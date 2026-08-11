@@ -171,10 +171,15 @@ def source_from_path(
     *,
     step_kind: str = "part",
     step_options: StepImportOptions | None = None,
+    python_source_text: str | None = None,
 ) -> CadSource | None:
     resolved = path.resolve()
     if resolved.suffix.lower() == ".py":
-        return _read_python_source(resolved, allow_dxf_only=True)
+        return _read_python_source(
+            resolved,
+            allow_dxf_only=True,
+            source_text=python_source_text,
+        )
     if resolved.suffix.lower() in STEP_SUFFIXES:
         return _read_step_source(resolved, kind=step_kind, options=step_options)
     return None
@@ -302,9 +307,17 @@ def _iter_python_sources(root: Path) -> tuple[CadSource, ...]:
     return tuple(sources)
 
 
-def _read_python_source(script_path: Path, *, allow_dxf_only: bool = False) -> CadSource | None:
+def _read_python_source(
+    script_path: Path,
+    *,
+    allow_dxf_only: bool = False,
+    source_text: str | None = None,
+) -> CadSource | None:
     resolved_script_path = script_path.resolve()
-    metadata = parse_generator_metadata(resolved_script_path)
+    metadata = parse_generator_metadata(
+        resolved_script_path,
+        source_text=source_text,
+    )
     if metadata is None:
         return None
     if not metadata.has_gen_step:

@@ -30,6 +30,7 @@ from cadpy.generation import _entry_spec_from_source, run_script_generator
 from cadpy.glb import export_canonical_measurement_glb_from_scene
 from cadpy.step_export import write_xcaf_doc_step_file
 from cadpy.step_scene import load_step_scene, mesh_step_scene, scene_export_shape
+from cadpy.source_hash import PythonSourceHash
 
 
 BUILD_SCHEMA = "mesh-to-cad.build/1"
@@ -884,8 +885,19 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
     for frozen_source in frozen_sources.values():
         _validate_unitless_source_parameters(frozen_source)
 
-    source_info = source_from_path(source_path)
     frozen_primary_source = frozen_sources[source_path]
+    frozen_source_text = frozen_primary_source.source_bytes.decode("utf-8")
+    frozen_source_digest = hashlib.sha256(
+        frozen_primary_source.source_bytes
+    ).hexdigest()
+    frozen_source_identity = PythonSourceHash(
+        source_path=source_relative,
+        source_hash=frozen_source_digest,
+    )
+    source_info = source_from_path(
+        source_path,
+        python_source_text=frozen_source_text,
+    )
     frozen_primary_source.revalidate()
     if source_info is None:
         raise RuntimeError("--source must define a supported gen_step() entrypoint")
@@ -921,6 +933,7 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
         generated_scene = run_script_generator(
             spec,
             "gen_step",
+            source_identity=frozen_source_identity,
             force=True,
             load_current_scene=False,
             skip_step_write=True,
@@ -931,7 +944,7 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
         raise RuntimeError("canonical CAD source did not produce an exportable XCAF scene")
     for frozen_source in frozen_sources.values():
         frozen_source.revalidate()
-    source_digest = hashlib.sha256(frozen_primary_source.source_bytes).hexdigest()
+    source_digest = frozen_source_digest
     write_xcaf_doc_step_file(
         generated_scene.doc,
         step_path,

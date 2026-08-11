@@ -95,9 +95,14 @@ def resolve_mesh_settings(
     )
 
 
-def parse_generator_metadata(script_path: Path) -> GeneratorMetadata | None:
+def parse_generator_metadata(
+    script_path: Path,
+    *,
+    source_text: str | None = None,
+) -> GeneratorMetadata | None:
     try:
-        tree = ast.parse(script_path.read_text(), filename=str(script_path))
+        text = script_path.read_text() if source_text is None else source_text
+        tree = ast.parse(text, filename=str(script_path))
     except (FileNotFoundError, SyntaxError, UnicodeDecodeError) as exc:
         raise RuntimeError(f"Failed to parse {_display_path(script_path)}") from exc
 

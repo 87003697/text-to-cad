@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,7 @@ import unittest
 
 from tests.python.support.paths import repo_path
 from tests.python.support.tmp_root import temporary_directory
+from cadpy.step_metadata import read_text_to_cad_step_metadata
 
 
 ADAPTER = repo_path("skills/cad/scripts/canonical-build")
@@ -189,6 +191,70 @@ def _run_adapter_with_pre_snapshot_replacement(
         text=True,
         check=False,
     )
+
+
+def _run_adapter_with_transient_primary_metadata(
+    root: Path,
+) -> tuple[subprocess.CompletedProcess[str], bytes]:
+    source = _write_canonical_source(
+        root,
+        body=(
+            "from build123d import Box\n"
+            "def gen_step():\n"
+            "    return Box(0.4, 0.2, 0.1)\n"
+        ),
+    )
+    source_bytes = source.read_bytes()
+    hook = root / "hook"
+    hook.mkdir()
+    (hook / "sitecustomize.py").write_text(
+        "from pathlib import Path\n"
+        "from cadpy import canonical_build, generation\n"
+        "from cadpy.source_hash import PythonSourceHash\n"
+        "_source_from_path = canonical_build.source_from_path\n"
+        "_transient = (\n"
+        "    'from build123d import Box\\n'\n"
+        "    'def gen_step():\\n'\n"
+        "    '    return [Box(0.4, 0.2, 0.1)]\\n'\n"
+        ").encode()\n"
+        "def _with_transient(path, operation):\n"
+        "    path = Path(path)\n"
+        "    original = path.read_bytes()\n"
+        "    path.write_bytes(_transient)\n"
+        "    try:\n"
+        "        return operation()\n"
+        "    finally:\n"
+        "        path.write_bytes(original)\n"
+        "def _transient_source_from_path(path, *args, **kwargs):\n"
+        "    return _with_transient(\n"
+        "        path, lambda: _source_from_path(path, *args, **kwargs)\n"
+        "    )\n"
+        "canonical_build.source_from_path = _transient_source_from_path\n"
+        "generation.python_source_hash = lambda path: PythonSourceHash(\n"
+        "    source_path='transient/model.py', source_hash='f' * 64\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment["PYTHONPATH"] = os.pathsep.join((str(hook), str(CADPY_SRC)))
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ADAPTER),
+            "build",
+            "--source",
+            "source/model.py",
+            "--output-dir",
+            "candidate",
+        ],
+        cwd=root,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    return result, source_bytes
 
 
 def _read_glb_json(path: Path) -> dict[str, object]:
@@ -674,6 +740,23 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertFalse((root / "candidate/measurement.glb").exists())
             self.assertFalse((root / "candidate/build.json").exists())
+
+    def test_primary_metadata_and_hash_use_frozen_source_bytes(self) -> None:
+        with temporary_directory(prefix="cad-canonical-primary-snapshot-") as temp_dir:
+            root = Path(temp_dir)
+            result, source_bytes = _run_adapter_with_transient_primary_metadata(root)
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            expected_digest = hashlib.sha256(source_bytes).hexdigest()
+            metadata = read_text_to_cad_step_metadata(
+                root / "candidate/canonical.step"
+            )
+            manifest = json.loads(
+                (root / "candidate/build.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(metadata["entryKind"], "part")
+            self.assertEqual(metadata["sourceHash"], expected_digest)
+            self.assertEqual(manifest["files"][0]["sha256"], expected_digest)
 
     def test_source_cannot_disable_internal_execution_policy(self) -> None:
         for bypass in (

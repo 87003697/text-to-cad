@@ -885,6 +885,7 @@ def _write_shape_step_payload(
     script_path: Path,
     logger: CliLogger,
     entry_kind: str,
+    source_identity: PythonSourceHash | None = None,
     skip_step_write: bool = False,
 ) -> LoadedStepScene:
     shape = envelope.get("shape")
@@ -895,7 +896,7 @@ def _write_shape_step_payload(
             f"{_display_path(script_path)} gen_step() envelope field 'shape' must be a build123d Shape, "
             f"got {type(shape).__name__}"
         )
-    source_identity = python_source_hash(script_path)
+    source_identity = source_identity or python_source_hash(script_path)
     if skip_step_write:
         scene = build_build123d_step_scene(
             shape,
@@ -940,6 +941,7 @@ def _write_assembly_step_payload(
     output_path: Path,
     script_path: Path,
     logger: CliLogger,
+    source_identity: PythonSourceHash | None = None,
     force: bool = False,
     load_current_scene: bool = True,
     skip_step_write: bool = False,
@@ -957,7 +959,7 @@ def _write_assembly_step_payload(
     payload = {key: envelope[key] for key in ("instances", "children") if key in envelope}
     assembly_spec = assembly_spec_from_payload(script_path, payload)
     resolver = _AssemblyCatalogResolver()
-    source_identity = python_source_hash(script_path)
+    source_identity = source_identity or python_source_hash(script_path)
     if skip_step_write:
         with logger.timed(f"build assembly scene {relative_to_repo(output_path)}"):
             scene = build_direct_assembly_step_scene(
@@ -1053,6 +1055,7 @@ def run_script_generator(
     generator_name: str,
     *,
     logger: CliLogger | None = None,
+    source_identity: PythonSourceHash | None = None,
     force: bool = False,
     load_current_scene: bool = True,
     skip_step_write: bool = False,
@@ -1067,6 +1070,7 @@ def run_script_generator(
             spec,
             generator_name,
             logger=logger,
+            source_identity=source_identity,
             force=force,
             load_current_scene=load_current_scene,
             skip_step_write=skip_step_write,
@@ -1078,6 +1082,7 @@ def _run_script_generator_inner(
     generator_name: str,
     *,
     logger: CliLogger,
+    source_identity: PythonSourceHash | None = None,
     force: bool = False,
     load_current_scene: bool = True,
     skip_step_write: bool = False,
@@ -1102,6 +1107,7 @@ def _run_script_generator_inner(
                 script_path=spec.script_path,
                 logger=logger,
                 entry_kind=_shape_payload_entry_kind(envelope.get("shape"), fallback=spec.kind),
+                source_identity=source_identity,
                 skip_step_write=skip_step_write,
             )
         elif "instances" in envelope or "children" in envelope:
@@ -1110,6 +1116,7 @@ def _run_script_generator_inner(
                 output_path=spec.step_path,
                 script_path=spec.script_path,
                 logger=logger,
+                source_identity=source_identity,
                 force=force,
                 load_current_scene=load_current_scene,
                 skip_step_write=skip_step_write,

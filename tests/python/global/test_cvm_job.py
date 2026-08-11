@@ -782,11 +782,12 @@ class CvmJobTests(unittest.TestCase):
             {entry["path"] for entry in manifest["files"]},
         )
 
-    def test_real_runner_crosses_candidate_workspace_with_production_layout(
+    def _install_real_provider_free_layout(
         self,
-    ) -> None:
-        """Drive supervisor, runner, and scenario through the real candidate build."""
-
+        *,
+        noisy_source: bool = False,
+    ) -> Path:
+        """Install the production deployment layout used by the real-chain tests."""
         for relative in deployment_authority.EXECUTION_AUTHORITY_PATHS:
             if relative == "skills/cad-viewer/scripts/viewer":
                 continue
@@ -927,6 +928,18 @@ server.listen(0, host, () => {
         provider_home = self.workspace / "provider-free-home"
         provider_home.mkdir()
 
+        if noisy_source:
+            durable_source = self.repo_root / (
+                provider_free_scenarios.DURABLE_MODEL_SOURCE.relative_to(
+                    REPO_ROOT
+                )
+            )
+            durable_source.write_text(
+                "print('candidate noise')\n"
+                + durable_source.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+
         deployed = json.loads(
             (self.repo_root / deployment_authority.RECEIPT_PATH).read_bytes()
         )
@@ -940,6 +953,13 @@ server.listen(0, host, () => {
             source_head=deployed["source_head"],
             runtime_identity=runtime_identity,
         )
+        return provider_home
+
+    def _run_real_provider_free_chain(
+        self,
+        provider_home: Path,
+    ) -> tuple[dict[str, object], str, dict[str, object]]:
+        """Run the real supervisor, runner, and scenario around the bwrap seam."""
         handle = runtime.submit_provider_free(
             "issue15-runtime-authority",
             self.group,
@@ -1027,6 +1047,30 @@ server.listen(0, host, () => {
                     "PYTHONPATH": "/must/not/cross/runner",
                 },
             )
+        return state, handle, captured
+
+    def _canonical_build_argv(self) -> list[str]:
+        return [
+            sys.executable,
+            os.fspath(self.repo_root / "skills/cad/scripts/canonical-build"),
+            "build",
+            "--source",
+            "source/model.py",
+            "--input",
+            "source/simple_model_library.py",
+            "--output-dir",
+            "built",
+        ]
+
+    def test_real_runner_crosses_candidate_workspace_with_production_layout(
+        self,
+    ) -> None:
+        """Drive supervisor, runner, and scenario through the real candidate build."""
+
+        provider_home = self._install_real_provider_free_layout()
+        state, handle, captured = self._run_real_provider_free_chain(
+            provider_home
+        )
 
         exp_dir = self.repo_root / "outputs" / handle
         candidate = exp_dir / "work/candidate"
@@ -1077,17 +1121,7 @@ server.listen(0, host, () => {
             .read_text(encoding="utf-8")
             .splitlines()
         ]
-        canonical_argv = [
-            sys.executable,
-            os.fspath(self.repo_root / "skills/cad/scripts/canonical-build"),
-            "build",
-            "--source",
-            "source/model.py",
-            "--input",
-            "source/simple_model_library.py",
-            "--output-dir",
-            "built",
-        ]
+        canonical_argv = self._canonical_build_argv()
         self.assertEqual(command_records[0]["argv"], canonical_argv)
         self.assertEqual(command_records[0]["cwd"], os.fspath(candidate))
         self.assertEqual(command_records[0]["exit_code"], 0)
@@ -1104,41 +1138,17 @@ server.listen(0, host, () => {
         self.assertNotIn("OPENAI_API_KEY", captured["sandbox_environment"])
         self.assertNotIn("PYTHONPATH", captured["sandbox_environment"])
 
-        durable_source = self.repo_root / (
-            provider_free_scenarios.DURABLE_MODEL_SOURCE.relative_to(REPO_ROOT)
+    def test_real_runner_rejects_noisy_candidate_without_publication(
+        self,
+    ) -> None:
+        """Reject candidate stdout before publishing formal build artifacts."""
+
+        provider_home = self._install_real_provider_free_layout(
+            noisy_source=True
         )
-        durable_source.write_text(
-            "print('candidate noise')\n"
-            + durable_source.read_text(encoding="utf-8"),
-            encoding="utf-8",
+        noisy_state, handle, captured = self._run_real_provider_free_chain(
+            provider_home
         )
-        deployment_authority.write_receipt(
-            self.repo_root,
-            source_head=deployed["source_head"],
-            runtime_identity=runtime_identity,
-        )
-        handle = runtime.submit_provider_free(
-            "issue15-runtime-authority",
-            self.group,
-            state_root=self.state_root,
-            detach=lambda *args: 1234,
-        )["job"]
-        captured.clear()
-        with mock.patch.object(
-            runtime,
-            "_run_with_heartbeat",
-            side_effect=run_real_runner,
-        ):
-            noisy_state = runtime.supervise_provider_free(
-                handle,
-                state_root=self.state_root,
-                environ={
-                    "PATH": os.environ["PATH"],
-                    "HOME": os.fspath(self.workspace),
-                    "OPENAI_API_KEY": "must-not-cross-runner",
-                    "PYTHONPATH": "/must/not/cross/runner",
-                },
-            )
 
         noisy_exp_dir = self.repo_root / "outputs" / handle
         noisy_candidate = noisy_exp_dir / "work/candidate"
@@ -1156,11 +1166,18 @@ server.listen(0, host, () => {
             ).read_text(encoding="utf-8").splitlines()
         ]
         self.assertEqual(len(noisy_records), 1)
-        self.assertEqual(noisy_records[0]["argv"], canonical_argv)
+        self.assertEqual(noisy_records[0]["argv"], self._canonical_build_argv())
         self.assertNotEqual(noisy_records[0]["exit_code"], 0)
         self.assertEqual(
             noisy_records[0]["stdout_sha256"],
             hashlib.sha256(b"").hexdigest(),
+        )
+        self.assertEqual(
+            captured["sandbox_environment"],
+            {
+                **runtime.PROVIDER_FREE_REQUIRED_ENVIRONMENT,
+                "LANG": "C.UTF-8",
+            },
         )
 
     def test_provider_free_failure_rejects_unknown_terminal_manifest_schema(
