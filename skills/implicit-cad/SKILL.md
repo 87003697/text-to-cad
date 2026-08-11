@@ -195,9 +195,11 @@ node scripts/canonical-build.mjs \
 ```
 
 The output contains the archived editable source, `artifacts/model.glb`,
-`profile.json`, `build.json`, and `rebuild.json`. Sampling and export behavior
-are frozen by `implicit_voxblame_depth8/1`; do not pass per-step sampling
-overrides.
+`profile.json`, `execution-profile.json`, `build.json`, and `rebuild.json`.
+Sampling and export behavior are frozen by `implicit_voxblame_depth8/1`;
+ordinary builds use the calibrated `implicit_canonical_worker/4` execution
+profile. Use `--execution-profile <relative-profile.json>` only for an explicit
+calibration run. Rebuilds use the execution profile frozen in `rebuild.json`.
 
 To verify the portable offline recipe, change into the delivery directory and
 rebuild to a new relative directory:

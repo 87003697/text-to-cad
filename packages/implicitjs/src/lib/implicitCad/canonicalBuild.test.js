@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  IMPLICIT_CANONICAL_EXECUTION_PROFILE,
   IMPLICIT_CANONICAL_PROFILE,
   buildCanonicalImplicitCad,
   rebuildCanonicalImplicitCad,
@@ -21,6 +22,41 @@ export default {
   units: "unitless",
   bounds: [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
   glsl: \`float sdf(vec3 p) { return length(p - vec3(0.2, 0.0, 0.0)) - 0.1; }\`
+};
+`, "utf-8");
+  return sourcePath;
+}
+
+function writeCanonicalTaperedCup(root) {
+  const sourcePath = path.join(root, "canonical-tapered-cup.implicit.js");
+  fs.writeFileSync(sourcePath, `
+export default {
+  schema: "implicit.js/0.1.0",
+  name: "canonical tapered cup",
+  units: "unitless",
+  bounds: [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+  glsl: \`
+float outerRadius(float z) {
+  float t = clamp((z + 0.50) / 1.00, 0.0, 1.0);
+  float body = mix(0.246, 0.338, t);
+  float foot = 0.028 * exp(-pow((z + 0.455) / 0.040, 2.0));
+  float shoulder = 0.030 * smoothstep(0.27, 0.37, z);
+  float rim = 0.022 * exp(-pow((z - 0.405) / 0.050, 2.0));
+  return body + foot + shoulder + rim;
+}
+
+float sdf(vec3 p) {
+  float radial = length(p.xy);
+  float outer = max(radial - outerRadius(p.z), max(-0.50 - p.z, p.z - 0.46));
+  float innerRadius = outerRadius(p.z) - 0.034;
+  float inner = max(innerRadius - radial, max(-0.435 - p.z, p.z - 0.50));
+  return max(outer, -inner);
+}
+
+vec3 color(vec3 p, vec3 normal) {
+  return vec3(0.72, 0.50, 0.26);
+}
+\`,
 };
 `, "utf-8");
   return sourcePath;
@@ -48,6 +84,14 @@ function collectStrings(value, result = []) {
   return result;
 }
 
+test("canonical implicit execution profile carries the calibrated CVM deadline", () => {
+  assert.deepEqual(IMPLICIT_CANONICAL_EXECUTION_PROFILE, {
+    schema: "mesh-to-cad.implicit-execution-profile/1",
+    id: "implicit_canonical_worker/4",
+    worker_timeout_ms: 720000,
+  });
+});
+
 test("canonical implicit build publishes traceable artifacts without moving source geometry", async () => {
   const workspaceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "implicit-canonical-build-"));
   const sourcePath = writeCanonicalSphere(workspaceDirectory);
@@ -67,6 +111,7 @@ test("canonical implicit build publishes traceable artifacts without moving sour
     `source/${path.basename(sourcePath)}`,
     "artifacts/model.glb",
     "profile.json",
+    "execution-profile.json",
     "build.json",
     "rebuild.json",
   ]) {
@@ -77,12 +122,17 @@ test("canonical implicit build publishes traceable artifacts without moving sour
 
   const profile = readJson(path.join(outputRoot, "profile.json"));
   assert.deepEqual(profile, IMPLICIT_CANONICAL_PROFILE);
+  const executionProfile = readJson(path.join(outputRoot, "execution-profile.json"));
+  assert.deepEqual(executionProfile, IMPLICIT_CANONICAL_EXECUTION_PROFILE);
 
   const manifest = readJson(path.join(outputRoot, "build.json"));
   assert.equal(manifest.schema, "mesh-to-cad.build/1");
   assert.equal(manifest.route, "implicit");
   assert.deepEqual(manifest.tool, { id: "implicitjs", version: "0.1.0" });
   assert.equal(manifest.profile.id, "implicit_voxblame_depth8/1");
+  assert.equal(manifest.execution_profile.id, "implicit_canonical_worker/4");
+  assert.equal(manifest.execution_profile.path, "execution-profile.json");
+  assert.match(manifest.execution_profile.sha256, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.coordinate_contract.id, "trellis2-canonical/1");
   assert.equal(manifest.coordinate_contract.source_coordinates, "preserved");
   assert.deepEqual(manifest.coordinate_contract.operations, {
@@ -102,6 +152,7 @@ test("canonical implicit build publishes traceable artifacts without moving sour
     experiment_external_reads: false,
     network: false,
     source_imports: false,
+    worker_timeout_ms: 720000,
   });
   assert.equal(manifest.serialization_units.semantic, false);
 
@@ -112,6 +163,62 @@ test("canonical implicit build publishes traceable artifacts without moving sour
   assert.ok(positionBounds.min[1] > -0.11, JSON.stringify(positionBounds.min));
   assert.ok(positionBounds.max[1] < 0.11, JSON.stringify(positionBounds.max));
   assert.equal(gltf.nodes[0].extras.cadUnits, "unitless");
+});
+
+test("canonical implicit build classifies a tapered source deadline through its execution profile", async () => {
+  const workspaceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "implicit-canonical-timeout-"));
+  const sourcePath = writeCanonicalTaperedCup(workspaceDirectory);
+  const executionProfilePath = path.join(workspaceDirectory, "execution-profile.json");
+  fs.writeFileSync(executionProfilePath, `${JSON.stringify({
+    schema: "mesh-to-cad.implicit-execution-profile/1",
+    id: "implicit_canonical_worker_test/1",
+    worker_timeout_ms: 1,
+  }, null, 2)}\n`, "utf-8");
+
+  await assert.rejects(
+    buildCanonicalImplicitCad({
+      workspaceDirectory,
+      sourcePath: path.basename(sourcePath),
+      outputDirectory: "must-time-out",
+      executionProfilePath: path.basename(executionProfilePath),
+    }),
+    (error) => {
+      assert.match(error.message, /^canonical_build_timeout: worker exceeded execution profile deadline of 1 ms$/u);
+      assert.doesNotMatch(error.message, /SIGKILL/u);
+      return true;
+    },
+  );
+  assert.equal(fs.existsSync(path.join(workspaceDirectory, "must-time-out")), false);
+});
+
+test("canonical build CLI injects a frozen execution profile", () => {
+  const workspaceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "implicit-canonical-timeout-cli-"));
+  const sourcePath = writeCanonicalTaperedCup(workspaceDirectory);
+  const executionProfilePath = path.join(workspaceDirectory, "execution-profile.json");
+  fs.writeFileSync(executionProfilePath, `${JSON.stringify({
+    schema: "mesh-to-cad.implicit-execution-profile/1",
+    id: "implicit_canonical_worker_test/1",
+    worker_timeout_ms: 1,
+  }, null, 2)}\n`, "utf-8");
+  const cliPath = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../scripts/canonical-build.mjs",
+  );
+
+  const completed = spawnSync(process.execPath, [
+    cliPath,
+    "--source",
+    path.basename(sourcePath),
+    "--output-dir",
+    "must-time-out",
+    "--execution-profile",
+    path.basename(executionProfilePath),
+    "--json",
+  ], { cwd: workspaceDirectory, encoding: "utf-8" });
+
+  assert.equal(completed.status, 1);
+  assert.match(completed.stderr, /^canonical_build_timeout: worker exceeded execution profile deadline of 1 ms\n$/u);
+  assert.doesNotMatch(completed.stderr, /SIGKILL/u);
 });
 
 test("canonical implicit build accepts import-like text that is not a module dependency", async () => {
@@ -194,11 +301,22 @@ test("registered implicit recipe rebuilds offline through the skill entry", asyn
   assert.equal(recipe.schema, "mesh-to-cad.rebuild-recipe/1");
   assert.deepEqual(recipe.executable, { id: "implicit-cad.canonical-build/1" });
   assert.equal(recipe.network, false);
+  assert.deepEqual(recipe.execution_profile, {
+    id: "implicit_canonical_worker/4",
+    path: "execution-profile.json",
+    sha256: readJson(path.join(deliveryRoot, "build.json")).execution_profile.sha256,
+  });
   assert.equal(collectStrings(recipe).some((value) => path.isAbsolute(value)), false);
-  assert.deepEqual(recipe.inputs.map(({ role, path: inputPath }) => ({ role, path: inputPath })), [{
-    role: "primary_implicit_source",
-    path: "source/portable.implicit.js",
-  }]);
+  assert.deepEqual(recipe.inputs.map(({ role, path: inputPath }) => ({ role, path: inputPath })), [
+    {
+      role: "primary_implicit_source",
+      path: "source/portable.implicit.js",
+    },
+    {
+      role: "frozen_execution_profile",
+      path: "execution-profile.json",
+    },
+  ]);
 
   const repoRoot = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
@@ -235,6 +353,7 @@ test("registered implicit recipe rebuilds offline through the skill entry", asyn
     rebuiltManifest.artifacts.measurement.sha256,
     originalManifest.artifacts.measurement.sha256,
   );
+  assert.deepEqual(rebuiltManifest.execution_profile, originalManifest.execution_profile);
   assert.deepEqual(
     parseGlbJson(path.join(rebuiltRoot, "artifacts/model.glb")).accessors[0],
     parseGlbJson(path.join(deliveryRoot, "artifacts/model.glb")).accessors[0],

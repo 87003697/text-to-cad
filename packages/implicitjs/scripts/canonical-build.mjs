@@ -6,7 +6,7 @@ import {
 
 function usage() {
   return `Usage:
-  node scripts/canonical-build.mjs --source <model.implicit.js> --output-dir <relative-directory> [--json]
+  node scripts/canonical-build.mjs --source <model.implicit.js> --output-dir <relative-directory> [--execution-profile <profile.json>] [--json]
   node scripts/canonical-build.mjs --recipe <rebuild.json> --output-dir <relative-directory> [--json]
 
 Paths are relative to the current working directory. Exactly one of --source or --recipe is required.
@@ -18,6 +18,7 @@ function parseArgs(argv) {
     sourcePath: "",
     recipePath: "",
     outputDirectory: "",
+    executionProfilePath: "",
     json: false,
     help: false,
   };
@@ -39,6 +40,9 @@ function parseArgs(argv) {
         break;
       case "--output-dir":
         options.outputDirectory = readValue();
+        break;
+      case "--execution-profile":
+        options.executionProfilePath = readValue();
         break;
       case "--json":
         options.json = true;
@@ -66,13 +70,20 @@ async function main() {
   if (!options.outputDirectory) {
     throw new Error("Missing --output-dir");
   }
+  if (options.recipePath && options.executionProfilePath) {
+    throw new Error("--execution-profile is only valid with --source; rebuilds use the frozen recipe profile");
+  }
   const request = {
     workspaceDirectory: process.cwd(),
     outputDirectory: options.outputDirectory,
   };
   const result = options.recipePath
     ? await rebuildCanonicalImplicitCad({ ...request, recipePath: options.recipePath })
-    : await buildCanonicalImplicitCad({ ...request, sourcePath: options.sourcePath });
+    : await buildCanonicalImplicitCad({
+      ...request,
+      sourcePath: options.sourcePath,
+      executionProfilePath: options.executionProfilePath || undefined,
+    });
   if (options.json) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } else {

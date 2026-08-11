@@ -848,7 +848,10 @@ def finalize_workspace(
     try:
         rebuild_root.mkdir(parents=True)
         package.mkdir()
-        input_records = _copy_rebuild_inputs(candidate_root, rebuild_root, recipe)
+        recipe_inputs_root = (
+            recipe_path.parent if recipe["route"] == "implicit" else candidate_root
+        )
+        input_records = _copy_rebuild_inputs(recipe_inputs_root, rebuild_root, recipe)
         shutil.copy2(recipe_path, rebuild_root / "rebuild.json")
         recipe_sha256 = _file_sha256(rebuild_root / "rebuild.json")
         build_root, rebuild_command = _run_registered_rebuild(
@@ -1370,7 +1373,7 @@ def _validate_build_provenance(
     if _file_sha256(primary_path) != primary.get("sha256") or _file_sha256(measurement_path) != measurement.get("sha256"):
         _fail("build_provenance_conflict", "implicit build artifact digest mismatch")
     if (
-        len(recipe_inputs) != 1
+        len(recipe_inputs) != 2
         or primary.get("path") != recipe_inputs[0].get("path")
         or primary.get("sha256") != recipe_inputs[0].get("sha256")
         or _file_sha256(
@@ -1385,6 +1388,30 @@ def _validate_build_provenance(
         _fail(
             "build_provenance_conflict",
             "implicit source input is not bound to the rebuilt GLB",
+        )
+    execution_profile = build.get("execution_profile")
+    recipe_execution_profile = recipe.get("execution_profile")
+    profile_input = recipe_inputs[1]
+    if (
+        not isinstance(execution_profile, Mapping)
+        or not isinstance(recipe_execution_profile, Mapping)
+        or profile_input.get("role") != "frozen_execution_profile"
+        or profile_input.get("path") != execution_profile.get("path")
+        or profile_input.get("sha256") != execution_profile.get("sha256")
+        or profile_input.get("path") != recipe_execution_profile.get("path")
+        or profile_input.get("sha256") != recipe_execution_profile.get("sha256")
+        or _file_sha256(
+            _relative_member(
+                rebuild_root,
+                profile_input.get("path"),
+                "$.rebuild_recipe.inputs[1].path",
+            )
+        )
+        != profile_input.get("sha256")
+    ):
+        _fail(
+            "build_provenance_conflict",
+            "implicit execution profile input is not bound to the rebuilt GLB",
         )
     edges = build.get("derivation", {}).get("edges") if isinstance(build.get("derivation"), Mapping) else None
     if not isinstance(edges, list) or not any(

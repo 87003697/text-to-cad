@@ -203,10 +203,20 @@ node /path/to/implicitjs/scripts/canonical-build.mjs \
 ```
 
 Each build publishes the archived editable source, `artifacts/model.glb`, the
-frozen `implicit_voxblame_depth8/1` profile, `mesh-to-cad.build/1` provenance,
-and a `mesh-to-cad.rebuild-recipe/1` recipe. Rebuild mode accepts only that
-registered recipe contract and uses the archived source; it does not depend on
-the original source path or a historical experiment directory.
+frozen `implicit_voxblame_depth8/1` geometry profile, the versioned canonical
+worker execution profile, `mesh-to-cad.build/1` provenance, and a
+`mesh-to-cad.rebuild-recipe/1` recipe. The production execution profile is
+`implicit_canonical_worker/4` with a 720-second deadline. The earlier tapered-cup
+samples completed in 236.678 and 235.472 seconds, while the exact issue #15
+airplane source completed in 347.431 seconds on CVM. A later exact generated
+airplane source exceeded 420 seconds and completed in 611.610 seconds under a
+temporary 900-second calibration profile. The production bound adds 108.390
+seconds (17.7%) of headroom above that slowest measured sample without widening
+the 900-second workspace command bound.
+For calibration only, `--execution-profile <relative-profile.json>` injects a
+versioned `mesh-to-cad.implicit-execution-profile/1` document; ordinary builds
+use the production profile. Rebuild mode always uses the profile frozen in the
+registered recipe and does not accept a replacement.
 
 ## Package Layout
 

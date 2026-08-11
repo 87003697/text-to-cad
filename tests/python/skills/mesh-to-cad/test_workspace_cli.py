@@ -1138,7 +1138,6 @@ class WorkspaceCliTests(unittest.TestCase):
                 (self.workspace / "final/verification.json").read_text(encoding="utf-8")
             )["verified"]
         )
-
     def test_finalize_covers_unaccepted_cad_recipe(self) -> None:
         prepared, candidate = self.canonical_cad_flow(accepted=False)
 
@@ -1164,6 +1163,9 @@ class WorkspaceCliTests(unittest.TestCase):
 
         self.assertEqual("implicit", final["route"])
         self.assertEqual("acceptance_satisfied", final["stop_reason"])
+        self.assertTrue(
+            (self.workspace / "final/source/execution-profile.json").is_file()
+        )
 
     def test_runner_accepts_and_reviewer_audits_real_synthetic_delivery(
         self,

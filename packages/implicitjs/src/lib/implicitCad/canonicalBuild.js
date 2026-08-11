@@ -47,6 +47,12 @@ export const IMPLICIT_CANONICAL_PROFILE = deepFreeze({
   },
 });
 
+export const IMPLICIT_CANONICAL_EXECUTION_PROFILE = deepFreeze({
+  schema: "mesh-to-cad.implicit-execution-profile/1",
+  id: "implicit_canonical_worker/4",
+  worker_timeout_ms: 720000,
+});
+
 function canonicalJson(value) {
   if (Array.isArray(value)) {
     return `[${value.map(canonicalJson).join(",")}]`;
@@ -98,6 +104,41 @@ async function resolveWorkspaceFile(workspaceRoot, relativePath, label) {
     throw new Error(`${label} must be a regular file`);
   }
   return resolved;
+}
+
+function validateExecutionProfile(profile) {
+  const expectedKeys = ["id", "schema", "worker_timeout_ms"];
+  if (
+    profile?.schema !== "mesh-to-cad.implicit-execution-profile/1"
+    || typeof profile?.id !== "string"
+    || !/^[a-z0-9][a-z0-9_-]*\/[1-9][0-9]*$/u.test(profile.id)
+    || !Number.isSafeInteger(profile?.worker_timeout_ms)
+    || profile.worker_timeout_ms < 1
+    || profile.worker_timeout_ms > 900000
+    || canonicalJson(Object.keys(profile || {}).sort()) !== canonicalJson(expectedKeys)
+  ) {
+    throw new Error("Invalid implicit canonical execution profile");
+  }
+  return deepFreeze(structuredClone(profile));
+}
+
+async function readExecutionProfile(workspaceRoot, executionProfilePath) {
+  if (!executionProfilePath) {
+    return IMPLICIT_CANONICAL_EXECUTION_PROFILE;
+  }
+  const relativePath = portableRelativePath(executionProfilePath, "executionProfilePath");
+  const absolutePath = await resolveWorkspaceFile(
+    workspaceRoot,
+    relativePath,
+    "executionProfilePath",
+  );
+  let profile;
+  try {
+    profile = JSON.parse(await fs.readFile(absolutePath, "utf-8"));
+  } catch (error) {
+    throw new Error(`Invalid implicit canonical execution profile: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return validateExecutionProfile(profile);
 }
 
 function validateSelfContainedSource(sourceText) {
@@ -161,7 +202,7 @@ function restrictedWorkerEnvironment() {
   )));
 }
 
-async function exportInRestrictedProcess(sourceText, outputPath) {
+async function exportInRestrictedProcess(sourceText, outputPath, executionProfile) {
   const packageRoot = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)),
     "../../..",
@@ -187,9 +228,11 @@ async function exportInRestrictedProcess(sourceText, outputPath) {
     });
     const stdout = [];
     const stderr = [];
+    let deadlineExceeded = false;
     const timeout = setTimeout(() => {
+      deadlineExceeded = true;
       child.kill("SIGKILL");
-    }, 120000);
+    }, executionProfile.worker_timeout_ms);
     child.stdout.on("data", (chunk) => stdout.push(chunk));
     child.stderr.on("data", (chunk) => stderr.push(chunk));
     child.on("error", (error) => {
@@ -198,6 +241,12 @@ async function exportInRestrictedProcess(sourceText, outputPath) {
     });
     child.on("close", (status, signal) => {
       clearTimeout(timeout);
+      if (deadlineExceeded) {
+        reject(new Error(
+          `canonical_build_timeout: worker exceeded execution profile deadline of ${executionProfile.worker_timeout_ms} ms`,
+        ));
+        return;
+      }
       const errorText = Buffer.concat(stderr).toString("utf-8").trim();
       if (status !== 0) {
         const detail = errorText || `worker exited with ${status ?? signal ?? "unknown status"}`;
@@ -241,6 +290,7 @@ function rebuildOutputs(sourcePath) {
     { role: "primary_implicit_source", path: sourcePath },
     { role: "measurement_glb", path: "artifacts/model.glb" },
     { role: "frozen_profile", path: "profile.json" },
+    { role: "frozen_execution_profile", path: "execution-profile.json" },
     { role: "build_manifest", path: "build.json" },
     { role: "rebuild_recipe", path: "rebuild.json" },
   ];
@@ -249,15 +299,17 @@ function rebuildOutputs(sourcePath) {
 export async function buildCanonicalImplicitCad(options = {}) {
   rejectUnknownOptions(
     options,
-    new Set(["workspaceDirectory", "sourcePath", "outputDirectory"]),
+    new Set(["workspaceDirectory", "sourcePath", "outputDirectory", "executionProfilePath"]),
     "canonical build",
   );
   const {
     workspaceDirectory = process.cwd(),
     sourcePath,
     outputDirectory,
+    executionProfilePath,
   } = options;
   const workspaceRoot = await fs.realpath(path.resolve(workspaceDirectory));
+  const executionProfile = await readExecutionProfile(workspaceRoot, executionProfilePath);
   const sourceRelative = portableRelativePath(sourcePath, "sourcePath");
   const outputRelative = portableRelativePath(outputDirectory, "outputDirectory");
   if (!/\.implicit\.(?:js|mjs)$/iu.test(sourceRelative)) {
@@ -293,13 +345,22 @@ export async function buildCanonicalImplicitCad(options = {}) {
     await fs.writeFile(path.join(stagingRoot, archivedSourceRelative), sourceBytes);
 
     const measurementPath = path.join(stagingRoot, measurementRelative);
-    const exportSummary = await exportInRestrictedProcess(sourceText, measurementPath);
+    const exportSummary = await exportInRestrictedProcess(sourceText, measurementPath, executionProfile);
     const measurementBytes = await fs.readFile(measurementPath);
 
     const profileBytes = await writeJson(path.join(stagingRoot, "profile.json"), IMPLICIT_CANONICAL_PROFILE);
+    const executionProfileBytes = await writeJson(
+      path.join(stagingRoot, "execution-profile.json"),
+      executionProfile,
+    );
     const primary = fileRecord("primary_implicit_source", archivedSourceRelative, sourceBytes);
     const measurement = fileRecord("measurement_glb", measurementRelative, measurementBytes);
     const profile = fileRecord("frozen_profile", "profile.json", profileBytes);
+    const executionProfileRecord = fileRecord(
+      "frozen_execution_profile",
+      "execution-profile.json",
+      executionProfileBytes,
+    );
     const rebuild = {
       schema: REBUILD_SCHEMA,
       route: ROUTE,
@@ -313,7 +374,19 @@ export async function buildCanonicalImplicitCad(options = {}) {
         "--json",
       ],
       profile: { id: IMPLICIT_CANONICAL_PROFILE.id, sha256: profile.sha256 },
-      inputs: [{ role: primary.role, path: primary.path, sha256: primary.sha256 }],
+      execution_profile: {
+        id: executionProfile.id,
+        path: executionProfileRecord.path,
+        sha256: executionProfileRecord.sha256,
+      },
+      inputs: [
+        { role: primary.role, path: primary.path, sha256: primary.sha256 },
+        {
+          role: executionProfileRecord.role,
+          path: executionProfileRecord.path,
+          sha256: executionProfileRecord.sha256,
+        },
+      ],
       outputs: rebuildOutputs(primary.path),
       network: false,
     };
@@ -326,8 +399,13 @@ export async function buildCanonicalImplicitCad(options = {}) {
       adapter: { id: "implicitjs.canonical-build", version: 1 },
       tool: TOOL,
       profile: { id: IMPLICIT_CANONICAL_PROFILE.id, path: profile.path, sha256: profile.sha256 },
+      execution_profile: {
+        id: executionProfile.id,
+        path: executionProfileRecord.path,
+        sha256: executionProfileRecord.sha256,
+      },
       artifacts: { primary, measurement },
-      files: [primary, measurement, profile, rebuildRecord],
+      files: [primary, measurement, profile, executionProfileRecord, rebuildRecord],
       delivery_roots: ["source", "artifacts"],
       derivation: {
         nodes: [primary.sha256, measurement.sha256],
@@ -347,6 +425,7 @@ export async function buildCanonicalImplicitCad(options = {}) {
         network: false,
         source_imports: false,
         experiment_external_reads: false,
+        worker_timeout_ms: executionProfile.worker_timeout_ms,
       },
       platform: {
         node: process.version,
@@ -407,6 +486,7 @@ export async function rebuildCanonicalImplicitCad(options = {}) {
   const expectedRecipeKeys = [
     "argv_template",
     "executable",
+    "execution_profile",
     "inputs",
     "network",
     "outputs",
@@ -444,11 +524,36 @@ export async function rebuildCanonicalImplicitCad(options = {}) {
     throw new Error("Rebuild recipe does not reference the registered implicit canonical profile");
   }
   if (
-    !Array.isArray(recipe.inputs)
-    || recipe.inputs.length !== 1
-    || recipe.inputs[0]?.role !== "primary_implicit_source"
+    recipe?.execution_profile?.path !== "execution-profile.json"
+    || typeof recipe?.execution_profile?.id !== "string"
+    || !/^[a-f0-9]{64}$/u.test(String(recipe?.execution_profile?.sha256 || ""))
+    || canonicalJson(Object.keys(recipe?.execution_profile || {}).sort())
+      !== canonicalJson(["id", "path", "sha256"])
   ) {
-    throw new Error("Rebuild recipe must declare exactly one primary implicit source input");
+    throw new Error("Rebuild recipe does not reference a frozen implicit canonical execution profile");
+  }
+  const executionProfileAbsolute = await resolveWorkspaceFile(
+    workspaceRoot,
+    recipe.execution_profile.path,
+    "recipe execution profile",
+  );
+  const executionProfileBytes = await fs.readFile(executionProfileAbsolute);
+  if (sha256(executionProfileBytes) !== recipe.execution_profile.sha256) {
+    throw new Error("Rebuild recipe execution profile digest does not match its declared input");
+  }
+  const executionProfile = validateExecutionProfile(JSON.parse(executionProfileBytes.toString("utf-8")));
+  if (executionProfile.id !== recipe.execution_profile.id) {
+    throw new Error("Rebuild recipe execution profile identity does not match its declared input");
+  }
+  if (
+    !Array.isArray(recipe.inputs)
+    || recipe.inputs.length !== 2
+    || recipe.inputs[0]?.role !== "primary_implicit_source"
+    || recipe.inputs[1]?.role !== "frozen_execution_profile"
+  ) {
+    throw new Error(
+      "Rebuild recipe must declare one primary implicit source and one frozen execution profile input",
+    );
   }
   const sourceRelative = portableRelativePath(recipe.inputs[0].path, "recipe source input");
   const expectedSourcePath = `source/${path.basename(sourceRelative)}`;
@@ -468,9 +573,18 @@ export async function rebuildCanonicalImplicitCad(options = {}) {
   if (sha256(sourceBytes) !== recipe.inputs[0].sha256) {
     throw new Error("Rebuild recipe source digest does not match its declared input");
   }
+  if (
+    recipe.inputs[1].path !== recipe.execution_profile.path
+    || recipe.inputs[1].sha256 !== recipe.execution_profile.sha256
+    || canonicalJson(Object.keys(recipe.inputs[1]).sort())
+      !== canonicalJson(["path", "role", "sha256"])
+  ) {
+    throw new Error("Rebuild recipe execution profile does not match its declared input");
+  }
   return buildCanonicalImplicitCad({
     workspaceDirectory: workspaceRoot,
     sourcePath: sourceRelative,
     outputDirectory,
+    executionProfilePath: recipe.execution_profile.path,
   });
 }
