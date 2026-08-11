@@ -47,6 +47,7 @@ OUTPUT_FILES = {
 class _SourceExecutionPolicy:
     root: Path
     declared_inputs: frozenset[Path]
+    declared_import_directories: frozenset[Path]
     output_dir: Path
 
 
@@ -209,7 +210,10 @@ def _canonical_build_audit_hook(event: str, args: tuple[object, ...]) -> None:
         raw_path = os.fsdecode(args[0] if args else ".")
         path = Path(raw_path)
         resolved = path.resolve() if path.is_absolute() else (policy.root / path).resolve()
-        if not _is_within(resolved, policy.output_dir):
+        if (
+            resolved not in policy.declared_import_directories
+            and not _is_within(resolved, policy.output_dir)
+        ):
             raise PermissionError(f"canonical build attempted to read undeclared directory: {raw_path}")
         return
     if event.startswith("os."):
@@ -248,6 +252,22 @@ def _source_execution_policy(*, root: Path, declared_inputs: set[Path], output_d
     _install_audit_hook()
     resolved_inputs = frozenset(path.resolve() for path in declared_inputs)
     resolved_input_names = frozenset(str(path) for path in resolved_inputs)
+    # Importlib enumerates a module directory before opening a helper. Admit
+    # that metadata read only when every physical sibling is a declared input.
+    inputs_by_parent: dict[Path, set[Path]] = {}
+    for path in resolved_inputs:
+        inputs_by_parent.setdefault(path.parent, set()).add(path)
+    declared_import_directories: set[Path] = set()
+    for parent, sibling_inputs in inputs_by_parent.items():
+        try:
+            siblings = tuple(parent.iterdir())
+        except OSError:
+            continue
+        if (
+            all(not sibling.is_symlink() and sibling.is_file() for sibling in siblings)
+            and {sibling.resolve() for sibling in siblings} == sibling_inputs
+        ):
+            declared_import_directories.add(parent)
     original_environment = dict(os.environ)
     original_hash = builtins.hash
     original_mutation_functions = {
@@ -283,6 +303,7 @@ def _source_execution_policy(*, root: Path, declared_inputs: set[Path], output_d
         _SourceExecutionPolicy(
             root=root,
             declared_inputs=resolved_inputs,
+            declared_import_directories=frozenset(declared_import_directories),
             output_dir=output_dir.resolve(),
         )
     )

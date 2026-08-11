@@ -376,6 +376,78 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             rebuilt_recipe = json.loads((isolated_root / "rebuilt/rebuild.json").read_text(encoding="utf-8"))
             self.assertEqual(recipe["inputs"], rebuilt_recipe["inputs"])
 
+    def test_public_adapter_builds_durable_model_with_declared_python_helper(self) -> None:
+        with temporary_directory(prefix="cad-canonical-import-") as temp_dir:
+            root = Path(temp_dir)
+            source = root / "source"
+            source.mkdir()
+            shutil.copy2(
+                repo_path("models/simple/rectangular_clamp_block.py"),
+                source / "model.py",
+            )
+            shutil.copy2(
+                repo_path("models/simple/simple_model_library.py"),
+                source / "simple_model_library.py",
+            )
+
+            result = _run_adapter(
+                root,
+                "build",
+                "--source",
+                "source/model.py",
+                "--input",
+                "source/simple_model_library.py",
+                "--output-dir",
+                "candidate",
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertTrue((root / "candidate/measurement.glb").is_file())
+            recipe = json.loads(
+                (root / "candidate/rebuild.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                ["source/model.py", "source/simple_model_library.py"],
+                [item["path"] for item in recipe["inputs"]],
+            )
+
+    def test_declared_helper_import_cannot_enumerate_undeclared_siblings(self) -> None:
+        with temporary_directory(prefix="cad-canonical-import-closure-") as temp_dir:
+            root = Path(temp_dir)
+            _write_canonical_source(
+                root,
+                body=(
+                    "from helper import make_shape\n"
+                    "def gen_step():\n"
+                    "    return make_shape()\n"
+                ),
+            )
+            (root / "source/helper.py").write_text(
+                "from build123d import Box\n"
+                "def make_shape():\n"
+                "    return Box(0.4, 0.2, 0.1)\n",
+                encoding="utf-8",
+            )
+            (root / "source/ambient.py").write_text(
+                "SECRET = 'undeclared'\n",
+                encoding="utf-8",
+            )
+
+            result = _run_adapter(
+                root,
+                "build",
+                "--source",
+                "source/model.py",
+                "--input",
+                "source/helper.py",
+                "--output-dir",
+                "candidate",
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertFalse((root / "candidate/measurement.glb").exists())
+            self.assertFalse((root / "candidate/build.json").exists())
+
     def test_adapter_forbids_network_and_child_processes_during_source_execution(self) -> None:
         cases = {
             "network": "\n".join(
