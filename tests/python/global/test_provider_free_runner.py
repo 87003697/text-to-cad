@@ -409,6 +409,167 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             manifest["files"],
         )
 
+    def test_deployed_authority_is_retained_and_manifest_bound_before_workload(self) -> None:
+        exp_dir = self.repo / "outputs" / self.handle
+        observed_before_launch: dict[str, object] = {}
+
+        def fake_run(argv, **_kwargs):
+            if list(argv) == [os.fspath(self.bwrap), "--version"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout="bubblewrap 1.2.3\n"
+                )
+            authority = exp_dir / "run/deployed-source-authority.json"
+            retained = exp_dir / "run/deployed-source"
+            observed_before_launch.update(
+                authority_exists=authority.is_file(),
+                retained_exists=retained.is_dir(),
+            )
+            self.write_success_evidence()
+            return subprocess.CompletedProcess(argv, 0)
+
+        with (
+            mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
+            mock.patch.object(
+                provider_free_runner.shutil,
+                "which",
+                return_value=os.fspath(self.bwrap),
+            ),
+            mock.patch.object(
+                provider_free_runner.subprocess,
+                "run",
+                side_effect=fake_run,
+            ),
+            mock.patch.object(
+                provider_free_runner.pilot_runner,
+                "validate_workspace_delivery",
+                return_value={"identity_sha256": "a" * 64},
+            ),
+            mock.patch.object(
+                provider_free_runner.pilot_runner,
+                "publish_workspace_authority",
+                side_effect=self.write_authority,
+            ),
+        ):
+            status = provider_free_runner.main(
+                ["run", "issue15-runtime-authority", self.group, self.exp],
+                environ=self.environment,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            observed_before_launch,
+            {"authority_exists": True, "retained_exists": True},
+        )
+        manifest = json.loads(
+            (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            "run/deployed-source-authority.json",
+            {entry["path"] for entry in manifest["files"]},
+        )
+
+    def test_deployment_retention_failure_is_terminal_before_workload_launch(self) -> None:
+        workload_launches: list[list[str]] = []
+
+        def fake_run(argv, **_kwargs):
+            if list(argv) == [os.fspath(self.bwrap), "--version"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout="bubblewrap 1.2.3\n"
+                )
+            if list(argv) and list(argv)[0] == os.fspath(self.bwrap):
+                workload_launches.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0)
+
+        with (
+            mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
+            mock.patch.object(
+                provider_free_runner.shutil,
+                "which",
+                return_value=os.fspath(self.bwrap),
+            ),
+            mock.patch.object(
+                provider_free_runner.subprocess,
+                "run",
+                side_effect=fake_run,
+            ),
+            mock.patch.object(
+                provider_free_runner,
+                "_retain_deployment_authority",
+                side_effect=provider_free_runner.ProviderFreeError(
+                    "deployed source authority retention failed"
+                ),
+            ),
+        ):
+            status = provider_free_runner.main(
+                ["run", "issue15-runtime-authority", self.group, self.exp],
+                environ=self.environment,
+            )
+
+        self.assertEqual(
+            status, provider_free_runner.pilot_runner.ARTIFACT_CONTRACT_STATUS
+        )
+        self.assertEqual(workload_launches, [])
+        exp_dir = self.repo / "outputs" / self.handle
+        manifest = json.loads(
+            (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            manifest["final_status"],
+            provider_free_runner.pilot_runner.ARTIFACT_CONTRACT_STATUS,
+        )
+        self.assertFalse((exp_dir / "run/sandbox-enforcement.json").exists())
+
+    def test_nonzero_scenario_manifest_binds_retained_authority_and_failure(self) -> None:
+        exp_dir = self.repo / "outputs" / self.handle
+
+        def fake_run(argv, **_kwargs):
+            if list(argv) == [os.fspath(self.bwrap), "--version"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout="bubblewrap 1.2.3\n"
+                )
+            (exp_dir / "run").mkdir(parents=True, exist_ok=True)
+            (exp_dir / "run/scenario-failure.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "cvm.provider-free-scenario-failure/1",
+                        "scenario_identity": (
+                            "issue15.provider-free.runtime-authority/1"
+                        ),
+                        "stage": "viewer_fallback",
+                    },
+                    sort_keys=True,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(argv, 1)
+
+        with (
+            mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
+            mock.patch.object(
+                provider_free_runner.shutil,
+                "which",
+                return_value=os.fspath(self.bwrap),
+            ),
+            mock.patch.object(
+                provider_free_runner.subprocess,
+                "run",
+                side_effect=fake_run,
+            ),
+        ):
+            status = provider_free_runner.main(
+                ["run", "issue15-runtime-authority", self.group, self.exp],
+                environ=self.environment,
+            )
+
+        self.assertEqual(status, 1)
+        manifest = json.loads(
+            (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
+        )
+        paths = {entry["path"] for entry in manifest["files"]}
+        self.assertIn("run/scenario-failure.json", paths)
+        self.assertIn("run/deployed-source-authority.json", paths)
+
     def test_unknown_scenario_is_rejected_before_sandbox_start(self) -> None:
         with (
             mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),

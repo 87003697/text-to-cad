@@ -28,7 +28,13 @@ from scripts.pilot.cvm_job.runtime import (
     PROVIDER_FREE_SUPERVISOR_LOCALE,
     provider_free_sandbox_argv,
 )
-from scripts.pilot.cvm_job.protocol import ProtocolError, request_authority_sha256
+from scripts.pilot.cvm_job.protocol import (
+    PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+    PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+    PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
+    ProtocolError,
+    request_authority_sha256,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -483,6 +489,29 @@ def _validate_scenario_evidence(exp_dir: Path, scenario_name: str) -> None:
             raise ProviderFreeError("runtime-authority portable Workspace authority is missing")
 
 
+def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> None:
+    """Require one exact, closed scenario failure receipt on nonzero exit."""
+
+    path = exp_dir / PROVIDER_FREE_SCENARIO_FAILURE_PATH
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProviderFreeError(
+            "provider-free scenario failure receipt is missing or invalid"
+        ) from exc
+    scenario = PROVIDER_FREE_SCENARIOS[scenario_name]
+    if (
+        not isinstance(receipt, dict)
+        or set(receipt) != {"schema", "scenario_identity", "stage"}
+        or receipt.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
+        or receipt.get("scenario_identity") != scenario.identity
+        or receipt.get("stage") not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES
+    ):
+        raise ProviderFreeError(
+            "provider-free scenario failure receipt conflicts with request"
+        )
+
+
 def run_scenario(
     scenario_name: str,
     group: str,
@@ -529,6 +558,17 @@ def run_scenario(
         exp_dir = provider_free_output.revalidate_exp_path(REPO_ROOT, exp_dir)
     except provider_free_output.OutputPathError as exc:
         raise ProviderFreeError(f"unsafe provider-free output path: {exc}") from exc
+    try:
+        _retain_deployment_authority(exp_dir)
+    except ProviderFreeError as exc:
+        print(f"provider-free-runner: {exc}", file=sys.stderr)
+        contract_status = pilot_runner.ARTIFACT_CONTRACT_STATUS
+        _publish_terminal_manifest(
+            exp_dir,
+            workload_status=contract_status,
+            final_status=contract_status,
+        )
+        return contract_status
     bwrap = runtime_identity["bwrap"]["path"]
     argv = _sandbox_argv(
         scenario_name,
@@ -565,9 +605,14 @@ def run_scenario(
         try:
             pilot_runner.validate_workspace_delivery(exp_dir)
             pilot_runner.publish_workspace_authority(exp_dir)
-            _retain_deployment_authority(exp_dir)
             _validate_scenario_evidence(exp_dir, scenario_name)
         except (pilot_runner.PilotError, ProviderFreeError) as exc:
+            print(f"provider-free-runner: {exc}", file=sys.stderr)
+            final_status = pilot_runner.ARTIFACT_CONTRACT_STATUS
+    else:
+        try:
+            _validate_scenario_failure_evidence(exp_dir, scenario_name)
+        except ProviderFreeError as exc:
             print(f"provider-free-runner: {exc}", file=sys.stderr)
             final_status = pilot_runner.ARTIFACT_CONTRACT_STATUS
     _publish_no_provider_proof(

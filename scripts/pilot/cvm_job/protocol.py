@@ -40,6 +40,19 @@ _PROVIDER_FREE_BOOTSTRAP_CLASSIFICATIONS = frozenset(
         "runner-completed-without-artifact-manifest",
     }
 )
+PROVIDER_FREE_SCENARIO_FAILURE_PATH = "run/scenario-failure.json"
+PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA = "cvm.provider-free-scenario-failure/1"
+PROVIDER_FREE_SCENARIO_FAILURE_STAGES = frozenset(
+    {
+        "viewer_deployment",
+        "shipped_tree",
+        "cadpy_runtime",
+        "viewer_fallback",
+        "candidate_workspace",
+        "native_measurement",
+        "finalization",
+    }
+)
 _RESERVED_UPDATE_FIELDS = frozenset(
     {
         "schema_version",
@@ -333,6 +346,12 @@ def public_state(state: dict[str, Any], stale_after: float) -> dict[str, Any]:
         )
         if state.get("job_kind") == "provider-free" and diagnostic is not None:
             result["bootstrap_diagnostic"] = diagnostic
+        scenario_failure = _public_provider_free_scenario_failure(
+            state.get("scenario_failure"),
+            expected_identity=(state.get("scenario") or {}).get("identity"),
+        )
+        if state.get("job_kind") == "provider-free" and scenario_failure is not None:
+            result["scenario_failure"] = scenario_failure
     return result
 
 
@@ -360,4 +379,29 @@ def _public_provider_free_bootstrap_diagnostic(
         "phase": phase,
         "classification": classification,
         "process_exit_code": process_exit_code,
+    }
+
+
+def _public_provider_free_scenario_failure(
+    value: object,
+    *,
+    expected_identity: object,
+) -> dict[str, str] | None:
+    """Project only the repository-owned closed scenario failure vocabulary."""
+
+    if not isinstance(value, dict):
+        return None
+    scenario_identity = value.get("scenario_identity")
+    stage = value.get("stage")
+    if (
+        value.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
+        or not isinstance(expected_identity, str)
+        or scenario_identity != expected_identity
+        or stage not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES
+    ):
+        return None
+    return {
+        "schema": PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+        "scenario_identity": scenario_identity,
+        "stage": stage,
     }

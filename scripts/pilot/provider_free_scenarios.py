@@ -22,6 +22,12 @@ from typing import Any, Sequence
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
 
+from scripts.pilot.cvm_job.protocol import (
+    PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+    PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+    PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
+)
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
@@ -52,6 +58,21 @@ VIEWER_TIMEOUT_SECONDS = 60
 
 class ScenarioError(RuntimeError):
     """A closed scenario could not publish required auditable evidence."""
+
+    def __init__(self, message: str, *, stage: str | None = None) -> None:
+        super().__init__(message)
+        self.stage = stage
+
+
+def _run_stage(stage: str, operation: Any, *args: Any, **kwargs: Any) -> Any:
+    """Attach one repository-owned top-level stage to a scenario failure."""
+
+    if stage not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES:
+        raise ValueError(f"unknown provider-free scenario stage: {stage!r}")
+    try:
+        return operation(*args, **kwargs)
+    except ScenarioError as exc:
+        raise ScenarioError(str(exc), stage=stage) from exc
 
 
 def _sha256(path: Path) -> str:
@@ -695,14 +716,34 @@ def _finalize_workspace(workspace: Path, command_log: Path) -> dict[str, Any]:
 
 def run_issue15_runtime_authority(workspace: Path) -> dict[str, Any]:
     command_log = workspace / "run/provider-free-commands.jsonl"
-    deployment = deployed_viewer_receipt(REPO_ROOT)
-    tree = deployed_runtime_tree_receipt(REPO_ROOT)
-    cadpy_runtime = cadpy_runtime_evidence()
-    fallback = viewer_fallback_evidence(workspace, deployment)
-    candidate = _prepare_candidate(workspace, command_log)
-    _prepare_workspace(workspace, candidate, command_log)
-    native = _publish_measured_step(workspace, candidate, command_log)
-    finalized = _finalize_workspace(workspace, command_log)
+    deployment = _run_stage(
+        "viewer_deployment", deployed_viewer_receipt, REPO_ROOT
+    )
+    tree = _run_stage("shipped_tree", deployed_runtime_tree_receipt, REPO_ROOT)
+    cadpy_runtime = _run_stage("cadpy_runtime", cadpy_runtime_evidence)
+    fallback = _run_stage(
+        "viewer_fallback", viewer_fallback_evidence, workspace, deployment
+    )
+    candidate = _run_stage(
+        "candidate_workspace", _prepare_candidate, workspace, command_log
+    )
+    _run_stage(
+        "candidate_workspace",
+        _prepare_workspace,
+        workspace,
+        candidate,
+        command_log,
+    )
+    native = _run_stage(
+        "native_measurement",
+        _publish_measured_step,
+        workspace,
+        candidate,
+        command_log,
+    )
+    finalized = _run_stage(
+        "finalization", _finalize_workspace, workspace, command_log
+    )
     receipt = {
         "schema": "issue15.runtime-authority-smoke/1",
         "scenario_identity": SCENARIO_IDENTITY,
@@ -732,9 +773,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.scenario != "issue15-runtime-authority":
         print(f"provider-free-scenario: unknown scenario: {args.scenario!r}", file=sys.stderr)
         return 2
+    workspace = args.workspace.resolve()
     try:
-        receipt = run_issue15_runtime_authority(args.workspace.resolve())
+        receipt = run_issue15_runtime_authority(workspace)
     except ScenarioError as exc:
+        if exc.stage in PROVIDER_FREE_SCENARIO_FAILURE_STAGES:
+            _write_json(
+                workspace / PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                {
+                    "schema": PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+                    "scenario_identity": SCENARIO_IDENTITY,
+                    "stage": exc.stage,
+                },
+            )
         print(f"provider-free-scenario: {exc}", file=sys.stderr)
         return 1
     print(json.dumps({"ok": True, "scenario": receipt}, sort_keys=True, separators=(",", ":")))

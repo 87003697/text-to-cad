@@ -27,6 +27,13 @@ without credential values, zero provider/tap requests, the isolated-loopback
 sandbox, native backend identity, Viewer deployment/fallback evidence, and the
 complete deployed-runtime tree receipt.
 
+After creating the new experiment, the runner retains the exact deployed-source
+authority and its materialized execution tree before starting bubblewrap. A
+retention failure is a terminal artifact-contract failure and no scenario
+workload starts. Both successful and nonzero scenario manifests bind the
+retained receipt and every retained execution file; failed output remains in
+place for postmortem review.
+
 The detached supervisor starts the provider-free Python runner with the fixed
 UTF-8 locale `LANG=C.UTF-8` and `LC_ALL=C.UTF-8`; caller locale values are not
 inherited. The runner accepts only the exact, platform-specific `LC_CTYPE` and

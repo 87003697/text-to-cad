@@ -20,6 +20,9 @@ from scripts.pilot import provider_free_output
 
 from . import tap_observer
 from .protocol import (
+    PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+    PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+    PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
     ProtocolError,
     TERMINAL_STATES,
     default_state_root,
@@ -596,29 +599,58 @@ def _provider_free_environment(
     return child
 
 
-def _provider_free_evidence_result(
+def _provider_free_manifest_index(
+    exp_dir: Path,
+) -> tuple[dict[str, dict[str, Any]] | None, str | None]:
+    """Read one terminal manifest into a duplicate-free path index."""
+
+    try:
+        manifest = json.loads(
+            (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
+        )
+    except FileNotFoundError:
+        return None, "provider-free execution evidence missing"
+    except (OSError, json.JSONDecodeError):
+        return None, "provider-free execution evidence invalid"
+    entries = manifest.get("files") if isinstance(manifest, dict) else None
+    if not isinstance(entries, list):
+        return None, "artifact manifest files are invalid"
+    by_path: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            return None, "provider-free terminal evidence manifest entry is invalid"
+        path = entry["path"]
+        if path in by_path:
+            return None, "provider-free terminal evidence manifest has duplicate paths"
+        by_path[path] = entry
+    return by_path, None
+
+
+def _provider_free_common_evidence_result(
     exp_dir: Path,
     *,
     handle: str,
     record: dict[str, Any],
     expected_stripped: list[str],
-) -> tuple[str | None, str | None]:
-    """Validate terminal no-provider evidence and its manifest binding."""
+    manifest_index: dict[str, dict[str, Any]] | None = None,
+) -> tuple[str | None, dict[str, dict[str, Any]] | None, str | None]:
+    """Validate evidence shared by successful and failed workload terminals."""
 
     proof_path = exp_dir / PROVIDER_FREE_PROOF
-    manifest_path = exp_dir / "artifact_manifest.json"
     try:
         proof_bytes = proof_path.read_bytes()
         proof = json.loads(proof_bytes)
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return None, "provider-free execution evidence missing"
+        return None, None, "provider-free execution evidence missing"
     except (OSError, json.JSONDecodeError):
-        return None, "provider-free execution evidence invalid"
+        return None, None, "provider-free execution evidence invalid"
     try:
         sandbox_bytes = (exp_dir / "run/sandbox-enforcement.json").read_bytes()
     except OSError:
-        return None, "provider-free terminal evidence missing: run/sandbox-enforcement.json"
+        return None, None, (
+            "provider-free terminal evidence missing: "
+            "run/sandbox-enforcement.json"
+        )
     expected_proof = {
         "schema": "cvm.provider-free-execution/1",
         "job": handle,
@@ -647,20 +679,14 @@ def _provider_free_evidence_result(
         },
     }
     if proof != expected_proof:
-        return None, "provider-free execution evidence does not match job authority"
-    entries = manifest.get("files")
-    if not isinstance(entries, list):
-        return None, "artifact manifest files are invalid"
-    required_paths = (
-        PROVIDER_FREE_PROOF,
-        "run/runtime-authority-smoke.json",
-        "run/deployed-source-authority.json",
-        "run/sandbox-enforcement.json",
-        "workspace-authority.json",
-        "workspace-authority.bundle",
-        "workspace.json",
-        "final/manifest.json",
-    )
+        return None, None, (
+            "provider-free execution evidence does not match job authority"
+        )
+    by_path = manifest_index
+    if by_path is None:
+        by_path, manifest_error = _provider_free_manifest_index(exp_dir)
+        if manifest_error is not None or by_path is None:
+            return None, None, manifest_error
     try:
         retained_receipt_bytes = (
             exp_dir / "run/deployed-source-authority.json"
@@ -675,7 +701,7 @@ def _provider_free_evidence_result(
         json.JSONDecodeError,
         deployment_authority.DeploymentAuthorityError,
     ):
-        return None, (
+        return None, None, (
             "provider-free terminal evidence has invalid retained deployed "
             "source authority"
         )
@@ -697,13 +723,15 @@ def _provider_free_evidence_result(
         or retained_receipt.get("runtime_identity")
         != record["request_authority"]["runtime_identity"]
     ):
-        return None, "provider-free retained deployment authority conflicts with job"
+        return None, None, (
+            "provider-free retained deployment authority conflicts with job"
+        )
     try:
         sandbox = json.loads(
             (exp_dir / "run/sandbox-enforcement.json").read_text(encoding="utf-8")
         )
     except (OSError, json.JSONDecodeError):
-        return None, "provider-free sandbox enforcement evidence is invalid"
+        return None, None, "provider-free sandbox enforcement evidence is invalid"
     argv = sandbox.get("argv") if isinstance(sandbox, dict) else None
     environment_names = (
         sandbox.get("environment_names") if isinstance(sandbox, dict) else None
@@ -742,19 +770,63 @@ def _provider_free_evidence_result(
         or sandbox.get("required_environment")
         != PROVIDER_FREE_REQUIRED_ENVIRONMENT
     ):
-        return None, "provider-free sandbox enforcement evidence is incomplete"
-    by_path: dict[str, dict[str, Any]] = {}
-    for entry in entries:
-        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
-            return None, "provider-free terminal evidence manifest entry is invalid"
-        path = entry["path"]
-        if path in by_path:
-            return None, "provider-free terminal evidence manifest has duplicate paths"
-        by_path[path] = entry
-    for relative in required_paths:
+        return None, None, "provider-free sandbox enforcement evidence is incomplete"
+    for relative in (
+        PROVIDER_FREE_PROOF,
+        "run/deployed-source-authority.json",
+        "run/sandbox-enforcement.json",
+    ):
         path = exp_dir / relative
         try:
             data = path.read_bytes()
+        except OSError:
+            return None, None, (
+                f"provider-free terminal evidence missing: {relative}"
+            )
+        expected_entry = {
+            "path": relative,
+            "size_bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+        if by_path.get(relative) != expected_entry:
+            return None, None, (
+                f"provider-free terminal evidence is not bound: {relative}"
+            )
+    for item in retained_receipt["files"]:
+        relative = f"run/deployed-source/{item['path']}"
+        if by_path.get(relative) != {**item, "path": relative}:
+            return None, None, (
+                f"provider-free terminal evidence is not bound: {relative}"
+            )
+    return _relative(proof_path), by_path, None
+
+
+def _provider_free_evidence_result(
+    exp_dir: Path,
+    *,
+    handle: str,
+    record: dict[str, Any],
+    expected_stripped: list[str],
+) -> tuple[str | None, str | None]:
+    """Validate complete successful execution evidence and manifest bindings."""
+
+    proof_path, by_path, error = _provider_free_common_evidence_result(
+        exp_dir,
+        handle=handle,
+        record=record,
+        expected_stripped=expected_stripped,
+    )
+    if error is not None or by_path is None:
+        return None, error
+    for relative in (
+        "run/runtime-authority-smoke.json",
+        "workspace-authority.json",
+        "workspace-authority.bundle",
+        "workspace.json",
+        "final/manifest.json",
+    ):
+        try:
+            data = (exp_dir / relative).read_bytes()
         except OSError:
             return None, f"provider-free terminal evidence missing: {relative}"
         expected_entry = {
@@ -764,11 +836,52 @@ def _provider_free_evidence_result(
         }
         if by_path.get(relative) != expected_entry:
             return None, f"provider-free terminal evidence is not bound: {relative}"
-    for item in retained_receipt["files"]:
-        relative = f"run/deployed-source/{item['path']}"
-        if by_path.get(relative) != {**item, "path": relative}:
-            return None, f"provider-free terminal evidence is not bound: {relative}"
-    return _relative(proof_path), None
+    return proof_path, None
+
+
+def _provider_free_failure_evidence_result(
+    exp_dir: Path,
+    *,
+    handle: str,
+    record: dict[str, Any],
+    expected_stripped: list[str],
+) -> tuple[str | None, dict[str, str] | None, str | None]:
+    """Validate the failure-only evidence path without requiring success files."""
+
+    by_path, manifest_error = _provider_free_manifest_index(exp_dir)
+    if manifest_error is not None or by_path is None:
+        return None, None, manifest_error
+    failure_path = exp_dir / PROVIDER_FREE_SCENARIO_FAILURE_PATH
+    try:
+        failure_bytes = failure_path.read_bytes()
+        failure = json.loads(failure_bytes)
+    except (OSError, json.JSONDecodeError):
+        return None, None, "provider-free scenario failure evidence is invalid"
+    if (
+        not isinstance(failure, dict)
+        or set(failure) != {"schema", "scenario_identity", "stage"}
+        or failure.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
+        or failure.get("scenario_identity") != record["scenario"]["identity"]
+        or failure.get("stage") not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES
+    ):
+        return None, None, "provider-free scenario failure identity conflicts"
+    expected_entry = {
+        "path": PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+        "size_bytes": len(failure_bytes),
+        "sha256": hashlib.sha256(failure_bytes).hexdigest(),
+    }
+    if by_path.get(PROVIDER_FREE_SCENARIO_FAILURE_PATH) != expected_entry:
+        return None, None, "provider-free scenario failure evidence is not bound"
+    proof_path, _common_index, error = _provider_free_common_evidence_result(
+        exp_dir,
+        handle=handle,
+        record=record,
+        expected_stripped=expected_stripped,
+        manifest_index=by_path,
+    )
+    if error is not None:
+        return None, None, error
+    return proof_path, failure, None
 
 
 def supervise_provider_free(
@@ -890,12 +1003,8 @@ def supervise_provider_free(
                     bootstrap_diagnostic=diagnostic,
                     failure_reason="provider-free runner produced no artifact manifest",
                 )
-            runner_status, manifest_error = _manifest_result(manifest_path)
-            proof_path, proof_error = _provider_free_evidence_result(
-                exp_dir,
-                handle=handle,
-                record=record,
-                expected_stripped=stripped,
+            workload_status, runner_status, manifest_error = (
+                _provider_free_manifest_result(manifest_path)
             )
             updates = {
                 "runner_final_status": runner_status,
@@ -903,16 +1012,65 @@ def supervise_provider_free(
                     _relative(manifest_path) if manifest_path.is_file() else None
                 ),
                 "process_exit_code": process_status,
-                "no_provider_evidence": proof_path,
             }
+            if manifest_error is not None:
+                return transition(
+                    root,
+                    handle,
+                    "failed",
+                    failure_reason=manifest_error,
+                    no_provider_evidence=None,
+                    **updates,
+                )
+            if workload_status != 0:
+                proof_path, scenario_failure, failure_error = (
+                    _provider_free_failure_evidence_result(
+                        exp_dir,
+                        handle=handle,
+                        record=record,
+                        expected_stripped=stripped,
+                    )
+                )
+                updates["no_provider_evidence"] = proof_path
+                if failure_error is not None:
+                    return transition(
+                        root,
+                        handle,
+                        "failed",
+                        failure_reason=failure_error,
+                        **updates,
+                    )
+                updates["scenario_failure"] = scenario_failure
+                if runner_status != workload_status:
+                    reason = "provider-free scenario final status conflicts"
+                elif process_status != runner_status:
+                    reason = "provider-free runner exit status conflicts"
+                else:
+                    reason = (
+                        "provider-free scenario failed at "
+                        f"{scenario_failure['stage']}"
+                    )
+                return transition(
+                    root,
+                    handle,
+                    "failed",
+                    failure_reason=reason,
+                    **updates,
+                )
+            proof_path, proof_error = _provider_free_evidence_result(
+                exp_dir,
+                handle=handle,
+                record=record,
+                expected_stripped=stripped,
+            )
+            updates["no_provider_evidence"] = proof_path
             if (
                 process_status == 0
                 and runner_status == 0
-                and manifest_error is None
                 and proof_error is None
             ):
                 return transition(root, handle, "succeeded", **updates)
-            reason = manifest_error or proof_error or (
+            reason = proof_error or (
                 f"provider-free runner exited {process_status}"
                 if process_status
                 else f"runner final_status={runner_status}"
@@ -1084,6 +1242,26 @@ def _manifest_result(path: Path) -> tuple[int | None, str | None]:
     if isinstance(final_status, bool) or not isinstance(final_status, int):
         return None, "artifact manifest final_status is not an integer"
     return final_status, None
+
+
+def _provider_free_manifest_result(
+    path: Path,
+) -> tuple[int | None, int | None, str | None]:
+    """Read both provider-free statuses from one terminal manifest."""
+
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, None, "artifact manifest missing"
+    except (OSError, json.JSONDecodeError):
+        return None, None, "artifact manifest invalid"
+    statuses: list[int] = []
+    for field in ("workload_status", "final_status"):
+        value = manifest.get(field)
+        if isinstance(value, bool) or not isinstance(value, int):
+            return None, None, f"artifact manifest {field} is not an integer"
+        statuses.append(value)
+    return statuses[0], statuses[1], None
 
 
 def supervise_pilot(

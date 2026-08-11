@@ -188,6 +188,91 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["path"], cadpy.relative_to(self.repo).as_posix())
         self.assertEqual(evidence["sha256"], hashlib.sha256(cadpy.read_bytes()).hexdigest())
 
+    def test_scenario_error_publishes_only_closed_top_level_stage(self) -> None:
+        workspace = self.repo / "outputs/group/exp"
+        dangerous = (
+            "OPENAI_API_KEY=secret\n../../private/path "
+            + "d" * 64
+            + " --argv --env"
+        )
+        stages = (
+            ("viewer_deployment", "deployed_viewer_receipt"),
+            ("shipped_tree", "deployed_runtime_tree_receipt"),
+            ("cadpy_runtime", "cadpy_runtime_evidence"),
+            ("viewer_fallback", "viewer_fallback_evidence"),
+            ("candidate_workspace", "_prepare_candidate"),
+            ("native_measurement", "_publish_measured_step"),
+            ("finalization", "_finalize_workspace"),
+        )
+
+        for stage, failing_helper in stages:
+            with self.subTest(stage=stage):
+                if workspace.exists():
+                    import shutil
+
+                    shutil.rmtree(workspace)
+                workspace.mkdir(parents=True)
+                defaults = {
+                    "deployed_viewer_receipt": {"viewer_version": "test"},
+                    "deployed_runtime_tree_receipt": {"files": []},
+                    "cadpy_runtime_evidence": {"schema": "cadpy"},
+                    "viewer_fallback_evidence": {"action": "start"},
+                    "_prepare_candidate": workspace / "candidate",
+                    "_prepare_workspace": None,
+                    "_publish_measured_step": {"depths": list(range(1, 9))},
+                    "_finalize_workspace": {"final": {}},
+                }
+                patches = []
+                for helper, value in defaults.items():
+                    patches.append(
+                        mock.patch.object(
+                            provider_free_scenarios,
+                            helper,
+                            side_effect=(
+                                provider_free_scenarios.ScenarioError(dangerous)
+                                if helper == failing_helper
+                                else None
+                            ),
+                            return_value=(None if helper == failing_helper else value),
+                        )
+                    )
+                for patcher in patches:
+                    patcher.start()
+                    self.addCleanup(patcher.stop)
+                try:
+                    status = provider_free_scenarios.main(
+                        [
+                            "run",
+                            "issue15-runtime-authority",
+                            "--workspace",
+                            str(workspace),
+                        ]
+                    )
+                finally:
+                    for patcher in reversed(patches):
+                        patcher.stop()
+
+                self.assertEqual(status, 1)
+                receipt_path = workspace / "run/scenario-failure.json"
+                receipt_text = receipt_path.read_text(encoding="utf-8")
+                self.assertEqual(
+                    json.loads(receipt_text),
+                    {
+                        "schema": "cvm.provider-free-scenario-failure/1",
+                        "scenario_identity": "issue15.provider-free.runtime-authority/1",
+                        "stage": stage,
+                    },
+                )
+                for forbidden in (
+                    "secret",
+                    "private/path",
+                    "d" * 64,
+                    "argv",
+                    "env",
+                    dangerous,
+                ):
+                    self.assertNotIn(forbidden, receipt_text)
+
 
 if __name__ == "__main__":
     unittest.main()

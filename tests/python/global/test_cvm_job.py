@@ -248,6 +248,62 @@ class CvmJobTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def write_provider_free_failure_evidence(
+        self,
+        handle: str,
+        *,
+        scenario_identity: str = "issue15.provider-free.runtime-authority/1",
+        stage: str = "viewer_fallback",
+        stripped: list[str] | None = None,
+    ) -> None:
+        """Publish common authority plus one manifest-bound closed failure."""
+
+        self.write_provider_free_terminal_evidence(handle, stripped=stripped)
+        exp_dir = self.repo_root / "outputs" / handle
+        for relative in (
+            "run/runtime-authority-smoke.json",
+            "workspace-authority.json",
+            "workspace-authority.bundle",
+            "workspace.json",
+            "final/manifest.json",
+        ):
+            (exp_dir / relative).unlink()
+        failure = {
+            "schema": "cvm.provider-free-scenario-failure/1",
+            "scenario_identity": scenario_identity,
+            "stage": stage,
+        }
+        failure_path = exp_dir / "run/scenario-failure.json"
+        failure_path.write_text(
+            json.dumps(failure, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        files = []
+        for path in sorted(exp_dir.rglob("*")):
+            if not path.is_file() or path.name == "artifact_manifest.json":
+                continue
+            data = path.read_bytes()
+            files.append(
+                {
+                    "path": path.relative_to(exp_dir).as_posix(),
+                    "size_bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }
+            )
+        (exp_dir / "artifact_manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "workload_status": 1,
+                    "final_status": 1,
+                    "files": files,
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
     def test_submit_returns_stable_handle_before_child_start(self) -> None:
         handle = self.submit()
         self.assertRegex(
@@ -561,6 +617,169 @@ class CvmJobTests(unittest.TestCase):
             include_observation=False,
         )
         self.assertNotIn("bootstrap_diagnostic", public)
+
+    def test_provider_free_nonzero_exposes_closed_scenario_failure(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **kwargs):
+            raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
+            self.write_provider_free_failure_evidence(
+                handle,
+                stripped=raw_stripped.split(",") if raw_stripped else [],
+            )
+            return 1, 4321
+
+        with mock.patch.object(
+            runtime,
+            "_run_with_heartbeat",
+            side_effect=fake_run,
+        ):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"], "OPENAI_API_KEY": "secret"},
+            )
+
+        expected = {
+            "schema": "cvm.provider-free-scenario-failure/1",
+            "scenario_identity": "issue15.provider-free.runtime-authority/1",
+            "stage": "viewer_fallback",
+        }
+        self.assertEqual(state["state"], "failed")
+        self.assertEqual(state["scenario_failure"], expected)
+        self.assertNotIn("missing", state["failure_reason"])
+        self.assertNotIn("invalid retained", state["failure_reason"])
+        public = runtime.status_job(
+            handle,
+            state_root=self.state_root,
+            include_observation=False,
+        )
+        waited, exit_code = runtime.wait_job(
+            handle,
+            state_root=self.state_root,
+            timeout=0,
+        )
+        for result in (public, waited):
+            self.assertEqual(result["scenario_failure"], expected)
+            self.assertEqual(result["process_exit_code"], 1)
+            self.assertEqual(result["runner_final_status"], 1)
+        self.assertEqual(exit_code, 1)
+
+    def test_provider_free_scenario_failure_rejects_tamper_and_wrong_identity(self) -> None:
+        for index, mutation in enumerate(("tamper", "wrong-identity")):
+            with self.subTest(mutation=mutation):
+                group = f"20260805-20{index:04d}-audit"
+                handle = runtime.submit_provider_free(
+                    "issue15-runtime-authority",
+                    group,
+                    state_root=self.state_root,
+                    detach=lambda *args: 1234,
+                )["job"]
+
+                def fake_run(*_args, **kwargs):
+                    raw_stripped = kwargs["env"][
+                        "CVM_PROVIDER_FREE_STRIPPED_NAMES"
+                    ]
+                    self.write_provider_free_failure_evidence(
+                        handle,
+                        scenario_identity=(
+                            "issue15.provider-free.other/1"
+                            if mutation == "wrong-identity"
+                            else "issue15.provider-free.runtime-authority/1"
+                        ),
+                        stripped=raw_stripped.split(",") if raw_stripped else [],
+                    )
+                    if mutation == "tamper":
+                        failure_path = (
+                            self.repo_root
+                            / "outputs"
+                            / handle
+                            / "run/scenario-failure.json"
+                        )
+                        failure_path.write_text(
+                            json.dumps(
+                                {
+                                    "schema": "cvm.provider-free-scenario-failure/1",
+                                    "scenario_identity": (
+                                        "issue15.provider-free.runtime-authority/1"
+                                    ),
+                                    "stage": "native_measurement",
+                                },
+                                sort_keys=True,
+                            )
+                            + "\n",
+                            encoding="utf-8",
+                        )
+                    return 1, 4321
+
+                with mock.patch.object(
+                    runtime,
+                    "_run_with_heartbeat",
+                    side_effect=fake_run,
+                ):
+                    state = runtime.supervise_provider_free(
+                        handle,
+                        state_root=self.state_root,
+                        environ={"PATH": os.environ["PATH"]},
+                    )
+
+                self.assertEqual(state["state"], "failed")
+                self.assertNotIn("scenario_failure", state)
+                self.assertIn("scenario failure", state["failure_reason"])
+                public = runtime.status_job(
+                    handle,
+                    state_root=self.state_root,
+                    include_observation=False,
+                )
+                self.assertNotIn("scenario_failure", public)
+
+    def test_public_scenario_failure_projection_strips_unbounded_fields(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+        protocol.transition(self.state_root, handle, "running")
+        protocol.transition(
+            self.state_root,
+            handle,
+            "failed",
+            process_exit_code=1,
+            runner_final_status=1,
+            scenario_failure={
+                "schema": "cvm.provider-free-scenario-failure/1",
+                "scenario_identity": "issue15.provider-free.runtime-authority/1",
+                "stage": "candidate_workspace",
+                "text": "OPENAI_API_KEY=secret\n../../private/path",
+                "argv": ["/bin/sh", "-c", "secret"],
+                "environment": {"VENUS_TOKEN": "secret"},
+                "digest": "d" * 64,
+            },
+        )
+
+        public = runtime.status_job(
+            handle,
+            state_root=self.state_root,
+            include_observation=False,
+        )
+
+        self.assertEqual(
+            public["scenario_failure"],
+            {
+                "schema": "cvm.provider-free-scenario-failure/1",
+                "scenario_identity": "issue15.provider-free.runtime-authority/1",
+                "stage": "candidate_workspace",
+            },
+        )
+        serialized = json.dumps(public, sort_keys=True)
+        for forbidden in ("secret", "private/path", "d" * 64, "argv", "environment"):
+            self.assertNotIn(forbidden, serialized)
 
     def test_provider_free_bootstrap_failure_has_bounded_public_diagnostic(self) -> None:
         handle = runtime.submit_provider_free(
@@ -1680,6 +1899,18 @@ class CvmJobTests(unittest.TestCase):
         contract = MONITOR_SKILL.read_text(encoding="utf-8")
 
         self.assertIn("cvm.provider-free-bootstrap-diagnostic/1", contract)
+        self.assertIn("cvm.provider-free-scenario-failure/1", contract)
+        self.assertIn("scenario_failure", contract)
+        for stage in (
+            "viewer_deployment",
+            "shipped_tree",
+            "cadpy_runtime",
+            "viewer_fallback",
+            "candidate_workspace",
+            "native_measurement",
+            "finalization",
+        ):
+            self.assertIn(stage, contract)
         self.assertIn("before-experiment", contract)
         self.assertIn("before-artifact-manifest", contract)
         for classification in (

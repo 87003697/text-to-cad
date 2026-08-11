@@ -29,6 +29,29 @@ includes `kind: provider-free` and the registered scenario identity; the
 terminal no-provider proof and runtime-authority receipt remain artifact
 evidence rather than monitor inference.
 
+When a launched provider-free scenario exits nonzero, terminal `status` and
+`wait` validate the manifest-bound retained deployment authority and then may
+publish `scenario_failure` with schema
+`cvm.provider-free-scenario-failure/1`. This projection contains only the
+registered `scenario_identity` and one closed `stage`:
+
+- `viewer_deployment`
+- `shipped_tree`
+- `cadpy_runtime`
+- `viewer_fallback`
+- `candidate_workspace`
+- `native_measurement`
+- `finalization`
+
+The failure path does not require successful Workspace, runtime-authority, or
+Final Delivery artifacts before reporting the primary stage. It still requires
+the failure receipt, retained deployed source, sandbox/no-provider proof, and
+their exact terminal-manifest bindings. Invalid, tampered, unbound, or
+wrong-scenario receipts are rejected. The projection never includes exception
+text, command output, paths, argv, environment data, digests, extra fields, or
+multiline details. `process_exit_code`, `runner_final_status`, and monitor exit
+code `1` remain the terminal failure authorities.
+
 If a provider-free runner terminates before it publishes
 `artifact_manifest.json`, terminal `status` and `wait` results may include
 `bootstrap_diagnostic` with schema
