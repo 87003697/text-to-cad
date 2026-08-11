@@ -244,4 +244,18 @@ PyModuleDef module = {
 
 }  // namespace
 
-PyMODINIT_FUNC PyInit__native() { return PyModule_Create(&module); }
+PyMODINIT_FUNC PyInit__native() {
+    PyObject* result = PyModule_Create(&module);
+    if (result == nullptr) {
+        return nullptr;
+    }
+    if (PyModule_AddStringConstant(
+            result,
+            "BACKEND_ID",
+            "meshscope.voxblame.native-sat/1"
+        ) < 0) {
+        Py_DECREF(result);
+        return nullptr;
+    }
+    return result;
+}

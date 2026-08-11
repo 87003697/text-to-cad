@@ -743,6 +743,47 @@ test("runAgentStart skips a reusable viewer that rejects the sandbox directory",
     spawned[0][1].slice(-4),
     ["--port", "4179", "--port-scan-limit", "0"]
   );
+  const dirIndex = spawned[0][1].indexOf("--dir");
+  assert.notEqual(dirIndex, -1);
+  assert.equal(spawned[0][1][dirIndex + 1], directory);
+});
+
+test("runAgentStart retries when the selected port is taken before spawn", async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-agent-start-directory-"));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const probes = new Map();
+  const spawned = [];
+  const child = new EventEmitter();
+
+  const result = await runAgentStart({
+    argv: ["--viewer-start-mode", "serve", "--host", "127.0.0.1", "--dir", directory, "--port", "4178"],
+    env: {},
+    packageRoot: path.resolve("viewer"),
+    nodePath: process.execPath,
+    registryServers: [],
+    probePort: async ({ host, port }) => {
+      const attempt = (probes.get(port) || 0) + 1;
+      probes.set(port, attempt);
+      return {
+        status: port === 4178 && attempt > 1 ? "occupied" : "closed",
+        port,
+        baseUrl: `http://${host}:${port}`,
+      };
+    },
+    spawnImpl: (...args) => {
+      spawned.push(args);
+      return child;
+    },
+  });
+
+  assert.equal(result, child);
+  assert.equal(spawned.length, 1);
+  assert.deepEqual(
+    spawned[0][1].slice(-4),
+    ["--port", "4179", "--port-scan-limit", "0"]
+  );
+  assert.equal(probes.get(4178), 2);
+  assert.equal(probes.get(4179), 2);
 });
 
 test("executeAgentStartLaunch --json emits one startup object only after readiness", async () => {

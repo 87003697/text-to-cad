@@ -27,6 +27,26 @@ IMPLICIT_NODE_MODULES_INCLUDE = (
 NATIVE_MESHSCOPE_RUNTIME = (
     "skills/mesh-compare/scripts/packages/meshscope"
 )
+VIEWER_RUNTIME_IDENTITY = (
+    "skills/cad-viewer/scripts/viewer/runtime-identity.json"
+)
+VIEWER_ARTIFACT_ROUTES = (
+    (
+        "launcher",
+        "viewer/scripts/start-agent-viewer.mjs",
+        "skills/cad-viewer/scripts/viewer/scripts/start-agent-viewer.mjs",
+    ),
+    (
+        "server",
+        "viewer/src/server/server.mjs",
+        "skills/cad-viewer/scripts/viewer/backend/server.mjs",
+    ),
+    (
+        "client",
+        "viewer/src/client/main.jsx",
+        "skills/cad-viewer/scripts/viewer/dist/index.html",
+    ),
+)
 
 # Source -> staging is intentionally different from staging -> CVM. The
 # staging copy keeps build-only inputs such as viewer/, packages/, and plugins/
@@ -129,6 +149,7 @@ class RuntimeAttestation:
 
     hashes: Mapping[str, str]
     chromium_revision: str
+    viewer_identity: Mapping[str, object] | None = None
 
 
 PRODUCTION_RUNTIME = RuntimeContract(
@@ -142,6 +163,7 @@ PRODUCTION_RUNTIME = RuntimeContract(
         "skills/cad-viewer/scripts/viewer/backend/server.mjs",
         "skills/cad-viewer/scripts/viewer/scripts/start-agent-viewer.mjs",
         "skills/cad-viewer/scripts/viewer/dist/index.html",
+        VIEWER_RUNTIME_IDENTITY,
         "skills/implicit-cad/scripts/packages/implicitjs/scripts/snapshot.mjs",
         (
             "skills/implicit-cad/scripts/packages/implicitjs/"
@@ -172,6 +194,8 @@ PRODUCTION_RUNTIME = RuntimeContract(
     hash_files=(
         "skills/cad-viewer/scripts/viewer/backend/server.mjs",
         "skills/cad-viewer/scripts/viewer/scripts/start-agent-viewer.mjs",
+        "skills/cad-viewer/scripts/viewer/dist/index.html",
+        VIEWER_RUNTIME_IDENTITY,
         (
             "skills/implicit-cad/scripts/packages/implicitjs/"
             "scripts/snapshot.mjs"
@@ -698,6 +722,7 @@ class CvmPush:
     def attest_stage(self, stage: Path) -> RuntimeAttestation:
         """Hash key runtime files and parse the required browser revision."""
 
+        viewer_identity = self._validate_viewer_identity(stage)
         hashes = {
             relative: hashlib.sha256((stage / relative).read_bytes()).hexdigest()
             for relative in PRODUCTION_RUNTIME.hash_files
@@ -730,7 +755,80 @@ class CvmPush:
         return RuntimeAttestation(
             hashes=hashes,
             chromium_revision=revision,
+            viewer_identity=viewer_identity,
         )
+
+    @staticmethod
+    def _validate_viewer_identity(stage: Path) -> Mapping[str, object]:
+        payload = _read_json(
+            stage / VIEWER_RUNTIME_IDENTITY,
+            "Viewer runtime identity",
+        )
+        if not isinstance(payload, dict) or payload.get("schema") != (
+            "cad-viewer.runtime-identity/1"
+        ):
+            raise PushError("Viewer runtime identity has an unsupported schema", 4)
+        artifacts = payload.get("artifacts")
+        actual_routes = []
+        if isinstance(artifacts, list):
+            for item in artifacts:
+                actual_routes.append(
+                    (
+                        item.get("role") if isinstance(item, dict) else None,
+                        (
+                            item.get("source", {}).get("path")
+                            if isinstance(item, dict)
+                            and isinstance(item.get("source"), dict)
+                            else None
+                        ),
+                        (
+                            item.get("bundle", {}).get("path")
+                            if isinstance(item, dict)
+                            and isinstance(item.get("bundle"), dict)
+                            else None
+                        ),
+                    )
+                )
+        if actual_routes != list(VIEWER_ARTIFACT_ROUTES):
+            raise PushError("Viewer runtime identity has invalid artifacts", 4)
+        if not isinstance(payload.get("viewer_version"), str) or not payload[
+            "viewer_version"
+        ].strip():
+            raise PushError("Viewer runtime identity has no viewer version", 4)
+        for artifact in artifacts:
+            for kind in ("source", "bundle"):
+                identity = artifact.get(kind)
+                if not isinstance(identity, dict):
+                    raise PushError(
+                        f"Viewer runtime identity has invalid {kind} entry",
+                        4,
+                    )
+                relative = identity.get("path")
+                expected = identity.get("sha256")
+                if (
+                    not isinstance(relative, str)
+                    or relative.startswith("/")
+                    or ".." in Path(relative).parts
+                    or not isinstance(expected, str)
+                    or len(expected) != 64
+                ):
+                    raise PushError(
+                        f"Viewer runtime identity has invalid {kind} identity",
+                        4,
+                    )
+                path = stage / relative
+                if not path.is_file():
+                    raise PushError(
+                        f"Viewer runtime identity is missing {kind}: {relative}",
+                        4,
+                    )
+                actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                if actual != expected:
+                    raise PushError(
+                        f"Viewer runtime identity has stale {kind} digest: {relative}",
+                        4,
+                    )
+        return payload
 
     def transfer_stage(self, stage: Path) -> None:
         """Perform the one and only remote rsync for a complete stage."""
@@ -820,7 +918,9 @@ class CvmPush:
             "spec = importlib.util.find_spec('meshscope.voxblame._native'); "
             "assert spec is not None and spec.origin is not None; "
             "assert pathlib.Path(spec.origin).resolve().is_relative_to(root); "
-            "from meshscope.voxblame import _native"
+            "from meshscope.voxblame import _native; "
+            "assert _native.BACKEND_ID == "
+            "'meshscope.voxblame.native-sat/1'"
         )
         lines.append(f"./.venv/bin/python -I -c {shlex.quote(probe)}")
         return "\n".join(lines)
@@ -851,7 +951,7 @@ class CvmPush:
             hashes[relative] = digest
         return hashes
 
-    def verify_remote(self, attestation: RuntimeAttestation) -> None:
+    def verify_remote(self, attestation: RuntimeAttestation) -> dict[str, object]:
         """Gate 3: verify physical files, hashes, and browser cache on CVM."""
 
         result = self.runner.remote(
@@ -887,6 +987,34 @@ class CvmPush:
                 f"CVM Playwright browser revision {revision} is missing.",
                 6,
             )
+        identity = attestation.viewer_identity
+        if not isinstance(identity, Mapping):
+            raise PushError("Viewer runtime deployment has no source identity", 5)
+        receipt_artifacts = []
+        for artifact in identity["artifacts"]:
+            bundle = artifact["bundle"]
+            deployed_digest = remote_hashes.get(bundle["path"])
+            if deployed_digest != bundle["sha256"]:
+                raise PushError(
+                    "CVM runtime verification failed: Viewer deployment digest mismatch",
+                    5,
+                )
+            receipt_artifacts.append(
+                {
+                    "role": artifact["role"],
+                    "source": artifact["source"],
+                    "bundle": bundle,
+                    "deployed": {
+                        "path": bundle["path"],
+                        "sha256": deployed_digest,
+                    },
+                }
+            )
+        return {
+            "schema": "cvm.viewer-runtime-deployment/1",
+            "viewer_version": identity["viewer_version"],
+            "artifacts": receipt_artifacts,
+        }
 
     def remote_git_base(self) -> str:
         result = self.runner.remote(
@@ -924,7 +1052,7 @@ class CvmPush:
                 attestation = self.attest_stage(stage)
                 self.transfer_stage(stage)
                 self.build_remote_native_runtime()
-                self.verify_remote(attestation)
+                deployment_receipt = self.verify_remote(attestation)
         except PushError as exc:
             if exc.status == 4 and not exc.transferred:
                 self._log(
@@ -936,6 +1064,10 @@ class CvmPush:
         self._log(
             "CVM runtime verified: physical Viewer + implicit + native "
             "meshscope runtime, matching hashes, and Playwright browser revision"
+        )
+        self._log(
+            "Viewer deployment receipt: "
+            + json.dumps(deployment_receipt, sort_keys=True, separators=(",", ":"))
         )
         remote_head = self.remote_git_base()
         self._log(

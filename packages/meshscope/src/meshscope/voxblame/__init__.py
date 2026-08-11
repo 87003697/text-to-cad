@@ -66,7 +66,14 @@ from meshscope.voxblame.verification import (
     VerifyStepResult,
     verify_step,
 )
-from meshscope.voxblame.voxelize import build_lattice_tree, voxelize_mesh
+from meshscope.voxblame.voxelize import (
+    BACKEND_IDENTITY_SCHEMA,
+    NATIVE_BACKEND_ID,
+    PYTHON_BACKEND_ID,
+    backend_identity,
+    build_lattice_tree,
+    voxelize_mesh,
+)
 
 __all__ = [
     "CanonicalFrame",
@@ -75,17 +82,20 @@ __all__ = [
     "UnsupportedOrInvalidVoxBlameState",
     "UNSUPPORTED_OR_INVALID_STATE",
     "BOUNDARY_EPSILON",
+    "BACKEND_IDENTITY_SCHEMA",
     "COORDINATE_CONTRACT",
     "FORBIDDEN_FIELDS",
     "MAX_DEPTH",
     "MEASUREMENT_SCHEMA",
     "MEASUREMENT_SUMMARY_SCHEMA",
     "MeasureStepResult",
+    "NATIVE_BACKEND_ID",
     "NORMALIZATION_SCHEMA",
     "PREPARE_FAILURE_SCHEMA",
     "PREVIEW_SCHEMA",
     "PrepareReferenceError",
     "PrepareReferenceResult",
+    "PYTHON_BACKEND_ID",
     "PreviewScene",
     "PublishPreviewResult",
     "ValidatedPreviewIdentity",
@@ -102,6 +112,7 @@ __all__ = [
     "SurfaceTreeError",
     "VoxBlameError",
     "build_lattice_tree",
+    "backend_identity",
     "decode_surface_tree",
     "encode_surface_tree",
     "measure_step",

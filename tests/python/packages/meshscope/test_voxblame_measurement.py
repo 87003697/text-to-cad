@@ -122,6 +122,14 @@ class VoxBlameMeasurementTests(unittest.TestCase):
         )
 
         self.assertFalse(result.idempotent)
+        self.assertEqual(
+            {
+                "schema": "meshscope.surface-occupancy-backend/1",
+                "id": "meshscope.voxblame.native-sat/1",
+                "implementation": "native",
+            },
+            result.backend,
+        )
         summary = result.summary
         self.assertEqual(MEASUREMENT_SUMMARY_SCHEMA, summary["schema"])
         self.assertEqual("trellis2_canonical/1", summary["coordinate_contract"])

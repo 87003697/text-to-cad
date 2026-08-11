@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -121,6 +122,51 @@ def create_runtime(stage: Path) -> cvm_push.RuntimeAttestation:
             )
         else:
             path.write_text(f"{relative}\n", encoding="utf-8")
+    artifacts = []
+    for role, source_relative, bundle_relative in (
+        (
+            "launcher",
+            "viewer/scripts/start-agent-viewer.mjs",
+            "skills/cad-viewer/scripts/viewer/scripts/start-agent-viewer.mjs",
+        ),
+        (
+            "server",
+            "viewer/src/server/server.mjs",
+            "skills/cad-viewer/scripts/viewer/backend/server.mjs",
+        ),
+        (
+            "client",
+            "viewer/src/client/main.jsx",
+            "skills/cad-viewer/scripts/viewer/dist/index.html",
+        ),
+    ):
+        source = stage / source_relative
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(f"{source_relative}\n", encoding="utf-8")
+        artifacts.append(
+            {
+                "role": role,
+                "source": {
+                    "path": source_relative,
+                    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                },
+                "bundle": {
+                    "path": bundle_relative,
+                    "sha256": hashlib.sha256(
+                        (stage / bundle_relative).read_bytes()
+                    ).hexdigest(),
+                },
+            }
+        )
+    identity = {
+        "schema": "cad-viewer.runtime-identity/1",
+        "viewer_version": "0.3.9",
+        "artifacts": artifacts,
+    }
+    identity_path = (
+        stage / "skills/cad-viewer/scripts/viewer/runtime-identity.json"
+    )
+    identity_path.write_text(json.dumps(identity, indent=2) + "\n", encoding="utf-8")
     workflow = cvm_push.CvmPush(FakeRunner(), repo_root=stage, environ={})
     workflow.validate_stage(stage)
     return workflow.attest_stage(stage)
@@ -218,6 +264,23 @@ class BuildInputTests(unittest.TestCase):
 
 
 class StageTests(unittest.TestCase):
+    def test_attestation_rejects_a_stale_generated_viewer_bundle(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            stage = Path(root_text)
+            create_runtime(stage)
+            launcher = (
+                stage
+                / "skills/cad-viewer/scripts/viewer/scripts/start-agent-viewer.mjs"
+            )
+            launcher.write_text("stale generated launcher\n", encoding="utf-8")
+            workflow = cvm_push.CvmPush(FakeRunner(), repo_root=stage, environ={})
+
+            with self.assertRaisesRegex(
+                cvm_push.PushError,
+                "stale bundle digest",
+            ):
+                workflow.attest_stage(stage)
+
     def test_materialize_skill_symlinks_replaces_internal_links_before_bundle(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             stage = Path(root_text)
@@ -349,6 +412,10 @@ class StageTests(unittest.TestCase):
             stage = Path(root_text)
             attestation = create_runtime(stage)
             self.assertEqual(attestation.chromium_revision, "1234")
+            self.assertEqual(
+                "cad-viewer.runtime-identity/1",
+                attestation.viewer_identity["schema"],
+            )
 
             required = stage / cvm_push.PRODUCTION_RUNTIME.required_files[-1]
             required.unlink()
@@ -535,13 +602,27 @@ class TransferAndVerifyTests(unittest.TestCase):
                 environ={},
             )
 
-            workflow.verify_remote(attestation)
+            receipt = workflow.verify_remote(attestation)
+            self.assertEqual("cvm.viewer-runtime-deployment/1", receipt["schema"])
+            for expected, artifact in zip(
+                attestation.viewer_identity["artifacts"],
+                receipt["artifacts"],
+                strict=True,
+            ):
+                self.assertEqual(expected["role"], artifact["role"])
+                self.assertEqual(expected["source"], artifact["source"])
+                self.assertEqual(expected["bundle"], artifact["bundle"])
+                self.assertEqual(
+                    artifact["bundle"]["sha256"],
+                    artifact["deployed"]["sha256"],
+                )
             command = runner.remote_commands[0]
             for relative in cvm_push.PRODUCTION_RUNTIME.physical_directories:
                 self.assertIn(f"test ! -L {relative}", command)
             for relative in cvm_push.PRODUCTION_RUNTIME.required_files:
                 self.assertIn(f"test -f {relative}", command)
             self.assertIn("meshscope.voxblame._native", command)
+            self.assertIn("meshscope.voxblame.native-sat/1", command)
             self.assertIn("chromium_headless_shell-1234", runner.remote_commands[1])
 
             bad = dict(attestation.hashes)
@@ -628,7 +709,14 @@ class WorkflowTests(unittest.TestCase):
             workflow.build_remote_native_runtime = lambda: events.append(
                 "build-native"
             )
-            workflow.verify_remote = lambda expected: events.append("verify")
+            workflow.verify_remote = lambda expected: (
+                events.append("verify"),
+                {
+                    "schema": "cvm.viewer-runtime-deployment/1",
+                    "viewer_version": "0.3.9",
+                    "artifacts": [],
+                },
+            )[1]
             workflow.remote_git_base = lambda: "remote-head"
 
             workflow.run()

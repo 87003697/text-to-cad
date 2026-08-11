@@ -781,6 +781,7 @@ export async function executeAgentStartLaunch(launch, {
   activateDirectory = activateAgentViewerDirectory,
   fetchImpl = globalThis.fetch,
   waitForReady = waitForAgentViewerReady,
+  probePort = null,
 } = {}) {
   if (launch.action === "reuse") {
     await activateDirectory({
@@ -796,6 +797,15 @@ export async function executeAgentStartLaunch(launch, {
       writeStdout(`CAD Viewer git: ${launch.git || "none"}`);
     }
     return null;
+  }
+
+  if (typeof probePort === "function") {
+    const finalProbe = await probePort({ host: launch.host, port: launch.port });
+    if (finalProbe.status !== "closed") {
+      const error = new Error(`CAD Viewer port ${launch.port} was taken before startup`);
+      error.code = "CAD_VIEWER_START_PORT_RACE";
+      throw error;
+    }
   }
 
   const command = launch.command;
@@ -876,12 +886,21 @@ export async function runAgentStart(options = {}) {
       },
     });
     try {
-      return await executeAgentStartLaunch(launch, options);
+      return await executeAgentStartLaunch(launch, {
+        ...options,
+        probePort: baseProbePort,
+      });
     } catch (error) {
       if (
-        launch.action !== "reuse"
-        || error?.code !== "CAD_VIEWER_DIRECTORY_ACTIVATION_REJECTED"
-        || error?.status !== 400
+        !(
+          launch.action === "reuse"
+          && error?.code === "CAD_VIEWER_DIRECTORY_ACTIVATION_REJECTED"
+          && error?.status === 400
+        )
+        && !(
+          launch.action === "start"
+          && error?.code === "CAD_VIEWER_START_PORT_RACE"
+        )
       ) {
         throw error;
       }

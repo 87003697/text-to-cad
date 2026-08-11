@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
+import builtins
 import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 import trimesh
@@ -87,6 +89,14 @@ class MeasureStepCliTests(unittest.TestCase):
         self.assertEqual(0, status, stderr)
         self.assertTrue(payload["ok"])
         self.assertFalse(payload["idempotent"])
+        self.assertEqual(
+            {
+                "schema": "meshscope.surface-occupancy-backend/1",
+                "id": "meshscope.voxblame.native-sat/1",
+                "implementation": "native",
+            },
+            payload["backend"],
+        )
         self.assertEqual(str(self.output), payload["output"])
         summary = payload["measurement"]
         self.assertEqual(MEASUREMENT_SUMMARY_SCHEMA, summary["schema"])
@@ -239,6 +249,33 @@ class MeasureStepCliTests(unittest.TestCase):
         self.assertIn("explicit earlier compare_to", payload["error"]["detail"])
         self.assertIn("measurement_failed", stderr)
         self.assertFalse((self.output / "steps/000001").exists())
+
+    def test_measure_command_fails_closed_when_native_backend_is_missing(self) -> None:
+        real_import = builtins.__import__
+
+        def import_without_native(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "meshscope.voxblame" and "_native" in fromlist:
+                raise ImportError("test hides native extension")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with mock.patch("builtins.__import__", side_effect=import_without_native):
+            status, payload, stderr = self.invoke(
+                "voxblame-measure",
+                str(self.candidate),
+                "--reference",
+                str(self.reference),
+                "--output",
+                str(self.output),
+                "--step",
+                "0",
+            )
+
+        self.assertEqual(2, status)
+        self.assertFalse(payload["ok"])
+        self.assertEqual("measurement_failed", payload["error"]["classification"])
+        self.assertIn("native octree backend is unavailable", payload["error"]["detail"])
+        self.assertIn("measurement_failed", stderr)
+        self.assertFalse((self.output / "steps/000000").exists())
 
     def test_measure_command_accepts_and_publishes_exterior_candidate_facts(
         self,

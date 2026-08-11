@@ -106,6 +106,7 @@ def _measure_main(argv: list[str]) -> int:
                 "ok": True,
                 "output": str(args.output),
                 "idempotent": result.idempotent,
+                "backend": result.backend,
                 "measurement": result.summary,
             },
             separators=(",", ":"),

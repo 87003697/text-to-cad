@@ -21,6 +21,7 @@ CHECK_DIR="${CAD_VIEWER_RUNTIME_CHECK_DIR:-${RENDER_VIEWER_RUNTIME_CHECK_DIR:-$R
 VIEWER_PACKAGE_MANAGER="${CAD_VIEWER_PACKAGE_MANAGER:-}"
 ESBUILD_BIN="${CAD_VIEWER_ESBUILD_BIN:-}"
 RELEASE_VERSION="$(tr -d '[:space:]' < "$REPO_ROOT/plugins/cad/VERSION")"
+VIEWER_RUNTIME_IDENTITY="$REPO_ROOT/scripts/bundle/viewer-runtime-identity.mjs"
 
 usage() {
   cat <<'EOF'
@@ -479,6 +480,10 @@ build_runtime() {
   write_runtime_package_json "$target_dir"
   write_runtime_gitignore "$target_dir"
   write_runtime_requirements "$target_dir"
+  node "$VIEWER_RUNTIME_IDENTITY" write \
+    --repo-root "$REPO_ROOT" \
+    --runtime-root "$target_dir" \
+    --viewer-version "$RELEASE_VERSION"
 }
 
 check_runtime() {
@@ -502,6 +507,7 @@ check_runtime() {
 }
 
 require_command rsync
+require_path "$VIEWER_RUNTIME_IDENTITY" "Viewer runtime identity generator"
 require_path "$CADJS_PACKAGE_DIR/package.json" "cadjs package"
 require_path "$CADJS_PACKAGE_DIR/src" "cadjs source"
 require_path "$CADPY_PACKAGE_DIR/pyproject.toml" "cadpy package"

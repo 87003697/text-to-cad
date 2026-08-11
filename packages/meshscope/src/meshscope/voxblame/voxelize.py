@@ -13,6 +13,32 @@ from meshscope.voxblame.tree import SurfaceTree, validate_depth
 
 
 Backend = Literal["python", "native"]
+BACKEND_IDENTITY_SCHEMA = "meshscope.surface-occupancy-backend/1"
+NATIVE_BACKEND_ID = "meshscope.voxblame.native-sat/1"
+PYTHON_BACKEND_ID = "meshscope.voxblame.python-sat/1"
+
+
+def backend_identity(backend: Backend) -> dict[str, str]:
+    """Return the explicit versioned identity of one occupancy backend."""
+    if backend == "python":
+        return {
+            "schema": BACKEND_IDENTITY_SCHEMA,
+            "id": PYTHON_BACKEND_ID,
+            "implementation": "python",
+        }
+    if backend != "native":
+        raise SurfaceTreeError("backend must be python or native")
+    try:
+        from meshscope.voxblame import _native as native
+    except ImportError:
+        raise SurfaceTreeError("native octree backend is unavailable") from None
+    if getattr(native, "BACKEND_ID", None) != NATIVE_BACKEND_ID:
+        raise SurfaceTreeError("native octree backend identity is missing or unsupported")
+    return {
+        "schema": BACKEND_IDENTITY_SCHEMA,
+        "id": NATIVE_BACKEND_ID,
+        "implementation": "native",
+    }
 
 
 def voxelize_mesh(
@@ -57,12 +83,8 @@ def build_lattice_tree(
         raise SurfaceTreeError("backend must be python or native")
     if backend == "python":
         return _build_python(geometry, max_depth)
-    try:
-        from meshscope.voxblame import _native as native
-    except ImportError:
-        raise SurfaceTreeError(
-            "native octree backend is unavailable"
-        ) from None
+    backend_identity(backend)
+    from meshscope.voxblame import _native as native
     masks, span_bytes, leaf_count = native.build(geometry, max_depth)
     spans = np.frombuffer(span_bytes, dtype=np.dtype("<u4"))
     return SurfaceTree(max_depth, masks, spans, int(leaf_count))

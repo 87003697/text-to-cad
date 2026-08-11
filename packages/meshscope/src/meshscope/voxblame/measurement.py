@@ -43,7 +43,12 @@ from meshscope.voxblame.targets import (
     repair_target_page,
 )
 from meshscope.voxblame.tree import SurfaceTree, tree_from_codes
-from meshscope.voxblame.voxelize import Backend, build_lattice_tree, voxelize_mesh
+from meshscope.voxblame.voxelize import (
+    Backend,
+    backend_identity,
+    build_lattice_tree,
+    voxelize_mesh,
+)
 
 
 MEASUREMENT_SUMMARY_SCHEMA = "voxblame.summary/1"
@@ -58,6 +63,7 @@ class MeasureStepResult:
 
     summary: dict[str, Any]
     idempotent: bool
+    backend: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -192,7 +198,11 @@ def measure_step(
             artifacts=artifacts,
         )
         idempotent = False
-    return MeasureStepResult(summary=summary, idempotent=idempotent)
+    return MeasureStepResult(
+        summary=summary,
+        idempotent=idempotent,
+        backend=backend_identity(backend),
+    )
 
 
 def _validate_ancestry(step: int, compare_to: int | None) -> None:

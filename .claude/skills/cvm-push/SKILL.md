@@ -75,6 +75,10 @@ description: >-
   meshscope native source 存在；比较关键 source/runtime SHA-256，从实体 meshscope
   bundle import target-ABI `_native`，并确认 host cache 中有对应 Chromium revision。
   任一失败均不得进入 pilot。
+- Viewer deployment 必须输出 `cvm.viewer-runtime-deployment/1` receipt，逐项记录
+  canonical source、generated bundle 和 CVM deployed runtime 的路径与 SHA-256；bundle
+  identity stale、deployed digest 不同或 native backend identity 不是
+  `meshscope.voxblame.native-sat/1` 都 fail closed。
 - 改名或删除仍不会自动清理 CVM stale path；必须先解析精确目标，再显式删除，
   不能通过 `--delete` 扩大同步权限。
 
@@ -85,6 +89,8 @@ description: >-
 - source branch / HEAD / clean-or-dirty state（从 `Source:` 行读取）
 - CVM Git base（从 `Remote Git base:` 行读取，并明确它不是 deployment identity）
 - 关键运行文件如需严格部署证明，比较 source/CVM SHA-256；不能只引用 CVM HEAD
+- 保留 stdout 的 `Viewer deployment receipt:` JSON；它是 source/bundle/deployed
+  Viewer runtime identity 的精确交接证据
 - 下一步提示（推荐先做 group snapshot，再 submit + monitor）：
   ```
   scripts/pilot/snapshot-batch.sh <YYYYMMDD-HHMMSS-slug>
@@ -103,8 +109,8 @@ compare SHA-256 for `scripts/pilot/cvm_job/`, `toys4k-pilot.sh`, and
 - exit 3（磁盘 <3G） → 汇报剩余 GB + 提示 `ssh cvm 'du -sh ~/*'` 清理
 - exit 4（production staging 失败）→ 检查 log 中缺失的 Viewer/CAD build dependency、
   bundle command 或残留 skill symlink；此时脚本保证尚未传输任何文件
-- exit 5（target-ABI meshscope build/import 失败、远端 runtime 缺失或 attested hash
-  不同）→ 不得 submit pilot；比较 staging 与 CVM 的精确 runtime 文件，并检查 CVM
+- exit 5（target-ABI meshscope build/import/identity 失败、远端 runtime 缺失、Viewer
+  source/bundle/deployed receipt 不一致或 attested hash 不同）→ 不得 submit pilot；比较 staging 与 CVM 的精确 runtime 文件，并检查 CVM
   C++ toolchain 与项目 Python ABI
 - exit 6（Playwright browser revision 缺失）→ 在 CVM host 安装脚本报告的 revision，
   随后重新 push
