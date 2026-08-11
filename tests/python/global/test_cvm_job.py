@@ -109,6 +109,7 @@ class CvmJobTests(unittest.TestCase):
         handle: str,
         *,
         complete: bool = True,
+        stripped: list[str] | None = None,
     ) -> None:
         state = protocol.load_state(self.state_root, handle)
         exp_dir = self.repo_root / "outputs" / handle
@@ -131,7 +132,9 @@ class CvmJobTests(unittest.TestCase):
             },
             "provider_environment": {
                 "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],
-                "stripped": [
+                "stripped": stripped
+                if stripped is not None
+                else [
                     "ANTHROPIC_API_KEY",
                     "HTTPS_PROXY",
                     "OPENAI_API_KEY",
@@ -370,17 +373,26 @@ class CvmJobTests(unittest.TestCase):
         def fake_run(root, job, command, **kwargs):
             captured["command"] = list(command)
             captured["env"] = dict(kwargs["env"])
-            self.write_provider_free_terminal_evidence(handle)
+            self.write_provider_free_terminal_evidence(
+                handle,
+                stripped=kwargs["env"][
+                    "CVM_PROVIDER_FREE_STRIPPED_NAMES"
+                ].split(","),
+            )
             return 0, 4321
 
         hostile_environment = {
             "PATH": os.environ["PATH"],
             "HOME": os.fspath(self.workspace),
-            "LANG": "C.UTF-8",
+            "LANG": "host-controlled-locale",
+            "LC_ALL": "host-controlled-locale",
+            "LC_CTYPE": "host-controlled-lookalike",
+            "__CF_USER_TEXT_ENCODING": "host-controlled-lookalike",
             "VENUS_TOKEN": "do-not-forward",
             "OPENAI_API_KEY": "do-not-forward",
             "ANTHROPIC_API_KEY": "do-not-forward",
             "HTTPS_PROXY": "http://provider-proxy.invalid",
+            "PYTHONPATH": "/host-controlled/python",
         }
         with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
             state = runtime.supervise_provider_free(
@@ -406,9 +418,22 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(child_environment["CVM_PROVIDER_FREE_PROFILE"], "issue15.provider-free-bounded/1")
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],
-            "ANTHROPIC_API_KEY,HTTPS_PROXY,OPENAI_API_KEY,VENUS_TOKEN",
+            (
+                "ANTHROPIC_API_KEY,HTTPS_PROXY,LC_ALL,LC_CTYPE,OPENAI_API_KEY,"
+                "PYTHONPATH,VENUS_TOKEN,__CF_USER_TEXT_ENCODING"
+            ),
         )
-        for forbidden in ("VENUS_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "HTTPS_PROXY"):
+        self.assertEqual(child_environment["LANG"], "C.UTF-8")
+        self.assertEqual(child_environment["LC_ALL"], "C.UTF-8")
+        for forbidden in (
+            "VENUS_TOKEN",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "HTTPS_PROXY",
+            "PYTHONPATH",
+            "LC_CTYPE",
+            "__CF_USER_TEXT_ENCODING",
+        ):
             self.assertNotIn(forbidden, child_environment)
         self.assertEqual(
             state["no_provider_evidence"],
@@ -420,7 +445,7 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(public["scenario"], state["scenario"])
         self.assertNotIn("bootstrap_diagnostic", public)
 
-    def test_provider_free_supervisor_imports_runner_from_repo_owned_cwd(self) -> None:
+    def test_provider_free_supervisor_clean_environment_crosses_python_startup(self) -> None:
         shutil.copytree(
             REPO_ROOT / "scripts",
             self.repo_root / "scripts",
@@ -478,14 +503,21 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 1)
         state = protocol.load_state(self.state_root, handle)
         self.assertEqual(state["state"], "failed")
+        diagnostic = state["bootstrap_diagnostic"]
         self.assertEqual(
-            state["bootstrap_diagnostic"],
+            {
+                key: diagnostic[key]
+                for key in ("schema", "phase", "process_exit_code")
+            },
             {
                 "schema": "cvm.provider-free-bootstrap-diagnostic/1",
                 "phase": "before-experiment",
-                "classification": "runner-environment-allowlist-rejected",
                 "process_exit_code": 2,
             },
+        )
+        self.assertIn(
+            diagnostic["classification"],
+            {"runner-bwrap-path-rejected", "runner-runtime-identity-rejected"},
         )
         self.assertNotIn(
             "ModuleNotFoundError",

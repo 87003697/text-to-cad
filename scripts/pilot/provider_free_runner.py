@@ -25,6 +25,7 @@ from scripts.pilot.cvm_job.runtime import (
     PROVIDER_FREE_REQUIRED_ENVIRONMENT,
     PROVIDER_FREE_SANDBOX_PROFILE,
     PROVIDER_FREE_SCENARIOS,
+    PROVIDER_FREE_SUPERVISOR_LOCALE,
     provider_free_sandbox_argv,
 )
 from scripts.pilot.cvm_job.protocol import ProtocolError, request_authority_sha256
@@ -41,6 +42,9 @@ PROCESS_LIMIT = _RESOURCE_LIMITS["processes"]
 _CONTROL_ENVIRONMENT = frozenset(
     {
         *PROVIDER_FREE_ENV_ALLOWLIST,
+        *PROVIDER_FREE_SUPERVISOR_LOCALE,
+        "LC_CTYPE",
+        "__CF_USER_TEXT_ENCODING",
         "CVM_PROVIDER_FREE_PROFILE",
         "CVM_PROVIDER_FREE_STRIPPED_NAMES",
         "CVM_PROVIDER_FREE_JOB",
@@ -53,6 +57,33 @@ _CONTROL_ENVIRONMENT = frozenset(
 
 class ProviderFreeError(RuntimeError):
     """The provider-free scenario cannot satisfy its fixed execution contract."""
+
+
+def _validate_interpreter_environment(environ: Mapping[str, str]) -> None:
+    """Validate the minimal process variables CPython may add at startup."""
+
+    lc_ctype = environ.get("LC_CTYPE")
+    expected_lc_ctype = {
+        "darwin": "UTF-8",
+        "linux": "C.UTF-8",
+    }.get("linux" if sys.platform.startswith("linux") else sys.platform)
+    if lc_ctype is not None and lc_ctype != expected_lc_ctype:
+        raise ProviderFreeError("provider-free interpreter LC_CTYPE is invalid")
+    cf_encoding = environ.get("__CF_USER_TEXT_ENCODING")
+    if cf_encoding is not None:
+        expected_user = f"0x{os.getuid():X}"
+        components = cf_encoding.split(":")
+        valid_components = (
+            sys.platform == "darwin"
+            and len(components) == 3
+            and components[0] == expected_user
+            and tuple(components[1:])
+            in {("0x0", "0x0"), ("0x19", "0x34")}
+        )
+        if not valid_components:
+            raise ProviderFreeError(
+                "provider-free interpreter __CF_USER_TEXT_ENCODING is invalid"
+            )
 
 
 def _safe_group(value: str) -> bool:
@@ -89,6 +120,12 @@ def _validate_environment(environ: Mapping[str, str]) -> list[str]:
             "provider-free environment contains non-allowlisted names: "
             + ",".join(unexpected)
         )
+    for name, expected in PROVIDER_FREE_SUPERVISOR_LOCALE.items():
+        if environ.get(name) != expected:
+            raise ProviderFreeError(
+                f"provider-free deterministic locale {name} is missing or invalid"
+            )
+    _validate_interpreter_environment(environ)
     raw = environ.get("CVM_PROVIDER_FREE_STRIPPED_NAMES", "")
     stripped = raw.split(",") if raw else []
     if stripped != sorted(set(stripped)) or any(not name for name in stripped):

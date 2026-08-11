@@ -263,6 +263,10 @@ PROVIDER_FREE_ENV_ALLOWLIST = (
     "PYTHONDONTWRITEBYTECODE",
     "TZ",
 )
+PROVIDER_FREE_SUPERVISOR_LOCALE = {
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+}
 PROVIDER_FREE_PROOF = "run/provider-free-execution.json"
 
 
@@ -567,7 +571,7 @@ def _provider_free_environment(
     deployment_tree_sha: str,
     immutable_request: dict[str, Any],
 ) -> dict[str, str]:
-    """Build an allowlisted workload environment without credential values."""
+    """Build the closed runner environment without credential values."""
 
     child = {
         name: environ[name]
@@ -575,6 +579,7 @@ def _provider_free_environment(
         if environ.get(name)
     }
     child.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+    child.update(PROVIDER_FREE_SUPERVISOR_LOCALE)
     removed = sorted(set(environ).difference(PROVIDER_FREE_ENV_ALLOWLIST))
     child.update(
         {

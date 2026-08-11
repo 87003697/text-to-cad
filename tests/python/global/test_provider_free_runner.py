@@ -128,6 +128,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             "PATH": "/usr/bin:/bin",
             "HOME": "/home/test",
             "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
             "PYTHONDONTWRITEBYTECODE": "1",
             "CVM_PROVIDER_FREE_PROFILE": "issue15.provider-free-bounded/1",
             "CVM_PROVIDER_FREE_STRIPPED_NAMES": (
@@ -144,6 +145,134 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 immutable_request, sort_keys=True, separators=(",", ":")
             ),
         }
+
+    def test_interpreter_owned_startup_environment_is_platform_closed(self) -> None:
+        cases = (
+            ("linux", {"LC_CTYPE": "C.UTF-8"}),
+            ("darwin", {"LC_CTYPE": "UTF-8"}),
+            (
+                "darwin",
+                {"__CF_USER_TEXT_ENCODING": f"0x{os.getuid():X}:0x0:0x0"},
+            ),
+            (
+                "darwin",
+                {"__CF_USER_TEXT_ENCODING": f"0x{os.getuid():X}:0x19:0x34"},
+            ),
+        )
+
+        for platform_name, startup_environment in cases:
+            with self.subTest(
+                platform=platform_name,
+                startup_environment=startup_environment,
+            ), mock.patch.object(provider_free_runner.sys, "platform", platform_name):
+                environment = {**self.environment, **startup_environment}
+                self.assertEqual(
+                    provider_free_runner._validate_environment(environment),
+                    [
+                        "ANTHROPIC_API_KEY",
+                        "HTTPS_PROXY",
+                        "OPENAI_API_KEY",
+                        "VENUS_TOKEN",
+                    ],
+                )
+
+    def test_interpreter_environment_rejects_invalid_values_and_extra_names(self) -> None:
+        cf_user = f"0x{os.getuid():X}"
+        cases = (
+            ("linux", {"LC_CTYPE": "UTF-8"}),
+            ("darwin", {"LC_CTYPE": "C.UTF-8"}),
+            ("freebsd", {"LC_CTYPE": "C.UTF-8"}),
+            ("linux", {"__CF_USER_TEXT_ENCODING": f"{cf_user}:0x19:0x34"}),
+            ("darwin", {"__CF_USER_TEXT_ENCODING": "0x0:0x19:0x34"}),
+            (
+                "darwin",
+                {
+                    "__CF_USER_TEXT_ENCODING": (
+                        f"{cf_user.replace('0x', '0X')}:0x19:0x34"
+                    )
+                },
+            ),
+            ("darwin", {"__CF_USER_TEXT_ENCODING": f"{cf_user}:0x0:0x34"}),
+            ("darwin", {"__CF_USER_TEXT_ENCODING": f"{cf_user}:0x19:0x0"}),
+            ("linux", {"PYTHONPATH": "/host/injection"}),
+            ("linux", {"HTTPS_PROXY": "http://provider.invalid"}),
+            ("linux", {"VENUS_TOKEN": "provider-secret"}),
+            ("linux", {"lc_ctype": "C.UTF-8"}),
+            ("darwin", {"__CF_USER_TEXT_ENCODING_": f"{cf_user}:0x19:0x34"}),
+        )
+
+        for platform_name, hostile_environment in cases:
+            with self.subTest(
+                platform=platform_name,
+                hostile_environment=hostile_environment,
+            ), mock.patch.object(provider_free_runner.sys, "platform", platform_name):
+                with self.assertRaisesRegex(
+                    provider_free_runner.ProviderFreeError,
+                    "invalid|non-allowlisted",
+                ):
+                    provider_free_runner._validate_environment(
+                        {**self.environment, **hostile_environment}
+                    )
+
+    def test_supervisor_locale_is_exact_and_interpreter_names_are_control_only(self) -> None:
+        for locale_mutation in (
+            {"LANG": "en_US.UTF-8"},
+            {"LC_ALL": "C"},
+            {"LANG": "C.UTF-8", "LC_ALL": ""},
+        ):
+            with self.subTest(locale_mutation=locale_mutation):
+                with self.assertRaisesRegex(
+                    provider_free_runner.ProviderFreeError,
+                    "deterministic locale",
+                ):
+                    provider_free_runner._validate_environment(
+                        {**self.environment, **locale_mutation}
+                    )
+
+        control_environment = {
+            **self.environment,
+            "LC_CTYPE": "UTF-8",
+            "__CF_USER_TEXT_ENCODING": f"0x{os.getuid():X}:0x19:0x34",
+        }
+        sandbox_environment = provider_free_runner._sandbox_environment(
+            control_environment
+        )
+        for control_name in (
+            "LC_ALL",
+            "LC_CTYPE",
+            "__CF_USER_TEXT_ENCODING",
+        ):
+            self.assertNotIn(control_name, sandbox_environment)
+        self.assertEqual(sandbox_environment["LANG"], "C.UTF-8")
+
+        exp_dir = self.repo / "outputs" / self.handle
+        (exp_dir / "run").mkdir(parents=True)
+        (exp_dir / "run/sandbox-enforcement.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+        provider_free_runner._publish_no_provider_proof(
+            exp_dir,
+            handle=self.handle,
+            scenario_name="issue15-runtime-authority",
+            stripped=["LC_CTYPE", "__CF_USER_TEXT_ENCODING"],
+            environ=control_environment,
+        )
+        proof_text = (exp_dir / "run/provider-free-execution.json").read_text(
+            encoding="utf-8"
+        )
+        proof = json.loads(proof_text)
+        self.assertNotIn(
+            "LC_CTYPE", proof["provider_environment"]["allowlist"]
+        )
+        self.assertNotIn(
+            "__CF_USER_TEXT_ENCODING",
+            proof["provider_environment"]["allowlist"],
+        )
+        self.assertEqual(
+            proof["provider_environment"]["stripped"],
+            ["LC_CTYPE", "__CF_USER_TEXT_ENCODING"],
+        )
+        self.assertNotIn(control_environment["__CF_USER_TEXT_ENCODING"], proof_text)
 
     def write_success_evidence(self) -> None:
         exp_dir = self.repo / "outputs" / self.handle

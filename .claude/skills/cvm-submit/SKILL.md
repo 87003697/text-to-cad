@@ -27,6 +27,16 @@ without credential values, zero provider/tap requests, the isolated-loopback
 sandbox, native backend identity, Viewer deployment/fallback evidence, and the
 complete deployed-runtime tree receipt.
 
+The detached supervisor starts the provider-free Python runner with the fixed
+UTF-8 locale `LANG=C.UTF-8` and `LC_ALL=C.UTF-8`; caller locale values are not
+inherited. The runner accepts only the exact, platform-specific `LC_CTYPE` and
+macOS `__CF_USER_TEXT_ENCODING` forms that the Python interpreter may add
+during startup. Those interpreter-owned names are control-only: they are
+strictly validated, never forwarded into the bubblewrap workload environment,
+and their values are never written to evidence. Caller-provided lookalikes,
+Python path injection, proxies, provider variables, credentials, and all other
+extra names remain stripped or rejected by the closed environment contract.
+
 `group` must use the repository pilot layout:
 `YYYYMMDD-HHMMSS-<lowercase-kebab-slug>`, normally the same group passed to
 `snapshot-batch.sh`.
