@@ -40,7 +40,7 @@ from .protocol import (
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PILOT_SCRIPT = REPO_ROOT / "scripts" / "pilot" / "toys4k-pilot.sh"
-PROVIDER_FREE_RUNNER = REPO_ROOT / "scripts" / "pilot" / "provider_free_runner.py"
+PROVIDER_FREE_RUNNER_MODULE = "scripts.pilot.provider_free_runner"
 DEFAULT_HEARTBEAT_INTERVAL = 5.0
 DEFAULT_STALE_AFTER = 60.0
 DEFAULT_WAIT_TIMEOUT = 12 * 60 * 60.0
@@ -778,7 +778,8 @@ def supervise_provider_free(
             stripped = []
         command = [
             sys.executable,
-            os.fspath(PROVIDER_FREE_RUNNER),
+            "-m",
+            PROVIDER_FREE_RUNNER_MODULE,
             "run",
             scenario.name,
             record["group"],

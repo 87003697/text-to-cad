@@ -393,7 +393,8 @@ class CvmJobTests(unittest.TestCase):
             captured["command"],
             [
                 sys.executable,
-                os.fspath(runtime.PROVIDER_FREE_RUNNER),
+                "-m",
+                runtime.PROVIDER_FREE_RUNNER_MODULE,
                 "run",
                 "issue15-runtime-authority",
                 self.group,
@@ -417,6 +418,78 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(public["kind"], "provider-free")
         self.assertEqual(public["scenario"], state["scenario"])
         self.assertNotIn("bootstrap_diagnostic", public)
+
+    def test_provider_free_supervisor_imports_runner_from_repo_owned_cwd(self) -> None:
+        shutil.copytree(
+            REPO_ROOT / "scripts",
+            self.repo_root / "scripts",
+            dirs_exist_ok=True,
+        )
+        previous_receipt = json.loads(
+            (self.repo_root / deployment_authority.RECEIPT_PATH).read_text(
+                encoding="utf-8"
+            )
+        )
+        deployment_authority.write_receipt(
+            self.repo_root,
+            source_head=previous_receipt["source_head"],
+            runtime_identity=previous_receipt["runtime_identity"],
+        )
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+        caller_cwd = self.workspace / "non-repository-caller"
+        caller_cwd.mkdir()
+        supervisor_log = protocol.log_path(self.state_root, handle)
+        supervisor_log.parent.mkdir(parents=True, exist_ok=True)
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(caller_cwd)
+            with supervisor_log.open("ab", buffering=0) as stream:
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "scripts.pilot.cvm_job",
+                        "--state-root",
+                        os.fspath(self.state_root),
+                        "supervise-provider-free",
+                        "--job",
+                        handle,
+                    ],
+                    cwd=self.repo_root,
+                    env={
+                        "HOME": os.fspath(self.workspace),
+                        "PATH": os.environ["PATH"],
+                        "PYTHONDONTWRITEBYTECODE": "1",
+                    },
+                    check=False,
+                    stdin=subprocess.DEVNULL,
+                    stdout=stream,
+                    stderr=subprocess.STDOUT,
+                )
+        finally:
+            os.chdir(original_cwd)
+
+        self.assertEqual(completed.returncode, 1)
+        state = protocol.load_state(self.state_root, handle)
+        self.assertEqual(state["state"], "failed")
+        self.assertEqual(
+            state["bootstrap_diagnostic"],
+            {
+                "schema": "cvm.provider-free-bootstrap-diagnostic/1",
+                "phase": "before-experiment",
+                "classification": "runner-contract-rejected",
+                "process_exit_code": 2,
+            },
+        )
+        self.assertNotIn(
+            "ModuleNotFoundError",
+            supervisor_log.read_text(encoding="utf-8"),
+        )
 
     def test_provider_free_supervisor_rejects_incomplete_terminal_evidence(self) -> None:
         handle = runtime.submit_provider_free(
