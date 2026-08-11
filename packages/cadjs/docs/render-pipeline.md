@@ -213,7 +213,7 @@ import {
 ```
 
 `renderJobContext(meshData, job)` normalizes snapshot-owned render policy:
-appearance, display, scene scale, outputs, STEP topology edge visibility, and
+theme, display, scene scale, outputs, STEP topology edge visibility, and
 warnings.
 
 `modelOptionsForRenderJob(context, job)` converts that policy into

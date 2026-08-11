@@ -1,5 +1,4 @@
 import { parseDxf } from "./dxf/parseDxf.js";
-import { parseGcode } from "./gcode/parseGcode.js";
 import {
   STEP_EDGE_BARYCENTRIC_ATTRIBUTE,
   STEP_EDGE_CLASS_ATTRIBUTE,
@@ -37,7 +36,6 @@ const selectorCache = new Map();
 const displayEdgeCache = new Map();
 const topologyIndexCache = new Map();
 const dxfCache = new Map();
-const gcodeCache = new Map();
 const urdfCache = new Map();
 const srdfCache = new Map();
 const sdfCache = new Map();
@@ -552,18 +550,6 @@ export async function loadRenderDxf(url, { signal } = {}) {
 
 export function peekRenderDxf(url) {
   return peekCached(dxfCache, url);
-}
-
-export async function loadRenderGcode(url, { signal } = {}) {
-  const payload = await loadCached(gcodeCache, url, async () => {
-    const gcodeText = await loadRenderText(url, { signal });
-    return parseGcode(gcodeText, { fileRef: "", sourceUrl: url });
-  }, { cachePending: !signal });
-  return finalizeCached(gcodeCache, url, payload);
-}
-
-export function peekRenderGcode(url) {
-  return peekCached(gcodeCache, url);
 }
 
 function urdfCacheKey(url) {

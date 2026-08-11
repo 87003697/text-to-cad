@@ -38,8 +38,8 @@ npm --prefix viewer install
 When running a tool manually, use that skill's interpreter:
 
 ```bash
-.venv/skills/cad/bin/python skills/cad/scripts/step --help
-.venv/skills/urdf/bin/python skills/urdf/scripts/urdf --help
+.venv/skills/cad/bin/python skills/cad/scripts/gen --help
+python3 skills/urdf/scripts/validate --help  # stdlib-only validator, no venv needed
 ```
 
 ## Link Skills Into Your Agent
@@ -103,10 +103,11 @@ live under `scripts/`.
 
 Write test, sample, and durable CAD/robot-description artifacts under `models/`;
 do not create ad hoc artifact directories elsewhere. When you need a scratch
-project, create it under this checkout, for example:
+project, create it under the fixture bucket it belongs in (for example
+`models/step/parts/my-test` for a standalone part), for example:
 
 ```bash
-mkdir -p models/experiments/my-test
+mkdir -p models/step/parts/my-test
 ```
 
 Then start your agent with `/path/to/text-to-cad` as the working directory and
@@ -114,13 +115,9 @@ ask it to write files under that scratch path. This keeps skill scripts,
 fixtures, generated sidecars, and Viewer links using the same repo-relative
 paths that CI and local checks expect.
 
-Only commit what belongs there. The File Policy section of
-[models/README.md](models/README.md) lists the file types `models/` accepts —
-CAD/robot sources, the 3D and fabrication outputs generated from them, and
-docs — and `tests/python/global/test_models_directory_policy.py` enforces that
-list against tracked files. Review media such as snapshot PNGs and orbit GIFs
-are not model artifacts: render them under `/tmp` and attach them to the pull
-request instead.
+Review media such as snapshot PNGs and orbit GIFs are not model artifacts:
+render them under `/tmp` and attach them to the pull request instead. `.gitignore`
+keeps them out of `models/`.
 
 ## Source Boundaries
 
@@ -224,8 +221,8 @@ gh workflow run release.yml --ref develop -f bump=patch
 
 One run bumps `VERSION` plus derived metadata on a
 `release/<version>` branch, opens a release PR, merges it into `develop`
-immediately, and then runs the publish, models-upload, web-app deploy, and
-tag/GitHub Release jobs in the same run. The release PR does not wait for its own CI checks; the
+immediately, and then runs the publish, docs deploy, and tag/GitHub Release
+jobs in the same run. The release PR does not wait for its own CI checks; the
 publish job repeats the full bundle and test validation against exactly what
 ships. The publish job ships to `main` only when the
 source version is newer than `main` and the latest semver tag, and refuses
@@ -236,6 +233,27 @@ while preserving source commits for release notes and contributor attribution.
 The GitHub Release is published immediately by default; set `publish=false` to
 review it as a draft first. Treat generated outputs as CI products, not edit
 targets.
+
+The publish job also uploads `packages/cadgen` to
+[PyPI](https://pypi.org/project/cadgen/). The upload runs after the production
+bundle is validated but BEFORE `main` is pushed: the publish tree pins
+`cadgen==<version>` from PyPI (`scripts/release/pin-cadgen-requirements.sh`
+rewrites the editable requirement lines), so a failed PyPI upload must block the
+release rather than ship a `main` whose skill installs cannot resolve. The PyPI version always
+equals `VERSION`; `sync-version.mjs` stamps
+`packages/cadgen/pyproject.toml` and the publish job refuses to upload on a
+mismatch. Uploads use `skip-existing`, so a rerun after a post-upload failure
+(for example a failed `main` push) is idempotent and resumes like any other
+failed publish. Local development keeps the editable symlinked installs.
+
+#### One-time PyPI setup
+
+The PyPI upload authenticates with [trusted
+publishing](https://docs.pypi.org/trusted-publishers/) (GitHub OIDC); no API
+token secret is stored. Before the first release that publishes to PyPI, add a
+trusted publisher for the `cadgen` project on PyPI (use "Add a pending
+publisher" if the project does not exist yet): repository
+`earthtojake/text-to-cad`, workflow `release.yml`, environment left blank.
 
 ### Testing CI/CD and build changes
 
@@ -253,28 +271,17 @@ tag exists — rerun `Release` with `set_version` pinned to the current version.
 When `develop` already contains that version, the workflow skips the release PR
 and proceeds straight to the publish jobs.
 
-### Redeploying the web apps
+### Redeploying the docs site
 
-The standalone `Deploy Docs` and `Deploy Viewer` workflows redeploy the
-individual web apps to Vercel production without running a release. They
-default to deploying `main` and expect a production-layout ref:
+The standalone `Deploy Docs` workflow redeploys the docs site to Vercel
+production without running a release. It defaults to deploying `main` and
+expects a production-layout ref:
 
 ```bash
 gh workflow run deploy-docs.yml -f ref=main
-gh workflow run deploy-viewer.yml -f ref=main
 ```
 
-### Uploading new models
-
-The standalone `Upload Models` workflow uploads the `models/` catalog and CAD
-Viewer assets to Vercel Blob without running a release or redeploying the
-viewer. It skips assets that already match the remote catalog and fetches only
-the missing Git LFS objects. Upload from a source ref — `main` does not
-contain `models/`:
-
-```bash
-gh workflow run upload-models.yml -f ref=develop
-```
+The CAD Viewer is a local-filesystem app and has no hosted deployment.
 
 ### Local and manual fallbacks
 
@@ -310,8 +317,8 @@ Production users should continue cloning `main`; developers should treat
    what inputs it expects, what it produces, and how to validate the work.
 3. Prefer small files in `references/` and reusable scripts in `scripts/` over
    long inline instructions.
-4. Add or update focused fixtures, tests, or benchmark cases when skill behavior
-   changes so regressions are measurable.
+4. Add or update focused fixtures or tests when skill behavior changes so
+   regressions are measurable.
 5. Validate with the smallest relevant check before broad repo checks.
 
 Generated artifacts should not become skill logic unless they are intentional
@@ -351,8 +358,11 @@ behavior:
 npm --prefix viewer run dev -- --host 127.0.0.1
 ```
 
-Use the printed URL with an absolute `?dir=/path/to/root` and any absolute
-`?file=/path/to/model.step`. Do not assume a fixed dev port unless you pass
+Put the absolute workspace directory in the URL path and the artifact in
+`?file=<path relative to it>` — pick the project's model root, not the file's own
+folder, so the file browser lists the whole project:
+`http://127.0.0.1:<port>/abs/project/models?file=mechanisms/lift_table.step.py`.
+Do not assume a fixed dev port unless you pass
 Vite's standard `--port` flag. Packaged Viewer runtime checks are
 production-output checks; use `scripts/README.md` when you specifically need
 that path.
@@ -364,6 +374,6 @@ as `.venv/`, `node_modules/`, `.vite/`, `dist/`, `tmp/`, or local credentials.
 Generated runtime changes should come from the production-output workflow, not
 manual edits inside generated runtime folders.
 
-CAD exchange files, generated render/topology assets, `assets/**`, and
-`benchmarks/**` may be LFS-tracked. Never disable LFS filters for `git add`,
-commits, or other object-writing operations.
+CAD exchange files, generated render/topology assets, and `assets/**` may be
+LFS-tracked. Never disable LFS filters for `git add`, commits, or other
+object-writing operations.

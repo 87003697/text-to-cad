@@ -20,13 +20,13 @@ import {
 import { resolveStepModuleFeatures } from "./stepModule.js";
 import {
   applyStepModuleEffectsToRecords,
-  buildPartTransformMatrix,
   buildStepModuleContext,
   createStepModuleEffectsApi,
   displayTransformForPart
 } from "./stepModuleEffects.js";
 import {
-  applyDisplayRecordTransform
+  applyDisplayRecordTransform,
+  composeDisplayRecordEffectMatrix
 } from "./displayRecordTransform.js";
 import { axisIndex, normalizeStepClipSettings } from "../lib/viewer/clipPlane.js";
 import {
@@ -741,7 +741,11 @@ function buildPartGeometryEntry(THREE, meshData, part, recomputeNormals = false)
         new THREE.BufferAttribute(new Float32Array(rawColors), 3)
       );
     }
-    if (!sourceMesh) {
+    if (sourceMesh) {
+      // Shared component geometry: source the (triangle-local) surface-edge attributes from
+      // the component itself so packages still render CAD edges on the shared-geometry path.
+      setSurfaceEdgeAttributes(THREE, geometry, sourceMesh, 0, vertexCount);
+    } else {
       setSurfaceEdgeAttributes(THREE, geometry, meshData, vertexOffset, vertexCount);
     }
     applyGeometryNormals(THREE, geometry, localNormals, recomputeNormals);
@@ -1008,6 +1012,12 @@ export function applyMaterialSettingsToRecord(THREE, record, materialSettings, {
   baseTheme = DEFAULT_THEME,
   displayMode = CAD_DISPLAY_MODE.SOLID
 } = {}) {
+  if (record?.instanced) {
+    // Instanced buckets carry per-instance color (occurrence override) on the
+    // shared material; per-record color mutation does not apply. Source-color /
+    // override handling for the instanced path is a later increment.
+    return;
+  }
   if (!record?.material || !materialSettings) {
     return;
   }
@@ -1036,10 +1046,22 @@ export function applyMaterialSettingsToRecord(THREE, record, materialSettings, {
     return;
   }
   syncRecordVertexColors(THREE, record, materialSettings);
-  record.material.roughness = clamp(Number(materialSettings.roughness) || 0, 0, 1);
-  record.material.metalness = clamp(Number(materialSettings.metalness) || 0, 0, 1);
-  record.material.clearcoat = clamp(Number(materialSettings.clearcoat) || 0, 0, 1);
-  record.material.clearcoatRoughness = clamp(Number(materialSettings.clearcoatRoughness) || 0, 0, 1);
+  // Per-part PBR overrides: descriptor occurrences may carry a "material"
+  // object (cadgen component_package._occurrence_material) so brushed,
+  // polished, lacquered, and transparent parts differ in material RESPONSE,
+  // not just albedo. Theme values remain the per-channel fallback.
+  const partMaterial =
+    record.sourcePart?.material && typeof record.sourcePart.material === "object"
+      ? record.sourcePart.material
+      : null;
+  const materialChannel = (key) => {
+    const override = partMaterial ? Number(partMaterial[key]) : NaN;
+    return clamp(Number.isFinite(override) ? override : Number(materialSettings[key]) || 0, 0, 1);
+  };
+  record.material.roughness = materialChannel("roughness");
+  record.material.metalness = materialChannel("metalness");
+  record.material.clearcoat = materialChannel("clearcoat");
+  record.material.clearcoatRoughness = materialChannel("clearcoatRoughness");
   const sourceOpacity = Number.isFinite(Number(record.sourceOpacity))
     ? clamp(Number(record.sourceOpacity), 0, 1)
     : 1;
@@ -1419,16 +1441,24 @@ function mergeBoundsList(boundsList) {
   return count > 0 && min.every(Number.isFinite) && max.every(Number.isFinite) ? { min, max } : null;
 }
 
-function effectiveBoundsFromRecords(THREE, records, fallbackBounds) {
+// Bounds of the model in its current parameter pose: the at-rest part bounds
+// moved by the module-effect delta. This is what the loader frames the camera
+// on, so callers that re-frame later (reset, fit) use it to land back on the
+// same view. Exploded-view offsets are deliberately excluded -- exploding is a
+// temporary inspection state, not a change to how big the model is.
+export function effectiveBoundsFromRecords(THREE, records, fallbackBounds = null) {
   const boundsList = [];
   for (const record of Array.isArray(records) ? records : []) {
-    if (record.effectVisible === false) {
+    if (!record || record.effectVisible === false) {
       continue;
     }
-    const baseMatrix = buildPartTransformMatrix(THREE, record.baseTransform);
-    const effectMatrix = record.effectMatrix instanceof THREE.Matrix4 ? record.effectMatrix.clone() : null;
-    const combinedMatrix = effectMatrix ? effectMatrix.multiply(baseMatrix) : baseMatrix;
-    boundsList.push(transformedBounds(THREE, record.partBounds, combinedMatrix));
+    // record.partBounds is world-space at rest pose: composed packages fold the
+    // occurrence transform into part.bounds and legacy meshDatas bake vertices,
+    // so re-applying baseTransform here would double it. Only the world-space
+    // post-transforms — the module-effect delta and the exploded-view offset —
+    // move the bounds, composed in render order.
+    const effectMatrix = composeDisplayRecordEffectMatrix(THREE, record);
+    boundsList.push(transformedBounds(THREE, record.partBounds, effectMatrix));
   }
   return mergeBoundsList(boundsList) || fallbackBounds;
 }
@@ -1653,7 +1683,7 @@ function selectorValuesFromEntry(value) {
     .filter(Boolean);
 }
 
-function normalizedSelectorValues(value) {
+export function normalizedSelectorValues(value) {
   return selectorEntries(value).flatMap(selectorValuesFromEntry);
 }
 
@@ -1739,7 +1769,7 @@ function resolveMaterialSettings(theme, settings = {}) {
   return theme.materials || {};
 }
 
-function resolvePartsToRender(meshData, theme, settings) {
+export function resolvePartsToRender(meshData, theme, settings) {
   if (Array.isArray(settings.parts)) {
     return settings.parts.filter((part) => toNumber(part?.vertexCount) > 0 && toNumber(part?.triangleCount) > 0);
   }
@@ -1754,6 +1784,16 @@ function resolvePartsToRender(meshData, theme, settings) {
     const pickableParts = toArray(settings.pickableParts).filter((part) => toNumber(part?.vertexCount) > 0 && toNumber(part?.triangleCount) > 0);
     if (pickableParts.length) {
       return pickableParts;
+    }
+    // A composed package's top-level arrays hold each unique COMPONENT's geometry in its
+    // own local frame — placement lives solely in the per-occurrence transform. Returning
+    // [] here drops to the whole-mesh fallback, which draws each shared component once at
+    // the origin: parts authored in world space still look right (their local frame IS
+    // world), but anything genuinely placed by its transform lands in the wrong spot. That
+    // is how a car loses all four wheels and grows one under its middle when the STEP
+    // parameter module is switched off. Per-part rendering is the only correct mode here.
+    if (meshData?.partTransformsBaked === false) {
+      return parts;
     }
     if (meshUsesPartSourceColors(meshData, parts) || meshUsesPartSourceOpacity(parts)) {
       return parts;
@@ -2215,7 +2255,12 @@ export function fitCameraToModel(THREE, camera, bounds, {
   const minSpan = settings.minModelRadius;
   const spanX = Math.max(Math.max(...xs) - Math.min(...xs), minSpan);
   const spanY = Math.max(Math.max(...ys) - Math.min(...ys), minSpan);
-  const safeContentScale = Math.max(1 - (clamp(Number(padding) || 0, 0.1, 0.4) * 2), 0.1);
+  // Padding bounds must match framePadding() in renderOptions.js (0 .. 0.15).
+  // They used to disagree -- this path forced a 0.1 MINIMUM while the render-job
+  // path honoured smaller values -- so the same `padding` framed differently in
+  // the viewport than in a snapshot, and a job asking for tighter framing than
+  // 0.1 was silently ignored here with no warning.
+  const safeContentScale = Math.max(1 - (clamp(Number(padding) || 0, 0, 0.15) * 2), 0.1);
   const halfHeight = lockedHalfHeight || Math.max(
     spanY / (2 * safeContentScale),
     spanX / (2 * aspect * safeContentScale),
