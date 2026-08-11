@@ -71,8 +71,11 @@ def _run_stage(stage: str, operation: Any, *args: Any, **kwargs: Any) -> Any:
         raise ValueError(f"unknown provider-free scenario stage: {stage!r}")
     try:
         return operation(*args, **kwargs)
-    except ScenarioError as exc:
-        raise ScenarioError(str(exc), stage=stage) from exc
+    except Exception as exc:
+        raise ScenarioError(
+            f"provider-free scenario stage failed: {stage}",
+            stage=stage,
+        ) from exc
 
 
 def _sha256(path: Path) -> str:

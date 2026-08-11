@@ -670,6 +670,54 @@ class CvmJobTests(unittest.TestCase):
             self.assertEqual(result["runner_final_status"], 1)
         self.assertEqual(exit_code, 1)
 
+    def test_provider_free_failure_rejects_unknown_terminal_manifest_schema(
+        self,
+    ) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **kwargs):
+            raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
+            self.write_provider_free_failure_evidence(
+                handle,
+                stripped=raw_stripped.split(",") if raw_stripped else [],
+            )
+            manifest_path = (
+                self.repo_root / "outputs" / handle / "artifact_manifest.json"
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["schema_version"] = 2
+            manifest_path.write_text(
+                json.dumps(manifest, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return 1, 4321
+
+        with mock.patch.object(
+            runtime,
+            "_run_with_heartbeat",
+            side_effect=fake_run,
+        ):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        self.assertEqual(state["state"], "failed")
+        self.assertNotIn("scenario_failure", state)
+        self.assertIn("schema", state["failure_reason"])
+        public = runtime.status_job(
+            handle,
+            state_root=self.state_root,
+            include_observation=False,
+        )
+        self.assertNotIn("scenario_failure", public)
+
     def test_provider_free_scenario_failure_rejects_tamper_and_wrong_identity(self) -> None:
         for index, mutation in enumerate(("tamper", "wrong-identity")):
             with self.subTest(mutation=mutation):

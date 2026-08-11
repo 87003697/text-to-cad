@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from pathlib import Path
 import sys
@@ -188,7 +189,9 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["path"], cadpy.relative_to(self.repo).as_posix())
         self.assertEqual(evidence["sha256"], hashlib.sha256(cadpy.read_bytes()).hexdigest())
 
-    def test_scenario_error_publishes_only_closed_top_level_stage(self) -> None:
+    def test_top_level_failure_publishes_only_closed_stage_for_all_exceptions(
+        self,
+    ) -> None:
         workspace = self.repo / "outputs/group/exp"
         dangerous = (
             "OPENAI_API_KEY=secret\n../../private/path "
@@ -205,42 +208,116 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             ("finalization", "_finalize_workspace"),
         )
 
-        for stage, failing_helper in stages:
-            with self.subTest(stage=stage):
-                if workspace.exists():
-                    import shutil
-
-                    shutil.rmtree(workspace)
-                workspace.mkdir(parents=True)
-                defaults = {
-                    "deployed_viewer_receipt": {"viewer_version": "test"},
-                    "deployed_runtime_tree_receipt": {"files": []},
-                    "cadpy_runtime_evidence": {"schema": "cadpy"},
-                    "viewer_fallback_evidence": {"action": "start"},
-                    "_prepare_candidate": workspace / "candidate",
-                    "_prepare_workspace": None,
-                    "_publish_measured_step": {"depths": list(range(1, 9))},
-                    "_finalize_workspace": {"final": {}},
-                }
-                patches = []
-                for helper, value in defaults.items():
-                    patches.append(
-                        mock.patch.object(
-                            provider_free_scenarios,
-                            helper,
-                            side_effect=(
-                                provider_free_scenarios.ScenarioError(dangerous)
-                                if helper == failing_helper
-                                else None
-                            ),
-                            return_value=(None if helper == failing_helper else value),
-                        )
+        for exception_type in (
+            provider_free_scenarios.ScenarioError,
+            PermissionError,
+        ):
+            for stage, failing_helper in stages:
+                with self.subTest(
+                    exception_type=exception_type.__name__, stage=stage
+                ):
+                    self._assert_closed_stage_failure(
+                        workspace,
+                        dangerous=dangerous,
+                        stage=stage,
+                        failing_helper=failing_helper,
+                        exception_type=exception_type,
                     )
-                for patcher in patches:
-                    patcher.start()
-                    self.addCleanup(patcher.stop)
-                try:
-                    status = provider_free_scenarios.main(
+
+    def _assert_closed_stage_failure(
+        self,
+        workspace: Path,
+        *,
+        dangerous: str,
+        stage: str,
+        failing_helper: str,
+        exception_type: type[Exception],
+    ) -> None:
+        if workspace.exists():
+            import shutil
+
+            shutil.rmtree(workspace)
+        workspace.mkdir(parents=True)
+        defaults = {
+            "deployed_viewer_receipt": {"viewer_version": "test"},
+            "deployed_runtime_tree_receipt": {"files": []},
+            "cadpy_runtime_evidence": {"schema": "cadpy"},
+            "viewer_fallback_evidence": {"action": "start"},
+            "_prepare_candidate": workspace / "candidate",
+            "_prepare_workspace": None,
+            "_publish_measured_step": {"depths": list(range(1, 9))},
+            "_finalize_workspace": {"final": {}},
+        }
+        patches = []
+        for helper, value in defaults.items():
+            patches.append(
+                mock.patch.object(
+                    provider_free_scenarios,
+                    helper,
+                    side_effect=(
+                        exception_type(dangerous)
+                        if helper == failing_helper
+                        else None
+                    ),
+                    return_value=(None if helper == failing_helper else value),
+                )
+            )
+        for patcher in patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        try:
+            with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                status = provider_free_scenarios.main(
+                    [
+                        "run",
+                        "issue15-runtime-authority",
+                        "--workspace",
+                        str(workspace),
+                    ]
+                )
+        finally:
+            for patcher in reversed(patches):
+                patcher.stop()
+
+        self.assertEqual(status, 1)
+        receipt_path = workspace / "run/scenario-failure.json"
+        receipt_text = receipt_path.read_text(encoding="utf-8")
+        self.assertEqual(
+            json.loads(receipt_text),
+            {
+                "schema": "cvm.provider-free-scenario-failure/1",
+                "scenario_identity": "issue15.provider-free.runtime-authority/1",
+                "stage": stage,
+            },
+        )
+        for forbidden in (
+            "secret",
+            "private/path",
+            "d" * 64,
+            "argv",
+            "env",
+            dangerous,
+        ):
+            self.assertNotIn(forbidden, receipt_text)
+            self.assertNotIn(forbidden, stderr.getvalue())
+
+    def test_control_flow_base_exceptions_are_not_converted_to_stage_receipts(
+        self,
+    ) -> None:
+        workspace = self.repo / "outputs/group/control-flow"
+        workspace.mkdir(parents=True)
+
+        for exception_type in (KeyboardInterrupt, SystemExit):
+            with self.subTest(exception_type=exception_type.__name__):
+                with (
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "deployed_viewer_receipt",
+                        side_effect=exception_type(),
+                    ),
+                    self.assertRaises(exception_type),
+                ):
+                    provider_free_scenarios.main(
                         [
                             "run",
                             "issue15-runtime-authority",
@@ -248,30 +325,9 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                             str(workspace),
                         ]
                     )
-                finally:
-                    for patcher in reversed(patches):
-                        patcher.stop()
-
-                self.assertEqual(status, 1)
-                receipt_path = workspace / "run/scenario-failure.json"
-                receipt_text = receipt_path.read_text(encoding="utf-8")
-                self.assertEqual(
-                    json.loads(receipt_text),
-                    {
-                        "schema": "cvm.provider-free-scenario-failure/1",
-                        "scenario_identity": "issue15.provider-free.runtime-authority/1",
-                        "stage": stage,
-                    },
+                self.assertFalse(
+                    (workspace / "run/scenario-failure.json").exists()
                 )
-                for forbidden in (
-                    "secret",
-                    "private/path",
-                    "d" * 64,
-                    "argv",
-                    "env",
-                    dangerous,
-                ):
-                    self.assertNotIn(forbidden, receipt_text)
 
 
 if __name__ == "__main__":
