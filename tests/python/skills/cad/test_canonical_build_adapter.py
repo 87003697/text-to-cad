@@ -319,6 +319,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
 
             self.assertEqual("", result.stderr)
             self.assertEqual(0, result.returncode)
+            self.assertEqual(1, len(result.stdout.splitlines()))
             self.assertIs(json.loads(result.stdout)["ok"], True)
             manifest = json.loads((root / "candidate/build.json").read_text(encoding="utf-8"))
             profile = json.loads((root / "candidate/profile.json").read_text(encoding="utf-8"))
@@ -669,6 +670,105 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
         with temporary_directory(prefix="cad-canonical-import-presnapshot-") as temp_dir:
             root = Path(temp_dir)
             result = _run_adapter_with_pre_snapshot_replacement(root)
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertFalse((root / "candidate/measurement.glb").exists())
+            self.assertFalse((root / "candidate/build.json").exists())
+
+    def test_source_cannot_disable_internal_execution_policy(self) -> None:
+        for bypass in (
+            "canonical_build._ACTIVE_SOURCE_POLICY.set(None)",
+            "canonical_build._INTERNAL_PHYSICAL_READ.set(True)",
+        ):
+            with self.subTest(bypass=bypass), temporary_directory(
+                prefix="cad-canonical-policy-bypass-"
+            ) as temp_dir:
+                root = Path(temp_dir)
+                (root / "secret.txt").write_text("undeclared\n", encoding="utf-8")
+                source = _write_canonical_source(
+                    root,
+                    body=(
+                        "from build123d import Box\n"
+                        "from cadpy import canonical_build\n"
+                        f"{bypass}\n"
+                        "canonical_build.Path('secret.txt').read_text(encoding='utf-8')\n"
+                        "canonical_build.Path('breach.txt').write_text('written', encoding='utf-8')\n"
+                        "canonical_build.sys.modules['socket'].socket().close()\n"
+                        "canonical_build.sys.modules['subprocess'].run(\n"
+                        "    [canonical_build.sys.executable, '-c', 'pass'], check=True\n"
+                        ")\n"
+                        "def gen_step():\n"
+                        "    return Box(0.4, 0.2, 0.1)\n"
+                    ),
+                )
+
+                result = _run_adapter(
+                    root,
+                    "build",
+                    "--source",
+                    source.relative_to(root).as_posix(),
+                    "--output-dir",
+                    "candidate",
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse((root / "breach.txt").exists())
+                self.assertFalse((root / "candidate/measurement.glb").exists())
+                self.assertFalse((root / "candidate/build.json").exists())
+
+    def test_source_stdout_is_rejected_before_formal_publication(self) -> None:
+        with temporary_directory(prefix="cad-canonical-source-stdout-") as temp_dir:
+            root = Path(temp_dir)
+            source = _write_canonical_source(
+                root,
+                body=(
+                    "from build123d import Box\n"
+                    "print('candidate noise')\n"
+                    "def gen_step():\n"
+                    "    return Box(0.4, 0.2, 0.1)\n"
+                ),
+            )
+
+            result = _run_adapter(
+                root,
+                "build",
+                "--source",
+                source.relative_to(root).as_posix(),
+                "--output-dir",
+                "candidate",
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertEqual("", result.stdout)
+            self.assertFalse((root / "candidate/measurement.glb").exists())
+            self.assertFalse((root / "candidate/build.json").exists())
+
+    def test_source_cannot_call_host_physical_reader(self) -> None:
+        with temporary_directory(prefix="cad-canonical-host-reader-") as temp_dir:
+            root = Path(temp_dir)
+            (root / "secret.txt").write_text("undeclared\n", encoding="utf-8")
+            source = _write_canonical_source(
+                root,
+                body=(
+                    "from build123d import Box\n"
+                    "from cadpy import canonical_build\n"
+                    "canonical_build._read_physical_file(\n"
+                    "    canonical_build.Path('.').resolve(),\n"
+                    "    canonical_build.Path('secret.txt'),\n"
+                    ")\n"
+                    "def gen_step():\n"
+                    "    return Box(0.4, 0.2, 0.1)\n"
+                ),
+            )
+
+            result = _run_adapter(
+                root,
+                "build",
+                "--source",
+                source.relative_to(root).as_posix(),
+                "--output-dir",
+                "candidate",
+            )
 
             self.assertNotEqual(0, result.returncode)
             self.assertFalse((root / "candidate/measurement.glb").exists())

@@ -1104,6 +1104,65 @@ server.listen(0, host, () => {
         self.assertNotIn("OPENAI_API_KEY", captured["sandbox_environment"])
         self.assertNotIn("PYTHONPATH", captured["sandbox_environment"])
 
+        durable_source = self.repo_root / (
+            provider_free_scenarios.DURABLE_MODEL_SOURCE.relative_to(REPO_ROOT)
+        )
+        durable_source.write_text(
+            "print('candidate noise')\n"
+            + durable_source.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        deployment_authority.write_receipt(
+            self.repo_root,
+            source_head=deployed["source_head"],
+            runtime_identity=runtime_identity,
+        )
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+        captured.clear()
+        with mock.patch.object(
+            runtime,
+            "_run_with_heartbeat",
+            side_effect=run_real_runner,
+        ):
+            noisy_state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={
+                    "PATH": os.environ["PATH"],
+                    "HOME": os.fspath(self.workspace),
+                    "OPENAI_API_KEY": "must-not-cross-runner",
+                    "PYTHONPATH": "/must/not/cross/runner",
+                },
+            )
+
+        noisy_exp_dir = self.repo_root / "outputs" / handle
+        noisy_candidate = noisy_exp_dir / "work/candidate"
+        self.assertEqual(noisy_state["state"], "failed")
+        self.assertEqual(
+            noisy_state["scenario_failure"]["stage"],
+            "candidate_workspace",
+        )
+        self.assertFalse((noisy_candidate / "built/measurement.glb").exists())
+        self.assertFalse((noisy_candidate / "built/build.json").exists())
+        noisy_records = [
+            json.loads(line)
+            for line in (
+                noisy_exp_dir / "run/provider-free-commands.jsonl"
+            ).read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(len(noisy_records), 1)
+        self.assertEqual(noisy_records[0]["argv"], canonical_argv)
+        self.assertNotEqual(noisy_records[0]["exit_code"], 0)
+        self.assertEqual(
+            noisy_records[0]["stdout_sha256"],
+            hashlib.sha256(b"").hexdigest(),
+        )
+
     def test_provider_free_failure_rejects_unknown_terminal_manifest_schema(
         self,
     ) -> None:

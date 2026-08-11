@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import ast
 import builtins
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 import hashlib
@@ -11,6 +11,7 @@ import importlib.abc
 import importlib.machinery
 import importlib.metadata
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -93,7 +94,6 @@ class _DeclaredPythonModuleLoader(importlib.abc.Loader):
         return None
 
     def exec_module(self, module: object) -> None:
-        self._declared.revalidate()
         namespace = vars(module)
         namespace["__file__"] = os.fspath(self._declared.path)
         code = compile(
@@ -131,14 +131,29 @@ class _DeclaredPythonModuleFinder(importlib.abc.MetaPathFinder):
         )
 
 
-_ACTIVE_SOURCE_POLICY: ContextVar[_SourceExecutionPolicy | None] = ContextVar(
-    "cadpy_canonical_build_source_policy",
-    default=None,
-)
-_INTERNAL_PHYSICAL_READ: ContextVar[bool] = ContextVar(
-    "cadpy_canonical_build_internal_physical_read",
-    default=False,
-)
+def _new_source_policy_authority():
+    active_policy: ContextVar[_SourceExecutionPolicy | None] = ContextVar(
+        "cadpy_canonical_build_source_policy",
+        default=None,
+    )
+
+    def current_policy() -> _SourceExecutionPolicy | None:
+        return active_policy.get()
+
+    @contextmanager
+    def activate_policy(policy: _SourceExecutionPolicy):
+        if active_policy.get() is not None:
+            raise RuntimeError("canonical source execution policy cannot be nested")
+        token = active_policy.set(policy)
+        try:
+            yield
+        finally:
+            active_policy.reset(token)
+
+    return current_policy, activate_policy
+
+
+_current_source_policy, _activate_source_policy = _new_source_policy_authority()
 _AUDIT_HOOK_INSTALLED = False
 _SEMANTIC_UNIT_IDENTIFIER = re.compile(
     r"(?:^|_)(?:mm|cm|meters?|metres?|inch(?:es)?|feet|foot|ft)$",
@@ -269,8 +284,8 @@ def _is_within(path: Path, root: Path) -> bool:
 
 
 def _canonical_build_audit_hook(event: str, args: tuple[object, ...]) -> None:
-    policy = _ACTIVE_SOURCE_POLICY.get()
-    if policy is None or _INTERNAL_PHYSICAL_READ.get():
+    policy = _current_source_policy()
+    if policy is None:
         return
     if event.startswith("socket."):
         raise RuntimeError("canonical build forbids network access during source execution")
@@ -342,7 +357,6 @@ def _read_physical_file(
     if hasattr(os, "O_CLOEXEC"):
         read_flags |= os.O_CLOEXEC
     directory_flags = read_flags | os.O_DIRECTORY
-    token = _INTERNAL_PHYSICAL_READ.set(True)
     directory_fd = -1
     file_fd = -1
     try:
@@ -381,7 +395,6 @@ def _read_physical_file(
             os.close(file_fd)
         if directory_fd >= 0:
             os.close(directory_fd)
-        _INTERNAL_PHYSICAL_READ.reset(token)
 
 
 def _freeze_declared_python_source(
@@ -434,7 +447,6 @@ def _frozen_primary_source_loader(source: _DeclaredPythonModule):
     ) -> importlib.machinery.ModuleSpec | None:
         location_path = Path(os.path.abspath(os.fsdecode(location)))
         if location_path == source.path:
-            source.revalidate()
             return importlib.machinery.ModuleSpec(
                 name,
                 _DeclaredPythonModuleLoader(source),
@@ -467,6 +479,8 @@ def _source_execution_policy(
         declared_inputs=resolved_inputs,
         frozen_sources=frozen_sources,
     )
+    for frozen_source in frozen_sources.values():
+        frozen_source.revalidate()
     shadowed_modules = {
         name: sys.modules.pop(name)
         for name in declared_finder.module_names
@@ -504,20 +518,18 @@ def _source_execution_policy(
     builtins.hash = guarded_hash
     for mutation_name, mutation_function in original_mutation_functions.items():
         setattr(os, mutation_name, guard_mutation(mutation_name, mutation_function))
-    token = _ACTIVE_SOURCE_POLICY.set(
-        _SourceExecutionPolicy(
-            root=root,
-            declared_inputs=resolved_inputs,
-            output_dir=output_dir.resolve(),
-        )
+    policy = _SourceExecutionPolicy(
+        root=root,
+        declared_inputs=resolved_inputs,
+        output_dir=output_dir.resolve(),
     )
     previous_dont_write_bytecode = sys.dont_write_bytecode
     sys.dont_write_bytecode = True
     try:
-        yield
+        with _activate_source_policy(policy):
+            yield
     finally:
         sys.dont_write_bytecode = previous_dont_write_bytecode
-        _ACTIVE_SOURCE_POLICY.reset(token)
         sys.meta_path[:] = [finder for finder in sys.meta_path if finder is not declared_finder]
         for name in declared_finder.module_names:
             sys.modules.pop(name, None)
@@ -601,6 +613,43 @@ def _validate_unitless_source_parameters(source: _DeclaredPythonModule) -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom) and node.module
     }
+    forbidden_policy_import = any(
+        isinstance(node, ast.Import)
+        and any(
+            alias.name == "cadpy.canonical_build"
+            or alias.name.startswith("cadpy.canonical_build.")
+            for alias in node.names
+        )
+        or isinstance(node, ast.ImportFrom)
+        and (
+            str(node.module) == "cadpy.canonical_build"
+            or str(node.module).startswith("cadpy.canonical_build.")
+            or (
+                str(node.module) == "cadpy"
+                and any(
+                    alias.name in {"canonical_build", "*"}
+                    for alias in node.names
+                )
+            )
+        )
+        for node in ast.walk(tree)
+    )
+    cadpy_aliases = {
+        alias.asname or "cadpy"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "cadpy"
+    }
+    forbidden_policy_attribute = any(
+        isinstance(node, ast.Attribute)
+        and node.attr == "canonical_build"
+        and isinstance(node.value, ast.Name)
+        and node.value.id in cadpy_aliases
+        for node in ast.walk(tree)
+    )
+    if forbidden_policy_import or forbidden_policy_attribute:
+        raise ValueError("canonical CAD source cannot import canonical-build policy internals")
     if "socket" in imported_roots:
         raise RuntimeError("canonical build forbids network access during source execution")
     if imported_roots & {"multiprocessing", "subprocess"}:
@@ -855,13 +904,20 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
     # I/O. Some dependencies populate their own interpreter cache on import.
     import build123d  # noqa: F401
 
-    with _source_execution_policy(
-        root=root,
-        source_path=source_path,
-        declared_inputs={path for path, _relative in declared_inputs},
-        frozen_sources=frozen_sources,
-        output_dir=output_path,
-    ), _frozen_primary_source_loader(frozen_primary_source):
+    candidate_stdout = io.StringIO()
+    candidate_stderr = io.StringIO()
+    with (
+        redirect_stdout(candidate_stdout),
+        redirect_stderr(candidate_stderr),
+        _source_execution_policy(
+            root=root,
+            source_path=source_path,
+            declared_inputs={path for path, _relative in declared_inputs},
+            frozen_sources=frozen_sources,
+            output_dir=output_path,
+        ),
+        _frozen_primary_source_loader(frozen_primary_source),
+    ):
         generated_scene = run_script_generator(
             spec,
             "gen_step",
@@ -869,6 +925,8 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
             load_current_scene=False,
             skip_step_write=True,
         )
+    if candidate_stdout.getvalue() or candidate_stderr.getvalue():
+        raise RuntimeError("canonical CAD source must not write to stdout or stderr")
     if generated_scene is None or generated_scene.doc is None:
         raise RuntimeError("canonical CAD source did not produce an exportable XCAF scene")
     for frozen_source in frozen_sources.values():
