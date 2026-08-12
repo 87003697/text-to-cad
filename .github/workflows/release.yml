@@ -418,12 +418,18 @@ jobs:
             echo "  skills/cad-viewer/scripts/viewer/package.json is missing." >&2
             exit 1
           fi
-          # Every skill vendors what it needs, so nothing published may reach
-          # repo-root packages/. A skill that does would break silently on
-          # install rather than here.
-          if grep -rIlE '\.\./\.\./\.\./packages/|["'"'"']\.\./\.\./packages/' skills 2>/dev/null | head -n 1 | grep -q .; then
+          # Every skill vendors what it needs, so no skill SOURCE may reach
+          # repo-root packages/ -- one that does would break silently on install
+          # rather than here. Generated artifacts are exempt: a bundled dist/ is
+          # self-contained, and its sourcemaps name the original source paths as
+          # debug metadata, which is not a runtime reference.
+          skill_packages_refs() {
+            grep -rIlE '\.\./\.\./\.\./packages/|["'"'"']\.\./\.\./packages/' skills \
+              --exclude='*.map' --exclude-dir=dist 2>/dev/null || true
+          }
+          if [ -n "$(skill_packages_refs)" ]; then
             echo "A skill references repo-root packages/, which is not published:" >&2
-            grep -rIlE '\.\./\.\./\.\./packages/|["'"'"']\.\./\.\./packages/' skills >&2
+            skill_packages_refs >&2
             exit 1
           fi
           echo "PUBLISH_TREE_REMOVED_ROOTS=$removed_roots" >> "$GITHUB_ENV"
