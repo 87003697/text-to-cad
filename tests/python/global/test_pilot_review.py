@@ -362,7 +362,7 @@ class PilotReviewTests(unittest.TestCase):
                     "expected_stdout": "cvm.browser-stage-exec-probe/1",
                 },
                 "sandbox_exec_diagnostics": {
-                    "schema": "cvm.provider-free-browser-exec-diagnostic/3",
+                    "schema": "cvm.provider-free-browser-exec-diagnostic/4",
                     "receipt": "run/browser-exec-diagnostic.json",
                     "executable": (
                         "/tmp/provider-free-playwright/attested/"
@@ -377,13 +377,19 @@ class PilotReviewTests(unittest.TestCase):
                         "script": "scripts/pilot/browser_exec_probe.js",
                         "runtime": "playwright-bundled-node",
                         "spawn": "child-process",
+                        "failure_kinds": [
+                            "spawn-event",
+                            "nonzero-exit",
+                            "timeout",
+                            "output-shape",
+                        ],
                         "modes": [
                             {"name": "attached", "detached": False},
                             {"name": "detached", "detached": True},
                         ],
                         "result": {
-                            "exit_code": 0,
-                            "stdout": "empty",
+                            "exit_code": "zero-only-on-passed",
+                            "stdout": "single-closed-result-token",
                             "stderr": "empty",
                             "child_stdout": "single-chromium-version-line",
                             "child_stdout_max_bytes": 128,
@@ -490,13 +496,13 @@ class PilotReviewTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/10",
+                "id": "issue15.provider-free-bounded/11",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/10",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/11",
             },
             "sandbox": {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/10",
+                "resource_profile": "issue15.provider-free-bounded/11",
             },
             "provider_environment": {
                 "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],
@@ -856,7 +862,7 @@ class PilotReviewTests(unittest.TestCase):
         write_json(
             self.exp / "run/browser-exec-diagnostic.json",
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/3",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/4",
                 "executable": (
                     "/tmp/provider-free-playwright/attested/"
                     "chrome-headless-shell-linux64/chrome-headless-shell"
@@ -866,6 +872,7 @@ class PilotReviewTests(unittest.TestCase):
                 "nested": "passed",
                 "node_attached": "passed",
                 "node_detached": "passed",
+                "node_failure_kind": "not-run",
                 "playwright": "passed",
             },
         )

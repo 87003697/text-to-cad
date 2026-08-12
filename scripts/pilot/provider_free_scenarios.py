@@ -75,6 +75,16 @@ _BROWSER_VERSION_OUTPUT = re.compile(
     rb"(?:Google Chrome for Testing|Chromium|Chrome|HeadlessChrome) "
     rb"[0-9]+(?:\.[0-9]+){3}\n"
 )
+_NODE_BROWSER_PROBE_FAILURE_KINDS = frozenset(
+    {"spawn-event", "nonzero-exit", "timeout", "output-shape"}
+)
+_NODE_BROWSER_PROBE_RESULT_BYTES = {
+    b"passed\n": None,
+    **{
+        f"{kind}\n".encode("ascii"): kind
+        for kind in _NODE_BROWSER_PROBE_FAILURE_KINDS
+    },
+}
 
 
 class ScenarioError(RuntimeError):
@@ -480,6 +490,7 @@ def _publish_browser_exec_diagnostic(
     nested: str,
     node_attached: str,
     node_detached: str,
+    node_failure_kind: str,
     playwright: str,
 ) -> None:
     """Publish only closed outcomes for the exact staged-browser probes."""
@@ -495,6 +506,7 @@ def _publish_browser_exec_diagnostic(
             "nested": nested,
             "node_attached": node_attached,
             "node_detached": node_detached,
+            "node_failure_kind": node_failure_kind,
             "playwright": playwright,
         },
     )
@@ -530,30 +542,64 @@ def _run_exact_browser_version_probe(argv: Sequence[str], *, cwd: Path) -> None:
 
 def _run_closed_node_browser_version_probe(
     argv: Sequence[str], *, cwd: Path
-) -> None:
-    """Require the repository Node probe to exit silently and successfully."""
+) -> str | None:
+    """Return one closed Node failure kind or ``None`` after exact success."""
 
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             list(argv),
             cwd=cwd,
             env=dict(BROWSER_EXEC_PROBE_ENVIRONMENT),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            check=False,
-            timeout=BROWSER_EXEC_PROBE_TIMEOUT_SECONDS,
             start_new_session=True,
             close_fds=True,
         )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ScenarioError("bundled Node browser exec probe failed") from exc
+    except OSError:
+        return "spawn-event"
+    try:
+        stdout, stderr = process.communicate(
+            timeout=BROWSER_EXEC_PROBE_TIMEOUT_SECONDS
+        )
+    except subprocess.TimeoutExpired:
+        _terminate_node_probe_process(process)
+        return "timeout"
+    except OSError:
+        _terminate_node_probe_process(process)
+        return "output-shape"
     if (
-        completed.returncode != 0
-        or completed.stdout != b""
-        or completed.stderr != b""
+        not isinstance(stdout, bytes)
+        or not isinstance(stderr, bytes)
+        or len(stdout) > 32
+        or stderr != b""
     ):
-        raise ScenarioError("bundled Node browser exec probe result is invalid")
+        return "output-shape"
+    result = _NODE_BROWSER_PROBE_RESULT_BYTES.get(stdout, "output-shape")
+    if process.returncode == 0:
+        return result if result is not None else None
+    if result in _NODE_BROWSER_PROBE_FAILURE_KINDS:
+        return result
+    return "nonzero-exit"
+
+
+def _terminate_node_probe_process(process: subprocess.Popen[bytes]) -> None:
+    """Bound cleanup of one session-owned Node probe and its descendants."""
+
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+        process.communicate(timeout=1)
+        return
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    try:
+        process.communicate()
+    except OSError:
+        pass
 
 
 def _playwright_bundled_node() -> Path:
@@ -1043,6 +1089,7 @@ def _run_voxblame_preview(
                     nested="not-run",
                     node_attached="not-run",
                     node_detached="not-run",
+                    node_failure_kind="not-run",
                     playwright="not-run",
                 )
                 raise ScenarioError(
@@ -1061,52 +1108,59 @@ def _run_voxblame_preview(
                     nested="failed",
                     node_attached="not-run",
                     node_detached="not-run",
+                    node_failure_kind="not-run",
                     playwright="not-run",
                 )
                 raise ScenarioError(
                     "provider-free nested browser exec probe failed",
                     operation="preview_browser_nested_exec_probe",
                 ) from exc
-            try:
-                _run_closed_node_browser_version_probe(
-                    _nested_node_browser_exec_probe_argv(
-                        cwd=cwd, mode="attached"
-                    ),
-                    cwd=cwd,
-                )
-            except ScenarioError as exc:
+            node_failure_kind = _run_closed_node_browser_version_probe(
+                _nested_node_browser_exec_probe_argv(
+                    cwd=cwd, mode="attached"
+                ),
+                cwd=cwd,
+            )
+            if node_failure_kind is not None:
                 _publish_browser_exec_diagnostic(
                     command_log,
                     outer="passed",
                     nested="passed",
                     node_attached="failed",
                     node_detached="not-run",
+                    node_failure_kind=node_failure_kind,
                     playwright="not-run",
                 )
                 raise ScenarioError(
                     "provider-free attached Node browser exec probe failed",
-                    operation="preview_browser_node_attached_exec_probe",
-                ) from exc
-            try:
-                _run_closed_node_browser_version_probe(
-                    _nested_node_browser_exec_probe_argv(
-                        cwd=cwd, mode="detached"
+                    operation=(
+                        "preview_browser_node_attached_"
+                        f"{node_failure_kind.replace('-', '_')}"
                     ),
-                    cwd=cwd,
                 )
-            except ScenarioError as exc:
+            node_failure_kind = _run_closed_node_browser_version_probe(
+                _nested_node_browser_exec_probe_argv(
+                    cwd=cwd, mode="detached"
+                ),
+                cwd=cwd,
+            )
+            if node_failure_kind is not None:
                 _publish_browser_exec_diagnostic(
                     command_log,
                     outer="passed",
                     nested="passed",
                     node_attached="passed",
                     node_detached="failed",
+                    node_failure_kind=node_failure_kind,
                     playwright="not-run",
                 )
                 raise ScenarioError(
                     "provider-free detached Node browser exec probe failed",
-                    operation="preview_browser_node_detached_exec_probe",
-                ) from exc
+                    operation=(
+                        "preview_browser_node_detached_"
+                        f"{node_failure_kind.replace('-', '_')}"
+                    ),
+                )
         sandbox_argv = _preview_sandbox_argv(argv, cwd=cwd)
         _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
         try:
@@ -1123,6 +1177,7 @@ def _run_voxblame_preview(
                     nested="passed",
                     node_attached="passed",
                     node_detached="passed",
+                    node_failure_kind="not-run",
                     playwright="failed",
                 )
                 if exc.classification in {
@@ -1144,6 +1199,7 @@ def _run_voxblame_preview(
                 nested="passed",
                 node_attached="passed",
                 node_detached="passed",
+                node_failure_kind="not-run",
                 playwright="passed",
             )
         return result

@@ -493,12 +493,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/10",
+    "id": "issue15.provider-free-bounded/11",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/10",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/11",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/10",
+    "schema": "cvm.provider-free-linux-sandbox/11",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -544,13 +544,19 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
                 "script": "scripts/pilot/browser_exec_probe.js",
                 "runtime": "playwright-bundled-node",
                 "spawn": "child-process",
+                "failure_kinds": [
+                    "spawn-event",
+                    "nonzero-exit",
+                    "timeout",
+                    "output-shape",
+                ],
                 "modes": [
                     {"name": "attached", "detached": False},
                     {"name": "detached", "detached": True},
                 ],
                 "result": {
-                    "exit_code": 0,
-                    "stdout": "empty",
+                    "exit_code": "zero-only-on-passed",
+                    "stdout": "single-closed-result-token",
                     "stderr": "empty",
                     "child_stdout": "single-chromium-version-line",
                     "child_stdout_max_bytes": 128,
@@ -1377,11 +1383,12 @@ def _provider_free_failure_evidence_result(
     diagnostic_operations = {
         "preview_browser_outer_exec_probe",
         "preview_browser_nested_exec_probe",
-        "preview_browser_node_attached_exec_probe",
-        "preview_browser_node_detached_exec_probe",
         "preview_browser_playwright_launch_after_direct_probes",
     }
-    if operation in diagnostic_operations:
+    if operation in diagnostic_operations or (
+        isinstance(operation, str)
+        and operation.startswith("preview_browser_node_")
+    ):
         diagnostic_path = exp_dir / PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
         try:
             diagnostic_bytes = diagnostic_path.read_bytes()

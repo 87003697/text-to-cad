@@ -28,13 +28,14 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 class JobProtocolTests(unittest.TestCase):
     def test_browser_exec_diagnostic_receipt_is_closed(self) -> None:
         receipt = {
-            "schema": "cvm.provider-free-browser-exec-diagnostic/3",
+            "schema": "cvm.provider-free-browser-exec-diagnostic/4",
             "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
             "probe": "chromium-version-immediate-exit",
             "outer": "passed",
             "nested": "passed",
             "node_attached": "passed",
             "node_detached": "passed",
+            "node_failure_kind": "not-run",
             "playwright": "failed",
         }
 
@@ -45,23 +46,25 @@ class JobProtocolTests(unittest.TestCase):
             **receipt,
             "node_attached": "failed",
             "node_detached": "not-run",
+            "node_failure_kind": "spawn-event",
             "playwright": "not-run",
         }
         self.assertTrue(
             protocol.provider_free_browser_exec_diagnostic_matches_operation(
                 attached_failure,
-                "preview_browser_node_attached_exec_probe",
+                "preview_browser_node_attached_spawn_event",
             )
         )
         detached_failure = {
             **receipt,
             "node_detached": "failed",
+            "node_failure_kind": "timeout",
             "playwright": "not-run",
         }
         self.assertTrue(
             protocol.provider_free_browser_exec_diagnostic_matches_operation(
                 detached_failure,
-                "preview_browser_node_detached_exec_probe",
+                "preview_browser_node_detached_timeout",
             )
         )
         self.assertFalse(
@@ -77,6 +80,7 @@ class JobProtocolTests(unittest.TestCase):
             {**receipt, "nested": "failed", "playwright": "passed"},
             {**receipt, "node_attached": "failed", "playwright": "passed"},
             {**receipt, "node_detached": "failed", "playwright": "passed"},
+            {**receipt, "node_failure_kind": "raw-errno"},
             {**receipt, "executable": "/tmp/other-browser"},
         ):
             with self.subTest(mutation=mutation):

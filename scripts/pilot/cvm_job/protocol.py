@@ -49,7 +49,10 @@ PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH = (
     "run/browser-exec-diagnostic.json"
 )
 PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA = (
-    "cvm.provider-free-browser-exec-diagnostic/3"
+    "cvm.provider-free-browser-exec-diagnostic/4"
+)
+PROVIDER_FREE_BROWSER_EXEC_FAILURE_KINDS = frozenset(
+    {"spawn-event", "nonzero-exit", "timeout", "output-shape"}
 )
 PROVIDER_FREE_STAGED_BROWSER_CACHE = "/tmp/provider-free-playwright"
 PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE = (
@@ -131,6 +134,7 @@ def provider_free_browser_exec_diagnostic_allowed(receipt: object) -> bool:
             "nested",
             "node_attached",
             "node_detached",
+            "node_failure_kind",
             "playwright",
         }
         or receipt.get("schema")
@@ -147,14 +151,24 @@ def provider_free_browser_exec_diagnostic_allowed(receipt: object) -> bool:
         receipt.get("node_detached"),
         receipt.get("playwright"),
     )
-    return outcomes in {
+    if outcomes not in {
         ("failed", "not-run", "not-run", "not-run", "not-run"),
         ("passed", "failed", "not-run", "not-run", "not-run"),
         ("passed", "passed", "failed", "not-run", "not-run"),
         ("passed", "passed", "passed", "failed", "not-run"),
         ("passed", "passed", "passed", "passed", "failed"),
         ("passed", "passed", "passed", "passed", "passed"),
-    }
+    }:
+        return False
+    node_failed = receipt.get("node_attached") == "failed" or receipt.get(
+        "node_detached"
+    ) == "failed"
+    kind = receipt.get("node_failure_kind")
+    return (
+        kind in PROVIDER_FREE_BROWSER_EXEC_FAILURE_KINDS
+        if node_failed
+        else kind == "not-run"
+    )
 
 
 def provider_free_browser_exec_diagnostic_matches_operation(
@@ -165,7 +179,7 @@ def provider_free_browser_exec_diagnostic_matches_operation(
 
     if not provider_free_browser_exec_diagnostic_allowed(receipt):
         return False
-    expected = {
+    expected_outcomes = {
         "preview_browser_outer_exec_probe": (
             "failed",
             "not-run",
@@ -180,20 +194,6 @@ def provider_free_browser_exec_diagnostic_matches_operation(
             "not-run",
             "not-run",
         ),
-        "preview_browser_node_attached_exec_probe": (
-            "passed",
-            "passed",
-            "failed",
-            "not-run",
-            "not-run",
-        ),
-        "preview_browser_node_detached_exec_probe": (
-            "passed",
-            "passed",
-            "passed",
-            "failed",
-            "not-run",
-        ),
         "preview_browser_playwright_launch_after_direct_probes": (
             "passed",
             "passed",
@@ -202,13 +202,25 @@ def provider_free_browser_exec_diagnostic_matches_operation(
             "failed",
         ),
     }.get(operation)
-    return expected == (
+    expected_kind = "not-run"
+    if isinstance(operation, str):
+        for mode, outcomes in (
+            ("attached", ("passed", "passed", "failed", "not-run", "not-run")),
+            ("detached", ("passed", "passed", "passed", "failed", "not-run")),
+        ):
+            for kind in PROVIDER_FREE_BROWSER_EXEC_FAILURE_KINDS:
+                if operation == (
+                    f"preview_browser_node_{mode}_{kind.replace('-', '_')}"
+                ):
+                    expected_outcomes = outcomes
+                    expected_kind = kind
+    return expected_outcomes == (
         receipt.get("outer"),
         receipt.get("nested"),
         receipt.get("node_attached"),
         receipt.get("node_detached"),
         receipt.get("playwright"),
-    )
+    ) and receipt.get("node_failure_kind") == expected_kind
 
 
 PROVIDER_FREE_SCENARIO_FAILURE_STAGES = frozenset(
@@ -241,8 +253,11 @@ PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS_BY_STAGE = {
             "preview_browser_runtime_staging",
             "preview_browser_outer_exec_probe",
             "preview_browser_nested_exec_probe",
-            "preview_browser_node_attached_exec_probe",
-            "preview_browser_node_detached_exec_probe",
+            *{
+                f"preview_browser_node_{mode}_{kind.replace('-', '_')}"
+                for mode in ("attached", "detached")
+                for kind in PROVIDER_FREE_BROWSER_EXEC_FAILURE_KINDS
+            },
             "preview_browser_playwright_launch_after_direct_probes",
             "preview_dependency",
             "preview_browser_launch",

@@ -2,6 +2,7 @@
 "use strict";
 
 const { spawn } = require("node:child_process");
+const { writeSync } = require("node:fs");
 
 const EXPECTED_EXECUTABLE =
   "/tmp/provider-free-playwright/attested/" +
@@ -24,6 +25,7 @@ let child;
 let finished = false;
 let stdout = Buffer.alloc(0);
 let stderr = Buffer.alloc(0);
+let timer;
 
 function stopChild() {
   if (!child || !child.pid)
@@ -47,14 +49,15 @@ function stopChild() {
   }
 }
 
-function finish(ok) {
+function finish(result) {
   if (finished)
     return;
   finished = true;
   clearTimeout(timer);
-  if (!ok)
+  if (result !== "passed")
     stopChild();
-  process.exit(ok ? 0 : 2);
+  process.stdout.write(`${result}\n`, () =>
+    process.exit(result === "passed" ? 0 : 2));
 }
 
 function appendBounded(current, chunk) {
@@ -76,31 +79,38 @@ try {
     stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
   });
 } catch (_error) {
+  writeSync(1, "spawn-event\n");
   process.exit(2);
 }
 
-const timer = setTimeout(() => finish(false), TIMEOUT_MILLISECONDS);
+timer = setTimeout(() => finish("timeout"), TIMEOUT_MILLISECONDS);
 
-child.once("error", () => finish(false));
+child.once("error", () => finish("spawn-event"));
 child.stdout.on("data", (chunk) => {
   const next = appendBounded(stdout, chunk);
   if (next === null)
-    finish(false);
+    finish("output-shape");
   else
     stdout = next;
 });
 child.stderr.on("data", (chunk) => {
   const next = appendBounded(stderr, chunk);
   if (next === null)
-    finish(false);
+    finish("output-shape");
   else
     stderr = next;
 });
-child.once("close", (code, signal) => {
+child.once("close", (code, childSignal) => {
+  if (code !== 0 || childSignal !== null) {
+    finish("nonzero-exit");
+    return;
+  }
   finish(
-    code === 0 &&
-      signal === null &&
-      stderr.length === 0 &&
-      VERSION_OUTPUT.test(stdout.toString("utf8")),
+    stderr.length === 0 && VERSION_OUTPUT.test(stdout.toString("utf8"))
+      ? "passed"
+      : "output-shape",
   );
 });
+
+for (const name of ["SIGINT", "SIGTERM"])
+  process.once(name, () => finish("timeout"));

@@ -573,11 +573,12 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
     diagnostic_operations = {
         "preview_browser_outer_exec_probe",
         "preview_browser_nested_exec_probe",
-        "preview_browser_node_attached_exec_probe",
-        "preview_browser_node_detached_exec_probe",
         "preview_browser_playwright_launch_after_direct_probes",
     }
-    if operation in diagnostic_operations:
+    if operation in diagnostic_operations or (
+        isinstance(operation, str)
+        and operation.startswith("preview_browser_node_")
+    ):
         try:
             browser_exec_diagnostic = json.loads(
                 (

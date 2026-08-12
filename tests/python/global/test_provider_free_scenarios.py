@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -440,8 +441,14 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             "preview_browser_runtime_staging",
             "preview_browser_outer_exec_probe",
             "preview_browser_nested_exec_probe",
-            "preview_browser_node_attached_exec_probe",
-            "preview_browser_node_detached_exec_probe",
+            "preview_browser_node_attached_spawn_event",
+            "preview_browser_node_attached_nonzero_exit",
+            "preview_browser_node_attached_timeout",
+            "preview_browser_node_attached_output_shape",
+            "preview_browser_node_detached_spawn_event",
+            "preview_browser_node_detached_nonzero_exit",
+            "preview_browser_node_detached_timeout",
+            "preview_browser_node_detached_output_shape",
             "preview_browser_playwright_launch_after_direct_probes",
             "preview_dependency",
             "preview_browser_launch",
@@ -598,13 +605,14 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         run_public.assert_not_called()
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/3",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/4",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "failed",
                 "nested": "not-run",
                 "node_attached": "not-run",
                 "node_detached": "not-run",
+                "node_failure_kind": "not-run",
                 "playwright": "not-run",
             },
             json.loads(
@@ -710,13 +718,14 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         run_public.assert_not_called()
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/3",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/4",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "passed",
                 "nested": "failed",
                 "node_attached": "not-run",
                 "node_detached": "not-run",
+                "node_failure_kind": "not-run",
                 "playwright": "not-run",
             },
             json.loads(
@@ -739,12 +748,6 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             stdout=b"Google Chrome for Testing 123.0.0.0\n",
             stderr=b"",
         )
-        node_passed = subprocess.CompletedProcess(
-            ["nested-preview-node-probe"],
-            0,
-            stdout=b"",
-            stderr=b"",
-        )
         with (
             mock.patch.object(
                 provider_free_scenarios.platform,
@@ -763,7 +766,12 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             mock.patch.object(
                 provider_free_scenarios.subprocess,
                 "run",
-                side_effect=[passed, passed, node_passed, node_passed],
+                side_effect=[passed, passed],
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_run_closed_node_browser_version_probe",
+                side_effect=[None, None],
             ),
             mock.patch.object(
                 provider_free_scenarios,
@@ -793,13 +801,14 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self.assertNotIn("sensitive", str(raised.exception))
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/3",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/4",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "passed",
                 "nested": "passed",
                 "node_attached": "passed",
                 "node_detached": "passed",
+                "node_failure_kind": "not-run",
                 "playwright": "failed",
             },
             json.loads(
@@ -809,7 +818,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             ),
         )
 
-    def test_preview_reports_nested_bundled_node_attached_exec_probe_failure(
+    def test_preview_reports_nested_bundled_node_attached_spawn_event(
         self,
     ) -> None:
         from playwright._impl._driver import compute_driver_executable
@@ -842,12 +851,13 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             mock.patch.object(
                 provider_free_scenarios.subprocess,
                 "run",
-                side_effect=[
-                    passed,
-                    passed,
-                    PermissionError("injected attached Node spawn denial"),
-                ],
+                side_effect=[passed, passed],
             ) as run,
+            mock.patch.object(
+                provider_free_scenarios,
+                "_run_closed_node_browser_version_probe",
+                return_value="spawn-event",
+            ) as node_probe,
             mock.patch.object(
                 provider_free_scenarios,
                 "_run_public",
@@ -864,10 +874,10 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            "preview_browser_node_attached_exec_probe",
+            "preview_browser_node_attached_spawn_event",
             raised.exception.operation,
         )
-        self.assertEqual(3, run.call_count)
+        self.assertEqual(2, run.call_count)
         bundled_node = os.fspath(compute_driver_executable()[0])
         self.assertEqual(
             [
@@ -903,18 +913,19 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 "attached",
                 protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
             ],
-            run.call_args_list[2].args[0],
+            node_probe.call_args.args[0],
         )
         run_public.assert_not_called()
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/3",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/4",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "passed",
                 "nested": "passed",
                 "node_attached": "failed",
                 "node_detached": "not-run",
+                "node_failure_kind": "spawn-event",
                 "playwright": "not-run",
             },
             json.loads(
@@ -950,6 +961,68 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self.assertEqual(b"", completed.stdout)
         self.assertEqual(b"", completed.stderr)
 
+    def test_node_probe_classifies_every_closed_result_and_timeout_cleanup(
+        self,
+    ) -> None:
+        argv = ["nested-bwrap", "bundled-node", "probe.js", "attached"]
+        cases = (
+            ("passed", 0, b"passed\n", b"", None),
+            ("nonzero-exit", 2, b"nonzero-exit\n", b"", "nonzero-exit"),
+            ("signal", -9, b"nonzero-exit\n", b"", "nonzero-exit"),
+            ("output-shape", 2, b"output-shape\n", b"", "output-shape"),
+            ("noisy-token", 2, b"spawn-event\nextra\n", b"", "output-shape"),
+        )
+        for name, returncode, stdout, stderr, expected in cases:
+            with self.subTest(name=name):
+                process = mock.Mock(pid=1234, returncode=returncode)
+                process.communicate.return_value = (stdout, stderr)
+                with mock.patch.object(
+                    provider_free_scenarios.subprocess,
+                    "Popen",
+                    return_value=process,
+                ):
+                    actual = provider_free_scenarios._run_closed_node_browser_version_probe(
+                        argv,
+                        cwd=self.repo,
+                    )
+                self.assertEqual(expected, actual)
+
+        with mock.patch.object(
+            provider_free_scenarios.subprocess,
+            "Popen",
+            side_effect=PermissionError("sensitive spawn denial"),
+        ):
+            self.assertEqual(
+                "spawn-event",
+                provider_free_scenarios._run_closed_node_browser_version_probe(
+                    argv,
+                    cwd=self.repo,
+                ),
+            )
+
+        timed_out = mock.Mock(pid=5678, returncode=None)
+        timed_out.communicate.side_effect = [
+            subprocess.TimeoutExpired(argv, 5),
+            (b"", b""),
+        ]
+        with (
+            mock.patch.object(
+                provider_free_scenarios.subprocess,
+                "Popen",
+                return_value=timed_out,
+            ),
+            mock.patch.object(provider_free_scenarios.os, "killpg") as killpg,
+        ):
+            self.assertEqual(
+                "timeout",
+                provider_free_scenarios._run_closed_node_browser_version_probe(
+                    argv,
+                    cwd=self.repo,
+                ),
+            )
+        killpg.assert_called_once_with(5678, signal.SIGTERM)
+        self.assertEqual(2, timed_out.communicate.call_count)
+
     def test_preview_reports_only_detached_node_exec_probe_failure(self) -> None:
         bwrap = self.repo / "bwrap"
         bwrap.write_text("#!/bin/sh\n", encoding="utf-8")
@@ -959,12 +1032,6 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             [protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE, "--version"],
             0,
             stdout=b"Chromium 123.0.0.0\n",
-            stderr=b"",
-        )
-        node_passed = subprocess.CompletedProcess(
-            ["nested-attached-node-probe"],
-            0,
-            stdout=b"",
             stderr=b"",
         )
         with (
@@ -985,13 +1052,13 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             mock.patch.object(
                 provider_free_scenarios.subprocess,
                 "run",
-                side_effect=[
-                    python_passed,
-                    python_passed,
-                    node_passed,
-                    PermissionError("injected detached Node spawn denial"),
-                ],
+                side_effect=[python_passed, python_passed],
             ) as run,
+            mock.patch.object(
+                provider_free_scenarios,
+                "_run_closed_node_browser_version_probe",
+                side_effect=[None, "spawn-event"],
+            ) as node_probe,
             mock.patch.object(
                 provider_free_scenarios,
                 "_run_public",
@@ -1008,12 +1075,12 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            "preview_browser_node_detached_exec_probe",
+            "preview_browser_node_detached_spawn_event",
             raised.exception.operation,
         )
-        self.assertEqual(4, run.call_count)
-        attached_argv = run.call_args_list[2].args[0]
-        detached_argv = run.call_args_list[3].args[0]
+        self.assertEqual(2, run.call_count)
+        attached_argv = node_probe.call_args_list[0].args[0]
+        detached_argv = node_probe.call_args_list[1].args[0]
         mode_index = attached_argv.index("attached")
         self.assertEqual("detached", detached_argv[mode_index])
         self.assertEqual(
@@ -1021,19 +1088,20 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             detached_argv[:mode_index] + detached_argv[mode_index + 1 :],
         )
         self.assertEqual(
-            run.call_args_list[2].kwargs,
-            run.call_args_list[3].kwargs,
+            node_probe.call_args_list[0].kwargs,
+            node_probe.call_args_list[1].kwargs,
         )
         run_public.assert_not_called()
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/3",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/4",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "passed",
                 "nested": "passed",
                 "node_attached": "passed",
                 "node_detached": "failed",
+                "node_failure_kind": "spawn-event",
                 "playwright": "not-run",
             },
             json.loads(

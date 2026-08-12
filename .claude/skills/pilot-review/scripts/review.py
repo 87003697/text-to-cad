@@ -63,7 +63,7 @@ _SANDBOX_SETUP_CAPABILITIES = (
     "CAP_SETFCAP",
 )
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/10",
+    "schema": "cvm.provider-free-linux-sandbox/11",
     "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -100,7 +100,7 @@ _SANDBOX_PROFILE = {
             "expected_stdout": "cvm.browser-stage-exec-probe/1",
         },
         "sandbox_exec_diagnostics": {
-            "schema": "cvm.provider-free-browser-exec-diagnostic/3",
+            "schema": "cvm.provider-free-browser-exec-diagnostic/4",
             "receipt": "run/browser-exec-diagnostic.json",
             "executable": (
                 "/tmp/provider-free-playwright/attested/"
@@ -115,13 +115,19 @@ _SANDBOX_PROFILE = {
                 "script": "scripts/pilot/browser_exec_probe.js",
                 "runtime": "playwright-bundled-node",
                 "spawn": "child-process",
+                "failure_kinds": [
+                    "spawn-event",
+                    "nonzero-exit",
+                    "timeout",
+                    "output-shape",
+                ],
                 "modes": [
                     {"name": "attached", "detached": False},
                     {"name": "detached", "detached": True},
                 ],
                 "result": {
-                    "exit_code": 0,
-                    "stdout": "empty",
+                    "exit_code": "zero-only-on-passed",
+                    "stdout": "single-closed-result-token",
                     "stderr": "empty",
                     "child_stdout": "single-chromium-version-line",
                     "child_stdout_max_bytes": 128,
@@ -797,14 +803,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/10",
+                "id": "issue15.provider-free-bounded/11",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/10",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/11",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/10",
+                "resource_profile": "issue15.provider-free-bounded/11",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False
@@ -949,7 +955,7 @@ def _runtime_authority_verdict(
         ):
             raise ReviewError("preview sandbox enforcement is incomplete")
         if browser_exec_diagnostic != {
-            "schema": "cvm.provider-free-browser-exec-diagnostic/3",
+            "schema": "cvm.provider-free-browser-exec-diagnostic/4",
             "executable": (
                 "/tmp/provider-free-playwright/attested/"
                 "chrome-headless-shell-linux64/chrome-headless-shell"
@@ -959,6 +965,7 @@ def _runtime_authority_verdict(
             "nested": "passed",
             "node_attached": "passed",
             "node_detached": "passed",
+            "node_failure_kind": "not-run",
             "playwright": "passed",
         }:
             raise ReviewError("browser exec diagnostic is incomplete")

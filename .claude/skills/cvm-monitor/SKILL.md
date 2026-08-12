@@ -62,8 +62,14 @@ Native measurement operations are:
 - `preview_browser_runtime_staging`
 - `preview_browser_outer_exec_probe`
 - `preview_browser_nested_exec_probe`
-- `preview_browser_node_attached_exec_probe`
-- `preview_browser_node_detached_exec_probe`
+- `preview_browser_node_attached_spawn_event`
+- `preview_browser_node_attached_nonzero_exit`
+- `preview_browser_node_attached_timeout`
+- `preview_browser_node_attached_output_shape`
+- `preview_browser_node_detached_spawn_event`
+- `preview_browser_node_detached_nonzero_exit`
+- `preview_browser_node_detached_timeout`
+- `preview_browser_node_detached_output_shape`
 - `preview_browser_playwright_launch_after_direct_probes`
 - `preview_dependency`
 - `preview_browser_launch`
@@ -85,8 +91,11 @@ Native measurement operations are:
 The attached Node probe runs first with `detached=false`; the detached Node
 probe runs second with `detached=true`. All other probe inputs are identical.
 The later Playwright operation is valid only after both Node modes passed.
+Each Node failure publishes exactly one of `spawn-event`, `nonzero-exit`,
+`timeout`, or `output-shape`; signal exits are `nonzero-exit`, and missing,
+extra, or invalid result tokens are `output-shape`.
 
-The five browser-exec diagnostic operations are backed by the manifest-bound
+The eleven browser-exec diagnostic operations are backed by the manifest-bound
 `run/browser-exec-diagnostic.json` receipt. It contains only closed
 `passed`/`failed`/`not-run` outcomes for the outer direct Chromium `--version`
 probe, the same exact executable through the nested preview sandbox, the same
@@ -98,7 +107,7 @@ environment values, and arbitrary operations are never projected by the
 monitor. A diagnostic operation is rejected unless its receipt has the
 corresponding exact outcome tuple and manifest binding. Historical three-field
 receipts, operations on another stage, or values outside these lists are
-rejected by profile `/10`.
+rejected by profile `/11`.
 
 The failure path does not require successful Workspace, runtime-authority, or
 Final Delivery artifacts before reporting the primary stage. It still requires
