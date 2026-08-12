@@ -5,7 +5,9 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -115,6 +117,201 @@ class ProviderFreeScenario:
 
 
 @dataclass(frozen=True)
+class AttestedBrowserMount:
+    """One job-scoped host tree exposed at the stable sandbox interface."""
+
+    host_revision: Path
+    sandbox_cache: str
+    sandbox_executable: str
+
+
+class BrowserStageError(RuntimeError):
+    """The deployment-attested browser could not be staged safely."""
+
+
+def _browser_mount(
+    chromium: dict[str, Any],
+    handle: str,
+) -> AttestedBrowserMount:
+    parsed = parse_handle(handle)
+    return AttestedBrowserMount(
+        host_revision=(
+            Path(chromium["host_cache_path"])
+            / ".cvm-provider-free-browser-stages"
+            / f"{parsed['group']}.{parsed['exp']}"
+            / "attested"
+        ),
+        sandbox_cache=PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        sandbox_executable=PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+    )
+
+
+def _browser_tree_manifest(root: Path) -> dict[str, tuple[str, int, str | None]]:
+    """Return the closed regular-file tree identity used around one copy."""
+
+    manifest: dict[str, tuple[str, int, str | None]] = {}
+    for path in (root, *sorted(root.rglob("*"))):
+        mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode) or not (
+            stat.S_ISDIR(mode) or stat.S_ISREG(mode)
+        ):
+            raise BrowserStageError(
+                "browser revision contains a link or special entry"
+            )
+        relative = "." if path == root else path.relative_to(root).as_posix()
+        manifest[relative] = (
+            "directory" if stat.S_ISDIR(mode) else "file",
+            stat.S_IMODE(mode),
+            (
+                None
+                if stat.S_ISDIR(mode)
+                else hashlib.sha256(path.read_bytes()).hexdigest()
+            ),
+        )
+    return manifest
+
+
+@contextmanager
+def staged_attested_browser(
+    chromium: dict[str, Any],
+    handle: str,
+    *,
+    repo_root: Path | None = None,
+) -> Iterator[AttestedBrowserMount]:
+    """Copy one attested browser revision into a private host-side stage."""
+
+    try:
+        parse_handle(handle)
+        source_cache = Path(str(chromium["host_cache_path"])).resolve(strict=True)
+        source_revision_link = (
+            source_cache / f"chromium_headless_shell-{chromium['revision']}"
+        )
+        if stat.S_ISLNK(source_revision_link.lstat().st_mode):
+            raise BrowserStageError("browser revision must not be a symlink")
+        source_revision = source_revision_link.resolve(strict=True)
+        try:
+            source_revision.relative_to(source_cache)
+        except ValueError as exc:
+            raise BrowserStageError(
+                "browser revision escapes its attested cache"
+            ) from exc
+        source_manifest = _browser_tree_manifest(source_revision)
+        executable_relative = Path(
+            "chrome-headless-shell-linux64/chrome-headless-shell"
+        )
+        source_executable = source_revision / executable_relative
+        if (
+            os.fspath(source_executable) != chromium.get("executable_path")
+            or not source_executable.lstat().st_mode & 0o111
+        ):
+            raise BrowserStageError(
+                "browser executable path or mode conflicts with deployment identity"
+            )
+        requested_root = REPO_ROOT if repo_root is None else Path(repo_root)
+        repository = requested_root.resolve(strict=True)
+        stage_parent = source_cache / ".cvm-provider-free-browser-stages"
+        mount = _browser_mount(chromium, handle)
+        stage_root = mount.host_revision.parent
+        try:
+            stage_parent.resolve(strict=False).relative_to(repository)
+        except ValueError:
+            pass
+        else:
+            raise BrowserStageError("browser stage must be outside the repository")
+    except BrowserStageError:
+        raise
+    except (KeyError, OSError, ProtocolError, ValueError) as exc:
+        raise BrowserStageError("deployment browser identity is invalid") from exc
+    created = False
+    try:
+        try:
+            stage_parent.mkdir(mode=0o700, parents=False, exist_ok=True)
+            stage_parent_mode = stage_parent.lstat().st_mode
+            if (
+                stat.S_ISLNK(stage_parent_mode)
+                or not stat.S_ISDIR(stage_parent_mode)
+                or stage_parent.resolve(strict=True) != stage_parent
+                or stage_parent.stat().st_uid != os.getuid()
+                or stat.S_IMODE(stage_parent_mode) & 0o077
+            ):
+                raise BrowserStageError("browser stage parent is not private")
+            if stage_parent.stat().st_dev != source_revision.stat().st_dev:
+                raise BrowserStageError(
+                    "browser stage is not on the deployment browser filesystem"
+                )
+            stage_root.mkdir(mode=0o700)
+            created = True
+            stage_identity = (
+                stage_root.lstat().st_dev,
+                stage_root.lstat().st_ino,
+            )
+            staged_revision = stage_root / "attested"
+            shutil.copytree(
+                source_revision,
+                staged_revision,
+                copy_function=shutil.copy2,
+            )
+            if (
+                _browser_tree_manifest(source_revision) != source_manifest
+                or _browser_tree_manifest(staged_revision) != source_manifest
+            ):
+                raise BrowserStageError(
+                    "staged browser tree conflicts with deployment revision"
+                )
+            staged_executable = staged_revision / executable_relative
+            if (
+                hashlib.sha256(staged_executable.read_bytes()).hexdigest()
+                != chromium["sha256"]
+                or not staged_executable.lstat().st_mode & 0o111
+            ):
+                raise BrowserStageError(
+                    "staged browser executable identity conflicts with deployment identity"
+                )
+        except BrowserStageError:
+            raise
+        except (KeyError, OSError, shutil.Error, ValueError) as exc:
+            raise BrowserStageError("browser stage setup failed") from exc
+        yield mount
+    finally:
+        if created:
+            try:
+                stage_mode = stage_root.lstat().st_mode
+                if (
+                    stat.S_ISLNK(stage_mode)
+                    or not stat.S_ISDIR(stage_mode)
+                    or (
+                        stage_root.lstat().st_dev,
+                        stage_root.lstat().st_ino,
+                    )
+                    != stage_identity
+                ):
+                    raise BrowserStageError(
+                        "browser stage identity changed before cleanup"
+                    )
+                _browser_tree_manifest(stage_root)
+                for directory in (
+                    stage_root,
+                    *(
+                        path
+                        for path in stage_root.rglob("*")
+                        if stat.S_ISDIR(path.lstat().st_mode)
+                    ),
+                ):
+                    directory.chmod(
+                        stat.S_IMODE(directory.lstat().st_mode) | 0o700
+                    )
+                shutil.rmtree(stage_root)
+            except BrowserStageError:
+                raise
+            except OSError as exc:
+                raise BrowserStageError("browser stage cleanup failed") from exc
+            try:
+                stage_parent.rmdir()
+            except OSError:
+                pass
+
+
+@dataclass(frozen=True)
 class _ProviderFreeTerminalManifest:
     """One parsed and closed terminal manifest shared by all validators."""
 
@@ -141,12 +338,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/6",
+    "id": "issue15.provider-free-bounded/7",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/6",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/7",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/6",
+    "schema": "cvm.provider-free-linux-sandbox/7",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -159,14 +356,15 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
     "temporary_filesystem": "/tmp",
     "repository_mount": "read-only",
     "output_mount": "read-write-exact-experiment",
-    "browser_cache_mount": "read-only-attested-revision",
+    "browser_cache_mount": "read-only-job-scoped-attested-revision",
     "browser_runtime_staging": {
-        "source": "read-only-attested-revision",
+        "source": "deployment-attested-host-revision",
+        "source_filesystem": "same-device-as-deployment-browser",
         "scope": "single-attested-revision",
         "destination": PROVIDER_FREE_STAGED_BROWSER_CACHE,
         "staged_revision": "attested",
         "staged_executable": PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
-        "destination_filesystem": "private-tmpfs",
+        "destination_filesystem": "read-only-bind-of-exec-permitted-host-stage",
         "tree_validation": "regular-files-only-no-links-or-special",
         "executable_validation": {
             "sha256": "deployment-runtime-identity",
@@ -179,7 +377,7 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "validation": "absolute-regular-non-symlink-executable",
             "playwright_option": "executable_path",
         },
-        "cleanup": "outer-sandbox-private-tmpfs-teardown",
+        "cleanup": "supervisor-context-terminal-all-exit-classes",
     },
     "preview_process": {
         "capabilities": "drop-all",
@@ -212,7 +410,7 @@ PROVIDER_FREE_SANDBOX_REPO_ROOT = Path("/workspace/repo")
 PROVIDER_FREE_REQUIRED_ENVIRONMENT = {
     "HOME": "/home/provider-free",
     "PATH": "/workspace/repo/.venv/bin:/usr/local/bin:/usr/bin:/bin",
-    "PLAYWRIGHT_BROWSERS_PATH": deployment_authority.SANDBOX_BROWSER_CACHE,
+    "PLAYWRIGHT_BROWSERS_PATH": PROVIDER_FREE_STAGED_BROWSER_CACHE,
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 PROVIDER_FREE_SYSTEM_RO_PATHS = tuple(
@@ -252,6 +450,7 @@ def provider_free_sandbox_argv(
     runtime_identity: dict[str, Any],
     *,
     repo_root: Path | None = None,
+    browser_mount: AttestedBrowserMount | None = None,
 ) -> list[str]:
     """Build the one exact versioned provider-free bubblewrap launch contract."""
 
@@ -262,6 +461,13 @@ def provider_free_sandbox_argv(
     except provider_free_output.OutputPathError as exc:
         raise ProtocolError(f"unsafe provider-free output path: {exc}") from exc
     relative_exp = exp_dir.relative_to(source_root)
+    if len(relative_exp.parts) != 3 or relative_exp.parts[0] != "outputs":
+        raise ProtocolError("provider-free output is not experiment-bound")
+    handle = f"{relative_exp.parts[1]}/{relative_exp.parts[2]}"
+    expected_mount = _browser_mount(runtime_identity["chromium"], handle)
+    mount = expected_mount if browser_mount is None else browser_mount
+    if mount != expected_mount:
+        raise ProtocolError("provider-free browser mount conflicts with job authority")
     sandbox_exp = PROVIDER_FREE_SANDBOX_REPO_ROOT / relative_exp
     bwrap = runtime_identity["bwrap"]["path"]
     chromium = runtime_identity["chromium"]
@@ -296,9 +502,11 @@ def provider_free_sandbox_argv(
         "/home/provider-free",
         "--dir",
         "/home/provider-free/.cache",
+        "--dir",
+        PROVIDER_FREE_STAGED_BROWSER_CACHE,
         "--ro-bind",
-        chromium["host_cache_path"],
-        chromium["sandbox_cache_path"],
+        os.fspath(mount.host_revision),
+        f"{mount.sandbox_cache}/attested",
     ))
     for source, target in (
         ("usr/bin", "/bin"),

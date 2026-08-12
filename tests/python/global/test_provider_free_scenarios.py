@@ -595,69 +595,25 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             )
         )
 
-    def test_stage_browser_runtime_copies_only_attested_revision(self) -> None:
-        source_cache = self.repo / "source-cache"
-        revision = "1234"
-        source_revision = source_cache / f"chromium_headless_shell-{revision}"
-        executable = (
-            source_revision
-            / "chrome-headless-shell-linux64/chrome-headless-shell"
-        )
-        executable.parent.mkdir(parents=True)
-        executable.write_bytes(b"trusted chromium")
-        executable.chmod(0o755)
-        (source_revision / "resources.pak").write_bytes(b"resource")
-        staging = self.repo / "staged-cache"
-        identity = {
-            "revision": revision,
-            "sandbox_cache_path": os.fspath(source_cache),
-            "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
-        }
-
-        provider_free_scenarios._stage_browser_runtime(identity, staging)
-
-        staged_revision = staging / "attested"
-        staged_executable = (
-            staged_revision
-            / "chrome-headless-shell-linux64/chrome-headless-shell"
-        )
-        self.assertEqual(executable.read_bytes(), staged_executable.read_bytes())
-        self.assertTrue(staged_executable.stat().st_mode & 0o111)
-        self.assertEqual(
-            b"resource", (staged_revision / "resources.pak").read_bytes()
-        )
-
-    def test_stage_browser_runtime_rejects_symlink(self) -> None:
-        source_cache = self.repo / "source-cache"
-        revision = "1234"
-        source_revision = source_cache / f"chromium_headless_shell-{revision}"
-        executable = (
-            source_revision
-            / "chrome-headless-shell-linux64/chrome-headless-shell"
-        )
-        executable.parent.mkdir(parents=True)
-        executable.write_bytes(b"trusted chromium")
-        executable.chmod(0o755)
-        (source_revision / "linked").symlink_to(executable)
-        identity = {
-            "revision": revision,
-            "sandbox_cache_path": os.fspath(source_cache),
-            "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
-        }
-
-        with self.assertRaises(provider_free_scenarios.ScenarioError) as raised:
-            provider_free_scenarios._stage_browser_runtime(
-                identity, self.repo / "staged-cache"
-            )
-
-        self.assertEqual(
-            "preview_browser_runtime_staging", raised.exception.operation
-        )
-
-    def test_stage_attested_browser_runtime_uses_read_only_deployment_authority(
+    def test_scenario_validates_pre_staged_attested_browser_without_copying_cache(
         self,
     ) -> None:
-        runtime_identity = {"chromium": {"revision": "1234"}}
+        staging = self.repo / "staged-cache"
+        executable = (
+            staging
+            / "attested"
+            / "chrome-headless-shell-linux64/chrome-headless-shell"
+        )
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"trusted chromium")
+        executable.chmod(0o755)
+        (staging / "attested/resources.pak").write_bytes(b"resource")
+        runtime_identity = {
+            "chromium": {
+                "revision": "1234",
+                "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+            }
+        }
         receipt = {
             "schema": "cvm.deployed-source-authority/1",
             "contract_paths": list(
@@ -675,16 +631,51 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 "verify_receipt",
                 return_value=receipt,
             ) as verify_receipt,
-            mock.patch.object(
-                provider_free_scenarios, "_stage_browser_runtime"
-            ) as stage_browser_runtime,
+            mock.patch.object(shutil, "copytree") as copytree,
         ):
-            provider_free_scenarios._stage_attested_browser_runtime()
+            provider_free_scenarios._validate_attested_browser_runtime(staging)
 
         verify_receipt.assert_called_once_with(self.repo, receipt)
-        stage_browser_runtime.assert_called_once_with(
-            runtime_identity["chromium"],
-            Path(provider_free_scenarios.PROVIDER_FREE_STAGED_BROWSER_CACHE),
+        copytree.assert_not_called()
+
+    def test_scenario_rejects_pre_staged_browser_digest_mismatch(self) -> None:
+        staging = self.repo / "staged-cache"
+        executable = staging / (
+            "attested/chrome-headless-shell-linux64/chrome-headless-shell"
+        )
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"tampered chromium")
+        executable.chmod(0o755)
+        receipt = {
+            "schema": "cvm.deployed-source-authority/1",
+            "contract_paths": list(
+                provider_free_scenarios.deployment_authority.EXECUTION_AUTHORITY_PATHS
+            ),
+            "runtime_identity": {
+                "chromium": {
+                    "revision": "1234",
+                    "sha256": hashlib.sha256(b"trusted chromium").hexdigest(),
+                }
+            },
+        }
+        (self.repo / ".cvm-deployment.json").write_text(
+            json.dumps(receipt), encoding="utf-8"
+        )
+
+        with (
+            mock.patch.object(provider_free_scenarios, "REPO_ROOT", self.repo),
+            mock.patch.object(
+                provider_free_scenarios.deployment_authority,
+                "verify_receipt",
+                return_value=receipt,
+            ),
+            self.assertRaises(provider_free_scenarios.ScenarioError) as raised,
+        ):
+            provider_free_scenarios._validate_attested_browser_runtime(staging)
+
+        self.assertEqual(
+            "preview_browser_runtime_staging",
+            raised.exception.operation,
         )
 
     def _assert_closed_stage_failure(

@@ -460,56 +460,10 @@ def _publish_preview_sandbox_enforcement(
     )
 
 
-def _stage_browser_runtime(chromium: dict[str, Any], staging_cache: Path) -> None:
-    """Copy one attested Chromium revision onto the private executable tmpfs."""
-
-    try:
-        revision = str(chromium["revision"])
-        source_cache = Path(str(chromium["sandbox_cache_path"])).resolve(
-            strict=True
-        )
-        source_revision_link = (
-            source_cache / f"chromium_headless_shell-{revision}"
-        )
-        if source_revision_link.is_symlink():
-            raise ValueError("browser revision is a symlink")
-        source_revision = source_revision_link.resolve(strict=True)
-        source_revision.relative_to(source_cache)
-        executable_relative = Path(
-            "chrome-headless-shell-linux64/chrome-headless-shell"
-        )
-        if staging_cache.exists() or not revision.isdigit():
-            raise ValueError("invalid browser staging target")
-        for source in (source_revision, *sorted(source_revision.rglob("*"))):
-            mode = source.lstat().st_mode
-            if stat.S_ISLNK(mode) or not (
-                stat.S_ISDIR(mode) or stat.S_ISREG(mode)
-            ):
-                raise ValueError("browser runtime contains a non-regular entry")
-        staging_cache.mkdir(mode=0o700)
-        staged_revision = staging_cache / "attested"
-        shutil.copytree(
-            source_revision,
-            staged_revision,
-            copy_function=shutil.copy2,
-        )
-        staged_executable = staged_revision / executable_relative
-        staged_mode = staged_executable.stat().st_mode
-        if (
-            hashlib.sha256(staged_executable.read_bytes()).hexdigest()
-            != chromium["sha256"]
-            or not staged_mode & 0o111
-        ):
-            raise ValueError("staged browser executable identity conflicts")
-    except (KeyError, OSError, ValueError) as exc:
-        raise ScenarioError(
-            "provider-free browser runtime staging failed",
-            operation="preview_browser_runtime_staging",
-        ) from exc
-
-
-def _stage_attested_browser_runtime() -> None:
-    """Verify the read-only deployment authority and stage its browser revision."""
+def _validate_attested_browser_runtime(
+    staging_cache: Path = Path(PROVIDER_FREE_STAGED_BROWSER_CACHE),
+) -> None:
+    """Validate the exact host-pre-staged browser without copying a host cache."""
 
     try:
         receipt = json.loads(
@@ -522,7 +476,34 @@ def _stage_attested_browser_runtime() -> None:
         ):
             raise ValueError("deployment authority contract is incomplete")
         deployment_authority.verify_receipt(REPO_ROOT, receipt)
-        identity = receipt["runtime_identity"]
+        chromium = receipt["runtime_identity"]["chromium"]
+        if (
+            not str(chromium["revision"]).isdigit()
+            or stat.S_ISLNK(staging_cache.lstat().st_mode)
+            or not stat.S_ISDIR(staging_cache.lstat().st_mode)
+        ):
+            raise ValueError("invalid pre-staged browser root")
+        staged_revision = staging_cache / "attested"
+        if [path.name for path in staging_cache.iterdir()] != ["attested"]:
+            raise ValueError("pre-staged browser root is not exact")
+        for staged in (
+            staged_revision,
+            *sorted(staged_revision.rglob("*")),
+        ):
+            mode = staged.lstat().st_mode
+            if stat.S_ISLNK(mode) or not (
+                stat.S_ISDIR(mode) or stat.S_ISREG(mode)
+            ):
+                raise ValueError("pre-staged browser contains a non-regular entry")
+        executable = staged_revision / (
+            "chrome-headless-shell-linux64/chrome-headless-shell"
+        )
+        if (
+            hashlib.sha256(executable.read_bytes()).hexdigest()
+            != chromium["sha256"]
+            or not executable.lstat().st_mode & 0o111
+        ):
+            raise ValueError("pre-staged browser executable identity conflicts")
     except (
         KeyError,
         OSError,
@@ -534,9 +515,6 @@ def _stage_attested_browser_runtime() -> None:
             "provider-free browser runtime identity is unavailable",
             operation="preview_browser_runtime_staging",
         ) from exc
-    _stage_browser_runtime(
-        identity["chromium"], Path(PROVIDER_FREE_STAGED_BROWSER_CACHE)
-    )
 
 
 class _RejectedViewerHandler(http.server.BaseHTTPRequestHandler):
@@ -851,7 +829,7 @@ def _run_voxblame_preview(
     }
     try:
         if platform.system() == "Linux":
-            _stage_attested_browser_runtime()
+            _validate_attested_browser_runtime()
         sandbox_argv = _preview_sandbox_argv(argv, cwd=cwd)
         _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
         return _run_public(

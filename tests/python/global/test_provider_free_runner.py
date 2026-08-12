@@ -45,7 +45,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         )
         self.bwrap.chmod(0o755)
         self.bwrap = self.bwrap.resolve(strict=True)
-        self.browser_cache = self.repo / "trusted/ms-playwright"
+        self.browser_cache = Path(self.temporary.name) / "trusted/ms-playwright"
         self.browser = (
             self.browser_cache
             / "chromium_headless_shell-1234/"
@@ -105,7 +105,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/6",
+                "id": "issue15.provider-free-bounded/7",
                 "provider_access": "forbidden",
             },
             "request_authority": {
@@ -130,7 +130,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
             "PYTHONDONTWRITEBYTECODE": "1",
-            "CVM_PROVIDER_FREE_PROFILE": "issue15.provider-free-bounded/6",
+            "CVM_PROVIDER_FREE_PROFILE": "issue15.provider-free-bounded/7",
             "CVM_PROVIDER_FREE_STRIPPED_NAMES": (
                 "ANTHROPIC_API_KEY,HTTPS_PROXY,OPENAI_API_KEY,VENUS_TOKEN"
             ),
@@ -374,8 +374,27 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         def fake_run(argv, **kwargs):
             if list(argv) == [os.fspath(self.bwrap), "--version"]:
                 return subprocess.CompletedProcess(argv, 0, stdout="bubblewrap 1.2.3\n")
+            if not list(argv) or list(argv)[0] != os.fspath(self.bwrap):
+                return subprocess.CompletedProcess(argv, 0, stdout="")
             captured["argv"] = list(argv)
             captured["kwargs"] = kwargs
+            attested_target = (
+                f"{protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested"
+            )
+            mount_index = next(
+                index
+                for index, value in enumerate(argv[:-2])
+                if value == "--ro-bind" and argv[index + 2] == attested_target
+            )
+            host_stage = Path(argv[mount_index + 1])
+            self.assertTrue(host_stage.is_dir())
+            self.assertTrue(
+                (
+                    host_stage
+                    / "chrome-headless-shell-linux64/chrome-headless-shell"
+                ).is_file()
+            )
+            captured["host_stage"] = host_stage
             self.write_success_evidence()
             return subprocess.CompletedProcess(argv, 0)
 
@@ -404,6 +423,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         self.assertIn("issue15-runtime-authority", argv)
         self.assertTrue(callable(captured["kwargs"]["preexec_fn"]))
         self.assertEqual(captured["kwargs"]["timeout"], 1800)
+        self.assertFalse(captured["host_stage"].parent.exists())
 
         exp_dir = self.repo / "outputs" / self.handle
         proof_path = exp_dir / "run" / "provider-free-execution.json"
@@ -599,6 +619,48 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         paths = {entry["path"] for entry in manifest["files"]}
         self.assertIn("run/scenario-failure.json", paths)
         self.assertIn("run/deployed-source-authority.json", paths)
+        self.assertFalse(
+            (
+                self.browser_cache
+                / ".cvm-provider-free-browser-stages"
+            ).exists()
+        )
+
+    def test_workload_launch_exception_cleans_host_browser_stage(self) -> None:
+        def fail_workload(argv, **_kwargs):
+            if list(argv) == [os.fspath(self.bwrap), "--version"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, stdout="bubblewrap 1.2.3\n"
+                )
+            if list(argv) and list(argv)[0] == os.fspath(self.bwrap):
+                raise OSError("injected launch failure")
+            return subprocess.CompletedProcess(argv, 0, stdout="")
+
+        with (
+            mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
+            mock.patch.object(
+                provider_free_runner.shutil,
+                "which",
+                return_value=os.fspath(self.bwrap),
+            ),
+            mock.patch.object(
+                provider_free_runner.subprocess,
+                "run",
+                side_effect=fail_workload,
+            ),
+            self.assertRaises(OSError),
+        ):
+            provider_free_runner.main(
+                ["run", "issue15-runtime-authority", self.group, self.exp],
+                environ=self.environment,
+            )
+
+        self.assertFalse(
+            (
+                self.browser_cache
+                / ".cvm-provider-free-browser-stages"
+            ).exists()
+        )
 
     def test_unknown_scenario_is_rejected_before_sandbox_start(self) -> None:
         with (

@@ -19,6 +19,8 @@ from scripts.pilot import runner as pilot_runner
 from scripts.pilot import deployment_authority
 from scripts.pilot import provider_free_output
 from scripts.pilot.cvm_job.runtime import (
+    AttestedBrowserMount,
+    BrowserStageError,
     PROVIDER_FREE_ENV_ALLOWLIST,
     PROVIDER_FREE_EXECUTION_PROFILE,
     PROVIDER_FREE_PROOF,
@@ -27,6 +29,7 @@ from scripts.pilot.cvm_job.runtime import (
     PROVIDER_FREE_SCENARIOS,
     PROVIDER_FREE_SUPERVISOR_LOCALE,
     provider_free_sandbox_argv,
+    staged_attested_browser,
 )
 from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
@@ -205,6 +208,7 @@ def _sandbox_argv(
     *,
     bwrap: str,
     runtime_identity: Mapping[str, object],
+    browser_mount: AttestedBrowserMount | None = None,
 ) -> list[str]:
     identity = dict(runtime_identity)
     if bwrap != identity.get("bwrap", {}).get("path"):
@@ -215,6 +219,7 @@ def _sandbox_argv(
             exp_dir,
             identity,
             repo_root=REPO_ROOT,
+            browser_mount=browser_mount,
         )
     except ProtocolError as exc:
         raise ProviderFreeError(f"unsafe provider-free sandbox output: {exc}") from exc
@@ -605,25 +610,33 @@ def run_scenario(
             final_status=contract_status,
         )
         return contract_status
-    bwrap = runtime_identity["bwrap"]["path"]
-    argv = _sandbox_argv(
-        scenario_name,
-        exp_dir,
-        bwrap=bwrap,
-        runtime_identity=runtime_identity,
-    )
     child_environment = _sandbox_environment(environ)
     workload_status = 1
     try:
-        completed = subprocess.run(
-            argv,
-            check=False,
-            env=child_environment,
-            stdin=subprocess.DEVNULL,
-            timeout=WALL_TIMEOUT_SECONDS,
-            preexec_fn=_apply_resource_limits,
-        )
-        workload_status = completed.returncode
+        with staged_attested_browser(
+            runtime_identity["chromium"],
+            handle,
+            repo_root=REPO_ROOT,
+        ) as browser_mount:
+            bwrap = runtime_identity["bwrap"]["path"]
+            argv = _sandbox_argv(
+                scenario_name,
+                exp_dir,
+                bwrap=bwrap,
+                runtime_identity=runtime_identity,
+                browser_mount=browser_mount,
+            )
+            completed = subprocess.run(
+                argv,
+                check=False,
+                env=child_environment,
+                stdin=subprocess.DEVNULL,
+                timeout=WALL_TIMEOUT_SECONDS,
+                preexec_fn=_apply_resource_limits,
+            )
+            workload_status = completed.returncode
+    except BrowserStageError as exc:
+        raise ProviderFreeError("trusted browser staging failed") from exc
     except subprocess.TimeoutExpired:
         workload_status = 124
     try:

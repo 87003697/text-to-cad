@@ -333,10 +333,11 @@ class PilotReviewTests(unittest.TestCase):
         )
         self.assertTrue((self.exp / "review.md").is_file())
 
-    def test_reviewer_binds_private_tmpfs_browser_staging_profile(self) -> None:
+    def test_reviewer_binds_exec_permitted_browser_staging_profile(self) -> None:
         self.assertEqual(
             {
-                "source": "read-only-attested-revision",
+                "source": "deployment-attested-host-revision",
+                "source_filesystem": "same-device-as-deployment-browser",
                 "scope": "single-attested-revision",
                 "destination": "/tmp/provider-free-playwright",
                 "staged_revision": "attested",
@@ -344,7 +345,9 @@ class PilotReviewTests(unittest.TestCase):
                     "/tmp/provider-free-playwright/attested/"
                     "chrome-headless-shell-linux64/chrome-headless-shell"
                 ),
-                "destination_filesystem": "private-tmpfs",
+                "destination_filesystem": (
+                    "read-only-bind-of-exec-permitted-host-stage"
+                ),
                 "tree_validation": "regular-files-only-no-links-or-special",
                 "executable_validation": {
                     "sha256": "deployment-runtime-identity",
@@ -360,7 +363,7 @@ class PilotReviewTests(unittest.TestCase):
                     "validation": "absolute-regular-non-symlink-executable",
                     "playwright_option": "executable_path",
                 },
-                "cleanup": "outer-sandbox-private-tmpfs-teardown",
+                "cleanup": "supervisor-context-terminal-all-exit-classes",
             },
             self.reviewer._SANDBOX_PROFILE["browser_runtime_staging"],
         )
@@ -431,13 +434,13 @@ class PilotReviewTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/6",
+                "id": "issue15.provider-free-bounded/7",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/6",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/7",
             },
             "sandbox": {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/6",
+                "resource_profile": "issue15.provider-free-bounded/7",
             },
             "provider_environment": {
                 "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],
@@ -693,9 +696,18 @@ class PilotReviewTests(unittest.TestCase):
                     "/home/provider-free",
                     "--dir",
                     "/home/provider-free/.cache",
+                    "--dir",
+                    "/tmp/provider-free-playwright",
                     "--ro-bind",
-                    runtime_identity["chromium"]["host_cache_path"],
-                    runtime_identity["chromium"]["sandbox_cache_path"],
+                    (
+                        runtime_identity["chromium"]["host_cache_path"]
+                        + "/.cvm-provider-free-browser-stages/"
+                        + immutable_request["group"]
+                        + "."
+                        + immutable_request["exp"]
+                        + "/attested"
+                    ),
+                    "/tmp/provider-free-playwright/attested",
                     "--symlink",
                     "usr/bin",
                     "/bin",
@@ -898,7 +910,12 @@ class PilotReviewTests(unittest.TestCase):
                     candidate["argv"][1:1] = ["--bind", "/", "/workspace/repo"]
                 elif mutation == "browser-bind":
                     candidate["argv"].remove(
-                        candidate["runtime_identity"]["chromium"]["host_cache_path"]
+                        next(
+                            value
+                            for value in candidate["argv"]
+                            if "/.cvm-provider-free-browser-stages/"
+                            in value
+                        )
                     )
                 else:
                     candidate["required_environment"][
