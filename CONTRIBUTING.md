@@ -183,6 +183,20 @@ preserves them verbatim, and Codex `plugin add` drops them with no error at all,
 publishing a skill whose files are simply missing at runtime.
 `scripts/github-workflows/check-builds.sh` is the gate that enforces this.
 
+Because the repository root is the plugin package, every source-only directory
+on `main` is copied into every install. The publish job therefore trims the tree
+before committing it — `models/`, `viewer/`, `tests/`, and `requirements-dev.txt`
+are removed, after the bundle and all checks have run against the untrimmed
+tree. `viewer/` in particular is source: what installs and runs is the
+dereferenced runtime under `skills/cad-viewer/scripts/viewer`, and the
+standalone cad-viewer mirror syncs from the release source commit instead.
+
+`packages/` deliberately stays. The docs site deploys from `main` in the same
+release run and builds against it: `docs/tsconfig.json` maps `cadjs/*` to
+`../packages/cadjs/src/*`, and `packages/cadjs/src/common` pulls in
+`implicitjs`. The trim step asserts `packages/cadjs/src` survived, so adding
+`packages/` to the removal list fails the publish rather than the deploy.
+
 `main` is publish-only: do not open PRs to `main` or push it directly. The `Test`
 workflow runs on `develop` and PRs to `develop`: it starts from the symlink
 layout, verifies that layout, checks generated outputs against their sources

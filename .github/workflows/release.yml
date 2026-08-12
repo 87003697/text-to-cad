@@ -375,14 +375,28 @@ jobs:
         run: scripts/test/test.sh
 
       # The plugin package is the repository root, so everything that reaches the
-      # target branch is copied into every install. models/ is fixture data;
-      # viewer/ is the SOURCE app, and what installs and runs is the dereferenced
-      # runtime the bundle already wrote to skills/cad-viewer/scripts/viewer --
-      # no skill imports repo-root viewer/. This runs after the bundle,
-      # check-builds, and the tests, so the tree they validated is untouched and
-      # only the published tree is trimmed. The standalone cad-viewer mirror
-      # syncs from the release SOURCE commit rather than from here
-      # (.github/workflows/sync-cad-viewer.yml).
+      # target branch is copied into every install. None of these is part of what
+      # installs:
+      #   models/            fixture data
+      #   viewer/            the SOURCE app -- what runs is the dereferenced
+      #                      runtime the bundle wrote to
+      #                      skills/cad-viewer/scripts/viewer, and no skill
+      #                      imports repo-root viewer/
+      #   tests/             source-only; nothing under skills/ or docs/ reads it,
+      #                      and test.yml runs on develop, never here
+      #   requirements-dev.txt  a source-checkout dev environment whose editable
+      #                      paths (packages/cadgen, viewer/moveit2_server) do not
+      #                      survive the trim anyway
+      #
+      # packages/ deliberately STAYS. The docs site deploys from this branch and
+      # builds against it: docs/tsconfig.json maps cadjs/* to
+      # ../packages/cadjs/src/*, and packages/cadjs/src/common pulls implicitjs.
+      # Removing it fails Deploy Docs in this same run.
+      #
+      # This runs after the bundle, check-builds, and the tests, so the tree they
+      # validated is untouched and only the published tree is trimmed. The
+      # standalone cad-viewer mirror syncs from the release SOURCE commit rather
+      # than from here (.github/workflows/sync-cad-viewer.yml).
       #
       # PUBLISH_TREE_REMOVED_ROOTS is the single source of truth for what was
       # dropped: the commit step below reads it both to assert the roots are
@@ -390,7 +404,7 @@ jobs:
       - name: Trim publish tree
         if: steps.gate.outputs.should_publish == 'true'
         run: |
-          removed_roots="models viewer"
+          removed_roots="models viewer tests requirements-dev.txt"
           for root in $removed_roots; do
             rm -rf "$root"
             if [ -e "$root" ]; then
@@ -401,6 +415,14 @@ jobs:
           if [ ! -f skills/cad-viewer/scripts/viewer/package.json ]; then
             echo "Refusing to publish without the bundled CAD Viewer runtime:" >&2
             echo "  skills/cad-viewer/scripts/viewer/package.json is missing." >&2
+            exit 1
+          fi
+          # Deploy Docs runs from this branch later in the same release and
+          # builds docs/ against packages/cadjs. Assert it survived, so adding
+          # packages/ to removed_roots fails here rather than in the deploy.
+          if [ ! -d packages/cadjs/src ]; then
+            echo "Refusing to publish without packages/cadjs: the docs site" >&2
+            echo "  builds against it (docs/tsconfig.json maps cadjs/* there)." >&2
             exit 1
           fi
           echo "PUBLISH_TREE_REMOVED_ROOTS=$removed_roots" >> "$GITHUB_ENV"
