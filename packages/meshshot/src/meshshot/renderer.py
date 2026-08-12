@@ -9,7 +9,7 @@ from io import BytesIO
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from PIL import Image
 
@@ -25,9 +25,21 @@ _BROWSER_STARTUP_TIMEOUT_MS = 15_000
 _RENDER_TIMEOUT_MS = 120_000
 _OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
 
+MeshshotPhase = Literal[
+    "runtime",
+    "dependency",
+    "browser_launch",
+    "browser_render",
+    "browser_result",
+]
+
 
 class MeshshotError(RuntimeError):
     """Stable renderer failure surfaced through the public preview command."""
+
+    def __init__(self, message: str, *, phase: MeshshotPhase | None = None) -> None:
+        super().__init__(message)
+        self.phase = phase
 
 
 @dataclass(frozen=True)
@@ -89,7 +101,8 @@ def render_residual_preview(
     if missing:
         raise MeshshotError(
             "meshshot browser runtime is missing; run the mesh-compare bundle: "
-            + ", ".join(missing)
+            + ", ".join(missing),
+            phase="runtime",
         )
 
     payload = {
@@ -109,16 +122,23 @@ def render_residual_preview(
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
         raise MeshshotError(
-            "meshshot requires the Python playwright package and Chromium"
+            "meshshot requires the Python playwright package and Chromium",
+            phase="dependency",
         ) from exc
 
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                headless=True,
-                args=["--no-sandbox"],
-                timeout=_BROWSER_STARTUP_TIMEOUT_MS,
-            )
+            try:
+                browser = playwright.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox"],
+                    timeout=_BROWSER_STARTUP_TIMEOUT_MS,
+                )
+            except Exception as exc:
+                raise MeshshotError(
+                    f"headless residual browser launch failed: {exc}",
+                    phase="browser_launch",
+                ) from exc
             try:
                 context = browser.new_context(
                     viewport={"width": 64, "height": 64},
@@ -193,14 +213,22 @@ def render_residual_preview(
             if renderer_events
             else "; no renderer stage event received"
         )
-        raise MeshshotError(f"headless residual render failed: {exc}{stage}") from exc
+        raise MeshshotError(
+            f"headless residual render failed: {exc}{stage}",
+            phase="browser_render",
+        ) from exc
 
     if not isinstance(result, dict) or result.get("ok") is not True:
         detail = result.get("error") if isinstance(result, dict) else None
-        raise MeshshotError(str(detail or "browser returned an invalid render result"))
+        raise MeshshotError(
+            str(detail or "browser returned an invalid render result"),
+            phase="browser_result",
+        )
     data_url = result.get("pngDataUrl")
     if not isinstance(data_url, str) or not data_url.startswith("data:image/png;base64,"):
-        raise MeshshotError("browser returned invalid PNG data")
+        raise MeshshotError(
+            "browser returned invalid PNG data", phase="browser_result"
+        )
     try:
         browser_png = base64.b64decode(data_url.split(",", 1)[1], validate=True)
         with Image.open(BytesIO(browser_png)) as image:
@@ -209,17 +237,23 @@ def render_residual_preview(
             expected = tuple(loaded.profile["variants"][variant]["image_pixels"])
             if image.size != expected:
                 raise MeshshotError(
-                    f"browser returned {image.size}, expected {expected} for {variant}"
+                    f"browser returned {image.size}, expected {expected} for {variant}",
+                    phase="browser_result",
                 )
             encoded = BytesIO()
             image.save(encoded, format="PNG", compress_level=9, optimize=False)
     except MeshshotError:
         raise
     except Exception as exc:
-        raise MeshshotError(f"browser returned unreadable PNG data: {exc}") from exc
+        raise MeshshotError(
+            f"browser returned unreadable PNG data: {exc}",
+            phase="browser_result",
+        ) from exc
     views = result.get("views")
     if not isinstance(views, list) or len(views) != 8:
-        raise MeshshotError("browser returned invalid view metadata")
+        raise MeshshotError(
+            "browser returned invalid view metadata", phase="browser_result"
+        )
     return RenderedPreview(
         png_bytes=encoded.getvalue(),
         variant=variant,

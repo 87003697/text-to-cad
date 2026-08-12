@@ -311,6 +311,39 @@ class PreviewCliTests(unittest.TestCase):
         self.assertIn("renderer exploded", payload["error"]["detail"])
         self.assertEqual(1, stderr.count("preview_failed"))
 
+    def test_renderer_failure_publishes_only_closed_phases(self) -> None:
+        cases = {
+            "runtime": "preview_runtime_failed",
+            "dependency": "preview_dependency_failed",
+            "browser_launch": "preview_browser_launch_failed",
+            "browser_render": "preview_browser_render_failed",
+            "browser_result": "preview_browser_result_failed",
+            "shell": "preview_failed",
+        }
+        for phase, expected in cases.items():
+            with self.subTest(phase=phase):
+                with mock.patch.object(
+                    cli,
+                    "render_residual_preview",
+                    side_effect=cli.MeshshotError(
+                        "sensitive renderer detail",
+                        phase=phase,
+                    ),
+                ):
+                    status, payload, stderr = self.invoke(*self.preview_arguments(
+                        str(self.candidate),
+                        "--reference",
+                        str(self.reference),
+                        "--output",
+                        str(self.root / f"failed-{phase}"),
+                        "--variant",
+                        "step",
+                    ))
+
+                self.assertEqual(2, status)
+                self.assertEqual(expected, payload["error"]["classification"])
+                self.assertIn(expected, stderr)
+
     def test_preview_rejects_experiment_profile_conflict_before_rendering(self) -> None:
         experiment = json.loads(self.experiment.read_text(encoding="utf-8"))
         experiment["preview_profile"]["sha256"] = "0" * 64

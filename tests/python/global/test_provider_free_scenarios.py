@@ -434,6 +434,11 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             "native_evidence",
             "voxblame_preview",
             "step_publication",
+            "preview_runtime",
+            "preview_dependency",
+            "preview_browser_launch",
+            "preview_browser_render",
+            "preview_browser_result",
         ):
             with self.subTest(operation=operation):
                 self.assertTrue(
@@ -451,6 +456,35 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 "native_measurement", "shell"
             )
         )
+
+    def test_preview_classification_maps_to_closed_native_operation(self) -> None:
+        cases = {
+            "preview_runtime_failed": "preview_runtime",
+            "preview_dependency_failed": "preview_dependency",
+            "preview_browser_launch_failed": "preview_browser_launch",
+            "preview_browser_render_failed": "preview_browser_render",
+            "preview_browser_result_failed": "preview_browser_result",
+        }
+        for classification, operation in cases.items():
+            with self.subTest(classification=classification):
+                with mock.patch.object(
+                    provider_free_scenarios,
+                    "_run_public",
+                    side_effect=provider_free_scenarios.ScenarioError(
+                        "sensitive browser failure",
+                        classification=classification,
+                    ),
+                ):
+                    with self.assertRaises(
+                        provider_free_scenarios.ScenarioError
+                    ) as raised:
+                        provider_free_scenarios._run_voxblame_preview(
+                            ["mesh-compare", "voxblame-preview"],
+                            cwd=self.repo,
+                            command_log=self.repo / "commands.jsonl",
+                        )
+
+                self.assertEqual(operation, raised.exception.operation)
 
     def _assert_closed_stage_failure(
         self,

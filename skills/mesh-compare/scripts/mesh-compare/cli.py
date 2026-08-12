@@ -24,7 +24,16 @@ from meshscope.voxblame import (
     validate_preview_identity,
     verify_step,
 )
-from meshshot import MeshGeometry, load_profile, render_residual_preview
+from meshshot import MeshGeometry, MeshshotError, load_profile, render_residual_preview
+
+
+_PREVIEW_FAILURE_CLASSIFICATIONS = {
+    "runtime": "preview_runtime_failed",
+    "dependency": "preview_dependency_failed",
+    "browser_launch": "preview_browser_launch_failed",
+    "browser_render": "preview_browser_render_failed",
+    "browser_result": "preview_browser_result_failed",
+}
 
 
 def _emit_error(classification: str, detail: str) -> int:
@@ -390,6 +399,11 @@ def _preview_main(argv: list[str]) -> int:
             ordered_views=[dict(view) for view in rendered.views],
             identity=identity,
         )
+    except MeshshotError as exc:
+        classification = _PREVIEW_FAILURE_CLASSIFICATIONS.get(
+            exc.phase, "preview_failed"
+        )
+        return _emit_error(classification, _compact_detail(exc))
     except Exception as exc:
         return _emit_error("preview_failed", _compact_detail(exc))
     print(

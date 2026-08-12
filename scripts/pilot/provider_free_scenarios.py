@@ -66,10 +66,12 @@ class ScenarioError(RuntimeError):
         *,
         stage: str | None = None,
         operation: str | None = None,
+        classification: str | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = stage
         self.operation = operation
+        self.classification = classification
 
 
 def _run_stage(
@@ -124,9 +126,16 @@ def _run_failure_operation(
     try:
         return function(*args, **kwargs)
     except Exception as exc:
+        classified_operation = (
+            exc.operation if isinstance(exc, ScenarioError) else None
+        )
+        if not provider_free_scenario_failure_operation_allowed(
+            stage, classified_operation
+        ):
+            classified_operation = operation
         raise ScenarioError(
-            f"provider-free scenario operation failed: {stage}/{operation}",
-            operation=operation,
+            f"provider-free scenario operation failed: {stage}/{classified_operation}",
+            operation=classified_operation,
         ) from exc
 
 
@@ -361,8 +370,26 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
     with command_log.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
     if completed.returncode != 0:
+        classification = None
+        try:
+            failure_payload = json.loads(completed.stdout)
+        except json.JSONDecodeError:
+            failure_payload = None
+        error = (
+            failure_payload.get("error")
+            if isinstance(failure_payload, dict)
+            else None
+        )
+        if (
+            isinstance(error, dict)
+            and isinstance(error.get("classification"), str)
+        ):
+            classification = error["classification"]
         detail = " ".join((completed.stderr or completed.stdout).split())[:1000]
-        raise ScenarioError(f"public command failed ({completed.returncode}): {detail}")
+        raise ScenarioError(
+            f"public command failed ({completed.returncode}): {detail}",
+            classification=classification,
+        )
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
@@ -634,6 +661,33 @@ def _prepare_workspace(workspace: Path, candidate: Path, command_log: Path) -> N
     )
 
 
+def _run_voxblame_preview(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    command_log: Path,
+) -> dict[str, Any]:
+    """Map one closed public renderer classification to a failure operation."""
+
+    operations = {
+        "preview_runtime_failed": "preview_runtime",
+        "preview_dependency_failed": "preview_dependency",
+        "preview_browser_launch_failed": "preview_browser_launch",
+        "preview_browser_render_failed": "preview_browser_render",
+        "preview_browser_result_failed": "preview_browser_result",
+    }
+    try:
+        return _run_public(argv, cwd=cwd, command_log=command_log)
+    except ScenarioError as exc:
+        operation = operations.get(exc.classification)
+        if operation is None:
+            raise
+        raise ScenarioError(
+            f"provider-free preview operation failed: {operation}",
+            operation=operation,
+        ) from exc
+
+
 def _publish_measured_step(workspace: Path, candidate: Path, command_log: Path) -> dict[str, Any]:
     plan = workspace / "work/initial-plan.json"
     _run_failure_operation(
@@ -694,7 +748,7 @@ def _publish_measured_step(workspace: Path, candidate: Path, command_log: Path) 
     _run_failure_operation(
         "native_measurement",
         "voxblame_preview",
-        _run_public,
+        _run_voxblame_preview,
         [
             sys.executable,
             os.fspath(MESH_COMPARE),

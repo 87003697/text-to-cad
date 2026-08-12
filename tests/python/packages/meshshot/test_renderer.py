@@ -15,7 +15,7 @@ from tests.python.support.paths import add_repo_path
 
 add_repo_path("packages/meshshot/src")
 
-from meshshot import MeshGeometry, render_residual_preview  # noqa: E402
+from meshshot import MeshGeometry, MeshshotError, render_residual_preview  # noqa: E402
 
 
 def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometry:
@@ -29,6 +29,58 @@ def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometr
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_browser_launch_failure_has_closed_phase(self) -> None:
+        playwright = mock.MagicMock()
+        playwright.chromium.launch.side_effect = RuntimeError("sensitive launch detail")
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = playwright
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+
+        with (
+            mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+            self.assertRaises(MeshshotError) as raised,
+        ):
+            render_residual_preview(
+                _geometry(triangle),
+                _geometry(triangle),
+                variant="step",
+            )
+
+        self.assertEqual("browser_launch", raised.exception.phase)
+
+    def test_invalid_browser_image_size_has_browser_result_phase(self) -> None:
+        page = mock.MagicMock()
+        context = mock.MagicMock()
+        browser = mock.MagicMock()
+        playwright = mock.MagicMock()
+        context.new_page.return_value = page
+        browser.new_context.return_value = context
+        playwright.chromium.launch.return_value = browser
+
+        png = BytesIO()
+        Image.new("RGB", (1, 1), (0, 0, 0)).save(png, format="PNG")
+        encoded = base64.b64encode(png.getvalue()).decode("ascii")
+        page.evaluate.return_value = {
+            "ok": True,
+            "pngDataUrl": f"data:image/png;base64,{encoded}",
+            "views": [{} for _ in range(8)],
+        }
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = playwright
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+
+        with (
+            mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+            self.assertRaises(MeshshotError) as raised,
+        ):
+            render_residual_preview(
+                _geometry(triangle),
+                _geometry(triangle),
+                variant="step",
+            )
+
+        self.assertEqual("browser_result", raised.exception.phase)
+
     def test_geometry_payload_crosses_same_origin_route_not_evaluate_arguments(self) -> None:
         page = mock.MagicMock()
         context = mock.MagicMock()

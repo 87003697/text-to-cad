@@ -58,6 +58,11 @@ Native measurement operations are:
 - `voxblame_measure`
 - `native_evidence`
 - `voxblame_preview`
+- `preview_runtime`
+- `preview_dependency`
+- `preview_browser_launch`
+- `preview_browser_render`
+- `preview_browser_result`
 - `step_publication`
 
 Historical three-field receipts remain valid. An operation on any other stage,

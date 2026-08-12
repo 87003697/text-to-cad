@@ -68,6 +68,11 @@ PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS_BY_STAGE = {
             "voxblame_measure",
             "native_evidence",
             "voxblame_preview",
+            "preview_runtime",
+            "preview_dependency",
+            "preview_browser_launch",
+            "preview_browser_render",
+            "preview_browser_result",
             "step_publication",
         }
     ),
