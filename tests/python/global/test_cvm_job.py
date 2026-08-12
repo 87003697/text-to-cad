@@ -871,6 +871,18 @@ class CvmJobTests(unittest.TestCase):
         preview_destination = self.repo_root / preview_profile
         preview_destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO_ROOT / preview_profile, preview_destination)
+        native_runtime = self.repo_root / (
+            "skills/mesh-compare/scripts/packages/meshscope"
+        )
+        native_build = subprocess.run(
+            [sys.executable, "setup.py", "build_ext", "--inplace"],
+            cwd=native_runtime,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(0, native_build.returncode, native_build.stderr)
         launcher = """\
 import http from "node:http";
 
@@ -1048,6 +1060,18 @@ server.listen(0, host, () => {
                 ).replace("/home/provider-free", os.fspath(provider_home))
                 for name, value in sandbox_environment.items()
             }
+            emulated_environment["PYTHONPATH"] = os.pathsep.join(
+                (
+                    os.fspath(
+                        self.repo_root
+                        / "skills/mesh-compare/scripts/packages/meshscope/src"
+                    ),
+                    os.fspath(
+                        self.repo_root
+                        / "skills/mesh-compare/scripts/packages/meshshot/src"
+                    ),
+                )
+            )
             captured["emulated_environment"] = emulated_environment
             completed = real_run(
                 command,
@@ -1122,7 +1146,7 @@ server.listen(0, host, () => {
             "--reject-source-output",
         ]
 
-    def test_bwrap_emulator_crosses_candidate_workspace_with_production_layout(
+    def test_bwrap_emulator_crosses_canonical_candidate_measurement_with_production_layout(
         self,
     ) -> None:
         """Drive public layers while explicitly emulating the bwrap syscall."""
@@ -1167,6 +1191,26 @@ server.listen(0, host, () => {
             ),
         )
         self.assertTrue((exp_dir / "workspace.json").is_file())
+        normalization = json.loads(
+            (exp_dir / "input/normalization.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ],
+            normalization["raw_to_canonical"],
+            json.dumps(
+                {
+                    "state": state,
+                    "scenario_stderr": captured.get("scenario_stderr"),
+                    "normalization": normalization,
+                },
+                sort_keys=True,
+            ),
+        )
         if state["state"] == "failed":
             self.assertIn(
                 state["scenario_failure"]["stage"],
@@ -1187,6 +1231,16 @@ server.listen(0, host, () => {
         self.assertEqual(command_records[0]["exit_code"], 0)
         self.assertIn("voxblame-prepare-reference", command_records[1]["argv"])
         self.assertIn("init", command_records[2]["argv"])
+        measurement_record = next(
+            record
+            for record in command_records
+            if "voxblame-measure" in record["argv"]
+        )
+        self.assertEqual(
+            0,
+            measurement_record["exit_code"],
+            json.dumps(measurement_record, sort_keys=True),
+        )
         self.assertEqual(
             captured["sandbox_environment"],
             {
