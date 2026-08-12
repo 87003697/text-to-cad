@@ -417,3 +417,11 @@ manual edits inside generated runtime folders.
 CAD exchange files, generated render/topology assets, and `assets/**` may be
 LFS-tracked. Never disable LFS filters for `git add`, commits, or other
 object-writing operations.
+
+`assets/**` holds heavyweight demo GIFs and is excluded from default LFS pulls,
+so lightweight clones do not fetch it. Hydrate it only when you need the demo
+assets locally:
+
+```bash
+git lfs pull --include="assets/**"
+```

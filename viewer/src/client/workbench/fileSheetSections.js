@@ -63,7 +63,7 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
       // selectable in the viewport. The Tree panel is 556 lines inside StepFileSheet
       // reading 20 props and 33 derived locals; sharing it means extracting it, and a
       // second tree implementation for robots is exactly the parallel stack this effort
-      // exists to remove. Tracked as R1b in design/viewer-robot-parity.md.
+      // exists to remove.
       return [
         ...status,
         ...(isSdf ? [FILE_SHEET_SECTION_IDS.ROBOT_SDF] : []),
