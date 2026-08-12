@@ -61,6 +61,11 @@ Native measurement operations are:
 - `preview_runtime`
 - `preview_dependency`
 - `preview_browser_launch`
+- `preview_browser_launch_process_limit`
+- `preview_browser_launch_file_limit`
+- `preview_browser_launch_address_space`
+- `preview_browser_launch_shared_memory`
+- `preview_browser_launch_executable`
 - `preview_browser_render`
 - `preview_browser_result`
 - `step_publication`

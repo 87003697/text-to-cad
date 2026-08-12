@@ -29,6 +29,41 @@ def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometr
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_browser_launch_failure_has_resource_specific_closed_phase(self) -> None:
+        cases = {
+            "pthread_create: Resource temporarily unavailable": (
+                "browser_launch_process_limit"
+            ),
+            "Too many open files": "browser_launch_file_limit",
+            "Cannot allocate memory": "browser_launch_address_space",
+            "Creating shared memory in /dev/shm failed": (
+                "browser_launch_shared_memory"
+            ),
+            "error while loading shared libraries": "browser_launch_executable",
+        }
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+
+        for detail, expected in cases.items():
+            with self.subTest(detail=detail):
+                playwright = mock.MagicMock()
+                playwright.chromium.launch.side_effect = RuntimeError(detail)
+                sync_playwright = mock.MagicMock()
+                sync_playwright.return_value.__enter__.return_value = playwright
+
+                with (
+                    mock.patch(
+                        "playwright.sync_api.sync_playwright", sync_playwright
+                    ),
+                    self.assertRaises(MeshshotError) as raised,
+                ):
+                    render_residual_preview(
+                        _geometry(triangle),
+                        _geometry(triangle),
+                        variant="step",
+                    )
+
+                self.assertEqual(expected, raised.exception.phase)
+
     def test_browser_launch_failure_has_closed_phase(self) -> None:
         playwright = mock.MagicMock()
         playwright.chromium.launch.side_effect = RuntimeError("sensitive launch detail")

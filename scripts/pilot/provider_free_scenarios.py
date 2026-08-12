@@ -722,6 +722,21 @@ def _run_voxblame_preview(
         "preview_runtime_failed": "preview_runtime",
         "preview_dependency_failed": "preview_dependency",
         "preview_browser_launch_failed": "preview_browser_launch",
+        "preview_browser_launch_process_limit_failed": (
+            "preview_browser_launch_process_limit"
+        ),
+        "preview_browser_launch_file_limit_failed": (
+            "preview_browser_launch_file_limit"
+        ),
+        "preview_browser_launch_address_space_failed": (
+            "preview_browser_launch_address_space"
+        ),
+        "preview_browser_launch_shared_memory_failed": (
+            "preview_browser_launch_shared_memory"
+        ),
+        "preview_browser_launch_executable_failed": (
+            "preview_browser_launch_executable"
+        ),
         "preview_browser_render_failed": "preview_browser_render",
         "preview_browser_result_failed": "preview_browser_result",
     }

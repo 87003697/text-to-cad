@@ -29,9 +29,66 @@ MeshshotPhase = Literal[
     "runtime",
     "dependency",
     "browser_launch",
+    "browser_launch_process_limit",
+    "browser_launch_file_limit",
+    "browser_launch_address_space",
+    "browser_launch_shared_memory",
+    "browser_launch_executable",
     "browser_render",
     "browser_result",
 ]
+
+_BROWSER_LAUNCH_PHASE_PATTERNS: tuple[
+    tuple[MeshshotPhase, tuple[str, ...]], ...
+] = (
+    (
+        "browser_launch_process_limit",
+        (
+            "resource temporarily unavailable",
+            "cannot fork",
+            "fork failed",
+            "pthread_create",
+            "failed to create thread",
+            "posix_spawn",
+        ),
+    ),
+    (
+        "browser_launch_file_limit",
+        ("too many open files", "emfile"),
+    ),
+    (
+        "browser_launch_shared_memory",
+        ("/dev/shm", "shared memory"),
+    ),
+    (
+        "browser_launch_address_space",
+        (
+            "out of memory",
+            "cannot allocate memory",
+            "failed to reserve",
+            "virtual memory",
+        ),
+    ),
+    (
+        "browser_launch_executable",
+        (
+            "executable doesn't exist",
+            "no such file or directory",
+            "permission denied",
+            "error while loading shared libraries",
+        ),
+    ),
+)
+
+
+def _browser_launch_phase(exc: Exception) -> MeshshotPhase:
+    """Reduce a browser launch exception to a closed public phase."""
+
+    detail = str(exc).casefold()
+    for phase, patterns in _BROWSER_LAUNCH_PHASE_PATTERNS:
+        if any(pattern in detail for pattern in patterns):
+            return phase
+    return "browser_launch"
 
 
 class MeshshotError(RuntimeError):
@@ -137,7 +194,7 @@ def render_residual_preview(
             except Exception as exc:
                 raise MeshshotError(
                     f"headless residual browser launch failed: {exc}",
-                    phase="browser_launch",
+                    phase=_browser_launch_phase(exc),
                 ) from exc
             try:
                 context = browser.new_context(

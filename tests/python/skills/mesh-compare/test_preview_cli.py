@@ -316,6 +316,19 @@ class PreviewCliTests(unittest.TestCase):
             "runtime": "preview_runtime_failed",
             "dependency": "preview_dependency_failed",
             "browser_launch": "preview_browser_launch_failed",
+            "browser_launch_process_limit": (
+                "preview_browser_launch_process_limit_failed"
+            ),
+            "browser_launch_file_limit": "preview_browser_launch_file_limit_failed",
+            "browser_launch_address_space": (
+                "preview_browser_launch_address_space_failed"
+            ),
+            "browser_launch_shared_memory": (
+                "preview_browser_launch_shared_memory_failed"
+            ),
+            "browser_launch_executable": (
+                "preview_browser_launch_executable_failed"
+            ),
             "browser_render": "preview_browser_render_failed",
             "browser_result": "preview_browser_result_failed",
             "shell": "preview_failed",
