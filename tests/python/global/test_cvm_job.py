@@ -786,6 +786,7 @@ class CvmJobTests(unittest.TestCase):
         """Exercise the isolated module launch through the public supervisor seam."""
 
         for relative in (
+            "scripts/pilot/deployment_authority.py",
             "scripts/pilot/provider_free_scenarios.py",
             "scripts/pilot/cvm_job/__init__.py",
             "scripts/pilot/cvm_job/protocol.py",

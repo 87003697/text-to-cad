@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from scripts.pilot import deployment_authority
+
 
 SCHEMA_VERSION = 1
 TERMINAL_STATES = frozenset({"succeeded", "failed"})
@@ -62,6 +64,9 @@ def provider_free_preview_sandbox_argv(group: str, exp: str) -> list[str]:
         "--bind",
         "/",
         "/",
+        "--ro-bind",
+        deployment_authority.SANDBOX_BROWSER_CACHE,
+        deployment_authority.SANDBOX_BROWSER_CACHE,
         "--chdir",
         sandbox_root,
         "--",

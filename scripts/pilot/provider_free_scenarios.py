@@ -23,6 +23,7 @@ from typing import Any, Sequence
 from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
 
+from scripts.pilot import deployment_authority
 from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA,
@@ -424,6 +425,9 @@ def _preview_sandbox_argv(argv: Sequence[str], *, cwd: Path) -> list[str]:
         "--bind",
         "/",
         "/",
+        "--ro-bind",
+        deployment_authority.SANDBOX_BROWSER_CACHE,
+        deployment_authority.SANDBOX_BROWSER_CACHE,
         "--chdir",
         os.fspath(cwd),
         "--",

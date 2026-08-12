@@ -41,6 +41,12 @@ class JobProtocolTests(unittest.TestCase):
                 receipt, group, exp
             )
         )
+        cache = "/home/provider-free/.cache/ms-playwright"
+        argv = receipt["argv"]
+        cache_bind = argv.index("--ro-bind")
+        self.assertEqual(
+            ["--ro-bind", cache, cache], argv[cache_bind : cache_bind + 3]
+        )
         for field, value in (
             ("capabilities", "inherit"),
             ("mount_namespace", "host"),
