@@ -34,12 +34,22 @@ class ResidualRendererTests(unittest.TestCase):
             "pthread_create: Resource temporarily unavailable": (
                 "browser_launch_process_limit"
             ),
+            "Error: spawn /usr/bin/chromium EAGAIN": (
+                "browser_launch_process_limit"
+            ),
             "Too many open files": "browser_launch_file_limit",
+            "Error: spawn /usr/bin/chromium ENFILE": "browser_launch_file_limit",
             "Cannot allocate memory": "browser_launch_address_space",
+            "Error: spawn /usr/bin/chromium ENOMEM": (
+                "browser_launch_address_space"
+            ),
             "Creating shared memory in /dev/shm failed": (
                 "browser_launch_shared_memory"
             ),
             "error while loading shared libraries": "browser_launch_executable",
+            "Error: spawn /missing/chromium ENOENT": "browser_launch_executable",
+            "Error: spawn /denied/chromium EACCES": "browser_launch_executable",
+            "posix_spawn: No such file or directory": "browser_launch_executable",
         }
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
 

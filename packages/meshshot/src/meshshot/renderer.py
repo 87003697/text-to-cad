@@ -49,12 +49,12 @@ _BROWSER_LAUNCH_PHASE_PATTERNS: tuple[
             "fork failed",
             "pthread_create",
             "failed to create thread",
-            "posix_spawn",
+            "eagain",
         ),
     ),
     (
         "browser_launch_file_limit",
-        ("too many open files", "emfile"),
+        ("too many open files", "emfile", "enfile"),
     ),
     (
         "browser_launch_shared_memory",
@@ -67,6 +67,7 @@ _BROWSER_LAUNCH_PHASE_PATTERNS: tuple[
             "cannot allocate memory",
             "failed to reserve",
             "virtual memory",
+            "enomem",
         ),
     ),
     (
@@ -76,6 +77,8 @@ _BROWSER_LAUNCH_PHASE_PATTERNS: tuple[
             "no such file or directory",
             "permission denied",
             "error while loading shared libraries",
+            "enoent",
+            "eacces",
         ),
     ),
 )
