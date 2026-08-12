@@ -1,6 +1,7 @@
 export const FILE_SHEET_SECTION_IDS = Object.freeze({
   FILE_STATUS: "status",
   STEP_TREE: "tree",
+  STEP_MEASUREMENTS: "measurements",
   STEP_REFERENCE: "reference",
   STEP_PARAMETERS: "parameters",
   ROBOT_SDF: "sdf",
@@ -53,6 +54,9 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
         ...status,
         FILE_SHEET_SECTION_IDS.STEP_TREE,
         FILE_SHEET_SECTION_IDS.STEP_REFERENCE,
+        // Measurements follows Reference: both are readouts about geometry the
+        // user has picked, as against the Tree's inventory of what is in the file.
+        FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS,
         ...(options.hasStepModulePanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : []),
         FILE_SHEET_SECTION_IDS.THEME_DISPLAY
       ];
