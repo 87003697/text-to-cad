@@ -133,6 +133,25 @@ class CvmJobTests(unittest.TestCase):
             },
             runtime.PROVIDER_FREE_SANDBOX_PROFILE["preview_process"],
         )
+        self.assertEqual(
+            128 * 1024**3,
+            runtime.PROVIDER_FREE_SANDBOX_PROFILE["resource_limits"][
+                "address_space_bytes"
+            ],
+        )
+        self.assertEqual(
+            {
+                "profile": "cad.canonical-build-worker/2",
+                "address_space": {
+                    "platform": "linux",
+                    "soft_bytes": 16 * 1024**3,
+                    "hard_bytes": 16 * 1024**3,
+                },
+            },
+            runtime.PROVIDER_FREE_SANDBOX_PROFILE[
+                "untrusted_canonical_worker"
+            ],
+        )
         self.assertIn("--unshare-user", argv)
         self.assertEqual("ALL", argv[argv.index("--cap-drop") + 1])
         self.assertEqual(
@@ -430,9 +449,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/3",
+                "id": "issue15.provider-free-bounded/4",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/3",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/4",
             },
         )
         self.assertEqual(
@@ -558,7 +577,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/3",
+            "issue15.provider-free-bounded/4",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],

@@ -13,10 +13,13 @@ import tempfile
 
 
 WORKER_PROFILE = {
-    "id": "cad.canonical-build-worker/1",
+    "id": "cad.canonical-build-worker/2",
     "timeout_seconds": 120,
     "output_bytes": 64 * 1024,
     "cpu_seconds": 90,
+    "address_space_bytes": 16 * 1024**3,
+    "address_space_platform": "linux",
+    "address_space_limit": "soft-and-hard",
     "file_bytes": 256 * 1024 * 1024,
     "open_files": 256,
     "processes": 32,
@@ -37,6 +40,11 @@ def worker_resource_limits() -> None:
         (resource.RLIMIT_FSIZE, WORKER_PROFILE["file_bytes"]),
         (resource.RLIMIT_NOFILE, WORKER_PROFILE["open_files"]),
     )
+    if platform.system() == "Linux":
+        limits = (
+            *limits,
+            (resource.RLIMIT_AS, WORKER_PROFILE["address_space_bytes"]),
+        )
     if hasattr(resource, "RLIMIT_NPROC"):
         limits = (*limits, (resource.RLIMIT_NPROC, WORKER_PROFILE["processes"]))
     for resource_id, requested in limits:

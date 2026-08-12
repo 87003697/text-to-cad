@@ -405,6 +405,50 @@ def _position_bounds(path: Path) -> tuple[list[float], list[float]]:
 
 
 class CanonicalBuildAdapterTests(unittest.TestCase):
+    def test_untrusted_worker_retains_sixteen_gib_address_space_hard_limit(
+        self,
+    ) -> None:
+        self.assertEqual(
+            {
+                "id": "cad.canonical-build-worker/2",
+                "timeout_seconds": 120,
+                "output_bytes": 64 * 1024,
+                "cpu_seconds": 90,
+                "address_space_bytes": 16 * 1024**3,
+                "address_space_platform": "linux",
+                "address_space_limit": "soft-and-hard",
+                "file_bytes": 256 * 1024 * 1024,
+                "open_files": 256,
+                "processes": 32,
+            },
+            canonical_worker.WORKER_PROFILE,
+        )
+        with (
+            mock.patch.object(
+                canonical_worker.platform, "system", return_value="Linux"
+            ),
+            mock.patch.object(
+                canonical_worker.resource,
+                "getrlimit",
+                return_value=(
+                    canonical_worker.resource.RLIM_INFINITY,
+                    canonical_worker.resource.RLIM_INFINITY,
+                ),
+            ),
+            mock.patch.object(
+                canonical_worker.resource, "setrlimit"
+            ) as setrlimit,
+        ):
+            canonical_worker.worker_resource_limits()
+
+        self.assertIn(
+            mock.call(
+                canonical_worker.resource.RLIMIT_AS,
+                (16 * 1024**3, 16 * 1024**3),
+            ),
+            setrlimit.call_args_list,
+        )
+
     def test_production_linux_worker_bwrap_argv_is_exactly_confined(self) -> None:
         with temporary_directory(prefix="cad-canonical-bwrap-contract-") as temp_dir:
             worker_root = Path(temp_dir) / "canonical-source-worker-contract"

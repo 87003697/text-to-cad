@@ -63,7 +63,7 @@ _SANDBOX_SETUP_CAPABILITIES = (
     "CAP_SETFCAP",
 )
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/3",
+    "schema": "cvm.provider-free-linux-sandbox/4",
     "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -82,10 +82,18 @@ _SANDBOX_PROFILE = {
         "mount_namespace": "inherit-outer",
         "receipt": "run/preview-sandbox-enforcement.json",
     },
+    "untrusted_canonical_worker": {
+        "profile": "cad.canonical-build-worker/2",
+        "address_space": {
+            "platform": "linux",
+            "soft_bytes": 16 * 1024**3,
+            "hard_bytes": 16 * 1024**3,
+        },
+    },
     "resource_limits": {
         "wall_seconds": 1800,
         "cpu_seconds": 1800,
-        "address_space_bytes": 16 * 1024**3,
+        "address_space_bytes": 128 * 1024**3,
         "file_size_bytes": 4 * 1024**3,
         "open_files": 512,
         "processes": 256,
@@ -696,14 +704,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/3",
+                "id": "issue15.provider-free-bounded/4",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/3",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/4",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/3",
+                "resource_profile": "issue15.provider-free-bounded/4",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False
