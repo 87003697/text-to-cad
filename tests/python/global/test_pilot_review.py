@@ -388,6 +388,7 @@ class PilotReviewTests(unittest.TestCase):
                 "files": shipped_files,
             },
             "commands": "run/provider-free-commands.jsonl",
+            "preview_sandbox": "run/preview-sandbox-enforcement.json",
         }
         proof = {
             "schema": "cvm.provider-free-execution/1",
@@ -398,13 +399,13 @@ class PilotReviewTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/2",
+                "id": "issue15.provider-free-bounded/3",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/2",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/3",
             },
             "sandbox": {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/2",
+                "resource_profile": "issue15.provider-free-bounded/3",
             },
             "provider_environment": {
                 "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],
@@ -707,6 +708,39 @@ class PilotReviewTests(unittest.TestCase):
             "path": "run/sandbox-enforcement.json",
             "sha256": hashlib.sha256(sandbox_bytes).hexdigest(),
         }
+        write_json(
+            self.exp / "run/preview-sandbox-enforcement.json",
+            {
+                "schema": "cvm.provider-free-preview-sandbox-enforcement/1",
+                "argv": [
+                    "/usr/bin/bwrap",
+                    "--die-with-parent",
+                    "--new-session",
+                    "--cap-drop",
+                    "ALL",
+                    "--bind",
+                    "/",
+                    "/",
+                    "--chdir",
+                    "/workspace/repo",
+                    "--",
+                    "/workspace/repo/.venv/bin/python",
+                    "/workspace/repo/skills/mesh-compare/scripts/mesh-compare",
+                    "voxblame-preview",
+                    f"{sandbox_exp}/work/candidate/built/measurement.glb",
+                    "--reference",
+                    f"{sandbox_exp}/input",
+                    "--output",
+                    f"{sandbox_exp}/work/preview-0",
+                    "--experiment",
+                    f"{sandbox_exp}/experiment.json",
+                    "--variant",
+                    "step",
+                ],
+                "capabilities": "drop-all",
+                "mount_namespace": "inherit-outer",
+            },
+        )
         write_json(self.exp / "run/runtime-authority-smoke.json", receipt)
         write_json(self.exp / "run/provider-free-execution.json", proof)
         manifest_files = []
@@ -858,6 +892,38 @@ class PilotReviewTests(unittest.TestCase):
             self.exp / "run/provider-free-execution.json",
             authoritative_proof,
         )
+        write_json(self.exp / "artifact_manifest.json", authoritative_manifest)
+
+        preview_path = self.exp / "run/preview-sandbox-enforcement.json"
+        authoritative_preview = json.loads(
+            preview_path.read_text(encoding="utf-8")
+        )
+        for mutation in ("capability", "mount", "argv"):
+            with self.subTest(preview_sandbox_mutation=mutation):
+                candidate = json.loads(json.dumps(authoritative_preview))
+                if mutation == "capability":
+                    candidate["capabilities"] = "inherit"
+                elif mutation == "mount":
+                    candidate["mount_namespace"] = "host"
+                else:
+                    candidate["argv"].remove("ALL")
+                write_json(preview_path, candidate)
+                candidate_manifest = json.loads(json.dumps(authoritative_manifest))
+                data = preview_path.read_bytes()
+                entry = next(
+                    item
+                    for item in candidate_manifest["files"]
+                    if item["path"] == "run/preview-sandbox-enforcement.json"
+                )
+                entry.update(
+                    size_bytes=len(data), sha256=hashlib.sha256(data).hexdigest()
+                )
+                write_json(self.exp / "artifact_manifest.json", candidate_manifest)
+                verdict = self.reviewer._runtime_authority_verdict(
+                    self.exp, workspace_payload
+                )[0]
+                self.assertEqual("not_auditable", verdict)
+        write_json(preview_path, authoritative_preview)
         write_json(self.exp / "artifact_manifest.json", authoritative_manifest)
 
         proof["requests"]["provider"] = 1

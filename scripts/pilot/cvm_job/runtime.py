@@ -20,6 +20,7 @@ from scripts.pilot import provider_free_output
 
 from . import tap_observer
 from .protocol import (
+    PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
@@ -30,6 +31,7 @@ from .protocol import (
     load_state,
     log_path,
     parse_handle,
+    provider_free_preview_sandbox_receipt_allowed,
     provider_free_scenario_failure_operation_allowed,
     public_state,
     publish_state,
@@ -137,12 +139,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/2",
+    "id": "issue15.provider-free-bounded/3",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/2",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/3",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/2",
+    "schema": "cvm.provider-free-linux-sandbox/3",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -156,6 +158,11 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
     "repository_mount": "read-only",
     "output_mount": "read-write-exact-experiment",
     "browser_cache_mount": "read-only-attested-revision",
+    "preview_process": {
+        "capabilities": "drop-all",
+        "mount_namespace": "inherit-outer",
+        "receipt": PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
+    },
     "resource_limits": {
         "wall_seconds": 1800,
         "cpu_seconds": 1800,
@@ -820,6 +827,26 @@ def _provider_free_evidence_result(
     if error is not None:
         return None, error
     by_path = manifest.by_path
+    try:
+        preview_sandbox_bytes = (
+            exp_dir / PROVIDER_FREE_PREVIEW_SANDBOX_PATH
+        ).read_bytes()
+        preview_sandbox = json.loads(preview_sandbox_bytes)
+    except (OSError, json.JSONDecodeError):
+        return None, "provider-free preview sandbox evidence is invalid"
+    if not provider_free_preview_sandbox_receipt_allowed(
+        preview_sandbox,
+        exp_dir.parent.name,
+        exp_dir.name,
+    ):
+        return None, "provider-free preview sandbox evidence conflicts"
+    preview_entry = {
+        "path": PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
+        "size_bytes": len(preview_sandbox_bytes),
+        "sha256": hashlib.sha256(preview_sandbox_bytes).hexdigest(),
+    }
+    if by_path.get(PROVIDER_FREE_PREVIEW_SANDBOX_PATH) != preview_entry:
+        return None, "provider-free preview sandbox evidence is not bound"
     for relative in (
         "run/runtime-authority-smoke.json",
         "workspace-authority.json",

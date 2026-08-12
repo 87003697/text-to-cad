@@ -125,6 +125,14 @@ class CvmJobTests(unittest.TestCase):
             },
             runtime.PROVIDER_FREE_SANDBOX_PROFILE["capabilities"],
         )
+        self.assertEqual(
+            {
+                "capabilities": "drop-all",
+                "mount_namespace": "inherit-outer",
+                "receipt": protocol.PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
+            },
+            runtime.PROVIDER_FREE_SANDBOX_PROFILE["preview_process"],
+        )
         self.assertIn("--unshare-user", argv)
         self.assertEqual("ALL", argv[argv.index("--cap-drop") + 1])
         self.assertEqual(
@@ -253,6 +261,22 @@ class CvmJobTests(unittest.TestCase):
             proof["sandbox_enforcement"]["sha256"] = hashlib.sha256(
                 sandbox_bytes
             ).hexdigest()
+            (exp_dir / protocol.PROVIDER_FREE_PREVIEW_SANDBOX_PATH).write_text(
+                json.dumps(
+                    {
+                        "schema": protocol.PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA,
+                        "argv": protocol.provider_free_preview_sandbox_argv(
+                            state["group"], state["exp"]
+                        ),
+                        "capabilities": "drop-all",
+                        "mount_namespace": "inherit-outer",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             for name, data in (
                 ("run/runtime-authority-smoke.json", b"{}\n"),
                 ("workspace-authority.json", b"{}\n"),
@@ -406,9 +430,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/2",
+                "id": "issue15.provider-free-bounded/3",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/2",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/3",
             },
         )
         self.assertEqual(
@@ -534,7 +558,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/2",
+            "issue15.provider-free-bounded/3",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],
@@ -2056,6 +2080,57 @@ server.listen(0, host, () => {
 
                 self.assertEqual(state["state"], "failed")
                 self.assertIn("sandbox enforcement", state["failure_reason"])
+
+    def test_provider_free_supervisor_rejects_tampered_preview_sandbox(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **_kwargs):
+            self.write_provider_free_terminal_evidence(handle)
+            exp_dir = self.repo_root / "outputs" / handle
+            preview_path = exp_dir / protocol.PROVIDER_FREE_PREVIEW_SANDBOX_PATH
+            preview = json.loads(preview_path.read_text(encoding="utf-8"))
+            preview["capabilities"] = "inherit"
+            preview_path.write_text(
+                json.dumps(preview, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            manifest_path = exp_dir / "artifact_manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            data = preview_path.read_bytes()
+            entry = next(
+                item
+                for item in manifest["files"]
+                if item["path"] == protocol.PROVIDER_FREE_PREVIEW_SANDBOX_PATH
+            )
+            entry.update(
+                size_bytes=len(data), sha256=hashlib.sha256(data).hexdigest()
+            )
+            manifest_path.write_text(
+                json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            return 0, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={
+                    "PATH": os.environ["PATH"],
+                    "HOME": os.fspath(self.workspace),
+                    "VENUS_TOKEN": "stripped",
+                    "OPENAI_API_KEY": "stripped",
+                    "ANTHROPIC_API_KEY": "stripped",
+                    "HTTPS_PROXY": "stripped",
+                },
+            )
+
+        self.assertEqual(state["state"], "failed")
+        self.assertIn("preview sandbox evidence", state["failure_reason"])
 
     def test_submit_launch_failure_is_terminal(self) -> None:
         def fail_detach(handle, command, root):

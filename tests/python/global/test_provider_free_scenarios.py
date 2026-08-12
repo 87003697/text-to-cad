@@ -486,6 +486,60 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
 
                 self.assertEqual(operation, raised.exception.operation)
 
+    def test_preview_linux_child_drops_outer_setup_capabilities(self) -> None:
+        bwrap = self.repo / "bwrap"
+        bwrap.write_text("#!/bin/sh\n", encoding="utf-8")
+        bwrap.chmod(0o755)
+        command = ["/workspace/repo/.venv/bin/python", "mesh-compare"]
+
+        with (
+            mock.patch.object(
+                provider_free_scenarios, "TRUSTED_BWRAP_PATH", bwrap
+            ),
+            mock.patch.object(
+                provider_free_scenarios.platform, "system", return_value="Linux"
+            ),
+        ):
+            argv = provider_free_scenarios._preview_sandbox_argv(
+                command,
+                cwd=Path("/workspace/repo"),
+            )
+
+        self.assertEqual(
+            [
+                str(bwrap),
+                "--die-with-parent",
+                "--new-session",
+                "--cap-drop",
+                "ALL",
+                "--bind",
+                "/",
+                "/",
+                "--chdir",
+                "/workspace/repo",
+                "--",
+                *command,
+            ],
+            argv,
+        )
+        group = "20260812-180000-preview"
+        exp = "20260812-100000-issue15-runtime-authority"
+        command_log = self.repo / "run/provider-free-commands.jsonl"
+        expected = protocol.provider_free_preview_sandbox_argv(group, exp)
+        provider_free_scenarios._publish_preview_sandbox_enforcement(
+            command_log, expected
+        )
+        receipt = json.loads(
+            (
+                self.repo / protocol.PROVIDER_FREE_PREVIEW_SANDBOX_PATH
+            ).read_text(encoding="utf-8")
+        )
+        self.assertTrue(
+            protocol.provider_free_preview_sandbox_receipt_allowed(
+                receipt, group, exp
+            )
+        )
+
     def _assert_closed_stage_failure(
         self,
         workspace: Path,

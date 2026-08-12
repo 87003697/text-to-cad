@@ -42,6 +42,60 @@ _PROVIDER_FREE_BOOTSTRAP_CLASSIFICATIONS = frozenset(
 )
 PROVIDER_FREE_SCENARIO_FAILURE_PATH = "run/scenario-failure.json"
 PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA = "cvm.provider-free-scenario-failure/1"
+PROVIDER_FREE_PREVIEW_SANDBOX_PATH = "run/preview-sandbox-enforcement.json"
+PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA = (
+    "cvm.provider-free-preview-sandbox-enforcement/1"
+)
+
+
+def provider_free_preview_sandbox_argv(group: str, exp: str) -> list[str]:
+    """Return the exact in-sandbox preview launch bound to one experiment."""
+
+    sandbox_root = "/workspace/repo"
+    sandbox_exp = f"{sandbox_root}/outputs/{group}/{exp}"
+    return [
+        "/usr/bin/bwrap",
+        "--die-with-parent",
+        "--new-session",
+        "--cap-drop",
+        "ALL",
+        "--bind",
+        "/",
+        "/",
+        "--chdir",
+        sandbox_root,
+        "--",
+        f"{sandbox_root}/.venv/bin/python",
+        f"{sandbox_root}/skills/mesh-compare/scripts/mesh-compare",
+        "voxblame-preview",
+        f"{sandbox_exp}/work/candidate/built/measurement.glb",
+        "--reference",
+        f"{sandbox_exp}/input",
+        "--output",
+        f"{sandbox_exp}/work/preview-0",
+        "--experiment",
+        f"{sandbox_exp}/experiment.json",
+        "--variant",
+        "step",
+    ]
+
+
+def provider_free_preview_sandbox_receipt_allowed(
+    receipt: object,
+    group: str,
+    exp: str,
+) -> bool:
+    """Validate one closed per-run child capability enforcement receipt."""
+
+    return (
+        isinstance(receipt, dict)
+        and set(receipt)
+        == {"schema", "argv", "capabilities", "mount_namespace"}
+        and receipt.get("schema") == PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA
+        and receipt.get("argv") == provider_free_preview_sandbox_argv(group, exp)
+        and receipt.get("capabilities") == "drop-all"
+        and receipt.get("mount_namespace") == "inherit-outer"
+    )
 PROVIDER_FREE_SCENARIO_FAILURE_STAGES = frozenset(
     {
         "viewer_deployment",

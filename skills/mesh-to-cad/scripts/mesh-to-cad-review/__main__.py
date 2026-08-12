@@ -63,7 +63,7 @@ _SANDBOX_SETUP_CAPABILITIES = (
     "CAP_SETFCAP",
 )
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/2",
+    "schema": "cvm.provider-free-linux-sandbox/3",
     "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -77,6 +77,11 @@ _SANDBOX_PROFILE = {
     "repository_mount": "read-only",
     "output_mount": "read-write-exact-experiment",
     "browser_cache_mount": "read-only-attested-revision",
+    "preview_process": {
+        "capabilities": "drop-all",
+        "mount_namespace": "inherit-outer",
+        "receipt": "run/preview-sandbox-enforcement.json",
+    },
     "resource_limits": {
         "wall_seconds": 1800,
         "cpu_seconds": 1800,
@@ -388,6 +393,9 @@ def _runtime_authority_verdict(
         deployed_bytes = deployed_path.read_bytes()
         deployed = json.loads(deployed_bytes)
         sandbox = _read_json(workspace / "run/sandbox-enforcement.json")
+        preview_sandbox = _read_json(
+            workspace / "run/preview-sandbox-enforcement.json"
+        )
         manifest = _read_json(workspace / "artifact_manifest.json")
         if (
             deployed.get("schema") != "cvm.deployed-source-authority/1"
@@ -553,6 +561,7 @@ def _runtime_authority_verdict(
             "cadpy_runtime",
             "shipped_tree",
             "commands",
+            "preview_sandbox",
         }
         if set(receipt) != required:
             raise ReviewError("runtime-authority receipt is not a closed object")
@@ -687,14 +696,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/2",
+                "id": "issue15.provider-free-bounded/3",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/2",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/3",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/2",
+                "resource_profile": "issue15.provider-free-bounded/3",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False
@@ -786,6 +795,46 @@ def _runtime_authority_verdict(
         command_path = receipt["commands"]
         if command_path != "run/provider-free-commands.jsonl":
             raise ReviewError("public-command receipt path conflicts")
+        preview_path = receipt["preview_sandbox"]
+        if preview_path != "run/preview-sandbox-enforcement.json":
+            raise ReviewError("preview sandbox receipt path conflicts")
+        sandbox_root = "/workspace/repo"
+        sandbox_exp = f"{sandbox_root}/outputs/{workspace.parent.name}/{workspace.name}"
+        expected_preview_argv = [
+            "/usr/bin/bwrap",
+            "--die-with-parent",
+            "--new-session",
+            "--cap-drop",
+            "ALL",
+            "--bind",
+            "/",
+            "/",
+            "--chdir",
+            sandbox_root,
+            "--",
+            f"{sandbox_root}/.venv/bin/python",
+            f"{sandbox_root}/skills/mesh-compare/scripts/mesh-compare",
+            "voxblame-preview",
+            f"{sandbox_exp}/work/candidate/built/measurement.glb",
+            "--reference",
+            f"{sandbox_exp}/input",
+            "--output",
+            f"{sandbox_exp}/work/preview-0",
+            "--experiment",
+            f"{sandbox_exp}/experiment.json",
+            "--variant",
+            "step",
+        ]
+        if (
+            set(preview_sandbox)
+            != {"schema", "argv", "capabilities", "mount_namespace"}
+            or preview_sandbox.get("schema")
+            != "cvm.provider-free-preview-sandbox-enforcement/1"
+            or preview_sandbox.get("argv") != expected_preview_argv
+            or preview_sandbox.get("capabilities") != "drop-all"
+            or preview_sandbox.get("mount_namespace") != "inherit-outer"
+        ):
+            raise ReviewError("preview sandbox enforcement is incomplete")
         manifest_files = manifest.get("files")
         if manifest.get("final_status") != 0 or not isinstance(manifest_files, list):
             raise ReviewError("terminal artifact manifest is incomplete")
@@ -798,6 +847,7 @@ def _runtime_authority_verdict(
             evidence,
             "run/provider-free-execution.json",
             command_path,
+            preview_path,
             "run/deployed-source-authority.json",
             "run/sandbox-enforcement.json",
         ):

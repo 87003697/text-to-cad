@@ -10,6 +10,7 @@ import importlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import platform
 import selectors
 import shutil
 import signal
@@ -23,6 +24,8 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from urllib.request import urlopen
 
 from scripts.pilot.cvm_job.protocol import (
+    PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
+    PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
@@ -55,6 +58,7 @@ NATIVE_BACKEND = {
 }
 COMMAND_TIMEOUT_SECONDS = 600
 VIEWER_TIMEOUT_SECONDS = 60
+TRUSTED_BWRAP_PATH = Path("/usr/bin/bwrap")
 
 
 class ScenarioError(RuntimeError):
@@ -399,6 +403,51 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
     return payload
 
 
+def _preview_sandbox_argv(argv: Sequence[str], *, cwd: Path) -> list[str]:
+    """Drop outer setup capabilities before starting the browser process tree."""
+
+    command = list(argv)
+    if platform.system() != "Linux":
+        return command
+    try:
+        info = TRUSTED_BWRAP_PATH.lstat()
+    except OSError as exc:
+        raise ScenarioError("trusted preview sandbox runtime unavailable") from exc
+    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise ScenarioError("trusted preview sandbox runtime invalid")
+    return [
+        os.fspath(TRUSTED_BWRAP_PATH),
+        "--die-with-parent",
+        "--new-session",
+        "--cap-drop",
+        "ALL",
+        "--bind",
+        "/",
+        "/",
+        "--chdir",
+        os.fspath(cwd),
+        "--",
+        *command,
+    ]
+
+
+def _publish_preview_sandbox_enforcement(
+    command_log: Path,
+    argv: Sequence[str],
+) -> None:
+    """Bind the exact capability-dropping preview boundary to this run."""
+
+    _write_json(
+        command_log.parent / Path(PROVIDER_FREE_PREVIEW_SANDBOX_PATH).name,
+        {
+            "schema": PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA,
+            "argv": list(argv),
+            "capabilities": "drop-all",
+            "mount_namespace": "inherit-outer",
+        },
+    )
+
+
 class _RejectedViewerHandler(http.server.BaseHTTPRequestHandler):
     viewer_version = ""
     activation_count = 0
@@ -677,7 +726,13 @@ def _run_voxblame_preview(
         "preview_browser_result_failed": "preview_browser_result",
     }
     try:
-        return _run_public(argv, cwd=cwd, command_log=command_log)
+        sandbox_argv = _preview_sandbox_argv(argv, cwd=cwd)
+        _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
+        return _run_public(
+            sandbox_argv,
+            cwd=cwd,
+            command_log=command_log,
+        )
     except ScenarioError as exc:
         operation = operations.get(exc.classification)
         if operation is None:
@@ -902,6 +957,7 @@ def _finalize_and_publish_runtime_authority(
         "cadpy_runtime": cadpy_runtime,
         "shipped_tree": tree,
         "commands": "run/provider-free-commands.jsonl",
+        "preview_sandbox": PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     }
     _write_json(workspace / "run" / "runtime-authority-smoke.json", receipt)
     return receipt

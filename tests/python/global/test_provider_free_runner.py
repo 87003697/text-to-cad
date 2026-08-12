@@ -105,7 +105,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/2",
+                "id": "issue15.provider-free-bounded/3",
                 "provider_access": "forbidden",
             },
             "request_authority": {
@@ -130,7 +130,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
             "PYTHONDONTWRITEBYTECODE": "1",
-            "CVM_PROVIDER_FREE_PROFILE": "issue15.provider-free-bounded/2",
+            "CVM_PROVIDER_FREE_PROFILE": "issue15.provider-free-bounded/3",
             "CVM_PROVIDER_FREE_STRIPPED_NAMES": (
                 "ANTHROPIC_API_KEY,HTTPS_PROXY,OPENAI_API_KEY,VENUS_TOKEN"
             ),
@@ -280,6 +280,19 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         (exp_dir / "run/provider-free-commands.jsonl").write_text(
             '{"exit_code":0}\n', encoding="utf-8"
         )
+        (exp_dir / protocol.PROVIDER_FREE_PREVIEW_SANDBOX_PATH).write_text(
+            json.dumps(
+                {
+                    "schema": protocol.PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA,
+                    "argv": protocol.provider_free_preview_sandbox_argv(
+                        self.group, self.exp
+                    ),
+                    "capabilities": "drop-all",
+                    "mount_namespace": "inherit-outer",
+                }
+            ),
+            encoding="utf-8",
+        )
         files = [{"path": "runtime-identity.json", "size_bytes": 1, "sha256": "a" * 64}]
         tree_bytes = json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
         artifact = {
@@ -327,6 +340,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 "files": files,
             },
             "commands": "run/provider-free-commands.jsonl",
+            "preview_sandbox": protocol.PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
         }
         (exp_dir / "run" / "runtime-authority-smoke.json").write_text(
             json.dumps(receipt), encoding="utf-8"
@@ -337,6 +351,22 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         (exp_dir / "workspace-authority.json").write_text("{}\n", encoding="utf-8")
         (exp_dir / "workspace-authority.bundle").write_bytes(b"bundle")
         return {"mode": "live"}
+
+    def test_success_rejects_tampered_preview_sandbox_receipt(self) -> None:
+        self.write_success_evidence()
+        exp_dir = self.repo / "outputs" / self.handle
+        path = exp_dir / protocol.PROVIDER_FREE_PREVIEW_SANDBOX_PATH
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        receipt["capabilities"] = "inherit"
+        path.write_text(json.dumps(receipt), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            provider_free_runner.ProviderFreeError,
+            "preview sandbox evidence conflicts",
+        ):
+            provider_free_runner._validate_scenario_evidence(
+                exp_dir, "issue15-runtime-authority"
+            )
 
     def test_success_runs_closed_scenario_in_network_isolated_bounded_sandbox(self) -> None:
         captured: dict[str, object] = {}

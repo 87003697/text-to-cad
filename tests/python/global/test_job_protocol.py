@@ -26,6 +26,39 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 
 
 class JobProtocolTests(unittest.TestCase):
+    def test_preview_sandbox_receipt_is_closed_and_experiment_bound(self) -> None:
+        group = "20260812-180000-preview"
+        exp = "20260812-100000-issue15-runtime-authority"
+        receipt = {
+            "schema": protocol.PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA,
+            "argv": protocol.provider_free_preview_sandbox_argv(group, exp),
+            "capabilities": "drop-all",
+            "mount_namespace": "inherit-outer",
+        }
+
+        self.assertTrue(
+            protocol.provider_free_preview_sandbox_receipt_allowed(
+                receipt, group, exp
+            )
+        )
+        for field, value in (
+            ("capabilities", "inherit"),
+            ("mount_namespace", "host"),
+            ("argv", receipt["argv"][:-1]),
+        ):
+            with self.subTest(field=field):
+                candidate = {**receipt, field: value}
+                self.assertFalse(
+                    protocol.provider_free_preview_sandbox_receipt_allowed(
+                        candidate, group, exp
+                    )
+                )
+        self.assertFalse(
+            protocol.provider_free_preview_sandbox_receipt_allowed(
+                {**receipt, "extra": True}, group, exp
+            )
+        )
+
     def test_safe_and_unsafe_handles(self) -> None:
         self.assertEqual(protocol.parse_handle("group/exp")["kind"], "pilot")
         for handle in (

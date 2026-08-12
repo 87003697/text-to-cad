@@ -29,10 +29,12 @@ from scripts.pilot.cvm_job.runtime import (
     provider_free_sandbox_argv,
 )
 from scripts.pilot.cvm_job.protocol import (
+    PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
     ProtocolError,
+    provider_free_preview_sandbox_receipt_allowed,
     provider_free_scenario_failure_operation_allowed,
     request_authority_sha256,
 )
@@ -418,6 +420,7 @@ def _validate_scenario_evidence(exp_dir: Path, scenario_name: str) -> None:
         "cadpy_runtime",
         "shipped_tree",
         "commands",
+        "preview_sandbox",
     }
     if not isinstance(receipt, dict) or set(receipt) != required:
         raise ProviderFreeError("runtime-authority scenario receipt is not a closed object")
@@ -485,6 +488,26 @@ def _validate_scenario_evidence(exp_dir: Path, scenario_name: str) -> None:
     commands = exp_dir / str(receipt["commands"])
     if not commands.is_file() or commands.stat().st_size == 0:
         raise ProviderFreeError("runtime-authority public-command evidence is missing")
+    if receipt["preview_sandbox"] != PROVIDER_FREE_PREVIEW_SANDBOX_PATH:
+        raise ProviderFreeError("runtime-authority preview sandbox path conflicts")
+    try:
+        preview_sandbox = json.loads(
+            (exp_dir / PROVIDER_FREE_PREVIEW_SANDBOX_PATH).read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProviderFreeError(
+            "runtime-authority preview sandbox evidence is missing or invalid"
+        ) from exc
+    if not provider_free_preview_sandbox_receipt_allowed(
+        preview_sandbox,
+        exp_dir.parent.name,
+        exp_dir.name,
+    ):
+        raise ProviderFreeError(
+            "runtime-authority preview sandbox evidence conflicts"
+        )
     for authority_name in ("workspace-authority.json", "workspace-authority.bundle"):
         if not (exp_dir / authority_name).is_file():
             raise ProviderFreeError("runtime-authority portable Workspace authority is missing")
