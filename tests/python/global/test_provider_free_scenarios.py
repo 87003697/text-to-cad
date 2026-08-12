@@ -975,21 +975,43 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             with self.subTest(name=name):
                 process = mock.Mock(pid=1234, returncode=returncode)
                 process.communicate.return_value = (stdout, stderr)
-                with mock.patch.object(
-                    provider_free_scenarios.subprocess,
-                    "Popen",
-                    return_value=process,
+                with (
+                    mock.patch.object(
+                        provider_free_scenarios.subprocess,
+                        "Popen",
+                        return_value=process,
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios.os,
+                        "killpg",
+                    ) as killpg,
                 ):
                     actual = provider_free_scenarios._run_closed_node_browser_version_probe(
                         argv,
                         cwd=self.repo,
                     )
                 self.assertEqual(expected, actual)
+                expected_cleanup = (
+                    [
+                        mock.call(1234, signal.SIGTERM),
+                        mock.call(1234, signal.SIGKILL),
+                    ]
+                    if name == "noisy-token"
+                    else []
+                )
+                self.assertEqual(expected_cleanup, killpg.call_args_list)
+                self.assertEqual(
+                    3 if expected_cleanup else 1,
+                    process.communicate.call_count,
+                )
 
-        with mock.patch.object(
-            provider_free_scenarios.subprocess,
-            "Popen",
-            side_effect=PermissionError("sensitive spawn denial"),
+        with (
+            mock.patch.object(
+                provider_free_scenarios.subprocess,
+                "Popen",
+                side_effect=PermissionError("sensitive spawn denial"),
+            ),
+            mock.patch.object(provider_free_scenarios.os, "killpg") as killpg,
         ):
             self.assertEqual(
                 "spawn-event",
@@ -998,6 +1020,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     cwd=self.repo,
                 ),
             )
+        killpg.assert_not_called()
 
         timed_out = mock.Mock(pid=5678, returncode=None)
         timed_out.communicate.side_effect = [
