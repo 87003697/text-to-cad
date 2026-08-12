@@ -651,6 +651,39 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             "preview_browser_runtime_staging", raised.exception.operation
         )
 
+    def test_stage_attested_browser_runtime_uses_read_only_deployment_authority(
+        self,
+    ) -> None:
+        runtime_identity = {"chromium": {"revision": "1234"}}
+        receipt = {
+            "schema": "cvm.deployed-source-authority/1",
+            "contract_paths": list(
+                provider_free_scenarios.deployment_authority.EXECUTION_AUTHORITY_PATHS
+            ),
+            "runtime_identity": runtime_identity,
+        }
+        (self.repo / ".cvm-deployment.json").write_text(
+            json.dumps(receipt), encoding="utf-8"
+        )
+        with (
+            mock.patch.object(provider_free_scenarios, "REPO_ROOT", self.repo),
+            mock.patch.object(
+                provider_free_scenarios.deployment_authority,
+                "verify_receipt",
+                return_value=receipt,
+            ) as verify_receipt,
+            mock.patch.object(
+                provider_free_scenarios, "_stage_browser_runtime"
+            ) as stage_browser_runtime,
+        ):
+            provider_free_scenarios._stage_attested_browser_runtime()
+
+        verify_receipt.assert_called_once_with(self.repo, receipt)
+        stage_browser_runtime.assert_called_once_with(
+            runtime_identity["chromium"],
+            Path(provider_free_scenarios.PROVIDER_FREE_STAGED_BROWSER_CACHE),
+        )
+
     def _assert_closed_stage_failure(
         self,
         workspace: Path,

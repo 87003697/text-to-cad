@@ -333,6 +333,24 @@ class PilotReviewTests(unittest.TestCase):
         )
         self.assertTrue((self.exp / "review.md").is_file())
 
+    def test_reviewer_binds_private_tmpfs_browser_staging_profile(self) -> None:
+        self.assertEqual(
+            {
+                "source": "read-only-attested-revision",
+                "scope": "single-attested-revision",
+                "destination": "/tmp/provider-free-playwright",
+                "destination_filesystem": "private-tmpfs",
+                "tree_validation": "regular-files-only-no-links-or-special",
+                "executable_validation": {
+                    "sha256": "deployment-runtime-identity",
+                    "execute_bits": "required",
+                },
+                "nested_mount": "read-only-exact-staged-cache",
+                "cleanup": "outer-sandbox-private-tmpfs-teardown",
+            },
+            self.reviewer._SANDBOX_PROFILE["browser_runtime_staging"],
+        )
+
     def test_reviewer_audits_provider_free_runtime_authority_receipt(self) -> None:
         workspace_payload = self.canonical_experiment()
         helper = self.helper(workspace_payload)
@@ -399,13 +417,13 @@ class PilotReviewTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/4",
+                "id": "issue15.provider-free-bounded/5",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/4",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/5",
             },
             "sandbox": {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/4",
+                "resource_profile": "issue15.provider-free-bounded/5",
             },
             "provider_environment": {
                 "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],

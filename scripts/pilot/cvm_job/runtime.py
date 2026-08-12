@@ -24,6 +24,7 @@ from .protocol import (
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
+    PROVIDER_FREE_STAGED_BROWSER_CACHE,
     ProtocolError,
     TERMINAL_STATES,
     default_state_root,
@@ -139,12 +140,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/4",
+    "id": "issue15.provider-free-bounded/5",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/4",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/5",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/4",
+    "schema": "cvm.provider-free-linux-sandbox/5",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -158,6 +159,19 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
     "repository_mount": "read-only",
     "output_mount": "read-write-exact-experiment",
     "browser_cache_mount": "read-only-attested-revision",
+    "browser_runtime_staging": {
+        "source": "read-only-attested-revision",
+        "scope": "single-attested-revision",
+        "destination": PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        "destination_filesystem": "private-tmpfs",
+        "tree_validation": "regular-files-only-no-links-or-special",
+        "executable_validation": {
+            "sha256": "deployment-runtime-identity",
+            "execute_bits": "required",
+        },
+        "nested_mount": "read-only-exact-staged-cache",
+        "cleanup": "outer-sandbox-private-tmpfs-teardown",
+    },
     "preview_process": {
         "capabilities": "drop-all",
         "mount_namespace": "inherit-outer",

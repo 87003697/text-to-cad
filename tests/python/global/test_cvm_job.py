@@ -134,6 +134,22 @@ class CvmJobTests(unittest.TestCase):
             runtime.PROVIDER_FREE_SANDBOX_PROFILE["preview_process"],
         )
         self.assertEqual(
+            {
+                "source": "read-only-attested-revision",
+                "scope": "single-attested-revision",
+                "destination": protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE,
+                "destination_filesystem": "private-tmpfs",
+                "tree_validation": "regular-files-only-no-links-or-special",
+                "executable_validation": {
+                    "sha256": "deployment-runtime-identity",
+                    "execute_bits": "required",
+                },
+                "nested_mount": "read-only-exact-staged-cache",
+                "cleanup": "outer-sandbox-private-tmpfs-teardown",
+            },
+            runtime.PROVIDER_FREE_SANDBOX_PROFILE["browser_runtime_staging"],
+        )
+        self.assertEqual(
             128 * 1024**3,
             runtime.PROVIDER_FREE_SANDBOX_PROFILE["resource_limits"][
                 "address_space_bytes"
@@ -449,9 +465,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/4",
+                "id": "issue15.provider-free-bounded/5",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/4",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/5",
             },
         )
         self.assertEqual(
@@ -577,7 +593,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/4",
+            "issue15.provider-free-bounded/5",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],

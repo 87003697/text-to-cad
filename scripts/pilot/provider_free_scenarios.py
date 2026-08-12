@@ -504,23 +504,23 @@ def _stage_browser_runtime(chromium: dict[str, Any], staging_cache: Path) -> Non
         ) from exc
 
 
-def _stage_attested_browser_runtime(command_log: Path) -> None:
-    """Load the runner-published identity and stage its browser revision."""
+def _stage_attested_browser_runtime() -> None:
+    """Verify the read-only deployment authority and stage its browser revision."""
 
     try:
-        sandbox = json.loads(
-            (command_log.parent / "sandbox-enforcement.json").read_text(
+        receipt = json.loads(
+            (REPO_ROOT / deployment_authority.RECEIPT_PATH).read_text(
                 encoding="utf-8"
             )
         )
-        if sandbox.get("schema") != "cvm.provider-free-sandbox-enforcement/1":
-            raise ValueError("sandbox enforcement schema conflicts")
-        identity = deployment_authority.validate_runtime_identity(
-            REPO_ROOT,
-            sandbox.get("runtime_identity"),
-            verify_external=False,
-        )
+        if receipt.get("contract_paths") != list(
+            deployment_authority.EXECUTION_AUTHORITY_PATHS
+        ):
+            raise ValueError("deployment authority contract is incomplete")
+        deployment_authority.verify_receipt(REPO_ROOT, receipt)
+        identity = receipt["runtime_identity"]
     except (
+        KeyError,
         OSError,
         json.JSONDecodeError,
         ValueError,
@@ -847,7 +847,7 @@ def _run_voxblame_preview(
     }
     try:
         if platform.system() == "Linux":
-            _stage_attested_browser_runtime(command_log)
+            _stage_attested_browser_runtime()
         sandbox_argv = _preview_sandbox_argv(argv, cwd=cwd)
         _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
         return _run_public(

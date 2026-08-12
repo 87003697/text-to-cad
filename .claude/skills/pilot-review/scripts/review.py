@@ -63,7 +63,7 @@ _SANDBOX_SETUP_CAPABILITIES = (
     "CAP_SETFCAP",
 )
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/4",
+    "schema": "cvm.provider-free-linux-sandbox/5",
     "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -77,6 +77,19 @@ _SANDBOX_PROFILE = {
     "repository_mount": "read-only",
     "output_mount": "read-write-exact-experiment",
     "browser_cache_mount": "read-only-attested-revision",
+    "browser_runtime_staging": {
+        "source": "read-only-attested-revision",
+        "scope": "single-attested-revision",
+        "destination": "/tmp/provider-free-playwright",
+        "destination_filesystem": "private-tmpfs",
+        "tree_validation": "regular-files-only-no-links-or-special",
+        "executable_validation": {
+            "sha256": "deployment-runtime-identity",
+            "execute_bits": "required",
+        },
+        "nested_mount": "read-only-exact-staged-cache",
+        "cleanup": "outer-sandbox-private-tmpfs-teardown",
+    },
     "preview_process": {
         "capabilities": "drop-all",
         "mount_namespace": "inherit-outer",
@@ -704,14 +717,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/4",
+                "id": "issue15.provider-free-bounded/5",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/4",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/5",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/4",
+                "resource_profile": "issue15.provider-free-bounded/5",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False
