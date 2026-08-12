@@ -335,6 +335,15 @@ class PreviewCliTests(unittest.TestCase):
             "browser_launch_executable_permission": (
                 "preview_browser_launch_executable_permission_failed"
             ),
+            "browser_launch_executable_spawn_permission": (
+                "preview_browser_launch_executable_spawn_permission_failed"
+            ),
+            "browser_launch_sandbox_permission": (
+                "preview_browser_launch_sandbox_permission_failed"
+            ),
+            "browser_launch_filesystem_permission": (
+                "preview_browser_launch_filesystem_permission_failed"
+            ),
             "browser_launch_executable_dependency": (
                 "preview_browser_launch_executable_dependency_failed"
             ),

@@ -36,6 +36,9 @@ MeshshotPhase = Literal[
     "browser_launch_executable",
     "browser_launch_executable_missing",
     "browser_launch_executable_permission",
+    "browser_launch_executable_spawn_permission",
+    "browser_launch_sandbox_permission",
+    "browser_launch_filesystem_permission",
     "browser_launch_executable_dependency",
     "browser_render",
     "browser_result",
@@ -88,16 +91,23 @@ _BROWSER_LAUNCH_PHASE_PATTERNS: tuple[
             "enoent",
         ),
     ),
-    (
-        "browser_launch_executable_permission",
-        (
-            "permission denied",
-            "eacces",
-            "operation not permitted",
-            "eperm",
-        ),
-    ),
 )
+
+_PERMISSION_MARKERS = (
+    "permission denied",
+    "eacces",
+    "operation not permitted",
+    "eperm",
+)
+_SANDBOX_PERMISSION_MARKERS = ("sandbox", "namespace", "zygote", "setuid", "clone")
+_FILESYSTEM_PERMISSION_MARKERS = (
+    "user data",
+    "cache directory",
+    "cannot create",
+    "mkdir",
+    "read-only file system",
+)
+_SPAWN_PERMISSION_MARKERS = ("spawn", "execve", "exec format")
 
 
 def _browser_launch_phase(exc: Exception) -> MeshshotPhase:
@@ -107,6 +117,14 @@ def _browser_launch_phase(exc: Exception) -> MeshshotPhase:
     for phase, patterns in _BROWSER_LAUNCH_PHASE_PATTERNS:
         if any(pattern in detail for pattern in patterns):
             return phase
+    if any(marker in detail for marker in _PERMISSION_MARKERS):
+        if any(marker in detail for marker in _SANDBOX_PERMISSION_MARKERS):
+            return "browser_launch_sandbox_permission"
+        if any(marker in detail for marker in _FILESYSTEM_PERMISSION_MARKERS):
+            return "browser_launch_filesystem_permission"
+        if any(marker in detail for marker in _SPAWN_PERMISSION_MARKERS):
+            return "browser_launch_executable_spawn_permission"
+        return "browser_launch_executable_permission"
     return "browser_launch"
 
 

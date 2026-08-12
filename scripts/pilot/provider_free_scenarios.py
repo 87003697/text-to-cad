@@ -743,6 +743,15 @@ def _run_voxblame_preview(
         "preview_browser_launch_executable_permission_failed": (
             "preview_browser_launch_executable_permission"
         ),
+        "preview_browser_launch_executable_spawn_permission_failed": (
+            "preview_browser_launch_executable_spawn_permission"
+        ),
+        "preview_browser_launch_sandbox_permission_failed": (
+            "preview_browser_launch_sandbox_permission"
+        ),
+        "preview_browser_launch_filesystem_permission_failed": (
+            "preview_browser_launch_filesystem_permission"
+        ),
         "preview_browser_launch_executable_dependency_failed": (
             "preview_browser_launch_executable_dependency"
         ),

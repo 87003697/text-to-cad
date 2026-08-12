@@ -53,6 +53,15 @@ class ResidualRendererTests(unittest.TestCase):
                 "browser_launch_executable_missing"
             ),
             "Error: spawn /denied/chromium EACCES": (
+                "browser_launch_executable_spawn_permission"
+            ),
+            "zygote sandbox initialization: Permission denied": (
+                "browser_launch_sandbox_permission"
+            ),
+            "cannot create user data directory: Permission denied": (
+                "browser_launch_filesystem_permission"
+            ),
+            "browser startup: Permission denied": (
                 "browser_launch_executable_permission"
             ),
             "posix_spawn: No such file or directory": (

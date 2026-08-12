@@ -68,6 +68,9 @@ Native measurement operations are:
 - `preview_browser_launch_executable`
 - `preview_browser_launch_executable_missing`
 - `preview_browser_launch_executable_permission`
+- `preview_browser_launch_executable_spawn_permission`
+- `preview_browser_launch_sandbox_permission`
+- `preview_browser_launch_filesystem_permission`
 - `preview_browser_launch_executable_dependency`
 - `preview_browser_render`
 - `preview_browser_result`
