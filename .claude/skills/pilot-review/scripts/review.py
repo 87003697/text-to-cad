@@ -63,7 +63,7 @@ _SANDBOX_SETUP_CAPABILITIES = (
     "CAP_SETFCAP",
 )
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/6",
+    "schema": "cvm.provider-free-linux-sandbox/7",
     "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -76,9 +76,10 @@ _SANDBOX_PROFILE = {
     "temporary_filesystem": "/tmp",
     "repository_mount": "read-only",
     "output_mount": "read-write-exact-experiment",
-    "browser_cache_mount": "read-only-attested-revision",
+    "browser_cache_mount": "read-only-job-scoped-attested-revision",
     "browser_runtime_staging": {
-        "source": "read-only-attested-revision",
+        "source": "deployment-attested-host-revision",
+        "source_filesystem": "same-device-as-deployment-browser",
         "scope": "single-attested-revision",
         "destination": "/tmp/provider-free-playwright",
         "staged_revision": "attested",
@@ -86,7 +87,7 @@ _SANDBOX_PROFILE = {
             "/tmp/provider-free-playwright/attested/"
             "chrome-headless-shell-linux64/chrome-headless-shell"
         ),
-        "destination_filesystem": "private-tmpfs",
+        "destination_filesystem": "read-only-bind-of-exec-permitted-host-stage",
         "tree_validation": "regular-files-only-no-links-or-special",
         "executable_validation": {
             "sha256": "deployment-runtime-identity",
@@ -102,7 +103,7 @@ _SANDBOX_PROFILE = {
             "validation": "absolute-regular-non-symlink-executable",
             "playwright_option": "executable_path",
         },
-        "cleanup": "outer-sandbox-private-tmpfs-teardown",
+        "cleanup": "supervisor-context-terminal-all-exit-classes",
     },
     "preview_process": {
         "capabilities": "drop-all",
@@ -134,7 +135,7 @@ _SANDBOX_PROFILE = {
 _SANDBOX_REQUIRED_ENVIRONMENT = {
     "HOME": "/home/provider-free",
     "PATH": "/workspace/repo/.venv/bin:/usr/local/bin:/usr/bin:/bin",
-    "PLAYWRIGHT_BROWSERS_PATH": "/home/provider-free/.cache/ms-playwright",
+    "PLAYWRIGHT_BROWSERS_PATH": "/tmp/provider-free-playwright",
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 _SYSTEM_RO_PATHS = (
@@ -219,6 +220,14 @@ def _validate_provider_free_sandbox_argv(
         raise ReviewError("deployed repository root is too broad")
     sandbox_exp = f"/workspace/repo/{exp_dir}"
     host_exp = f"{host_root}/{exp_dir}"
+    group = immutable_request.get("group")
+    exp = immutable_request.get("exp")
+    if not isinstance(group, str) or not isinstance(exp, str):
+        raise ReviewError("provider-free job identity is invalid")
+    host_stage = (
+        f"{chromium['host_cache_path']}/.cvm-provider-free-browser-stages/"
+        f"{group}.{exp}/attested"
+    )
     fixed_mounts = [
         host_root,
         "/workspace/repo",
@@ -231,9 +240,11 @@ def _validate_provider_free_sandbox_argv(
         "/home/provider-free",
         "--dir",
         "/home/provider-free/.cache",
+        "--dir",
+        "/tmp/provider-free-playwright",
         "--ro-bind",
-        chromium["host_cache_path"],
-        chromium["sandbox_cache_path"],
+        host_stage,
+        "/tmp/provider-free-playwright/attested",
         "--symlink",
         "usr/bin",
         "/bin",
@@ -731,14 +742,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/6",
+                "id": "issue15.provider-free-bounded/7",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/6",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/7",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/6",
+                "resource_profile": "issue15.provider-free-bounded/7",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False

@@ -122,7 +122,6 @@ class AttestedBrowserMount:
 
     host_revision: Path
     sandbox_cache: str
-    sandbox_executable: str
 
 
 class BrowserStageError(RuntimeError):
@@ -142,7 +141,6 @@ def _browser_mount(
             / "attested"
         ),
         sandbox_cache=PROVIDER_FREE_STAGED_BROWSER_CACHE,
-        sandbox_executable=PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
     )
 
 

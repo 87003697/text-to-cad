@@ -134,10 +134,6 @@ class CvmJobTests(unittest.TestCase):
                 protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE,
                 mount.sandbox_cache,
             )
-            self.assertEqual(
-                protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
-                mount.sandbox_executable,
-            )
             stage_root = mount.host_revision.parent
             self.assertTrue(stage_root.is_dir())
             self.assertEqual(
