@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Semver part to bump when set_version is empty.
+        description: Semver part to bump when set_version is empty. Use none to publish base_branch as it stands, without touching the version.
         required: true
         default: patch
         type: choice
@@ -12,8 +12,9 @@ on:
           - patch
           - minor
           - major
+          - none
       set_version:
-        description: Exact X.Y.Z version to release instead of bumping. Set to the current version to resume a failed publish.
+        description: Exact X.Y.Z version to release instead of bumping. Leave empty unless you are naming a specific new version.
         required: false
         type: string
       base_branch:
@@ -111,8 +112,17 @@ jobs:
         env:
           BUMP: ${{ inputs.bump }}
           SET_VERSION: ${{ inputs.set_version }}
+          BASE_BRANCH: ${{ inputs.base_branch }}
         run: |
-          if [ -n "$SET_VERSION" ]; then
+          # bump=none publishes base_branch as it stands. That is what resuming a
+          # failed publish and rehearsing the pipeline against build-test both
+          # want: the version is already correct, or irrelevant. sync-version
+          # still runs, so a base branch whose derived metadata has drifted from
+          # VERSION shows up as changed=true and goes through a release PR rather
+          # than publishing the drift.
+          if [ "$BUMP" = "none" ] && [ -z "$SET_VERSION" ]; then
+            echo "No version change requested; publishing $BASE_BRANCH as it stands."
+          elif [ -n "$SET_VERSION" ]; then
             scripts/release/bump-version.sh --set-version "$SET_VERSION" --no-commit
           else
             scripts/release/bump-version.sh "$BUMP" --no-commit

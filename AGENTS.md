@@ -27,8 +27,9 @@ draft). Never pick the semver bump yourself: if the request does not name
 patch, minor, major, or an exact version, ask which one before dispatching.
 Use `target_branch=build-test` only when the user explicitly asks to test
 CI/CD or build-pipeline changes — never by default and never as part of a
-requested release. Rerun `Release` with `set_version` pinned to the current
-version to resume a failed publish.
+requested release, and pair it with `bump=none` so a rehearsal does not consume
+a version number. `bump=none` publishes `base_branch` as it stands and is also
+how you resume a failed publish; it is never a release setting.
 
 The standalone `Deploy Docs` workflow redeploys the docs site from `main`
 without running a release. The CAD Viewer is a local-filesystem app with no

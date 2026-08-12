@@ -213,7 +213,8 @@ settings — build from `develop` (`base_branch=develop`), publish to `main`
 draft) — and the input descriptions in `.github/workflows/release.yml` are
 authoritative. Choose the semver bump (`patch`, `minor`, or `major`) or an
 exact `set_version` deliberately for every release; if a release request does
-not specify one, confirm it rather than assuming:
+not specify one, confirm it rather than assuming. `bump=none` is not a release
+setting — see "Publishing without a version bump" below:
 
 ```bash
 gh workflow run release.yml --ref develop -f bump=patch
@@ -255,21 +256,46 @@ trusted publisher for the `cadgen` project on PyPI (use "Add a pending
 publisher" if the project does not exist yet): repository
 `earthtojake/text-to-cad`, workflow `release.yml`, environment left blank.
 
+### Publishing without a version bump
+
+`bump=none` publishes `base_branch` exactly as it stands: no version change, no
+release PR, straight to the publish jobs. Use it whenever the version is already
+right or is beside the point — resuming a failed publish, and rehearsing the
+pipeline against `build-test`. `set_version` is only for naming a specific *new*
+version; it is not the way to say "leave the version alone".
+
+`sync-version.mjs` still runs under `bump=none`, so a base branch whose derived
+metadata has drifted from `VERSION` is caught and goes through a release PR
+rather than publishing the drift.
+
 ### Testing CI/CD and build changes
 
 Use `target_branch=build-test` only when explicitly testing changes to the
 CI/CD pipeline or production build outputs; it is never part of a normal
 release and should never be chosen by default. It rehearses the full publish
-flow without touching `main`, deploying, or creating a tag/release. Use
-`dry_run=true` to preview the version changes only, and `auto_merge=false` to
-stop after preparing the release PR.
+flow without touching `main`, deploying, creating a tag/release, uploading to
+PyPI, or syncing the CAD Viewer mirror:
+
+```bash
+gh workflow run release.yml --ref <branch> \
+  -f bump=none -f base_branch=<branch> -f target_branch=build-test
+```
+
+Pair it with `bump=none` so a rehearsal does not consume a version number or
+move `VERSION` on the branch you are testing. Bump for real (`bump=patch`) only
+when the change under test is the version machinery itself — `bump-version.sh`
+or `sync-version.mjs` — since `bump=none` skips that stage. `dry_run=true`
+previews the version changes only, and `auto_merge=false` stops after preparing
+the release PR.
 
 ### Resuming a failed publish
 
 If a run fails partway — including after `main` has moved but before the semver
-tag exists — rerun `Release` with `set_version` pinned to the current version.
-When `develop` already contains that version, the workflow skips the release PR
-and proceeds straight to the publish jobs.
+tag exists — rerun `Release` with `bump=none`. The version already reached
+`base_branch` on the first attempt, so there is nothing to bump; the workflow
+skips the release PR and proceeds straight to the publish jobs, and the publish
+gate handles both shapes (`main` not yet moved, and `main` moved with the tag
+missing).
 
 ### Redeploying the docs site
 
