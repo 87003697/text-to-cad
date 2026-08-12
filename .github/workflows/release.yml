@@ -373,6 +373,28 @@ jobs:
             exit 1
           fi
 
+      # The plugin package is the repository root, so everything here is copied
+      # into every install. viewer/ is the SOURCE app: what installs and runs is
+      # the dereferenced runtime the bundle already wrote to
+      # skills/cad-viewer/scripts/viewer, and no skill imports repo-root viewer/.
+      # Runs after the bundle, check-builds, and the tests, so the source tree
+      # they validated is untouched -- only the published tree is trimmed.
+      # The standalone cad-viewer mirror syncs from the release SOURCE commit
+      # rather than from here (.github/workflows/sync-cad-viewer.yml).
+      - name: Remove viewer source from publish tree
+        if: steps.gate.outputs.should_publish == 'true'
+        run: |
+          rm -rf viewer
+          if [ -e viewer ]; then
+            echo "Failed to remove viewer from the publish tree." >&2
+            exit 1
+          fi
+          if [ ! -f skills/cad-viewer/scripts/viewer/package.json ]; then
+            echo "Refusing to publish without the bundled CAD Viewer runtime:" >&2
+            echo "  skills/cad-viewer/scripts/viewer/package.json is missing." >&2
+            exit 1
+          fi
+
       # Published skills have no sibling packages/cadgen to install editable
       # from, so the publish tree resolves cadgen from PyPI at this release's
       # version. Runs after the bundle so vendored runtime copies are pinned too,
@@ -510,11 +532,25 @@ jobs:
       ref: ${{ needs.publish.outputs.publish_sha }}
     secrets: inherit
 
+  # Mirrors from the release SOURCE commit, not the publish commit: the publish
+  # tree deliberately drops viewer/, and the mirror is a source repo.
+  sync-cad-viewer:
+    name: Sync CAD Viewer Repo
+    needs:
+      - release-pr
+      - publish
+    if: ${{ needs.publish.outputs.published == 'true' && inputs.target_branch == 'main' }}
+    uses: ./.github/workflows/sync-cad-viewer.yml
+    with:
+      ref: ${{ needs.release-pr.outputs.source_sha }}
+    secrets: inherit
+
   tag-release:
     name: Tag and GitHub Release
     needs:
       - publish
       - deploy-docs
+      - sync-cad-viewer
     if: ${{ needs.publish.outputs.published == 'true' && inputs.target_branch == 'main' }}
     runs-on: ubuntu-latest
 

@@ -32,7 +32,10 @@ version to resume a failed publish.
 
 The standalone `Deploy Docs` workflow redeploys the docs site from `main`
 without running a release. The CAD Viewer is a local-filesystem app with no
-hosted deployment. `main` is publish-only; pushing `develop` runs tests but
+hosted deployment, but each release mirrors `viewer/` into the standalone
+`earthtojake/cad-viewer` repo through the `Sync CAD Viewer Repo` workflow, which
+`Release` calls after publishing and which can also be dispatched on its own.
+`main` is publish-only; pushing `develop` runs tests but
 never publishes. See the Releases section in `CONTRIBUTING.md` for the full
 flow, CI/CD-testing and resume options, and local/manual fallbacks.
 
@@ -90,6 +93,11 @@ flow, CI/CD-testing and resume options, and local/manual fallbacks.
   Code preserves them, and Codex `plugin add` drops them with no error, shipping
   a skill with missing files. `scripts/github-workflows/check-builds.sh` enforces
   this; do not relax it.
+- `viewer/` must stay self-contained: nothing under it may reference a path,
+  command, or document above it, because it is mirrored verbatim into the
+  standalone `cad-viewer` repo with no rewriting step. Keep repo-level tooling
+  in `scripts/`, not under `viewer/`.
+  `viewer/scripts/selfContained.test.mjs` enforces this.
 - `packages/cadjs` must stay reusable/non-React; app UI and workflow state
   belong in `viewer/`.
 - `packages/implicitjs` must stay reusable/non-React and independent of

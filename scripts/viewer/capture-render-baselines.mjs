@@ -1,13 +1,16 @@
 #!/usr/bin/env node
-// Visual baseline harness for the renderer-consolidation phases (see
-// viewer/docs/renderer-consolidation.md). Unit tests do not exercise 3D
-// rendering, so Phases 1-3 are gated on before/after screenshots: capture a
-// labeled baseline before starting a phase, re-capture after, and eyeball the
-// diff. This drives an ALREADY-RUNNING dev viewer (start it via the
+// Visual before/after baseline harness for renderer changes. Unit tests do not
+// exercise 3D rendering, so a risky render change is gated on screenshots:
+// capture a labeled baseline before the change, re-capture after, and eyeball
+// the diff. This drives an ALREADY-RUNNING dev viewer (start it via the
 // cad-viewer skill launcher) — it never starts or stops servers itself.
 //
+// For standing per-format and per-theme gates, prefer viewer/scripts/
+// e2e-format-sweep.mjs and e2e-theme-conformance.mjs; this one is for ad hoc
+// before/after comparisons.
+//
 // Usage:
-//   node viewer/scripts/capture-render-baselines.mjs \
+//   node scripts/viewer/capture-render-baselines.mjs \
 //     --base-url http://127.0.0.1:4178 --label pre-phase-1a \
 //     [--models-dir <abs path>] [--fixture <relative-to-models path>]... \
 //     [--theme light]... [--wait-ms 9000] [--out-dir tmp/render-baselines]

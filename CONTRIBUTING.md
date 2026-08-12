@@ -283,6 +283,46 @@ gh workflow run deploy-docs.yml -f ref=main
 
 The CAD Viewer is a local-filesystem app and has no hosted deployment.
 
+### Mirroring the CAD Viewer repo
+
+`viewer/` is published as its own standalone repo,
+[`earthtojake/cad-viewer`](https://github.com/earthtojake/cad-viewer). The
+`Release` workflow calls `Sync CAD Viewer Repo` after publishing to `main`, so
+the mirror tracks releases rather than in-flight `develop` work. Dispatch it on
+its own for an out-of-band sync, or with `dry_run` to build and verify the
+mirror without pushing:
+
+```bash
+gh workflow run sync-cad-viewer.yml -f ref=main
+gh workflow run sync-cad-viewer.yml -f ref=main -f dry_run=true
+```
+
+The workflow needs a `CAD_VIEWER_SYNC_TOKEN` secret with `contents:write` on the
+mirror repo. Before pushing, it runs `npm ci`, `npm run test`, `npm run build`,
+`pip install -r requirements.txt`, and the `server_py` tests inside the mirror,
+so a mirror that cannot stand on its own fails the release instead of shipping.
+
+The sync is a **straight copy** — nothing rewrites paths, commands, or prose on
+the way out, and it does not run or depend on `bundle.sh`. The only structural
+change is dereferencing `viewer/packages/*` into real directories; the script
+refuses to publish a tree that still contains a symlink. What lands in the
+mirror's `packages/` is whatever `viewer/packages/` holds, so syncing from a
+published `main` mirrors the committed bundle output that `bundle.sh --check`
+already validated. A sync from `develop` dereferences the symlinks to the live
+package sources instead — a development snapshot, not what a release publishes,
+and the script says so when it sees that layout. That works only because
+`viewer/` stays self-contained, which `viewer/scripts/selfContained.test.mjs`
+enforces on every test run: no import, markdown link, or `package.json` script
+under `viewer/` may reach above it. Repo-level tooling belongs in `scripts/`,
+not under `viewer/`.
+
+To sync into a local clone, or to check an existing one for drift:
+
+```bash
+scripts/viewer/sync-cad-viewer-repo.sh ../cad-viewer
+scripts/viewer/sync-cad-viewer-repo.sh --check ../cad-viewer
+```
+
 ### Local and manual fallbacks
 
 For local release preparation, use the same scripts the workflow calls:
