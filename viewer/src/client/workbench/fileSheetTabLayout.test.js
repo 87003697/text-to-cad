@@ -219,3 +219,27 @@ test("layout store tolerates missing storage and bad json", () => {
   const storage = { getItem: () => "{not json", setItem: () => {} };
   assert.deepEqual(readFileSheetTabLayoutStore(storage), {});
 });
+
+test("measurements defaults to the top pane, beside the tree", () => {
+  const arrangement = defaultFileSheetTabArrangement("step", [
+    "status",
+    "tree",
+    "measurements",
+    "reference",
+    "display"
+  ]);
+  assert.equal(arrangement.split, true);
+  assert.deepEqual(arrangement.top, ["tree", "measurements"]);
+  assert.deepEqual(arrangement.bottom, ["status", "reference", "display"]);
+});
+
+test("activating measurements makes it the top pane's live tab", () => {
+  const arrangement = defaultFileSheetTabArrangement("step", ["tree", "measurements", "reference"]);
+  const opened = activateFileSheetTab(["tree", "reference"], arrangement, "step", "top", "measurements");
+  const resolved = resolveFileSheetTabPanes(arrangement, "step", opened);
+  const top = resolved.panes.find((pane) => pane.pane === "top");
+  const bottom = resolved.panes.find((pane) => pane.pane === "bottom");
+  assert.equal(top.activeId, "measurements");
+  // Activating it must not disturb whatever the other pane was showing.
+  assert.equal(bottom.activeId, "reference");
+});

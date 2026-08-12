@@ -1,6 +1,7 @@
 export const FILE_SHEET_SECTION_IDS = Object.freeze({
   FILE_STATUS: "status",
   STEP_TREE: "tree",
+  STEP_MEASUREMENTS: "measurements",
   STEP_REFERENCE: "reference",
   STEP_PARAMETERS: "parameters",
   ROBOT_SDF: "sdf",
@@ -52,6 +53,9 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
       return [
         ...status,
         FILE_SHEET_SECTION_IDS.STEP_TREE,
+        // Measurements sits beside the Tree: both are lists of things found in
+        // this file, and both belong in the upper pane rather than over the model.
+        FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS,
         FILE_SHEET_SECTION_IDS.STEP_REFERENCE,
         ...(options.hasStepModulePanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : []),
         FILE_SHEET_SECTION_IDS.THEME_DISPLAY

@@ -50,11 +50,12 @@ export function clampSplitRatio(ratio) {
 }
 
 // Tabs that live in the top pane of a split layout; everything else defaults to
-// the bottom pane, in render order. STEP: the Tree on top, Reference/Parameters/
-// Display below. DXF: Material on top (it always renders), the conditional
+// the bottom pane, in render order. STEP: the Tree and Measurements on top,
+// Reference/Parameters/Display below. DXF: Material on top (it always renders), the conditional
 // Bends/Layers tabs below.
 const TOP_PANE_SECTION_IDS = Object.freeze(new Set([
   FILE_SHEET_SECTION_IDS.STEP_TREE,
+  FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS,
   FILE_SHEET_SECTION_IDS.DXF_MATERIAL
 ]));
 

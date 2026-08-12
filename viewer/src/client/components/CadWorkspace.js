@@ -11,7 +11,6 @@ import {
 } from "./workbench/ThemeSettingsPopover";
 import MeshFileSheet from "./workbench/MeshFileSheet";
 import { DXF_PREVIEW_REFERENCE_THICKNESS_MM } from "cadjs/lib/dxf/previewGlb";
-import { entityMeasurementFromPick, formatEntityMeasurement } from "cadjs/lib/viewer/measurement";
 import { extractOrderedDxfBendLines } from "cadjs/lib/dxf/buildPreviewMesh";
 import {
   buildDxfBendsTab,
@@ -5261,8 +5260,10 @@ export default function CadWorkspace({
     setMeasureRulerState((current) => clearMeasureRulerMeasurements(current));
   }, []);
   const measureMeasurements = measureRulerState?.measurements || EMPTY_LIST;
-  // Follow the newest measurement, but never pull the highlight off a row the
-  // user picked — a live draft rewrites this state on every hover tick.
+  // Only rescue the highlight when the row it points at is gone (deleted or
+  // cleared). Taking a new measurement promotes it separately, below; doing it
+  // here as well would fight the user's own row clicks, because a live draft
+  // rewrites this state on every hover tick.
   useEffect(() => {
     setActiveMeasureId((current) => {
       if (current && measureMeasurements.some((item) => item.id === current)) {
@@ -5277,17 +5278,32 @@ export default function CadWorkspace({
   useEffect(() => {
     setMeasureRulerState((current) => measureRulerStateForChange(current, { toolActive: measureModeActive }));
   }, [measureModeActive]);
-  // What the cursor is over, sized on its own: an edge's length, a hole's
-  // diameter, a face's area. This is the reading a CAD measure tool gives before
-  // a second pick turns it into a relationship.
-  const measureDraftEntity = useMemo(
-    () => entityMeasurementFromPick(measureRulerState?.hover || measureRulerState?.draft?.anchor || null),
-    [measureRulerState]
-  );
-  const measureDraftEntityText = useMemo(
-    () => formatEntityMeasurement(measureDraftEntity),
-    [measureDraftEntity]
-  );
+  // A new measurement reveals the tab that holds it. Re-appending (rather than
+  // just ensuring membership) moves it to the end, and last-in-pane wins tab
+  // resolution — so it also wins the pane back if the user has since clicked Tree.
+  const measurementCountRef = useRef(0);
+  useEffect(() => {
+    const count = measureMeasurements.length;
+    const grew = count > measurementCountRef.current;
+    measurementCountRef.current = count;
+    if (!grew) {
+      return;
+    }
+    setActiveMeasureId(measureMeasurements[count - 1].id);
+    if (!renderedSelectedFileSheetSectionIds.includes(FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS)) {
+      return;
+    }
+    setTabToolsOpen(true);
+    setFileSheetOpenSectionIds((current) => normalizeFileSheetOpenSectionIds(
+      [
+        ...(Array.isArray(current) ? current : [])
+          .filter((id) => id !== FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS),
+        FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS
+      ],
+      renderedSelectedFileSheetSectionIds
+    ));
+  }, [measureMeasurements, renderedSelectedFileSheetSectionIds, setTabToolsOpen]);
+
   const measureToolDisabled = viewerLoading || !selectedMeshData || !supportsTopology;
   const topologySelectionActive =
     (isAssemblyView && requestedStepTreeTopologyNodeIds.length > 0) ||
@@ -8613,14 +8629,6 @@ export default function CadWorkspace({
                 drawToolActive={drawToolActive}
                 measureModeActive={measureModeActive}
                 measureDisabled={measureToolDisabled}
-                measureState={measureRulerState}
-                activeMeasurementId={activeMeasureId}
-                onMeasureActivate={setActiveMeasureId}
-                onMeasureDelete={handleMeasureDelete}
-                onMeasureClear={handleMeasureClear}
-                measureDraftEntity={measureDraftEntity}
-                measureDraftEntityText={measureDraftEntityText}
-                measureDraftInProgress={Boolean(measureRulerState?.draft?.anchor)}
                 panToolActive={panToolActive}
                 handleSelectTabToolMode={handleSelectTabToolMode}
                 viewerLoading={viewerLoading}
@@ -8670,6 +8678,12 @@ export default function CadWorkspace({
                 selectedEntry={selectedEntry}
                 viewerLoading={viewerLoading || assemblySidebarLoading}
                 isAssemblyView={isAssemblyView}
+                measurements={measureMeasurements}
+                activeMeasurementId={activeMeasureId}
+                measureModeActive={measureModeActive}
+                onMeasurementActivate={setActiveMeasureId}
+                onMeasurementDelete={handleMeasureDelete}
+                onMeasurementsClear={handleMeasureClear}
                 stepTreeRoot={displayStepTreeRoot}
                 assemblyMates={selectedAssemblyMates}
                 expandedTreeNodeIds={expandedStepTreeNodeIds}
