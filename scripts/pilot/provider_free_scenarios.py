@@ -737,6 +737,15 @@ def _run_voxblame_preview(
         "preview_browser_launch_executable_failed": (
             "preview_browser_launch_executable"
         ),
+        "preview_browser_launch_executable_missing_failed": (
+            "preview_browser_launch_executable_missing"
+        ),
+        "preview_browser_launch_executable_permission_failed": (
+            "preview_browser_launch_executable_permission"
+        ),
+        "preview_browser_launch_executable_dependency_failed": (
+            "preview_browser_launch_executable_dependency"
+        ),
         "preview_browser_render_failed": "preview_browser_render",
         "preview_browser_result_failed": "preview_browser_result",
     }

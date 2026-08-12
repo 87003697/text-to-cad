@@ -36,6 +36,15 @@ _PREVIEW_FAILURE_CLASSIFICATIONS = {
     "browser_launch_address_space": "preview_browser_launch_address_space_failed",
     "browser_launch_shared_memory": "preview_browser_launch_shared_memory_failed",
     "browser_launch_executable": "preview_browser_launch_executable_failed",
+    "browser_launch_executable_missing": (
+        "preview_browser_launch_executable_missing_failed"
+    ),
+    "browser_launch_executable_permission": (
+        "preview_browser_launch_executable_permission_failed"
+    ),
+    "browser_launch_executable_dependency": (
+        "preview_browser_launch_executable_dependency_failed"
+    ),
     "browser_render": "preview_browser_render_failed",
     "browser_result": "preview_browser_result_failed",
 }

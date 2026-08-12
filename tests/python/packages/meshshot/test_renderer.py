@@ -46,10 +46,18 @@ class ResidualRendererTests(unittest.TestCase):
             "Creating shared memory in /dev/shm failed": (
                 "browser_launch_shared_memory"
             ),
-            "error while loading shared libraries": "browser_launch_executable",
-            "Error: spawn /missing/chromium ENOENT": "browser_launch_executable",
-            "Error: spawn /denied/chromium EACCES": "browser_launch_executable",
-            "posix_spawn: No such file or directory": "browser_launch_executable",
+            "error while loading shared libraries": (
+                "browser_launch_executable_dependency"
+            ),
+            "Error: spawn /missing/chromium ENOENT": (
+                "browser_launch_executable_missing"
+            ),
+            "Error: spawn /denied/chromium EACCES": (
+                "browser_launch_executable_permission"
+            ),
+            "posix_spawn: No such file or directory": (
+                "browser_launch_executable_missing"
+            ),
         }
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
 

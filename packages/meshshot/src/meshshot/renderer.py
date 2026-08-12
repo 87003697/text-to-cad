@@ -34,6 +34,9 @@ MeshshotPhase = Literal[
     "browser_launch_address_space",
     "browser_launch_shared_memory",
     "browser_launch_executable",
+    "browser_launch_executable_missing",
+    "browser_launch_executable_permission",
+    "browser_launch_executable_dependency",
     "browser_render",
     "browser_result",
 ]
@@ -71,14 +74,27 @@ _BROWSER_LAUNCH_PHASE_PATTERNS: tuple[
         ),
     ),
     (
-        "browser_launch_executable",
+        "browser_launch_executable_dependency",
+        (
+            "error while loading shared libraries",
+            "cannot open shared object file",
+        ),
+    ),
+    (
+        "browser_launch_executable_missing",
         (
             "executable doesn't exist",
             "no such file or directory",
-            "permission denied",
-            "error while loading shared libraries",
             "enoent",
+        ),
+    ),
+    (
+        "browser_launch_executable_permission",
+        (
+            "permission denied",
             "eacces",
+            "operation not permitted",
+            "eperm",
         ),
     ),
 )
