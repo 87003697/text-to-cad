@@ -374,36 +374,37 @@ jobs:
         if: steps.gate.outputs.should_publish == 'true'
         run: scripts/test/test.sh
 
-      - name: Remove models from publish tree
+      # The plugin package is the repository root, so everything that reaches the
+      # target branch is copied into every install. models/ is fixture data;
+      # viewer/ is the SOURCE app, and what installs and runs is the dereferenced
+      # runtime the bundle already wrote to skills/cad-viewer/scripts/viewer --
+      # no skill imports repo-root viewer/. This runs after the bundle,
+      # check-builds, and the tests, so the tree they validated is untouched and
+      # only the published tree is trimmed. The standalone cad-viewer mirror
+      # syncs from the release SOURCE commit rather than from here
+      # (.github/workflows/sync-cad-viewer.yml).
+      #
+      # PUBLISH_TREE_REMOVED_ROOTS is the single source of truth for what was
+      # dropped: the commit step below reads it both to assert the roots are
+      # absent and to stop demanding the generated outputs that lived under them.
+      - name: Trim publish tree
         if: steps.gate.outputs.should_publish == 'true'
         run: |
-          rm -rf models
-          if [ -e models ]; then
-            echo "Failed to remove models from the publish tree." >&2
-            exit 1
-          fi
-
-      # The plugin package is the repository root, so everything here is copied
-      # into every install. viewer/ is the SOURCE app: what installs and runs is
-      # the dereferenced runtime the bundle already wrote to
-      # skills/cad-viewer/scripts/viewer, and no skill imports repo-root viewer/.
-      # Runs after the bundle, check-builds, and the tests, so the source tree
-      # they validated is untouched -- only the published tree is trimmed.
-      # The standalone cad-viewer mirror syncs from the release SOURCE commit
-      # rather than from here (.github/workflows/sync-cad-viewer.yml).
-      - name: Remove viewer source from publish tree
-        if: steps.gate.outputs.should_publish == 'true'
-        run: |
-          rm -rf viewer
-          if [ -e viewer ]; then
-            echo "Failed to remove viewer from the publish tree." >&2
-            exit 1
-          fi
+          removed_roots="models viewer"
+          for root in $removed_roots; do
+            rm -rf "$root"
+            if [ -e "$root" ]; then
+              echo "Failed to remove $root from the publish tree." >&2
+              exit 1
+            fi
+          done
           if [ ! -f skills/cad-viewer/scripts/viewer/package.json ]; then
             echo "Refusing to publish without the bundled CAD Viewer runtime:" >&2
             echo "  skills/cad-viewer/scripts/viewer/package.json is missing." >&2
             exit 1
           fi
+          echo "PUBLISH_TREE_REMOVED_ROOTS=$removed_roots" >> "$GITHUB_ENV"
+          echo "Trimmed from the publish tree: $removed_roots"
 
       # Published skills have no sibling packages/cadgen to install editable
       # from, so the publish tree resolves cadgen from PyPI at this release's
@@ -426,11 +427,13 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          if [ -n "$(git ls-files -- models)" ]; then
-            echo "models/ must not be present in the publish commit." >&2
-            git ls-files -- models >&2
-            exit 1
-          fi
+          for root in ${PUBLISH_TREE_REMOVED_ROOTS:-models}; do
+            if [ -n "$(git ls-files -- "$root")" ]; then
+              echo "$root/ must not be present in the publish commit." >&2
+              git ls-files -- "$root" >&2
+              exit 1
+            fi
+          done
 
           # Every gate above this line -- check-builds.sh, test.sh, test-docs.sh -- ran
           # against the WORKING TREE, where bundle.sh had just written the generated outputs.
@@ -441,6 +444,18 @@ jobs:
           unstaged_generated=""
           while IFS= read -r generated_path; do
             [ -n "$generated_path" ] || continue
+            # Outputs under a trimmed root are deliberately absent here. They were
+            # still built and validated by check-builds.sh before the trim; they
+            # are just not part of what ships.
+            trimmed=0
+            for root in ${PUBLISH_TREE_REMOVED_ROOTS:-}; do
+              case "$generated_path" in
+                "$root"/*) trimmed=1 ;;
+              esac
+            done
+            if [ "$trimmed" -eq 1 ]; then
+              continue
+            fi
             if [ -z "$(git ls-files -- "$generated_path" | head -n 1)" ]; then
               unstaged_generated="$unstaged_generated$generated_path"$'\n'
             fi
