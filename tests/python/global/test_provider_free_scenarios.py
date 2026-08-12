@@ -12,6 +12,7 @@ from typing import Callable
 from unittest import mock
 
 from scripts.pilot import provider_free_scenarios
+from scripts.pilot.cvm_job import protocol
 
 
 class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
@@ -350,6 +351,106 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     )["operation"],
                     operation,
                 )
+
+    def test_native_measurement_operations_follow_production_boundaries(self) -> None:
+        workspace = self.repo / "outputs/group/native-operations"
+        candidate = workspace / "work/candidate"
+        command_log = workspace / "run/provider-free-commands.jsonl"
+        workspace.mkdir(parents=True)
+        begun = {"attempt": {"attempt": 1}}
+        measured = {"ok": True}
+        native = {"depths": list(range(1, 9))}
+        operations = (
+            ("attempt_begin", "write-plan"),
+            ("voxblame_measure", "measure"),
+            ("native_evidence", "native-evidence"),
+            ("voxblame_preview", "preview"),
+            ("step_publication", "publish"),
+        )
+
+        for operation, failing_boundary in operations:
+            with self.subTest(operation=operation):
+                public_results = iter((begun, measured, {"ok": True}, {"ok": True}))
+
+                def run_public(argv, **_kwargs):
+                    boundary = (
+                        "measure"
+                        if "voxblame-measure" in argv
+                        else (
+                            "preview"
+                            if "voxblame-preview" in argv
+                            else (
+                                "publish"
+                                if "publish-step-zero" in argv
+                                else "attempt"
+                            )
+                        )
+                    )
+                    if boundary == failing_boundary:
+                        raise PermissionError("sensitive native failure")
+                    return next(public_results)
+
+                with (
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_write_json",
+                        side_effect=(
+                            PermissionError("sensitive native failure")
+                            if failing_boundary == "write-plan"
+                            else None
+                        ),
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_run_public",
+                        side_effect=run_public,
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "native_depth_eight_evidence",
+                        side_effect=(
+                            PermissionError("sensitive native failure")
+                            if failing_boundary == "native-evidence"
+                            else None
+                        ),
+                        return_value=native,
+                    ),
+                ):
+                    with self.assertRaises(
+                        provider_free_scenarios.ScenarioError
+                    ) as raised:
+                        provider_free_scenarios._publish_measured_step(
+                            workspace,
+                            candidate,
+                            command_log,
+                        )
+
+                self.assertEqual(operation, raised.exception.operation)
+
+    def test_failure_operations_are_closed_and_stage_compatible(self) -> None:
+        for operation in (
+            "attempt_begin",
+            "voxblame_measure",
+            "native_evidence",
+            "voxblame_preview",
+            "step_publication",
+        ):
+            with self.subTest(operation=operation):
+                self.assertTrue(
+                    protocol.provider_free_scenario_failure_operation_allowed(
+                        "native_measurement", operation
+                    )
+                )
+                self.assertFalse(
+                    protocol.provider_free_scenario_failure_operation_allowed(
+                        "candidate_workspace", operation
+                    )
+                )
+        self.assertFalse(
+            protocol.provider_free_scenario_failure_operation_allowed(
+                "native_measurement", "shell"
+            )
+        )
 
     def _assert_closed_stage_failure(
         self,

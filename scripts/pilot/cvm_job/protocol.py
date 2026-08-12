@@ -53,14 +53,25 @@ PROVIDER_FREE_SCENARIO_FAILURE_STAGES = frozenset(
         "finalization",
     }
 )
-PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS = frozenset(
-    {
+PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS_BY_STAGE = {
+    "candidate_workspace": frozenset(
+        {
         "fixture_availability",
         "canonical_build",
         "reference_preparation",
         "workspace_init",
-    }
-)
+        }
+    ),
+    "native_measurement": frozenset(
+        {
+            "attempt_begin",
+            "voxblame_measure",
+            "native_evidence",
+            "voxblame_preview",
+            "step_publication",
+        }
+    ),
+}
 _RESERVED_UPDATE_FIELDS = frozenset(
     {
         "schema_version",
@@ -409,9 +420,8 @@ def _public_provider_free_scenario_failure(
         or stage not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES
         or (
             operation is not None
-            and (
-                stage != "candidate_workspace"
-                or operation not in PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS
+            and not provider_free_scenario_failure_operation_allowed(
+                stage, operation
             )
         )
     ):
@@ -424,3 +434,19 @@ def _public_provider_free_scenario_failure(
     if operation is not None:
         result["operation"] = operation
     return result
+
+
+def provider_free_scenario_failure_operation_allowed(
+    stage: object,
+    operation: object,
+) -> bool:
+    """Return whether one closed operation is valid for its failure stage."""
+
+    return (
+        isinstance(stage, str)
+        and isinstance(operation, str)
+        and operation
+        in PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS_BY_STAGE.get(
+            stage, frozenset()
+        )
+    )

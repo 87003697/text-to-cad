@@ -43,16 +43,26 @@ publish `scenario_failure` with schema
 - `native_measurement`
 - `finalization`
 
-`candidate_workspace` may also contain one manifest-bound closed `operation`
-that identifies the first failing production contract:
+`candidate_workspace` and `native_measurement` may also contain one
+manifest-bound closed `operation` that identifies the first failing production
+contract. Candidate preparation operations are:
 
 - `fixture_availability`
 - `canonical_build`
 - `reference_preparation`
 - `workspace_init`
 
+Native measurement operations are:
+
+- `attempt_begin`
+- `voxblame_measure`
+- `native_evidence`
+- `voxblame_preview`
+- `step_publication`
+
 Historical three-field receipts remain valid. An operation on any other stage,
-or any value outside this list, invalidates the scenario failure receipt.
+an operation assigned to the wrong stage, or any value outside these lists,
+invalidates the scenario failure receipt.
 
 The failure path does not require successful Workspace, runtime-authority, or
 Final Delivery artifacts before reporting the primary stage. It still requires

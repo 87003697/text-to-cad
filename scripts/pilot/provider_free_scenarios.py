@@ -26,6 +26,7 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
+    provider_free_scenario_failure_operation_allowed,
 )
 
 
@@ -73,7 +74,7 @@ class ScenarioError(RuntimeError):
 
 def _run_stage(
     stage: str,
-    operation: Any,
+    function: Any,
     *args: Any,
     **kwargs: Any,
 ) -> Any:
@@ -82,7 +83,7 @@ def _run_stage(
     if stage not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES:
         raise ValueError(f"unknown provider-free scenario stage: {stage!r}")
     try:
-        return operation(*args, **kwargs)
+        return function(*args, **kwargs)
     except Exception as exc:
         classified_operation = (
             exc.operation if isinstance(exc, ScenarioError) else None
@@ -102,18 +103,29 @@ def _run_candidate_operation(
 ) -> Any:
     """Attach one closed candidate operation without retaining error text."""
 
-    if operation not in {
-        "fixture_availability",
-        "canonical_build",
-        "reference_preparation",
-        "workspace_init",
-    }:
-        raise ValueError(f"unknown candidate operation: {operation!r}")
+    return _run_failure_operation(
+        "candidate_workspace", operation, function, *args, **kwargs
+    )
+
+
+def _run_failure_operation(
+    stage: str,
+    operation: str,
+    function: Any,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Attach one stage-compatible closed operation without error text."""
+
+    if not provider_free_scenario_failure_operation_allowed(stage, operation):
+        raise ValueError(
+            f"unknown provider-free scenario operation: {stage!r}/{operation!r}"
+        )
     try:
         return function(*args, **kwargs)
     except Exception as exc:
         raise ScenarioError(
-            f"provider-free candidate operation failed: {operation}",
+            f"provider-free scenario operation failed: {stage}/{operation}",
             operation=operation,
         ) from exc
 
@@ -624,14 +636,20 @@ def _prepare_workspace(workspace: Path, candidate: Path, command_log: Path) -> N
 
 def _publish_measured_step(workspace: Path, candidate: Path, command_log: Path) -> dict[str, Any]:
     plan = workspace / "work/initial-plan.json"
-    _write_json(
+    _run_failure_operation(
+        "native_measurement",
+        "attempt_begin",
+        _write_json,
         plan,
         {
             "schema": "mesh-to-cad.initial-plan/1",
             "summary": "Rebuild the durable rectangular clamp fixture in canonical coordinates.",
         },
     )
-    begun = _run_public(
+    begun = _run_failure_operation(
+        "native_measurement",
+        "attempt_begin",
+        _run_public,
         [
             sys.executable,
             os.fspath(WORKSPACE_HELPER),
@@ -647,7 +665,10 @@ def _publish_measured_step(workspace: Path, candidate: Path, command_log: Path) 
         command_log=command_log,
     )
     attempt = begun["attempt"]["attempt"]
-    measured = _run_public(
+    measured = _run_failure_operation(
+        "native_measurement",
+        "voxblame_measure",
+        _run_public,
         [
             sys.executable,
             os.fspath(MESH_COMPARE),
@@ -663,9 +684,17 @@ def _publish_measured_step(workspace: Path, candidate: Path, command_log: Path) 
         cwd=REPO_ROOT,
         command_log=command_log,
     )
-    native = native_depth_eight_evidence(measured)
+    native = _run_failure_operation(
+        "native_measurement",
+        "native_evidence",
+        native_depth_eight_evidence,
+        measured,
+    )
     preview_dir = workspace / "work/preview-0"
-    _run_public(
+    _run_failure_operation(
+        "native_measurement",
+        "voxblame_preview",
+        _run_public,
         [
             sys.executable,
             os.fspath(MESH_COMPARE),
@@ -683,7 +712,10 @@ def _publish_measured_step(workspace: Path, candidate: Path, command_log: Path) 
         cwd=REPO_ROOT,
         command_log=command_log,
     )
-    _run_public(
+    _run_failure_operation(
+        "native_measurement",
+        "step_publication",
+        _run_public,
         [
             sys.executable,
             os.fspath(WORKSPACE_HELPER),

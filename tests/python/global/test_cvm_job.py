@@ -694,8 +694,8 @@ class CvmJobTests(unittest.TestCase):
             raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
             self.write_provider_free_failure_evidence(
                 handle,
-                stage="candidate_workspace",
-                operation="canonical_build",
+                stage="native_measurement",
+                operation="voxblame_preview",
                 stripped=raw_stripped.split(",") if raw_stripped else [],
             )
             return 1, 4321
@@ -714,8 +714,8 @@ class CvmJobTests(unittest.TestCase):
         expected = {
             "schema": "cvm.provider-free-scenario-failure/1",
             "scenario_identity": "issue15.provider-free.runtime-authority/1",
-            "stage": "candidate_workspace",
-            "operation": "canonical_build",
+            "stage": "native_measurement",
+            "operation": "voxblame_preview",
         }
         self.assertEqual(state["state"], "failed")
         self.assertEqual(state["scenario_failure"], expected)
@@ -851,6 +851,7 @@ class CvmJobTests(unittest.TestCase):
         *,
         noisy_source: bool = False,
         abrupt_source: bool = False,
+        measurement_failure: bool = False,
     ) -> Path:
         """Install the production deployment layout used by the real-chain tests."""
         for relative in deployment_authority.EXECUTION_AUTHORITY_PATHS:
@@ -1008,6 +1009,24 @@ server.listen(0, host, () => {
             )
             durable_source.write_text(
                 prefix + durable_source.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+
+        if measurement_failure:
+            measurement_cli = self.repo_root / (
+                "skills/mesh-compare/scripts/mesh-compare/cli.py"
+            )
+            marker = "def _measure_main(argv: list[str]) -> int:\n"
+            source = measurement_cli.read_text(encoding="utf-8")
+            self.assertEqual(1, source.count(marker))
+            measurement_cli.write_text(
+                source.replace(
+                    marker,
+                    marker
+                    + "    raise PermissionError("
+                    + repr("OPENAI_API_KEY=secret native measurement failure")
+                    + ")\n",
+                ),
                 encoding="utf-8",
             )
 
@@ -1346,6 +1365,60 @@ server.listen(0, host, () => {
                 "LANG": "C.UTF-8",
             },
         )
+
+    def test_real_chain_projects_manifest_bound_native_measurement_operation(
+        self,
+    ) -> None:
+        """Bind a native public-command failure through scenario to supervisor."""
+
+        provider_home = self._install_real_provider_free_layout(
+            measurement_failure=True
+        )
+        state, handle, captured = self._run_provider_free_chain_with_bwrap_emulator(
+            provider_home
+        )
+
+        expected = {
+            "schema": "cvm.provider-free-scenario-failure/1",
+            "scenario_identity": "issue15.provider-free.runtime-authority/1",
+            "stage": "native_measurement",
+            "operation": "voxblame_measure",
+        }
+        self.assertEqual("failed", state["state"])
+        self.assertEqual(1, state["process_exit_code"])
+        self.assertEqual(1, state["runner_final_status"])
+        self.assertEqual(expected, state["scenario_failure"])
+        exp_dir = self.repo_root / "outputs" / handle
+        receipt_text = (exp_dir / "run/scenario-failure.json").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(expected, json.loads(receipt_text))
+        manifest = json.loads(
+            (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            "run/scenario-failure.json",
+            {entry["path"] for entry in manifest["files"]},
+        )
+        command_records = [
+            json.loads(line)
+            for line in (
+                exp_dir / "run/provider-free-commands.jsonl"
+            ).read_text(encoding="utf-8").splitlines()
+        ]
+        measurement = next(
+            record
+            for record in command_records
+            if "voxblame-measure" in record["argv"]
+        )
+        self.assertNotEqual(0, measurement["exit_code"])
+        for public_value in (
+            state,
+            receipt_text,
+            captured.get("scenario_stderr", ""),
+        ):
+            self.assertNotIn("OPENAI_API_KEY", str(public_value))
+            self.assertNotIn("native measurement failure", str(public_value))
 
     def test_bwrap_emulator_proves_nested_worker_survives_abrupt_source(
         self,

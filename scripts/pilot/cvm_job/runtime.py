@@ -20,7 +20,6 @@ from scripts.pilot import provider_free_output
 
 from . import tap_observer
 from .protocol import (
-    PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
@@ -31,6 +30,7 @@ from .protocol import (
     load_state,
     log_path,
     parse_handle,
+    provider_free_scenario_failure_operation_allowed,
     public_state,
     publish_state,
     request_authority_payload,
@@ -872,9 +872,8 @@ def _provider_free_failure_evidence_result(
         or failure.get("stage") not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES
         or (
             operation is not None
-            and (
-                failure.get("stage") != "candidate_workspace"
-                or operation not in PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS
+            and not provider_free_scenario_failure_operation_allowed(
+                failure.get("stage"), operation
             )
         )
     ):

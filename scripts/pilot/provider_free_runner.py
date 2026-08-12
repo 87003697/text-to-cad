@@ -29,11 +29,11 @@ from scripts.pilot.cvm_job.runtime import (
     provider_free_sandbox_argv,
 )
 from scripts.pilot.cvm_job.protocol import (
-    PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
     ProtocolError,
+    provider_free_scenario_failure_operation_allowed,
     request_authority_sha256,
 )
 
@@ -515,9 +515,8 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
         or receipt.get("stage") not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES
         or (
             operation is not None
-            and (
-                receipt.get("stage") != "candidate_workspace"
-                or operation not in PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS
+            and not provider_free_scenario_failure_operation_allowed(
+                receipt.get("stage"), operation
             )
         )
     ):
