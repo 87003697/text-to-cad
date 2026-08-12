@@ -440,7 +440,8 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             "preview_browser_runtime_staging",
             "preview_browser_outer_exec_probe",
             "preview_browser_nested_exec_probe",
-            "preview_browser_node_exec_probe",
+            "preview_browser_node_attached_exec_probe",
+            "preview_browser_node_detached_exec_probe",
             "preview_browser_playwright_launch_after_direct_probes",
             "preview_dependency",
             "preview_browser_launch",
@@ -597,12 +598,13 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         run_public.assert_not_called()
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/2",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/3",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "failed",
                 "nested": "not-run",
-                "node": "not-run",
+                "node_attached": "not-run",
+                "node_detached": "not-run",
                 "playwright": "not-run",
             },
             json.loads(
@@ -708,12 +710,13 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         run_public.assert_not_called()
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/2",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/3",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "passed",
                 "nested": "failed",
-                "node": "not-run",
+                "node_attached": "not-run",
+                "node_detached": "not-run",
                 "playwright": "not-run",
             },
             json.loads(
@@ -760,7 +763,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             mock.patch.object(
                 provider_free_scenarios.subprocess,
                 "run",
-                side_effect=[passed, passed, node_passed],
+                side_effect=[passed, passed, node_passed, node_passed],
             ),
             mock.patch.object(
                 provider_free_scenarios,
@@ -790,12 +793,13 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self.assertNotIn("sensitive", str(raised.exception))
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/2",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/3",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "passed",
                 "nested": "passed",
-                "node": "passed",
+                "node_attached": "passed",
+                "node_detached": "passed",
                 "playwright": "failed",
             },
             json.loads(
@@ -805,7 +809,9 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             ),
         )
 
-    def test_preview_reports_nested_bundled_node_exec_probe_failure(self) -> None:
+    def test_preview_reports_nested_bundled_node_attached_exec_probe_failure(
+        self,
+    ) -> None:
         from playwright._impl._driver import compute_driver_executable
 
         bwrap = self.repo / "bwrap"
@@ -839,7 +845,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 side_effect=[
                     passed,
                     passed,
-                    PermissionError("injected bundled Node spawn denial"),
+                    PermissionError("injected attached Node spawn denial"),
                 ],
             ) as run,
             mock.patch.object(
@@ -858,7 +864,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            "preview_browser_node_exec_probe",
+            "preview_browser_node_attached_exec_probe",
             raised.exception.operation,
         )
         self.assertEqual(3, run.call_count)
@@ -894,6 +900,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     provider_free_scenarios.REPO_ROOT
                     / "scripts/pilot/browser_exec_probe.js"
                 ),
+                "attached",
                 protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
             ],
             run.call_args_list[2].args[0],
@@ -901,12 +908,13 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         run_public.assert_not_called()
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/2",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/3",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "passed",
                 "nested": "passed",
-                "node": "failed",
+                "node_attached": "failed",
+                "node_detached": "not-run",
                 "playwright": "not-run",
             },
             json.loads(
@@ -924,6 +932,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     provider_free_scenarios.REPO_ROOT
                     / "scripts/pilot/browser_exec_probe.js"
                 ),
+                "attached",
                 "/tmp/other-browser",
             ],
             cwd=provider_free_scenarios.REPO_ROOT,
@@ -940,6 +949,99 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self.assertEqual(2, completed.returncode)
         self.assertEqual(b"", completed.stdout)
         self.assertEqual(b"", completed.stderr)
+
+    def test_preview_reports_only_detached_node_exec_probe_failure(self) -> None:
+        bwrap = self.repo / "bwrap"
+        bwrap.write_text("#!/bin/sh\n", encoding="utf-8")
+        bwrap.chmod(0o755)
+        command_log = self.repo / "run/provider-free-commands.jsonl"
+        python_passed = subprocess.CompletedProcess(
+            [protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE, "--version"],
+            0,
+            stdout=b"Chromium 123.0.0.0\n",
+            stderr=b"",
+        )
+        node_passed = subprocess.CompletedProcess(
+            ["nested-attached-node-probe"],
+            0,
+            stdout=b"",
+            stderr=b"",
+        )
+        with (
+            mock.patch.object(
+                provider_free_scenarios.platform,
+                "system",
+                return_value="Linux",
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "TRUSTED_BWRAP_PATH",
+                bwrap,
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_validate_attested_browser_runtime",
+            ),
+            mock.patch.object(
+                provider_free_scenarios.subprocess,
+                "run",
+                side_effect=[
+                    python_passed,
+                    python_passed,
+                    node_passed,
+                    PermissionError("injected detached Node spawn denial"),
+                ],
+            ) as run,
+            mock.patch.object(
+                provider_free_scenarios,
+                "_run_public",
+                return_value={"ok": True},
+            ) as run_public,
+            self.assertRaises(
+                provider_free_scenarios.ScenarioError
+            ) as raised,
+        ):
+            provider_free_scenarios._run_voxblame_preview(
+                ["mesh-compare", "voxblame-preview"],
+                cwd=self.repo,
+                command_log=command_log,
+            )
+
+        self.assertEqual(
+            "preview_browser_node_detached_exec_probe",
+            raised.exception.operation,
+        )
+        self.assertEqual(4, run.call_count)
+        attached_argv = run.call_args_list[2].args[0]
+        detached_argv = run.call_args_list[3].args[0]
+        mode_index = attached_argv.index("attached")
+        self.assertEqual("detached", detached_argv[mode_index])
+        self.assertEqual(
+            attached_argv[:mode_index] + attached_argv[mode_index + 1 :],
+            detached_argv[:mode_index] + detached_argv[mode_index + 1 :],
+        )
+        self.assertEqual(
+            run.call_args_list[2].kwargs,
+            run.call_args_list[3].kwargs,
+        )
+        run_public.assert_not_called()
+        self.assertEqual(
+            {
+                "schema": "cvm.provider-free-browser-exec-diagnostic/3",
+                "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+                "probe": "chromium-version-immediate-exit",
+                "outer": "passed",
+                "nested": "passed",
+                "node_attached": "passed",
+                "node_detached": "failed",
+                "playwright": "not-run",
+            },
+            json.loads(
+                (self.repo / "run/browser-exec-diagnostic.json").read_text(
+                    encoding="utf-8"
+                )
+            ),
+        )
 
     def test_preview_linux_child_drops_outer_setup_capabilities(self) -> None:
         bwrap = self.repo / "bwrap"

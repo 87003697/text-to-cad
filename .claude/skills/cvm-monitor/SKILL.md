@@ -62,7 +62,8 @@ Native measurement operations are:
 - `preview_browser_runtime_staging`
 - `preview_browser_outer_exec_probe`
 - `preview_browser_nested_exec_probe`
-- `preview_browser_node_exec_probe`
+- `preview_browser_node_attached_exec_probe`
+- `preview_browser_node_detached_exec_probe`
 - `preview_browser_playwright_launch_after_direct_probes`
 - `preview_dependency`
 - `preview_browser_launch`
@@ -81,24 +82,23 @@ Native measurement operations are:
 - `preview_browser_result`
 - `step_publication`
 
-The Node probe operation means the outer and nested Python direct probes passed,
-but Playwright's bundled Node could not silently spawn the same exact staged
-Chromium with the bounded `--version` probe. The later Playwright operation is
-valid only after all three direct probes passed.
+The attached Node probe runs first with `detached=false`; the detached Node
+probe runs second with `detached=true`. All other probe inputs are identical.
+The later Playwright operation is valid only after both Node modes passed.
 
-The four browser-exec diagnostic operations are backed by the manifest-bound
+The five browser-exec diagnostic operations are backed by the manifest-bound
 `run/browser-exec-diagnostic.json` receipt. It contains only closed
 `passed`/`failed`/`not-run` outcomes for the outer direct Chromium `--version`
 probe, the same exact executable through the nested preview sandbox, the same
-nested spawn repeated by Playwright's bundled Node, and the subsequent
-Playwright launch. The probes use a five-second outer timeout, a closed
+nested spawn repeated by Playwright's bundled Node in attached and detached
+modes, and the subsequent Playwright launch. The probes use a five-second outer timeout, a closed
 `HOME`/`LANG`/`PATH` environment, no provider or network access, and accept only
 the exact bounded result for their caller. Raw stdout, stderr, exception text,
 environment values, and arbitrary operations are never projected by the
 monitor. A diagnostic operation is rejected unless its receipt has the
 corresponding exact outcome tuple and manifest binding. Historical three-field
 receipts, operations on another stage, or values outside these lists are
-rejected by profile `/9`.
+rejected by profile `/10`.
 
 The failure path does not require successful Workspace, runtime-authority, or
 Final Delivery artifacts before reporting the primary stage. It still requires

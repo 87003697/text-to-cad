@@ -11,7 +11,12 @@ const TIMEOUT_MILLISECONDS = 4000;
 const VERSION_OUTPUT =
   /^(?:Google Chrome for Testing|Chromium|Chrome|HeadlessChrome) [0-9]+(?:\.[0-9]+){3}\n$/;
 
-if (process.argv.length !== 3 || process.argv[2] !== EXPECTED_EXECUTABLE) {
+const mode = process.argv[2];
+if (
+  process.argv.length !== 4 ||
+  !["attached", "detached"].includes(mode) ||
+  process.argv[3] !== EXPECTED_EXECUTABLE
+) {
   process.exit(2);
 }
 
@@ -23,6 +28,14 @@ let stderr = Buffer.alloc(0);
 function stopChild() {
   if (!child || !child.pid)
     return;
+  if (mode === "attached") {
+    try {
+      child.kill("SIGKILL");
+    } catch (_ignored) {
+      // The child already exited.
+    }
+    return;
+  }
   try {
     process.kill(-child.pid, "SIGKILL");
   } catch (_error) {
@@ -53,7 +66,7 @@ function appendBounded(current, chunk) {
 try {
   child = spawn(EXPECTED_EXECUTABLE, ["--version"], {
     cwd: process.cwd(),
-    detached: true,
+    detached: mode === "detached",
     env: {
       HOME: "/nonexistent",
       LANG: "C.UTF-8",

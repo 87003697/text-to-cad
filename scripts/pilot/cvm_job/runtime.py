@@ -493,12 +493,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/9",
+    "id": "issue15.provider-free-bounded/10",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/9",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/10",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/9",
+    "schema": "cvm.provider-free-linux-sandbox/10",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -543,7 +543,11 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "node_probe": {
                 "script": "scripts/pilot/browser_exec_probe.js",
                 "runtime": "playwright-bundled-node",
-                "spawn": "child-process-detached",
+                "spawn": "child-process",
+                "modes": [
+                    {"name": "attached", "detached": False},
+                    {"name": "detached", "detached": True},
+                ],
                 "result": {
                     "exit_code": 0,
                     "stdout": "empty",
@@ -561,7 +565,8 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "seams": [
                 "outer-python-direct",
                 "nested-python-direct",
-                "nested-node-direct",
+                "nested-node-attached-direct",
+                "nested-node-detached-direct",
                 "playwright-launch",
             ],
             "published": "closed-outcomes-only-no-raw-output",
@@ -1372,7 +1377,8 @@ def _provider_free_failure_evidence_result(
     diagnostic_operations = {
         "preview_browser_outer_exec_probe",
         "preview_browser_nested_exec_probe",
-        "preview_browser_node_exec_probe",
+        "preview_browser_node_attached_exec_probe",
+        "preview_browser_node_detached_exec_probe",
         "preview_browser_playwright_launch_after_direct_probes",
     }
     if operation in diagnostic_operations:

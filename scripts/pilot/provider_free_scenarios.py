@@ -478,7 +478,8 @@ def _publish_browser_exec_diagnostic(
     *,
     outer: str,
     nested: str,
-    node: str,
+    node_attached: str,
+    node_detached: str,
     playwright: str,
 ) -> None:
     """Publish only closed outcomes for the exact staged-browser probes."""
@@ -492,7 +493,8 @@ def _publish_browser_exec_diagnostic(
             "probe": "chromium-version-immediate-exit",
             "outer": outer,
             "nested": nested,
-            "node": node,
+            "node_attached": node_attached,
+            "node_detached": node_detached,
             "playwright": playwright,
         },
     )
@@ -591,6 +593,22 @@ def _browser_node_probe_script() -> Path:
     if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
         raise ScenarioError("repository browser exec probe is invalid")
     return resolved
+
+
+def _nested_node_browser_exec_probe_argv(*, cwd: Path, mode: str) -> list[str]:
+    """Run one closed Node spawn mode inside the exact preview sandbox."""
+
+    if mode not in {"attached", "detached"}:
+        raise ScenarioError("bundled Node browser exec probe mode is invalid")
+    return _nested_browser_exec_probe_argv(
+        cwd=cwd,
+        command=[
+            os.fspath(_playwright_bundled_node()),
+            os.fspath(_browser_node_probe_script()),
+            mode,
+            PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+        ],
+    )
 
 
 def _nested_browser_exec_probe_argv(
@@ -1023,7 +1041,8 @@ def _run_voxblame_preview(
                     command_log,
                     outer="failed",
                     nested="not-run",
-                    node="not-run",
+                    node_attached="not-run",
+                    node_detached="not-run",
                     playwright="not-run",
                 )
                 raise ScenarioError(
@@ -1040,7 +1059,8 @@ def _run_voxblame_preview(
                     command_log,
                     outer="passed",
                     nested="failed",
-                    node="not-run",
+                    node_attached="not-run",
+                    node_detached="not-run",
                     playwright="not-run",
                 )
                 raise ScenarioError(
@@ -1049,13 +1069,8 @@ def _run_voxblame_preview(
                 ) from exc
             try:
                 _run_closed_node_browser_version_probe(
-                    _nested_browser_exec_probe_argv(
-                        cwd=cwd,
-                        command=[
-                            os.fspath(_playwright_bundled_node()),
-                            os.fspath(_browser_node_probe_script()),
-                            PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
-                        ],
+                    _nested_node_browser_exec_probe_argv(
+                        cwd=cwd, mode="attached"
                     ),
                     cwd=cwd,
                 )
@@ -1064,12 +1079,33 @@ def _run_voxblame_preview(
                     command_log,
                     outer="passed",
                     nested="passed",
-                    node="failed",
+                    node_attached="failed",
+                    node_detached="not-run",
                     playwright="not-run",
                 )
                 raise ScenarioError(
-                    "provider-free bundled Node browser exec probe failed",
-                    operation="preview_browser_node_exec_probe",
+                    "provider-free attached Node browser exec probe failed",
+                    operation="preview_browser_node_attached_exec_probe",
+                ) from exc
+            try:
+                _run_closed_node_browser_version_probe(
+                    _nested_node_browser_exec_probe_argv(
+                        cwd=cwd, mode="detached"
+                    ),
+                    cwd=cwd,
+                )
+            except ScenarioError as exc:
+                _publish_browser_exec_diagnostic(
+                    command_log,
+                    outer="passed",
+                    nested="passed",
+                    node_attached="passed",
+                    node_detached="failed",
+                    playwright="not-run",
+                )
+                raise ScenarioError(
+                    "provider-free detached Node browser exec probe failed",
+                    operation="preview_browser_node_detached_exec_probe",
                 ) from exc
         sandbox_argv = _preview_sandbox_argv(argv, cwd=cwd)
         _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
@@ -1085,7 +1121,8 @@ def _run_voxblame_preview(
                     command_log,
                     outer="passed",
                     nested="passed",
-                    node="passed",
+                    node_attached="passed",
+                    node_detached="passed",
                     playwright="failed",
                 )
                 if exc.classification in {
@@ -1105,7 +1142,8 @@ def _run_voxblame_preview(
                 command_log,
                 outer="passed",
                 nested="passed",
-                node="passed",
+                node_attached="passed",
+                node_detached="passed",
                 playwright="passed",
             )
         return result

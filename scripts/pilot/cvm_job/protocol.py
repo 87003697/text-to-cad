@@ -49,7 +49,7 @@ PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH = (
     "run/browser-exec-diagnostic.json"
 )
 PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA = (
-    "cvm.provider-free-browser-exec-diagnostic/2"
+    "cvm.provider-free-browser-exec-diagnostic/3"
 )
 PROVIDER_FREE_STAGED_BROWSER_CACHE = "/tmp/provider-free-playwright"
 PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE = (
@@ -129,7 +129,8 @@ def provider_free_browser_exec_diagnostic_allowed(receipt: object) -> bool:
             "probe",
             "outer",
             "nested",
-            "node",
+            "node_attached",
+            "node_detached",
             "playwright",
         }
         or receipt.get("schema")
@@ -142,15 +143,17 @@ def provider_free_browser_exec_diagnostic_allowed(receipt: object) -> bool:
     outcomes = (
         receipt.get("outer"),
         receipt.get("nested"),
-        receipt.get("node"),
+        receipt.get("node_attached"),
+        receipt.get("node_detached"),
         receipt.get("playwright"),
     )
     return outcomes in {
-        ("failed", "not-run", "not-run", "not-run"),
-        ("passed", "failed", "not-run", "not-run"),
-        ("passed", "passed", "failed", "not-run"),
-        ("passed", "passed", "passed", "failed"),
-        ("passed", "passed", "passed", "passed"),
+        ("failed", "not-run", "not-run", "not-run", "not-run"),
+        ("passed", "failed", "not-run", "not-run", "not-run"),
+        ("passed", "passed", "failed", "not-run", "not-run"),
+        ("passed", "passed", "passed", "failed", "not-run"),
+        ("passed", "passed", "passed", "passed", "failed"),
+        ("passed", "passed", "passed", "passed", "passed"),
     }
 
 
@@ -168,14 +171,24 @@ def provider_free_browser_exec_diagnostic_matches_operation(
             "not-run",
             "not-run",
             "not-run",
+            "not-run",
         ),
         "preview_browser_nested_exec_probe": (
             "passed",
             "failed",
             "not-run",
             "not-run",
+            "not-run",
         ),
-        "preview_browser_node_exec_probe": (
+        "preview_browser_node_attached_exec_probe": (
+            "passed",
+            "passed",
+            "failed",
+            "not-run",
+            "not-run",
+        ),
+        "preview_browser_node_detached_exec_probe": (
+            "passed",
             "passed",
             "passed",
             "failed",
@@ -185,13 +198,15 @@ def provider_free_browser_exec_diagnostic_matches_operation(
             "passed",
             "passed",
             "passed",
+            "passed",
             "failed",
         ),
     }.get(operation)
     return expected == (
         receipt.get("outer"),
         receipt.get("nested"),
-        receipt.get("node"),
+        receipt.get("node_attached"),
+        receipt.get("node_detached"),
         receipt.get("playwright"),
     )
 
@@ -226,7 +241,8 @@ PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS_BY_STAGE = {
             "preview_browser_runtime_staging",
             "preview_browser_outer_exec_probe",
             "preview_browser_nested_exec_probe",
-            "preview_browser_node_exec_probe",
+            "preview_browser_node_attached_exec_probe",
+            "preview_browser_node_detached_exec_probe",
             "preview_browser_playwright_launch_after_direct_probes",
             "preview_dependency",
             "preview_browser_launch",
