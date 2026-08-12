@@ -32,9 +32,9 @@ A library of agent skills for CAD, CAE and CAM
 
 </div>
 
-# CAD Skills
+# text-to-cad
 
-CAD Skills is a library of agent skills for generating, inspecting, sourcing,
+text-to-cad is a library of agent skills for generating, inspecting, sourcing,
 slicing, and handing off CAD and robot-description artifacts from local project
 files.
 
@@ -64,7 +64,7 @@ generated skill outputs needed by provider installers.
 
 ### Skills
 
-Install CAD Skills with the Skills CLI:
+Install text-to-cad with the Skills CLI:
 
 ```bash
 npx skills install earthtojake/text-to-cad

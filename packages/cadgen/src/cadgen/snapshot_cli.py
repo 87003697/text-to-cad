@@ -35,6 +35,9 @@ import cadgen.lookup as lookup
 from cadgen.catalog import render_package_dir
 from cadgen.step_targets import ResolvedStepTarget, StepTopologyArtifact, StepTopologyArtifactError
 
+from cadgen.cli_logging import CliLogger
+from cadgen.coordination import PHASE_BROWSER, SNAPSHOT, ProgressReporter
+from cadgen.cli_progress import cli_progress_line
 from cadgen.snapshot_core import (
     THEME_OPTION_KEYS,
     BatchSnapshotRenderer,
@@ -73,7 +76,6 @@ from cadgen.snapshot_core import (
     SUPPORTED_OUTPUT_KEYS,
     SUPPORTED_RENDER_MODES,
     SnapshotError,
-    SnapshotProgress,
     TOPOLOGY_DISPLAY_MODES,
     WORKBENCH_RENDER_THEME_IDS,
     theme_id_for_job,
@@ -1466,6 +1468,16 @@ def resolve_render_job_packet(
 
 
 
+def snapshot_progress_label(packet: object) -> str:
+    """The header the progress line commits: what this run is rendering."""
+    jobs = packet.get("jobs") if isinstance(packet, dict) else None
+    if not isinstance(jobs, list) or not jobs:
+        return "snapshot"
+    if len(jobs) == 1:
+        return str(jobs[0].get("input") or "snapshot")
+    return f"snapshot ({len(jobs)} jobs)"
+
+
 async def run_render_cli_async(
     argv: Sequence[str],
     *,
@@ -1490,18 +1502,27 @@ async def run_render_cli_async(
     if options.help:
         stdout.write(help_text(kinds=enabled, prog=prog))
         return 0
-    # Resolution is where a STEP or drawing package gets built, and on a cold model that is
-    # the SLOWEST part of a snapshot -- longer than the render. It has to report before it
-    # starts, not after.
-    progress = SnapshotProgress()
     raw_payload = load_job_from_options(options, stdin=stdin, cwd=cwd)
-    progress.phase("resolving input (building render artifacts if needed)")
+    # Resolution is where a STEP or drawing package gets built, and on a cold model that is
+    # the SLOWEST part of a snapshot -- longer than the render. It is deliberately NOT
+    # wrapped in a phase of ours: that build reports its own phases through artifact_build,
+    # and a second painter on the same terminal would both interleave with it and replace
+    # its detail with the single word "resolving".
     packet = resolve_render_job_packet(raw_payload, cwd=cwd, kinds=enabled)
-    progress.phase("starting browser")
-    result = await render_resolved_job_packet(
-        packet, runtime_dir=Path(runtime_dir), progress=progress
-    )
-    progress.clear()
+    logger = CliLogger("snapshot", verbose=False)
+    with cli_progress_line(
+        snapshot_progress_label(packet), logger=logger, fallback="Rendering..."
+    ) as sink:
+        progress = ProgressReporter(
+            sinks=[sink] if sink is not None else (),
+            phases=SNAPSHOT.phases,
+            labels=SNAPSHOT.labels,
+        )
+        progress.phase(PHASE_BROWSER)
+        result = await render_resolved_job_packet(
+            packet, runtime_dir=Path(runtime_dir), progress=progress
+        )
+        progress.finish()
     write_render_outputs(result)
     print_render_result(result, json_output=options.json, stdout=stdout)
     return 0

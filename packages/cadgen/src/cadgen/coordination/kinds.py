@@ -83,6 +83,24 @@ IMPLICIT_PACKAGE = ArtifactKind(
     },
 )
 
+# A snapshot render. Not a coordinated artifact -- it takes no lock and writes no status
+# record, because it produces an image, not a package another process might read half-built.
+# It is a kind anyway so its CLI reports through the same phase model as everything else;
+# before this it had a second, unrelated progress implementation of its own.
+#
+# Note what is NOT a phase here: resolving the input. That step builds the STEP/drawing
+# package when the model is cold, which is the slowest part of a whole snapshot -- and that
+# build reports its OWN phases through artifact_build. Declaring a `resolve` phase here would
+# put two painters on one terminal and replace the build's detail with the word "resolving".
+PHASE_BROWSER = "browser"
+PHASE_RENDER = "render"
+
+SNAPSHOT = ArtifactKind(
+    name="snapshot",
+    phases=(PHASE_BROWSER, PHASE_RENDER),
+    labels={PHASE_BROWSER: "Starting browser", PHASE_RENDER: "Rendering"},
+)
+
 # An export (STEP/STL/3MF/GLB/DXF) writes no package -- it occupies the model's GENERATOR
 # and writes a file elsewhere -- so it is coordinated with generator_busy() against the
 # model's own kind rather than being a kind of its own. Add one here when something needs

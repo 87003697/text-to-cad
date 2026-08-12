@@ -45,7 +45,7 @@ test("normalizeViewerGithubUrl falls back to a configured default", () => {
   );
 });
 
-test("normalizeViewerDiscordUrl defaults to the CAD Skills Discord invite", () => {
+test("normalizeViewerDiscordUrl defaults to the text-to-cad Discord invite", () => {
   assert.equal(normalizeViewerDiscordUrl(""), DEFAULT_VIEWER_DISCORD_URL);
 });
 

@@ -877,6 +877,17 @@ def _normalize_label_name(raw_name: object) -> str | None:
 
 
 def _label_name(label: object) -> str | None:
+    # IsAttribute first, and it is not belt-and-braces: TDF_Label.FindAttribute SEGFAULTS in
+    # this OCP build when the attribute is ABSENT, rather than returning false. The label
+    # itself is valid (IsNull() is False) -- it simply carries no name.
+    #
+    # Any shape whose labels are not all named reaches this, which is every assembly built as
+    # a plain `Compound(children=[...])` rather than through AssemblyHelper: XCAF creates a
+    # child label per solid and leaves the unnamed ones without TDataStd_Name. A 3-solid
+    # compound was enough. The crash is uncatchable -- SIGSEGV, no traceback, exit 139 -- so
+    # it read as a hang or a mysterious kill rather than an unnamed label.
+    if not label.IsAttribute(TDataStd_Name.GetID_s()):
+        return None
     name = TDataStd_Name()
     if not label.FindAttribute(TDataStd_Name.GetID_s(), name):
         return None
