@@ -3,13 +3,29 @@ import { isFinitePoint, measurementFromPicks } from "cadjs/lib/viewer/measuremen
 export const MEASURE_RULER_MAX_MEASUREMENTS = 20;
 
 let measureMeasurementCounter = 0;
+let measureSeriesCounter = 0;
 
 export function createMeasureMeasurementId() {
   measureMeasurementCounter += 1;
   return `measurement-${measureMeasurementCounter}`;
 }
 
-export function applyMeasureRulerPick(state, pick, { createId = createMeasureMeasurementId } = {}) {
+/**
+ * Colours advance monotonically rather than being derived from the list length,
+ * so deleting a row in the middle never hands its colour to a row that is still
+ * on screen. Only the index is stored — the palette resolves it at render, so
+ * changing the palette cannot leave stale colours behind in state.
+ */
+export function createMeasureSeriesIndex() {
+  const index = measureSeriesCounter;
+  measureSeriesCounter += 1;
+  return index;
+}
+
+export function applyMeasureRulerPick(state, pick, {
+  createId = createMeasureMeasurementId,
+  createSeriesIndex = createMeasureSeriesIndex
+} = {}) {
   if (!pick || !isFinitePoint(pick?.point)) {
     return state || null;
   }
@@ -30,6 +46,7 @@ export function applyMeasureRulerPick(state, pick, { createId = createMeasureMea
   }
   const item = {
     id: createId(),
+    colorIndex: createSeriesIndex(),
     pickA: state.draft.anchor,
     pickB: pick,
     measurement

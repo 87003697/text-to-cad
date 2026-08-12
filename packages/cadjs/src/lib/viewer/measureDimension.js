@@ -2,11 +2,41 @@ import { formatMeasurement } from "./measurement.js";
 import { dimensionEndpoints, measureDimensionSegments } from "./measureLines.js";
 import { projectWorldPointToClient } from "./measureRuler.js";
 
-// Draft state is amber so it can never be confused with the cyan of a committed
-// dimension.  Committed cyan is also distinct from the blue selection highlight.
+// Draft state is amber so it can never be confused with a committed dimension.
 export const MEASURE_DIMENSION_DRAFT_COLOR = "#f59e0b";
 export const MEASURE_DIMENSION_COMMITTED_COLOR = "#22d3ee";
-export const MEASURE_DIMENSION_FADED_ALPHA = 0.3;
+
+/**
+ * One colour per measurement, so a line in the viewport and its row in the panel
+ * identify each other without hovering either. Muted mid-tones rather than
+ * saturated ones: several are on screen at once over a shaded model, and they
+ * have to read in both the light and dark themes without competing with the
+ * selection blue or the amber draft.
+ */
+export const MEASURE_SERIES_COLORS = Object.freeze([
+  "#7fb5e6",
+  "#8fcfa8",
+  "#e8a87c",
+  "#c39bd3",
+  "#e6a6b8",
+  "#86cfc9",
+  "#d6c77f",
+  "#a8b5d9"
+]);
+
+export function measureSeriesColor(index) {
+  const numeric = Number(index);
+  if (!Number.isFinite(numeric)) {
+    return MEASURE_SERIES_COLORS[0];
+  }
+  const wrapped = Math.trunc(numeric) % MEASURE_SERIES_COLORS.length;
+  return MEASURE_SERIES_COLORS[wrapped < 0 ? wrapped + MEASURE_SERIES_COLORS.length : wrapped];
+}
+// Inactive dimensions recede, but they still have to be identifiable by colour
+// against their row. The series palette is already muted, so the 0.3 that suited
+// one saturated cyan line washed the pastels out to nothing; the emphasis on the
+// active dimension now comes mostly from line weight and its label.
+export const MEASURE_DIMENSION_FADED_ALPHA = 0.7;
 export const MEASURE_DIMENSION_LABEL_BACKGROUND = "rgba(15, 23, 42, 0.92)";
 export const MEASURE_DIMENSION_LABEL_FONT =
   "600 8px ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif";

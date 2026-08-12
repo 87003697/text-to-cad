@@ -4,11 +4,13 @@ import test from "node:test";
 import { PerspectiveCamera } from "three";
 
 import {
+  MEASURE_SERIES_COLORS,
   drawMeasureDimension,
   drawMeasureSnapChip,
   drawMeasureSnapMarker,
   drawPulsingEndRing,
   measureLabelText,
+  measureSeriesColor,
   screenDimensionLayout,
   screenSpaceDimensionLayout
 } from "./measureDimension.js";
@@ -248,4 +250,30 @@ test("drawMeasureSnapChip keeps the caption inside the viewport", () => {
   const empty = recordingContext();
   drawMeasureSnapChip(empty, { x: 10, y: 10 }, "", { bounds: { width: 800, height: 600 } });
   assert.equal(empty.calls.length, 0);
+});
+
+test("measureSeriesColor cycles the palette and tolerates junk indices", () => {
+  assert.equal(measureSeriesColor(0), MEASURE_SERIES_COLORS[0]);
+  assert.equal(measureSeriesColor(3), MEASURE_SERIES_COLORS[3]);
+  // Wraps rather than running off the end, so the 9th measurement still has a colour.
+  assert.equal(measureSeriesColor(MEASURE_SERIES_COLORS.length), MEASURE_SERIES_COLORS[0]);
+  assert.equal(measureSeriesColor(MEASURE_SERIES_COLORS.length + 2), MEASURE_SERIES_COLORS[2]);
+  assert.equal(measureSeriesColor(-1), MEASURE_SERIES_COLORS[MEASURE_SERIES_COLORS.length - 1]);
+  assert.equal(measureSeriesColor(undefined), MEASURE_SERIES_COLORS[0]);
+  assert.equal(measureSeriesColor("nope"), MEASURE_SERIES_COLORS[0]);
+});
+
+test("the series palette stays muted enough to sit over a shaded model", () => {
+  for (const color of MEASURE_SERIES_COLORS) {
+    assert.match(color, /^#[0-9a-f]{6}$/, `${color} is not a 6-digit hex`);
+    const [r, g, b] = [1, 3, 5].map((offset) => parseInt(color.slice(offset, offset + 2), 16));
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    // Mid-tone: bright enough on a dark theme, dark enough on a light one.
+    const lightness = (max + min) / 2 / 255;
+    assert.ok(lightness > 0.5 && lightness < 0.85, `${color} lightness ${lightness.toFixed(2)} out of range`);
+    // Pastel, not saturated: no channel may dominate the way a pure hue does.
+    assert.ok((max - min) / 255 < 0.45, `${color} is too saturated`);
+  }
+  assert.equal(new Set(MEASURE_SERIES_COLORS).size, MEASURE_SERIES_COLORS.length, "palette has duplicates");
 });

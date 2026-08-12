@@ -220,3 +220,17 @@ test("cancelMeasureRulerDraft drops the in-flight measurement and nothing else",
   assert.equal(cancelMeasureRulerDraft(committed), committed);
   assert.equal(cancelMeasureRulerDraft(null), null);
 });
+
+test("each measurement keeps its own colour index, even after deletions", () => {
+  // Derived from the list length, a delete in the middle would hand a colour
+  // already on screen to the next measurement taken.
+  let series = 0;
+  const opts = { createId: counterIds(), createSeriesIndex: () => series++ };
+  let state = applyMeasureRulerPick(applyMeasureRulerPick(null, FIRST_PICK, opts), SECOND_PICK, opts);
+  state = applyMeasureRulerPick(applyMeasureRulerPick(state, FIRST_PICK, opts), SECOND_PICK, opts);
+  assert.deepEqual(state.measurements.map((item) => item.colorIndex), [0, 1]);
+
+  state = applyMeasureRulerDelete(state, state.measurements[0].id);
+  state = applyMeasureRulerPick(applyMeasureRulerPick(state, FIRST_PICK, opts), SECOND_PICK, opts);
+  assert.deepEqual(state.measurements.map((item) => item.colorIndex), [1, 2]);
+});

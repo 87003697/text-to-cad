@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 
 import {
-  MEASURE_DIMENSION_COMMITTED_COLOR,
   MEASURE_DIMENSION_DRAFT_COLOR,
   MEASURE_DIMENSION_FADED_ALPHA,
   drawMeasureDimension,
@@ -9,6 +8,7 @@ import {
   drawMeasureSnapMarker,
   drawPulsingEndRing,
   measureLabelText,
+  measureSeriesColor,
   screenSpaceDimensionLayout
 } from "cadjs/lib/viewer/measureDimension.js";
 import {
@@ -96,10 +96,10 @@ export function useViewerMeasureOverlay({
           }
           const active = item.id === activeId;
           drawMeasureDimension(context, layout, {
-            color: MEASURE_DIMENSION_COMMITTED_COLOR,
+            color: measureSeriesColor(item?.colorIndex),
             alpha: active ? 1 : MEASURE_DIMENSION_FADED_ALPHA,
-            lineWidth: active ? 2.4 : 1.5,
-            witnessWidth: active ? 1.6 : 1.2,
+            lineWidth: active ? 2.6 : 1.4,
+            witnessWidth: active ? 1.6 : 1,
             ringRadius: active ? 4 : 3,
             label: active ? measureLabelText(item.measurement) : "",
             bounds

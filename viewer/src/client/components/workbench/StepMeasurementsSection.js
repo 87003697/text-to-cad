@@ -5,7 +5,7 @@ import {
   formatMeasurementAngle,
   formatMeasurementDelta
 } from "cadjs/lib/viewer/measurement.js";
-import { measureLabelText } from "cadjs/lib/viewer/measureDimension.js";
+import { measureLabelText, measureSeriesColor } from "cadjs/lib/viewer/measureDimension.js";
 
 import { MEASURE_RULER_MAX_MEASUREMENTS } from "../../workbench/measureRulerState.js";
 import { cn } from "@/ui/utils";
@@ -86,6 +86,13 @@ export default function StepMeasurementsSection({
                   : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground"
               )}
             >
+              {/* The row's colour is the line's colour, so the two identify each
+                  other without hovering either. */}
+              <span
+                aria-hidden="true"
+                className="size-2 shrink-0 rounded-full"
+                style={{ backgroundColor: measureSeriesColor(item.colorIndex) }}
+              />
               <span className="min-w-0 flex-1 truncate text-[11px] tabular-nums">
                 {labelText}
                 {angleText ? <span className="ml-1.5">{angleText}</span> : null}
