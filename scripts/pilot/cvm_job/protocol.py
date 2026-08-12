@@ -46,6 +46,10 @@ PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA = (
     "cvm.provider-free-preview-sandbox-enforcement/1"
 )
 PROVIDER_FREE_STAGED_BROWSER_CACHE = "/tmp/provider-free-playwright"
+PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE = (
+    f"{PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested/"
+    "chrome-headless-shell-linux64/chrome-headless-shell"
+)
 
 
 def provider_free_preview_sandbox_argv(group: str, exp: str) -> list[str]:
@@ -68,6 +72,9 @@ def provider_free_preview_sandbox_argv(group: str, exp: str) -> list[str]:
         "--setenv",
         "PLAYWRIGHT_BROWSERS_PATH",
         PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        "--setenv",
+        "MESHSHOT_BROWSER_EXECUTABLE",
+        PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
         "--chdir",
         sandbox_root,
         "--",

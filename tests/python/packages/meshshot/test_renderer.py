@@ -5,7 +5,10 @@ from __future__ import annotations
 import base64
 from io import BytesIO
 import json
+import os
+from pathlib import Path
 import statistics
+import tempfile
 import unittest
 from unittest import mock
 
@@ -29,6 +32,87 @@ def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometr
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_explicit_attested_browser_executable_bypasses_registry_selection(
+        self,
+    ) -> None:
+        playwright = mock.MagicMock()
+        playwright.chromium.launch.side_effect = RuntimeError("stop after launch")
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = playwright
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_bytes(b"browser")
+            executable.chmod(0o755)
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(executable)},
+                ),
+                mock.patch(
+                    "playwright.sync_api.sync_playwright", sync_playwright
+                ),
+                self.assertRaises(MeshshotError),
+            ):
+                render_residual_preview(
+                    _geometry(triangle),
+                    _geometry(triangle),
+                    variant="step",
+                )
+
+            playwright.chromium.launch.assert_called_once_with(
+                headless=True,
+                args=["--no-sandbox"],
+                timeout=15_000,
+                executable_path=os.fspath(executable),
+            )
+
+    def test_explicit_browser_executable_rejects_unsafe_file_types(self) -> None:
+        playwright = mock.MagicMock()
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = playwright
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            regular = root / "regular"
+            regular.write_bytes(b"browser")
+            regular.chmod(0o644)
+            symlink = root / "symlink"
+            symlink.symlink_to(regular)
+            cases = (
+                "relative-browser",
+                os.fspath(root / "missing"),
+                os.fspath(root),
+                os.fspath(regular),
+                os.fspath(symlink),
+            )
+
+            for value in cases:
+                with (
+                    self.subTest(value=value),
+                    mock.patch.dict(
+                        os.environ,
+                        {"MESHSHOT_BROWSER_EXECUTABLE": value},
+                    ),
+                    mock.patch(
+                        "playwright.sync_api.sync_playwright", sync_playwright
+                    ),
+                    self.assertRaises(MeshshotError) as raised,
+                ):
+                    render_residual_preview(
+                        _geometry(triangle),
+                        _geometry(triangle),
+                        variant="step",
+                    )
+
+                self.assertEqual(
+                    "browser_launch_executable", raised.exception.phase
+                )
+
+        playwright.chromium.launch.assert_not_called()
+
     def test_browser_launch_failure_has_resource_specific_closed_phase(self) -> None:
         cases = {
             "pthread_create: Resource temporarily unavailable": (

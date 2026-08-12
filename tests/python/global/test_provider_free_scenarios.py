@@ -567,6 +567,9 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 "--setenv",
                 "PLAYWRIGHT_BROWSERS_PATH",
                 "/tmp/provider-free-playwright",
+                "--setenv",
+                "MESHSHOT_BROWSER_EXECUTABLE",
+                protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "--chdir",
                 "/workspace/repo",
                 "--",
@@ -613,7 +616,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
 
         provider_free_scenarios._stage_browser_runtime(identity, staging)
 
-        staged_revision = staging / source_revision.name
+        staged_revision = staging / "attested"
         staged_executable = (
             staged_revision
             / "chrome-headless-shell-linux64/chrome-headless-shell"

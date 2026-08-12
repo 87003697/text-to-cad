@@ -28,6 +28,7 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA,
     PROVIDER_FREE_STAGED_BROWSER_CACHE,
+    PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
@@ -432,6 +433,9 @@ def _preview_sandbox_argv(argv: Sequence[str], *, cwd: Path) -> list[str]:
         "--setenv",
         "PLAYWRIGHT_BROWSERS_PATH",
         PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        "--setenv",
+        "MESHSHOT_BROWSER_EXECUTABLE",
+        PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
         "--chdir",
         os.fspath(cwd),
         "--",
@@ -483,7 +487,7 @@ def _stage_browser_runtime(chromium: dict[str, Any], staging_cache: Path) -> Non
             ):
                 raise ValueError("browser runtime contains a non-regular entry")
         staging_cache.mkdir(mode=0o700)
-        staged_revision = staging_cache / source_revision.name
+        staged_revision = staging_cache / "attested"
         shutil.copytree(
             source_revision,
             staged_revision,

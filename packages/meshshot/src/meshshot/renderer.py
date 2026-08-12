@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from io import BytesIO
 import json
 import math
+import os
 from pathlib import Path
+import stat
 from typing import Any, Literal
 
 from PIL import Image
@@ -229,14 +231,37 @@ def render_residual_preview(
             phase="dependency",
         ) from exc
 
+    browser_executable = os.environ.get("MESHSHOT_BROWSER_EXECUTABLE")
+    launch_options: dict[str, Any] = {
+        "headless": True,
+        "args": ["--no-sandbox"],
+        "timeout": _BROWSER_STARTUP_TIMEOUT_MS,
+    }
+    if browser_executable is not None:
+        executable_path = Path(browser_executable)
+        try:
+            executable_mode = executable_path.lstat().st_mode
+        except OSError as exc:
+            raise MeshshotError(
+                "attested browser executable is invalid",
+                phase="browser_launch_executable",
+            ) from exc
+        if (
+            not executable_path.is_absolute()
+            or stat.S_ISLNK(executable_mode)
+            or not stat.S_ISREG(executable_mode)
+            or not os.access(executable_path, os.X_OK)
+        ):
+            raise MeshshotError(
+                "attested browser executable is invalid",
+                phase="browser_launch_executable",
+            )
+        launch_options["executable_path"] = browser_executable
+
     try:
         with sync_playwright() as playwright:
             try:
-                browser = playwright.chromium.launch(
-                    headless=True,
-                    args=["--no-sandbox"],
-                    timeout=_BROWSER_STARTUP_TIMEOUT_MS,
-                )
+                browser = playwright.chromium.launch(**launch_options)
             except Exception as exc:
                 raise MeshshotError(
                     f"headless residual browser launch failed: {exc}",

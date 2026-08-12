@@ -339,6 +339,11 @@ class PilotReviewTests(unittest.TestCase):
                 "source": "read-only-attested-revision",
                 "scope": "single-attested-revision",
                 "destination": "/tmp/provider-free-playwright",
+                "staged_revision": "attested",
+                "staged_executable": (
+                    "/tmp/provider-free-playwright/attested/"
+                    "chrome-headless-shell-linux64/chrome-headless-shell"
+                ),
                 "destination_filesystem": "private-tmpfs",
                 "tree_validation": "regular-files-only-no-links-or-special",
                 "executable_validation": {
@@ -346,6 +351,15 @@ class PilotReviewTests(unittest.TestCase):
                     "execute_bits": "required",
                 },
                 "nested_mount": "read-only-exact-staged-cache",
+                "launch_handoff": {
+                    "environment": "MESHSHOT_BROWSER_EXECUTABLE",
+                    "value": (
+                        "/tmp/provider-free-playwright/attested/"
+                        "chrome-headless-shell-linux64/chrome-headless-shell"
+                    ),
+                    "validation": "absolute-regular-non-symlink-executable",
+                    "playwright_option": "executable_path",
+                },
                 "cleanup": "outer-sandbox-private-tmpfs-teardown",
             },
             self.reviewer._SANDBOX_PROFILE["browser_runtime_staging"],
@@ -417,13 +431,13 @@ class PilotReviewTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/5",
+                "id": "issue15.provider-free-bounded/6",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/5",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/6",
             },
             "sandbox": {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/5",
+                "resource_profile": "issue15.provider-free-bounded/6",
             },
             "provider_environment": {
                 "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],
@@ -745,6 +759,12 @@ class PilotReviewTests(unittest.TestCase):
                     "--setenv",
                     "PLAYWRIGHT_BROWSERS_PATH",
                     "/tmp/provider-free-playwright",
+                    "--setenv",
+                    "MESHSHOT_BROWSER_EXECUTABLE",
+                    (
+                        "/tmp/provider-free-playwright/attested/"
+                        "chrome-headless-shell-linux64/chrome-headless-shell"
+                    ),
                     "--chdir",
                     "/workspace/repo",
                     "--",

@@ -52,6 +52,15 @@ class JobProtocolTests(unittest.TestCase):
             ["--setenv", "PLAYWRIGHT_BROWSERS_PATH", cache],
             argv[setenv : setenv + 3],
         )
+        executable_setenv = argv.index("--setenv", setenv + 1)
+        self.assertEqual(
+            [
+                "--setenv",
+                "MESHSHOT_BROWSER_EXECUTABLE",
+                protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+            ],
+            argv[executable_setenv : executable_setenv + 3],
+        )
         for field, value in (
             ("capabilities", "inherit"),
             ("mount_namespace", "host"),

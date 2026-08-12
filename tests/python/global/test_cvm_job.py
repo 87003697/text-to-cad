@@ -138,6 +138,10 @@ class CvmJobTests(unittest.TestCase):
                 "source": "read-only-attested-revision",
                 "scope": "single-attested-revision",
                 "destination": protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE,
+                "staged_revision": "attested",
+                "staged_executable": (
+                    protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE
+                ),
                 "destination_filesystem": "private-tmpfs",
                 "tree_validation": "regular-files-only-no-links-or-special",
                 "executable_validation": {
@@ -145,6 +149,12 @@ class CvmJobTests(unittest.TestCase):
                     "execute_bits": "required",
                 },
                 "nested_mount": "read-only-exact-staged-cache",
+                "launch_handoff": {
+                    "environment": "MESHSHOT_BROWSER_EXECUTABLE",
+                    "value": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+                    "validation": "absolute-regular-non-symlink-executable",
+                    "playwright_option": "executable_path",
+                },
                 "cleanup": "outer-sandbox-private-tmpfs-teardown",
             },
             runtime.PROVIDER_FREE_SANDBOX_PROFILE["browser_runtime_staging"],
@@ -465,9 +475,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/5",
+                "id": "issue15.provider-free-bounded/6",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/5",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/6",
             },
         )
         self.assertEqual(
@@ -593,7 +603,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/5",
+            "issue15.provider-free-bounded/6",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],
