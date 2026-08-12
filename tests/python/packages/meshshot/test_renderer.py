@@ -55,6 +55,10 @@ class ResidualRendererTests(unittest.TestCase):
             "Error: spawn /denied/chromium EACCES": (
                 "browser_launch_executable_spawn_permission"
             ),
+            (
+                "Error: spawn /denied/chromium --no-sandbox "
+                "--user-data-dir=/tmp/pw EACCES"
+            ): "browser_launch_executable_spawn_permission",
             "zygote sandbox initialization: Permission denied": (
                 "browser_launch_sandbox_permission"
             ),
