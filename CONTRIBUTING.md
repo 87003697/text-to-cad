@@ -213,7 +213,8 @@ settings — build from `develop` (`base_branch=develop`), publish to `main`
 draft) — and the input descriptions in `.github/workflows/release.yml` are
 authoritative. Choose the semver bump (`patch`, `minor`, or `major`) or an
 exact `set_version` deliberately for every release; if a release request does
-not specify one, confirm it rather than assuming:
+not specify one, confirm it rather than assuming. `bump=none` is not a release
+setting — see "Publishing without a version bump" below:
 
 ```bash
 gh workflow run release.yml --ref develop -f bump=patch
@@ -255,21 +256,46 @@ trusted publisher for the `cadgen` project on PyPI (use "Add a pending
 publisher" if the project does not exist yet): repository
 `earthtojake/text-to-cad`, workflow `release.yml`, environment left blank.
 
+### Publishing without a version bump
+
+`bump=none` publishes `base_branch` exactly as it stands: no version change, no
+release PR, straight to the publish jobs. Use it whenever the version is already
+right or is beside the point — resuming a failed publish, and rehearsing the
+pipeline against `build-test`. `set_version` is only for naming a specific *new*
+version; it is not the way to say "leave the version alone".
+
+`sync-version.mjs` still runs under `bump=none`, so a base branch whose derived
+metadata has drifted from `VERSION` is caught and goes through a release PR
+rather than publishing the drift.
+
 ### Testing CI/CD and build changes
 
 Use `target_branch=build-test` only when explicitly testing changes to the
 CI/CD pipeline or production build outputs; it is never part of a normal
 release and should never be chosen by default. It rehearses the full publish
-flow without touching `main`, deploying, or creating a tag/release. Use
-`dry_run=true` to preview the version changes only, and `auto_merge=false` to
-stop after preparing the release PR.
+flow without touching `main`, deploying, creating a tag/release, uploading to
+PyPI, or syncing the CAD Viewer mirror:
+
+```bash
+gh workflow run release.yml --ref <branch> \
+  -f bump=none -f base_branch=<branch> -f target_branch=build-test
+```
+
+Pair it with `bump=none` so a rehearsal does not consume a version number or
+move `VERSION` on the branch you are testing. Bump for real (`bump=patch`) only
+when the change under test is the version machinery itself — `bump-version.sh`
+or `sync-version.mjs` — since `bump=none` skips that stage. `dry_run=true`
+previews the version changes only, and `auto_merge=false` stops after preparing
+the release PR.
 
 ### Resuming a failed publish
 
 If a run fails partway — including after `main` has moved but before the semver
-tag exists — rerun `Release` with `set_version` pinned to the current version.
-When `develop` already contains that version, the workflow skips the release PR
-and proceeds straight to the publish jobs.
+tag exists — rerun `Release` with `bump=none`. The version already reached
+`base_branch` on the first attempt, so there is nothing to bump; the workflow
+skips the release PR and proceeds straight to the publish jobs, and the publish
+gate handles both shapes (`main` not yet moved, and `main` moved with the tag
+missing).
 
 ### Redeploying the docs site
 
@@ -282,6 +308,46 @@ gh workflow run deploy-docs.yml -f ref=main
 ```
 
 The CAD Viewer is a local-filesystem app and has no hosted deployment.
+
+### Mirroring the CAD Viewer repo
+
+`viewer/` is published as its own standalone repo,
+[`earthtojake/cad-viewer`](https://github.com/earthtojake/cad-viewer). The
+`Release` workflow calls `Sync CAD Viewer Repo` after publishing to `main`, so
+the mirror tracks releases rather than in-flight `develop` work. Dispatch it on
+its own for an out-of-band sync, or with `dry_run` to build and verify the
+mirror without pushing:
+
+```bash
+gh workflow run sync-cad-viewer.yml -f ref=main
+gh workflow run sync-cad-viewer.yml -f ref=main -f dry_run=true
+```
+
+The workflow needs a `CAD_VIEWER_SYNC_TOKEN` secret with `contents:write` on the
+mirror repo. Before pushing, it runs `npm ci`, `npm run test`, `npm run build`,
+`pip install -r requirements.txt`, and the `server_py` tests inside the mirror,
+so a mirror that cannot stand on its own fails the release instead of shipping.
+
+The sync is a **straight copy** — nothing rewrites paths, commands, or prose on
+the way out, and it does not run or depend on `bundle.sh`. The only structural
+change is dereferencing `viewer/packages/*` into real directories; the script
+refuses to publish a tree that still contains a symlink. What lands in the
+mirror's `packages/` is whatever `viewer/packages/` holds, so syncing from a
+published `main` mirrors the committed bundle output that `bundle.sh --check`
+already validated. A sync from `develop` dereferences the symlinks to the live
+package sources instead — a development snapshot, not what a release publishes,
+and the script says so when it sees that layout. That works only because
+`viewer/` stays self-contained, which `viewer/scripts/selfContained.test.mjs`
+enforces on every test run: no import, markdown link, or `package.json` script
+under `viewer/` may reach above it. Repo-level tooling belongs in `scripts/`,
+not under `viewer/`.
+
+To sync into a local clone, or to check an existing one for drift:
+
+```bash
+scripts/viewer/sync-cad-viewer-repo.sh ../cad-viewer
+scripts/viewer/sync-cad-viewer-repo.sh --check ../cad-viewer
+```
 
 ### Local and manual fallbacks
 
@@ -377,3 +443,11 @@ manual edits inside generated runtime folders.
 CAD exchange files, generated render/topology assets, and `assets/**` may be
 LFS-tracked. Never disable LFS filters for `git add`, commits, or other
 object-writing operations.
+
+`assets/**` holds heavyweight demo GIFs and is excluded from default LFS pulls,
+so lightweight clones do not fetch it. Hydrate it only when you need the demo
+assets locally:
+
+```bash
+git lfs pull --include="assets/**"
+```

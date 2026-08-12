@@ -38,6 +38,29 @@ text-to-cad is a library of agent skills for generating, inspecting, sourcing,
 slicing, and handing off CAD and robot-description artifacts from local project
 files.
 
+<table>
+  <tr>
+    <td width="33%">
+      <a href="./assets/text-to-cad-demo.gif">
+        <img src="./assets/text-to-cad-demo.gif" alt="CAD skill demo showing generated geometry in CAD Viewer" width="100%">
+      </a>
+      <a href="./skills/cad/SKILL.md"><strong>CAD</strong></a>
+    </td>
+    <td width="33%">
+      <a href="./assets/urdf-demo.gif">
+        <img src="./assets/urdf-demo.gif" alt="URDF skill demo showing robot description output in CAD Viewer" width="100%">
+      </a>
+      <a href="./skills/urdf/SKILL.md"><strong>URDF</strong></a>
+    </td>
+    <td width="33%">
+      <a href="./assets/srdf-moveit2-demo.gif">
+        <img src="./assets/srdf-moveit2-demo.gif" alt="SRDF MoveIt2 skill demo showing inverse kinematics in CAD Viewer" width="100%">
+      </a>
+      <a href="./skills/srdf/SKILL.md"><strong>SRDF / MoveIt2</strong></a>
+    </td>
+  </tr>
+</table>
+
 ## 🧰 Skills
 
 Install the library to give agents focused workflows for CAD, fabrication,
@@ -96,39 +119,6 @@ claude plugin install cad@text-to-cad
 Restart your agent if newly installed skills do not appear. For local
 development, branch from `develop`, open PRs against `develop`, and use the symlink
 workflow in [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## 📸 Screenshots
-
-The repo stores heavyweight GIF assets in `assets/**` through Git LFS and
-excludes that tree from default LFS pulls, so lightweight clones do not fetch
-them. To hydrate the demo assets locally, run:
-
-```bash
-git lfs pull --include="assets/**"
-```
-
-<table>
-  <tr>
-    <td width="33%">
-      <a href="./assets/text-to-cad-demo.gif">
-        <img src="./assets/text-to-cad-demo.gif" alt="CAD skill demo showing generated geometry in CAD Viewer" width="100%">
-      </a>
-      <a href="./skills/cad/SKILL.md"><strong>CAD</strong></a>
-    </td>
-    <td width="33%">
-      <a href="./assets/urdf-demo.gif">
-        <img src="./assets/urdf-demo.gif" alt="URDF skill demo showing robot description output in CAD Viewer" width="100%">
-      </a>
-      <a href="./skills/urdf/SKILL.md"><strong>URDF</strong></a>
-    </td>
-    <td width="33%">
-      <a href="./assets/srdf-moveit2-demo.gif">
-        <img src="./assets/srdf-moveit2-demo.gif" alt="SRDF MoveIt2 skill demo showing inverse kinematics in CAD Viewer" width="100%">
-      </a>
-      <a href="./skills/srdf/SKILL.md"><strong>SRDF / MoveIt2</strong></a>
-    </td>
-  </tr>
-</table>
 
 ## 🛠️ Contributing
 

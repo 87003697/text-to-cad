@@ -724,7 +724,7 @@ class GeneratedDxfFreshness(unittest.TestCase):
         )
 
     def test_a_changed_bake_format_makes_every_drawing_stale(self):
-        # The other half of the pin in tests/python/skills/cad/cadgen/test_package_freshness:
+        # The other half of cadgen's own package-freshness pin:
         # the SAME callable owns the bake on both sides, so an edit to the producer's
         # settings invalidates packages here too instead of rendering an old bake silently.
         with tempfile.TemporaryDirectory() as root:
