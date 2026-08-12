@@ -10,6 +10,7 @@ import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -128,6 +129,139 @@ class BrowserStageError(RuntimeError):
     """The deployment-attested browser could not be staged safely."""
 
 
+class _BrowserStageSignal(BaseException):
+    """One catchable process signal that must unwind browser staging."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(signum)
+        self.signum = signum
+
+
+_BROWSER_STAGE_SIGNALS = (signal.SIGINT, signal.SIGTERM)
+_EXEC_PROBE_BYTES = (
+    b"#!/bin/sh\n"
+    b"printf 'cvm.browser-stage-exec-probe/1\\n'\n"
+)
+_EXEC_PROBE_STDOUT = b"cvm.browser-stage-exec-probe/1\n"
+_EXEC_PROBE_NAME = ".cvm-browser-stage-exec-probe"
+_EXEC_PROBE_TIMEOUT_SECONDS = 5
+_PRODUCTION_SUBPROCESS_RUN = subprocess.run
+
+
+@contextmanager
+def _browser_stage_signal_cleanup() -> Iterator[None]:
+    """Turn catchable termination into an unwind, then re-emit it exactly."""
+
+    if threading.current_thread() is not threading.main_thread():
+        raise BrowserStageError(
+            "browser staging signal cleanup requires the main thread"
+        )
+    previous = {
+        signum: signal.getsignal(signum)
+        for signum in _BROWSER_STAGE_SIGNALS
+    }
+    interrupted: _BrowserStageSignal | None = None
+
+    def interrupt(signum: int, _frame: Any) -> None:
+        for catchable in _BROWSER_STAGE_SIGNALS:
+            signal.signal(catchable, signal.SIG_IGN)
+        raise _BrowserStageSignal(signum)
+
+    try:
+        for signum in _BROWSER_STAGE_SIGNALS:
+            signal.signal(signum, interrupt)
+        try:
+            yield
+        except _BrowserStageSignal as exc:
+            interrupted = exc
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+    if interrupted is not None:
+        signal.signal(interrupted.signum, signal.SIG_DFL)
+        os.kill(os.getpid(), interrupted.signum)
+        raise BrowserStageError("failed to re-emit browser staging signal")
+
+
+def _run_browser_stage_exec_probe(
+    probe: Path,
+    stage_root: Path,
+) -> subprocess.CompletedProcess[bytes]:
+    """Use the real production exec boundary behind one private test seam."""
+
+    return _PRODUCTION_SUBPROCESS_RUN(
+        [os.fspath(probe)],
+        cwd=stage_root,
+        env={},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=_EXEC_PROBE_TIMEOUT_SECONDS,
+        start_new_session=True,
+        close_fds=True,
+    )
+
+
+def _probe_browser_stage_exec(stage_root: Path) -> None:
+    """Execute one bounded repository-owned probe on the staged filesystem."""
+
+    probe = stage_root / _EXEC_PROBE_NAME
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    probe_identity: tuple[int, int] | None = None
+    try:
+        descriptor = os.open(probe, flags, 0o700)
+        os.write(descriptor, _EXEC_PROBE_BYTES)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        probe.chmod(0o700)
+        probe_info = probe.lstat()
+        probe_identity = (probe_info.st_dev, probe_info.st_ino)
+        completed = _run_browser_stage_exec_probe(probe, stage_root)
+        if (
+            completed.returncode != 0
+            or completed.stdout != _EXEC_PROBE_STDOUT
+            or completed.stderr != b""
+        ):
+            raise BrowserStageError(
+                "browser stage is not exec-permitted"
+            )
+    except BrowserStageError:
+        raise
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BrowserStageError(
+            "browser stage is not exec-permitted"
+        ) from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if probe_identity is not None:
+            try:
+                probe_info = probe.lstat()
+                if (
+                    stat.S_ISLNK(probe_info.st_mode)
+                    or not stat.S_ISREG(probe_info.st_mode)
+                    or (probe_info.st_dev, probe_info.st_ino)
+                    != probe_identity
+                    or stat.S_IMODE(probe_info.st_mode) != 0o700
+                    or probe.read_bytes() != _EXEC_PROBE_BYTES
+                ):
+                    raise BrowserStageError(
+                        "browser stage exec probe identity changed"
+                    )
+                probe.unlink()
+            except BrowserStageError:
+                raise
+            except OSError as exc:
+                raise BrowserStageError(
+                    "browser stage exec probe cleanup failed"
+                ) from exc
+
+
 def _browser_mount(
     chromium: dict[str, Any],
     handle: str,
@@ -177,6 +311,24 @@ def staged_attested_browser(
     repo_root: Path | None = None,
 ) -> Iterator[AttestedBrowserMount]:
     """Copy one attested browser revision into a private host-side stage."""
+
+    with _browser_stage_signal_cleanup():
+        with _staged_attested_browser(
+            chromium,
+            handle,
+            repo_root=repo_root,
+        ) as mount:
+            yield mount
+
+
+@contextmanager
+def _staged_attested_browser(
+    chromium: dict[str, Any],
+    handle: str,
+    *,
+    repo_root: Path | None,
+) -> Iterator[AttestedBrowserMount]:
+    """Implement browser staging behind the signal-safe public interface."""
 
     try:
         parse_handle(handle)
@@ -265,6 +417,7 @@ def staged_attested_browser(
                 raise BrowserStageError(
                     "staged browser executable identity conflicts with deployment identity"
                 )
+            _probe_browser_stage_exec(stage_root)
         except BrowserStageError:
             raise
         except (KeyError, OSError, shutil.Error, ValueError) as exc:
@@ -368,6 +521,12 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "sha256": "deployment-runtime-identity",
             "execute_bits": "required",
         },
+        "exec_permission_validation": {
+            "mechanism": "kernel-execve-repository-owned-immediate-exit-probe",
+            "network": "none",
+            "timeout_seconds": _EXEC_PROBE_TIMEOUT_SECONDS,
+            "expected_stdout": "cvm.browser-stage-exec-probe/1",
+        },
         "nested_mount": "read-only-exact-staged-cache",
         "launch_handoff": {
             "environment": "MESHSHOT_BROWSER_EXECUTABLE",
@@ -376,6 +535,8 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "playwright_option": "executable_path",
         },
         "cleanup": "supervisor-context-terminal-all-exit-classes",
+        "catchable_signal_cleanup": ["SIGINT", "SIGTERM"],
+        "uncatchable_termination": "stale-stage-collision-fail-closed",
     },
     "preview_process": {
         "capabilities": "drop-all",

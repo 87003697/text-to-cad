@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
+import errno
 import hashlib
+import json
 import os
 import signal
 import shutil
@@ -137,11 +138,98 @@ class CvmJobTests(unittest.TestCase):
             stage_root = mount.host_revision.parent
             self.assertTrue(stage_root.is_dir())
             self.assertEqual(
+                ["attested"],
+                [path.name for path in stage_root.iterdir()],
+            )
+            self.assertEqual(
                 executable.stat().st_dev,
                 mount.host_revision.stat().st_dev,
             )
 
         self.assertFalse(stage_root.exists())
+
+    def test_attested_browser_stage_rejects_kernel_noexec_probe(self) -> None:
+        chromium, _executable = self._browser_identity()
+        handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
+
+        with (
+            mock.patch.object(
+                runtime,
+                "_run_browser_stage_exec_probe",
+                side_effect=PermissionError(
+                    errno.EACCES,
+                    "injected noexec mount",
+                ),
+            ) as run,
+            self.assertRaisesRegex(
+                runtime.BrowserStageError,
+                "exec-permitted",
+            ),
+        ):
+            with runtime.staged_attested_browser(
+                chromium,
+                handle,
+                repo_root=self.repo_root,
+            ):
+                pass
+
+        run.assert_called_once()
+        stage_parent = (
+            Path(chromium["host_cache_path"])
+            / ".cvm-provider-free-browser-stages"
+        )
+        self.assertFalse(stage_parent.exists())
+
+    def test_attested_browser_stage_cleans_after_subprocess_sigterm(self) -> None:
+        chromium, _executable = self._browser_identity()
+        handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
+        stage_root = (
+            Path(chromium["host_cache_path"])
+            / ".cvm-provider-free-browser-stages"
+            / f"{self.group}.20260812-100000-issue15-runtime-authority"
+        )
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import json,os,sys,time\n"
+                    "from pathlib import Path\n"
+                    "from scripts.pilot.cvm_job import runtime\n"
+                    "identity=json.loads(sys.argv[1])\n"
+                    "with runtime.staged_attested_browser("
+                    "identity,sys.argv[2],repo_root=Path(sys.argv[3])):\n"
+                    " os.write(1,b'READY\\n')\n"
+                    " time.sleep(30)\n"
+                ),
+                json.dumps(chromium, sort_keys=True),
+                handle,
+                os.fspath(self.repo_root),
+            ],
+            cwd=REPO_ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert child.stdout is not None
+            ready = child.stdout.readline()
+            if ready != "READY\n":
+                detail = child.stderr.read() if child.stderr is not None else ""
+                self.fail(f"stage child did not become ready: {ready!r} {detail}")
+            self.assertTrue(stage_root.is_dir())
+            child.send_signal(signal.SIGTERM)
+            self.assertEqual(-signal.SIGTERM, child.wait(timeout=10))
+            self.assertFalse(stage_root.exists())
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+            if child.stdout is not None:
+                child.stdout.close()
+            if child.stderr is not None:
+                child.stderr.close()
 
     def test_attested_browser_stage_rejects_wrong_executable_digest(self) -> None:
         chromium, _executable = self._browser_identity()
@@ -417,6 +505,14 @@ class CvmJobTests(unittest.TestCase):
                     "sha256": "deployment-runtime-identity",
                     "execute_bits": "required",
                 },
+                "exec_permission_validation": {
+                    "mechanism": (
+                        "kernel-execve-repository-owned-immediate-exit-probe"
+                    ),
+                    "network": "none",
+                    "timeout_seconds": 5,
+                    "expected_stdout": "cvm.browser-stage-exec-probe/1",
+                },
                 "nested_mount": "read-only-exact-staged-cache",
                 "launch_handoff": {
                     "environment": "MESHSHOT_BROWSER_EXECUTABLE",
@@ -425,6 +521,10 @@ class CvmJobTests(unittest.TestCase):
                     "playwright_option": "executable_path",
                 },
                 "cleanup": "supervisor-context-terminal-all-exit-classes",
+                "catchable_signal_cleanup": ["SIGINT", "SIGTERM"],
+                "uncatchable_termination": (
+                    "stale-stage-collision-fail-closed"
+                ),
             },
             runtime.PROVIDER_FREE_SANDBOX_PROFILE["browser_runtime_staging"],
         )
@@ -1433,6 +1533,29 @@ server.listen(0, host, () => {
         def execute_sandbox(argv, **kwargs):
             if "--" not in argv:
                 return real_run(argv, **kwargs)
+            stable_revision = (
+                f"{protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested"
+            )
+            browser_binds = [
+                (Path(argv[index + 1]), argv[index + 2])
+                for index, value in enumerate(argv[:-2])
+                if value == "--ro-bind"
+                and argv[index + 2] == stable_revision
+            ]
+            self.assertEqual(1, len(browser_binds), list(argv))
+            host_revision, sandbox_revision = browser_binds[0]
+            self.assertEqual(stable_revision, sandbox_revision)
+            self.assertTrue(host_revision.is_dir())
+            host_stage = host_revision.parent
+            executable_relative = Path(
+                protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE
+            ).relative_to(protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE)
+            host_executable = host_stage / executable_relative
+            self.assertTrue(host_executable.is_file())
+            captured["browser_stage_projection"] = {
+                "source": os.fspath(host_revision),
+                "destination": sandbox_revision,
+            }
             command = list(argv)[list(argv).index("--") + 1 :]
             command = [
                 value.replace("/workspace/repo", os.fspath(self.repo_root), 1)
@@ -1447,9 +1570,17 @@ server.listen(0, host, () => {
             emulated_environment = {
                 name: value.replace(
                     "/workspace/repo", os.fspath(self.repo_root)
-                ).replace("/home/provider-free", os.fspath(provider_home))
+                ).replace(
+                    "/home/provider-free", os.fspath(provider_home)
+                ).replace(
+                    protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE,
+                    os.fspath(host_stage),
+                )
                 for name, value in sandbox_environment.items()
             }
+            emulated_environment["MESHSHOT_BROWSER_EXECUTABLE"] = os.fspath(
+                host_executable
+            )
             captured["emulated_environment"] = emulated_environment
             completed = real_run(
                 command,

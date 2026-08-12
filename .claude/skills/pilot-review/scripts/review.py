@@ -93,6 +93,12 @@ _SANDBOX_PROFILE = {
             "sha256": "deployment-runtime-identity",
             "execute_bits": "required",
         },
+        "exec_permission_validation": {
+            "mechanism": "kernel-execve-repository-owned-immediate-exit-probe",
+            "network": "none",
+            "timeout_seconds": 5,
+            "expected_stdout": "cvm.browser-stage-exec-probe/1",
+        },
         "nested_mount": "read-only-exact-staged-cache",
         "launch_handoff": {
             "environment": "MESHSHOT_BROWSER_EXECUTABLE",
@@ -104,6 +110,8 @@ _SANDBOX_PROFILE = {
             "playwright_option": "executable_path",
         },
         "cleanup": "supervisor-context-terminal-all-exit-classes",
+        "catchable_signal_cleanup": ["SIGINT", "SIGTERM"],
+        "uncatchable_termination": "stale-stage-collision-fail-closed",
     },
     "preview_process": {
         "capabilities": "drop-all",
