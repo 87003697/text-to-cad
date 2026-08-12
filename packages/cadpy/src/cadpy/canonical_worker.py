@@ -104,8 +104,6 @@ def worker_sandbox_argv(
         "--bind",
         os.fspath(worker_output),
         os.fspath(worker_output),
-        "--proc",
-        "/proc",
         "--dev",
         "/dev",
         "--chdir",

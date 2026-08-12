@@ -444,6 +444,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
         ):
             self.assertIn(flag, argv)
         self.assertEqual("ALL", argv[argv.index("--cap-drop") + 1])
+        self.assertNotIn("--proc", argv)
         self.assertIn(["--ro-bind", "/", "/"], triples)
         self.assertIn(
             ["--ro-bind", os.fspath(snapshot_root), os.fspath(snapshot_root)],

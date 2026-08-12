@@ -88,6 +88,41 @@ class CvmJobTests(unittest.TestCase):
         self.repo_patch.stop()
         self.temporary.__exit__(None, None, None)
 
+    def test_provider_free_sandbox_preserves_only_nested_bwrap_setup_capabilities(
+        self,
+    ) -> None:
+        exp_dir = self.repo_root / "outputs" / self.group / "nested-bwrap-contract"
+        exp_dir.mkdir(parents=True)
+        receipt = json.loads(
+            (self.repo_root / deployment_authority.RECEIPT_PATH).read_bytes()
+        )
+
+        argv = runtime.provider_free_sandbox_argv(
+            "issue15-runtime-authority",
+            exp_dir,
+            receipt["runtime_identity"],
+            repo_root=self.repo_root,
+        )
+
+        self.assertIn("--unshare-user", argv)
+        self.assertEqual("ALL", argv[argv.index("--cap-drop") + 1])
+        self.assertEqual(
+            [
+                "CAP_SYS_ADMIN",
+                "CAP_SYS_CHROOT",
+                "CAP_NET_ADMIN",
+                "CAP_SETUID",
+                "CAP_SETGID",
+                "CAP_SYS_PTRACE",
+                "CAP_SETFCAP",
+            ],
+            [
+                argv[index + 1]
+                for index, value in enumerate(argv[:-1])
+                if value == "--cap-add"
+            ],
+        )
+
     def submit(self) -> str:
         def fake_detach(handle, command, root):
             self.detached = (handle, list(command), root)
