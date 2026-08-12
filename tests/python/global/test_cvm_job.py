@@ -5,7 +5,6 @@ import hashlib
 import os
 import signal
 import shutil
-import socket
 import subprocess
 import sys
 import threading
@@ -800,16 +799,6 @@ class CvmJobTests(unittest.TestCase):
             else:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
-            reservation.bind(("127.0.0.1", 0))
-            fallback_reuse_port = reservation.getsockname()[1]
-        scenario_path = self.repo_root / "scripts/pilot/provider_free_scenarios.py"
-        scenario_path.write_text(
-            scenario_path.read_text(encoding="utf-8").replace(
-                "4178", str(fallback_reuse_port)
-            ),
-            encoding="utf-8",
-        )
         preview_profile = provider_free_scenarios.PREVIEW_PROFILE.relative_to(
             REPO_ROOT
         )
@@ -1168,6 +1157,10 @@ server.listen(0, host, () => {
         self.assertEqual(len(noisy_records), 1)
         self.assertEqual(noisy_records[0]["argv"], self._canonical_build_argv())
         self.assertNotEqual(noisy_records[0]["exit_code"], 0)
+        self.assertNotIn(
+            "candidate noise",
+            str(captured.get("scenario_stderr", "")),
+        )
         self.assertEqual(
             noisy_records[0]["stdout_sha256"],
             hashlib.sha256(b"").hexdigest(),

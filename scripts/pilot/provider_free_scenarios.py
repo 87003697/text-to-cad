@@ -391,7 +391,8 @@ def viewer_fallback_evidence(
 
     _RejectedViewerHandler.viewer_version = str(deployment["viewer_version"])
     _RejectedViewerHandler.activation_count = 0
-    fake = http.server.ThreadingHTTPServer(("127.0.0.1", 4178), _RejectedViewerHandler)
+    fake = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _RejectedViewerHandler)
+    reuse_port = fake.server_port
     thread = threading.Thread(target=fake.serve_forever, daemon=True)
     thread.start()
     stderr_path = workspace / "run/viewer-fallback.stderr.log"
@@ -410,7 +411,7 @@ def viewer_fallback_evidence(
                     "--dir",
                     os.fspath(workspace),
                     "--port",
-                    "4178",
+                    str(reuse_port),
                     "--port-scan-limit",
                     "3",
                     "--json",
@@ -424,7 +425,7 @@ def viewer_fallback_evidence(
                 start_new_session=True,
             )
             result = json.loads(_read_process_line(process, VIEWER_TIMEOUT_SECONDS))
-        if result.get("action") != "start" or result.get("port") == 4178:
+        if result.get("action") != "start" or result.get("port") == reuse_port:
             raise ScenarioError("deployed Viewer did not fall back after HTTP 400 reuse rejection")
         parsed_url = urlparse(str(result.get("url", "")))
         requested = parse_qs(parsed_url.query).get("dir", [])
@@ -443,7 +444,7 @@ def viewer_fallback_evidence(
         return {
             "schema": "issue15.viewer-fallback-smoke/1",
             "requested_directory": os.fspath(workspace),
-            "rejected_reuse": {"port": 4178, "http_status": 400},
+            "rejected_reuse": {"port": reuse_port, "http_status": 400},
             "fallback": {
                 "action": result["action"],
                 "port": result["port"],

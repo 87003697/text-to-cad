@@ -13,9 +13,11 @@ import tempfile
 import time
 from typing import Callable
 import unittest
+from unittest import mock
 
 from tests.python.support.paths import repo_path
 from tests.python.support.tmp_root import temporary_directory
+from cadpy import canonical_build, canonical_worker
 from cadpy.step_metadata import read_text_to_cad_step_metadata
 
 
@@ -119,24 +121,20 @@ def _run_adapter_with_post_policy_mutation(
     hook = root / "hook"
     hook.mkdir()
     (hook / "sitecustomize.py").write_text(
-        "from contextlib import contextmanager\n"
         "import time\n"
+        "from pathlib import Path\n"
         "from cadpy import canonical_build\n"
-        "_original = canonical_build._source_execution_policy\n"
-        "@contextmanager\n"
-        "def _signaled_policy(*args, **kwargs):\n"
-        "    with _original(*args, **kwargs):\n"
-        "        ready = kwargs['output_dir'] / 'race-ready'\n"
-        "        release = kwargs['output_dir'] / 'race-release'\n"
-        "        ready.write_text('ready', encoding='utf-8')\n"
-        "        while not release.is_file():\n"
-        "            time.sleep(0.01)\n"
-        "        release.unlink()\n"
-        "        try:\n"
-        "            yield\n"
-        "        finally:\n"
-        "            ready.unlink(missing_ok=True)\n"
-        "canonical_build._source_execution_policy = _signaled_policy\n",
+        "_original = canonical_build._run_worker_bounded\n"
+        "def _signaled_worker(*args, **kwargs):\n"
+        "    ready = Path('race-ready')\n"
+        "    release = Path('race-release')\n"
+        "    ready.write_text('ready', encoding='utf-8')\n"
+        "    while not release.is_file():\n"
+        "        time.sleep(0.01)\n"
+        "    release.unlink()\n"
+        "    ready.unlink()\n"
+        "    return _original(*args, **kwargs)\n"
+        "canonical_build._run_worker_bounded = _signaled_worker\n",
         encoding="utf-8",
     )
     environment = dict(os.environ)
@@ -168,11 +166,7 @@ def _run_adapter_with_post_policy_mutation(
             text=True,
         )
         deadline = time.monotonic() + 15
-        while not any(
-            root.glob(
-                ".canonical-source-worker-*/inputs/.worker-output/race-ready"
-            )
-        ):
+        while not (root / "race-ready").is_file():
             if process.poll() is not None:
                 stdout, stderr = process.communicate()
                 raise AssertionError(
@@ -184,13 +178,7 @@ def _run_adapter_with_post_policy_mutation(
                 raise AssertionError("adapter did not reach post-policy mutation gate")
             time.sleep(0.01)
         mutate(source.parent, helper)
-        release_paths = list(
-            root.glob(
-                ".canonical-source-worker-*/inputs/.worker-output/race-ready"
-            )
-        )
-        self_release = release_paths[0].with_name("race-release")
-        self_release.write_text("release", encoding="utf-8")
+        (root / "race-release").write_text("release", encoding="utf-8")
         fcntl.flock(control_stream.fileno(), fcntl.LOCK_UN)
         stdout, stderr = process.communicate(timeout=30)
     return subprocess.CompletedProcess(
@@ -224,20 +212,25 @@ def _run_adapter_with_pre_snapshot_replacement(
     (hook / "sitecustomize.py").write_text(
         "from pathlib import Path\n"
         "from cadpy import canonical_build\n"
-        "_original = canonical_build._declared_python_module_finder\n"
-        "def _replace_before_snapshot(*args, **kwargs):\n"
-        "    helper = Path(kwargs['root']) / 'source/helper.py'\n"
-        "    replacement = helper.with_name('replacement.py')\n"
-        "    replacement.write_text(\n"
-        "        'from build123d import Box\\n'\n"
-        "        'def make_shape():\\n'\n"
-        "        '    length_mm = 0.8\\n'\n"
-        "        '    return Box(length_mm, 0.2, 0.1)\\n',\n"
-        "        encoding='utf-8',\n"
-        "    )\n"
-        "    replacement.replace(helper)\n"
-        "    return _original(*args, **kwargs)\n"
-        "canonical_build._declared_python_module_finder = _replace_before_snapshot\n",
+        "_read = canonical_build._read_physical_file\n"
+        "_replaced = False\n"
+        "def _replace_after_snapshot(root, relative_path):\n"
+        "    global _replaced\n"
+        "    frozen = _read(root, relative_path)\n"
+        "    if relative_path.as_posix() == 'source/helper.py' and not _replaced:\n"
+        "        _replaced = True\n"
+        "        helper = Path(root) / relative_path\n"
+        "        replacement = helper.with_name('replacement.py')\n"
+        "        replacement.write_text(\n"
+        "            'from build123d import Box\\n'\n"
+        "            'def make_shape():\\n'\n"
+        "            '    length_mm = 0.8\\n'\n"
+        "            '    return Box(length_mm, 0.2, 0.1)\\n',\n"
+        "            encoding='utf-8',\n"
+        "        )\n"
+        "        replacement.replace(helper)\n"
+        "    return frozen\n"
+        "canonical_build._read_physical_file = _replace_after_snapshot\n",
         encoding="utf-8",
     )
     environment = dict(os.environ)
@@ -296,7 +289,7 @@ def _run_adapter_with_transient_primary_metadata(
         "    finally:\n"
         "        path.write_bytes(original)\n"
         "def _transient_source_from_path(path, *args, **kwargs):\n"
-        "    if '.canonical-source-worker-' in str(path):\n"
+        "    if 'canonical-source-worker-' in str(path):\n"
         "        return _source_from_path(path, *args, **kwargs)\n"
         "    return _with_transient(\n"
         "        path, lambda: _source_from_path(path, *args, **kwargs)\n"
@@ -412,6 +405,40 @@ def _position_bounds(path: Path) -> tuple[list[float], list[float]]:
 
 
 class CanonicalBuildAdapterTests(unittest.TestCase):
+    def test_linux_worker_contract_mounts_only_worker_output_writable(self) -> None:
+        with temporary_directory(prefix="cad-canonical-bwrap-contract-") as temp_dir:
+            worker_root = Path(temp_dir) / "canonical-source-worker-contract"
+            snapshot_root = worker_root / "sandbox/inputs"
+            worker_output = snapshot_root / ".worker-output"
+            worker_output.mkdir(parents=True)
+            bwrap = Path(temp_dir) / "bwrap"
+            bwrap.write_bytes(b"trusted test runtime")
+            with (
+                mock.patch.object(canonical_worker.platform, "system", return_value="Linux"),
+                mock.patch.object(canonical_worker, "TRUSTED_BWRAP_PATH", bwrap),
+            ):
+                argv = canonical_worker.worker_sandbox_argv(
+                    worker_command=["/trusted/python", "-I"],
+                    snapshot_root=snapshot_root,
+                    worker_output=worker_output,
+                )
+
+        triples = [argv[index : index + 3] for index in range(len(argv) - 2)]
+        self.assertIn("--unshare-net", argv)
+        self.assertIn("--unshare-pid", argv)
+        self.assertIn("--cap-drop", argv)
+        self.assertIn(["--ro-bind", "/", "/"], triples)
+        self.assertIn(
+            ["--ro-bind", os.fspath(snapshot_root), os.fspath(snapshot_root)],
+            triples,
+        )
+        self.assertIn(
+            ["--bind", os.fspath(worker_output), os.fspath(worker_output)],
+            triples,
+        )
+        self.assertLess(argv.index("--tmpfs"), argv.index(os.fspath(snapshot_root)))
+        self.assertEqual(argv[-3:], ["--", "/trusted/python", "-I"])
+
     def test_public_adapter_preserves_world_placement_and_excludes_unreturned_helper_geometry(self) -> None:
         with temporary_directory(prefix="cad-canonical-placement-") as temp_dir:
             root = Path(temp_dir)
@@ -758,7 +785,10 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             )
 
             self.assertNotEqual(0, rejected.returncode)
-            self.assertIn("undeclared input", rejected.stderr)
+            self.assertEqual(
+                "canonical source worker closed status: rejected\n",
+                rejected.stderr,
+            )
             self.assertEqual(0, accepted.returncode, accepted.stderr)
             recipe = json.loads((root / "accepted/rebuild.json").read_text(encoding="utf-8"))
             self.assertEqual(
@@ -1084,12 +1114,10 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             hook.mkdir()
             (hook / "sitecustomize.py").write_text(
                 "from cadpy import canonical_build\n"
-                "_rename = canonical_build.os.rename\n"
-                "def _fail_publication(source, destination, *args, **kwargs):\n"
-                "    if str(destination).endswith('/candidate'):\n"
-                "        raise OSError('deterministic publication failure')\n"
-                "    return _rename(source, destination, *args, **kwargs)\n"
-                "canonical_build.os.rename = _fail_publication\n",
+                "def _fail_publication(**kwargs):\n"
+                "    raise OSError('deterministic publication failure')\n"
+                "canonical_build._rename_directory_no_replace = "
+                "_fail_publication\n",
                 encoding="utf-8",
             )
             environment = dict(os.environ)
@@ -1120,6 +1148,62 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertFalse((root / "candidate").exists())
             self.assertEqual([], list(root.glob(".canonical-build-stage-*")))
 
+    def test_output_parent_substitution_cannot_escape_or_strand_stage(self) -> None:
+        with temporary_directory(
+            prefix="cad-canonical-output-parent-race-"
+        ) as temp_dir:
+            root = Path(temp_dir)
+            _write_canonical_source(root)
+            (root / "delivery").mkdir()
+            (root / "escape").mkdir()
+            hook = root / "hook"
+            hook.mkdir()
+            (hook / "sitecustomize.py").write_text(
+                "from pathlib import Path\n"
+                "from cadpy import canonical_build\n"
+                "_publish = canonical_build._rename_directory_no_replace\n"
+                "def _substitute_parent(**kwargs):\n"
+                "    parent = Path(kwargs['parent_path'])\n"
+                "    moved = parent.with_name('moved-delivery')\n"
+                "    parent.rename(moved)\n"
+                "    parent.symlink_to(parent.with_name('escape'), "
+                "target_is_directory=True)\n"
+                "    return _publish(**kwargs)\n"
+                "canonical_build._rename_directory_no_replace = "
+                "_substitute_parent\n",
+                encoding="utf-8",
+            )
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = os.pathsep.join(
+                (str(hook), str(CADPY_SRC))
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ADAPTER),
+                    "build",
+                    "--source",
+                    "source/model.py",
+                    "--output-dir",
+                    "delivery/candidate",
+                ],
+                cwd=root,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("output parent changed", result.stderr)
+            self.assertFalse((root / "escape/candidate").exists())
+            self.assertFalse((root / "moved-delivery/candidate").exists())
+            self.assertEqual(
+                [],
+                list((root / "moved-delivery").glob(".canonical-build-stage-*")),
+            )
+
     def test_child_module_mutation_cannot_break_parent_cleanup(self) -> None:
         with temporary_directory(
             prefix="cad-canonical-child-module-mutation-"
@@ -1149,6 +1233,154 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertFalse((root / "candidate").exists())
             self.assertEqual([], list(root.glob(".canonical-build-stage-*")))
             self.assertEqual([], list(root.glob(".canonical-source-worker-*")))
+
+    def test_worker_ignores_hostile_startup_hooks_and_redacts_errors(self) -> None:
+        with temporary_directory(
+            prefix="cad-canonical-hostile-startup-"
+        ) as temp_dir:
+            root = Path(temp_dir)
+            source = _write_canonical_source(
+                root,
+                body=(
+                    "from build123d import Box\n"
+                    "raise RuntimeError('TOP SECRET source exception')\n"
+                    "def gen_step():\n"
+                    "    return Box(0.4, 0.2, 0.1)\n"
+                ),
+            )
+            hook = root / "source"
+            for name in ("sitecustomize.py", "usercustomize.py"):
+                (hook / name).write_text(
+                    "from pathlib import Path\n"
+                    "Path('startup-hook-ran').write_text('breach')\n",
+                    encoding="utf-8",
+                )
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = str(CADPY_SRC)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ADAPTER),
+                    "build",
+                    "--source",
+                    source.relative_to(root).as_posix(),
+                    "--input",
+                    "source/sitecustomize.py",
+                    "--input",
+                    "source/usercustomize.py",
+                    "--output-dir",
+                    "candidate",
+                ],
+                cwd=root,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertEqual("", result.stdout)
+            self.assertFalse((root / "startup-hook-ran").exists())
+            self.assertNotIn("TOP SECRET", result.stderr)
+            self.assertNotIn("model.py", result.stderr)
+            self.assertEqual(
+                "canonical source worker closed status: rejected\n",
+                result.stderr,
+            )
+            self.assertFalse((root / "candidate").exists())
+
+    def test_worker_native_export_cannot_escape_private_output(self) -> None:
+        with temporary_directory(
+            prefix="cad-canonical-native-export-escape-"
+        ) as temp_dir:
+            root = Path(temp_dir)
+            source = _write_canonical_source(
+                root,
+                body=(
+                    "from build123d import Box, export_step\n"
+                    "export_step(Box(0.1, 0.1, 0.1), "
+                    "'../../candidate/escaped.step')\n"
+                    "def gen_step():\n"
+                    "    return Box(0.4, 0.2, 0.1)\n"
+                ),
+            )
+
+            result = _run_adapter(
+                root,
+                "build",
+                "--source",
+                source.relative_to(root).as_posix(),
+                "--output-dir",
+                "candidate",
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertFalse((root / "candidate").exists())
+            self.assertFalse((root / "escaped.step").exists())
+
+    def test_worker_profile_closes_timeout_output_and_child_processes(self) -> None:
+        attacks = {
+            "timeout": (
+                "from build123d import Box\n"
+                "while True:\n"
+                "    pass\n"
+            ),
+            "output": (
+                "import os\n"
+                "from build123d import Box\n"
+                "os.write(1, b'x' * 70000)\n"
+            ),
+            "child": (
+                "import os\n"
+                "from build123d import Box\n"
+                "os.fork()\n"
+            ),
+        }
+        for name, attack in attacks.items():
+            with self.subTest(name=name), temporary_directory(
+                prefix=f"cad-canonical-worker-profile-{name}-"
+            ) as temp_dir:
+                root = Path(temp_dir)
+                source = _write_canonical_source(
+                    root,
+                    body=(
+                        attack
+                        + "def gen_step():\n"
+                        + "    return Box(0.4, 0.2, 0.1)\n"
+                    ),
+                )
+                hook = root / "hook"
+                hook.mkdir()
+                (hook / "sitecustomize.py").write_text(
+                    "from cadpy import canonical_build\n"
+                    "canonical_build.WORKER_PROFILE['timeout_seconds'] = 1\n",
+                    encoding="utf-8",
+                )
+                environment = dict(os.environ)
+                environment["PYTHONPATH"] = os.pathsep.join(
+                    (str(hook), str(CADPY_SRC))
+                )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ADAPTER),
+                        "build",
+                        "--source",
+                        source.relative_to(root).as_posix(),
+                        "--output-dir",
+                        "candidate",
+                    ],
+                    cwd=root,
+                    env=environment,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                )
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("closed status", result.stderr)
+                self.assertFalse((root / "candidate").exists())
 
     def test_concurrent_parent_state_stays_stable_during_worker_execution(
         self,
@@ -1303,7 +1535,13 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
 
                     self.assertNotEqual(0, result.returncode)
                     self.assertEqual("", result.stdout)
-                    self.assertIn("file descriptor", result.stderr)
+                    if operation in {"posix", "raw-io"}:
+                        self.assertIn(
+                            "direct file descriptor internals",
+                            result.stderr,
+                        )
+                    else:
+                        self.assertIn("closed status: rejected", result.stderr)
                     self.assertFalse(
                         (root / "candidate/canonical.step").exists()
                     )
@@ -1332,7 +1570,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertEqual(1, result.returncode)
             self.assertEqual("caller stdout usable\n", result.stdout)
             self.assertIn("caller stderr usable", result.stderr)
-            self.assertIn("file descriptor", result.stderr)
+            self.assertIn("closed status: rejected", result.stderr)
             self.assertFalse((root / "candidate/canonical.step").exists())
             self.assertFalse((root / "candidate/measurement.glb").exists())
             self.assertFalse((root / "candidate/build.json").exists())
@@ -1369,7 +1607,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertEqual(1, result.returncode)
             self.assertEqual("caller stdout usable\n", result.stdout)
             self.assertIn("caller stderr usable", result.stderr)
-            self.assertIn("file descriptor", result.stderr)
+            self.assertIn("closed status: rejected", result.stderr)
             self.assertNotIn("saved descriptor noise", result.stdout)
             self.assertNotIn("saved descriptor noise", result.stderr)
             self.assertFalse((root / "candidate/canonical.step").exists())
@@ -1564,7 +1802,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
                 "candidate",
             )
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("forbids writes outside", result.stderr)
+            self.assertIn("closed status: rejected", result.stderr)
             self.assertFalse((root / "candidate/build.json").exists())
 
     def test_adapter_keeps_declared_inputs_read_only(self) -> None:
@@ -1597,7 +1835,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
                 "candidate",
             )
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("outside the output directory", result.stderr)
+            self.assertIn("closed status: rejected", result.stderr)
             self.assertEqual("0.2\n", sidecar.read_text(encoding="utf-8"))
 
     def test_adapter_confines_non_open_filesystem_mutations_to_output_directory(self) -> None:
@@ -1640,7 +1878,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
                 )
 
                 self.assertNotEqual(0, result.returncode)
-                self.assertIn("outside the output directory", result.stderr)
+                self.assertIn("closed status: rejected", result.stderr)
                 self.assertEqual("keep\n", victim.read_text(encoding="utf-8"))
                 self.assertFalse((root / "moved.txt").exists())
                 self.assertFalse((root / "outside").exists())

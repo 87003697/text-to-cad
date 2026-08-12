@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ast
 import builtins
+import ctypes
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
@@ -18,9 +19,9 @@ import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
+import secrets
 import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 from typing import Any
@@ -30,6 +31,12 @@ from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
 
 from cadpy.catalog import source_from_path
+from cadpy.canonical_worker import (
+    WORKER_PROFILE,
+    run_worker_bounded as _run_worker_bounded,
+    trusted_worker_import_paths as _trusted_worker_import_paths,
+    worker_sandbox_argv as _worker_sandbox_argv,
+)
 from cadpy.generation import _entry_spec_from_source, run_script_generator
 from cadpy.glb import export_canonical_measurement_glb_from_scene
 from cadpy.step_export import write_xcaf_doc_step_file
@@ -51,6 +58,10 @@ OUTPUT_FILES = {
     "manifest": "build.json",
     "recipe": "rebuild.json",
 }
+
+
+class _WorkerClosedError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -1215,6 +1226,13 @@ def _worker_main(argv: list[str]) -> int:
     return 0
 
 
+def _worker_entrypoint(argv: list[str]) -> int:
+    try:
+        return _worker_main(argv)
+    except BaseException:
+        return 41
+
+
 @contextmanager
 def _source_worker_step(
     *,
@@ -1222,68 +1240,60 @@ def _source_worker_step(
     source_relative: str,
     declared_inputs: list[tuple[Path, str]],
     frozen_inputs: dict[Path, _DeclaredPythonModule],
-    temporary_parent: Path,
 ):
-    worker_root = Path(
-        tempfile.mkdtemp(
-            prefix=".canonical-source-worker-",
-            dir=temporary_parent,
-        )
-    )
-    snapshot_root = worker_root / "inputs"
-    snapshot_root.mkdir()
+    worker_root = Path(tempfile.mkdtemp(prefix="canonical-source-worker-"))
+    snapshot_root = worker_root / "sandbox/inputs"
+    snapshot_root.mkdir(parents=True)
     worker_output_name = ".worker-output"
     worker_output = snapshot_root / worker_output_name
     worker_output.mkdir()
     try:
         _materialize_frozen_inputs(snapshot_root, frozen_inputs)
         worker_output.chmod(0o700)
-        command = [
+        trusted_paths = _trusted_worker_import_paths()
+        bootstrap = (
+            "import json,sys; "
+            "sys.path[:0]=json.loads(sys.argv[1]); "
+            "from cadpy.canonical_build import _worker_entrypoint; "
+            "from cadpy.canonical_worker import worker_resource_limits; "
+            "worker_resource_limits(); "
+            "raise SystemExit(_worker_entrypoint(sys.argv[2:]))"
+        )
+        worker_command = [
             sys.executable,
+            "-I",
+            "-P",
+            "-S",
             "-c",
-            (
-                "import sys; from cadpy.canonical_build import _worker_main; "
-                "raise SystemExit(_worker_main(sys.argv[1:]))"
-            ),
+            bootstrap,
+            json.dumps(trusted_paths),
             "--root",
             os.fspath(snapshot_root),
             "--source",
             source_relative,
         ]
         for _input_path, input_relative in declared_inputs[1:]:
-            command.extend(("--input", input_relative))
+            worker_command.extend(("--input", input_relative))
         intermediate_relative = f"{worker_output_name}/intermediate.step"
-        command.extend(("--output", intermediate_relative))
+        worker_command.extend(("--output", intermediate_relative))
+        command = _worker_sandbox_argv(
+            worker_command=worker_command,
+            snapshot_root=snapshot_root,
+            worker_output=worker_output,
+        )
         environment = {
             "LANG": "C.UTF-8",
             "PATH": os.environ.get("PATH", ""),
             "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONPATH": os.pathsep.join(
-                entry for entry in sys.path if entry
-            ),
         }
-        completed = subprocess.run(
+        worker_status = _run_worker_bounded(
             command,
             cwd=snapshot_root,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
+            environment=environment,
         )
-        if completed.returncode != 0:
-            diagnostic = (
-                completed.stderr.strip().splitlines()[-1]
-                if completed.stderr.strip()
-                else "worker exited without a diagnostic"
-            )
-            raise RuntimeError(
-                f"canonical source worker failed: {diagnostic}"
-            )
-        if completed.stdout or completed.stderr:
-            raise RuntimeError(
-                "canonical source worker emitted forbidden output"
+        if worker_status != "ok":
+            raise _WorkerClosedError(
+                "canonical source worker closed status: " + worker_status
             )
         intermediate_path = snapshot_root / intermediate_relative
         info = intermediate_path.lstat()
@@ -1385,7 +1395,6 @@ def _build_staged(
         source_relative=source_relative,
         declared_inputs=declared_inputs,
         frozen_inputs=frozen_inputs,
-        temporary_parent=output_path.parent,
     ) as intermediate_step:
         worker_scene = load_step_scene(intermediate_step)
         _validate_scene(worker_scene, step_path=intermediate_step)
@@ -1552,6 +1561,58 @@ def _validate_staged_delivery(
         )
 
 
+def _rename_directory_no_replace(
+    *,
+    parent_fd: int,
+    parent_path: Path,
+    expected_parent: tuple[int, int],
+    source_name: str,
+    destination_name: str,
+) -> None:
+    live_parent = parent_path.lstat()
+    if (live_parent.st_dev, live_parent.st_ino) != expected_parent:
+        raise RuntimeError("canonical build output parent changed")
+    libc = ctypes.CDLL(None, use_errno=True)
+    source = os.fsencode(source_name)
+    destination = os.fsencode(destination_name)
+    if platform.system() == "Linux" and hasattr(libc, "renameat2"):
+        status = libc.renameat2(
+            parent_fd,
+            source,
+            parent_fd,
+            destination,
+            1,
+        )
+    elif platform.system() == "Darwin" and hasattr(libc, "renameatx_np"):
+        status = libc.renameatx_np(
+            parent_fd,
+            source,
+            parent_fd,
+            destination,
+            0x00000004,
+        )
+    else:
+        raise RuntimeError("atomic no-replace publication is unavailable")
+    if status != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), destination_name)
+
+
+def _cleanup_flat_stage(
+    *,
+    parent_fd: int,
+    stage_fd: int,
+    stage_name: str,
+) -> None:
+    for name in os.listdir(stage_fd):
+        info = os.stat(name, dir_fd=stage_fd, follow_symlinks=False)
+        if stat.S_ISDIR(info.st_mode):
+            os.rmdir(name, dir_fd=stage_fd)
+        else:
+            os.unlink(name, dir_fd=stage_fd)
+    os.rmdir(stage_name, dir_fd=parent_fd)
+
+
 def build(
     *,
     root: Path,
@@ -1566,16 +1627,31 @@ def build(
         root=root,
         label="--output-dir",
     )
-    if output_path.exists():
-        raise ValueError("--output-dir must not already exist")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    stage_path = Path(
-        tempfile.mkdtemp(
-            prefix=".canonical-build-stage-",
-            dir=output_path.parent,
-        )
-    )
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    parent_fd = os.open(output_path.parent, directory_flags)
+    stage_fd = -1
+    stage_name = ".canonical-build-stage-" + secrets.token_hex(12)
+    stage_path = output_path.parent / stage_name
+    published = False
     try:
+        parent_info = os.fstat(parent_fd)
+        live_parent_info = output_path.parent.lstat()
+        if (
+            parent_info.st_dev != live_parent_info.st_dev
+            or parent_info.st_ino != live_parent_info.st_ino
+        ):
+            raise RuntimeError("canonical build output parent changed")
+        try:
+            os.stat(output_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError("--output-dir must not already exist")
+        os.mkdir(stage_name, mode=0o700, dir_fd=parent_fd)
+        stage_fd = os.open(stage_name, directory_flags, dir_fd=parent_fd)
         manifest = _build_staged(
             root=root,
             source=source,
@@ -1588,11 +1664,31 @@ def build(
             stage_path,
             expected_names=set(OUTPUT_FILES.values()),
         )
-        os.rename(stage_path, output_path)
+        live_parent_info = output_path.parent.lstat()
+        if (
+            parent_info.st_dev != live_parent_info.st_dev
+            or parent_info.st_ino != live_parent_info.st_ino
+        ):
+            raise RuntimeError("canonical build output parent changed")
+        _rename_directory_no_replace(
+            parent_fd=parent_fd,
+            parent_path=output_path.parent,
+            expected_parent=(parent_info.st_dev, parent_info.st_ino),
+            source_name=stage_name,
+            destination_name=output_path.name,
+        )
+        published = True
         return manifest
     finally:
-        if stage_path.exists():
-            shutil.rmtree(stage_path)
+        if not published and stage_fd >= 0:
+            _cleanup_flat_stage(
+                parent_fd=parent_fd,
+                stage_fd=stage_fd,
+                stage_name=stage_name,
+            )
+        if stage_fd >= 0:
+            os.close(stage_fd)
+        os.close(parent_fd)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1608,7 +1704,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "build":
         manifest = build(root=Path.cwd(), source=args.source, output_dir=args.output_dir, inputs=args.input)
@@ -1633,6 +1729,14 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"ok": True, **manifest}, separators=(",", ":")))
         return 0
     raise AssertionError(f"unsupported command: {args.command}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        return _main(argv)
+    except _WorkerClosedError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
 
 __all__ = ["ADAPTER_ID", "BUILD_SCHEMA", "PROFILE_ID", "RECIPE_SCHEMA", "build", "main"]
