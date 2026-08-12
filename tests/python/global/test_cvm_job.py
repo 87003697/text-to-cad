@@ -513,6 +513,35 @@ class CvmJobTests(unittest.TestCase):
                     "timeout_seconds": 5,
                     "expected_stdout": "cvm.browser-stage-exec-probe/1",
                 },
+                "sandbox_exec_diagnostics": {
+                    "schema": (
+                        protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA
+                    ),
+                    "receipt": (
+                        protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
+                    ),
+                    "executable": (
+                        protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE
+                    ),
+                    "argv_suffix": ["--version"],
+                    "lifecycle": "non-rendering-immediate-exit",
+                    "environment_names": ["HOME", "LANG", "PATH"],
+                    "network": "none",
+                    "timeout_seconds": 5,
+                    "result": {
+                        "exit_code": 0,
+                        "stdout": "single-chromium-version-line",
+                        "stdout_max_bytes": 128,
+                        "stderr": "empty",
+                    },
+                    "seams": [
+                        "outer-direct",
+                        "nested-direct",
+                        "playwright-launch",
+                    ],
+                    "published": "closed-outcomes-only-no-raw-output",
+                    "cleanup": "no-profile-or-persistent-process-artifacts",
+                },
                 "nested_mount": "read-only-exact-staged-cache",
                 "launch_handoff": {
                     "environment": "MESHSHOT_BROWSER_EXECUTABLE",
@@ -723,6 +752,28 @@ class CvmJobTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            (
+                exp_dir / protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
+            ).write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA
+                        ),
+                        "executable": (
+                            protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE
+                        ),
+                        "probe": "chromium-version-immediate-exit",
+                        "outer": "passed",
+                        "nested": "passed",
+                        "playwright": "passed",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             for name, data in (
                 ("run/runtime-authority-smoke.json", b"{}\n"),
                 ("workspace-authority.json", b"{}\n"),
@@ -876,9 +927,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/7",
+                "id": "issue15.provider-free-bounded/8",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/7",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/8",
             },
         )
         self.assertEqual(
@@ -1004,7 +1055,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/7",
+            "issue15.provider-free-bounded/8",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],
@@ -1206,6 +1257,39 @@ class CvmJobTests(unittest.TestCase):
             self.assertEqual(result["process_exit_code"], 1)
             self.assertEqual(result["runner_final_status"], 1)
         self.assertEqual(exit_code, 1)
+
+    def test_monitor_rejects_unbound_browser_exec_diagnostic(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **kwargs):
+            raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
+            self.write_provider_free_failure_evidence(
+                handle,
+                stage="native_measurement",
+                operation="preview_browser_outer_exec_probe",
+                stripped=raw_stripped.split(",") if raw_stripped else [],
+            )
+            return 1, 4321
+
+        with mock.patch.object(
+            runtime,
+            "_run_with_heartbeat",
+            side_effect=fake_run,
+        ):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        self.assertEqual("failed", state["state"])
+        self.assertNotIn("scenario_failure", state)
+        self.assertIn("browser exec diagnostic", state["failure_reason"])
 
     def test_real_runner_startup_projects_manifest_bound_scenario_failure(
         self,
@@ -2612,6 +2696,55 @@ server.listen(0, host, () => {
 
         self.assertEqual(state["state"], "failed")
         self.assertIn("preview sandbox evidence", state["failure_reason"])
+
+    def test_provider_free_supervisor_rejects_tampered_browser_exec_diagnostic(
+        self,
+    ) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **_kwargs):
+            self.write_provider_free_terminal_evidence(handle, stripped=[])
+            exp_dir = self.repo_root / "outputs" / handle
+            path = exp_dir / protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
+            diagnostic = json.loads(path.read_text(encoding="utf-8"))
+            diagnostic["stdout"] = "sensitive raw browser output"
+            path.write_text(
+                json.dumps(diagnostic, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            manifest_path = exp_dir / "artifact_manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            data = path.read_bytes()
+            entry = next(
+                item
+                for item in manifest["files"]
+                if item["path"]
+                == protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
+            )
+            entry.update(
+                size_bytes=len(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+            )
+            manifest_path.write_text(
+                json.dumps(manifest, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return 0, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        self.assertEqual("failed", state["state"])
+        self.assertIn("browser exec diagnostic", state["failure_reason"])
 
     def test_submit_launch_failure_is_terminal(self) -> None:
         def fail_detach(handle, command, root):

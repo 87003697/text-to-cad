@@ -63,7 +63,7 @@ _SANDBOX_SETUP_CAPABILITIES = (
     "CAP_SETFCAP",
 )
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/7",
+    "schema": "cvm.provider-free-linux-sandbox/8",
     "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -98,6 +98,28 @@ _SANDBOX_PROFILE = {
             "network": "none",
             "timeout_seconds": 5,
             "expected_stdout": "cvm.browser-stage-exec-probe/1",
+        },
+        "sandbox_exec_diagnostics": {
+            "schema": "cvm.provider-free-browser-exec-diagnostic/1",
+            "receipt": "run/browser-exec-diagnostic.json",
+            "executable": (
+                "/tmp/provider-free-playwright/attested/"
+                "chrome-headless-shell-linux64/chrome-headless-shell"
+            ),
+            "argv_suffix": ["--version"],
+            "lifecycle": "non-rendering-immediate-exit",
+            "environment_names": ["HOME", "LANG", "PATH"],
+            "network": "none",
+            "timeout_seconds": 5,
+            "result": {
+                "exit_code": 0,
+                "stdout": "single-chromium-version-line",
+                "stdout_max_bytes": 128,
+                "stderr": "empty",
+            },
+            "seams": ["outer-direct", "nested-direct", "playwright-launch"],
+            "published": "closed-outcomes-only-no-raw-output",
+            "cleanup": "no-profile-or-persistent-process-artifacts",
         },
         "nested_mount": "read-only-exact-staged-cache",
         "launch_handoff": {
@@ -450,6 +472,9 @@ def _runtime_authority_verdict(
         preview_sandbox = _read_json(
             workspace / "run/preview-sandbox-enforcement.json"
         )
+        browser_exec_diagnostic = _read_json(
+            workspace / "run/browser-exec-diagnostic.json"
+        )
         manifest = _read_json(workspace / "artifact_manifest.json")
         if (
             deployed.get("schema") != "cvm.deployed-source-authority/1"
@@ -750,14 +775,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/7",
+                "id": "issue15.provider-free-bounded/8",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/7",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/8",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/7",
+                "resource_profile": "issue15.provider-free-bounded/8",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False
@@ -901,6 +926,18 @@ def _runtime_authority_verdict(
             or preview_sandbox.get("mount_namespace") != "inherit-outer"
         ):
             raise ReviewError("preview sandbox enforcement is incomplete")
+        if browser_exec_diagnostic != {
+            "schema": "cvm.provider-free-browser-exec-diagnostic/1",
+            "executable": (
+                "/tmp/provider-free-playwright/attested/"
+                "chrome-headless-shell-linux64/chrome-headless-shell"
+            ),
+            "probe": "chromium-version-immediate-exit",
+            "outer": "passed",
+            "nested": "passed",
+            "playwright": "passed",
+        }:
+            raise ReviewError("browser exec diagnostic is incomplete")
         manifest_files = manifest.get("files")
         if manifest.get("final_status") != 0 or not isinstance(manifest_files, list):
             raise ReviewError("terminal artifact manifest is incomplete")
@@ -914,6 +951,7 @@ def _runtime_authority_verdict(
             "run/provider-free-execution.json",
             command_path,
             preview_path,
+            "run/browser-exec-diagnostic.json",
             "run/deployed-source-authority.json",
             "run/sandbox-enforcement.json",
         ):

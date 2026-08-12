@@ -361,6 +361,32 @@ class PilotReviewTests(unittest.TestCase):
                     "timeout_seconds": 5,
                     "expected_stdout": "cvm.browser-stage-exec-probe/1",
                 },
+                "sandbox_exec_diagnostics": {
+                    "schema": "cvm.provider-free-browser-exec-diagnostic/1",
+                    "receipt": "run/browser-exec-diagnostic.json",
+                    "executable": (
+                        "/tmp/provider-free-playwright/attested/"
+                        "chrome-headless-shell-linux64/chrome-headless-shell"
+                    ),
+                    "argv_suffix": ["--version"],
+                    "lifecycle": "non-rendering-immediate-exit",
+                    "environment_names": ["HOME", "LANG", "PATH"],
+                    "network": "none",
+                    "timeout_seconds": 5,
+                    "result": {
+                        "exit_code": 0,
+                        "stdout": "single-chromium-version-line",
+                        "stdout_max_bytes": 128,
+                        "stderr": "empty",
+                    },
+                    "seams": [
+                        "outer-direct",
+                        "nested-direct",
+                        "playwright-launch",
+                    ],
+                    "published": "closed-outcomes-only-no-raw-output",
+                    "cleanup": "no-profile-or-persistent-process-artifacts",
+                },
                 "nested_mount": "read-only-exact-staged-cache",
                 "launch_handoff": {
                     "environment": "MESHSHOT_BROWSER_EXECUTABLE",
@@ -446,13 +472,13 @@ class PilotReviewTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/7",
+                "id": "issue15.provider-free-bounded/8",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/7",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/8",
             },
             "sandbox": {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/7",
+                "resource_profile": "issue15.provider-free-bounded/8",
             },
             "provider_environment": {
                 "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],
@@ -809,6 +835,20 @@ class PilotReviewTests(unittest.TestCase):
                 "mount_namespace": "inherit-outer",
             },
         )
+        write_json(
+            self.exp / "run/browser-exec-diagnostic.json",
+            {
+                "schema": "cvm.provider-free-browser-exec-diagnostic/1",
+                "executable": (
+                    "/tmp/provider-free-playwright/attested/"
+                    "chrome-headless-shell-linux64/chrome-headless-shell"
+                ),
+                "probe": "chromium-version-immediate-exit",
+                "outer": "passed",
+                "nested": "passed",
+                "playwright": "passed",
+            },
+        )
         write_json(self.exp / "run/runtime-authority-smoke.json", receipt)
         write_json(self.exp / "run/provider-free-execution.json", proof)
         manifest_files = []
@@ -997,6 +1037,30 @@ class PilotReviewTests(unittest.TestCase):
                 )[0]
                 self.assertEqual("not_auditable", verdict)
         write_json(preview_path, authoritative_preview)
+        write_json(self.exp / "artifact_manifest.json", authoritative_manifest)
+
+        diagnostic_path = self.exp / "run/browser-exec-diagnostic.json"
+        diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+        diagnostic["stdout"] = "sensitive raw browser output"
+        write_json(diagnostic_path, diagnostic)
+        diagnostic_manifest = json.loads(json.dumps(authoritative_manifest))
+        diagnostic_data = diagnostic_path.read_bytes()
+        diagnostic_entry = next(
+            item
+            for item in diagnostic_manifest["files"]
+            if item["path"] == "run/browser-exec-diagnostic.json"
+        )
+        diagnostic_entry.update(
+            size_bytes=len(diagnostic_data),
+            sha256=hashlib.sha256(diagnostic_data).hexdigest(),
+        )
+        write_json(self.exp / "artifact_manifest.json", diagnostic_manifest)
+        verdict = self.reviewer._runtime_authority_verdict(
+            self.exp, workspace_payload
+        )[0]
+        self.assertEqual("not_auditable", verdict)
+        diagnostic.pop("stdout")
+        write_json(diagnostic_path, diagnostic)
         write_json(self.exp / "artifact_manifest.json", authoritative_manifest)
 
         proof["requests"]["provider"] = 1

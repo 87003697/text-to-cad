@@ -45,6 +45,12 @@ PROVIDER_FREE_PREVIEW_SANDBOX_PATH = "run/preview-sandbox-enforcement.json"
 PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA = (
     "cvm.provider-free-preview-sandbox-enforcement/1"
 )
+PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH = (
+    "run/browser-exec-diagnostic.json"
+)
+PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA = (
+    "cvm.provider-free-browser-exec-diagnostic/1"
+)
 PROVIDER_FREE_STAGED_BROWSER_CACHE = "/tmp/provider-free-playwright"
 PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE = (
     f"{PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested/"
@@ -109,6 +115,74 @@ def provider_free_preview_sandbox_receipt_allowed(
         and receipt.get("capabilities") == "drop-all"
         and receipt.get("mount_namespace") == "inherit-outer"
     )
+
+
+def provider_free_browser_exec_diagnostic_allowed(receipt: object) -> bool:
+    """Validate closed outer, nested, and Playwright launch outcomes."""
+
+    if (
+        not isinstance(receipt, dict)
+        or set(receipt)
+        != {
+            "schema",
+            "executable",
+            "probe",
+            "outer",
+            "nested",
+            "playwright",
+        }
+        or receipt.get("schema")
+        != PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA
+        or receipt.get("executable")
+        != PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE
+        or receipt.get("probe") != "chromium-version-immediate-exit"
+    ):
+        return False
+    outcomes = (
+        receipt.get("outer"),
+        receipt.get("nested"),
+        receipt.get("playwright"),
+    )
+    return outcomes in {
+        ("failed", "not-run", "not-run"),
+        ("passed", "failed", "not-run"),
+        ("passed", "passed", "failed"),
+        ("passed", "passed", "passed"),
+    }
+
+
+def provider_free_browser_exec_diagnostic_matches_operation(
+    receipt: object,
+    operation: object,
+) -> bool:
+    """Bind one diagnostic failure operation to its exact closed outcomes."""
+
+    if not provider_free_browser_exec_diagnostic_allowed(receipt):
+        return False
+    expected = {
+        "preview_browser_outer_exec_probe": (
+            "failed",
+            "not-run",
+            "not-run",
+        ),
+        "preview_browser_nested_exec_probe": (
+            "passed",
+            "failed",
+            "not-run",
+        ),
+        "preview_browser_playwright_launch_after_direct_probes": (
+            "passed",
+            "passed",
+            "failed",
+        ),
+    }.get(operation)
+    return expected == (
+        receipt.get("outer"),
+        receipt.get("nested"),
+        receipt.get("playwright"),
+    )
+
+
 PROVIDER_FREE_SCENARIO_FAILURE_STAGES = frozenset(
     {
         "viewer_deployment",
@@ -137,6 +211,9 @@ PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS_BY_STAGE = {
             "voxblame_preview",
             "preview_runtime",
             "preview_browser_runtime_staging",
+            "preview_browser_outer_exec_probe",
+            "preview_browser_nested_exec_probe",
+            "preview_browser_playwright_launch_after_direct_probes",
             "preview_dependency",
             "preview_browser_launch",
             "preview_browser_launch_process_limit",

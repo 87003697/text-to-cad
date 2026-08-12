@@ -60,6 +60,9 @@ Native measurement operations are:
 - `voxblame_preview`
 - `preview_runtime`
 - `preview_browser_runtime_staging`
+- `preview_browser_outer_exec_probe`
+- `preview_browser_nested_exec_probe`
+- `preview_browser_playwright_launch_after_direct_probes`
 - `preview_dependency`
 - `preview_browser_launch`
 - `preview_browser_launch_process_limit`
@@ -76,6 +79,17 @@ Native measurement operations are:
 - `preview_browser_render`
 - `preview_browser_result`
 - `step_publication`
+
+The three browser-exec diagnostic operations are backed by the manifest-bound
+`run/browser-exec-diagnostic.json` receipt. It contains only closed
+`passed`/`failed`/`not-run` outcomes for the outer direct Chromium `--version`
+probe, the same exact executable through the nested preview sandbox, and the
+subsequent Playwright launch. The probe uses a five-second timeout, a closed
+`HOME`/`LANG`/`PATH` environment, no provider or network access, and accepts
+only exit zero, one bounded Chromium version line, and empty stderr. Raw
+stdout, stderr, exception text, environment values, and arbitrary operations
+are never projected by the monitor. A diagnostic operation is rejected unless
+its receipt has the corresponding exact outcome tuple and manifest binding.
 
 Historical three-field receipts remain valid. An operation on any other stage,
 an operation assigned to the wrong stage, or any value outside these lists,

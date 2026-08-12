@@ -5,6 +5,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -437,6 +438,9 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             "step_publication",
             "preview_runtime",
             "preview_browser_runtime_staging",
+            "preview_browser_outer_exec_probe",
+            "preview_browser_nested_exec_probe",
+            "preview_browser_playwright_launch_after_direct_probes",
             "preview_dependency",
             "preview_browser_launch",
             "preview_browser_launch_process_limit",
@@ -531,6 +535,265 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                         )
 
                 self.assertEqual(operation, raised.exception.operation)
+
+    def test_preview_reports_outer_exact_browser_exec_probe_failure(self) -> None:
+        command_log = self.repo / "run/provider-free-commands.jsonl"
+        with (
+            mock.patch.object(
+                provider_free_scenarios.platform,
+                "system",
+                return_value="Linux",
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_validate_attested_browser_runtime",
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_preview_sandbox_argv",
+                return_value=["nested-preview"],
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_run_public",
+                return_value={"ok": True},
+            ) as run_public,
+            mock.patch.object(
+                provider_free_scenarios.subprocess,
+                "run",
+                side_effect=PermissionError("injected outer exec denial"),
+            ) as run,
+            self.assertRaises(
+                provider_free_scenarios.ScenarioError
+            ) as raised,
+        ):
+            provider_free_scenarios._run_voxblame_preview(
+                ["mesh-compare", "voxblame-preview"],
+                cwd=self.repo,
+                command_log=command_log,
+            )
+
+        self.assertEqual(
+            "preview_browser_outer_exec_probe",
+            raised.exception.operation,
+        )
+        run.assert_called_once_with(
+            [protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE, "--version"],
+            cwd=self.repo,
+            env={
+                "HOME": "/nonexistent",
+                "LANG": "C.UTF-8",
+                "PATH": "/usr/bin:/bin",
+            },
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=5,
+            start_new_session=True,
+            close_fds=True,
+        )
+        run_public.assert_not_called()
+        self.assertEqual(
+            {
+                "schema": "cvm.provider-free-browser-exec-diagnostic/1",
+                "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+                "probe": "chromium-version-immediate-exit",
+                "outer": "failed",
+                "nested": "not-run",
+                "playwright": "not-run",
+            },
+            json.loads(
+                (self.repo / "run/browser-exec-diagnostic.json").read_text(
+                    encoding="utf-8"
+                )
+            ),
+        )
+
+    def test_preview_reports_nested_exact_browser_exec_probe_failure(self) -> None:
+        bwrap = self.repo / "bwrap"
+        bwrap.write_text("#!/bin/sh\n", encoding="utf-8")
+        bwrap.chmod(0o755)
+        command_log = self.repo / "run/provider-free-commands.jsonl"
+        outer = subprocess.CompletedProcess(
+            [protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE, "--version"],
+            0,
+            stdout=b"Chromium 123.0.0.0\n",
+            stderr=b"",
+        )
+        with (
+            mock.patch.object(
+                provider_free_scenarios.platform,
+                "system",
+                return_value="Linux",
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "TRUSTED_BWRAP_PATH",
+                bwrap,
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_validate_attested_browser_runtime",
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_run_public",
+                return_value={"ok": True},
+            ) as run_public,
+            mock.patch.object(
+                provider_free_scenarios.subprocess,
+                "run",
+                side_effect=[
+                    outer,
+                    PermissionError("injected nested exec denial"),
+                ],
+            ) as run,
+            self.assertRaises(
+                provider_free_scenarios.ScenarioError
+            ) as raised,
+        ):
+            provider_free_scenarios._run_voxblame_preview(
+                ["mesh-compare", "voxblame-preview"],
+                cwd=self.repo,
+                command_log=command_log,
+            )
+
+        self.assertEqual(
+            "preview_browser_nested_exec_probe",
+            raised.exception.operation,
+        )
+        self.assertEqual(2, run.call_count)
+        self.assertEqual(
+            [
+                str(bwrap),
+                "--die-with-parent",
+                "--new-session",
+                "--cap-drop",
+                "ALL",
+                "--clearenv",
+                "--setenv",
+                "HOME",
+                "/nonexistent",
+                "--setenv",
+                "LANG",
+                "C.UTF-8",
+                "--setenv",
+                "PATH",
+                "/usr/bin:/bin",
+                "--bind",
+                "/",
+                "/",
+                "--ro-bind",
+                protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE,
+                protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE,
+                "--chdir",
+                str(self.repo),
+                "--",
+                protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+                "--version",
+            ],
+            run.call_args_list[1].args[0],
+        )
+        self.assertEqual(
+            {
+                "HOME": "/nonexistent",
+                "LANG": "C.UTF-8",
+                "PATH": "/usr/bin:/bin",
+            },
+            run.call_args_list[1].kwargs["env"],
+        )
+        run_public.assert_not_called()
+        self.assertEqual(
+            {
+                "schema": "cvm.provider-free-browser-exec-diagnostic/1",
+                "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+                "probe": "chromium-version-immediate-exit",
+                "outer": "passed",
+                "nested": "failed",
+                "playwright": "not-run",
+            },
+            json.loads(
+                (self.repo / "run/browser-exec-diagnostic.json").read_text(
+                    encoding="utf-8"
+                )
+            ),
+        )
+
+    def test_preview_distinguishes_playwright_after_both_exec_probes_pass(
+        self,
+    ) -> None:
+        bwrap = self.repo / "bwrap"
+        bwrap.write_text("#!/bin/sh\n", encoding="utf-8")
+        bwrap.chmod(0o755)
+        command_log = self.repo / "run/provider-free-commands.jsonl"
+        passed = subprocess.CompletedProcess(
+            [protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE, "--version"],
+            0,
+            stdout=b"Google Chrome for Testing 123.0.0.0\n",
+            stderr=b"",
+        )
+        with (
+            mock.patch.object(
+                provider_free_scenarios.platform,
+                "system",
+                return_value="Linux",
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "TRUSTED_BWRAP_PATH",
+                bwrap,
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_validate_attested_browser_runtime",
+            ),
+            mock.patch.object(
+                provider_free_scenarios.subprocess,
+                "run",
+                side_effect=[passed, passed],
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_run_public",
+                side_effect=provider_free_scenarios.ScenarioError(
+                    "sensitive Playwright launch detail",
+                    classification=(
+                        "preview_browser_launch_executable_"
+                        "spawn_permission_failed"
+                    ),
+                ),
+            ),
+            self.assertRaises(
+                provider_free_scenarios.ScenarioError
+            ) as raised,
+        ):
+            provider_free_scenarios._run_voxblame_preview(
+                ["mesh-compare", "voxblame-preview"],
+                cwd=self.repo,
+                command_log=command_log,
+            )
+
+        self.assertEqual(
+            "preview_browser_playwright_launch_after_direct_probes",
+            raised.exception.operation,
+        )
+        self.assertNotIn("sensitive", str(raised.exception))
+        self.assertEqual(
+            {
+                "schema": "cvm.provider-free-browser-exec-diagnostic/1",
+                "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+                "probe": "chromium-version-immediate-exit",
+                "outer": "passed",
+                "nested": "passed",
+                "playwright": "failed",
+            },
+            json.loads(
+                (self.repo / "run/browser-exec-diagnostic.json").read_text(
+                    encoding="utf-8"
+                )
+            ),
+        )
 
     def test_preview_linux_child_drops_outer_setup_capabilities(self) -> None:
         bwrap = self.repo / "bwrap"

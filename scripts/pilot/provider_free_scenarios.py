@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import platform
+import re
 import selectors
 import shutil
 import signal
@@ -25,6 +26,8 @@ from urllib.request import urlopen
 
 from scripts.pilot import deployment_authority
 from scripts.pilot.cvm_job.protocol import (
+    PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
+    PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA,
     PROVIDER_FREE_STAGED_BROWSER_CACHE,
@@ -62,6 +65,16 @@ NATIVE_BACKEND = {
 COMMAND_TIMEOUT_SECONDS = 600
 VIEWER_TIMEOUT_SECONDS = 60
 TRUSTED_BWRAP_PATH = Path("/usr/bin/bwrap")
+BROWSER_EXEC_PROBE_TIMEOUT_SECONDS = 5
+BROWSER_EXEC_PROBE_ENVIRONMENT = {
+    "HOME": "/nonexistent",
+    "LANG": "C.UTF-8",
+    "PATH": "/usr/bin:/bin",
+}
+_BROWSER_VERSION_OUTPUT = re.compile(
+    rb"(?:Google Chrome for Testing|Chromium|Chrome|HeadlessChrome) "
+    rb"[0-9]+(?:\.[0-9]+){3}\n"
+)
 
 
 class ScenarioError(RuntimeError):
@@ -460,6 +473,96 @@ def _publish_preview_sandbox_enforcement(
     )
 
 
+def _publish_browser_exec_diagnostic(
+    command_log: Path,
+    *,
+    outer: str,
+    nested: str,
+    playwright: str,
+) -> None:
+    """Publish only closed outcomes for the exact staged-browser probes."""
+
+    _write_json(
+        command_log.parent
+        / Path(PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH).name,
+        {
+            "schema": PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
+            "executable": PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+            "probe": "chromium-version-immediate-exit",
+            "outer": outer,
+            "nested": nested,
+            "playwright": playwright,
+        },
+    )
+
+
+def _run_exact_browser_version_probe(argv: Sequence[str], *, cwd: Path) -> None:
+    """Require one bounded immediate exit from the exact staged Chromium."""
+
+    try:
+        completed = subprocess.run(
+            list(argv),
+            cwd=cwd,
+            env=dict(BROWSER_EXEC_PROBE_ENVIRONMENT),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=BROWSER_EXEC_PROBE_TIMEOUT_SECONDS,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ScenarioError("staged browser exec probe failed") from exc
+    if (
+        completed.returncode != 0
+        or not isinstance(completed.stdout, bytes)
+        or len(completed.stdout) > 128
+        or _BROWSER_VERSION_OUTPUT.fullmatch(completed.stdout) is None
+        or completed.stderr != b""
+    ):
+        raise ScenarioError("staged browser exec probe result is invalid")
+
+
+def _nested_browser_exec_probe_argv(*, cwd: Path) -> list[str]:
+    """Project the exact staged Chromium through the nested preview mount."""
+
+    try:
+        info = TRUSTED_BWRAP_PATH.lstat()
+    except OSError as exc:
+        raise ScenarioError("trusted preview sandbox runtime unavailable") from exc
+    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise ScenarioError("trusted preview sandbox runtime invalid")
+    return [
+        os.fspath(TRUSTED_BWRAP_PATH),
+        "--die-with-parent",
+        "--new-session",
+        "--cap-drop",
+        "ALL",
+        "--clearenv",
+        "--setenv",
+        "HOME",
+        BROWSER_EXEC_PROBE_ENVIRONMENT["HOME"],
+        "--setenv",
+        "LANG",
+        BROWSER_EXEC_PROBE_ENVIRONMENT["LANG"],
+        "--setenv",
+        "PATH",
+        BROWSER_EXEC_PROBE_ENVIRONMENT["PATH"],
+        "--bind",
+        "/",
+        "/",
+        "--ro-bind",
+        PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        "--chdir",
+        os.fspath(cwd),
+        "--",
+        PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+        "--version",
+    ]
+
+
 def _validate_attested_browser_runtime(
     staging_cache: Path = Path(PROVIDER_FREE_STAGED_BROWSER_CACHE),
 ) -> None:
@@ -827,16 +930,81 @@ def _run_voxblame_preview(
         "preview_browser_render_failed": "preview_browser_render",
         "preview_browser_result_failed": "preview_browser_result",
     }
+    is_linux = platform.system() == "Linux"
     try:
-        if platform.system() == "Linux":
+        if is_linux:
             _validate_attested_browser_runtime()
+            try:
+                _run_exact_browser_version_probe(
+                    [
+                        PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+                        "--version",
+                    ],
+                    cwd=cwd,
+                )
+            except ScenarioError as exc:
+                _publish_browser_exec_diagnostic(
+                    command_log,
+                    outer="failed",
+                    nested="not-run",
+                    playwright="not-run",
+                )
+                raise ScenarioError(
+                    "provider-free outer browser exec probe failed",
+                    operation="preview_browser_outer_exec_probe",
+                ) from exc
+            try:
+                _run_exact_browser_version_probe(
+                    _nested_browser_exec_probe_argv(cwd=cwd),
+                    cwd=cwd,
+                )
+            except ScenarioError as exc:
+                _publish_browser_exec_diagnostic(
+                    command_log,
+                    outer="passed",
+                    nested="failed",
+                    playwright="not-run",
+                )
+                raise ScenarioError(
+                    "provider-free nested browser exec probe failed",
+                    operation="preview_browser_nested_exec_probe",
+                ) from exc
         sandbox_argv = _preview_sandbox_argv(argv, cwd=cwd)
         _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
-        return _run_public(
-            sandbox_argv,
-            cwd=cwd,
-            command_log=command_log,
-        )
+        try:
+            result = _run_public(
+                sandbox_argv,
+                cwd=cwd,
+                command_log=command_log,
+            )
+        except ScenarioError as exc:
+            if is_linux:
+                _publish_browser_exec_diagnostic(
+                    command_log,
+                    outer="passed",
+                    nested="passed",
+                    playwright="failed",
+                )
+                if exc.classification in {
+                    classification
+                    for classification in operations
+                    if classification.startswith("preview_browser_launch")
+                }:
+                    raise ScenarioError(
+                        "Playwright failed after both direct exec probes passed",
+                        operation=(
+                            "preview_browser_playwright_launch_after_direct_probes"
+                        ),
+                    ) from exc
+            raise
+        if is_linux:
+            _publish_browser_exec_diagnostic(
+                command_log,
+                outer="passed",
+                nested="passed",
+                playwright="passed",
+            )
+        return result
     except ScenarioError as exc:
         operation = operations.get(exc.classification)
         if operation is None:

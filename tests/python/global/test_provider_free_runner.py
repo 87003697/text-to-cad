@@ -105,7 +105,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/7",
+                "id": "issue15.provider-free-bounded/8",
                 "provider_access": "forbidden",
             },
             "request_authority": {
@@ -130,7 +130,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
             "PYTHONDONTWRITEBYTECODE": "1",
-            "CVM_PROVIDER_FREE_PROFILE": "issue15.provider-free-bounded/7",
+            "CVM_PROVIDER_FREE_PROFILE": "issue15.provider-free-bounded/8",
             "CVM_PROVIDER_FREE_STRIPPED_NAMES": (
                 "ANTHROPIC_API_KEY,HTTPS_PROXY,OPENAI_API_KEY,VENUS_TOKEN"
             ),
@@ -293,6 +293,21 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        (exp_dir / protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH).write_text(
+            json.dumps(
+                {
+                    "schema": protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
+                    "executable": (
+                        protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE
+                    ),
+                    "probe": "chromium-version-immediate-exit",
+                    "outer": "passed",
+                    "nested": "passed",
+                    "playwright": "passed",
+                }
+            ),
+            encoding="utf-8",
+        )
         files = [{"path": "runtime-identity.json", "size_bytes": 1, "sha256": "a" * 64}]
         tree_bytes = json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
         artifact = {
@@ -366,6 +381,66 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         ):
             provider_free_runner._validate_scenario_evidence(
                 exp_dir, "issue15-runtime-authority"
+            )
+
+    def test_success_rejects_tampered_browser_exec_diagnostic(self) -> None:
+        self.write_success_evidence()
+        self.write_authority(self.repo / "outputs" / self.handle)
+        exp_dir = self.repo / "outputs" / self.handle
+        path = exp_dir / protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        receipt["stdout"] = "sensitive raw version"
+        path.write_text(json.dumps(receipt), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            provider_free_runner.ProviderFreeError,
+            "browser exec diagnostic conflicts",
+        ):
+            provider_free_runner._validate_scenario_evidence(
+                exp_dir, "issue15-runtime-authority"
+            )
+
+    def test_failure_requires_matching_closed_browser_exec_diagnostic(
+        self,
+    ) -> None:
+        exp_dir = self.repo / "outputs" / self.handle
+        (exp_dir / "run").mkdir(parents=True)
+        (exp_dir / protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH).write_text(
+            json.dumps(
+                {
+                    "schema": protocol.PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+                    "scenario_identity": (
+                        "issue15.provider-free.runtime-authority/1"
+                    ),
+                    "stage": "native_measurement",
+                    "operation": "preview_browser_nested_exec_probe",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (exp_dir / protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH).write_text(
+            json.dumps(
+                {
+                    "schema": protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
+                    "executable": (
+                        protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE
+                    ),
+                    "probe": "chromium-version-immediate-exit",
+                    "outer": "passed",
+                    "nested": "passed",
+                    "playwright": "failed",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            provider_free_runner.ProviderFreeError,
+            "browser exec diagnostic conflicts",
+        ):
+            provider_free_runner._validate_scenario_failure_evidence(
+                exp_dir,
+                "issue15-runtime-authority",
             )
 
     def test_success_runs_closed_scenario_in_network_isolated_bounded_sandbox(self) -> None:

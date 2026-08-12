@@ -23,6 +23,8 @@ from scripts.pilot import provider_free_output
 
 from . import tap_observer
 from .protocol import (
+    PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
+    PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
@@ -36,6 +38,8 @@ from .protocol import (
     load_state,
     log_path,
     parse_handle,
+    provider_free_browser_exec_diagnostic_allowed,
+    provider_free_browser_exec_diagnostic_matches_operation,
     provider_free_preview_sandbox_receipt_allowed,
     provider_free_scenario_failure_operation_allowed,
     public_state,
@@ -489,12 +493,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/7",
+    "id": "issue15.provider-free-bounded/8",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/7",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/8",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/7",
+    "schema": "cvm.provider-free-linux-sandbox/8",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -526,6 +530,25 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "network": "none",
             "timeout_seconds": _EXEC_PROBE_TIMEOUT_SECONDS,
             "expected_stdout": "cvm.browser-stage-exec-probe/1",
+        },
+        "sandbox_exec_diagnostics": {
+            "schema": PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
+            "receipt": PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
+            "executable": PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+            "argv_suffix": ["--version"],
+            "lifecycle": "non-rendering-immediate-exit",
+            "environment_names": ["HOME", "LANG", "PATH"],
+            "network": "none",
+            "timeout_seconds": 5,
+            "result": {
+                "exit_code": 0,
+                "stdout": "single-chromium-version-line",
+                "stdout_max_bytes": 128,
+                "stderr": "empty",
+            },
+            "seams": ["outer-direct", "nested-direct", "playwright-launch"],
+            "published": "closed-outcomes-only-no-raw-output",
+            "cleanup": "no-profile-or-persistent-process-artifacts",
         },
         "nested_mount": "read-only-exact-staged-cache",
         "launch_handoff": {
@@ -1245,6 +1268,25 @@ def _provider_free_evidence_result(
     }
     if by_path.get(PROVIDER_FREE_PREVIEW_SANDBOX_PATH) != preview_entry:
         return None, "provider-free preview sandbox evidence is not bound"
+    try:
+        diagnostic_bytes = (
+            exp_dir / PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
+        ).read_bytes()
+        diagnostic = json.loads(diagnostic_bytes)
+    except (OSError, json.JSONDecodeError):
+        return None, "provider-free browser exec diagnostic evidence is invalid"
+    if (
+        not provider_free_browser_exec_diagnostic_allowed(diagnostic)
+        or diagnostic["playwright"] != "passed"
+    ):
+        return None, "provider-free browser exec diagnostic evidence conflicts"
+    diagnostic_entry = {
+        "path": PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
+        "size_bytes": len(diagnostic_bytes),
+        "sha256": hashlib.sha256(diagnostic_bytes).hexdigest(),
+    }
+    if by_path.get(PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH) != diagnostic_entry:
+        return None, "provider-free browser exec diagnostic evidence is not bound"
     for relative in (
         "run/runtime-authority-smoke.json",
         "workspace-authority.json",
@@ -1310,6 +1352,42 @@ def _provider_free_failure_evidence_result(
     }
     if by_path.get(PROVIDER_FREE_SCENARIO_FAILURE_PATH) != expected_entry:
         return None, None, "provider-free scenario failure evidence is not bound"
+    diagnostic_operations = {
+        "preview_browser_outer_exec_probe",
+        "preview_browser_nested_exec_probe",
+        "preview_browser_playwright_launch_after_direct_probes",
+    }
+    if operation in diagnostic_operations:
+        diagnostic_path = exp_dir / PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
+        try:
+            diagnostic_bytes = diagnostic_path.read_bytes()
+            diagnostic = json.loads(diagnostic_bytes)
+        except (OSError, json.JSONDecodeError):
+            return (
+                None,
+                None,
+                "provider-free browser exec diagnostic evidence is invalid",
+            )
+        if not provider_free_browser_exec_diagnostic_matches_operation(
+            diagnostic,
+            operation,
+        ):
+            return (
+                None,
+                None,
+                "provider-free browser exec diagnostic evidence conflicts",
+            )
+        diagnostic_entry = {
+            "path": PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
+            "size_bytes": len(diagnostic_bytes),
+            "sha256": hashlib.sha256(diagnostic_bytes).hexdigest(),
+        }
+        if by_path.get(PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH) != diagnostic_entry:
+            return (
+                None,
+                None,
+                "provider-free browser exec diagnostic evidence is not bound",
+            )
     proof_path, error = _provider_free_common_evidence_result(
         exp_dir,
         handle=handle,
