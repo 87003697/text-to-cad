@@ -116,11 +116,29 @@ def _run_adapter_with_post_policy_mutation(
     )
     control = source.parent / "control.lock"
     control.write_bytes(b"locked\n")
+    hook = root / "hook"
+    hook.mkdir()
+    (hook / "sitecustomize.py").write_text(
+        "from contextlib import contextmanager\n"
+        "from cadpy import canonical_build\n"
+        "_original = canonical_build._source_execution_policy\n"
+        "@contextmanager\n"
+        "def _signaled_policy(*args, **kwargs):\n"
+        "    with _original(*args, **kwargs):\n"
+        "        ready = kwargs['output_dir'] / 'race-ready'\n"
+        "        ready.write_text('ready', encoding='utf-8')\n"
+        "        try:\n"
+        "            yield\n"
+        "        finally:\n"
+        "            ready.unlink(missing_ok=True)\n"
+        "canonical_build._source_execution_policy = _signaled_policy\n",
+        encoding="utf-8",
+    )
     environment = dict(os.environ)
     environment["PYTHONPATH"] = os.pathsep.join(
-        (str(CADPY_SRC), environment["PYTHONPATH"])
+        (str(hook), str(CADPY_SRC), environment["PYTHONPATH"])
         if environment.get("PYTHONPATH")
-        else (str(CADPY_SRC),)
+        else (str(hook), str(CADPY_SRC))
     )
     with control.open("rb") as control_stream:
         fcntl.flock(control_stream.fileno(), fcntl.LOCK_EX)
@@ -144,9 +162,10 @@ def _run_adapter_with_post_policy_mutation(
             stderr=subprocess.PIPE,
             text=True,
         )
-        ready = root / "candidate/race-ready"
         deadline = time.monotonic() + 15
-        while not ready.is_file():
+        while not any(
+            root.glob(".canonical-source-scratch-*/race-ready")
+        ):
             if process.poll() is not None:
                 stdout, stderr = process.communicate()
                 raise AssertionError(
@@ -516,6 +535,70 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             )
             self.assertNotIn(str(initial_root), json.dumps(rebuilt_manifest))
 
+    def test_rebuild_rejects_source_swap_between_recipe_check_and_freeze(
+        self,
+    ) -> None:
+        with temporary_directory(
+            prefix="cad-canonical-rebuild-swap-"
+        ) as temp_dir:
+            root = Path(temp_dir)
+            source = _write_canonical_source(root)
+            initial = _run_adapter(
+                root,
+                "build",
+                "--source",
+                "source/model.py",
+                "--output-dir",
+                "initial",
+            )
+            self.assertEqual(0, initial.returncode, initial.stderr)
+            shutil.copy2(root / "initial/rebuild.json", root / "rebuild.json")
+            hook = root / "hook"
+            hook.mkdir()
+            (hook / "sitecustomize.py").write_text(
+                "from pathlib import Path\n"
+                "from cadpy import canonical_build\n"
+                "_build = canonical_build.build\n"
+                "def _swap_before_freeze(*args, **kwargs):\n"
+                "    if kwargs.get('expected_input_digests') is not None:\n"
+                "        Path('source/model.py').write_text(\n"
+                "            'from build123d import Box\\n'\n"
+                "            'def gen_step():\\n'\n"
+                "            '    return Box(0.8, 0.2, 0.1)\\n',\n"
+                "            encoding='utf-8',\n"
+                "        )\n"
+                "    return _build(*args, **kwargs)\n"
+                "canonical_build.build = _swap_before_freeze\n",
+                encoding="utf-8",
+            )
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = os.pathsep.join(
+                (str(hook), str(CADPY_SRC))
+            )
+
+            rebuilt = subprocess.run(
+                [
+                    sys.executable,
+                    str(ADAPTER),
+                    "rebuild",
+                    "--recipe",
+                    "rebuild.json",
+                    "--output-dir",
+                    "rebuilt",
+                ],
+                cwd=root,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(0, rebuilt.returncode)
+            self.assertIn("digest changed before canonical build freeze", rebuilt.stderr)
+            self.assertFalse((root / "rebuilt").exists())
+            self.assertEqual([], list(root.glob(".canonical-build-stage-*")))
+
     def test_adapter_rejects_absolute_and_out_of_root_paths(self) -> None:
         with temporary_directory(prefix="cad-canonical-paths-") as temp_dir:
             root = Path(temp_dir)
@@ -693,10 +776,8 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             "import fcntl\n"
             "import os\n"
             "from pathlib import Path\n"
-            "Path('candidate/race-ready').write_text('ready', encoding='utf-8')\n"
             "with Path('source/control.lock').open('rb') as control:\n"
             "    fcntl.flock(control.fileno(), fcntl.LOCK_SH)\n"
-            "Path('candidate/race-ready').unlink()\n"
             "try:\n"
             "    os.listdir('source')\n"
             "except PermissionError:\n"
@@ -737,10 +818,8 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
         source_body = (
             "import fcntl\n"
             "from pathlib import Path\n"
-            "Path('candidate/race-ready').write_text('ready', encoding='utf-8')\n"
             "with Path('source/control.lock').open('rb') as control:\n"
             "    fcntl.flock(control.fileno(), fcntl.LOCK_SH)\n"
-            "Path('candidate/race-ready').unlink()\n"
             "from helper import make_shape\n"
             "def gen_step():\n"
             "    return make_shape()\n"
@@ -862,6 +941,98 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertEqual("", result.stdout)
             self.assertFalse((root / "candidate/measurement.glb").exists())
             self.assertFalse((root / "candidate/build.json").exists())
+
+    def test_source_cannot_seed_final_output_with_symlink_or_residue(self) -> None:
+        for name, attack in (
+            (
+                "symlink",
+                "Path('candidate').mkdir()\n"
+                "Path('candidate/canonical.step').symlink_to('../escaped.step')\n",
+            ),
+            (
+                "formal-residue",
+                "Path('candidate').mkdir()\n"
+                "Path('candidate/profile.json').write_text('owned')\n"
+                "print('candidate noise')\n",
+            ),
+        ):
+            with self.subTest(name=name), temporary_directory(
+                prefix=f"cad-canonical-final-output-{name}-"
+            ) as temp_dir:
+                root = Path(temp_dir)
+                source = _write_canonical_source(
+                    root,
+                    body=(
+                        "from pathlib import Path\n"
+                        f"{attack}"
+                        "from build123d import Box\n"
+                        "def gen_step():\n"
+                        "    return Box(0.4, 0.2, 0.1)\n"
+                    ),
+                )
+
+                result = _run_adapter(
+                    root,
+                    "build",
+                    "--source",
+                    source.relative_to(root).as_posix(),
+                    "--output-dir",
+                    "candidate",
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertFalse((root / "candidate").exists())
+                self.assertFalse((root / "escaped.step").exists())
+                self.assertEqual(
+                    [],
+                    list(root.glob(".canonical-build-stage-*")),
+                )
+
+    def test_late_publication_failure_leaves_no_partial_delivery(self) -> None:
+        with temporary_directory(
+            prefix="cad-canonical-atomic-publication-"
+        ) as temp_dir:
+            root = Path(temp_dir)
+            _write_canonical_source(root)
+            hook = root / "hook"
+            hook.mkdir()
+            (hook / "sitecustomize.py").write_text(
+                "from cadpy import canonical_build\n"
+                "_rename = canonical_build.os.rename\n"
+                "def _fail_publication(source, destination, *args, **kwargs):\n"
+                "    if str(destination).endswith('/candidate'):\n"
+                "        raise OSError('deterministic publication failure')\n"
+                "    return _rename(source, destination, *args, **kwargs)\n"
+                "canonical_build.os.rename = _fail_publication\n",
+                encoding="utf-8",
+            )
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = os.pathsep.join(
+                (str(hook), str(CADPY_SRC))
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ADAPTER),
+                    "build",
+                    "--source",
+                    "source/model.py",
+                    "--output-dir",
+                    "candidate",
+                ],
+                cwd=root,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("deterministic publication failure", result.stderr)
+            self.assertFalse((root / "candidate").exists())
+            self.assertEqual([], list(root.glob(".canonical-build-stage-*")))
 
     def test_source_file_descriptor_output_is_rejected_before_publication(
         self,
@@ -1017,6 +1188,68 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertFalse((root / "candidate/measurement.glb").exists())
             self.assertFalse((root / "candidate/build.json").exists())
 
+    def test_source_module_state_is_rejected_and_primary_module_is_removed(
+        self,
+    ) -> None:
+        with temporary_directory(
+            prefix="cad-canonical-module-state-"
+        ) as temp_dir:
+            root = Path(temp_dir)
+            source = _write_canonical_source(
+                root,
+                body=(
+                    "import os\n"
+                    "os.open = lambda *args, **kwargs: -1\n"
+                    "from build123d import Box\n"
+                    "def gen_step():\n"
+                    "    return Box(0.4, 0.2, 0.1)\n"
+                ),
+            )
+
+            rejected = _run_adapter(
+                root,
+                "build",
+                "--source",
+                source.relative_to(root).as_posix(),
+                "--output-dir",
+                "rejected",
+            )
+
+            self.assertNotEqual(0, rejected.returncode)
+            self.assertIn("module state", rejected.stderr)
+            source.write_text(
+                "from build123d import Box\n"
+                "def gen_step():\n"
+                "    return Box(0.4, 0.2, 0.1)\n",
+                encoding="utf-8",
+            )
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = str(CADPY_SRC)
+            inspected = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import json, sys\n"
+                        "from pathlib import Path\n"
+                        "from cadpy.canonical_build import build\n"
+                        "build(root=Path.cwd(), source='source/model.py', "
+                        "output_dir='accepted')\n"
+                        "print(json.dumps(sorted(name for name in sys.modules "
+                        "if name.startswith('_cad_tool_'))))\n"
+                    ),
+                ],
+                cwd=root,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, inspected.returncode, inspected.stderr)
+            self.assertEqual([], json.loads(inspected.stdout))
+            self.assertTrue((root / "accepted/build.json").is_file())
+
     def test_source_cannot_call_host_physical_reader(self) -> None:
         with temporary_directory(prefix="cad-canonical-host-reader-") as temp_dir:
             root = Path(temp_dir)
@@ -1143,7 +1376,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
                 "candidate",
             )
             self.assertNotEqual(0, result.returncode)
-            self.assertIn("undeclared output", result.stderr)
+            self.assertIn("forbids writes outside", result.stderr)
             self.assertFalse((root / "candidate/build.json").exists())
 
     def test_adapter_keeps_declared_inputs_read_only(self) -> None:

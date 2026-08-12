@@ -18,6 +18,7 @@ import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
+import shutil
 import stat
 import sys
 import tempfile
@@ -583,6 +584,9 @@ def _source_execution_policy(
         if name in sys.modules
     }
     sys.meta_path.insert(0, declared_finder)
+    original_modules = dict(sys.modules)
+    os_namespace = vars(os)
+    original_os_namespace = dict(os_namespace)
     original_environment = dict(os.environ)
     original_hash = builtins.hash
     original_mutation_functions = {
@@ -689,6 +693,8 @@ def _source_execution_policy(
         with _activate_source_policy(policy):
             yield
     finally:
+        os_namespace.clear()
+        os_namespace.update(original_os_namespace)
         sys.dont_write_bytecode = previous_dont_write_bytecode
         sys.meta_path[:] = [finder for finder in sys.meta_path if finder is not declared_finder]
         for name in declared_finder.module_names:
@@ -712,6 +718,10 @@ def _source_execution_policy(
             output_function,
         ) in original_descriptor_output_functions.items():
             setattr(os, output_name, output_function)
+        for module_name in tuple(sys.modules):
+            if module_name not in original_modules:
+                sys.modules.pop(module_name, None)
+        sys.modules.update(original_modules)
         os.environ.clear()
         os.environ.update(original_environment)
 
@@ -788,6 +798,32 @@ def _validate_unitless_source_parameters(source: _DeclaredPythonModule) -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.ImportFrom) and node.module
     }
+    imported_module_aliases = {
+        alias.asname or alias.name.split(".", 1)[0]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    mutates_imported_module = any(
+        isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Delete))
+        and any(
+            isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Name)
+            and target.value.id in imported_module_aliases
+            for target in (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else node.targets
+                if isinstance(node, ast.Delete)
+                else (node.target,)
+            )
+        )
+        for node in ast.walk(tree)
+    )
+    if mutates_imported_module:
+        raise ValueError(
+            "canonical CAD source cannot mutate imported module state"
+        )
     forbidden_policy_import = any(
         isinstance(node, ast.Import)
         and any(
@@ -832,7 +868,14 @@ def _validate_unitless_source_parameters(source: _DeclaredPythonModule) -> None:
         )
     if "socket" in imported_roots:
         raise RuntimeError("canonical build forbids network access during source execution")
-    if imported_roots & {"multiprocessing", "subprocess"}:
+    if imported_roots & {
+        "_thread",
+        "asyncio",
+        "concurrent",
+        "multiprocessing",
+        "subprocess",
+        "threading",
+    }:
         raise RuntimeError("canonical build forbids child processes during source execution")
 
     nondeterministic_imports = sorted(
@@ -1033,17 +1076,20 @@ def _load_recipe(*, root: Path, recipe_path: str) -> dict[str, Any]:
     return payload
 
 
-def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None = None) -> dict[str, Any]:
-    root = root.resolve()
+def _build_staged(
+    *,
+    root: Path,
+    source: str,
+    output_path: Path,
+    output_relative: str,
+    inputs: list[str] | None = None,
+    expected_input_digests: dict[str, str] | None = None,
+) -> dict[str, Any]:
     source_path, source_relative = _relative_path(source, root=root, label="--source", must_exist=True)
     if source_path.suffix.lower() != ".py":
         raise ValueError("--source must name a Python gen_step() source")
-    output_path, output_relative = _relative_path(output_dir, root=root, label="--output-dir")
     if output_path == root or source_path == output_path or output_path in source_path.parents:
         raise ValueError("--output-dir must be separate from the declared source")
-    if output_path.exists() and any(output_path.iterdir()):
-        raise ValueError("--output-dir must not contain existing files")
-    output_path.mkdir(parents=True, exist_ok=True)
 
     declared_inputs: list[tuple[Path, str]] = [(source_path, source_relative)]
     seen_inputs = {source_path}
@@ -1061,6 +1107,19 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
         for path, _relative in declared_inputs
         if path.suffix.lower() == ".py"
     }
+    if expected_input_digests is not None:
+        frozen_digests = {
+            relative: (
+                hashlib.sha256(frozen_sources[path].source_bytes).hexdigest()
+                if path in frozen_sources
+                else _sha256(path)
+            )
+            for path, relative in declared_inputs
+        }
+        if frozen_digests != expected_input_digests:
+            raise ValueError(
+                "--recipe input digest changed before canonical build freeze"
+            )
     for frozen_source in frozen_sources.values():
         _validate_unitless_source_parameters(frozen_source)
 
@@ -1097,27 +1156,37 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
 
     candidate_stdout = io.StringIO()
     candidate_stderr = io.StringIO()
-    with (
-        redirect_stdout(candidate_stdout),
-        redirect_stderr(candidate_stderr),
-        _capture_source_file_descriptor_output() as candidate_descriptor_output,
-        _source_execution_policy(
-            root=root,
-            source_path=source_path,
-            declared_inputs={path for path, _relative in declared_inputs},
-            frozen_sources=frozen_sources,
-            output_dir=output_path,
-        ),
-        _frozen_primary_source_loader(frozen_primary_source),
-    ):
-        generated_scene = run_script_generator(
-            spec,
-            "gen_step",
-            source_identity=frozen_source_identity,
-            force=True,
-            load_current_scene=False,
-            skip_step_write=True,
+    source_scratch = Path(
+        tempfile.mkdtemp(
+            prefix=".canonical-source-scratch-",
+            dir=output_path.parent,
         )
+    )
+    try:
+        with (
+            redirect_stdout(candidate_stdout),
+            redirect_stderr(candidate_stderr),
+            _capture_source_file_descriptor_output() as candidate_descriptor_output,
+            _source_execution_policy(
+                root=root,
+                source_path=source_path,
+                declared_inputs={path for path, _relative in declared_inputs},
+                frozen_sources=frozen_sources,
+                output_dir=source_scratch,
+            ),
+            _frozen_primary_source_loader(frozen_primary_source),
+        ):
+            generated_scene = run_script_generator(
+                spec,
+                "gen_step",
+                source_identity=frozen_source_identity,
+                force=True,
+                load_current_scene=False,
+                skip_step_write=True,
+            )
+        _validate_staged_delivery(source_scratch, expected_names=set())
+    finally:
+        shutil.rmtree(source_scratch)
     if (
         candidate_stdout.getvalue()
         or candidate_stderr.getvalue()
@@ -1128,6 +1197,7 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
         raise RuntimeError("canonical CAD source did not produce an exportable XCAF scene")
     for frozen_source in frozen_sources.values():
         frozen_source.revalidate()
+    _validate_staged_delivery(output_path, expected_names=set())
     source_digest = frozen_source_digest
     write_xcaf_doc_step_file(
         generated_scene.doc,
@@ -1175,19 +1245,14 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
     recipe_path = output_path / OUTPUT_FILES["recipe"]
     _write_json(recipe_path, recipe)
 
-    expected_output_paths = {
-        (output_path / filename).resolve()
-        for role, filename in OUTPUT_FILES.items()
-        if role != "manifest"
-    }
-    actual_output_paths = {
-        path.resolve()
-        for path in output_path.rglob("*")
-        if path.is_file() or path.is_symlink()
-    }
-    undeclared_outputs = sorted(path.relative_to(output_path).as_posix() for path in actual_output_paths - expected_output_paths)
-    if undeclared_outputs:
-        raise RuntimeError(f"canonical CAD source produced undeclared output: {', '.join(undeclared_outputs)}")
+    _validate_staged_delivery(
+        output_path,
+        expected_names={
+            filename
+            for role, filename in OUTPUT_FILES.items()
+            if role != "manifest"
+        },
+    )
 
     files = [
         *[
@@ -1275,6 +1340,73 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
     return manifest
 
 
+def _validate_staged_delivery(
+    stage_path: Path,
+    *,
+    expected_names: set[str],
+) -> None:
+    actual_names: set[str] = set()
+    with os.scandir(stage_path) as entries:
+        for entry in entries:
+            actual_names.add(entry.name)
+            info = entry.stat(follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode):
+                raise RuntimeError(
+                    "canonical build staged delivery contains a symlink or "
+                    f"non-regular entry: {entry.name}"
+                )
+    if actual_names != expected_names:
+        unexpected = sorted(actual_names - expected_names)
+        missing = sorted(expected_names - actual_names)
+        joined = ", ".join((*unexpected, *missing))
+        raise RuntimeError(
+            f"canonical build staged delivery set is incomplete or invalid: {joined}"
+        )
+
+
+def build(
+    *,
+    root: Path,
+    source: str,
+    output_dir: str,
+    inputs: list[str] | None = None,
+    expected_input_digests: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    root = root.resolve()
+    output_path, output_relative = _relative_path(
+        output_dir,
+        root=root,
+        label="--output-dir",
+    )
+    if output_path.exists():
+        raise ValueError("--output-dir must not already exist")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    stage_path = Path(
+        tempfile.mkdtemp(
+            prefix=".canonical-build-stage-",
+            dir=output_path.parent,
+        )
+    )
+    try:
+        manifest = _build_staged(
+            root=root,
+            source=source,
+            output_path=stage_path,
+            output_relative=output_relative,
+            inputs=inputs,
+            expected_input_digests=expected_input_digests,
+        )
+        _validate_staged_delivery(
+            stage_path,
+            expected_names=set(OUTPUT_FILES.values()),
+        )
+        os.rename(stage_path, output_path)
+        return manifest
+    finally:
+        if stage_path.exists():
+            shutil.rmtree(stage_path)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="scripts/canonical-build")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1299,7 +1431,17 @@ def main(argv: list[str] | None = None) -> int:
         recipe = _load_recipe(root=root, recipe_path=args.recipe)
         source = recipe["inputs"][0]["path"]
         declared_inputs = [item["path"] for item in recipe["inputs"][1:]]
-        manifest = build(root=root, source=source, output_dir=args.output_dir, inputs=declared_inputs)
+        expected_input_digests = {
+            item["path"]: item["sha256"]
+            for item in recipe["inputs"]
+        }
+        manifest = build(
+            root=root,
+            source=source,
+            output_dir=args.output_dir,
+            inputs=declared_inputs,
+            expected_input_digests=expected_input_digests,
+        )
         print(json.dumps({"ok": True, **manifest}, separators=(",", ":")))
         return 0
     raise AssertionError(f"unsupported command: {args.command}")
