@@ -59,6 +59,7 @@ Native measurement operations are:
 - `native_evidence`
 - `voxblame_preview`
 - `preview_runtime`
+- `preview_browser_runtime_staging`
 - `preview_dependency`
 - `preview_browser_launch`
 - `preview_browser_launch_process_limit`

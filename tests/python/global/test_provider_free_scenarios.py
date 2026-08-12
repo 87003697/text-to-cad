@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -435,6 +436,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             "voxblame_preview",
             "step_publication",
             "preview_runtime",
+            "preview_browser_runtime_staging",
             "preview_dependency",
             "preview_browser_launch",
             "preview_browser_launch_process_limit",
@@ -560,8 +562,11 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 "/",
                 "/",
                 "--ro-bind",
-                "/home/provider-free/.cache/ms-playwright",
-                "/home/provider-free/.cache/ms-playwright",
+                "/tmp/provider-free-playwright",
+                "/tmp/provider-free-playwright",
+                "--setenv",
+                "PLAYWRIGHT_BROWSERS_PATH",
+                "/tmp/provider-free-playwright",
                 "--chdir",
                 "/workspace/repo",
                 "--",
@@ -585,6 +590,65 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             protocol.provider_free_preview_sandbox_receipt_allowed(
                 receipt, group, exp
             )
+        )
+
+    def test_stage_browser_runtime_copies_only_attested_revision(self) -> None:
+        source_cache = self.repo / "source-cache"
+        revision = "1234"
+        source_revision = source_cache / f"chromium_headless_shell-{revision}"
+        executable = (
+            source_revision
+            / "chrome-headless-shell-linux64/chrome-headless-shell"
+        )
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"trusted chromium")
+        executable.chmod(0o755)
+        (source_revision / "resources.pak").write_bytes(b"resource")
+        staging = self.repo / "staged-cache"
+        identity = {
+            "revision": revision,
+            "sandbox_cache_path": os.fspath(source_cache),
+            "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        }
+
+        provider_free_scenarios._stage_browser_runtime(identity, staging)
+
+        staged_revision = staging / source_revision.name
+        staged_executable = (
+            staged_revision
+            / "chrome-headless-shell-linux64/chrome-headless-shell"
+        )
+        self.assertEqual(executable.read_bytes(), staged_executable.read_bytes())
+        self.assertTrue(staged_executable.stat().st_mode & 0o111)
+        self.assertEqual(
+            b"resource", (staged_revision / "resources.pak").read_bytes()
+        )
+
+    def test_stage_browser_runtime_rejects_symlink(self) -> None:
+        source_cache = self.repo / "source-cache"
+        revision = "1234"
+        source_revision = source_cache / f"chromium_headless_shell-{revision}"
+        executable = (
+            source_revision
+            / "chrome-headless-shell-linux64/chrome-headless-shell"
+        )
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"trusted chromium")
+        executable.chmod(0o755)
+        (source_revision / "linked").symlink_to(executable)
+        identity = {
+            "revision": revision,
+            "sandbox_cache_path": os.fspath(source_cache),
+            "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        }
+
+        with self.assertRaises(provider_free_scenarios.ScenarioError) as raised:
+            provider_free_scenarios._stage_browser_runtime(
+                identity, self.repo / "staged-cache"
+            )
+
+        self.assertEqual(
+            "preview_browser_runtime_staging", raised.exception.operation
         )
 
     def _assert_closed_stage_failure(

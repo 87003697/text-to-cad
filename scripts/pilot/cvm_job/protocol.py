@@ -9,9 +9,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from scripts.pilot import deployment_authority
-
-
 SCHEMA_VERSION = 1
 TERMINAL_STATES = frozenset({"succeeded", "failed"})
 _TRANSITIONS = {
@@ -48,6 +45,7 @@ PROVIDER_FREE_PREVIEW_SANDBOX_PATH = "run/preview-sandbox-enforcement.json"
 PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA = (
     "cvm.provider-free-preview-sandbox-enforcement/1"
 )
+PROVIDER_FREE_STAGED_BROWSER_CACHE = "/tmp/provider-free-playwright"
 
 
 def provider_free_preview_sandbox_argv(group: str, exp: str) -> list[str]:
@@ -65,8 +63,11 @@ def provider_free_preview_sandbox_argv(group: str, exp: str) -> list[str]:
         "/",
         "/",
         "--ro-bind",
-        deployment_authority.SANDBOX_BROWSER_CACHE,
-        deployment_authority.SANDBOX_BROWSER_CACHE,
+        PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        "--setenv",
+        "PLAYWRIGHT_BROWSERS_PATH",
+        PROVIDER_FREE_STAGED_BROWSER_CACHE,
         "--chdir",
         sandbox_root,
         "--",
@@ -128,6 +129,7 @@ PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS_BY_STAGE = {
             "native_evidence",
             "voxblame_preview",
             "preview_runtime",
+            "preview_browser_runtime_staging",
             "preview_dependency",
             "preview_browser_launch",
             "preview_browser_launch_process_limit",

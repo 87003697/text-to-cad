@@ -27,6 +27,7 @@ from scripts.pilot import deployment_authority
 from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA,
+    PROVIDER_FREE_STAGED_BROWSER_CACHE,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
@@ -426,8 +427,11 @@ def _preview_sandbox_argv(argv: Sequence[str], *, cwd: Path) -> list[str]:
         "/",
         "/",
         "--ro-bind",
-        deployment_authority.SANDBOX_BROWSER_CACHE,
-        deployment_authority.SANDBOX_BROWSER_CACHE,
+        PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        "--setenv",
+        "PLAYWRIGHT_BROWSERS_PATH",
+        PROVIDER_FREE_STAGED_BROWSER_CACHE,
         "--chdir",
         os.fspath(cwd),
         "--",
@@ -449,6 +453,85 @@ def _publish_preview_sandbox_enforcement(
             "capabilities": "drop-all",
             "mount_namespace": "inherit-outer",
         },
+    )
+
+
+def _stage_browser_runtime(chromium: dict[str, Any], staging_cache: Path) -> None:
+    """Copy one attested Chromium revision onto the private executable tmpfs."""
+
+    try:
+        revision = str(chromium["revision"])
+        source_cache = Path(str(chromium["sandbox_cache_path"])).resolve(
+            strict=True
+        )
+        source_revision_link = (
+            source_cache / f"chromium_headless_shell-{revision}"
+        )
+        if source_revision_link.is_symlink():
+            raise ValueError("browser revision is a symlink")
+        source_revision = source_revision_link.resolve(strict=True)
+        source_revision.relative_to(source_cache)
+        executable_relative = Path(
+            "chrome-headless-shell-linux64/chrome-headless-shell"
+        )
+        if staging_cache.exists() or not revision.isdigit():
+            raise ValueError("invalid browser staging target")
+        for source in (source_revision, *sorted(source_revision.rglob("*"))):
+            mode = source.lstat().st_mode
+            if stat.S_ISLNK(mode) or not (
+                stat.S_ISDIR(mode) or stat.S_ISREG(mode)
+            ):
+                raise ValueError("browser runtime contains a non-regular entry")
+        staging_cache.mkdir(mode=0o700)
+        staged_revision = staging_cache / source_revision.name
+        shutil.copytree(
+            source_revision,
+            staged_revision,
+            copy_function=shutil.copy2,
+        )
+        staged_executable = staged_revision / executable_relative
+        staged_mode = staged_executable.stat().st_mode
+        if (
+            hashlib.sha256(staged_executable.read_bytes()).hexdigest()
+            != chromium["sha256"]
+            or not staged_mode & 0o111
+        ):
+            raise ValueError("staged browser executable identity conflicts")
+    except (KeyError, OSError, ValueError) as exc:
+        raise ScenarioError(
+            "provider-free browser runtime staging failed",
+            operation="preview_browser_runtime_staging",
+        ) from exc
+
+
+def _stage_attested_browser_runtime(command_log: Path) -> None:
+    """Load the runner-published identity and stage its browser revision."""
+
+    try:
+        sandbox = json.loads(
+            (command_log.parent / "sandbox-enforcement.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        if sandbox.get("schema") != "cvm.provider-free-sandbox-enforcement/1":
+            raise ValueError("sandbox enforcement schema conflicts")
+        identity = deployment_authority.validate_runtime_identity(
+            REPO_ROOT,
+            sandbox.get("runtime_identity"),
+            verify_external=False,
+        )
+    except (
+        OSError,
+        json.JSONDecodeError,
+        ValueError,
+        deployment_authority.DeploymentAuthorityError,
+    ) as exc:
+        raise ScenarioError(
+            "provider-free browser runtime identity is unavailable",
+            operation="preview_browser_runtime_staging",
+        ) from exc
+    _stage_browser_runtime(
+        identity["chromium"], Path(PROVIDER_FREE_STAGED_BROWSER_CACHE)
     )
 
 
@@ -763,6 +846,8 @@ def _run_voxblame_preview(
         "preview_browser_result_failed": "preview_browser_result",
     }
     try:
+        if platform.system() == "Linux":
+            _stage_attested_browser_runtime(command_log)
         sandbox_argv = _preview_sandbox_argv(argv, cwd=cwd)
         _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
         return _run_public(
