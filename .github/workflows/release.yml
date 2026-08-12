@@ -374,6 +374,39 @@ jobs:
         if: steps.gate.outputs.should_publish == 'true'
         run: scripts/test/test.sh
 
+      # cadgen is built and uploaded from packages/, which the trim below
+      # removes, and BEFORE the target-branch push: a failed upload must block
+      # the release, because the publish tree pins cadgen==<version> from PyPI
+      # and a main without the matching PyPI release would break skill installs.
+      # Uploading before the pin also means the pin can only ever name a version
+      # that already exists. If PyPI succeeds but a later step fails, rerun
+      # Release with bump=none; skip-existing makes the re-upload a no-op.
+      #
+      # Only the upload itself is gated on main. The version check and the build
+      # run for build-test too, so a rehearsal exercises everything about this
+      # that can be exercised without publishing.
+      - name: Check cadgen package version matches the canonical release version
+        if: steps.gate.outputs.should_publish == 'true'
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          if ! grep -Eq "^version = \"$version\"$" packages/cadgen/pyproject.toml; then
+            echo "packages/cadgen/pyproject.toml version does not match VERSION ($version)." >&2
+            exit 1
+          fi
+
+      - name: Build cadgen sdist and wheel
+        if: steps.gate.outputs.should_publish == 'true'
+        run: |
+          python3 -m pip install --upgrade build
+          python3 -m build packages/cadgen
+
+      - name: Publish cadgen to PyPI
+        if: ${{ steps.gate.outputs.should_publish == 'true' && inputs.target_branch == 'main' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/cadgen/dist
+          skip-existing: true
+
       # The plugin package is the repository root, so everything that reaches the
       # target branch is copied into every install. None of these is part of what
       # installs:
@@ -535,34 +568,6 @@ jobs:
           git reset --hard "$publish_commit"
           echo "publish_sha=$publish_commit" >> "$GITHUB_OUTPUT"
           echo "Created publish commit: $publish_commit"
-
-      # PyPI publish runs BEFORE the target-branch push: a failed upload must
-      # block the release, because production plugin bundles pin
-      # cadgen==<version> from PyPI and a main without the matching PyPI
-      # release would break skill installs. If PyPI succeeds but the push
-      # fails, rerun Release with set_version pinned; skip-existing makes the
-      # re-upload a no-op.
-      - name: Check cadgen package version matches the canonical release version
-        if: ${{ steps.gate.outputs.should_publish == 'true' && inputs.target_branch == 'main' }}
-        run: |
-          version="$(tr -d '[:space:]' < VERSION)"
-          if ! grep -Eq "^version = \"$version\"$" packages/cadgen/pyproject.toml; then
-            echo "packages/cadgen/pyproject.toml version does not match VERSION ($version)." >&2
-            exit 1
-          fi
-
-      - name: Build cadgen sdist and wheel
-        if: ${{ steps.gate.outputs.should_publish == 'true' && inputs.target_branch == 'main' }}
-        run: |
-          python3 -m pip install --upgrade build
-          python3 -m build packages/cadgen
-
-      - name: Publish cadgen to PyPI
-        if: ${{ steps.gate.outputs.should_publish == 'true' && inputs.target_branch == 'main' }}
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: packages/cadgen/dist
-          skip-existing: true
 
       - name: Push target branch
         if: steps.gate.outputs.should_publish == 'true'
