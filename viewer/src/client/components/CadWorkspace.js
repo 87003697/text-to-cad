@@ -5202,10 +5202,9 @@ export default function CadWorkspace({
     viewerPickableEdges.length ||
     viewerPickableVertices.length
   );
-  const measureModeActive = selectedEntrySourceFormat === RENDER_FORMAT.STEP &&
+  const measureModeActive = supportsTopology &&
     tabToolMode === TAB_TOOL_MODE.MEASURE &&
-    hasViewerPickableTopology &&
-    !viewerInAssemblyMode;
+    hasViewerPickableTopology;
   const [measureRulerState, setMeasureRulerState] = useState(null);
   const [activeMeasureId, setActiveMeasureId] = useState("");
   const handleMeasurePick = useCallback((pick) => {
@@ -5229,8 +5228,7 @@ export default function CadWorkspace({
   }, [measureModeActive]);
   const measureToolDisabled = viewerLoading ||
     !selectedMeshData ||
-    !hasViewerPickableTopology ||
-    viewerInAssemblyMode;
+    !hasViewerPickableTopology;
   const topologySelectionActive =
     (isAssemblyView && requestedStepTreeTopologyNodeIds.length > 0) ||
     topLevelReferenceSelectionActive;

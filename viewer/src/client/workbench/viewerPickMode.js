@@ -21,7 +21,7 @@ export function viewerPickModeForRenderPane({
   if (topologySelectionPending || topologySelectionUnavailable || topologySelectionDeferred) {
     return VIEWER_PICK_MODE.NONE;
   }
-  if (measureMode && topologyPickingActive && viewerMode !== "assembly") {
+  if (measureMode && topologyPickingActive) {
     return VIEWER_PICK_MODE.MEASURE;
   }
   if (

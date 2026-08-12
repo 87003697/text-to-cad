@@ -89,14 +89,14 @@ test("viewer pick mode rejects measure picking without pickable topology", () =>
   );
 });
 
-test("viewer pick mode rejects measure picking in assembly views", () => {
+test("viewer pick mode keeps measure picking in assemblies with pickable topology", () => {
   assert.equal(
     viewerPickModeForRenderPane({
       viewerMode: "assembly",
       measureMode: true,
       topologyPickingActive: true
     }),
-    VIEWER_PICK_MODE.AUTO
+    VIEWER_PICK_MODE.MEASURE
   );
   assert.equal(
     viewerPickModeForRenderPane({
