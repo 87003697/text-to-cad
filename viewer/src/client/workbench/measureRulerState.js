@@ -124,6 +124,22 @@ export function measureRulerStateForChange(state, { entryChanged = false, toolAc
   return state;
 }
 
+/**
+ * Abandon the half-finished measurement without touching the committed ones or
+ * the tool itself — what Escape does in a CAD measure tool: cancel what you are
+ * drawing, stay where you are.
+ */
+export function cancelMeasureRulerDraft(state) {
+  if (!state?.draft) {
+    return state || null;
+  }
+  return {
+    draft: null,
+    hover: state.hover || null,
+    measurements: state.measurements || []
+  };
+}
+
 export function clearMeasureRulerMeasurements(state) {
   if (!state) {
     return null;

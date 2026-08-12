@@ -204,6 +204,7 @@ import {
   applyMeasureRulerDelete,
   applyMeasureRulerHover,
   applyMeasureRulerPick,
+  cancelMeasureRulerDraft,
   clearMeasureRulerMeasurements,
   measureRulerStateForChange
 } from "@/workbench/measureRulerState";
@@ -5253,6 +5254,9 @@ export default function CadWorkspace({
   const handleMeasureDelete = useCallback((measurementId) => {
     setMeasureRulerState((current) => applyMeasureRulerDelete(current, measurementId));
   }, []);
+  const handleMeasureCancelDraft = useCallback(() => {
+    setMeasureRulerState((current) => cancelMeasureRulerDraft(current));
+  }, []);
   const handleMeasureClear = useCallback(() => {
     setMeasureRulerState((current) => clearMeasureRulerMeasurements(current));
   }, []);
@@ -8204,6 +8208,8 @@ export default function CadWorkspace({
     sidebarOpen,
     previewUiStateRef,
     tabToolMode,
+    measureDraftActive: Boolean(measureRulerState?.draft?.anchor),
+    onCancelMeasureDraft: handleMeasureCancelDraft,
     drawingUndoStackRef,
     drawingRedoStackRef,
     handleUndoDrawing,

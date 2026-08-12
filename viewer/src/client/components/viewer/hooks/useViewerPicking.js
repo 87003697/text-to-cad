@@ -582,6 +582,19 @@ export function useViewerPicking({
       .filter(Boolean)
   );
 
+  // Arming the tool has to change the cursor immediately. Leaving it to the next
+  // hover tick means the select pointer lingers until the mouse happens to move.
+  useEffect(() => {
+    const container = mountRef.current;
+    if (!container || pickMode !== VIEWER_PICK_MODE.MEASURE) {
+      return undefined;
+    }
+    container.style.cursor = "crosshair";
+    return () => {
+      container.style.cursor = "";
+    };
+  }, [mountRef, pickMode, previewMode, viewerReadyTick]);
+
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime || !mountRef.current || previewMode) {
@@ -1184,8 +1197,12 @@ export function useViewerPicking({
 
     function commitHoverState(referenceId) {
       const normalizedReferenceId = referenceId || "";
+      // Measuring keeps one cursor throughout. Swapping to the select pointer
+      // over a reference reads as "click to select this", when the click is
+      // going to drop a measurement point either way — what is snappable is
+      // shown by highlighting the entity, not by changing the cursor.
       const isMeasureMode = pickModeRef.current === VIEWER_PICK_MODE.MEASURE;
-      container.style.cursor = normalizedReferenceId ? "pointer" : (isMeasureMode ? "crosshair" : "");
+      container.style.cursor = isMeasureMode ? "crosshair" : (normalizedReferenceId ? "pointer" : "");
       if (hoverState.hoveredReferenceId === normalizedReferenceId) {
         return;
       }
@@ -1200,7 +1217,7 @@ export function useViewerPicking({
       }
       hoverState.lastX = NaN;
       hoverState.lastY = NaN;
-      container.style.cursor = "";
+      container.style.cursor = pickModeRef.current === VIEWER_PICK_MODE.MEASURE ? "crosshair" : "";
       const hadMeasureTick = hoverState.measureTickEmitted;
       hoverState.measureTickEmitted = false;
       if (!hoverState.hoveredReferenceId && !hadMeasureTick) {

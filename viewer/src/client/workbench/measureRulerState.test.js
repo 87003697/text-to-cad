@@ -6,6 +6,7 @@ import {
   applyMeasureRulerDelete,
   applyMeasureRulerHover,
   applyMeasureRulerPick,
+  cancelMeasureRulerDraft,
   clearMeasureRulerMeasurements,
   measureRulerDraftMeasurement,
   measureRulerStateForChange,
@@ -202,4 +203,20 @@ test("measure ruler entry-change gate stays null without state", () => {
 
 test("measure ruler reset returns null", () => {
   const draft = applyMeasureRulerPick(null, FIRST_PICK);
+});
+
+test("cancelMeasureRulerDraft drops the in-flight measurement and nothing else", () => {
+  // Escape while measuring cancels the pending pick; committed measurements and
+  // the tool itself are untouched.
+  const committed = applyMeasureRulerPick(applyMeasureRulerPick(null, FIRST_PICK), SECOND_PICK);
+  const withDraft = applyMeasureRulerPick(committed, FIRST_PICK);
+  assert.ok(withDraft.draft);
+
+  const cancelled = cancelMeasureRulerDraft(withDraft);
+  assert.equal(cancelled.draft, null);
+  assert.deepEqual(cancelled.measurements, committed.measurements);
+
+  // Nothing in flight means the same object back, so React can bail out.
+  assert.equal(cancelMeasureRulerDraft(committed), committed);
+  assert.equal(cancelMeasureRulerDraft(null), null);
 });
