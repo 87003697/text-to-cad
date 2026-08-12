@@ -119,16 +119,37 @@ class _ProviderFreeTerminalManifest:
     by_path: dict[str, dict[str, Any]]
 
 
+PROVIDER_FREE_NAMESPACES = (
+    ("user", "--unshare-user"),
+    ("network", "--unshare-net"),
+    ("pid", "--unshare-pid"),
+    ("ipc", "--unshare-ipc"),
+    ("uts", "--unshare-uts"),
+)
+PROVIDER_FREE_SETUP_CAPABILITIES = (
+    "CAP_SYS_ADMIN",
+    "CAP_SYS_CHROOT",
+    "CAP_NET_ADMIN",
+    "CAP_SETUID",
+    "CAP_SETGID",
+    "CAP_SYS_PTRACE",
+    "CAP_SETFCAP",
+)
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/1",
+    "id": "issue15.provider-free-bounded/2",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/1",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/2",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/1",
-    "namespaces": ["network", "pid", "ipc", "uts"],
-    "capabilities": "drop-all",
+    "schema": "cvm.provider-free-linux-sandbox/2",
+    "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
+    "capabilities": {
+        "baseline": "drop-all",
+        "retained": list(PROVIDER_FREE_SETUP_CAPABILITIES),
+        "scope": "outer-user-namespace",
+        "purpose": "nested-bwrap-setup",
+    },
     "die_with_parent": True,
     "new_session": True,
     "temporary_filesystem": "/tmp",
@@ -208,27 +229,13 @@ def provider_free_sandbox_argv(
     chromium = runtime_identity["chromium"]
     argv = [
         bwrap,
-        "--unshare-user",
-        "--unshare-net",
-        "--unshare-pid",
-        "--unshare-ipc",
-        "--unshare-uts",
+        *(flag for _name, flag in PROVIDER_FREE_NAMESPACES),
         "--cap-drop",
         "ALL",
-        "--cap-add",
-        "CAP_SYS_ADMIN",
-        "--cap-add",
-        "CAP_SYS_CHROOT",
-        "--cap-add",
-        "CAP_NET_ADMIN",
-        "--cap-add",
-        "CAP_SETUID",
-        "--cap-add",
-        "CAP_SETGID",
-        "--cap-add",
-        "CAP_SYS_PTRACE",
-        "--cap-add",
-        "CAP_SETFCAP",
+    ]
+    for capability in PROVIDER_FREE_SETUP_CAPABILITIES:
+        argv.extend(("--cap-add", capability))
+    argv.extend((
         "--die-with-parent",
         "--new-session",
         "--dev",
@@ -254,7 +261,7 @@ def provider_free_sandbox_argv(
         "--ro-bind",
         chromium["host_cache_path"],
         chromium["sandbox_cache_path"],
-    ]
+    ))
     for source, target in (
         ("usr/bin", "/bin"),
         ("usr/sbin", "/sbin"),

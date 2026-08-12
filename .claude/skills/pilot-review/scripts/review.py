@@ -46,10 +46,31 @@ _DEPLOYED_AUTHORITY_EXCLUSIONS = {
     "file_suffixes": [".dylib", ".pyc", ".pyd"],
     "native_shared_objects_included": True,
 }
+_SANDBOX_NAMESPACES = (
+    ("user", "--unshare-user"),
+    ("network", "--unshare-net"),
+    ("pid", "--unshare-pid"),
+    ("ipc", "--unshare-ipc"),
+    ("uts", "--unshare-uts"),
+)
+_SANDBOX_SETUP_CAPABILITIES = (
+    "CAP_SYS_ADMIN",
+    "CAP_SYS_CHROOT",
+    "CAP_NET_ADMIN",
+    "CAP_SETUID",
+    "CAP_SETGID",
+    "CAP_SYS_PTRACE",
+    "CAP_SETFCAP",
+)
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/1",
-    "namespaces": ["network", "pid", "ipc", "uts"],
-    "capabilities": "drop-all",
+    "schema": "cvm.provider-free-linux-sandbox/2",
+    "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
+    "capabilities": {
+        "baseline": "drop-all",
+        "retained": list(_SANDBOX_SETUP_CAPABILITIES),
+        "scope": "outer-user-namespace",
+        "purpose": "nested-bwrap-setup",
+    },
     "die_with_parent": True,
     "new_session": True,
     "temporary_filesystem": "/tmp",
@@ -131,12 +152,13 @@ def _validate_provider_free_sandbox_argv(
         raise ReviewError("provider-free experiment path is invalid")
     fixed_prefix = [
         bwrap,
-        "--unshare-net",
-        "--unshare-pid",
-        "--unshare-ipc",
-        "--unshare-uts",
+        *(flag for _name, flag in _SANDBOX_NAMESPACES),
         "--cap-drop",
         "ALL",
+    ]
+    for capability in _SANDBOX_SETUP_CAPABILITIES:
+        fixed_prefix.extend(("--cap-add", capability))
+    fixed_prefix.extend([
         "--die-with-parent",
         "--new-session",
         "--dev",
@@ -148,10 +170,11 @@ def _validate_provider_free_sandbox_argv(
         "--dir",
         "/workspace",
         "--ro-bind",
-    ]
-    if argv[: len(fixed_prefix)] != fixed_prefix or len(argv) < 45:
+    ])
+    mount_start = len(fixed_prefix)
+    if argv[:mount_start] != fixed_prefix or len(argv) < mount_start + 27:
         raise ReviewError("provider-free sandbox argv prefix conflicts")
-    host_root = _normalized_absolute(argv[18], "deployed repository root")
+    host_root = _normalized_absolute(argv[mount_start], "deployed repository root")
     if host_root == "/":
         raise ReviewError("deployed repository root is too broad")
     sandbox_exp = f"/workspace/repo/{exp_dir}"
@@ -184,9 +207,9 @@ def _validate_provider_free_sandbox_argv(
         "usr/lib64",
         "/lib64",
     ]
-    if argv[18 : 18 + len(fixed_mounts)] != fixed_mounts:
+    if argv[mount_start : mount_start + len(fixed_mounts)] != fixed_mounts:
         raise ReviewError("provider-free sandbox mount contract conflicts")
-    index = 18 + len(fixed_mounts)
+    index = mount_start + len(fixed_mounts)
     mounted_system_paths: list[str] = []
     while argv[index : index + 1] == ["--ro-bind"]:
         if index + 2 >= len(argv) or argv[index + 1] != argv[index + 2]:
@@ -664,14 +687,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/1",
+                "id": "issue15.provider-free-bounded/2",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/1",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/2",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/1",
+                "resource_profile": "issue15.provider-free-bounded/2",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False

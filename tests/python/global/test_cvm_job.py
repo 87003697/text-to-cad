@@ -104,6 +104,27 @@ class CvmJobTests(unittest.TestCase):
             repo_root=self.repo_root,
         )
 
+        self.assertEqual(
+            ["user", "network", "pid", "ipc", "uts"],
+            runtime.PROVIDER_FREE_SANDBOX_PROFILE["namespaces"],
+        )
+        self.assertEqual(
+            {
+                "baseline": "drop-all",
+                "retained": [
+                    "CAP_SYS_ADMIN",
+                    "CAP_SYS_CHROOT",
+                    "CAP_NET_ADMIN",
+                    "CAP_SETUID",
+                    "CAP_SETGID",
+                    "CAP_SYS_PTRACE",
+                    "CAP_SETFCAP",
+                ],
+                "scope": "outer-user-namespace",
+                "purpose": "nested-bwrap-setup",
+            },
+            runtime.PROVIDER_FREE_SANDBOX_PROFILE["capabilities"],
+        )
         self.assertIn("--unshare-user", argv)
         self.assertEqual("ALL", argv[argv.index("--cap-drop") + 1])
         self.assertEqual(
@@ -385,9 +406,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/1",
+                "id": "issue15.provider-free-bounded/2",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/1",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/2",
             },
         )
         self.assertEqual(
@@ -511,7 +532,10 @@ class CvmJobTests(unittest.TestCase):
             ],
         )
         child_environment = captured["env"]
-        self.assertEqual(child_environment["CVM_PROVIDER_FREE_PROFILE"], "issue15.provider-free-bounded/1")
+        self.assertEqual(
+            child_environment["CVM_PROVIDER_FREE_PROFILE"],
+            "issue15.provider-free-bounded/2",
+        )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],
             (
