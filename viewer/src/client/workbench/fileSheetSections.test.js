@@ -55,8 +55,8 @@ test("rendered file sheet sections include closed-by-default sections", () => {
   assert.deepEqual(renderedFileSheetSectionIds("step", { hasFileStatus: true, hasStepModulePanel: true }), [
     "status",
     "tree",
-    "measurements",
     "reference",
+    "measurements",
     "parameters",
     "display"
   ]);

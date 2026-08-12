@@ -1297,8 +1297,8 @@ export default function StepFileSheet({
             </div>
       )
     },
-    measurementsSection,
     buildStepReferenceTab({ references: selectedReferences }),
+    measurementsSection,
     // The parameters tab is the shared ParameterControlsSection; the only
     // STEP-specific part is the time control, which tracks live playback.
     buildParameterControlsTab({
