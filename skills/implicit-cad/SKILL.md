@@ -179,30 +179,6 @@ export-preset GLB (the package's own `model.glb` is compressed for the viewer an
 substitute). Use `scripts/export` when you want STL or 3MF, non-default parameters, or an
 animation.
 
-## Generate Tool
-
-From this skill directory:
-
-```bash
-python scripts/gen <model.implicit.js>
-python scripts/gen <model.implicit.js> --write
-python scripts/gen models/implicits/*.implicit.js --force
-python scripts/gen <model.implicit.js> --resolution 128 --threads 4
-python scripts/gen --help
-```
-
-`scripts/gen` builds the model's **render package** — the baked mesh the CAD Viewer opens,
-under the model folder's `__cadgen__/models/<name>.implicit.js/` (`implicit.json` +
-`model.glb`). The package is baked at the model's parameter DEFAULTS: it carries no live
-parameters and no animation. It is also what the viewer builds on demand, through the same
-producer, so a package built here and one built by opening the model are the same artifact.
-
-A model whose package is current is skipped; `--force` rebuilds anyway. `--write` also leaves
-the sibling `<name>.glb` beside the source, from the same mesh pass — that file is an ordinary
-export-preset GLB (the package's own `model.glb` is compressed for the viewer and is not a
-substitute). Use `scripts/export` when you want STL or 3MF, non-default parameters, or an
-animation.
-
 ## Export Tool
 
 From this skill directory:
