@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 import platform
 import resource
@@ -21,6 +22,13 @@ WORKER_PROFILE = {
     "processes": 32,
 }
 TRUSTED_BWRAP_PATH = Path("/usr/bin/bwrap")
+
+
+@dataclass(frozen=True)
+class WorkerResult:
+    status: str
+    stdout: bytes = b""
+    stderr: bytes = b""
 
 
 def worker_resource_limits() -> None:
@@ -119,7 +127,7 @@ def run_worker_bounded(
     *,
     cwd: Path,
     environment: dict[str, str],
-) -> str:
+) -> WorkerResult:
     with (
         tempfile.TemporaryFile() as worker_stdout,
         tempfile.TemporaryFile() as worker_stderr,
@@ -137,22 +145,25 @@ def run_worker_bounded(
             process.wait(timeout=WORKER_PROFILE["timeout_seconds"])
         except subprocess.TimeoutExpired:
             _kill_worker_group(process)
-            return "timeout"
+            return WorkerResult("timeout")
         _kill_worker_group(process)
         output_limit = WORKER_PROFILE["output_bytes"]
         for stream in (worker_stdout, worker_stderr):
             if stream.tell() > output_limit:
-                return "output-limit"
+                return WorkerResult("output-limit")
         if process.returncode != 0:
-            return "rejected"
-        if any(stream.tell() for stream in (worker_stdout, worker_stderr)):
-            return "output"
-        return "ok"
+            return WorkerResult("rejected")
+        outputs: list[bytes] = []
+        for stream in (worker_stdout, worker_stderr):
+            stream.seek(0)
+            outputs.append(stream.read(output_limit + 1))
+        return WorkerResult("ok", stdout=outputs[0], stderr=outputs[1])
 
 
 __all__ = [
     "TRUSTED_BWRAP_PATH",
     "WORKER_PROFILE",
+    "WorkerResult",
     "run_worker_bounded",
     "trusted_worker_import_paths",
     "worker_resource_limits",

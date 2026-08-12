@@ -494,6 +494,7 @@ def _prepare_candidate(workspace: Path, command_log: Path) -> Path:
             "source/simple_model_library.py",
             "--output-dir",
             "built",
+            "--reject-source-output",
         ],
         cwd=candidate,
         command_log=command_log,

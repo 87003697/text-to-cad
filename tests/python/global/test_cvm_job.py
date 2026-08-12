@@ -785,6 +785,7 @@ class CvmJobTests(unittest.TestCase):
         self,
         *,
         noisy_source: bool = False,
+        abrupt_source: bool = False,
     ) -> Path:
         """Install the production deployment layout used by the real-chain tests."""
         for relative in deployment_authority.EXECUTION_AUTHORITY_PATHS:
@@ -917,15 +918,19 @@ server.listen(0, host, () => {
         provider_home = self.workspace / "provider-free-home"
         provider_home.mkdir()
 
-        if noisy_source:
+        if noisy_source or abrupt_source:
             durable_source = self.repo_root / (
                 provider_free_scenarios.DURABLE_MODEL_SOURCE.relative_to(
                     REPO_ROOT
                 )
             )
+            prefix = (
+                "import os\nos._exit(23)\n"
+                if abrupt_source
+                else "print('candidate noise')\n"
+            )
             durable_source.write_text(
-                "print('candidate noise')\n"
-                + durable_source.read_text(encoding="utf-8"),
+                prefix + durable_source.read_text(encoding="utf-8"),
                 encoding="utf-8",
             )
 
@@ -944,11 +949,11 @@ server.listen(0, host, () => {
         )
         return provider_home
 
-    def _run_real_provider_free_chain(
+    def _run_provider_free_chain_with_bwrap_emulator(
         self,
         provider_home: Path,
     ) -> tuple[dict[str, object], str, dict[str, object]]:
-        """Run the real supervisor, runner, and scenario around the bwrap seam."""
+        """Run real public layers with only the outer bwrap syscall emulated."""
         handle = runtime.submit_provider_free(
             "issue15-runtime-authority",
             self.group,
@@ -1049,15 +1054,16 @@ server.listen(0, host, () => {
             "source/simple_model_library.py",
             "--output-dir",
             "built",
+            "--reject-source-output",
         ]
 
-    def test_real_runner_crosses_candidate_workspace_with_production_layout(
+    def test_bwrap_emulator_crosses_candidate_workspace_with_production_layout(
         self,
     ) -> None:
-        """Drive supervisor, runner, and scenario through the real candidate build."""
+        """Drive public layers while explicitly emulating the bwrap syscall."""
 
         provider_home = self._install_real_provider_free_layout()
-        state, handle, captured = self._run_real_provider_free_chain(
+        state, handle, captured = self._run_provider_free_chain_with_bwrap_emulator(
             provider_home
         )
 
@@ -1124,10 +1130,28 @@ server.listen(0, host, () => {
             },
         )
         self.assertIn("--unshare-net", captured["sandbox_argv"])
+        for flag in (
+            "--unshare-pid",
+            "--unshare-ipc",
+            "--unshare-uts",
+            "--die-with-parent",
+            "--new-session",
+        ):
+            self.assertIn(flag, captured["sandbox_argv"])
+        self.assertEqual(
+            "ALL",
+            captured["sandbox_argv"][
+                captured["sandbox_argv"].index("--cap-drop") + 1
+            ],
+        )
+        self.assertEqual(
+            state["request_authority"]["runtime_identity"]["bwrap"]["path"],
+            captured["sandbox_argv"][0],
+        )
         self.assertNotIn("OPENAI_API_KEY", captured["sandbox_environment"])
         self.assertNotIn("PYTHONPATH", captured["sandbox_environment"])
 
-    def test_real_runner_rejects_noisy_candidate_without_publication(
+    def test_bwrap_emulator_rejects_noisy_candidate_without_publication(
         self,
     ) -> None:
         """Reject candidate stdout before publishing formal build artifacts."""
@@ -1135,7 +1159,7 @@ server.listen(0, host, () => {
         provider_home = self._install_real_provider_free_layout(
             noisy_source=True
         )
-        noisy_state, handle, captured = self._run_real_provider_free_chain(
+        noisy_state, handle, captured = self._run_provider_free_chain_with_bwrap_emulator(
             provider_home
         )
 
@@ -1172,6 +1196,42 @@ server.listen(0, host, () => {
                 "LANG": "C.UTF-8",
             },
         )
+
+    def test_bwrap_emulator_proves_nested_worker_survives_abrupt_source(
+        self,
+    ) -> None:
+        """An os._exit source kills only the nested worker, not public layers."""
+
+        provider_home = self._install_real_provider_free_layout(
+            abrupt_source=True
+        )
+        state, handle, captured = (
+            self._run_provider_free_chain_with_bwrap_emulator(provider_home)
+        )
+
+        exp_dir = self.repo_root / "outputs" / handle
+        candidate = exp_dir / "work/candidate"
+        self.assertEqual("failed", state["state"])
+        self.assertEqual(
+            "candidate_workspace",
+            state["scenario_failure"]["stage"],
+        )
+        self.assertFalse((candidate / "built/build.json").exists())
+        command_records = [
+            json.loads(line)
+            for line in (
+                exp_dir / "run/provider-free-commands.jsonl"
+            ).read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(1, len(command_records))
+        self.assertEqual(self._canonical_build_argv(), command_records[0]["argv"])
+        self.assertNotEqual(0, command_records[0]["exit_code"])
+        self.assertEqual(
+            state["request_authority"]["runtime_identity"]["bwrap"]["path"],
+            captured["sandbox_argv"][0],
+        )
+        self.assertIn("--unshare-net", captured["sandbox_argv"])
+        self.assertNotIn("TOP SECRET", str(captured.get("scenario_stderr", "")))
 
     def test_provider_free_failure_rejects_unknown_terminal_manifest_schema(
         self,
