@@ -1301,6 +1301,7 @@ def _source_worker_step(
             "LANG": "C.UTF-8",
             "PATH": os.environ.get("PATH", ""),
             "PYTHONDONTWRITEBYTECODE": "1",
+            "XDG_CACHE_HOME": "/tmp/canonical-cache",
         }
         worker_result = _run_worker_bounded(
             command,

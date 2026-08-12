@@ -830,7 +830,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             rebuilt_recipe = json.loads((isolated_root / "rebuilt/rebuild.json").read_text(encoding="utf-8"))
             self.assertEqual(recipe["inputs"], rebuilt_recipe["inputs"])
 
-    def test_public_adapter_builds_durable_model_with_declared_python_helper(self) -> None:
+    def test_public_adapter_builds_durable_model_without_worker_diagnostics(self) -> None:
         with temporary_directory(prefix="cad-canonical-import-") as temp_dir:
             root = Path(temp_dir)
             source = root / "source"
@@ -853,9 +853,11 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
                 "source/simple_model_library.py",
                 "--output-dir",
                 "candidate",
+                "--reject-source-output",
             )
 
             self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("", result.stderr)
             self.assertTrue((root / "candidate/measurement.glb").is_file())
             recipe = json.loads(
                 (root / "candidate/rebuild.json").read_text(encoding="utf-8")
