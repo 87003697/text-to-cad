@@ -61,6 +61,12 @@ class ResidualRendererTests(unittest.TestCase):
             "cannot create user data directory: Permission denied": (
                 "browser_launch_filesystem_permission"
             ),
+            "Failed to create user-data-dir: EROFS": (
+                "browser_launch_filesystem_permission"
+            ),
+            "Profile directory is on a read-only file system": (
+                "browser_launch_filesystem_permission"
+            ),
             "browser startup: Permission denied": (
                 "browser_launch_executable_permission"
             ),

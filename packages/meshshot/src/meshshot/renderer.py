@@ -102,11 +102,14 @@ _PERMISSION_MARKERS = (
 _SANDBOX_PERMISSION_MARKERS = ("sandbox", "namespace", "zygote", "setuid", "clone")
 _FILESYSTEM_PERMISSION_MARKERS = (
     "user data",
+    "user-data-dir",
+    "profile directory",
     "cache directory",
-    "cannot create",
-    "mkdir",
     "read-only file system",
+    "erofs",
 )
+_FILESYSTEM_CREATION_MARKERS = ("cannot create", "failed to create", "mkdir")
+_FILESYSTEM_DIRECTORY_MARKERS = ("directory", "user data", "user-data-dir", "cache")
 _SPAWN_PERMISSION_MARKERS = ("spawn", "execve", "exec format")
 
 
@@ -117,11 +120,17 @@ def _browser_launch_phase(exc: Exception) -> MeshshotPhase:
     for phase, patterns in _BROWSER_LAUNCH_PHASE_PATTERNS:
         if any(pattern in detail for pattern in patterns):
             return phase
+    filesystem_denial = any(
+        marker in detail for marker in _FILESYSTEM_PERMISSION_MARKERS
+    ) or (
+        any(marker in detail for marker in _FILESYSTEM_CREATION_MARKERS)
+        and any(marker in detail for marker in _FILESYSTEM_DIRECTORY_MARKERS)
+    )
+    if filesystem_denial:
+        return "browser_launch_filesystem_permission"
     if any(marker in detail for marker in _PERMISSION_MARKERS):
         if any(marker in detail for marker in _SANDBOX_PERMISSION_MARKERS):
             return "browser_launch_sandbox_permission"
-        if any(marker in detail for marker in _FILESYSTEM_PERMISSION_MARKERS):
-            return "browser_launch_filesystem_permission"
         if any(marker in detail for marker in _SPAWN_PERMISSION_MARKERS):
             return "browser_launch_executable_spawn_permission"
         return "browser_launch_executable_permission"
