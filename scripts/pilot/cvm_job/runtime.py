@@ -493,12 +493,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/8",
+    "id": "issue15.provider-free-bounded/9",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/8",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/9",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/8",
+    "schema": "cvm.provider-free-linux-sandbox/9",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -540,13 +540,30 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "environment_names": ["HOME", "LANG", "PATH"],
             "network": "none",
             "timeout_seconds": 5,
+            "node_probe": {
+                "script": "scripts/pilot/browser_exec_probe.js",
+                "runtime": "playwright-bundled-node",
+                "spawn": "child-process-detached",
+                "result": {
+                    "exit_code": 0,
+                    "stdout": "empty",
+                    "stderr": "empty",
+                    "child_stdout": "single-chromium-version-line",
+                    "child_stdout_max_bytes": 128,
+                },
+            },
             "result": {
                 "exit_code": 0,
                 "stdout": "single-chromium-version-line",
                 "stdout_max_bytes": 128,
                 "stderr": "empty",
             },
-            "seams": ["outer-direct", "nested-direct", "playwright-launch"],
+            "seams": [
+                "outer-python-direct",
+                "nested-python-direct",
+                "nested-node-direct",
+                "playwright-launch",
+            ],
             "published": "closed-outcomes-only-no-raw-output",
             "cleanup": "no-profile-or-persistent-process-artifacts",
         },
@@ -1355,6 +1372,7 @@ def _provider_free_failure_evidence_result(
     diagnostic_operations = {
         "preview_browser_outer_exec_probe",
         "preview_browser_nested_exec_probe",
+        "preview_browser_node_exec_probe",
         "preview_browser_playwright_launch_after_direct_probes",
     }
     if operation in diagnostic_operations:

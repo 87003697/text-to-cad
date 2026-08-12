@@ -478,6 +478,7 @@ def _publish_browser_exec_diagnostic(
     *,
     outer: str,
     nested: str,
+    node: str,
     playwright: str,
 ) -> None:
     """Publish only closed outcomes for the exact staged-browser probes."""
@@ -491,6 +492,7 @@ def _publish_browser_exec_diagnostic(
             "probe": "chromium-version-immediate-exit",
             "outer": outer,
             "nested": nested,
+            "node": node,
             "playwright": playwright,
         },
     )
@@ -524,7 +526,76 @@ def _run_exact_browser_version_probe(argv: Sequence[str], *, cwd: Path) -> None:
         raise ScenarioError("staged browser exec probe result is invalid")
 
 
-def _nested_browser_exec_probe_argv(*, cwd: Path) -> list[str]:
+def _run_closed_node_browser_version_probe(
+    argv: Sequence[str], *, cwd: Path
+) -> None:
+    """Require the repository Node probe to exit silently and successfully."""
+
+    try:
+        completed = subprocess.run(
+            list(argv),
+            cwd=cwd,
+            env=dict(BROWSER_EXEC_PROBE_ENVIRONMENT),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=BROWSER_EXEC_PROBE_TIMEOUT_SECONDS,
+            start_new_session=True,
+            close_fds=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ScenarioError("bundled Node browser exec probe failed") from exc
+    if (
+        completed.returncode != 0
+        or completed.stdout != b""
+        or completed.stderr != b""
+    ):
+        raise ScenarioError("bundled Node browser exec probe result is invalid")
+
+
+def _playwright_bundled_node() -> Path:
+    """Resolve only Playwright's physical bundled Node executable."""
+
+    try:
+        import playwright
+        from playwright._impl._driver import compute_driver_executable
+
+        package_root = Path(playwright.__file__).resolve(strict=True).parent
+        expected = package_root / "driver/node"
+        reported = Path(compute_driver_executable()[0])
+        info = expected.lstat()
+    except (ImportError, OSError) as exc:
+        raise ScenarioError("Playwright bundled Node is unavailable") from exc
+    if (
+        reported != expected
+        or stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_mode & 0o111 == 0
+    ):
+        raise ScenarioError("Playwright bundled Node is invalid")
+    return expected
+
+
+def _browser_node_probe_script() -> Path:
+    """Return the physical repository-owned Node probe."""
+
+    root = REPO_ROOT.resolve(strict=True)
+    path = root / "scripts/pilot/browser_exec_probe.js"
+    try:
+        info = path.lstat()
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise ScenarioError("repository browser exec probe is unavailable") from exc
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        raise ScenarioError("repository browser exec probe is invalid")
+    return resolved
+
+
+def _nested_browser_exec_probe_argv(
+    *, cwd: Path, command: Sequence[str] | None = None
+) -> list[str]:
     """Project the exact staged Chromium through the nested preview mount."""
 
     try:
@@ -533,6 +604,12 @@ def _nested_browser_exec_probe_argv(*, cwd: Path) -> list[str]:
         raise ScenarioError("trusted preview sandbox runtime unavailable") from exc
     if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
         raise ScenarioError("trusted preview sandbox runtime invalid")
+    nested_command = list(command) if command is not None else [
+        PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+        "--version",
+    ]
+    if not nested_command:
+        raise ScenarioError("nested browser exec probe command is empty")
     return [
         os.fspath(TRUSTED_BWRAP_PATH),
         "--die-with-parent",
@@ -558,8 +635,7 @@ def _nested_browser_exec_probe_argv(*, cwd: Path) -> list[str]:
         "--chdir",
         os.fspath(cwd),
         "--",
-        PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
-        "--version",
+        *nested_command,
     ]
 
 
@@ -947,6 +1023,7 @@ def _run_voxblame_preview(
                     command_log,
                     outer="failed",
                     nested="not-run",
+                    node="not-run",
                     playwright="not-run",
                 )
                 raise ScenarioError(
@@ -963,11 +1040,36 @@ def _run_voxblame_preview(
                     command_log,
                     outer="passed",
                     nested="failed",
+                    node="not-run",
                     playwright="not-run",
                 )
                 raise ScenarioError(
                     "provider-free nested browser exec probe failed",
                     operation="preview_browser_nested_exec_probe",
+                ) from exc
+            try:
+                _run_closed_node_browser_version_probe(
+                    _nested_browser_exec_probe_argv(
+                        cwd=cwd,
+                        command=[
+                            os.fspath(_playwright_bundled_node()),
+                            os.fspath(_browser_node_probe_script()),
+                            PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+                        ],
+                    ),
+                    cwd=cwd,
+                )
+            except ScenarioError as exc:
+                _publish_browser_exec_diagnostic(
+                    command_log,
+                    outer="passed",
+                    nested="passed",
+                    node="failed",
+                    playwright="not-run",
+                )
+                raise ScenarioError(
+                    "provider-free bundled Node browser exec probe failed",
+                    operation="preview_browser_node_exec_probe",
                 ) from exc
         sandbox_argv = _preview_sandbox_argv(argv, cwd=cwd)
         _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
@@ -983,6 +1085,7 @@ def _run_voxblame_preview(
                     command_log,
                     outer="passed",
                     nested="passed",
+                    node="passed",
                     playwright="failed",
                 )
                 if exc.classification in {
@@ -991,7 +1094,7 @@ def _run_voxblame_preview(
                     if classification.startswith("preview_browser_launch")
                 }:
                     raise ScenarioError(
-                        "Playwright failed after both direct exec probes passed",
+                        "Playwright failed after all direct exec probes passed",
                         operation=(
                             "preview_browser_playwright_launch_after_direct_probes"
                         ),
@@ -1002,6 +1105,7 @@ def _run_voxblame_preview(
                 command_log,
                 outer="passed",
                 nested="passed",
+                node="passed",
                 playwright="passed",
             )
         return result

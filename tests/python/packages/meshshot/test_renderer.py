@@ -32,6 +32,34 @@ def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometr
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_real_playwright_launches_explicit_attested_executable(self) -> None:
+        """Exercise the production executable_path at the real launch seam."""
+
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            executable = Path(playwright.chromium.executable_path).resolve(
+                strict=True
+            )
+        triangle = (
+            (-0.2, -0.2, 0.0),
+            (0.2, -0.2, 0.0),
+            (0.0, 0.2, 0.0),
+        )
+        geometry = _geometry(triangle)
+
+        with mock.patch.dict(
+            os.environ,
+            {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(executable)},
+        ):
+            rendered = render_residual_preview(
+                geometry,
+                geometry,
+                variant="step",
+            )
+
+        self.assertEqual((504, 1008), Image.open(BytesIO(rendered.png_bytes)).size)
+
     def test_explicit_attested_browser_executable_bypasses_registry_selection(
         self,
     ) -> None:

@@ -28,22 +28,41 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 class JobProtocolTests(unittest.TestCase):
     def test_browser_exec_diagnostic_receipt_is_closed(self) -> None:
         receipt = {
-            "schema": "cvm.provider-free-browser-exec-diagnostic/1",
+            "schema": "cvm.provider-free-browser-exec-diagnostic/2",
             "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
             "probe": "chromium-version-immediate-exit",
             "outer": "passed",
             "nested": "passed",
+            "node": "passed",
             "playwright": "failed",
         }
 
         self.assertTrue(
             protocol.provider_free_browser_exec_diagnostic_allowed(receipt)
         )
+        node_failure = {
+            **receipt,
+            "node": "failed",
+            "playwright": "not-run",
+        }
+        self.assertTrue(
+            protocol.provider_free_browser_exec_diagnostic_matches_operation(
+                node_failure,
+                "preview_browser_node_exec_probe",
+            )
+        )
+        self.assertFalse(
+            protocol.provider_free_browser_exec_diagnostic_matches_operation(
+                node_failure,
+                "preview_browser_nested_exec_probe",
+            )
+        )
         for mutation in (
             {**receipt, "stdout": "sensitive raw version"},
             {**receipt, "outer": "unknown"},
             {**receipt, "outer": "failed", "nested": "passed"},
             {**receipt, "nested": "failed", "playwright": "passed"},
+            {**receipt, "node": "failed", "playwright": "passed"},
             {**receipt, "executable": "/tmp/other-browser"},
         ):
             with self.subTest(mutation=mutation):

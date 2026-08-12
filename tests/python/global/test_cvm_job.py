@@ -528,6 +528,18 @@ class CvmJobTests(unittest.TestCase):
                     "environment_names": ["HOME", "LANG", "PATH"],
                     "network": "none",
                     "timeout_seconds": 5,
+                    "node_probe": {
+                        "script": "scripts/pilot/browser_exec_probe.js",
+                        "runtime": "playwright-bundled-node",
+                        "spawn": "child-process-detached",
+                        "result": {
+                            "exit_code": 0,
+                            "stdout": "empty",
+                            "stderr": "empty",
+                            "child_stdout": "single-chromium-version-line",
+                            "child_stdout_max_bytes": 128,
+                        },
+                    },
                     "result": {
                         "exit_code": 0,
                         "stdout": "single-chromium-version-line",
@@ -535,8 +547,9 @@ class CvmJobTests(unittest.TestCase):
                         "stderr": "empty",
                     },
                     "seams": [
-                        "outer-direct",
-                        "nested-direct",
+                        "outer-python-direct",
+                        "nested-python-direct",
+                        "nested-node-direct",
                         "playwright-launch",
                     ],
                     "published": "closed-outcomes-only-no-raw-output",
@@ -766,6 +779,7 @@ class CvmJobTests(unittest.TestCase):
                         "probe": "chromium-version-immediate-exit",
                         "outer": "passed",
                         "nested": "passed",
+                        "node": "passed",
                         "playwright": "passed",
                     },
                     sort_keys=True,
@@ -927,9 +941,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/8",
+                "id": "issue15.provider-free-bounded/9",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/8",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/9",
             },
         )
         self.assertEqual(
@@ -1055,7 +1069,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/8",
+            "issue15.provider-free-bounded/9",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],
