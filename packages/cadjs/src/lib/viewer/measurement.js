@@ -10,6 +10,8 @@
 
 const PLANAR_SURFACE_TYPES = new Set(["plane", "planar"]);
 const PARALLEL_NORMAL_TOLERANCE = 0.999;
+// Below this the two planes are the same plane, not two planes with a gap.
+const COPLANAR_TOLERANCE = 1e-6;
 const EPSILON = 1e-9;
 
 export const MEASURE_SNAP_LABELS = {
@@ -410,6 +412,14 @@ function planarPairMeasurement(pickA, pickB) {
   if (!normalA || !normalB) {
     return null;
   }
+  // Two points on the SAME face are not a face-to-face measurement. Their
+  // separation lies entirely in the plane, so the perpendicular distance is
+  // exactly zero — which would read as "0.00 mm" and collapse the dimension line
+  // to nothing. This is the commonest measurement there is, so it has to fall
+  // through to the straight distance between the points.
+  if (pickA.referenceId && pickA.referenceId === pickB.referenceId) {
+    return null;
+  }
   const alignment = Math.abs(dot3(normalA, normalB));
   if (alignment < PARALLEL_NORMAL_TOLERANCE) {
     return { perpendicular: null, angleDeg: acuteAngleDegrees(alignment) };
@@ -418,7 +428,13 @@ function planarPairMeasurement(pickA, pickB) {
   if (!separation) {
     return null;
   }
-  return { perpendicular: Math.abs(dot3(separation, normalA)), angleDeg: null };
+  const perpendicular = Math.abs(dot3(separation, normalA));
+  // Distinct but coplanar faces — two flats milled to the same height — have
+  // nothing between them to report either.
+  if (perpendicular <= COPLANAR_TOLERANCE) {
+    return null;
+  }
+  return { perpendicular, angleDeg: null };
 }
 
 function straightEdgePairAngle(pickA, pickB) {

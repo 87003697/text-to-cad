@@ -120,11 +120,11 @@ test("measurementFromPicks measures euclidean distance and per-axis delta", () =
 test("measurementFromPicks reports perpendicular distance for parallel planar faces", () => {
   const faceA = {
     point: [0, 0, 0],
-    snapKind: "face", snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, 1] } }
+    snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, 1] } }
   };
   const faceB = {
     point: [0, 0, 2.5],
-    snapKind: "face", snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, 1] } }
+    snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, 1] } }
   };
   assert.equal(measurementFromPicks(faceA, faceB).perpendicular, 2.5);
 });
@@ -132,11 +132,11 @@ test("measurementFromPicks reports perpendicular distance for parallel planar fa
 test("measurementFromPicks treats anti-parallel planar faces as perpendicular", () => {
   const faceA = {
     point: [0, 0, 0],
-    snapKind: "face", snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, 1] } }
+    snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, 1] } }
   };
   const faceB = {
     point: [0, 0, 4],
-    snapKind: "face", snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, -1] } }
+    snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, -1] } }
   };
   assert.equal(measurementFromPicks(faceA, faceB).perpendicular, 4);
 });
@@ -144,11 +144,11 @@ test("measurementFromPicks treats anti-parallel planar faces as perpendicular", 
 test("measurementFromPicks falls back to euclidean for non-parallel faces", () => {
   const faceA = {
     point: [0, 0, 0],
-    snapKind: "face", snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [1, 0, 0] } }
+    snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [1, 0, 0] } }
   };
   const faceB = {
     point: [0, 0, 1],
-    snapKind: "face", snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 1, 0] } }
+    snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 1, 0] } }
   };
   const result = measurementFromPicks(faceA, faceB);
   assert.equal(result.perpendicular, null);
@@ -162,23 +162,31 @@ test("measurementFromPicks refuses perpendicular distance for non-planar picks",
   };
   const face = {
     point: [0, 0, 5],
-    snapKind: "face", snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, 1] } }
+    snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, 1] } }
   };
   const result = measurementFromPicks(cylinder, face);
   assert.equal(result.perpendicular, null);
   assert.equal(result.euclidean, 5);
 });
 
-test("measurementFromPicks clamps near-zero perpendicular distances to zero", () => {
+test("measurementFromPicks treats a vanishing perpendicular gap as no gap at all", () => {
+  // Faces this close are the same plane. Reporting a perpendicular of 0 hides the
+  // real distance between the picked points and draws a zero-length dimension.
   const faceA = {
     point: [0, 0, 0],
-    snapKind: "face", snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, 1] } }
+    referenceId: "a",
+    snapKind: "face",
+    reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, 1] } }
   };
   const faceB = {
-    point: [0, 0, 1e-12],
-    snapKind: "face", snapKind: "face", reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, 1] } }
+    point: [3, 4, 1e-12],
+    referenceId: "b",
+    snapKind: "face",
+    reference: { pickData: { surfaceType: "PLANE", normal: [0, 0, 1] } }
   };
-  assert.equal(measurementFromPicks(faceA, faceB).perpendicular, 0);
+  const result = measurementFromPicks(faceA, faceB);
+  assert.equal(result.perpendicular, null);
+  assert.equal(result.euclidean, 5);
 });
 
 test("classifyMeasureSnapKind classifies references deterministically", () => {
@@ -501,4 +509,50 @@ test("formatMeasurement prefers perpendicular, then centre distance, then straig
   assert.equal(formatMeasurement({ euclidean: 62, centerDistance: 70, perpendicular: 20, unit: "mm" }), "20.00 mm");
   assert.equal(formatMeasurement({ euclidean: 62, centerDistance: 70, perpendicular: null, unit: "mm" }), "70.00 mm");
   assert.equal(formatMeasurement({ euclidean: 62, centerDistance: null, perpendicular: null, unit: "mm" }), "62.00 mm");
+});
+
+test("two points on one face measure the distance between them, not zero", () => {
+  // The commonest measurement there is. Both picks share a face, so the
+  // separation lies entirely IN the plane and the perpendicular distance along
+  // its normal is exactly 0. Reporting that reads as "0.00 mm" and collapses the
+  // dimension line to zero length, so the tool looks broken.
+  const face = { pickData: { selectorType: "face", surfaceType: "plane", normal: [0, 0, 1] } };
+  const a = { snapKind: "face", point: [0, 0, 10], referenceId: "o1.1.f8", reference: face };
+  const b = { snapKind: "face", point: [30, 40, 10], referenceId: "o1.1.f8", reference: face };
+
+  const result = measurementFromPicks(a, b);
+  assert.equal(result.perpendicular, null);
+  assert.equal(result.angleDeg, null);
+  assert.equal(result.euclidean, 50);
+  assert.equal(formatMeasurement(result), "50.00 mm");
+});
+
+test("coplanar picks on different faces also have no perpendicular reading", () => {
+  // Two separate flats milled to the same height: parallel and distinct, but with
+  // nothing between them to report.
+  const plane = (id) => ({
+    snapKind: "face",
+    referenceId: id,
+    reference: { pickData: { selectorType: "face", surfaceType: "plane", normal: [0, 0, 1] } }
+  });
+  const result = measurementFromPicks(
+    { ...plane("f1"), point: [0, 0, 10] },
+    { ...plane("f2"), point: [30, 40, 10] }
+  );
+  assert.equal(result.perpendicular, null);
+  assert.equal(result.euclidean, 50);
+});
+
+test("genuinely separated parallel faces still report perpendicular distance", () => {
+  const plane = (id, normal) => ({
+    snapKind: "face",
+    referenceId: id,
+    reference: { pickData: { selectorType: "face", surfaceType: "plane", normal } }
+  });
+  const result = measurementFromPicks(
+    { ...plane("top", [0, 0, 1]), point: [0, 0, 10] },
+    { ...plane("bottom", [0, 0, -1]), point: [30, 40, -10] }
+  );
+  assert.equal(result.perpendicular, 20);
+  assert.equal(formatMeasurement(result), "20.00 mm");
 });

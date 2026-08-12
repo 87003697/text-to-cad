@@ -241,29 +241,18 @@ test("measure clicks on empty space produce no pick", () => {
 });
 
 test("measure tap payload keeps the resolved reference for face-to-face distance", () => {
-  const faceReference = {
-    id: "topology|1|face|3",
-    selectorType: "face",
-    pickData: {
-      selectorType: "face",
-      surfaceType: "plane",
-      normal: [0, 0, 1],
-      center: [0, 0, 2]
-    }
-  };
-  const pickA = measurePickForPosition({
-    reference: faceReference,
-    worldHitPoint: [0, 0, 2],
-    referenceId: faceReference.id
+  const facePick = (id, normal, point) => measurePickForPosition({
+    reference: { id, selectorType: "face", pickData: { selectorType: "face", surfaceType: "plane", normal } },
+    worldHitPoint: point,
+    referenceId: id
   });
+  // Two DISTINCT parallel faces. Reusing one reference for both picks would be
+  // two points on a single face, which has no perpendicular distance.
+  const pickA = facePick("topology|1|face|3", [0, 0, 1], [0, 0, 2]);
+  const pickB = facePick("topology|1|face|9", [0, 0, -1], [0, 0, 7]);
   assert.equal(pickA.snapKind, "face");
-  assert.equal(pickA.reference, faceReference);
+  assert.equal(pickA.reference.id, "topology|1|face|3");
 
-  const pickB = classifyMeasurePick({
-    reference: faceReference,
-    hitPoint: [0, 0, 7],
-    referenceId: faceReference.id
-  });
   const measurement = measurementFromPicks(pickA, pickB);
   assert.equal(measurement.perpendicular, 5);
   assert.equal(measurement.euclidean, 5);
