@@ -726,7 +726,7 @@ export default function StepFileSheet({
 
   const measurementsSection = {
     id: measurementsSectionId,
-    title: "Measurements",
+    title: "Measure",
     content: (
       <StepMeasurementsSection
         measurements={measurements}

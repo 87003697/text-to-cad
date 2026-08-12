@@ -86,7 +86,6 @@ export default function StepMeasurementsSection({
                   : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground"
               )}
             >
-              <Ruler className="size-3.5 shrink-0 text-current/60" strokeWidth={1.5} aria-hidden="true" />
               <span className="min-w-0 flex-1 truncate text-[11px] tabular-nums">
                 {labelText}
                 {angleText ? <span className="ml-1.5">{angleText}</span> : null}
