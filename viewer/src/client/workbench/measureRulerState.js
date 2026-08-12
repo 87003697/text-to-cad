@@ -16,6 +16,7 @@ export function applyMeasureRulerPick(state, pick, { createId = createMeasureMea
   if (!state?.draft) {
     return {
       draft: { anchor: pick, hover: null },
+      hover: pick,
       measurements: state?.measurements || []
     };
   }
@@ -23,6 +24,7 @@ export function applyMeasureRulerPick(state, pick, { createId = createMeasureMea
   if (!measurement) {
     return {
       draft: { anchor: pick, hover: null },
+      hover: pick,
       measurements: state.measurements || []
     };
   }
@@ -38,19 +40,43 @@ export function applyMeasureRulerPick(state, pick, { createId = createMeasureMea
   }
   return {
     draft: null,
+    hover: state?.hover || null,
     measurements
   };
 }
 
+/**
+ * Hover is tracked whether or not a measurement is in flight: with a draft it
+ * drives the rubber-band line, and without one it is what lets the panel read
+ * out the size of the entity under the cursor before any click.
+ *
+ * With no draft the point itself is not needed, so the state object is only
+ * replaced when the hovered entity changes — otherwise every mouse move would
+ * re-render the workspace for a readout that did not move.
+ */
 export function applyMeasureRulerHover(state, hover) {
+  const nextHover = hover && isFinitePoint(hover?.point) ? hover : null;
   if (!state?.draft) {
-    return state || null;
+    const currentId = state?.hover?.referenceId || "";
+    const nextId = nextHover?.referenceId || "";
+    if (!state && !nextHover) {
+      return state || null;
+    }
+    if (state && currentId === nextId && (state.hover?.snapKind || "") === (nextHover?.snapKind || "")) {
+      return state;
+    }
+    return {
+      draft: null,
+      hover: nextHover,
+      measurements: state?.measurements || []
+    };
   }
   return {
     ...state,
+    hover: nextHover,
     draft: {
       anchor: state.draft.anchor,
-      hover: hover && isFinitePoint(hover?.point) ? hover : null
+      hover: nextHover
     }
   };
 }
@@ -65,6 +91,7 @@ export function applyMeasureRulerDelete(state, measurementId) {
   }
   return {
     draft: state.draft || null,
+    hover: state.hover || null,
     measurements
   };
 }
@@ -77,22 +104,31 @@ export function measureRulerDraftMeasurement(state) {
   return measurementFromPicks(draft.anchor, draft.hover);
 }
 
+/**
+ * Committed measurements belong to the model, not to the tool. Leaving Measure
+ * keeps them — the panel still lists them and the overlay still draws them, the
+ * way a CAD measurement stays on screen once taken — and only abandons the
+ * half-finished draft. Opening a different entry drops all of them, because the
+ * points are world-space against the model that is going away.
+ */
 export function measureRulerStateForChange(state, { entryChanged = false, toolActive = true } = {}) {
   if (!state) {
     return null;
   }
-  if (!toolActive) {
+  if (entryChanged) {
     return null;
   }
-  if (entryChanged) {
-    return {
-      draft: null,
-      measurements: state.measurements || []
-    };
+  if (!toolActive) {
+    return state.draft ? { draft: null, hover: null, measurements: state.measurements || [] } : state;
   }
   return state;
 }
 
-export function resetMeasureRulerState() {
-  return null;
+export function clearMeasureRulerMeasurements(state) {
+  if (!state) {
+    return null;
+  }
+  return state.draft || state.hover
+    ? { draft: state.draft || null, hover: state.hover || null, measurements: [] }
+    : null;
 }

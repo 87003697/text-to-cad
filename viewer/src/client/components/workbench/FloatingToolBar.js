@@ -131,6 +131,10 @@ function DesktopFloatingToolBar({
   activeMeasurementId = "",
   onMeasureActivate = null,
   onMeasureDelete = null,
+  onMeasureClear = null,
+  measureDraftEntity = null,
+  measureDraftEntityText = "",
+  measureDraftInProgress = false,
   panToolActive,
   handleSelectTabToolMode,
   viewerLoading,
@@ -372,6 +376,10 @@ function DesktopFloatingToolBar({
           activeId={activeMeasurementId}
           onActivate={onMeasureActivate}
           onDelete={onMeasureDelete}
+          onClear={onMeasureClear}
+          draftEntity={measureDraftEntity}
+          draftEntityText={measureDraftEntityText}
+          draftInProgress={measureDraftInProgress}
           measureModeActive={measureModeActive}
         />
       ) : null}

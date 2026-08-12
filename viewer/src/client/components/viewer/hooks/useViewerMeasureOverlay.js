@@ -27,9 +27,25 @@ export function useViewerMeasureOverlay({
   const activeIdRef = useRef(activeMeasurementId);
   activeIdRef.current = activeMeasurementId;
 
+  // Nothing to draw means no loop at all. An unconditional rAF would clear an
+  // empty canvas every frame, for the whole session, on every model, whether or
+  // not the tool had ever been opened.
+  const hasOverlayContent = Boolean(
+    !previewMode &&
+    (measureState?.measurements?.length || (measureState?.draft?.anchor && measureState?.draft?.hover))
+  );
+
   useEffect(() => {
     const canvas = measureCanvasRef.current;
     if (!canvas) {
+      return undefined;
+    }
+    if (!hasOverlayContent) {
+      const idleContext = canvas.getContext("2d");
+      if (idleContext) {
+        idleContext.setTransform(1, 0, 0, 1, 0, 0);
+        idleContext.clearRect(0, 0, canvas.width, canvas.height);
+      }
       return undefined;
     }
 
@@ -107,5 +123,5 @@ export function useViewerMeasureOverlay({
     return () => {
       window.cancelAnimationFrame(rafId);
     };
-  }, [measureCanvasRef, runtimeRef, mountRef, previewMode, viewerReadyTick]);
+  }, [measureCanvasRef, runtimeRef, mountRef, previewMode, viewerReadyTick, hasOverlayContent]);
 }

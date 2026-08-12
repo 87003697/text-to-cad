@@ -6,9 +6,9 @@ import {
   applyMeasureRulerDelete,
   applyMeasureRulerHover,
   applyMeasureRulerPick,
+  clearMeasureRulerMeasurements,
   measureRulerDraftMeasurement,
   measureRulerStateForChange,
-  resetMeasureRulerState
 } from "./measureRulerState.js";
 
 const FIRST_PICK = { point: [0, 0, 0] };
@@ -26,6 +26,7 @@ test("measure ruler starts a draft with the first pick", () => {
   const state = applyMeasureRulerPick(null, FIRST_PICK);
   assert.deepEqual(state, {
     draft: { anchor: FIRST_PICK, hover: null },
+    hover: FIRST_PICK,
     measurements: []
   });
 });
@@ -136,23 +137,62 @@ test("measure ruler survives unrelated state changes", () => {
   assert.equal(measureRulerStateForChange(draft), draft);
 });
 
-test("measure ruler clears when the tool deactivates", () => {
+test("measure ruler keeps committed measurements when the tool deactivates", () => {
   const draft = applyMeasureRulerPick(null, FIRST_PICK);
-  assert.equal(measureRulerStateForChange(draft, { toolActive: false }), null);
-});
-
-test("measure ruler clears draft on entry change while keeping committed measurements", () => {
-  const draft = applyMeasureRulerPick(null, FIRST_PICK);
-  assert.deepEqual(measureRulerStateForChange(draft, { entryChanged: true }), {
+  // Leaving the tool abandons the half-finished draft only.
+  assert.deepEqual(measureRulerStateForChange(draft, { toolActive: false }), {
     draft: null,
+    hover: null,
     measurements: []
   });
 
   const committed = applyMeasureRulerPick(draft, SECOND_PICK);
   assert.deepEqual(
-    measureRulerStateForChange(committed, { entryChanged: true, toolActive: true }),
-    { draft: null, measurements: committed.measurements }
+    measureRulerStateForChange(committed, { toolActive: false }).measurements,
+    committed.measurements
   );
+  // Nothing to abandon means the same object back, so React can bail out.
+  assert.equal(measureRulerStateForChange(committed, { toolActive: false }), committed);
+});
+
+test("measure ruler drops everything on entry change", () => {
+  const draft = applyMeasureRulerPick(null, FIRST_PICK);
+  assert.equal(measureRulerStateForChange(draft, { entryChanged: true }), null);
+
+  // Points are world-space against the model being replaced, so they cannot carry over.
+  const committed = applyMeasureRulerPick(draft, SECOND_PICK);
+  assert.equal(measureRulerStateForChange(committed, { entryChanged: true, toolActive: true }), null);
+});
+
+test("clearMeasureRulerMeasurements empties the list but keeps live draft and hover", () => {
+  const committed = applyMeasureRulerPick(applyMeasureRulerPick(null, FIRST_PICK), SECOND_PICK);
+  const cleared = clearMeasureRulerMeasurements(committed);
+  assert.deepEqual(cleared.measurements, []);
+
+  const withDraft = applyMeasureRulerPick(committed, FIRST_PICK);
+  const clearedDraft = clearMeasureRulerMeasurements(withDraft);
+  assert.deepEqual(clearedDraft.measurements, []);
+  assert.equal(clearedDraft.draft, withDraft.draft);
+  assert.equal(clearMeasureRulerMeasurements(null), null);
+});
+
+test("measure ruler tracks hover without a draft, and only when the entity changes", () => {
+  // Needed for the single-entity readout; a new object every mouse move would
+  // re-render the workspace for a value that did not change.
+  const overEdge = { point: [0, 0, 0], referenceId: "e1", snapKind: "edge" };
+  const alongSameEdge = { point: [9, 9, 9], referenceId: "e1", snapKind: "edge" };
+  const overFace = { point: [1, 1, 1], referenceId: "f2", snapKind: "face" };
+
+  const first = applyMeasureRulerHover(null, overEdge);
+  assert.equal(first.hover, overEdge);
+  assert.equal(first.draft, null);
+
+  // Same entity, moved cursor: identical state object, so React bails out.
+  assert.equal(applyMeasureRulerHover(first, alongSameEdge), first);
+  // Different entity: new state, new readout.
+  assert.notEqual(applyMeasureRulerHover(first, overFace), first);
+  assert.equal(applyMeasureRulerHover(first, overFace).hover, overFace);
+  assert.equal(applyMeasureRulerHover(null, null), null);
 });
 
 test("measure ruler entry-change gate stays null without state", () => {
@@ -162,5 +202,4 @@ test("measure ruler entry-change gate stays null without state", () => {
 
 test("measure ruler reset returns null", () => {
   const draft = applyMeasureRulerPick(null, FIRST_PICK);
-  assert.equal(resetMeasureRulerState(draft), null);
 });

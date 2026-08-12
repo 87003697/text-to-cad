@@ -20,9 +20,14 @@ export function measureLabelText(measurement, { precision = 2 } = {}) {
   if (!formatted) {
     return "";
   }
-  return measurement?.perpendicular !== null && measurement?.perpendicular !== undefined
-    ? `⟂ ${formatted}`
-    : formatted;
+  if (measurement?.perpendicular !== null && measurement?.perpendicular !== undefined) {
+    return `⟂ ${formatted}`;
+  }
+  // C-C is the standard shorthand for a centre-to-centre (hole spacing) reading.
+  if (measurement?.centerDistance !== null && measurement?.centerDistance !== undefined) {
+    return `C-C ${formatted}`;
+  }
+  return formatted;
 }
 
 /**

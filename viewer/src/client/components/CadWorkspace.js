@@ -11,6 +11,7 @@ import {
 } from "./workbench/ThemeSettingsPopover";
 import MeshFileSheet from "./workbench/MeshFileSheet";
 import { DXF_PREVIEW_REFERENCE_THICKNESS_MM } from "cadjs/lib/dxf/previewGlb";
+import { entityMeasurementFromPick, formatEntityMeasurement } from "cadjs/lib/viewer/measurement";
 import { extractOrderedDxfBendLines } from "cadjs/lib/dxf/buildPreviewMesh";
 import {
   buildDxfBendsTab,
@@ -203,6 +204,7 @@ import {
   applyMeasureRulerDelete,
   applyMeasureRulerHover,
   applyMeasureRulerPick,
+  clearMeasureRulerMeasurements,
   measureRulerStateForChange
 } from "@/workbench/measureRulerState";
 import {
@@ -5233,9 +5235,13 @@ export default function CadWorkspace({
     viewerPickableEdges.length ||
     viewerPickableVertices.length
   );
+  // Measuring needs a mesh to hit, not loaded topology: an assembly measures
+  // across its parts straight away, and topology — once a component is expanded
+  // — upgrades those hits from free points to edge and face snaps.
   const measureModeActive = supportsTopology &&
     tabToolMode === TAB_TOOL_MODE.MEASURE &&
-    hasViewerPickableTopology;
+    Boolean(selectedMeshData) &&
+    !viewerLoading;
   const [measureRulerState, setMeasureRulerState] = useState(null);
   const [activeMeasureId, setActiveMeasureId] = useState("");
   const handleMeasurePick = useCallback((pick) => {
@@ -5247,19 +5253,38 @@ export default function CadWorkspace({
   const handleMeasureDelete = useCallback((measurementId) => {
     setMeasureRulerState((current) => applyMeasureRulerDelete(current, measurementId));
   }, []);
+  const handleMeasureClear = useCallback(() => {
+    setMeasureRulerState((current) => clearMeasureRulerMeasurements(current));
+  }, []);
+  const measureMeasurements = measureRulerState?.measurements || EMPTY_LIST;
+  // Follow the newest measurement, but never pull the highlight off a row the
+  // user picked — a live draft rewrites this state on every hover tick.
   useEffect(() => {
-    const items = measureRulerState?.measurements || [];
-    setActiveMeasureId(items.length ? items[items.length - 1].id : "");
-  }, [measureRulerState]);
+    setActiveMeasureId((current) => {
+      if (current && measureMeasurements.some((item) => item.id === current)) {
+        return current;
+      }
+      return measureMeasurements.length ? measureMeasurements[measureMeasurements.length - 1].id : "";
+    });
+  }, [measureMeasurements]);
   useEffect(() => {
     setMeasureRulerState((current) => measureRulerStateForChange(current, { entryChanged: true }));
   }, [selectedKey]);
   useEffect(() => {
     setMeasureRulerState((current) => measureRulerStateForChange(current, { toolActive: measureModeActive }));
   }, [measureModeActive]);
-  const measureToolDisabled = viewerLoading ||
-    !selectedMeshData ||
-    !hasViewerPickableTopology;
+  // What the cursor is over, sized on its own: an edge's length, a hole's
+  // diameter, a face's area. This is the reading a CAD measure tool gives before
+  // a second pick turns it into a relationship.
+  const measureDraftEntity = useMemo(
+    () => entityMeasurementFromPick(measureRulerState?.hover || measureRulerState?.draft?.anchor || null),
+    [measureRulerState]
+  );
+  const measureDraftEntityText = useMemo(
+    () => formatEntityMeasurement(measureDraftEntity),
+    [measureDraftEntity]
+  );
+  const measureToolDisabled = viewerLoading || !selectedMeshData || !supportsTopology;
   const topologySelectionActive =
     (isAssemblyView && requestedStepTreeTopologyNodeIds.length > 0) ||
     topLevelReferenceSelectionActive;
@@ -8586,6 +8611,10 @@ export default function CadWorkspace({
                 activeMeasurementId={activeMeasureId}
                 onMeasureActivate={setActiveMeasureId}
                 onMeasureDelete={handleMeasureDelete}
+                onMeasureClear={handleMeasureClear}
+                measureDraftEntity={measureDraftEntity}
+                measureDraftEntityText={measureDraftEntityText}
+                measureDraftInProgress={Boolean(measureRulerState?.draft?.anchor)}
                 panToolActive={panToolActive}
                 handleSelectTabToolMode={handleSelectTabToolMode}
                 viewerLoading={viewerLoading}
