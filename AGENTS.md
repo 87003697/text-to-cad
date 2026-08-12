@@ -31,11 +31,14 @@ requested release, and pair it with `bump=none` so a rehearsal does not consume
 a version number. `bump=none` publishes `base_branch` as it stands and is also
 how you resume a failed publish; it is never a release setting.
 
-The standalone `Deploy Docs` workflow redeploys the docs site from `main`
-without running a release. The CAD Viewer is a local-filesystem app with no
-hosted deployment, but each release mirrors `viewer/` into the standalone
-`earthtojake/cad-viewer` repo through the `Sync CAD Viewer Repo` workflow, which
-`Release` calls after publishing and which can also be dispatched on its own.
+The standalone `Deploy Docs` workflow redeploys the docs site without running a
+release. It deploys a source ref (defaulting to `develop`), never `main`: the
+publish tree drops `docs/` and `packages/`, which the docs app builds against.
+The CAD Viewer is a local-filesystem app with no hosted deployment, but each
+release mirrors `viewer/` into the standalone `earthtojake/cad-viewer` repo
+through the `Sync CAD Viewer Repo` workflow, which `Release` calls after
+publishing and which can also be dispatched on its own. Both of those read the
+release SOURCE commit, because `main` carries only what installs.
 `main` is publish-only; pushing `develop` runs tests but
 never publishes. See the Releases section in `CONTRIBUTING.md` for the full
 flow, CI/CD-testing and resume options, and local/manual fallbacks.

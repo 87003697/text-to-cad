@@ -375,14 +375,29 @@ jobs:
         run: scripts/test/test.sh
 
       # The plugin package is the repository root, so everything that reaches the
-      # target branch is copied into every install. models/ is fixture data;
-      # viewer/ is the SOURCE app, and what installs and runs is the dereferenced
-      # runtime the bundle already wrote to skills/cad-viewer/scripts/viewer --
-      # no skill imports repo-root viewer/. This runs after the bundle,
-      # check-builds, and the tests, so the tree they validated is untouched and
-      # only the published tree is trimmed. The standalone cad-viewer mirror
-      # syncs from the release SOURCE commit rather than from here
-      # (.github/workflows/sync-cad-viewer.yml).
+      # target branch is copied into every install. None of these is part of what
+      # installs:
+      #   models/            fixture data
+      #   viewer/            the SOURCE app -- what runs is the dereferenced
+      #                      runtime the bundle wrote to
+      #                      skills/cad-viewer/scripts/viewer, and no skill
+      #                      imports repo-root viewer/
+      #   tests/             source-only; nothing under skills/ or docs/ reads it,
+      #                      and test.yml runs on develop, never here
+      #   requirements-dev.txt  a source-checkout dev environment whose editable
+      #                      paths (packages/cadgen, viewer/moveit2_server) do not
+      #                      survive the trim anyway
+      #   docs/              a website, not an install; Deploy Docs builds and
+      #                      deploys it from the release SOURCE commit
+      #   packages/          the shared source runtimes. Every skill already
+      #                      carries its own vendored copy, and the only other
+      #                      consumer was the docs build, which now runs from
+      #                      source too.
+      #
+      # This runs after the bundle, check-builds, and the tests, so the tree they
+      # validated is untouched and only the published tree is trimmed. The
+      # standalone cad-viewer mirror syncs from the release SOURCE commit rather
+      # than from here (.github/workflows/sync-cad-viewer.yml).
       #
       # PUBLISH_TREE_REMOVED_ROOTS is the single source of truth for what was
       # dropped: the commit step below reads it both to assert the roots are
@@ -390,7 +405,7 @@ jobs:
       - name: Trim publish tree
         if: steps.gate.outputs.should_publish == 'true'
         run: |
-          removed_roots="models viewer"
+          removed_roots="models viewer tests requirements-dev.txt docs packages"
           for root in $removed_roots; do
             rm -rf "$root"
             if [ -e "$root" ]; then
@@ -401,6 +416,14 @@ jobs:
           if [ ! -f skills/cad-viewer/scripts/viewer/package.json ]; then
             echo "Refusing to publish without the bundled CAD Viewer runtime:" >&2
             echo "  skills/cad-viewer/scripts/viewer/package.json is missing." >&2
+            exit 1
+          fi
+          # Every skill vendors what it needs, so nothing published may reach
+          # repo-root packages/. A skill that does would break silently on
+          # install rather than here.
+          if grep -rIlE '\.\./\.\./\.\./packages/|["'"'"']\.\./\.\./packages/' skills 2>/dev/null | head -n 1 | grep -q .; then
+            echo "A skill references repo-root packages/, which is not published:" >&2
+            grep -rIlE '\.\./\.\./\.\./packages/|["'"'"']\.\./\.\./packages/' skills >&2
             exit 1
           fi
           echo "PUBLISH_TREE_REMOVED_ROOTS=$removed_roots" >> "$GITHUB_ENV"
@@ -548,13 +571,19 @@ jobs:
           fi
           echo "published=true" >> "$GITHUB_OUTPUT"
 
+  # Deploys from the release SOURCE commit, not the publish commit: the docs app
+  # builds against repo-root packages/, and the publish tree drops both. Still
+  # gated on the publish succeeding, so the site never moves for a release that
+  # did not ship.
   deploy-docs:
     name: Deploy Docs
-    needs: publish
+    needs:
+      - release-pr
+      - publish
     if: ${{ needs.publish.outputs.published == 'true' && inputs.target_branch == 'main' }}
     uses: ./.github/workflows/deploy-docs.yml
     with:
-      ref: ${{ needs.publish.outputs.publish_sha }}
+      ref: ${{ needs.release-pr.outputs.source_sha }}
     secrets: inherit
 
   # Mirrors from the release SOURCE commit, not the publish commit: the publish
