@@ -5,6 +5,8 @@ import { PerspectiveCamera } from "three";
 
 import {
   drawMeasureDimension,
+  drawMeasureSnapChip,
+  drawMeasureSnapMarker,
   drawPulsingEndRing,
   measureLabelText,
   screenDimensionLayout,
@@ -187,4 +189,63 @@ test("drawPulsingEndRing tolerates missing context or point", () => {
   assert.doesNotThrow(() => drawPulsingEndRing(null, null));
   assert.doesNotThrow(() => drawPulsingEndRing(mockContext(), null));
   assert.doesNotThrow(() => drawPulsingEndRing(mockContext(), { x: 10, y: 10 }));
+});
+
+function recordingContext() {
+  const calls = [];
+  const record = (name) => (...args) => calls.push({ name, args });
+  return {
+    calls,
+    save: record("save"),
+    restore: record("restore"),
+    beginPath: record("beginPath"),
+    moveTo: record("moveTo"),
+    lineTo: record("lineTo"),
+    arc: record("arc"),
+    rect: record("rect"),
+    roundRect: record("roundRect"),
+    closePath: record("closePath"),
+    fill: record("fill"),
+    stroke: record("stroke"),
+    fillText: record("fillText"),
+    measureText: () => ({ width: 60 })
+  };
+}
+
+test("drawMeasureSnapMarker draws a distinct shape per snap kind", () => {
+  const shapeFor = (snapKind) => {
+    const context = recordingContext();
+    drawMeasureSnapMarker(context, { x: 50, y: 50 }, { snapKind, now: 0 });
+    return context.calls.map((call) => call.name);
+  };
+  // A vertex is a filled square, an edge a filled ring, a face a hollow diamond.
+  assert.ok(shapeFor("vertex").includes("rect"));
+  assert.ok(shapeFor("edge").includes("arc"));
+  assert.ok(shapeFor("face").includes("closePath"));
+  // An unsnapped point gets the crosshair only, so it cannot be mistaken for a snap.
+  const free = shapeFor("free");
+  assert.ok(!free.includes("arc") && !free.includes("rect") && !free.includes("closePath"));
+  assert.ok(free.includes("stroke"));
+});
+
+test("drawMeasureSnapMarker ignores unusable positions", () => {
+  const context = recordingContext();
+  drawMeasureSnapMarker(context, { x: NaN, y: 10 }, { snapKind: "edge" });
+  drawMeasureSnapMarker(context, null, { snapKind: "edge" });
+  assert.equal(context.calls.length, 0);
+});
+
+test("drawMeasureSnapChip keeps the caption inside the viewport", () => {
+  const context = recordingContext();
+  // Near the bottom-right corner the chip would otherwise be drawn off-screen.
+  drawMeasureSnapChip(context, { x: 795, y: 595 }, "Edge  L 25.13 mm", { bounds: { width: 800, height: 600 } });
+  const chip = context.calls.find((call) => call.name === "roundRect");
+  assert.ok(chip);
+  const [x, y, width, height] = chip.args;
+  assert.ok(x + width <= 800, "chip runs past the right edge");
+  assert.ok(y + height <= 600, "chip runs past the bottom edge");
+
+  const empty = recordingContext();
+  drawMeasureSnapChip(empty, { x: 10, y: 10 }, "", { bounds: { width: 800, height: 600 } });
+  assert.equal(empty.calls.length, 0);
 });

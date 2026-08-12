@@ -329,3 +329,107 @@ export function drawPulsingEndRing(context, point, {
   context.stroke();
   context.restore();
 }
+
+export const MEASURE_SNAP_COLOR = "#f59e0b";
+export const MEASURE_SNAP_FREE_COLOR = "#94a3b8";
+
+/**
+ * Where the next click would actually land, and what it would bind to. Without
+ * this the tool gives no sign that a click is about to snap to an edge rather
+ * than to the surface under the cursor, and the two produce different numbers.
+ *
+ * The marker is shaped by snap kind rather than only coloured, so it survives
+ * both themes and reads without a legend: a square corner is a vertex, a ring is
+ * an edge, a hollow diamond is a face, and a bare cross is an unsnapped point on
+ * the mesh.
+ */
+export function drawMeasureSnapMarker(context, point, { snapKind = "free", now = null } = {}) {
+  if (!context || !point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+    return;
+  }
+  const snapped = snapKind === "vertex" || snapKind === "edge" || snapKind === "face";
+  const color = snapped ? MEASURE_SNAP_COLOR : MEASURE_SNAP_FREE_COLOR;
+  const { x, y } = point;
+
+  context.save();
+  context.lineWidth = 1.6;
+  context.strokeStyle = color;
+  context.fillStyle = color;
+
+  // A crosshair under every marker keeps the exact point readable even where the
+  // marker sits against a busy edge.
+  context.globalAlpha = snapped ? 0.9 : 0.7;
+  context.beginPath();
+  context.moveTo(x - 7, y);
+  context.lineTo(x - 2.5, y);
+  context.moveTo(x + 2.5, y);
+  context.lineTo(x + 7, y);
+  context.moveTo(x, y - 7);
+  context.lineTo(x, y - 2.5);
+  context.moveTo(x, y + 2.5);
+  context.lineTo(x, y + 7);
+  context.stroke();
+
+  context.globalAlpha = 1;
+  if (snapKind === "vertex") {
+    context.beginPath();
+    context.rect(x - 3.5, y - 3.5, 7, 7);
+    context.fill();
+  } else if (snapKind === "edge") {
+    // Pulses so a snap that engages under a stationary cursor is still noticed.
+    const phase = Number.isFinite(now) ? (Math.sin((now / 500) * Math.PI) + 1) / 2 : 0.5;
+    context.beginPath();
+    context.arc(x, y, 3.6 + (phase * 0.8), 0, Math.PI * 2);
+    context.fill();
+  } else if (snapKind === "face") {
+    context.beginPath();
+    context.moveTo(x, y - 4.2);
+    context.lineTo(x + 4.2, y);
+    context.lineTo(x, y + 4.2);
+    context.lineTo(x - 4.2, y);
+    context.closePath();
+    context.stroke();
+  }
+  context.restore();
+}
+
+/**
+ * A short caption pinned beside the cursor. The docked panel already carries the
+ * same words, but it is across the viewport from where the user is looking.
+ */
+export function drawMeasureSnapChip(context, point, text, {
+  bounds = null,
+  color = MEASURE_SNAP_COLOR,
+  background = MEASURE_DIMENSION_LABEL_BACKGROUND,
+  labelColor = "#f8fafc"
+} = {}) {
+  if (!context || !point || !text) {
+    return;
+  }
+  context.save();
+  context.font = MEASURE_DIMENSION_LABEL_FONT;
+  const width = context.measureText(text).width + 14;
+  const height = 20;
+  let x = point.x + 14;
+  let y = point.y - height - 10;
+  if (bounds) {
+    x = Math.min(Math.max(x, 4), Math.max(4, bounds.width - width - 4));
+    y = Math.min(Math.max(y, 4), Math.max(4, bounds.height - height - 4));
+  }
+  context.beginPath();
+  if (typeof context.roundRect === "function") {
+    context.roundRect(x, y, width, height, 5);
+  } else {
+    context.rect(x, y, width, height);
+  }
+  context.fillStyle = background;
+  context.fill();
+  context.strokeStyle = color;
+  context.lineWidth = 1;
+  context.stroke();
+  context.fillStyle = labelColor;
+  context.textBaseline = "middle";
+  context.textAlign = "left";
+  context.fillText(text, x + 7, y + (height / 2));
+  context.restore();
+}

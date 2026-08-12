@@ -5,10 +5,17 @@ import {
   MEASURE_DIMENSION_DRAFT_COLOR,
   MEASURE_DIMENSION_FADED_ALPHA,
   drawMeasureDimension,
+  drawMeasureSnapChip,
+  drawMeasureSnapMarker,
   drawPulsingEndRing,
   measureLabelText,
   screenSpaceDimensionLayout
 } from "cadjs/lib/viewer/measureDimension.js";
+import {
+  MEASURE_SNAP_LABELS,
+  entityMeasurementFromPick,
+  formatEntityMeasurement
+} from "cadjs/lib/viewer/measurement.js";
 import { projectWorldPointToClient } from "cadjs/lib/viewer/measureRuler.js";
 
 import { measureRulerDraftMeasurement } from "../../../workbench/measureRulerState.js";
@@ -17,6 +24,8 @@ export function useViewerMeasureOverlay({
   measureCanvasRef,
   measureState,
   activeMeasurementId = "",
+  measureHoverRef = null,
+  measureModeActive = false,
   runtimeRef,
   mountRef,
   previewMode,
@@ -29,10 +38,13 @@ export function useViewerMeasureOverlay({
 
   // Nothing to draw means no loop at all. An unconditional rAF would clear an
   // empty canvas every frame, for the whole session, on every model, whether or
-  // not the tool had ever been opened.
+  // not the tool had ever been opened. While the tool is armed the loop does run
+  // continuously, because the snap indicator has to track the cursor.
   const hasOverlayContent = Boolean(
     !previewMode &&
-    (measureState?.measurements?.length || (measureState?.draft?.anchor && measureState?.draft?.hover))
+    (measureModeActive ||
+      measureState?.measurements?.length ||
+      (measureState?.draft?.anchor && measureState?.draft?.hover))
   );
 
   useEffect(() => {
@@ -113,6 +125,23 @@ export function useViewerMeasureOverlay({
             }
           }
         }
+
+        // The snap indicator is driven from a ref rather than from React state:
+        // it has to follow the cursor every frame, and re-rendering the whole
+        // workspace on each mouse move to move a 7px marker is not worth it.
+        const hover = measureModeActive ? measureHoverRef?.current : null;
+        if (hover?.point) {
+          const hoverPoint = projectWorldPointToClient(hover.point, camera, localRect);
+          if (hoverPoint) {
+            drawMeasureSnapMarker(context, hoverPoint, { snapKind: hover.snapKind, now });
+            const entityText = formatEntityMeasurement(entityMeasurementFromPick(hover));
+            const snapLabel = MEASURE_SNAP_LABELS[hover.snapKind] || "";
+            const chipText = [snapLabel, entityText].filter(Boolean).join("  ");
+            if (chipText) {
+              drawMeasureSnapChip(context, hoverPoint, chipText, { bounds });
+            }
+          }
+        }
       }
 
       rafId = window.requestAnimationFrame(render);
@@ -123,5 +152,5 @@ export function useViewerMeasureOverlay({
     return () => {
       window.cancelAnimationFrame(rafId);
     };
-  }, [measureCanvasRef, runtimeRef, mountRef, previewMode, viewerReadyTick, hasOverlayContent]);
+  }, [measureCanvasRef, measureHoverRef, measureModeActive, runtimeRef, mountRef, previewMode, viewerReadyTick, hasOverlayContent]);
 }
