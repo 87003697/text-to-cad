@@ -17,6 +17,8 @@
 # - skills/cad/requirements.txt
 ezdxf
 playwright
+# - skills/dfam-check/requirements.txt
+rtree
 
 # Extra third-party requirements used by repo tests.
 networkx
