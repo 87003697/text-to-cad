@@ -1622,6 +1622,27 @@ def _rename_directory_no_replace(
         raise OSError(error_number, os.strerror(error_number), destination_name)
 
 
+def _require_directory_entry(
+    *,
+    parent_fd: int,
+    name: str,
+    expected: tuple[int, int],
+) -> None:
+    try:
+        info = os.stat(
+            name,
+            dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except OSError as exc:
+        raise RuntimeError("canonical build exchange entry changed") from exc
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or (info.st_dev, info.st_ino) != expected
+    ):
+        raise RuntimeError("canonical build exchange entry changed")
+
+
 def _exchange_directories(
     *,
     parent_fd: int,
@@ -1629,10 +1650,22 @@ def _exchange_directories(
     expected_parent: tuple[int, int],
     source_name: str,
     destination_name: str,
+    expected_source: tuple[int, int],
+    expected_destination: tuple[int, int],
 ) -> None:
     live_parent = parent_path.lstat()
     if (live_parent.st_dev, live_parent.st_ino) != expected_parent:
         raise RuntimeError("canonical build output parent changed")
+    _require_directory_entry(
+        parent_fd=parent_fd,
+        name=source_name,
+        expected=expected_source,
+    )
+    _require_directory_entry(
+        parent_fd=parent_fd,
+        name=destination_name,
+        expected=expected_destination,
+    )
     libc = ctypes.CDLL(None, use_errno=True)
     source = os.fsencode(source_name)
     destination = os.fsencode(destination_name)
@@ -1697,6 +1730,7 @@ def build(
     stage_fd = -1
     existing_output_fd = -1
     existing_output_identity: tuple[int, int] | None = None
+    stage_identity: tuple[int, int] | None = None
     stage_name = ".canonical-build-stage-" + secrets.token_hex(12)
     stage_path = output_path.parent / stage_name
     published = False
@@ -1737,6 +1771,8 @@ def build(
                 raise ValueError("--output-dir must be an empty directory")
         os.mkdir(stage_name, mode=0o700, dir_fd=parent_fd)
         stage_fd = os.open(stage_name, directory_flags, dir_fd=parent_fd)
+        opened_stage = os.fstat(stage_fd)
+        stage_identity = (opened_stage.st_dev, opened_stage.st_ino)
         manifest, source_stdout, source_stderr = _build_staged(
             root=root,
             source=source,
@@ -1774,13 +1810,41 @@ def build(
                 "expected_parent": (parent_info.st_dev, parent_info.st_ino),
                 "source_name": stage_name,
                 "destination_name": output_path.name,
+                "expected_source": stage_identity,
+                "expected_destination": existing_output_identity,
             }
             _exchange_directories(**exchange_arguments)
             stage_cleanup_safe = False
+            _require_directory_entry(
+                parent_fd=parent_fd,
+                name=stage_name,
+                expected=existing_output_identity,
+            )
+            _require_directory_entry(
+                parent_fd=parent_fd,
+                name=output_path.name,
+                expected=stage_identity,
+            )
             try:
                 os.rmdir(stage_name, dir_fd=parent_fd)
             except Exception:
-                _exchange_directories(**exchange_arguments)
+                _exchange_directories(
+                    **{
+                        **exchange_arguments,
+                        "expected_source": existing_output_identity,
+                        "expected_destination": stage_identity,
+                    }
+                )
+                _require_directory_entry(
+                    parent_fd=parent_fd,
+                    name=stage_name,
+                    expected=stage_identity,
+                )
+                _require_directory_entry(
+                    parent_fd=parent_fd,
+                    name=output_path.name,
+                    expected=existing_output_identity,
+                )
                 stage_cleanup_safe = True
                 raise
         else:

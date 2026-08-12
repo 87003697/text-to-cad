@@ -1206,6 +1206,71 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertEqual("preserve race\n", (output / "racer.txt").read_text())
             self.assertEqual([], list(root.glob(".canonical-build-stage-*")))
 
+    def test_empty_output_rollback_refuses_substituted_directory_entry(
+        self,
+    ) -> None:
+        with temporary_directory(
+            prefix="cad-canonical-empty-output-substitution-"
+        ) as temp_dir:
+            root = Path(temp_dir)
+            _write_canonical_source(root)
+            output = root / "candidate"
+            output.mkdir()
+            hook = root / "hook"
+            hook.mkdir()
+            (hook / "sitecustomize.py").write_text(
+                "from pathlib import Path\n"
+                "from cadpy import canonical_build\n"
+                "_exchange = canonical_build._exchange_directories\n"
+                "_calls = 0\n"
+                "def _race(**kwargs):\n"
+                "    global _calls\n"
+                "    _calls += 1\n"
+                "    result = _exchange(**kwargs)\n"
+                "    if _calls == 1:\n"
+                "        parent = Path(kwargs['parent_path'])\n"
+                "        displaced = parent / 'displaced-output'\n"
+                "        (parent / kwargs['source_name']).rename(displaced)\n"
+                "        (parent / kwargs['source_name']).symlink_to(\n"
+                "            displaced, target_is_directory=True\n"
+                "        )\n"
+                "    return result\n"
+                "canonical_build._exchange_directories = _race\n",
+                encoding="utf-8",
+            )
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = os.pathsep.join(
+                (str(hook), str(CADPY_SRC))
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ADAPTER),
+                    "build",
+                    "--source",
+                    "source/model.py",
+                    "--output-dir",
+                    "candidate",
+                ],
+                cwd=root,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertFalse(output.is_symlink())
+            self.assertEqual(
+                set(canonical_build.OUTPUT_FILES.values()),
+                {path.name for path in output.iterdir()},
+            )
+            displaced = root / "displaced-output"
+            self.assertTrue(displaced.is_dir())
+            self.assertEqual([], list(displaced.iterdir()))
+
     def test_source_cannot_seed_final_output_with_symlink_or_residue(self) -> None:
         for name, attack in (
             (
