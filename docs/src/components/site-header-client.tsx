@@ -88,7 +88,7 @@ export function SiteHeaderClient({
           className="flex min-w-0 items-center text-foreground transition hover:text-primary"
         >
           <span className="min-w-0 truncate text-sm font-medium">
-            CAD Skills
+            text-to-cad
           </span>
         </Link>
 
@@ -138,7 +138,7 @@ export function SiteHeaderClient({
                   href={discordUrl}
                   target="_blank"
                   rel="noreferrer"
-                  aria-label="Join the CAD Skills Discord"
+                  aria-label="Join the text-to-cad Discord"
                 >
                   <DiscordLogo className="size-3.5" />
                 </a>

@@ -14,6 +14,7 @@ from urllib.parse import urlsplit, parse_qs, unquote
 
 from . import artifact as artifact_mod
 from . import cadgen_bridge
+from . import paths
 from . import scanner
 from .content_types import content_type_for_path
 from .save_dialog import pick_save_destination
@@ -50,6 +51,8 @@ def normalized_file_ref(value: str) -> str:
         return ""
     if "\0" in raw:
         raise ValueError("File path contains an invalid null byte")
+    # A ref can reach us in URL-path form (`/D:/models/part.step`) the same way ?dir= does.
+    raw = paths.filesystem_path_from_url_path(raw)
     return absolute_file_ref(raw) if os.path.isabs(raw) else raw.lstrip("/")
 
 
@@ -167,7 +170,10 @@ class LocalAssetBackend:
     kind = "local-fs"
 
     def resolve_root(self, root_dir: str = "") -> dict:
-        root_path = os.path.abspath(str(root_dir or "").strip() or os.getcwd())
+        # ?dir= is a URL path, so a Windows root arrives as `/D:/models`; abspath would
+        # read the leading slash as the current drive's root and answer `C:\D:\models`.
+        requested = paths.filesystem_path_from_url_path(str(root_dir or "").strip())
+        root_path = os.path.abspath(requested or os.getcwd())
         if "\0" in root_path:
             raise ValueError("CAD Viewer directory contains an invalid null byte")
         require_directory(root_path)
@@ -357,6 +363,14 @@ class LocalAssetBackend:
             status = {"state": artifact_mod.ARTIFACT_STATE_READY, "ref": ref}
             if snap.busy:
                 status["busy"] = True
+                # An occupied generator (an export, an on-demand topology extraction) runs
+                # the same multi-minute gen_step a build does. It does NOT hide the model —
+                # nothing is being rewritten — so this rides alongside a ready artifact and
+                # the client shows it without blocking the render.
+                if snap.run_id:
+                    status["runId"] = snap.run_id
+                if snap.progress is not None:
+                    status["progress"] = snap.progress
             return status
         if code in artifact_mod.BUILDABLE_ARTIFACT_CODES:
             status = {"state": artifact_mod.ARTIFACT_STATE_NEEDS_BUILD, "reason": code, "ref": ref}
