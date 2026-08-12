@@ -1060,18 +1060,6 @@ server.listen(0, host, () => {
                 ).replace("/home/provider-free", os.fspath(provider_home))
                 for name, value in sandbox_environment.items()
             }
-            emulated_environment["PYTHONPATH"] = os.pathsep.join(
-                (
-                    os.fspath(
-                        self.repo_root
-                        / "skills/mesh-compare/scripts/packages/meshscope/src"
-                    ),
-                    os.fspath(
-                        self.repo_root
-                        / "skills/mesh-compare/scripts/packages/meshshot/src"
-                    ),
-                )
-            )
             captured["emulated_environment"] = emulated_environment
             completed = real_run(
                 command,
@@ -1145,6 +1133,48 @@ server.listen(0, host, () => {
             "built",
             "--reject-source-output",
         ]
+
+    def test_measurement_public_seam_owns_bundled_packages_without_pythonpath(
+        self,
+    ) -> None:
+        """The deployed CLI must not resolve an older editable meshscope first."""
+
+        self._install_real_provider_free_layout()
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys\n"
+                    "from pathlib import Path\n"
+                    "from scripts.pilot import provider_free_scenarios as scenario\n"
+                    "from scripts.pilot import runner\n"
+                    "workspace = Path('outputs/public-measurement-seam')\n"
+                    "runner.prepare_exp(workspace)\n"
+                    "commands = workspace / 'run/provider-free-commands.jsonl'\n"
+                    "candidate = scenario._prepare_candidate(workspace, commands)\n"
+                    "scenario._prepare_workspace(workspace, candidate, commands)\n"
+                    "measured = scenario._run_public([\n"
+                    "    sys.executable, str(scenario.MESH_COMPARE),\n"
+                    "    'voxblame-measure', str(candidate / 'built/measurement.glb'),\n"
+                    "    '--reference', str(workspace / 'input'),\n"
+                    "    '--output', str(workspace / 'voxblame'),\n"
+                    "    '--step', '0',\n"
+                    "], cwd=scenario.REPO_ROOT, command_log=commands)\n"
+                    "scenario.native_depth_eight_evidence(measured)\n"
+                ),
+            ],
+            cwd=self.repo_root,
+            env=environment,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(0, completed.returncode, completed.stderr)
 
     def test_bwrap_emulator_crosses_canonical_candidate_measurement_with_production_layout(
         self,
@@ -1248,6 +1278,7 @@ server.listen(0, host, () => {
                 "LANG": "C.UTF-8",
             },
         )
+        self.assertNotIn("PYTHONPATH", captured["emulated_environment"])
         self.assertIn("--unshare-net", captured["sandbox_argv"])
         for flag in (
             "--unshare-pid",
