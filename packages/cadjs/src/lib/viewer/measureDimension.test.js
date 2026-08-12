@@ -277,3 +277,23 @@ test("the series palette stays muted enough to sit over a shaded model", () => {
   }
   assert.equal(new Set(MEASURE_SERIES_COLORS).size, MEASURE_SERIES_COLORS.length, "palette has duplicates");
 });
+
+test("consecutive series colours are far apart, not neighbouring hues", () => {
+  // Colours are handed out in sequence, so measurements taken one after another
+  // must not land on adjacent hues — that pair is the one most likely to be
+  // compared, in the viewport and in the panel.
+  const rgb = (color) => [1, 3, 5].map((offset) => parseInt(color.slice(offset, offset + 2), 16));
+  let closest = Infinity;
+  for (let index = 0; index < MEASURE_SERIES_COLORS.length; index += 1) {
+    const a = rgb(MEASURE_SERIES_COLORS[index]);
+    const b = rgb(MEASURE_SERIES_COLORS[(index + 1) % MEASURE_SERIES_COLORS.length]);
+    closest = Math.min(closest, Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+  }
+  assert.ok(closest > 80, `consecutive colours only ${closest.toFixed(0)} apart in RGB`);
+});
+
+test("the series palette is large enough to keep a full panel distinguishable", () => {
+  // The panel holds 20 measurements; the palette should cover most of a screen's
+  // worth before it repeats.
+  assert.ok(MEASURE_SERIES_COLORS.length >= 10, "palette is too small to tell measurements apart");
+});

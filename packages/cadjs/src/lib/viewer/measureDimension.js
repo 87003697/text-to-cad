@@ -13,15 +13,25 @@ export const MEASURE_DIMENSION_COMMITTED_COLOR = "#22d3ee";
  * have to read in both the light and dark themes without competing with the
  * selection blue or the amber draft.
  */
+// Twelve hues at even 30 degree spacing, all at the same lightness and
+// saturation (HSL 45%/70%), so no measurement's colour shouts louder than
+// another's. The order is deliberately not the order around the wheel: colours
+// are handed out in sequence, so stepping by 150 degrees each time means two
+// measurements taken one after another — the pair most likely to be compared —
+// are never neighbouring hues.
 export const MEASURE_SERIES_COLORS = Object.freeze([
-  "#7fb5e6",
-  "#8fcfa8",
-  "#e8a87c",
-  "#c39bd3",
-  "#e6a6b8",
-  "#86cfc9",
-  "#d6c77f",
-  "#a8b5d9"
+  "#d59090",
+  "#90d5b2",
+  "#d590d5",
+  "#b2d590",
+  "#9090d5",
+  "#d5b290",
+  "#90d5d5",
+  "#d590b2",
+  "#90d590",
+  "#b290d5",
+  "#d5d590",
+  "#90b2d5"
 ]);
 
 export function measureSeriesColor(index) {
