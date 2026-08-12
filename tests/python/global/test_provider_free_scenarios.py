@@ -252,7 +252,12 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             ),
             mock.patch.object(
                 provider_free_scenarios,
-                "_prepare_candidate",
+                "_copy_candidate_sources",
+                return_value=workspace / "work/candidate",
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_build_candidate",
                 side_effect=provider_free_scenarios.ScenarioError(
                     "canonical build rejected"
                 ),
@@ -282,6 +287,69 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 "operation": "canonical_build",
             },
         )
+
+    def test_candidate_failure_operations_follow_production_boundaries(self) -> None:
+        operations = (
+            ("fixture_availability", "_copy_candidate_sources"),
+            ("canonical_build", "_build_candidate"),
+            ("reference_preparation", "_prepare_reference"),
+            ("workspace_init", "_initialize_workspace"),
+        )
+        for index, (operation, failing_helper) in enumerate(operations):
+            with self.subTest(operation=operation):
+                workspace = self.repo / f"outputs/group/operation-{index}"
+                workspace.mkdir(parents=True)
+                candidate = workspace / "work/candidate"
+                defaults = {
+                    "deployed_viewer_receipt": {"viewer_version": "test"},
+                    "deployed_runtime_tree_receipt": {"files": []},
+                    "cadpy_runtime_evidence": {"schema": "cadpy"},
+                    "viewer_fallback_evidence": {"action": "start"},
+                    "_copy_candidate_sources": candidate,
+                    "_build_candidate": None,
+                    "_prepare_reference": None,
+                    "_initialize_workspace": None,
+                    "_publish_measured_step": {"depths": list(range(1, 9))},
+                    "_finalize_workspace": {"final": {}},
+                }
+                patchers = [
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        helper,
+                        side_effect=(
+                            PermissionError("sensitive failure")
+                            if helper == failing_helper
+                            else None
+                        ),
+                        return_value=(None if helper == failing_helper else value),
+                    )
+                    for helper, value in defaults.items()
+                ]
+                for patcher in patchers:
+                    patcher.start()
+                try:
+                    with mock.patch("sys.stderr", new_callable=io.StringIO):
+                        status = provider_free_scenarios.main(
+                            [
+                                "run",
+                                "issue15-runtime-authority",
+                                "--workspace",
+                                str(workspace),
+                            ]
+                        )
+                finally:
+                    for patcher in reversed(patchers):
+                        patcher.stop()
+
+                self.assertEqual(status, 1)
+                self.assertEqual(
+                    json.loads(
+                        (workspace / "run/scenario-failure.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )["operation"],
+                    operation,
+                )
 
     def _assert_closed_stage_failure(
         self,
@@ -344,8 +412,6 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             "scenario_identity": "issue15.provider-free.runtime-authority/1",
             "stage": stage,
         }
-        if stage == "candidate_workspace":
-            expected["operation"] = "canonical_build"
         self.assertEqual(json.loads(receipt_text), expected)
         for forbidden in (
             "secret",

@@ -75,7 +75,6 @@ def _run_stage(
     stage: str,
     operation: Any,
     *args: Any,
-    failure_operation: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """Attach one repository-owned top-level stage to a scenario failure."""
@@ -86,14 +85,36 @@ def _run_stage(
         return operation(*args, **kwargs)
     except Exception as exc:
         classified_operation = (
-            exc.operation
-            if isinstance(exc, ScenarioError) and exc.operation is not None
-            else failure_operation
+            exc.operation if isinstance(exc, ScenarioError) else None
         )
         raise ScenarioError(
             f"provider-free scenario stage failed: {stage}",
             stage=stage,
             operation=classified_operation,
+        ) from exc
+
+
+def _run_candidate_operation(
+    operation: str,
+    function: Any,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Attach one closed candidate operation without retaining error text."""
+
+    if operation not in {
+        "fixture_availability",
+        "canonical_build",
+        "reference_preparation",
+        "workspace_init",
+    }:
+        raise ValueError(f"unknown candidate operation: {operation!r}")
+    try:
+        return function(*args, **kwargs)
+    except Exception as exc:
+        raise ScenarioError(
+            f"provider-free candidate operation failed: {operation}",
+            operation=operation,
         ) from exc
 
 
@@ -493,18 +514,19 @@ def viewer_fallback_evidence(
                 process.wait(timeout=2)
 
 
-def _prepare_candidate(workspace: Path, command_log: Path) -> Path:
+def _copy_candidate_sources(workspace: Path) -> Path:
     for source in (DURABLE_MODEL_SOURCE, DURABLE_MODEL_LIBRARY):
         if not source.is_file() or source.read_bytes().startswith(b"version https://git-lfs"):
-            raise ScenarioError(
-                f"durable model source is unavailable: {source}",
-                operation="fixture_availability",
-            )
+            raise ScenarioError(f"durable model source is unavailable: {source}")
     candidate = workspace / "work/candidate"
     source_dir = candidate / "source"
     source_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(DURABLE_MODEL_SOURCE, source_dir / "model.py")
     shutil.copy2(DURABLE_MODEL_LIBRARY, source_dir / "simple_model_library.py")
+    return candidate
+
+
+def _build_candidate(candidate: Path, command_log: Path) -> None:
     _run_public(
         [
             sys.executable,
@@ -524,29 +546,32 @@ def _prepare_candidate(workspace: Path, command_log: Path) -> Path:
     mesh = candidate / "built/measurement.glb"
     if not mesh.is_file():
         raise ScenarioError("canonical CAD build did not publish measurement.glb")
+
+
+def _prepare_candidate(workspace: Path, command_log: Path) -> Path:
+    candidate = _run_candidate_operation(
+        "fixture_availability", _copy_candidate_sources, workspace
+    )
+    _run_candidate_operation(
+        "canonical_build", _build_candidate, candidate, command_log
+    )
     return candidate
 
 
-def _prepare_workspace(workspace: Path, candidate: Path, command_log: Path) -> None:
+def _prepare_reference(workspace: Path, candidate: Path, command_log: Path) -> None:
     prepared = workspace / "work/prepared"
-    try:
-        _run_public(
-            [
-                sys.executable,
-                os.fspath(MESH_COMPARE),
-                "voxblame-prepare-reference",
-                os.fspath(candidate / "built/measurement.glb"),
-                "--output",
-                os.fspath(prepared / "input"),
-            ],
-            cwd=REPO_ROOT,
-            command_log=command_log,
-        )
-    except ScenarioError as exc:
-        raise ScenarioError(
-            "canonical reference preparation failed",
-            operation="reference_preparation",
-        ) from exc
+    _run_public(
+        [
+            sys.executable,
+            os.fspath(MESH_COMPARE),
+            "voxblame-prepare-reference",
+            os.fspath(candidate / "built/measurement.glb"),
+            "--output",
+            os.fspath(prepared / "input"),
+        ],
+        cwd=REPO_ROOT,
+        command_log=command_log,
+    )
     input_document = json.loads((prepared / "input/input.json").read_text(encoding="utf-8"))
     reference_sha = input_document["canonical_reference_sha256"]
     profile_sha = _sha256(PREVIEW_PROFILE)
@@ -565,6 +590,10 @@ def _prepare_workspace(workspace: Path, candidate: Path, command_log: Path) -> N
             "route": "cad",
         },
     )
+
+
+def _initialize_workspace(workspace: Path, command_log: Path) -> None:
+    prepared = workspace / "work/prepared"
     _run_public(
         [
             sys.executable,
@@ -577,6 +606,19 @@ def _prepare_workspace(workspace: Path, candidate: Path, command_log: Path) -> N
         ],
         cwd=REPO_ROOT,
         command_log=command_log,
+    )
+
+
+def _prepare_workspace(workspace: Path, candidate: Path, command_log: Path) -> None:
+    _run_candidate_operation(
+        "reference_preparation",
+        _prepare_reference,
+        workspace,
+        candidate,
+        command_log,
+    )
+    _run_candidate_operation(
+        "workspace_init", _initialize_workspace, workspace, command_log
     )
 
 
@@ -794,7 +836,6 @@ def run_issue15_runtime_authority(workspace: Path) -> dict[str, Any]:
         _prepare_candidate,
         workspace,
         command_log,
-        failure_operation="canonical_build",
     )
     _run_stage(
         "candidate_workspace",
@@ -802,7 +843,6 @@ def run_issue15_runtime_authority(workspace: Path) -> dict[str, Any]:
         workspace,
         candidate,
         command_log,
-        failure_operation="workspace_init",
     )
     native = _run_stage(
         "native_measurement",
