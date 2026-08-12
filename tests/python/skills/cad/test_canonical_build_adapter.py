@@ -436,6 +436,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
         for flag in (
             "--die-with-parent",
             "--new-session",
+            "--unshare-user",
             "--unshare-net",
             "--unshare-pid",
             "--unshare-ipc",

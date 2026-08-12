@@ -80,6 +80,7 @@ def worker_sandbox_argv(
         os.fspath(TRUSTED_BWRAP_PATH),
         "--die-with-parent",
         "--new-session",
+        "--unshare-user",
         "--unshare-net",
         "--unshare-pid",
         "--unshare-ipc",
