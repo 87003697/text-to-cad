@@ -162,6 +162,7 @@ import {
 import ViewPlaneControl from "./viewer/ViewPlaneControl";
 import { useImplicitRaymarch } from "./viewer/hooks/useImplicitRaymarch";
 import { useViewerDrawingOverlay } from "./viewer/hooks/useViewerDrawingOverlay";
+import { useViewerMeasureOverlay } from "./viewer/hooks/useViewerMeasureOverlay";
 import { useViewerPicking } from "./viewer/hooks/useViewerPicking";
 import { useViewerRuntime } from "./viewer/hooks/useViewerRuntime";
 import { PREVIEW_AUTO_ROTATE_SPEED } from "./viewer/orbitControls";
@@ -1799,6 +1800,11 @@ const CadViewer = forwardRef(function CadViewer({
   onActivateReference,
   onDoubleActivateReference,
   onContextReference,
+  onMeasurePick,
+  onMeasureHoverPoint,
+  activeMeasurementId = "",
+  measureState = null,
+  measureModeActive = false,
   onViewerAlertChange,
   onStepModuleTransformDetectedChange,
   urdfPosePicker = null
@@ -1828,6 +1834,7 @@ const CadViewer = forwardRef(function CadViewer({
   const interactionHostRef = useRef(null);
   const mountRef = useRef(null);
   const drawingCanvasRef = useRef(null);
+  const measureCanvasRef = useRef(null);
   const drawingDraftRef = useRef(null);
   const drawingStrokesRef = useRef(Array.isArray(drawingStrokes) ? drawingStrokes : []);
   const drawingChangeRef = useRef(onDrawingStrokesChange);
@@ -5114,6 +5121,11 @@ const CadViewer = forwardRef(function CadViewer({
     const hoveredLineWidth = selectedLineWidth;
     const highlightEdgeColor = getHighlightEdgeColor(displayEdgeSettings);
     const highlightEdgeOpacity = getHighlightEdgeOpacity(displayEdgeSettings);
+    // In measure mode the snapped topology still needs a visible target, but the
+    // full-strength face fill would compete with the amber/cyan annotations.
+    const measureHoverHighlightOpacity = measureModeActive
+      ? Math.max(0.08, highlightEdgeOpacity * 0.35)
+      : highlightEdgeOpacity;
 
     const highlightReferenceStates = new Map();
     const runtimeReferences = Array.isArray(activeSelectorRuntime?.references)
@@ -5223,7 +5235,7 @@ const CadViewer = forwardRef(function CadViewer({
         const lineWidth = isHovered ? hoveredLineWidth : selectedLineWidth;
         const line = createScreenSpaceLineSegments(runtime, linePositions, {
           color: highlightColor,
-          opacity: highlightEdgeOpacity,
+          opacity: isHovered ? measureHoverHighlightOpacity : highlightEdgeOpacity,
           lineWidth,
           renderOrder: 26,
           depthTest: selectorType !== "edge",
@@ -5239,7 +5251,7 @@ const CadViewer = forwardRef(function CadViewer({
         const fillGeometry = buildFaceFillGeometryFromDisplayMeshes(runtime, THREE, topologyReference) ||
           buildFaceFillGeometryFromProxy(runtime, THREE, activeSelectorRuntime, topologyReference);
         if (fillGeometry) {
-          const fillOpacity = highlightEdgeOpacity;
+          const fillOpacity = isHovered ? measureHoverHighlightOpacity : highlightEdgeOpacity;
           const fillMaterial = new THREE.MeshBasicMaterial({
             color: highlightColor,
             transparent: fillOpacity < 0.999,
@@ -5267,7 +5279,7 @@ const CadViewer = forwardRef(function CadViewer({
       clearOverlayGroup(runtime, highlightGroup);
       clearOverlayGroup(runtime, faceFillGroup);
     };
-  }, [activeSelectorRuntime, hoveredReferenceId, pickableReferenceMap, selectedReferenceIds, viewerReadyTick, viewerTheme, displayEdgeSettings]);
+  }, [activeSelectorRuntime, hoveredReferenceId, pickableReferenceMap, selectedReferenceIds, viewerReadyTick, viewerTheme, displayEdgeSettings, measureModeActive]);
 
   useViewerDrawingOverlay({
     drawingCanvasRef,
@@ -5294,6 +5306,16 @@ const CadViewer = forwardRef(function CadViewer({
     drawingMinStrokeLengthPx: DRAWING_MIN_STROKE_LENGTH_PX
   });
 
+  useViewerMeasureOverlay({
+    measureCanvasRef,
+    measureState,
+    activeMeasurementId,
+    runtimeRef,
+    mountRef,
+    previewMode,
+    viewerReadyTick
+  });
+
   useViewerPicking({
     runtimeRef,
     mountRef: interactionHostRef,
@@ -5311,6 +5333,8 @@ const CadViewer = forwardRef(function CadViewer({
     onActivateReference,
     onDoubleActivateReference,
     onContextReference,
+    onMeasurePick,
+    onMeasureHoverPoint,
     viewerReadyTick,
     suppressTopologyPicking: stepAnimationPlaying
   });
@@ -5327,6 +5351,12 @@ const CadViewer = forwardRef(function CadViewer({
       onPointerLeave={handlePosePickerPointerLeave}
     >
       <div className="h-full w-full" ref={mountRef} />
+      <canvas
+        ref={measureCanvasRef}
+        className="absolute inset-0 z-10 h-full w-full touch-none"
+        style={{ pointerEvents: "none" }}
+        aria-hidden="true"
+      />
       <canvas
         ref={drawingCanvasRef}
         className="absolute inset-0 z-10 h-full w-full touch-none"

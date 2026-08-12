@@ -317,6 +317,11 @@ export default function CadRenderPane({
   handleModelReferenceActivate,
   handleModelReferenceDoubleActivate,
   handleModelReferenceContext,
+  onMeasurePick,
+  onMeasureHoverPoint,
+  activeMeasurementId = "",
+  measureState = null,
+  measureModeActive = false,
   viewerContextMenu = null,
   onViewerContextMenuClose,
   onViewerContextMenuCopyReference,
@@ -537,7 +542,8 @@ export default function CadRenderPane({
             ),
             viewerMode,
             assemblyPickingActive,
-            focusedPartIds
+            focusedPartIds,
+            measureMode: measureModeActive
           })}
         panToolActive={panToolActive}
         renderPartsIndividually={capabilities.sceneScale === "urdf"
@@ -569,6 +575,11 @@ export default function CadRenderPane({
         onActivateReference={handleModelReferenceActivate}
         onDoubleActivateReference={handleModelReferenceDoubleActivate}
         onContextReference={handleModelReferenceContext}
+        onMeasurePick={onMeasurePick}
+        onMeasureHoverPoint={onMeasureHoverPoint}
+        activeMeasurementId={activeMeasurementId}
+        measureState={measureState}
+        measureModeActive={measureModeActive}
         onViewerAlertChange={handleViewerAlertChange}
         onStepModuleTransformDetectedChange={handleStepModuleTransformDetectedChange}
         urdfPosePicker={urdfPosePicker}

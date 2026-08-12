@@ -63,3 +63,61 @@ test("viewer pick mode disables picking while topology assets are pending", () =
     VIEWER_PICK_MODE.NONE
   );
 });
+
+test("viewer pick mode switches to measure picking when the measure tool is active on pickable topology", () => {
+  assert.equal(
+    viewerPickModeForRenderPane({ measureMode: true, topologyPickingActive: true }),
+    VIEWER_PICK_MODE.MEASURE
+  );
+});
+
+test("viewer pick mode keeps measure picking in focused part views", () => {
+  assert.equal(
+    viewerPickModeForRenderPane({
+      viewerMode: "part",
+      measureMode: true,
+      topologyPickingActive: true
+    }),
+    VIEWER_PICK_MODE.MEASURE
+  );
+});
+
+test("viewer pick mode rejects measure picking without pickable topology", () => {
+  assert.equal(
+    viewerPickModeForRenderPane({ measureMode: true, topologyPickingActive: false }),
+    VIEWER_PICK_MODE.AUTO
+  );
+});
+
+test("viewer pick mode keeps measure picking in assemblies with pickable topology", () => {
+  assert.equal(
+    viewerPickModeForRenderPane({
+      viewerMode: "assembly",
+      measureMode: true,
+      topologyPickingActive: true
+    }),
+    VIEWER_PICK_MODE.MEASURE
+  );
+  assert.equal(
+    viewerPickModeForRenderPane({
+      viewerMode: "assembly",
+      measureMode: true,
+      topologyPickingActive: false
+    }),
+    VIEWER_PICK_MODE.ASSEMBLY
+  );
+});
+
+test("viewer pick mode blocks measure picking while topology assets are pending", () => {
+  assert.equal(
+    viewerPickModeForRenderPane({ measureMode: true, topologyPickingActive: true, topologySelectionPending: true }),
+    VIEWER_PICK_MODE.NONE
+  );
+});
+
+test("viewer pick mode falls back to auto without the measure tool", () => {
+  assert.equal(
+    viewerPickModeForRenderPane({ measureMode: false }),
+    VIEWER_PICK_MODE.AUTO
+  );
+});

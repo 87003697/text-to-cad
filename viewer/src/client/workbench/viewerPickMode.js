@@ -10,7 +10,8 @@ export function viewerPickModeForRenderPane({
   topologyPickingActive = false,
   viewerMode = "",
   assemblyPickingActive = false,
-  focusedPartIds = ""
+  focusedPartIds = "",
+  measureMode = false
 } = {}) {
   // While panning, a drag is a camera move — picking on release would select
   // whatever the drag happened to finish over.
@@ -19,6 +20,9 @@ export function viewerPickModeForRenderPane({
   }
   if (topologySelectionPending || topologySelectionUnavailable || topologySelectionDeferred) {
     return VIEWER_PICK_MODE.NONE;
+  }
+  if (measureMode && topologyPickingActive) {
+    return VIEWER_PICK_MODE.MEASURE;
   }
   if (
     viewerMode === "assembly" &&

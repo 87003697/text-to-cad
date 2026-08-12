@@ -200,6 +200,12 @@ import {
   setStepAnimationFrame
 } from "@/workbench/stepAnimationStore";
 import {
+  applyMeasureRulerDelete,
+  applyMeasureRulerHover,
+  applyMeasureRulerPick,
+  measureRulerStateForChange
+} from "@/workbench/measureRulerState";
+import {
   buildDefaultParameterAnimationState,
   findParameterAnimation,
   hasParameterAnimations,
@@ -5227,6 +5233,33 @@ export default function CadWorkspace({
     viewerPickableEdges.length ||
     viewerPickableVertices.length
   );
+  const measureModeActive = supportsTopology &&
+    tabToolMode === TAB_TOOL_MODE.MEASURE &&
+    hasViewerPickableTopology;
+  const [measureRulerState, setMeasureRulerState] = useState(null);
+  const [activeMeasureId, setActiveMeasureId] = useState("");
+  const handleMeasurePick = useCallback((pick) => {
+    setMeasureRulerState((current) => applyMeasureRulerPick(current, pick));
+  }, []);
+  const handleMeasureHoverPoint = useCallback((hover) => {
+    setMeasureRulerState((current) => applyMeasureRulerHover(current, hover));
+  }, []);
+  const handleMeasureDelete = useCallback((measurementId) => {
+    setMeasureRulerState((current) => applyMeasureRulerDelete(current, measurementId));
+  }, []);
+  useEffect(() => {
+    const items = measureRulerState?.measurements || [];
+    setActiveMeasureId(items.length ? items[items.length - 1].id : "");
+  }, [measureRulerState]);
+  useEffect(() => {
+    setMeasureRulerState((current) => measureRulerStateForChange(current, { entryChanged: true }));
+  }, [selectedKey]);
+  useEffect(() => {
+    setMeasureRulerState((current) => measureRulerStateForChange(current, { toolActive: measureModeActive }));
+  }, [measureModeActive]);
+  const measureToolDisabled = viewerLoading ||
+    !selectedMeshData ||
+    !hasViewerPickableTopology;
   const topologySelectionActive =
     (isAssemblyView && requestedStepTreeTopologyNodeIds.length > 0) ||
     topLevelReferenceSelectionActive;
@@ -7847,7 +7880,7 @@ export default function CadWorkspace({
     setViewerAlertOpen(false);
     // Anything unrecognized falls back to selection rather than sticking the
     // viewer in a mode with no tool behind it.
-    const normalizedMode = mode === TAB_TOOL_MODE.DRAW || mode === TAB_TOOL_MODE.PAN
+    const normalizedMode = mode === TAB_TOOL_MODE.DRAW || mode === TAB_TOOL_MODE.MEASURE || mode === TAB_TOOL_MODE.PAN
       ? mode
       : TAB_TOOL_MODE.REFERENCES;
     setTabToolMode(normalizedMode);
@@ -8407,6 +8440,7 @@ export default function CadWorkspace({
           focusedPartIds={viewerFocusedPartIds}
           boundsAnimationActive={robotBoundsAnimationActive}
           drawToolActive={drawToolActive}
+          measureModeActive={measureModeActive}
           drawingTool={drawingTool}
           drawingStrokes={drawingStrokes}
           handleDrawingStrokesChange={handleDrawingStrokesChange}
@@ -8415,6 +8449,10 @@ export default function CadWorkspace({
           handleModelReferenceActivate={handleModelReferenceActivate}
           handleModelReferenceDoubleActivate={handleModelReferenceDoubleActivate}
           handleModelReferenceContext={handleModelReferenceContext}
+          onMeasurePick={handleMeasurePick}
+          onMeasureHoverPoint={handleMeasureHoverPoint}
+          activeMeasurementId={activeMeasureId}
+          measureState={measureRulerState}
           viewerContextMenu={viewerContextMenu}
           onViewerContextMenuClose={closeViewerContextMenu}
           onViewerContextMenuCopyReference={copyViewerContextMenuReference}
@@ -8542,6 +8580,12 @@ export default function CadWorkspace({
                 animationDisabled={!!activeAnimationRuntime?.disabled}
                 handleAnimationPlayToggle={activeAnimationRuntime?.onPlayToggle}
                 drawToolActive={drawToolActive}
+                measureModeActive={measureModeActive}
+                measureDisabled={measureToolDisabled}
+                measureState={measureRulerState}
+                activeMeasurementId={activeMeasureId}
+                onMeasureActivate={setActiveMeasureId}
+                onMeasureDelete={handleMeasureDelete}
                 panToolActive={panToolActive}
                 handleSelectTabToolMode={handleSelectTabToolMode}
                 viewerLoading={viewerLoading}

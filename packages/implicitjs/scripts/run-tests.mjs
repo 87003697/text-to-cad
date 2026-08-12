@@ -30,9 +30,12 @@ if (!tests.length) {
   process.exit(1);
 }
 
+const nodeMajor = Number(process.versions.node.split(".")[0] || 0);
+const extraFlags = nodeMajor > 0 && nodeMajor < 22 ? ["--experimental-default-type=module"] : [];
+
 const result = spawnSync(process.execPath, [
   "--test",
-  "--experimental-default-type=module",
+  ...extraFlags,
   ...tests,
 ], {
   cwd: packageRoot,
