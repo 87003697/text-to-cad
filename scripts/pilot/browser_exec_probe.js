@@ -9,6 +9,7 @@ const EXPECTED_EXECUTABLE =
   "chrome-headless-shell-linux64/chrome-headless-shell";
 const MAX_OUTPUT_BYTES = 128;
 const TIMEOUT_MILLISECONDS = 4000;
+const CLEANUP_TIMEOUT_MILLISECONDS = 1000;
 const VERSION_OUTPUT =
   /^(?:Google Chrome for Testing|Chromium|Chrome|HeadlessChrome) [0-9]+(?:\.[0-9]+){3}\n$/;
 
@@ -22,10 +23,13 @@ if (
 }
 
 let child;
-let finished = false;
+let childClosed = false;
+let published = false;
+let requestedResult = null;
 let stdout = Buffer.alloc(0);
 let stderr = Buffer.alloc(0);
 let timer;
+let cleanupTimer;
 
 function stopChild() {
   if (!child || !child.pid)
@@ -49,15 +53,30 @@ function stopChild() {
   }
 }
 
-function finish(result) {
-  if (finished)
+function publish(result) {
+  if (published)
     return;
-  finished = true;
+  published = true;
   clearTimeout(timer);
-  if (result !== "passed")
-    stopChild();
+  clearTimeout(cleanupTimer);
   process.stdout.write(`${result}\n`, () =>
     process.exit(result === "passed" ? 0 : 2));
+}
+
+function finish(result) {
+  if (published || requestedResult !== null)
+    return;
+  clearTimeout(timer);
+  if (result === "passed" || childClosed || !child || !child.pid) {
+    publish(result);
+    return;
+  }
+  requestedResult = result;
+  stopChild();
+  cleanupTimer = setTimeout(
+    () => process.exit(2),
+    CLEANUP_TIMEOUT_MILLISECONDS,
+  );
 }
 
 function appendBounded(current, chunk) {
@@ -101,6 +120,11 @@ child.stderr.on("data", (chunk) => {
     stderr = next;
 });
 child.once("close", (code, childSignal) => {
+  childClosed = true;
+  if (requestedResult !== null) {
+    publish(requestedResult);
+    return;
+  }
   if (code !== 0 || childSignal !== null) {
     finish("nonzero-exit");
     return;

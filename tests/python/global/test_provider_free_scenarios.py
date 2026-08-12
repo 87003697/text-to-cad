@@ -968,7 +968,6 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         cases = (
             ("passed", 0, b"passed\n", b"", None),
             ("nonzero-exit", 2, b"nonzero-exit\n", b"", "nonzero-exit"),
-            ("signal", -9, b"nonzero-exit\n", b"", "nonzero-exit"),
             ("output-shape", 2, b"output-shape\n", b"", "output-shape"),
             ("noisy-token", 2, b"spawn-event\nextra\n", b"", "output-shape"),
         )
@@ -1004,6 +1003,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         timed_out.communicate.side_effect = [
             subprocess.TimeoutExpired(argv, 5),
             (b"", b""),
+            (b"", b""),
         ]
         with (
             mock.patch.object(
@@ -1020,8 +1020,107 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     cwd=self.repo,
                 ),
             )
-        killpg.assert_called_once_with(5678, signal.SIGTERM)
-        self.assertEqual(2, timed_out.communicate.call_count)
+        self.assertEqual(
+            [
+                mock.call(5678, signal.SIGTERM),
+                mock.call(5678, signal.SIGKILL),
+            ],
+            killpg.call_args_list,
+        )
+        self.assertEqual(3, timed_out.communicate.call_count)
+
+    def test_node_probe_classifies_signaled_process_without_token_as_nonzero_exit(
+        self,
+    ) -> None:
+        process = mock.Mock(pid=1234, returncode=-signal.SIGKILL)
+        process.communicate.return_value = (b"", b"")
+        with (
+            mock.patch.object(
+                provider_free_scenarios.subprocess,
+                "Popen",
+                return_value=process,
+            ),
+            mock.patch.object(provider_free_scenarios.os, "killpg") as killpg,
+        ):
+            actual = provider_free_scenarios._run_closed_node_browser_version_probe(
+                ["nested-bwrap", "bundled-node", "probe.js", "attached"],
+                cwd=self.repo,
+            )
+
+        self.assertEqual("nonzero-exit", actual)
+        self.assertEqual(
+            [
+                mock.call(1234, signal.SIGTERM),
+                mock.call(1234, signal.SIGKILL),
+            ],
+            killpg.call_args_list,
+        )
+
+    def test_node_probe_reaps_killed_child_before_publishing_failure_token(
+        self,
+    ) -> None:
+        staged_root = Path("/tmp/provider-free-playwright")
+        self.assertFalse(
+            staged_root.exists(),
+            "the subprocess lifecycle test refuses to replace a real staged runtime",
+        )
+        executable = (
+            staged_root
+            / "attested/chrome-headless-shell-linux64/chrome-headless-shell"
+        )
+        executable.parent.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, staged_root)
+        child_pid_path = self.repo / "run/node-probe-child.pid"
+        child_pid_path.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text(
+            f"#!{sys.executable}\n"
+            "import os\n"
+            "import time\n"
+            f"open({os.fspath(child_pid_path)!r}, 'w').write(str(os.getpid()))\n"
+            "os.write(1, b'x' * 129)\n"
+            "time.sleep(30)\n",
+            encoding="utf-8",
+        )
+        executable.chmod(0o755)
+        process = subprocess.Popen(
+            [
+                os.fspath(provider_free_scenarios._playwright_bundled_node()),
+                os.fspath(
+                    provider_free_scenarios.REPO_ROOT
+                    / "scripts/pilot/browser_exec_probe.js"
+                ),
+                "attached",
+                protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+            ],
+            cwd=provider_free_scenarios.REPO_ROOT,
+            env=dict(provider_free_scenarios.BROWSER_EXEC_PROBE_ENVIRONMENT),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+            close_fds=True,
+        )
+        child_pid: int | None = None
+        try:
+            self.assertIsNotNone(process.stdout)
+            self.assertIsNotNone(process.stderr)
+            self.assertEqual(b"output-shape\n", process.stdout.readline())
+            child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
+            remaining_stdout, stderr = process.communicate(timeout=5)
+            self.assertEqual(2, process.returncode)
+            self.assertEqual(b"", remaining_stdout)
+            self.assertEqual(b"", stderr)
+        finally:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+            if child_pid is not None:
+                try:
+                    os.kill(child_pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
     def test_preview_reports_only_detached_node_exec_probe_failure(self) -> None:
         bwrap = self.repo / "bwrap"

@@ -568,12 +568,16 @@ def _run_closed_node_browser_version_probe(
     except OSError:
         _terminate_node_probe_process(process)
         return "output-shape"
+    if process.returncode is not None and process.returncode < 0:
+        _terminate_node_probe_process(process)
+        return "nonzero-exit"
     if (
         not isinstance(stdout, bytes)
         or not isinstance(stderr, bytes)
         or len(stdout) > 32
         or stderr != b""
     ):
+        _terminate_node_probe_process(process)
         return "output-shape"
     result = _NODE_BROWSER_PROBE_RESULT_BYTES.get(stdout, "output-shape")
     if process.returncode == 0:
@@ -589,7 +593,6 @@ def _terminate_node_probe_process(process: subprocess.Popen[bytes]) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
         process.communicate(timeout=1)
-        return
     except (OSError, subprocess.TimeoutExpired):
         pass
     try:
