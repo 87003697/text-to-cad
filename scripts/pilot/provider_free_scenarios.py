@@ -59,12 +59,25 @@ VIEWER_TIMEOUT_SECONDS = 60
 class ScenarioError(RuntimeError):
     """A closed scenario could not publish required auditable evidence."""
 
-    def __init__(self, message: str, *, stage: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str | None = None,
+        operation: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.stage = stage
+        self.operation = operation
 
 
-def _run_stage(stage: str, operation: Any, *args: Any, **kwargs: Any) -> Any:
+def _run_stage(
+    stage: str,
+    operation: Any,
+    *args: Any,
+    failure_operation: str | None = None,
+    **kwargs: Any,
+) -> Any:
     """Attach one repository-owned top-level stage to a scenario failure."""
 
     if stage not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES:
@@ -72,9 +85,15 @@ def _run_stage(stage: str, operation: Any, *args: Any, **kwargs: Any) -> Any:
     try:
         return operation(*args, **kwargs)
     except Exception as exc:
+        classified_operation = (
+            exc.operation
+            if isinstance(exc, ScenarioError) and exc.operation is not None
+            else failure_operation
+        )
         raise ScenarioError(
             f"provider-free scenario stage failed: {stage}",
             stage=stage,
+            operation=classified_operation,
         ) from exc
 
 
@@ -477,7 +496,10 @@ def viewer_fallback_evidence(
 def _prepare_candidate(workspace: Path, command_log: Path) -> Path:
     for source in (DURABLE_MODEL_SOURCE, DURABLE_MODEL_LIBRARY):
         if not source.is_file() or source.read_bytes().startswith(b"version https://git-lfs"):
-            raise ScenarioError(f"durable model source is unavailable: {source}")
+            raise ScenarioError(
+                f"durable model source is unavailable: {source}",
+                operation="fixture_availability",
+            )
     candidate = workspace / "work/candidate"
     source_dir = candidate / "source"
     source_dir.mkdir(parents=True, exist_ok=True)
@@ -507,18 +529,24 @@ def _prepare_candidate(workspace: Path, command_log: Path) -> Path:
 
 def _prepare_workspace(workspace: Path, candidate: Path, command_log: Path) -> None:
     prepared = workspace / "work/prepared"
-    _run_public(
-        [
-            sys.executable,
-            os.fspath(MESH_COMPARE),
-            "voxblame-prepare-reference",
-            os.fspath(candidate / "built/measurement.glb"),
-            "--output",
-            os.fspath(prepared / "input"),
-        ],
-        cwd=REPO_ROOT,
-        command_log=command_log,
-    )
+    try:
+        _run_public(
+            [
+                sys.executable,
+                os.fspath(MESH_COMPARE),
+                "voxblame-prepare-reference",
+                os.fspath(candidate / "built/measurement.glb"),
+                "--output",
+                os.fspath(prepared / "input"),
+            ],
+            cwd=REPO_ROOT,
+            command_log=command_log,
+        )
+    except ScenarioError as exc:
+        raise ScenarioError(
+            "canonical reference preparation failed",
+            operation="reference_preparation",
+        ) from exc
     input_document = json.loads((prepared / "input/input.json").read_text(encoding="utf-8"))
     reference_sha = input_document["canonical_reference_sha256"]
     profile_sha = _sha256(PREVIEW_PROFILE)
@@ -762,7 +790,11 @@ def run_issue15_runtime_authority(workspace: Path) -> dict[str, Any]:
         "viewer_fallback", viewer_fallback_evidence, workspace, deployment
     )
     candidate = _run_stage(
-        "candidate_workspace", _prepare_candidate, workspace, command_log
+        "candidate_workspace",
+        _prepare_candidate,
+        workspace,
+        command_log,
+        failure_operation="canonical_build",
     )
     _run_stage(
         "candidate_workspace",
@@ -770,6 +802,7 @@ def run_issue15_runtime_authority(workspace: Path) -> dict[str, Any]:
         workspace,
         candidate,
         command_log,
+        failure_operation="workspace_init",
     )
     native = _run_stage(
         "native_measurement",
@@ -806,13 +839,16 @@ def main(argv: list[str] | None = None) -> int:
         receipt = run_issue15_runtime_authority(workspace)
     except ScenarioError as exc:
         if exc.stage in PROVIDER_FREE_SCENARIO_FAILURE_STAGES:
+            failure = {
+                "schema": PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+                "scenario_identity": SCENARIO_IDENTITY,
+                "stage": exc.stage,
+            }
+            if exc.operation is not None:
+                failure["operation"] = exc.operation
             _write_json(
                 workspace / PROVIDER_FREE_SCENARIO_FAILURE_PATH,
-                {
-                    "schema": PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
-                    "scenario_identity": SCENARIO_IDENTITY,
-                    "stage": exc.stage,
-                },
+                failure,
             )
         print(f"provider-free-scenario: {exc}", file=sys.stderr)
         return 1

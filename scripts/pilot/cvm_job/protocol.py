@@ -53,6 +53,14 @@ PROVIDER_FREE_SCENARIO_FAILURE_STAGES = frozenset(
         "finalization",
     }
 )
+PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS = frozenset(
+    {
+        "fixture_availability",
+        "canonical_build",
+        "reference_preparation",
+        "workspace_init",
+    }
+)
 _RESERVED_UPDATE_FIELDS = frozenset(
     {
         "schema_version",
@@ -393,15 +401,26 @@ def _public_provider_free_scenario_failure(
         return None
     scenario_identity = value.get("scenario_identity")
     stage = value.get("stage")
+    operation = value.get("operation")
     if (
         value.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
         or not isinstance(expected_identity, str)
         or scenario_identity != expected_identity
         or stage not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES
+        or (
+            operation is not None
+            and (
+                stage != "candidate_workspace"
+                or operation not in PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS
+            )
+        )
     ):
         return None
-    return {
+    result = {
         "schema": PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
         "scenario_identity": scenario_identity,
         "stage": stage,
     }
+    if operation is not None:
+        result["operation"] = operation
+    return result

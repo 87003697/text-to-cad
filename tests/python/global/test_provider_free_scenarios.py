@@ -226,6 +226,63 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                         exception_type=exception_type,
                     )
 
+    def test_candidate_canonical_build_failure_names_closed_operation(self) -> None:
+        workspace = self.repo / "outputs/group/canonical-build-failure"
+        workspace.mkdir(parents=True)
+        with (
+            mock.patch.object(
+                provider_free_scenarios,
+                "deployed_viewer_receipt",
+                return_value={"viewer_version": "test"},
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "deployed_runtime_tree_receipt",
+                return_value={"files": []},
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "cadpy_runtime_evidence",
+                return_value={"schema": "cadpy"},
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "viewer_fallback_evidence",
+                return_value={"action": "start"},
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_prepare_candidate",
+                side_effect=provider_free_scenarios.ScenarioError(
+                    "canonical build rejected"
+                ),
+            ),
+            mock.patch("sys.stderr", new_callable=io.StringIO),
+        ):
+            status = provider_free_scenarios.main(
+                [
+                    "run",
+                    "issue15-runtime-authority",
+                    "--workspace",
+                    str(workspace),
+                ]
+            )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            json.loads(
+                (workspace / "run/scenario-failure.json").read_text(
+                    encoding="utf-8"
+                )
+            ),
+            {
+                "schema": "cvm.provider-free-scenario-failure/1",
+                "scenario_identity": "issue15.provider-free.runtime-authority/1",
+                "stage": "candidate_workspace",
+                "operation": "canonical_build",
+            },
+        )
+
     def _assert_closed_stage_failure(
         self,
         workspace: Path,
@@ -282,14 +339,14 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self.assertEqual(status, 1)
         receipt_path = workspace / "run/scenario-failure.json"
         receipt_text = receipt_path.read_text(encoding="utf-8")
-        self.assertEqual(
-            json.loads(receipt_text),
-            {
-                "schema": "cvm.provider-free-scenario-failure/1",
-                "scenario_identity": "issue15.provider-free.runtime-authority/1",
-                "stage": stage,
-            },
-        )
+        expected = {
+            "schema": "cvm.provider-free-scenario-failure/1",
+            "scenario_identity": "issue15.provider-free.runtime-authority/1",
+            "stage": stage,
+        }
+        if stage == "candidate_workspace":
+            expected["operation"] = "canonical_build"
+        self.assertEqual(json.loads(receipt_text), expected)
         for forbidden in (
             "secret",
             "private/path",

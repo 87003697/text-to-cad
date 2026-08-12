@@ -32,8 +32,8 @@ evidence rather than monitor inference.
 When a launched provider-free scenario exits nonzero, terminal `status` and
 `wait` validate the manifest-bound retained deployment authority and then may
 publish `scenario_failure` with schema
-`cvm.provider-free-scenario-failure/1`. This projection contains only the
-registered `scenario_identity` and one closed `stage`:
+`cvm.provider-free-scenario-failure/1`. This projection contains the registered
+`scenario_identity` and one closed `stage`:
 
 - `viewer_deployment`
 - `shipped_tree`
@@ -42,6 +42,17 @@ registered `scenario_identity` and one closed `stage`:
 - `candidate_workspace`
 - `native_measurement`
 - `finalization`
+
+`candidate_workspace` may also contain one manifest-bound closed `operation`
+that identifies the first failing production contract:
+
+- `fixture_availability`
+- `canonical_build`
+- `reference_preparation`
+- `workspace_init`
+
+Historical three-field receipts remain valid. An operation on any other stage,
+or any value outside this list, invalidates the scenario failure receipt.
 
 The failure path does not require successful Workspace, runtime-authority, or
 Final Delivery artifacts before reporting the primary stage. It still requires

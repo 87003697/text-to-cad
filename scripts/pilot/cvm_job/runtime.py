@@ -20,6 +20,7 @@ from scripts.pilot import provider_free_output
 
 from . import tap_observer
 from .protocol import (
+    PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
@@ -835,12 +836,25 @@ def _provider_free_failure_evidence_result(
         failure = json.loads(failure_bytes)
     except (OSError, json.JSONDecodeError):
         return None, None, "provider-free scenario failure evidence is invalid"
+    failure_keys = set(failure) if isinstance(failure, dict) else set()
+    operation = failure.get("operation") if isinstance(failure, dict) else None
     if (
         not isinstance(failure, dict)
-        or set(failure) != {"schema", "scenario_identity", "stage"}
+        or failure_keys
+        not in (
+            {"schema", "scenario_identity", "stage"},
+            {"schema", "scenario_identity", "stage", "operation"},
+        )
         or failure.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
         or failure.get("scenario_identity") != record["scenario"]["identity"]
         or failure.get("stage") not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES
+        or (
+            operation is not None
+            and (
+                failure.get("stage") != "candidate_workspace"
+                or operation not in PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS
+            )
+        )
     ):
         return None, None, "provider-free scenario failure identity conflicts"
     expected_entry = {

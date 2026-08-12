@@ -256,6 +256,7 @@ class CvmJobTests(unittest.TestCase):
         *,
         scenario_identity: str = "issue15.provider-free.runtime-authority/1",
         stage: str = "viewer_fallback",
+        operation: str | None = None,
         stripped: list[str] | None = None,
     ) -> None:
         """Publish common authority plus one manifest-bound closed failure."""
@@ -275,6 +276,8 @@ class CvmJobTests(unittest.TestCase):
             "scenario_identity": scenario_identity,
             "stage": stage,
         }
+        if operation is not None:
+            failure["operation"] = operation
         failure_path = exp_dir / "run/scenario-failure.json"
         failure_path.write_text(
             json.dumps(failure, sort_keys=True, separators=(",", ":")) + "\n",
@@ -632,6 +635,8 @@ class CvmJobTests(unittest.TestCase):
             raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
             self.write_provider_free_failure_evidence(
                 handle,
+                stage="candidate_workspace",
+                operation="canonical_build",
                 stripped=raw_stripped.split(",") if raw_stripped else [],
             )
             return 1, 4321
@@ -650,7 +655,8 @@ class CvmJobTests(unittest.TestCase):
         expected = {
             "schema": "cvm.provider-free-scenario-failure/1",
             "scenario_identity": "issue15.provider-free.runtime-authority/1",
-            "stage": "viewer_fallback",
+            "stage": "candidate_workspace",
+            "operation": "canonical_build",
         }
         self.assertEqual(state["state"], "failed")
         self.assertEqual(state["scenario_failure"], expected)
@@ -1281,8 +1287,15 @@ server.listen(0, host, () => {
         )
         self.assertNotIn("scenario_failure", public)
 
-    def test_provider_free_scenario_failure_rejects_tamper_and_wrong_identity(self) -> None:
-        for index, mutation in enumerate(("tamper", "wrong-identity")):
+    def test_provider_free_scenario_failure_rejects_unbound_or_open_values(self) -> None:
+        for index, mutation in enumerate(
+            (
+                "tamper",
+                "wrong-identity",
+                "unknown-operation",
+                "operation-on-wrong-stage",
+            )
+        ):
             with self.subTest(mutation=mutation):
                 group = f"20260805-20{index:04d}-audit"
                 handle = runtime.submit_provider_free(
@@ -1302,6 +1315,20 @@ server.listen(0, host, () => {
                             "issue15.provider-free.other/1"
                             if mutation == "wrong-identity"
                             else "issue15.provider-free.runtime-authority/1"
+                        ),
+                        stage=(
+                            "viewer_fallback"
+                            if mutation == "operation-on-wrong-stage"
+                            else "candidate_workspace"
+                        ),
+                        operation=(
+                            "shell"
+                            if mutation == "unknown-operation"
+                            else (
+                                "canonical_build"
+                                if mutation == "operation-on-wrong-stage"
+                                else None
+                            )
                         ),
                         stripped=raw_stripped.split(",") if raw_stripped else [],
                     )
@@ -1367,6 +1394,7 @@ server.listen(0, host, () => {
                 "schema": "cvm.provider-free-scenario-failure/1",
                 "scenario_identity": "issue15.provider-free.runtime-authority/1",
                 "stage": "candidate_workspace",
+                "operation": "canonical_build",
                 "text": "OPENAI_API_KEY=secret\n../../private/path",
                 "argv": ["/bin/sh", "-c", "secret"],
                 "environment": {"VENUS_TOKEN": "secret"},
@@ -1386,6 +1414,7 @@ server.listen(0, host, () => {
                 "schema": "cvm.provider-free-scenario-failure/1",
                 "scenario_identity": "issue15.provider-free.runtime-authority/1",
                 "stage": "candidate_workspace",
+                "operation": "canonical_build",
             },
         )
         serialized = json.dumps(public, sort_keys=True)
@@ -2522,6 +2551,13 @@ server.listen(0, host, () => {
             "finalization",
         ):
             self.assertIn(stage, contract)
+        for operation in (
+            "fixture_availability",
+            "canonical_build",
+            "reference_preparation",
+            "workspace_init",
+        ):
+            self.assertIn(operation, contract)
         self.assertIn("before-experiment", contract)
         self.assertIn("before-artifact-manifest", contract)
         for classification in (
