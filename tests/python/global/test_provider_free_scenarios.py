@@ -1056,6 +1056,36 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             killpg.call_args_list,
         )
 
+    def test_node_probe_cleans_session_group_after_no_close_fallback(self) -> None:
+        process = mock.Mock(pid=2468, returncode=2)
+        process.communicate.side_effect = [
+            (b"", b""),
+            (b"", b""),
+            (b"", b""),
+        ]
+        with (
+            mock.patch.object(
+                provider_free_scenarios.subprocess,
+                "Popen",
+                return_value=process,
+            ),
+            mock.patch.object(provider_free_scenarios.os, "killpg") as killpg,
+        ):
+            actual = provider_free_scenarios._run_closed_node_browser_version_probe(
+                ["nested-bwrap", "bundled-node", "probe.js", "attached"],
+                cwd=self.repo,
+            )
+
+        self.assertEqual("output-shape", actual)
+        self.assertEqual(
+            [
+                mock.call(2468, signal.SIGTERM),
+                mock.call(2468, signal.SIGKILL),
+            ],
+            killpg.call_args_list,
+        )
+        self.assertEqual(3, process.communicate.call_count)
+
     def test_node_probe_reaps_killed_child_before_publishing_failure_token(
         self,
     ) -> None:

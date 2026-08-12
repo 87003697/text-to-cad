@@ -579,11 +579,18 @@ def _run_closed_node_browser_version_probe(
     ):
         _terminate_node_probe_process(process)
         return "output-shape"
-    result = _NODE_BROWSER_PROBE_RESULT_BYTES.get(stdout, "output-shape")
+    if stdout not in _NODE_BROWSER_PROBE_RESULT_BYTES:
+        _terminate_node_probe_process(process)
+        return "output-shape"
+    result = _NODE_BROWSER_PROBE_RESULT_BYTES[stdout]
     if process.returncode == 0:
-        return result if result is not None else None
+        if result is None:
+            return None
+        _terminate_node_probe_process(process)
+        return "output-shape"
     if result in _NODE_BROWSER_PROBE_FAILURE_KINDS:
         return result
+    _terminate_node_probe_process(process)
     return "nonzero-exit"
 
 
