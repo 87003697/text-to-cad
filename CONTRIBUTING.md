@@ -183,19 +183,25 @@ preserves them verbatim, and Codex `plugin add` drops them with no error at all,
 publishing a skill whose files are simply missing at runtime.
 `scripts/github-workflows/check-builds.sh` is the gate that enforces this.
 
-Because the repository root is the plugin package, every source-only directory
-on `main` is copied into every install. The publish job therefore trims the tree
-before committing it — `models/`, `viewer/`, `tests/`, and `requirements-dev.txt`
-are removed, after the bundle and all checks have run against the untrimmed
-tree. `viewer/` in particular is source: what installs and runs is the
-dereferenced runtime under `skills/cad-viewer/scripts/viewer`, and the
-standalone cad-viewer mirror syncs from the release source commit instead.
+Because the repository root is the plugin package, every source-only path on
+`main` is copied into every install. The publish job therefore trims the tree
+before committing it, after the bundle and all checks have run against the
+untrimmed tree. `models/`, `viewer/`, `tests/`, `docs/`, `packages/`, and
+`requirements-dev.txt` are removed, leaving `main` as close to just the plugin
+package as it can be.
 
-`packages/` deliberately stays. The docs site deploys from `main` in the same
-release run and builds against it: `docs/tsconfig.json` maps `cadjs/*` to
-`../packages/cadjs/src/*`, and `packages/cadjs/src/common` pulls in
-`implicitjs`. The trim step asserts `packages/cadjs/src` survived, so adding
-`packages/` to the removal list fails the publish rather than the deploy.
+Nothing is lost, because each of those has a consumer that reads **source**
+rather than the published tree:
+
+- `viewer/` — what installs and runs is the dereferenced runtime under
+  `skills/cad-viewer/scripts/viewer`, and the standalone cad-viewer mirror syncs
+  from the release source commit.
+- `docs/` and `packages/` — `Deploy Docs` builds and deploys from the release
+  source commit. `packages/` has no other published consumer: every skill
+  vendors the runtimes it needs, and the trim step fails the publish if a skill
+  is found reaching into repo-root `packages/`.
+- `models/`, `tests/`, `requirements-dev.txt` — source-only, with no consumer
+  outside a source checkout.
 
 `main` is publish-only: do not open PRs to `main` or push it directly. The `Test`
 workflow runs on `develop` and PRs to `develop`: it starts from the symlink
@@ -314,11 +320,24 @@ missing).
 ### Redeploying the docs site
 
 The standalone `Deploy Docs` workflow redeploys the docs site to Vercel
-production without running a release. It defaults to deploying `main` and
-expects a production-layout ref:
+production without running a release. It deploys a **source** ref and defaults
+to `develop`:
 
 ```bash
-gh workflow run deploy-docs.yml -f ref=main
+gh workflow run deploy-docs.yml -f ref=develop
+```
+
+It cannot deploy `main`. The docs app builds against repo-root `packages/`
+(`docs/tsconfig.json` maps `cadjs/*` to `../packages/cadjs/src/*`), and the
+publish tree drops both `docs/` and `packages/`. The workflow checks for them up
+front and fails with that explanation rather than an opaque module-resolution
+error inside `next build`.
+
+To redeploy the site as it stood at a past release, use that release's source
+commit. Every publish commit records it as its second parent:
+
+```bash
+gh workflow run deploy-docs.yml -f ref="$(git rev-parse 0.4.6^2)"
 ```
 
 The CAD Viewer is a local-filesystem app and has no hosted deployment.
@@ -328,14 +347,18 @@ The CAD Viewer is a local-filesystem app and has no hosted deployment.
 `viewer/` is published as its own standalone repo,
 [`earthtojake/cad-viewer`](https://github.com/earthtojake/cad-viewer). The
 `Release` workflow calls `Sync CAD Viewer Repo` after publishing to `main`, so
-the mirror tracks releases rather than in-flight `develop` work. Dispatch it on
-its own for an out-of-band sync, or with `dry_run` to build and verify the
-mirror without pushing:
+the mirror tracks releases rather than in-flight `develop` work. It mirrors from
+the release **source** commit, not from `main`, which carries no `viewer/`.
+Dispatch it on its own for an out-of-band sync, or with `dry_run` to build and
+verify the mirror without pushing:
 
 ```bash
-gh workflow run sync-cad-viewer.yml -f ref=main
-gh workflow run sync-cad-viewer.yml -f ref=main -f dry_run=true
+gh workflow run sync-cad-viewer.yml -f ref=develop
+gh workflow run sync-cad-viewer.yml -f ref=develop -f dry_run=true
 ```
+
+Use a past release's source commit — `git rev-parse <tag>^2` — to re-sync the
+mirror as it stood at that release.
 
 The workflow needs a `CAD_VIEWER_SYNC_TOKEN` secret with `contents:write` on the
 mirror repo. Before pushing, it runs `npm ci`, `npm run test`, `npm run build`,

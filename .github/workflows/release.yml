@@ -387,11 +387,12 @@ jobs:
       #   requirements-dev.txt  a source-checkout dev environment whose editable
       #                      paths (packages/cadgen, viewer/moveit2_server) do not
       #                      survive the trim anyway
-      #
-      # packages/ deliberately STAYS. The docs site deploys from this branch and
-      # builds against it: docs/tsconfig.json maps cadjs/* to
-      # ../packages/cadjs/src/*, and packages/cadjs/src/common pulls implicitjs.
-      # Removing it fails Deploy Docs in this same run.
+      #   docs/              a website, not an install; Deploy Docs builds and
+      #                      deploys it from the release SOURCE commit
+      #   packages/          the shared source runtimes. Every skill already
+      #                      carries its own vendored copy, and the only other
+      #                      consumer was the docs build, which now runs from
+      #                      source too.
       #
       # This runs after the bundle, check-builds, and the tests, so the tree they
       # validated is untouched and only the published tree is trimmed. The
@@ -404,7 +405,7 @@ jobs:
       - name: Trim publish tree
         if: steps.gate.outputs.should_publish == 'true'
         run: |
-          removed_roots="models viewer tests requirements-dev.txt"
+          removed_roots="models viewer tests requirements-dev.txt docs packages"
           for root in $removed_roots; do
             rm -rf "$root"
             if [ -e "$root" ]; then
@@ -417,12 +418,12 @@ jobs:
             echo "  skills/cad-viewer/scripts/viewer/package.json is missing." >&2
             exit 1
           fi
-          # Deploy Docs runs from this branch later in the same release and
-          # builds docs/ against packages/cadjs. Assert it survived, so adding
-          # packages/ to removed_roots fails here rather than in the deploy.
-          if [ ! -d packages/cadjs/src ]; then
-            echo "Refusing to publish without packages/cadjs: the docs site" >&2
-            echo "  builds against it (docs/tsconfig.json maps cadjs/* there)." >&2
+          # Every skill vendors what it needs, so nothing published may reach
+          # repo-root packages/. A skill that does would break silently on
+          # install rather than here.
+          if grep -rIlE '\.\./\.\./\.\./packages/|["'"'"']\.\./\.\./packages/' skills 2>/dev/null | head -n 1 | grep -q .; then
+            echo "A skill references repo-root packages/, which is not published:" >&2
+            grep -rIlE '\.\./\.\./\.\./packages/|["'"'"']\.\./\.\./packages/' skills >&2
             exit 1
           fi
           echo "PUBLISH_TREE_REMOVED_ROOTS=$removed_roots" >> "$GITHUB_ENV"
@@ -570,13 +571,19 @@ jobs:
           fi
           echo "published=true" >> "$GITHUB_OUTPUT"
 
+  # Deploys from the release SOURCE commit, not the publish commit: the docs app
+  # builds against repo-root packages/, and the publish tree drops both. Still
+  # gated on the publish succeeding, so the site never moves for a release that
+  # did not ship.
   deploy-docs:
     name: Deploy Docs
-    needs: publish
+    needs:
+      - release-pr
+      - publish
     if: ${{ needs.publish.outputs.published == 'true' && inputs.target_branch == 'main' }}
     uses: ./.github/workflows/deploy-docs.yml
     with:
-      ref: ${{ needs.publish.outputs.publish_sha }}
+      ref: ${{ needs.release-pr.outputs.source_sha }}
     secrets: inherit
 
   # Mirrors from the release SOURCE commit, not the publish commit: the publish
