@@ -171,6 +171,9 @@ URL, and `?file=` selects one artifact within it:
 http://127.0.0.1:3245/absolute/model/root?file=path/relative/to/that/root
 ```
 
+On Windows the drive is part of that path, after the leading slash and with
+forward slashes: `D:\project\models` is `.../3245/D:/project/models`.
+
 The Viewer is not started against a directory — it opens whatever a URL names, so
 one instance serves any folder **under its own served root**. That qualifier
 matters in a worktree: an instance started from another checkout resolves paths
