@@ -20,6 +20,7 @@ import platform
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 from typing import Any
@@ -494,7 +495,7 @@ def _read_physical_file(
             os.close(directory_fd)
 
 
-def _freeze_declared_python_source(
+def _freeze_declared_file(
     *,
     root: Path,
     path: Path,
@@ -503,7 +504,7 @@ def _freeze_declared_python_source(
         relative_path = path.relative_to(root)
         source_bytes, info = _read_physical_file(root, relative_path)
     except (OSError, ValueError) as exc:
-        raise ValueError("declared Python source is unavailable or unsafe") from exc
+        raise ValueError("declared input is unavailable or unsafe") from exc
     return _DeclaredPythonModule(
         name=path.stem,
         root=root,
@@ -512,6 +513,25 @@ def _freeze_declared_python_source(
         device=info.st_dev,
         inode=info.st_ino,
     )
+
+
+def _materialize_frozen_inputs(
+    snapshot_root: Path,
+    frozen_inputs: dict[Path, _DeclaredPythonModule],
+) -> None:
+    directories: set[Path] = {snapshot_root}
+    for frozen_input in frozen_inputs.values():
+        destination = snapshot_root / frozen_input.relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(frozen_input.source_bytes)
+        destination.chmod(0o444)
+        directories.update(destination.parents)
+    for directory in sorted(
+        (path for path in directories if _is_within(path, snapshot_root)),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    ):
+        directory.chmod(0o555)
 
 
 def _declared_python_module_finder(
@@ -1076,6 +1096,214 @@ def _load_recipe(*, root: Path, recipe_path: str) -> dict[str, Any]:
     return payload
 
 
+def _worker_generate_intermediate_step(
+    *,
+    root: Path,
+    source: str,
+    inputs: list[str],
+    output: str,
+) -> None:
+    source_path, source_relative = _relative_path(
+        source,
+        root=root,
+        label="worker source",
+        must_exist=True,
+    )
+    declared_inputs = [source_path]
+    for raw_input in inputs:
+        input_path, _input_relative = _relative_path(
+            raw_input,
+            root=root,
+            label="worker input",
+            must_exist=True,
+        )
+        declared_inputs.append(input_path)
+    output_path, _output_relative = _relative_path(
+        output,
+        root=root,
+        label="worker output",
+    )
+    frozen_sources = {
+        path: _freeze_declared_file(root=root, path=path)
+        for path in declared_inputs
+        if path.suffix.lower() == ".py"
+    }
+    for frozen_source in frozen_sources.values():
+        _validate_unitless_source_parameters(frozen_source)
+    primary_source = frozen_sources[source_path]
+    source_digest = hashlib.sha256(primary_source.source_bytes).hexdigest()
+    source_info = source_from_path(
+        source_path,
+        python_source_text=primary_source.source_bytes.decode("utf-8"),
+    )
+    if source_info is None:
+        raise RuntimeError("worker source must define gen_step()")
+    spec = replace(
+        _entry_spec_from_source(source_info),
+        cad_ref="worker/intermediate",
+        display_name="intermediate",
+        step_path=output_path,
+        mesh_tolerance=LINEAR_DEFLECTION,
+        mesh_angular_tolerance=ANGULAR_DEFLECTION,
+        mesh_tolerance_explicit=True,
+        mesh_angular_tolerance_explicit=True,
+    )
+    import build123d  # noqa: F401
+
+    candidate_stdout = io.StringIO()
+    candidate_stderr = io.StringIO()
+    with (
+        redirect_stdout(candidate_stdout),
+        redirect_stderr(candidate_stderr),
+        _capture_source_file_descriptor_output() as descriptor_output,
+        _source_execution_policy(
+            root=root,
+            source_path=source_path,
+            declared_inputs=set(declared_inputs),
+            frozen_sources=frozen_sources,
+            output_dir=output_path.parent,
+        ),
+        _frozen_primary_source_loader(primary_source),
+    ):
+        generated_scene = run_script_generator(
+            spec,
+            "gen_step",
+            source_identity=PythonSourceHash(
+                source_path=source_relative,
+                source_hash=source_digest,
+            ),
+            force=True,
+            load_current_scene=False,
+            skip_step_write=True,
+        )
+    if (
+        candidate_stdout.getvalue()
+        or candidate_stderr.getvalue()
+        or any(descriptor_output.values())
+    ):
+        raise RuntimeError("canonical CAD source must not write to stdout or stderr")
+    if generated_scene is None or generated_scene.doc is None:
+        raise RuntimeError("canonical CAD source did not produce an exportable XCAF scene")
+    _validate_staged_delivery(output_path.parent, expected_names=set())
+    write_xcaf_doc_step_file(
+        generated_scene.doc,
+        output_path,
+        label="intermediate",
+        text_to_cad_entry_kind=spec.kind,
+        source_path=source_relative,
+        source_hash=source_digest,
+    )
+    _validate_staged_delivery(
+        output_path.parent,
+        expected_names={output_path.name},
+    )
+
+
+def _worker_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(prog="cadpy.canonical-build-worker")
+    parser.add_argument("--root", required=True)
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--input", action="append", default=[])
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args(argv)
+    _worker_generate_intermediate_step(
+        root=Path(args.root).resolve(),
+        source=args.source,
+        inputs=args.input,
+        output=args.output,
+    )
+    return 0
+
+
+@contextmanager
+def _source_worker_step(
+    *,
+    root: Path,
+    source_relative: str,
+    declared_inputs: list[tuple[Path, str]],
+    frozen_inputs: dict[Path, _DeclaredPythonModule],
+    temporary_parent: Path,
+):
+    worker_root = Path(
+        tempfile.mkdtemp(
+            prefix=".canonical-source-worker-",
+            dir=temporary_parent,
+        )
+    )
+    snapshot_root = worker_root / "inputs"
+    snapshot_root.mkdir()
+    worker_output_name = ".worker-output"
+    worker_output = snapshot_root / worker_output_name
+    worker_output.mkdir()
+    try:
+        _materialize_frozen_inputs(snapshot_root, frozen_inputs)
+        worker_output.chmod(0o700)
+        command = [
+            sys.executable,
+            "-c",
+            (
+                "import sys; from cadpy.canonical_build import _worker_main; "
+                "raise SystemExit(_worker_main(sys.argv[1:]))"
+            ),
+            "--root",
+            os.fspath(snapshot_root),
+            "--source",
+            source_relative,
+        ]
+        for _input_path, input_relative in declared_inputs[1:]:
+            command.extend(("--input", input_relative))
+        intermediate_relative = f"{worker_output_name}/intermediate.step"
+        command.extend(("--output", intermediate_relative))
+        environment = {
+            "LANG": "C.UTF-8",
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONPATH": os.pathsep.join(
+                entry for entry in sys.path if entry
+            ),
+        }
+        completed = subprocess.run(
+            command,
+            cwd=snapshot_root,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            diagnostic = (
+                completed.stderr.strip().splitlines()[-1]
+                if completed.stderr.strip()
+                else "worker exited without a diagnostic"
+            )
+            raise RuntimeError(
+                f"canonical source worker failed: {diagnostic}"
+            )
+        if completed.stdout or completed.stderr:
+            raise RuntimeError(
+                "canonical source worker emitted forbidden output"
+            )
+        intermediate_path = snapshot_root / intermediate_relative
+        info = intermediate_path.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("canonical source worker result is not a regular file")
+        yield intermediate_path
+    finally:
+        for current_root, directory_names, _file_names in os.walk(
+            snapshot_root,
+            topdown=True,
+            followlinks=False,
+        ):
+            Path(current_root).chmod(0o700)
+            for directory_name in directory_names:
+                directory = Path(current_root) / directory_name
+                if stat.S_ISDIR(directory.lstat().st_mode):
+                    directory.chmod(0o700)
+        shutil.rmtree(worker_root)
+
+
 def _build_staged(
     *,
     root: Path,
@@ -1102,17 +1330,19 @@ def _build_staged(
         declared_inputs.append((input_path, input_relative))
         seen_inputs.add(input_path)
 
-    frozen_sources = {
-        path: _freeze_declared_python_source(root=root, path=path)
+    frozen_inputs = {
+        path: _freeze_declared_file(root=root, path=path)
         for path, _relative in declared_inputs
+    }
+    frozen_sources = {
+        path: frozen_input
+        for path, frozen_input in frozen_inputs.items()
         if path.suffix.lower() == ".py"
     }
     if expected_input_digests is not None:
         frozen_digests = {
             relative: (
-                hashlib.sha256(frozen_sources[path].source_bytes).hexdigest()
-                if path in frozen_sources
-                else _sha256(path)
+                hashlib.sha256(frozen_inputs[path].source_bytes).hexdigest()
             )
             for path, relative in declared_inputs
         }
@@ -1128,10 +1358,6 @@ def _build_staged(
     frozen_source_digest = hashlib.sha256(
         frozen_primary_source.source_bytes
     ).hexdigest()
-    frozen_source_identity = PythonSourceHash(
-        source_path=source_relative,
-        source_hash=frozen_source_digest,
-    )
     source_info = source_from_path(
         source_path,
         python_source_text=frozen_source_text,
@@ -1150,63 +1376,29 @@ def _build_staged(
         mesh_tolerance_explicit=True,
         mesh_angular_tolerance_explicit=True,
     )
-    # Initialize the registered CAD runtime before constraining user source
-    # I/O. Some dependencies populate their own interpreter cache on import.
-    import build123d  # noqa: F401
-
-    candidate_stdout = io.StringIO()
-    candidate_stderr = io.StringIO()
-    source_scratch = Path(
-        tempfile.mkdtemp(
-            prefix=".canonical-source-scratch-",
-            dir=output_path.parent,
-        )
-    )
-    try:
-        with (
-            redirect_stdout(candidate_stdout),
-            redirect_stderr(candidate_stderr),
-            _capture_source_file_descriptor_output() as candidate_descriptor_output,
-            _source_execution_policy(
-                root=root,
-                source_path=source_path,
-                declared_inputs={path for path, _relative in declared_inputs},
-                frozen_sources=frozen_sources,
-                output_dir=source_scratch,
-            ),
-            _frozen_primary_source_loader(frozen_primary_source),
-        ):
-            generated_scene = run_script_generator(
-                spec,
-                "gen_step",
-                source_identity=frozen_source_identity,
-                force=True,
-                load_current_scene=False,
-                skip_step_write=True,
-            )
-        _validate_staged_delivery(source_scratch, expected_names=set())
-    finally:
-        shutil.rmtree(source_scratch)
-    if (
-        candidate_stdout.getvalue()
-        or candidate_stderr.getvalue()
-        or any(candidate_descriptor_output.values())
-    ):
-        raise RuntimeError("canonical CAD source must not write to stdout or stderr")
-    if generated_scene is None or generated_scene.doc is None:
-        raise RuntimeError("canonical CAD source did not produce an exportable XCAF scene")
-    for frozen_source in frozen_sources.values():
-        frozen_source.revalidate()
+    for frozen_input in frozen_inputs.values():
+        frozen_input.revalidate()
     _validate_staged_delivery(output_path, expected_names=set())
     source_digest = frozen_source_digest
-    write_xcaf_doc_step_file(
-        generated_scene.doc,
-        step_path,
-        label="canonical",
-        text_to_cad_entry_kind=spec.kind,
-        source_path=source_relative,
-        source_hash=source_digest,
-    )
+    with _source_worker_step(
+        root=root,
+        source_relative=source_relative,
+        declared_inputs=declared_inputs,
+        frozen_inputs=frozen_inputs,
+        temporary_parent=output_path.parent,
+    ) as intermediate_step:
+        worker_scene = load_step_scene(intermediate_step)
+        _validate_scene(worker_scene, step_path=intermediate_step)
+        write_xcaf_doc_step_file(
+            worker_scene.doc,
+            step_path,
+            label="canonical",
+            text_to_cad_entry_kind=spec.kind,
+            source_path=source_relative,
+            source_hash=source_digest,
+        )
+    for frozen_input in frozen_inputs.values():
+        frozen_input.revalidate()
 
     reread_scene = load_step_scene(step_path)
     _validate_scene(reread_scene, step_path=step_path)
@@ -1234,9 +1426,7 @@ def _build_staged(
             "role": "canonical-cad-source" if index == 0 else "declared-source-input",
             "path": relative,
             "sha256": (
-                hashlib.sha256(frozen_sources[path].source_bytes).hexdigest()
-                if path in frozen_sources
-                else _sha256(path)
+                hashlib.sha256(frozen_inputs[path].source_bytes).hexdigest()
             ),
         }
         for index, (path, relative) in enumerate(declared_inputs)
@@ -1262,9 +1452,7 @@ def _build_staged(
                 "path": declared_input["path"],
                 "sha256": declared_input["sha256"],
                 "bytes": (
-                    len(frozen_sources[path].source_bytes)
-                    if path in frozen_sources
-                    else path.stat().st_size
+                    len(frozen_inputs[path].source_bytes)
                 ),
             }
             for declared_input, (path, _relative) in zip(recipe_inputs, declared_inputs, strict=True)

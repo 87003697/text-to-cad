@@ -120,13 +120,18 @@ def _run_adapter_with_post_policy_mutation(
     hook.mkdir()
     (hook / "sitecustomize.py").write_text(
         "from contextlib import contextmanager\n"
+        "import time\n"
         "from cadpy import canonical_build\n"
         "_original = canonical_build._source_execution_policy\n"
         "@contextmanager\n"
         "def _signaled_policy(*args, **kwargs):\n"
         "    with _original(*args, **kwargs):\n"
         "        ready = kwargs['output_dir'] / 'race-ready'\n"
+        "        release = kwargs['output_dir'] / 'race-release'\n"
         "        ready.write_text('ready', encoding='utf-8')\n"
+        "        while not release.is_file():\n"
+        "            time.sleep(0.01)\n"
+        "        release.unlink()\n"
         "        try:\n"
         "            yield\n"
         "        finally:\n"
@@ -164,7 +169,9 @@ def _run_adapter_with_post_policy_mutation(
         )
         deadline = time.monotonic() + 15
         while not any(
-            root.glob(".canonical-source-scratch-*/race-ready")
+            root.glob(
+                ".canonical-source-worker-*/inputs/.worker-output/race-ready"
+            )
         ):
             if process.poll() is not None:
                 stdout, stderr = process.communicate()
@@ -177,6 +184,13 @@ def _run_adapter_with_post_policy_mutation(
                 raise AssertionError("adapter did not reach post-policy mutation gate")
             time.sleep(0.01)
         mutate(source.parent, helper)
+        release_paths = list(
+            root.glob(
+                ".canonical-source-worker-*/inputs/.worker-output/race-ready"
+            )
+        )
+        self_release = release_paths[0].with_name("race-release")
+        self_release.write_text("release", encoding="utf-8")
         fcntl.flock(control_stream.fileno(), fcntl.LOCK_UN)
         stdout, stderr = process.communicate(timeout=30)
     return subprocess.CompletedProcess(
@@ -282,6 +296,8 @@ def _run_adapter_with_transient_primary_metadata(
         "    finally:\n"
         "        path.write_bytes(original)\n"
         "def _transient_source_from_path(path, *args, **kwargs):\n"
+        "    if '.canonical-source-worker-' in str(path):\n"
+        "        return _source_from_path(path, *args, **kwargs)\n"
         "    return _with_transient(\n"
         "        path, lambda: _source_from_path(path, *args, **kwargs)\n"
         "    )\n"
@@ -598,6 +614,76 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertIn("digest changed before canonical build freeze", rebuilt.stderr)
             self.assertFalse((root / "rebuilt").exists())
             self.assertEqual([], list(root.glob(".canonical-build-stage-*")))
+
+    def test_rebuild_freezes_non_python_input_before_worker_execution(
+        self,
+    ) -> None:
+        with temporary_directory(
+            prefix="cad-canonical-rebuild-non-python-swap-"
+        ) as temp_dir:
+            root = Path(temp_dir)
+            _write_canonical_source(
+                root,
+                body=(
+                    "from pathlib import Path\n"
+                    "from build123d import Box\n"
+                    "def gen_step():\n"
+                    "    width = float(Path('source/width.txt').read_text())\n"
+                    "    return Box(width, 0.2, 0.1)\n"
+                ),
+            )
+            (root / "source/width.txt").write_text("0.4\n", encoding="utf-8")
+            initial = _run_adapter(
+                root,
+                "build",
+                "--source",
+                "source/model.py",
+                "--input",
+                "source/width.txt",
+                "--output-dir",
+                "initial",
+            )
+            self.assertEqual(0, initial.returncode, initial.stderr)
+            shutil.copy2(root / "initial/rebuild.json", root / "rebuild.json")
+            hook = root / "hook"
+            hook.mkdir()
+            (hook / "sitecustomize.py").write_text(
+                "from pathlib import Path\n"
+                "from cadpy import canonical_build\n"
+                "_build = canonical_build.build\n"
+                "def _swap_before_freeze(*args, **kwargs):\n"
+                "    if kwargs.get('expected_input_digests') is not None:\n"
+                "        Path('source/width.txt').write_text('0.8\\n')\n"
+                "    return _build(*args, **kwargs)\n"
+                "canonical_build.build = _swap_before_freeze\n",
+                encoding="utf-8",
+            )
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = os.pathsep.join(
+                (str(hook), str(CADPY_SRC))
+            )
+            rebuilt = subprocess.run(
+                [
+                    sys.executable,
+                    str(ADAPTER),
+                    "rebuild",
+                    "--recipe",
+                    "rebuild.json",
+                    "--output-dir",
+                    "rebuilt",
+                ],
+                cwd=root,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertNotEqual(0, rebuilt.returncode)
+            self.assertIn("digest changed before canonical build freeze", rebuilt.stderr)
+            self.assertFalse((root / "rebuilt").exists())
+            self.assertEqual([], list(root.glob(".canonical-*-*")))
 
     def test_adapter_rejects_absolute_and_out_of_root_paths(self) -> None:
         with temporary_directory(prefix="cad-canonical-paths-") as temp_dir:
@@ -1033,6 +1119,108 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertIn("deterministic publication failure", result.stderr)
             self.assertFalse((root / "candidate").exists())
             self.assertEqual([], list(root.glob(".canonical-build-stage-*")))
+
+    def test_child_module_mutation_cannot_break_parent_cleanup(self) -> None:
+        with temporary_directory(
+            prefix="cad-canonical-child-module-mutation-"
+        ) as temp_dir:
+            root = Path(temp_dir)
+            source = _write_canonical_source(
+                root,
+                body=(
+                    "import shutil\n"
+                    "shutil.__dict__.clear()\n"
+                    "raise RuntimeError('worker poisoned itself')\n"
+                    "def gen_step():\n"
+                    "    return None\n"
+                ),
+            )
+
+            result = _run_adapter(
+                root,
+                "build",
+                "--source",
+                source.relative_to(root).as_posix(),
+                "--output-dir",
+                "candidate",
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertFalse((root / "candidate").exists())
+            self.assertEqual([], list(root.glob(".canonical-build-stage-*")))
+            self.assertEqual([], list(root.glob(".canonical-source-worker-*")))
+
+    def test_concurrent_parent_state_stays_stable_during_worker_execution(
+        self,
+    ) -> None:
+        with temporary_directory(
+            prefix="cad-canonical-concurrent-parent-"
+        ) as temp_dir:
+            root = Path(temp_dir)
+            _write_canonical_source(
+                root,
+                body=(
+                    "import os\n"
+                    "import select\n"
+                    "os.__dict__['open'] = None\n"
+                    "os.__dict__['environ']['CHILD_POISON'] = 'visible'\n"
+                    "select.select([], [], [], 1.0)\n"
+                    "raise RuntimeError('child mutation complete')\n"
+                    "def gen_step():\n"
+                    "    return None\n"
+                ),
+            )
+            environment = dict(os.environ)
+            environment["PYTHONPATH"] = str(CADPY_SRC)
+            observed = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import json, os, threading\n"
+                        "from pathlib import Path\n"
+                        "from cadpy.canonical_build import build\n"
+                        "original_open = os.open\n"
+                        "original_environment = dict(os.environ)\n"
+                        "original_fds = [(os.fstat(fd).st_dev, "
+                        "os.fstat(fd).st_ino) for fd in (1, 2)]\n"
+                        "failure = []\n"
+                        "def run():\n"
+                        "    try:\n"
+                        "        build(root=Path.cwd(), "
+                        "source='source/model.py', output_dir='candidate')\n"
+                        "    except Exception as exc:\n"
+                        "        failure.append(str(exc))\n"
+                        "thread = threading.Thread(target=run)\n"
+                        "thread.start()\n"
+                        "samples = 0\n"
+                        "while thread.is_alive():\n"
+                        "    assert os.open is original_open\n"
+                        "    assert dict(os.environ) == original_environment\n"
+                        "    assert [(os.fstat(fd).st_dev, os.fstat(fd).st_ino) "
+                        "for fd in (1, 2)] == original_fds\n"
+                        "    samples += 1\n"
+                        "thread.join()\n"
+                        "print(json.dumps({'samples': samples, "
+                        "'failure': failure, 'poison': "
+                        "os.environ.get('CHILD_POISON')}))\n"
+                    ),
+                ],
+                cwd=root,
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(0, observed.returncode, observed.stderr)
+            payload = json.loads(observed.stdout)
+            self.assertGreater(payload["samples"], 0)
+            self.assertTrue(payload["failure"])
+            self.assertIsNone(payload["poison"])
+            self.assertFalse((root / "candidate").exists())
+            self.assertEqual([], list(root.glob(".canonical-*-*")))
 
     def test_source_file_descriptor_output_is_rejected_before_publication(
         self,
