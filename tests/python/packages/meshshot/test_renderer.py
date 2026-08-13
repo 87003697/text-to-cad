@@ -1153,7 +1153,12 @@ class ResidualRendererTests(unittest.TestCase):
 
         checks = (
             "sealed_memfd_creation_policy",
-            "private_version_probe_spawn",
+            "private_version_helper_spawn",
+            "private_version_handoff_setup",
+            "private_version_handoff_timeout",
+            "private_version_helper_exec",
+            "private_version_exec_replacement",
+            "private_version_probe_completion",
             "private_version_probe_timeout",
         )
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
@@ -2442,8 +2447,14 @@ class ResidualRendererTests(unittest.TestCase):
         from meshshot import browser_runtime
         from meshshot.browser_runtime import _PinnedExecutable
 
-        cases = ("helper-spawn", "select", "read", "fd-exec", "timeout")
-        for boundary in cases:
+        cases = {
+            "helper-spawn": "private_version_helper_spawn",
+            "select": "private_version_handoff_setup",
+            "read": "private_version_handoff_setup",
+            "fd-exec": "private_version_helper_exec",
+            "timeout": "private_version_handoff_timeout",
+        }
+        for boundary, expected_check in cases.items():
             pinned = object.__new__(_PinnedExecutable)
             pinned.fd = 73
             pinned.launch_path = Path("/private/image/chrome-headless-shell")
@@ -2492,14 +2503,16 @@ class ResidualRendererTests(unittest.TestCase):
                     "_reap_failed_handoff",
                     return_value=False,
                 ) as reap,
-                self.assertRaises((OSError, subprocess.TimeoutExpired)),
+                self.assertRaises(browser_runtime.BrowserRuntimeError) as raised,
             ):
                 pinned.popen(
                     ["ignored", "--headless"],
                     start_new_session=True,
                     close_fds=True,
                     _handoff_deadline=time.monotonic() + 1,
+                    _handoff_completion="version",
                 )
+            self.assertEqual(expected_check, raised.exception.browser_identity_check)
             if boundary == "helper-spawn":
                 reap.assert_not_called()
             else:
