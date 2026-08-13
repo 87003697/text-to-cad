@@ -91,9 +91,9 @@
       "process_reaped": null,
       "profile_removed": null
     },
-    "render_seconds": 1.399973,
+    "render_seconds": 2.104398,
     "route_registered": true,
-    "startup_seconds": 0.1112,
+    "startup_seconds": 0.134796,
     "status": "PASS"
   },
   "browser_identity": {
@@ -127,13 +127,13 @@
     "page_evaluate": false,
     "readiness": true,
     "release": {
-      "cleanup_seconds": 0.034861,
+      "cleanup_seconds": 0.046154,
       "process_group_empty": true,
       "process_reaped": true,
       "profile_removed": true
     },
     "route_registered": false,
-    "startup_seconds": 0.098651,
+    "startup_seconds": 0.116047,
     "status": "PASS"
   },
   "not_run": [],
@@ -220,14 +220,14 @@
     "profile_sha256": "87da3cc3f625cb9c24f51bed41dcdc70402a4d461b2af29eaa19846b1e8f7241",
     "readiness": true,
     "release": {
-      "cleanup_seconds": 0.047644,
+      "cleanup_seconds": 0.047983,
       "process_group_empty": true,
       "process_reaped": true,
       "profile_removed": true
     },
-    "render_seconds": 1.2928,
+    "render_seconds": 1.90997,
     "route_registered": true,
-    "startup_seconds": 0.09718,
+    "startup_seconds": 0.101425,
     "status": "PASS"
   },
   "question": "Can Python prelaunch the exact Playwright 1.60 headless shell on loopback and preserve meshshot semantics through connect_over_cdp()?",
