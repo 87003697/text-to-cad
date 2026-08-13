@@ -348,6 +348,87 @@ class ResidualRendererTests(unittest.TestCase):
             self.assertEqual("browser_readiness_timeout", raised.exception.operation)
             self.assertFalse(profile.exists())
 
+    def test_profile_creation_failure_closes_private_browser_snapshot(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            with mock.patch(
+                "meshshot.browser_runtime._attest",
+                return_value={
+                    "playwright": "1.60.0",
+                    "browser": "chromium-headless-shell",
+                    "revision": "1223",
+                    "version": "Google Chrome for Testing 148.0.7778.96",
+                    "sha256": "2" * 64,
+                },
+            ):
+                runtime = PrelaunchedCdpRuntime(executable)
+            launch_root = runtime._pinned_executable.launch_root
+            assert launch_root is not None
+            try:
+                with (
+                    mock.patch(
+                        "tempfile.mkdtemp",
+                        side_effect=OSError("sensitive profile setup"),
+                    ),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    runtime._prelaunch()
+                self.assertEqual("browser_profile", raised.exception.operation)
+                self.assertFalse(launch_root.exists())
+            finally:
+                runtime._pinned_executable.close()
+
+    def test_spawned_session_uses_pid_as_group_before_readiness_failure(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 54321
+        process.poll.return_value = None
+        process.wait.return_value = 0
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "profile"
+            runtime = object.__new__(PrelaunchedCdpRuntime)
+            runtime._profile = {
+                "arguments": [], "startup_timeout_ms": 0,
+                "cleanup_term_ms": 0, "cleanup_kill_ms": 0,
+            }
+            runtime._executable = Path(os.__file__)
+            runtime._pinned_executable = mock.MagicMock()
+            runtime._pinned_executable.popen.return_value = process
+            runtime._profile_dir = None
+            runtime._process = None
+            runtime._process_group = None
+            with (
+                mock.patch(
+                    "tempfile.mkdtemp",
+                    side_effect=lambda **_kwargs: (
+                        profile.mkdir() or os.fspath(profile)
+                    ),
+                ),
+                mock.patch("os.getpgid", side_effect=OSError("lost pgid")) as getpgid,
+                mock.patch(
+                    "os.killpg",
+                    side_effect=lambda _pgid, signum: (
+                        (_ for _ in ()).throw(ProcessLookupError())
+                        if signum == 0
+                        else None
+                    ),
+                ) as killpg,
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                runtime._prelaunch()
+            self.assertEqual("browser_readiness_timeout", raised.exception.operation)
+            getpgid.assert_not_called()
+            self.assertIn(
+                mock.call(54321, __import__("signal").SIGTERM),
+                killpg.mock_calls,
+            )
+            self.assertFalse(profile.exists())
+
     def test_browser_crash_is_projected_as_closed_public_render_failure(self) -> None:
         page = mock.MagicMock()
         context = mock.MagicMock()
@@ -758,6 +839,50 @@ class ResidualRendererTests(unittest.TestCase):
                 self.assertEqual(b"", stderr)
                 self.assertEqual(0, process.returncode)
                 self.assertEqual(expected_sha256, pinned.sha256())
+            finally:
+                pinned.close()
+
+    def test_private_launch_tree_rejects_atomic_executable_replacement(self) -> None:
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        if os.geteuid() == 0:
+            self.skipTest("root bypasses directory write permission checks")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            executable.write_text(
+                "#!/bin/sh\nprintf 'attested\\n'\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            pinned = _PinnedExecutable(executable)
+            expected_sha256 = pinned.sha256()
+            replacement = root / "replacement-browser"
+            replacement.write_text(
+                "#!/bin/sh\nprintf 'substituted\\n'\n",
+                encoding="utf-8",
+            )
+            replacement.chmod(0o755)
+            try:
+                assert pinned.launch_path is not None
+                replacement_denied = False
+                try:
+                    os.replace(replacement, pinned.launch_path)
+                except PermissionError:
+                    replacement_denied = True
+                process = pinned.popen(
+                    [os.fspath(executable)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    close_fds=True,
+                )
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(b"attested\n", stdout)
+                self.assertEqual(b"", stderr)
+                self.assertEqual(0, process.returncode)
+                self.assertEqual(expected_sha256, pinned.sha256())
+                self.assertTrue(replacement_denied)
             finally:
                 pinned.close()
 
