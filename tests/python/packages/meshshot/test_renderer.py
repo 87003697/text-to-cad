@@ -2217,6 +2217,114 @@ class ResidualRendererTests(unittest.TestCase):
             finally:
                 pinned.close()
 
+    def test_linux_runtime_executes_sealed_fd_with_private_resource_argv0(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 73
+        pinned.launch_path = Path("/private/image/chrome-headless-shell")
+        with (
+            mock.patch.object(browser_runtime.sys, "platform", "linux"),
+            mock.patch("meshshot.browser_runtime.subprocess.Popen") as popen,
+        ):
+            pinned.popen(
+                ["source-browser", "--headless"],
+                close_fds=True,
+            )
+        self.assertEqual(
+            ["/private/image/chrome-headless-shell", "--headless"],
+            popen.call_args.args[0],
+        )
+        self.assertEqual(
+            "/proc/self/fd/73",
+            popen.call_args.kwargs["executable"],
+        )
+        self.assertEqual((73,), popen.call_args.kwargs["pass_fds"])
+        self.assertTrue(popen.call_args.kwargs["close_fds"])
+
+    def test_linux_version_executes_the_same_sealed_fd(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 91
+        pinned.launch_path = Path("/private/image/chrome-headless-shell")
+        with (
+            mock.patch.object(browser_runtime.sys, "platform", "linux"),
+            mock.patch(
+                "meshshot.browser_runtime.subprocess.run",
+                return_value=subprocess.CompletedProcess([], 0),
+            ) as run,
+        ):
+            pinned.run_version(timeout=5)
+        self.assertEqual(
+            "/proc/self/fd/91",
+            run.call_args.kwargs["executable"],
+        )
+        self.assertEqual((91,), run.call_args.kwargs["pass_fds"])
+        self.assertTrue(run.call_args.kwargs["close_fds"])
+
+    def test_linux_memfd_creation_and_sealing_fail_closed_and_cleanup(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            launch_parent = root / "launches"
+            launch_parent.mkdir()
+            for boundary, patches in (
+                (
+                    "create",
+                    (mock.patch.object(
+                        browser_runtime.os,
+                        "memfd_create",
+                        side_effect=OSError("closed create"),
+                        create=True,
+                    ),),
+                ),
+                (
+                    "seal",
+                    (
+                        mock.patch.object(
+                            browser_runtime.os,
+                            "memfd_create",
+                            return_value=os.open(executable, os.O_RDONLY),
+                            create=True,
+                        ),
+                        mock.patch(
+                            "meshshot.browser_runtime.fcntl.fcntl",
+                            side_effect=OSError("closed seal"),
+                            create=True,
+                        ),
+                    ),
+                ),
+            ):
+                with (
+                    self.subTest(boundary=boundary),
+                    mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                    mock.patch(
+                        "meshshot.browser_runtime._private_directory",
+                        side_effect=lambda _prefix: Path(
+                            tempfile.mkdtemp(dir=launch_parent)
+                        ),
+                    ),
+                    ExitStack() as stack,
+                ):
+                    for patch in patches:
+                        stack.enter_context(patch)
+                    with self.assertRaises(BrowserRuntimeError) as raised:
+                        _PinnedExecutable(executable)
+                self.assertEqual("browser_identity", raised.exception.operation)
+                self.assertEqual(
+                    "private_launch_image_identity",
+                    raised.exception.browser_identity_phase,
+                )
+                self.assertEqual([], list(launch_parent.iterdir()))
+
     def test_prelaunched_runtime_cleanup_failure_is_terminal_and_closed(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
 
