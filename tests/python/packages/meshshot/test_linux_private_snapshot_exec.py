@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -75,6 +76,111 @@ class LinuxPrivateSnapshotExecutionTests(unittest.TestCase):
                     os.environ.pop("MESHSHOT_EXECUTABLE_ROOT", None)
                 else:
                     os.environ["MESHSHOT_EXECUTABLE_ROOT"] = previous_root
+
+    def test_sealed_elf_preserves_private_resources_and_self_reexec(self) -> None:
+        runtime_source = Path(os.environ["MESHSHOT_BROWSER_RUNTIME_SOURCE"])
+        package = sys.modules.get("meshshot")
+        if package is None:
+            package = types.ModuleType("meshshot")
+            package.__path__ = [os.fspath(runtime_source.parent)]
+            sys.modules["meshshot"] = package
+        runtime = importlib.import_module("meshshot.browser_runtime")
+        source_root = Path("/fixture/source")
+        source_root.mkdir(parents=True)
+        source = source_root / "chrome-headless-shell"
+        c_source = source_root / "fixture.c"
+        c_source.write_text(
+            """
+#include <errno.h>
+#include <limits.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
+static int resource(const char *argv0) {
+  char path[PATH_MAX]; const char *slash = strrchr(argv0, '/');
+  if (!slash) return 10; size_t n = (size_t)(slash - argv0);
+  memcpy(path, argv0, n); memcpy(path+n, "/runtime.dat", 13);
+  FILE *f = fopen(path, "rb"); if (!f) return 11;
+  char value[9] = {0}; size_t count = fread(value, 1, 8, f); fclose(f);
+  return count == 8 && memcmp(value, "resource", 8) == 0 ? 0 : 12;
+}
+int main(int argc, char **argv) {
+  int status = resource(argv[0]); if (status) return status;
+  if (argc == 2 && strcmp(argv[1], "hold") == 0) { sleep(5); return 0; }
+  if (argc == 2 && strcmp(argv[1], "reexec") == 0) {
+    puts("sealed-elf-resource-reexec-ok"); return 0;
+  }
+  char *child[] = {argv[0], "reexec", NULL};
+  execv("/proc/self/exe", child); return errno ? errno : 20;
+}
+""",
+            encoding="utf-8",
+        )
+        (source_root / "runtime.dat").write_bytes(b"resource")
+        compiled = subprocess.run(
+            [
+                "/usr/bin/gcc",
+                "-O2",
+                "-Wall",
+                os.fspath(c_source),
+                "-o",
+                os.fspath(source),
+            ],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=15,
+        )
+        self.assertEqual(0, compiled.returncode, "Linux ELF fixture compile failed")
+        previous_root = os.environ.get("MESHSHOT_EXECUTABLE_ROOT")
+        try:
+            os.environ["MESHSHOT_EXECUTABLE_ROOT"] = "/meshshot-exec"
+            pinned = runtime._PinnedExecutable(source)
+            try:
+                required = (
+                    fcntl.F_SEAL_WRITE
+                    | fcntl.F_SEAL_GROW
+                    | fcntl.F_SEAL_SHRINK
+                    | fcntl.F_SEAL_SEAL
+                )
+                self.assertEqual(
+                    required,
+                    fcntl.fcntl(pinned.fd, fcntl.F_GET_SEALS) & required,
+                )
+                with self.assertRaises(PermissionError):
+                    os.write(pinned.fd, b"x")
+                process = pinned.popen(
+                    [os.fspath(source)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    close_fds=True,
+                )
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(0, process.returncode)
+                self.assertEqual(b"sealed-elf-resource-reexec-ok\n", stdout)
+                self.assertEqual(b"", stderr)
+                held = pinned.popen(
+                    [os.fspath(source), "hold"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+                try:
+                    pinned.verify_running_image(held.pid, timeout=5)
+                finally:
+                    held.terminate()
+                    held.wait(timeout=5)
+            finally:
+                pinned.close()
+        finally:
+            if previous_root is None:
+                os.environ.pop("MESHSHOT_EXECUTABLE_ROOT", None)
+            else:
+                os.environ["MESHSHOT_EXECUTABLE_ROOT"] = previous_root
 
 
 @unittest.skipIf(
@@ -305,6 +411,8 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
                     "/tmp:noexec,mode=1777,uid=65534,gid=65534",
                     "--tmpfs",
                     "/meshshot-exec:exec,mode=0755,uid=65534,gid=65534",
+                    "--tmpfs",
+                    "/fixture:exec,mode=0755,uid=65534,gid=65534",
                     "-e",
                     "PYTHONDONTWRITEBYTECODE=1",
                     "-e",

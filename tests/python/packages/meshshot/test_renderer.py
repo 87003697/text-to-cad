@@ -100,6 +100,13 @@ class ResidualRendererTests(unittest.TestCase):
                     create=True,
                 ),
                 mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch.object(
+                    _PinnedExecutable,
+                    "_sealed_snapshot_fd",
+                    side_effect=lambda launch, _source_info: os.open(
+                        launch, os.O_RDONLY
+                    ),
+                ),
                 mock.patch.dict(
                     os.environ,
                     {
@@ -2271,38 +2278,79 @@ class ResidualRendererTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            executable = root / "chrome-headless-shell"
+            source_resources = root / "source-resources"
+            source_resources.mkdir()
+            executable = source_resources / "chrome-headless-shell"
             executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             executable.chmod(0o755)
             launch_parent = root / "launches"
             launch_parent.mkdir()
-            for boundary, patches in (
-                (
-                    "create",
-                    (mock.patch.object(
-                        browser_runtime.os,
-                        "memfd_create",
-                        side_effect=OSError("closed create"),
-                        create=True,
-                    ),),
-                ),
-                (
-                    "seal",
-                    (
+            for boundary in ("unavailable", "create", "write", "fchmod", "seal"):
+                fake_memfd_path = root / f"{boundary}.memfd"
+                fake_memfd_path.write_bytes(b"")
+                fake_memfd: int | None = None
+                patches: list[mock._patch] = []
+                if boundary == "unavailable":
+                    patches.append(
                         mock.patch.object(
                             browser_runtime.os,
                             "memfd_create",
-                            return_value=os.open(executable, os.O_RDONLY),
+                            None,
                             create=True,
-                        ),
-                        mock.patch(
-                            "meshshot.browser_runtime.fcntl.fcntl",
-                            side_effect=OSError("closed seal"),
+                        )
+                    )
+                elif boundary == "create":
+                    patches.append(
+                        mock.patch.object(
+                            browser_runtime.os,
+                            "memfd_create",
+                            side_effect=OSError("closed create"),
                             create=True,
-                        ),
-                    ),
-                ),
-            ):
+                        )
+                    )
+                else:
+                    fake_memfd = os.open(fake_memfd_path, os.O_RDWR)
+                    patches.append(
+                        mock.patch.object(
+                            browser_runtime.os,
+                            "memfd_create",
+                            return_value=fake_memfd,
+                            create=True,
+                        )
+                    )
+                    if boundary == "write":
+                        real_write = os.write
+                        patches.append(
+                            mock.patch.object(
+                                browser_runtime.os,
+                                "write",
+                                side_effect=lambda fd, data: (
+                                    (_ for _ in ()).throw(OSError("closed write"))
+                                    if fd == fake_memfd
+                                    else real_write(fd, data)
+                                ),
+                            )
+                        )
+                    elif boundary == "fchmod":
+                        real_fchmod = os.fchmod
+                        patches.append(
+                            mock.patch.object(
+                                browser_runtime.os,
+                                "fchmod",
+                                side_effect=lambda fd, mode: (
+                                    (_ for _ in ()).throw(OSError("closed fchmod"))
+                                    if fd == fake_memfd
+                                    else real_fchmod(fd, mode)
+                                ),
+                            )
+                        )
+                    else:
+                        patches.append(
+                            mock.patch(
+                                "meshshot.browser_runtime.fcntl.fcntl",
+                                side_effect=OSError("closed seal"),
+                            )
+                        )
                 with (
                     self.subTest(boundary=boundary),
                     mock.patch.object(browser_runtime.sys, "platform", "linux"),
@@ -2324,6 +2372,9 @@ class ResidualRendererTests(unittest.TestCase):
                     raised.exception.browser_identity_phase,
                 )
                 self.assertEqual([], list(launch_parent.iterdir()))
+                if fake_memfd is not None:
+                    with self.assertRaises(OSError):
+                        os.fstat(fake_memfd)
 
     def test_prelaunched_runtime_cleanup_failure_is_terminal_and_closed(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime

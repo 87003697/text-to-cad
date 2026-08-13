@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 import errno
+import fcntl
 import hashlib
 from importlib import metadata, resources
 import json
@@ -661,10 +662,13 @@ class _PinnedExecutable:
             self._fsync_directory(root)
             self._freeze_directories(root)
             phase = "private_launch_image_identity"
-            snapshot_fd = os.open(
-                launch,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-            )
+            if sys.platform.startswith("linux"):
+                snapshot_fd = self._sealed_snapshot_fd(launch, source_info)
+            else:
+                snapshot_fd = os.open(
+                    launch,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                )
             launch_info = os.fstat(snapshot_fd)
             if (
                 not stat.S_ISREG(launch_info.st_mode)
@@ -717,6 +721,61 @@ class _PinnedExecutable:
             raise
 
     @staticmethod
+    def _sealed_snapshot_fd(
+        launch: Path,
+        source_info: os.stat_result,
+    ) -> int:
+        flags = getattr(os, "MFD_ALLOW_SEALING", 0x0002) | getattr(
+            os, "MFD_CLOEXEC", 0x0001
+        )
+        descriptor: int | None = None
+        source: int | None = None
+        try:
+            create_memfd = getattr(os, "memfd_create", None)
+            if not callable(create_memfd):
+                raise OSError("sealed executable memory is unavailable")
+            descriptor = create_memfd("meshshot-browser", flags)
+            source = os.open(
+                launch,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
+            written_total = 0
+            while True:
+                chunk = os.read(source, 4 * 1024 * 1024)
+                if not chunk:
+                    break
+                written_total += len(chunk)
+                if written_total > source_info.st_size:
+                    raise OSError("snapshot size changed")
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(descriptor, view)
+                    view = view[written:]
+            if written_total != source_info.st_size:
+                raise OSError("snapshot size changed")
+            os.fchmod(descriptor, stat.S_IMODE(source_info.st_mode) & 0o555)
+            required = (
+                getattr(fcntl, "F_SEAL_WRITE", 0x0008)
+                | getattr(fcntl, "F_SEAL_GROW", 0x0004)
+                | getattr(fcntl, "F_SEAL_SHRINK", 0x0002)
+                | getattr(fcntl, "F_SEAL_SEAL", 0x0001)
+            )
+            add_seals = getattr(fcntl, "F_ADD_SEALS", 1033)
+            get_seals = getattr(fcntl, "F_GET_SEALS", 1034)
+            fcntl.fcntl(descriptor, add_seals, required)
+            actual = fcntl.fcntl(descriptor, get_seals)
+            if actual & required != required:
+                raise OSError("snapshot sealing failed")
+            return descriptor
+        except BaseException:
+            if descriptor is not None:
+                os.close(descriptor)
+            raise
+        finally:
+            if source is not None:
+                os.close(source)
+
+    @staticmethod
     def _sha256_fd(descriptor: int) -> str:
         digest = hashlib.sha256()
         duplicate = os.dup(descriptor)
@@ -744,7 +803,12 @@ class _PinnedExecutable:
     def popen(self, argv: list[str], **kwargs: Any) -> subprocess.Popen[bytes]:
         assert self.fd is not None and self.launch_path is not None
         options = dict(kwargs)
-        options["executable"] = os.fspath(self.launch_path)
+        if sys.platform.startswith("linux"):
+            options["executable"] = f"/proc/self/fd/{self.fd}"
+            options["pass_fds"] = (self.fd,)
+            options["close_fds"] = True
+        else:
+            options["executable"] = os.fspath(self.launch_path)
         launch_argv = [os.fspath(self.launch_path), *argv[1:]]
         return subprocess.Popen(launch_argv, **options)
 
@@ -829,6 +893,9 @@ class _PinnedExecutable:
             "timeout": timeout,
             "close_fds": True,
         }
+        if sys.platform.startswith("linux"):
+            options["executable"] = f"/proc/self/fd/{self.fd}"
+            options["pass_fds"] = (self.fd,)
         return subprocess.run(**options)
 
     def close(self) -> None:
