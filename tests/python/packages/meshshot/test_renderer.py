@@ -630,6 +630,96 @@ class ResidualRendererTests(unittest.TestCase):
             killpg.mock_calls,
         )
 
+    def test_prelaunched_runtime_kills_descendant_after_leader_exits_on_term(self) -> None:
+        from meshshot.browser_runtime import PrelaunchedCdpRuntime
+
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.wait.return_value = 0
+        runtime = object.__new__(PrelaunchedCdpRuntime)
+        runtime._profile = {"cleanup_term_ms": 1, "cleanup_kill_ms": 1}
+        runtime._profile_dir = None
+        runtime._process = process
+        runtime._process_group = 43210
+        group_checks = iter((False, True))
+
+        with (
+            mock.patch(
+                "meshshot.browser_runtime._group_empty",
+                side_effect=lambda _pgid: next(group_checks),
+            ),
+            mock.patch("os.killpg") as killpg,
+        ):
+            runtime._cleanup()
+
+        self.assertEqual(
+            [
+                mock.call(43210, __import__("signal").SIGTERM),
+                mock.call(43210, __import__("signal").SIGKILL),
+            ],
+            killpg.mock_calls,
+        )
+
+    def test_prelaunched_runtime_reports_cleanup_when_descendant_survives_kill(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.wait.return_value = 0
+        runtime = object.__new__(PrelaunchedCdpRuntime)
+        runtime._profile = {"cleanup_term_ms": 0, "cleanup_kill_ms": 0}
+        runtime._profile_dir = None
+        runtime._process = process
+        runtime._process_group = 43210
+
+        with (
+            mock.patch("meshshot.browser_runtime._group_empty", return_value=False),
+            mock.patch("os.killpg") as killpg,
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            runtime._cleanup()
+
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertIn(
+            mock.call(43210, __import__("signal").SIGKILL),
+            killpg.mock_calls,
+        )
+
+    def test_runtime_rejects_atomic_executable_replacement_before_spawn(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            executable.write_bytes(b"attested-browser")
+            executable.chmod(0o755)
+            with mock.patch(
+                "meshshot.browser_runtime._attest",
+                return_value={
+                    "playwright": "1.60.0",
+                    "browser": "chromium-headless-shell",
+                    "revision": "1223",
+                    "version": "Google Chrome for Testing 148.0.7778.96",
+                    "sha256": __import__("hashlib").sha256(
+                        b"attested-browser"
+                    ).hexdigest(),
+                },
+            ):
+                runtime = PrelaunchedCdpRuntime(executable)
+            replacement = root / "replacement"
+            replacement.write_bytes(b"replacement-browser")
+            replacement.chmod(0o755)
+            os.replace(replacement, executable)
+
+            with (
+                mock.patch("subprocess.Popen") as popen,
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                runtime._prelaunch()
+
+            self.assertEqual("browser_identity", raised.exception.operation)
+            popen.assert_not_called()
+
     def test_prelaunched_runtime_cleanup_failure_is_terminal_and_closed(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
 
