@@ -9,10 +9,12 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -158,18 +160,7 @@ def default_executable(chromium_executable: str) -> Path:
     return candidates[0].resolve(strict=True)
 
 
-def _attest(executable: Path, profile: dict[str, Any]) -> dict[str, str]:
-    try:
-        mode = executable.lstat().st_mode
-    except OSError as exc:
-        raise BrowserRuntimeError("browser_identity") from exc
-    if (
-        not executable.is_absolute()
-        or stat.S_ISLNK(mode)
-        or not stat.S_ISREG(mode)
-        or not os.access(executable, os.X_OK)
-    ):
-        raise BrowserRuntimeError("browser_identity")
+def _attest(executable: _PinnedExecutable, profile: dict[str, Any]) -> dict[str, str]:
     try:
         playwright_version = metadata.version("playwright")
     except metadata.PackageNotFoundError as exc:
@@ -181,14 +172,8 @@ def _attest(executable: Path, profile: dict[str, Any]) -> dict[str, str]:
     ):
         raise BrowserRuntimeError("browser_identity")
     try:
-        completed = subprocess.run(
-            [os.fspath(executable), "--version"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=float(profile["startup_timeout_ms"]) / 1000,
-            close_fds=True,
+        completed = executable.run_version(
+            float(profile["startup_timeout_ms"]) / 1000
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise BrowserRuntimeError("browser_identity") from exc
@@ -208,8 +193,181 @@ def _attest(executable: Path, profile: dict[str, Any]) -> dict[str, str]:
         "browser": str(profile["browser"]),
         "revision": revision,
         "version": version,
-        "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        "sha256": executable.sha256(),
     }
+
+
+def _private_directory(prefix: str) -> Path:
+    root = Path(tempfile.gettempdir())
+    for _attempt in range(16):
+        path = root / f"{prefix}{secrets.token_hex(16)}"
+        try:
+            path.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        try:
+            os.chmod(path, 0o700)
+            info = path.lstat()
+        except OSError as exc:
+            shutil.rmtree(path, ignore_errors=True)
+            raise BrowserRuntimeError("browser_identity") from exc
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or stat.S_IMODE(info.st_mode) != 0o700
+        ):
+            shutil.rmtree(path, ignore_errors=True)
+            raise BrowserRuntimeError("browser_identity")
+        return path
+    raise BrowserRuntimeError("browser_identity")
+
+
+class _PinnedExecutable:
+    """Own one exact executable image from attestation through production exec."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.fd: int | None = None
+        self.launch_path: Path | None = None
+        self.launch_root: Path | None = None
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            fd = os.open(path, flags)
+            info = os.fstat(fd)
+        except OSError as exc:
+            raise BrowserRuntimeError("browser_identity") from exc
+        if (
+            not path.is_absolute()
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_mode & 0o111 == 0
+        ):
+            os.close(fd)
+            raise BrowserRuntimeError("browser_identity")
+        self.fd = fd
+        self.identity = (
+            info.st_dev,
+            info.st_ino,
+            info.st_size,
+            stat.S_IMODE(info.st_mode),
+        )
+        try:
+            if sys.platform.startswith("linux"):
+                self.launch_path = Path(f"/proc/self/fd/{fd}")
+            else:
+                self._materialize_private_image()
+        except BaseException:
+            self.close()
+            raise
+
+    def _materialize_private_image(self) -> None:
+        root = _private_directory("meshshot-image-")
+        launch = root / self.path.name
+        try:
+            try:
+                os.link(self.path, launch, follow_symlinks=False)
+            except OSError:
+                assert self.fd is not None
+                os.lseek(self.fd, 0, os.SEEK_SET)
+                output_fd = os.open(
+                    launch,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    self.identity[3],
+                )
+                try:
+                    os.fchmod(output_fd, self.identity[3])
+                    while True:
+                        chunk = os.read(self.fd, 1024 * 1024)
+                        if not chunk:
+                            break
+                        view = memoryview(chunk)
+                        while view:
+                            written = os.write(output_fd, view)
+                            view = view[written:]
+                    os.fsync(output_fd)
+                finally:
+                    os.close(output_fd)
+            launch_info = launch.stat(follow_symlinks=False)
+            if (
+                launch_info.st_size != self.identity[2]
+                or stat.S_IMODE(launch_info.st_mode) != self.identity[3]
+                or self.sha256(launch) != self.sha256()
+            ):
+                raise BrowserRuntimeError("browser_identity")
+            for sibling in self.path.parent.iterdir():
+                if sibling.name == self.path.name:
+                    continue
+                target = root / sibling.name
+                target.symlink_to(
+                    sibling.resolve(strict=True),
+                    target_is_directory=sibling.is_dir(),
+                )
+            self.launch_root = root
+            self.launch_path = launch
+        except BaseException:
+            shutil.rmtree(root, ignore_errors=True)
+            raise
+
+    def sha256(self, path: Path | None = None) -> str:
+        digest = hashlib.sha256()
+        if path is not None:
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        assert self.fd is not None
+        duplicate = os.dup(self.fd)
+        try:
+            os.lseek(duplicate, 0, os.SEEK_SET)
+            while True:
+                chunk = os.read(duplicate, 1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        finally:
+            os.close(duplicate)
+        return digest.hexdigest()
+
+    def popen(self, argv: list[str], **kwargs: Any) -> subprocess.Popen[bytes]:
+        assert self.fd is not None and self.launch_path is not None
+        options = dict(kwargs)
+        options["executable"] = os.fspath(self.launch_path)
+        if sys.platform.startswith("linux"):
+            options["pass_fds"] = (self.fd,)
+        return subprocess.Popen(argv, **options)
+
+    def run_version(self, timeout: float) -> subprocess.CompletedProcess[bytes]:
+        assert self.fd is not None and self.launch_path is not None
+        options: dict[str, Any] = {
+            "args": [os.fspath(self.path), "--version"],
+            "executable": os.fspath(self.launch_path),
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "check": False,
+            "timeout": timeout,
+            "close_fds": True,
+        }
+        if sys.platform.startswith("linux"):
+            options["pass_fds"] = (self.fd,)
+        return subprocess.run(**options)
+
+    def close(self) -> None:
+        failure = False
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                failure = True
+            self.fd = None
+        if self.launch_root is not None:
+            try:
+                shutil.rmtree(self.launch_root)
+            except OSError:
+                failure = True
+            if os.path.lexists(self.launch_root):
+                failure = True
+            self.launch_root = None
+        if failure:
+            raise BrowserRuntimeError("browser_cleanup")
 
 
 def _group_empty(process_group: int) -> bool:
@@ -222,19 +380,35 @@ def _group_empty(process_group: int) -> bool:
     return False
 
 
+def _wait_group_empty(process_group: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        if _group_empty(process_group):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.02)
+
+
 class PrelaunchedCdpRuntime:
     """Deep internal adapter: attest, launch, attach, and clean one browser."""
 
     def __init__(self, executable: Path) -> None:
         self._executable = executable
         self._profile, profile_sha256 = _load_profile()
+        self._pinned_executable = _PinnedExecutable(executable)
+        try:
+            browser_identity = _attest(self._pinned_executable, self._profile)
+        except BaseException:
+            self._pinned_executable.close()
+            raise
         self.evidence = {
             "schema": RUNTIME_SCHEMA,
             "adapter_profile": {
                 "name": self._profile["name"],
                 "sha256": profile_sha256,
             },
-            "browser_identity": _attest(executable, self._profile),
+            "browser_identity": browser_identity,
             "result": "passed",
         }
         self._profile_dir: Path | None = None
@@ -259,7 +433,7 @@ class PrelaunchedCdpRuntime:
                 "about:blank",
             ]
             try:
-                self._process = subprocess.Popen(
+                self._process = self._pinned_executable.popen(
                     argv,
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
@@ -304,28 +478,38 @@ class PrelaunchedCdpRuntime:
                 pass
             except OSError:
                 failure = True
+        leader_timed_out = False
         if process is not None:
             try:
                 process.wait(timeout=float(self._profile["cleanup_term_ms"]) / 1000)
             except subprocess.TimeoutExpired:
-                if process_group is not None:
-                    try:
-                        os.killpg(process_group, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    except OSError:
-                        failure = True
-                try:
-                    process.wait(timeout=float(self._profile["cleanup_kill_ms"]) / 1000)
-                except (OSError, subprocess.TimeoutExpired):
-                    failure = True
+                leader_timed_out = True
             except OSError:
                 failure = True
         if process_group is not None:
-            deadline = time.monotonic() + float(self._profile["cleanup_kill_ms"]) / 1000
-            while time.monotonic() < deadline and not _group_empty(process_group):
-                time.sleep(0.02)
-            if not _group_empty(process_group):
+            group_empty = False if leader_timed_out else _wait_group_empty(
+                process_group,
+                float(self._profile["cleanup_term_ms"]) / 1000,
+            )
+            if leader_timed_out or not group_empty:
+                try:
+                    os.killpg(process_group, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    failure = True
+                if process is not None and leader_timed_out:
+                    try:
+                        process.wait(
+                            timeout=float(self._profile["cleanup_kill_ms"]) / 1000
+                        )
+                    except (OSError, subprocess.TimeoutExpired):
+                        failure = True
+                group_empty = _wait_group_empty(
+                    process_group,
+                    float(self._profile["cleanup_kill_ms"]) / 1000,
+                )
+            if not group_empty:
                 failure = True
         if self._profile_dir is not None:
             try:
@@ -333,6 +517,12 @@ class PrelaunchedCdpRuntime:
             except OSError:
                 failure = True
             if os.path.lexists(self._profile_dir):
+                failure = True
+        pinned = getattr(self, "_pinned_executable", None)
+        if pinned is not None:
+            try:
+                pinned.close()
+            except BrowserRuntimeError:
                 failure = True
         if failure:
             raise BrowserRuntimeError("browser_cleanup")

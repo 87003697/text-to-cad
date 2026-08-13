@@ -321,6 +321,8 @@ class ResidualRendererTests(unittest.TestCase):
                 "cleanup_term_ms": 1, "cleanup_kill_ms": 1,
             }
             runtime._executable = Path(os.__file__)
+            runtime._pinned_executable = mock.MagicMock()
+            runtime._pinned_executable.popen.return_value = process
             runtime._profile_dir = None
             runtime._process = None
             runtime._process_group = None
@@ -331,7 +333,6 @@ class ResidualRendererTests(unittest.TestCase):
                         profile.mkdir() or os.fspath(profile)
                     ),
                 ),
-                mock.patch("subprocess.Popen", return_value=process),
                 mock.patch("os.getpgid", return_value=43210),
                 mock.patch(
                     "os.killpg",
@@ -603,7 +604,7 @@ class ResidualRendererTests(unittest.TestCase):
         process.poll.return_value = None
         process.wait.side_effect = [subprocess.TimeoutExpired([], 5), 0]
         runtime = object.__new__(PrelaunchedCdpRuntime)
-        runtime._profile = {"cleanup_term_ms": 1, "cleanup_kill_ms": 1}
+        runtime._profile = {"cleanup_term_ms": 0, "cleanup_kill_ms": 0}
         runtime._profile_dir = None
         runtime._process = process
         runtime._process_group = 43210
@@ -625,7 +626,6 @@ class ResidualRendererTests(unittest.TestCase):
                 mock.call(43210, __import__("signal").SIGTERM),
                 mock.call(43210, __import__("signal").SIGKILL),
                 mock.call(43210, 0),
-                mock.call(43210, 0),
             ],
             killpg.mock_calls,
         )
@@ -637,7 +637,7 @@ class ResidualRendererTests(unittest.TestCase):
         process.pid = 43210
         process.wait.return_value = 0
         runtime = object.__new__(PrelaunchedCdpRuntime)
-        runtime._profile = {"cleanup_term_ms": 1, "cleanup_kill_ms": 1}
+        runtime._profile = {"cleanup_term_ms": 0, "cleanup_kill_ms": 0}
         runtime._profile_dir = None
         runtime._process = process
         runtime._process_group = 43210
@@ -685,40 +685,72 @@ class ResidualRendererTests(unittest.TestCase):
             killpg.mock_calls,
         )
 
-    def test_runtime_rejects_atomic_executable_replacement_before_spawn(self) -> None:
-        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+    def test_runtime_executes_pinned_image_during_swap_then_restore(self) -> None:
+        from meshshot.browser_runtime import _PinnedExecutable
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             executable = root / "chrome-headless-shell"
-            executable.write_bytes(b"attested-browser")
+            executable.write_text(
+                "#!/bin/sh\nprintf 'attested\\n'\n",
+                encoding="utf-8",
+            )
             executable.chmod(0o755)
-            with mock.patch(
-                "meshshot.browser_runtime._attest",
-                return_value={
-                    "playwright": "1.60.0",
-                    "browser": "chromium-headless-shell",
-                    "revision": "1223",
-                    "version": "Google Chrome for Testing 148.0.7778.96",
-                    "sha256": __import__("hashlib").sha256(
-                        b"attested-browser"
-                    ).hexdigest(),
-                },
-            ):
-                runtime = PrelaunchedCdpRuntime(executable)
-            replacement = root / "replacement"
-            replacement.write_bytes(b"replacement-browser")
+            pinned = _PinnedExecutable(executable)
+            expected_sha256 = __import__("hashlib").sha256(
+                executable.read_bytes()
+            ).hexdigest()
+            saved = root / "saved-browser"
+            replacement = root / "replacement-browser"
+            replacement.write_text(
+                "#!/bin/sh\nprintf 'replacement\\n'\n",
+                encoding="utf-8",
+            )
             replacement.chmod(0o755)
-            os.replace(replacement, executable)
+            try:
+                os.replace(executable, saved)
+                os.replace(replacement, executable)
+                process = pinned.popen(
+                    [os.fspath(executable), "attested"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    close_fds=True,
+                )
+                os.replace(executable, replacement)
+                os.replace(saved, executable)
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(b"attested\n", stdout)
+                self.assertEqual(b"", stderr)
+                self.assertEqual(0, process.returncode)
+                self.assertEqual(expected_sha256, pinned.sha256())
+            finally:
+                pinned.close()
 
-            with (
-                mock.patch("subprocess.Popen") as popen,
-                self.assertRaises(BrowserRuntimeError) as raised,
-            ):
-                runtime._prelaunch()
+    def test_linux_runtime_executes_inherited_pinned_descriptor(self) -> None:
+        from meshshot.browser_runtime import _PinnedExecutable
 
-            self.assertEqual("browser_identity", raised.exception.operation)
-            popen.assert_not_called()
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            with mock.patch("meshshot.browser_runtime.sys.platform", "linux"):
+                pinned = _PinnedExecutable(executable)
+                try:
+                    with mock.patch(
+                        "meshshot.browser_runtime.subprocess.Popen"
+                    ) as popen:
+                        pinned.popen([os.fspath(executable)], close_fds=True)
+                    self.assertEqual(
+                        f"/proc/self/fd/{pinned.fd}",
+                        popen.call_args.kwargs["executable"],
+                    )
+                    self.assertEqual(
+                        (pinned.fd,),
+                        popen.call_args.kwargs["pass_fds"],
+                    )
+                finally:
+                    pinned.close()
 
     def test_prelaunched_runtime_cleanup_failure_is_terminal_and_closed(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
@@ -1029,6 +1061,8 @@ class ResidualRendererTests(unittest.TestCase):
                 playwright = mock.MagicMock()
                 sync_playwright = mock.MagicMock()
                 sync_playwright.return_value.__enter__.return_value = playwright
+                pinned = mock.MagicMock()
+                pinned.popen.side_effect = OSError(detail)
 
                 with (
                     mock.patch.dict(
@@ -1048,7 +1082,10 @@ class ResidualRendererTests(unittest.TestCase):
                             "sha256": "2" * 64,
                         },
                     ),
-                    mock.patch("subprocess.Popen", side_effect=OSError(detail)),
+                    mock.patch(
+                        "meshshot.browser_runtime._PinnedExecutable",
+                        return_value=pinned,
+                    ),
                     self.assertRaises(MeshshotError) as raised,
                 ):
                     render_residual_preview(
@@ -1063,6 +1100,8 @@ class ResidualRendererTests(unittest.TestCase):
         playwright = mock.MagicMock()
         sync_playwright = mock.MagicMock()
         sync_playwright.return_value.__enter__.return_value = playwright
+        pinned = mock.MagicMock()
+        pinned.popen.side_effect = OSError("sensitive launch detail")
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
 
         with (
@@ -1082,7 +1121,8 @@ class ResidualRendererTests(unittest.TestCase):
                 },
             ),
             mock.patch(
-                "subprocess.Popen", side_effect=OSError("sensitive launch detail")
+                "meshshot.browser_runtime._PinnedExecutable",
+                return_value=pinned,
             ),
             self.assertRaises(MeshshotError) as raised,
         ):
