@@ -11,6 +11,7 @@ import tempfile
 import unittest
 
 from scripts.pilot import deployment_authority
+from scripts.pilot.cvm_job import protocol, runtime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -525,10 +526,7 @@ class PilotReviewTests(unittest.TestCase):
                 "identity": "issue15.provider-free.runtime-authority/1",
             },
             "execution_profile": {
-                "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/15",
-                "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/15",
+                **runtime.PROVIDER_FREE_EXECUTION_PROFILE,
             },
             "sandbox": {
                 "network": "isolated-loopback",
@@ -736,106 +734,32 @@ class PilotReviewTests(unittest.TestCase):
             "deployment_tree_sha256": deployed_receipt["tree_sha256"],
             "immutable_request": immutable_request,
         }
-        host_root = "/home/test/text-to-cad"
         sandbox_exp = f"/workspace/repo/{immutable_request['exp_dir']}"
+        runtime_repo = (self.root / "runtime-repo").resolve()
+        runtime_exp = runtime_repo / immutable_request["exp_dir"]
+        runtime_exp.mkdir(parents=True)
         write_json(
             self.exp / "run/sandbox-enforcement.json",
             {
                 "schema": "cvm.provider-free-sandbox-enforcement/1",
                 "network": "isolated-loopback",
-                "argv": [
-                    "/usr/bin/bwrap",
-                    "--unshare-user",
-                    "--unshare-net",
-                    "--unshare-pid",
-                    "--unshare-ipc",
-                    "--unshare-uts",
-                    "--cap-drop",
-                    "ALL",
-                    "--cap-add",
-                    "CAP_SYS_ADMIN",
-                    "--cap-add",
-                    "CAP_SYS_CHROOT",
-                    "--cap-add",
-                    "CAP_NET_ADMIN",
-                    "--cap-add",
-                    "CAP_SETUID",
-                    "--cap-add",
-                    "CAP_SETGID",
-                    "--cap-add",
-                    "CAP_SYS_PTRACE",
-                    "--cap-add",
-                    "CAP_SETFCAP",
-                    "--die-with-parent",
-                    "--new-session",
-                    "--dev",
-                    "/dev",
-                    "--proc",
-                    "/proc",
-                    "--tmpfs",
-                    "/tmp",
-                    "--dir",
-                    "/workspace",
-                    "--ro-bind",
-                    host_root,
-                    "/workspace/repo",
-                    "--bind",
-                    f"{host_root}/{immutable_request['exp_dir']}",
-                    sandbox_exp,
-                    "--dir",
-                    "/home",
-                    "--dir",
-                    "/home/provider-free",
-                    "--dir",
-                    "/home/provider-free/.cache",
-                    "--dir",
-                    "/tmp/provider-free-playwright",
-                    "--ro-bind",
-                    (
-                        runtime_identity["chromium"]["host_cache_path"]
-                        + "/.cvm-provider-free-browser-stages/"
-                        + immutable_request["group"]
-                        + "."
-                        + immutable_request["exp"]
-                        + "/attested"
-                    ),
-                    "/tmp/provider-free-playwright/attested",
-                    "--symlink",
-                    "usr/bin",
-                    "/bin",
-                    "--symlink",
-                    "usr/sbin",
-                    "/sbin",
-                    "--symlink",
-                    "usr/lib",
-                    "/lib",
-                    "--symlink",
-                    "usr/lib64",
-                    "/lib64",
-                    "--ro-bind",
-                    "/usr",
-                    "/usr",
-                    "--chdir",
-                    "/workspace/repo",
-                    "--",
-                    "/workspace/repo/.venv/bin/python",
-                    "-m",
-                    "scripts.pilot.provider_free_scenarios",
-                    "run",
+                "argv": runtime.provider_free_sandbox_argv(
                     "issue15-runtime-authority",
-                    "--workspace",
-                    sandbox_exp,
-                ],
+                    runtime_exp,
+                    runtime_identity,
+                    repo_root=runtime_repo,
+                ),
                 "environment_names": [
                     "HOME",
                     "LANG",
                     "PATH",
                     "PLAYWRIGHT_BROWSERS_PATH",
+                    "MESHSHOT_EXECUTABLE_ROOT",
                     "PYTHONDONTWRITEBYTECODE",
                     "TZ",
                 ],
-                "required_environment": self.reviewer._SANDBOX_REQUIRED_ENVIRONMENT,
-                "sandbox_profile": self.reviewer._SANDBOX_PROFILE,
+                "required_environment": runtime.PROVIDER_FREE_REQUIRED_ENVIRONMENT,
+                "sandbox_profile": runtime.PROVIDER_FREE_SANDBOX_PROFILE,
                 "runtime_identity": runtime_identity,
             },
         )
@@ -848,43 +772,9 @@ class PilotReviewTests(unittest.TestCase):
             self.exp / "run/preview-sandbox-enforcement.json",
             {
                 "schema": "cvm.provider-free-preview-sandbox-enforcement/1",
-                "argv": [
-                    "/usr/bin/bwrap",
-                    "--die-with-parent",
-                    "--new-session",
-                    "--cap-drop",
-                    "ALL",
-                    "--bind",
-                    "/",
-                    "/",
-                    "--ro-bind",
-                    "/tmp/provider-free-playwright",
-                    "/tmp/provider-free-playwright",
-                    "--setenv",
-                    "PLAYWRIGHT_BROWSERS_PATH",
-                    "/tmp/provider-free-playwright",
-                    "--setenv",
-                    "MESHSHOT_BROWSER_EXECUTABLE",
-                    (
-                        "/tmp/provider-free-playwright/attested/"
-                        "chrome-headless-shell-linux64/chrome-headless-shell"
-                    ),
-                    "--chdir",
-                    "/workspace/repo",
-                    "--",
-                    "/workspace/repo/.venv/bin/python",
-                    "/workspace/repo/skills/mesh-compare/scripts/mesh-compare",
-                    "voxblame-preview",
-                    f"{sandbox_exp}/work/candidate/built/measurement.glb",
-                    "--reference",
-                    f"{sandbox_exp}/input",
-                    "--output",
-                    f"{sandbox_exp}/work/preview-0",
-                    "--experiment",
-                    f"{sandbox_exp}/experiment.json",
-                    "--variant",
-                    "step",
-                ],
+                "argv": protocol.provider_free_preview_sandbox_argv(
+                    immutable_request["group"], immutable_request["exp"]
+                ),
                 "capabilities": "drop-all",
                 "mount_namespace": "inherit-outer",
             },
