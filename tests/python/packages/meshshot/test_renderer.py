@@ -3202,6 +3202,102 @@ class ResidualRendererTests(unittest.TestCase):
                 elif boundary == "group-proof":
                     self.assertEqual(9, raised.exception.code)
 
+    def test_linux_version_invalid_utf8_preserves_output_identity_phase(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 73
+        pinned.launch_path = Path("/private/image/chrome-headless-shell")
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.returncode = 0
+        process.communicate.return_value = (b"\xff", b"")
+        with (
+            mock.patch.object(browser_runtime.sys, "platform", "linux"),
+            mock.patch.object(pinned, "popen", return_value=process),
+            mock.patch("meshshot.browser_runtime._wait_group_empty", return_value=True),
+            mock.patch.object(pinned, "_reap_failed_handoff", return_value=False),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            pinned.run_version(timeout=5)
+        self.assertEqual("browser_identity", raised.exception.operation)
+        self.assertEqual(
+            "private_launch_version_output_identity",
+            raised.exception.browser_identity_phase,
+        )
+
+    def test_linux_version_blocks_signals_until_spawn_reference_is_owned(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 73
+        pinned.launch_path = Path("/private/image/chrome-headless-shell")
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        blocked = False
+
+        @contextmanager
+        def interrupted_after_assignment():
+            nonlocal blocked
+            blocked = True
+            try:
+                yield
+            finally:
+                blocked = False
+                raise KeyboardInterrupt()
+
+        def spawn(*_args: object, **_kwargs: object) -> subprocess.Popen[bytes]:
+            self.assertTrue(blocked)
+            return process
+
+        with (
+            mock.patch.object(browser_runtime.sys, "platform", "linux"),
+            mock.patch.object(
+                browser_runtime,
+                "_blocked_runtime_signals",
+                interrupted_after_assignment,
+            ),
+            mock.patch.object(pinned, "popen", side_effect=spawn),
+            mock.patch.object(pinned, "_reap_failed_handoff", return_value=False) as reap,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            pinned.run_version(timeout=5)
+        reap.assert_called_once_with(
+            process,
+            process_group=True,
+            cleanup_term_timeout=browser_runtime._FD_EXEC_CLEANUP_TERM_SECONDS,
+            cleanup_kill_timeout=browser_runtime._FD_EXEC_CLEANUP_KILL_SECONDS,
+        )
+
+    def test_linux_version_does_not_reap_after_positive_empty_group_proof(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 73
+        pinned.launch_path = Path("/private/image/chrome-headless-shell")
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.returncode = 0
+        process.communicate.return_value = (b"invalid output\n", b"")
+        with (
+            mock.patch.object(browser_runtime.sys, "platform", "linux"),
+            mock.patch.object(pinned, "popen", return_value=process),
+            mock.patch("meshshot.browser_runtime._wait_group_empty", return_value=True),
+            mock.patch.object(pinned, "_reap_failed_handoff") as reap,
+            mock.patch("meshshot.browser_runtime.os.killpg") as killpg,
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            pinned.run_version(timeout=5)
+        self.assertEqual(
+            "private_launch_version_output_identity",
+            raised.exception.browser_identity_phase,
+        )
+        reap.assert_not_called()
+        killpg.assert_not_called()
+
     def test_linux_running_image_descriptor_close_failure_is_cleanup(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
