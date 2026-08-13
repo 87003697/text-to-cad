@@ -2527,6 +2527,75 @@ class ResidualRendererTests(unittest.TestCase):
             if boundary == "helper-spawn":
                 self.assertEqual(1, popen.call_count)
 
+    def test_linux_parent_write_close_failure_preserves_setup_classification(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        for remaining_close_failed in (False, True):
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.fd = 73
+            pinned.launch_path = Path("/private/image/chrome-headless-shell")
+            process = mock.MagicMock(spec=subprocess.Popen)
+            process.pid = 43210
+            closed: list[int] = []
+
+            def close(descriptor: int) -> None:
+                closed.append(descriptor)
+                if descriptor == 102 or (
+                    descriptor == 101 and remaining_close_failed
+                ):
+                    raise OSError("closed handoff descriptor transition")
+
+            with (
+                self.subTest(remaining_close_failed=remaining_close_failed),
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch(
+                    "meshshot.browser_runtime.subprocess.Popen",
+                    return_value=process,
+                ),
+                mock.patch(
+                    "meshshot.browser_runtime.os.pipe",
+                    return_value=(101, 102),
+                ),
+                mock.patch("meshshot.browser_runtime.os.set_inheritable"),
+                mock.patch("meshshot.browser_runtime.os.close", side_effect=close),
+                mock.patch.object(
+                    pinned,
+                    "_reap_failed_handoff",
+                    return_value=False,
+                ) as reap,
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned.popen(
+                    ["ignored", "--version"],
+                    start_new_session=True,
+                    close_fds=True,
+                    _handoff_deadline=time.monotonic() + 1,
+                    _handoff_completion="version",
+                )
+            self.assertEqual([102, 101], closed)
+            reap.assert_called_once_with(
+                process,
+                process_group=True,
+                cleanup_term_timeout=(
+                    browser_runtime._FD_EXEC_CLEANUP_TERM_SECONDS
+                ),
+                cleanup_kill_timeout=(
+                    browser_runtime._FD_EXEC_CLEANUP_KILL_SECONDS
+                ),
+            )
+            if remaining_close_failed:
+                self.assertEqual("browser_cleanup", raised.exception.operation)
+                self.assertIsNone(raised.exception.browser_identity_check)
+            else:
+                self.assertEqual("browser_identity", raised.exception.operation)
+                self.assertEqual(
+                    "private_version_handoff_setup",
+                    raised.exception.browser_identity_check,
+                )
+
     def test_linux_failed_group_handoff_gets_bounded_kill_and_reap(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import _PinnedExecutable
@@ -3375,6 +3444,43 @@ class ResidualRendererTests(unittest.TestCase):
                 raised.exception.browser_identity_check,
             )
             reap.assert_called_once()
+
+    def test_linux_exact_version_output_authenticates_completion_anomalies(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        for returncode, stderr in ((9, b""), (0, b"closed stderr")):
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.fd = 73
+            pinned.launch_path = Path("/private/image/chrome-headless-shell")
+            process = mock.MagicMock(spec=subprocess.Popen)
+            process.pid = 43210
+            process.returncode = returncode
+            process.communicate.return_value = (
+                b"Google Chrome for Testing 148.0.7778.96\n",
+                stderr,
+            )
+            setattr(process, "_meshshot_version_handoff_eof", True)
+            with (
+                self.subTest(returncode=returncode, stderr=stderr),
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch.object(pinned, "popen", return_value=process),
+                mock.patch(
+                    "meshshot.browser_runtime._wait_group_empty",
+                    return_value=True,
+                ),
+                mock.patch.object(pinned, "_reap_failed_handoff") as reap,
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned.run_version(timeout=5)
+            self.assertEqual("browser_identity", raised.exception.operation)
+            self.assertEqual(
+                "private_version_probe_completion",
+                raised.exception.browser_identity_check,
+            )
+            reap.assert_not_called()
 
     def test_linux_authenticated_version_cleanup_failure_dominates_completion(self) -> None:
         from meshshot import browser_runtime
