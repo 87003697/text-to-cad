@@ -596,18 +596,35 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
             lines = completed.stdout.decode("utf-8").splitlines()
         except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
             raise BrowserRuntimeError("browser_identity") from exc
-        groups = []
-        for line in lines:
-            if line.startswith("g"):
+        records: list[tuple[int | None, str | None, str | None]] = []
+        group: int | None = None
+        name: str | None = None
+        state: str | None = None
+        for line in [*lines, "pEND"]:
+            if line.startswith("p"):
+                if name is not None or state is not None:
+                    records.append((group, name, state))
+                group, name, state = None, None, None
+            elif line.startswith("g"):
                 try:
-                    groups.append(int(line[1:]))
+                    group = int(line[1:])
                 except ValueError as exc:
                     raise BrowserRuntimeError("browser_identity") from exc
+            elif line.startswith("n"):
+                name = line[1:]
+            elif line == "TST=LISTEN":
+                state = "LISTEN"
+        expected_name = f"127.0.0.1:{port}"
         if (
             completed.returncode != 0
             or completed.stderr != b""
-            or process_group not in groups
-            or "TST=LISTEN" not in lines
+            or not records
+            or any(
+                group != process_group
+                or name != expected_name
+                or state != "LISTEN"
+                for group, name, state in records
+            )
         ):
             raise BrowserRuntimeError("browser_identity")
         return
@@ -620,24 +637,27 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
                     local_address, state = fields[1], fields[3]
                     if int(local_address.rsplit(":", 1)[1], 16) == port and state == "0A":
                         socket_inodes.add(fields[9])
-            owned = False
+            owners: dict[str, set[int]] = {
+                inode: set() for inode in socket_inodes
+            }
             for process_path in Path("/proc").iterdir():
                 if not process_path.name.isdigit():
                     continue
                 stat_line = (process_path / "stat").read_text(encoding="utf-8")
                 tail = stat_line[stat_line.rfind(")") + 2 :].split()
-                if int(tail[2]) != process_group:
-                    continue
+                group = int(tail[2])
                 for descriptor in (process_path / "fd").iterdir():
                     target = os.readlink(descriptor)
-                    if target.startswith("socket:[") and target[8:-1] in socket_inodes:
-                        owned = True
-                        break
-                if owned:
-                    break
+                    if target.startswith("socket:["):
+                        inode = target[8:-1]
+                        if inode in owners:
+                            owners[inode].add(group)
         except (OSError, ValueError, IndexError) as exc:
             raise BrowserRuntimeError("browser_identity") from exc
-        if not socket_inodes or not owned:
+        if (
+            not socket_inodes
+            or any(groups != {process_group} for groups in owners.values())
+        ):
             raise BrowserRuntimeError("browser_identity")
         return
     raise BrowserRuntimeError("browser_identity")
@@ -812,7 +832,7 @@ class PrelaunchedCdpRuntime:
                     os.killpg(process_group, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
-                except OSError:
+                except (BrowserRuntimeError, OSError):
                     failure = True
                 if process is not None and leader_timed_out:
                     try:
@@ -875,7 +895,7 @@ class PrelaunchedCdpRuntime:
                         )
                         raise OSError("profile identity changed")
                     shutil.rmtree(quarantine / "profile")
-                except OSError:
+                except (BrowserRuntimeError, OSError):
                     failure = True
                 finally:
                     if quarantine_fd is not None:
@@ -942,7 +962,6 @@ class PrelaunchedCdpRuntime:
                         timeout=int(self._profile["startup_timeout_ms"]),
                         is_local=True,
                     )
-                    self._verify_connected_browser(browser)
                 except BaseException as exc:
                     try:
                         self._cleanup()
@@ -954,6 +973,11 @@ class PrelaunchedCdpRuntime:
                     if isinstance(exc, _RuntimeSignal):
                         raise
                     raise BrowserRuntimeError("browser_connect") from exc
+                try:
+                    self._verify_connected_browser(browser)
+                except BrowserRuntimeError:
+                    self._cleanup()
+                    raise
                 interrupted: _RuntimeSignal | None = None
                 try:
                     yield browser
