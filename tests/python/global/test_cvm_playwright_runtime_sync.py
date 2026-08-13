@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import importlib.util
+import ensurepip
 import io
 import json
+import os
+import shlex
 import subprocess
 import sys
 import tempfile
 import unittest
+import venv
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
@@ -211,7 +215,9 @@ class PlaywrightRuntimeSyncTests(unittest.TestCase):
         self.assertEqual(len(runner.commands), 3)
         install = runner.commands[1]
         self.assertIn(
-            "python3 -m pip --python ./.venv/bin/python install",
+            "cd / && /usr/bin/env -i HOME=/root PATH=/usr/bin:/bin "
+            "PIP_CONFIG_FILE=/dev/null /usr/bin/python3 -I -m pip "
+            "--isolated --python /root/text-to-cad/.venv/bin/python install",
             install,
         )
         self.assertNotIn("./.venv/bin/python -m pip", install)
@@ -222,6 +228,91 @@ class PlaywrightRuntimeSyncTests(unittest.TestCase):
         self.assertNotIn("playwright install", install)
         self.assertNotIn("outputs", install)
         self.assertNotIn("rm ", install)
+
+    def test_isolated_system_pip_targets_a_pipless_venv_only(self) -> None:
+        """Exercise the production pip isolation shape against a real venv."""
+
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            target = root / "target"
+            redirected = root / "redirected"
+            prefixed = root / "prefixed"
+            (root / "home").mkdir()
+            venv.EnvBuilder(with_pip=False, symlinks=True).create(target)
+            (root / "pip.py").write_text(
+                "raise SystemExit('repo-local pip was imported')\n",
+                encoding="utf-8",
+            )
+            config = root / "pip.conf"
+            config.write_text(
+                f"[global]\ntarget = {redirected}\nprefix = {prefixed}\n",
+                encoding="utf-8",
+            )
+            bundled = Path(ensurepip.__file__).parent / "_bundled"
+            wheel = next(bundled.glob("pip-*.whl"))
+            hostile_environment = dict(os.environ)
+            hostile_environment.update(
+                {
+                    "PIP_CONFIG_FILE": str(config),
+                    "PIP_TARGET": str(redirected),
+                    "PIP_PREFIX": str(prefixed),
+                    "PYTHONPATH": str(root),
+                }
+            )
+            command = " ".join(
+                shlex.quote(str(part))
+                for part in (
+                    "/usr/bin/env",
+                    "-i",
+                    f"HOME={root / 'home'}",
+                    "PATH=/usr/bin:/bin",
+                    "PIP_CONFIG_FILE=/dev/null",
+                    sys.executable,
+                    "-I",
+                    "-m",
+                    "pip",
+                    "--isolated",
+                    "--python",
+                    target / "bin/python",
+                    "install",
+                    "--disable-pip-version-check",
+                    "--no-input",
+                    "--no-deps",
+                    "--force-reinstall",
+                    "--no-cache-dir",
+                    "--no-index",
+                    wheel,
+                )
+            )
+            result = subprocess.run(
+                ["/bin/sh", "-c", command],
+                cwd=Path("/"),
+                env=hostile_environment,
+                check=False,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            probe = subprocess.run(
+                [
+                    target / "bin/python",
+                    "-I",
+                    "-c",
+                    "import importlib.metadata as m; print(m.version('pip'))",
+                ],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(probe.returncode, 0, probe.stderr)
+            self.assertRegex(probe.stdout.strip(), r"^\d+\.\d+")
+            self.assertFalse(redirected.exists())
+            self.assertFalse(prefixed.exists())
 
     def test_matching_identity_is_idempotent_and_skips_install(self) -> None:
         module = load_module()
