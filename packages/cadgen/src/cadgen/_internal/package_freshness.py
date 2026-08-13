@@ -28,7 +28,12 @@ from typing import Any, Mapping
 # imports the CAD runtime) so the viewer's validator can gate on the same number without
 # loading OCP. Bumping it invalidates every assembly package: it is the single invalidation
 # channel, in place of per-field compatibility branches.
-ASSEMBLY_PACKAGE_SCHEMA_VERSION = 2
+# 3: the topology extractor's curveType/continuity names were corrupted by a memoization
+# collision between the numerically overlapping GeomAbs_* enum families, so every package
+# built before that fix records surface names on its edges. Bumping this makes the viewer's
+# validator refuse those packages; ``component_package.COMPONENT_PAYLOAD_VERSION`` is what
+# makes the rebuild actually re-emit the component GLBs rather than reuse them by geometry.
+ASSEMBLY_PACKAGE_SCHEMA_VERSION = 3
 
 SCHEMA_VERSION_FIELD = "packageSchemaVersion"
 BAKE_HASH_FIELD = "bakeHash"

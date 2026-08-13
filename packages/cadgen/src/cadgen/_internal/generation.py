@@ -1509,6 +1509,7 @@ def _generate_part_outputs(
         # Lazy import: component_package imports from this module, so a top-level
         # import would cycle.
         from cadgen._internal.component_package import build_package_from_compound
+        from cadgen._internal.legacy_artifacts import prune_legacy_artifacts
 
         shape = source_compound
         if shape is None:
@@ -1517,6 +1518,20 @@ def _generate_part_outputs(
             from build123d import import_step
 
             shape = import_step(spec.step_path)
+        # An in-place 0.3.x -> 0.4.x upgrade leaves that release's artifacts beside the
+        # source, where nothing reads them any more. Pruned here rather than on a
+        # separate migration pass because this is already the once-per-entry moment
+        # under the generation lock, and the schema bump that invalidates 0.3.x-era
+        # packages routes every model through it on first open.
+        pruned = prune_legacy_artifacts(spec.entry_path)
+        if pruned["removed"]:
+            reclaimed_mb = pruned["bytes"] / (1024 * 1024)
+            print(
+                f"Removed {len(pruned['removed'])} legacy 0.3.x artifact(s) "
+                f"beside {spec.entry_path.name} ({reclaimed_mb:.1f} MB)"
+            )
+        for skipped in pruned["skipped"]:
+            print(f"Left {skipped.name} in place: unrecognized contents for a 0.3.x artifact")
         return build_package_from_compound(
             shape,
             package_dir=render_package_dir(spec.entry_path),

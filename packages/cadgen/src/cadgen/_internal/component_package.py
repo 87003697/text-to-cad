@@ -48,6 +48,16 @@ PACKAGE_KIND = "assembly-package"
 # authorities gate on one constant -- the viewer's validator cannot import this module
 # (it pulls in the CAD runtime), and a second hand-copied number is how the two drift.
 PACKAGE_SCHEMA_VERSION = ASSEMBLY_PACKAGE_SCHEMA_VERSION
+# Salts the component cid (see ``_content_hash_and_bytes``). Bump whenever a change to what
+# the topology extractor or mesher writes INTO a component GLB should invalidate components
+# whose geometry is unchanged. The descriptor's schema version cannot do this on its own:
+# it invalidates the descriptor, but the rebuild re-derives the same geometry cids, finds
+# every ``<cid>.glb`` present, and reuses them.
+#
+# 2: curveType/continuity names were corrupted by a memoization collision between the
+#    numerically overlapping GeomAbs_* enum families (see _internal.step_scene._enum_name),
+#    so every package built before the fix records surface names on its edges.
+COMPONENT_PAYLOAD_VERSION = "2"
 # Self-contained content-addressed packages: each model's components live INSIDE its own package
 # at <folder>/__cadgen__/models/<step-filename>/components/<geomHash>.glb, referenced by the
 # descriptor via the flat relative ref components/<geomHash>.glb. Within-model dedup (repeated
@@ -133,6 +143,14 @@ def _content_hash_and_bytes(shape: Any) -> tuple[str, bytes]:
     """The content hash AND the location-stripped BREP bytes it digests, from a
     single serialization.
 
+    The digest is salted with :data:`COMPONENT_PAYLOAD_VERSION` because the cid
+    addresses a BUILT component GLB, not the geometry alone. Each GLB embeds the
+    topology tables the extractor produced, so a change to what the extractor
+    emits makes every cached component wrong while its geometry — and therefore
+    an unsalted digest — is unchanged. The build reuses any ``<cid>.glb`` already
+    on disk, so without the salt an extractor fix would leave every existing
+    package serving the old tables behind a descriptor that claims to be current.
+
     Two occurrences of the same part share an underlying ``TShape`` (``.moved()``
     only swaps the location), so stripping the location and serializing yields an
     identical digest for every repeat — the content-addressing that dedups the
@@ -145,7 +163,11 @@ def _content_hash_and_bytes(shape: Any) -> tuple[str, bytes]:
     worker-build payload, so returning both avoids serializing each missing
     component's BREP twice (once to hash, once for the payload)."""
     brep = _shape_brep_bytes(shape)
-    return hashlib.sha256(brep).hexdigest(), brep
+    digest = hashlib.sha256()
+    digest.update(COMPONENT_PAYLOAD_VERSION.encode("utf-8"))
+    digest.update(b"\x00")
+    digest.update(brep)
+    return digest.hexdigest(), brep
 
 
 def _content_hash_shape(shape: Any) -> str:
