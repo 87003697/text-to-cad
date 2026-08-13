@@ -4,6 +4,7 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
+from cadgen._internal.cli_locking import add_lock_timeout_argument
 from cadgen.catalog import StepImportOptions
 from cadgen.metadata import normalize_mesh_numeric
 
@@ -74,10 +75,14 @@ def _add_gen_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help=(
             "Print one JSON line per target on stdout reporting what happened to it "
-            "(built, current, or built by a concurrent run) and where its package is. "
+            "(built, current, built by a concurrent run, or left to one) and where its "
+            "package is. "
             "Human progress stays on stderr, so the two never interleave."
         ),
     )
+    # The same flag, spelled and defaulted the same way, as every other artifact CLI --
+    # scripts/gen is the one SKILL.md documents it on, and the one that did not accept it.
+    add_lock_timeout_argument(parser)
 
 
 def _validate_python_targets(targets: Sequence[str], *, parser: argparse.ArgumentParser) -> None:
@@ -159,6 +164,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             force=bool(args.force),
             verbose=bool(args.verbose),
             json_output=bool(args.json),
+            lock_timeout_s=float(args.lock_timeout or 0.0),
         )
     except Exception as exc:  # noqa: BLE001 — the CLI boundary: report, do not traceback
         return report_cli_error(exc, tool="scripts/gen", verbose=bool(args.verbose))

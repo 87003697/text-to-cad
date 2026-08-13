@@ -29,7 +29,7 @@ from cadgen.catalog import (
     source_from_path,
 )
 from cadgen.cli_logging import CliLogger
-from cadgen._internal.cli_locking import lock_wait_notice
+from cadgen._internal.cli_locking import contended_payload, deadline_ms, lock_wait_notice
 from cadgen._internal.file_metadata import text_to_cad_identity_metadata, write_dxf_text_to_cad_metadata
 from cadgen._internal.package_freshness import (
     STEP_PACKAGE_VERSION,
@@ -1753,6 +1753,19 @@ class _SkippedGeneration:
         self.spec = spec
 
 
+class _ContendedGeneration:
+    """Marker: a peer holds the lock and this run declined to wait for it.
+
+    Deliberately NOT :class:`_SkippedGeneration`. That one means the package IS current --
+    the peer finished and this run re-checked under the lock. This one means the build is
+    still in flight somewhere else, so nothing can be claimed about the package yet."""
+
+    __slots__ = ("spec",)
+
+    def __init__(self, spec: EntrySpec) -> None:
+        self.spec = spec
+
+
 def _spec_output_dir(spec: EntrySpec, generator_name: str) -> Path | None:
     """The coordinated output directory for this spec's generator, if it has one."""
     if generator_name == "gen_step" and spec.step_path is not None:
@@ -1816,6 +1829,7 @@ def _run_with_spec_generation_status(
     skip_if_current: Callable[[EntrySpec], bool] | None = None,
     progress_sink: object | None = None,
     logger: CliLogger | None = None,
+    lock_timeout_s: float = 0.0,
 ) -> object:
     """Run ``action`` while holding the model's build lock, reporting its progress.
 
@@ -1829,6 +1843,10 @@ def _run_with_spec_generation_status(
     cannot cover the concurrent case: it ran before the other build existed.
 
     ``action`` is called as ``action(spec, run)``; ``run`` is the progress reporter.
+
+    ``lock_timeout_s`` bounds the wait for a peer's lock, exactly as it does in
+    ``cadgen.step_artifact``: 0 waits, and a positive value gives up and reports the peer
+    instead. Same flag, same default, same meaning -- see :mod:`cadgen._internal.cli_locking`.
     """
     kind = DRAWING_PACKAGE if generator_name == "gen_dxf" else STEP_PACKAGE
     # No output dir means no lock, so there is nothing to wait on and no ref to name in a
@@ -1838,9 +1856,12 @@ def _run_with_spec_generation_status(
         kind,
         output_dir,
         is_current=(lambda: bool(skip_if_current(spec))) if skip_if_current is not None else None,
+        deadline_ms=deadline_ms(lock_timeout_s),
         sink=progress_sink,
         on_wait=lock_wait_notice(logger, spec.source_ref) if output_dir is not None else None,
     ) as run:
+        if run.contended:
+            return _ContendedGeneration(spec)
         if run.skipped:
             return _SkippedGeneration(spec)
         return action(spec, run)
@@ -1871,7 +1892,9 @@ def _run_selected_specs(
             with logger.timed(f"{done_status.lower()} {spec.source_ref}"):
                 result = action(spec, progress_sink)
         results.append(result)
-        if isinstance(result, _SkippedGeneration):
+        if isinstance(result, _ContendedGeneration):
+            logger.info(f"another run is building {spec.cad_ref}; not waiting")
+        elif isinstance(result, _SkippedGeneration):
             logger.info(f"{spec.cad_ref} was built by a concurrent run; skipped")
         elif success_message is not None:
             message_spec = result.spec if isinstance(result, GeneratedStepResult) else spec
@@ -2117,6 +2140,7 @@ def generate_step_targets(
     force: bool = False,
     verbose: bool = False,
     json_output: bool = False,
+    lock_timeout_s: float = 0.0,
 ) -> int:
     """Build render packages for ``targets``. Returns the process exit code.
 
@@ -2124,6 +2148,10 @@ def generate_step_targets(
     alone cannot say WHICH targets were rebuilt and which were already current, and the
     logger's prose goes to stderr by design -- so without this a caller reading the streams
     apart had no machine-readable result at all.
+
+    ``lock_timeout_s`` bounds the wait for a concurrent build of the same model. 0 waits,
+    which is what an agent that asked for a build wants; a positive value reports the peer
+    as ``contended`` and moves on.
     """
     tool_name = "scripts/gen"
     logger = CliLogger("scripts/gen", verbose=verbose)
@@ -2138,6 +2166,23 @@ def generate_step_targets(
                 "kind": spec.kind,
                 "outcome": outcome,
                 "packagePath": _display_path(render_package_dir(spec.entry_path)),
+            }
+        )
+
+    def _emit_contended(spec: EntrySpec) -> None:
+        # The SAME payload the artifact CLIs answer with when a peer holds the lock, so a
+        # caller branching on `contended` does not have to learn a second spelling of it per
+        # CLI. `outcome` rides alongside, because --json promises one line per target and a
+        # reader should not have to special-case which key names the result.
+        reported.append(
+            {
+                **contended_payload(
+                    source_ref=spec.source_ref,
+                    cad_ref=spec.cad_ref,
+                    package_dir=render_package_dir(spec.entry_path),
+                ),
+                "kind": spec.kind,
+                "outcome": "contended",
             }
         )
 
@@ -2225,6 +2270,7 @@ def generate_step_targets(
             skip_if_current=_built_by_a_peer,
             progress_sink=progress_sink,
             logger=logger,
+            lock_timeout_s=lock_timeout_s,
         )
 
     results = _run_selected_specs(
@@ -2234,6 +2280,9 @@ def generate_step_targets(
         success_message=_generated_python_glb_summary,
     )
     for spec, result in zip(selected_specs, results):
+        if isinstance(result, _ContendedGeneration):
+            _emit_contended(spec)
+            continue
         _emit(spec, "skipped-peer" if isinstance(result, _SkippedGeneration) else "built")
     logger.total()
     _flush()
