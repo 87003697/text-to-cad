@@ -75,7 +75,7 @@ class JobProtocolTests(unittest.TestCase):
 
     def test_browser_identity_diagnostic_is_closed_and_failure_bound(self) -> None:
         receipt = {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/3",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/4",
             "operation": "preview_browser_identity",
             "substage": "connected_cdp_browser_version_identity",
             "scenario_failure": {
@@ -162,7 +162,11 @@ class JobProtocolTests(unittest.TestCase):
             check = (
                 "python_distribution_metadata"
                 if phase == "playwright_package_revision_identity"
-                else None
+                else (
+                    "sealed_memfd_creation_policy"
+                    if phase == "private_launch_version_execution"
+                    else None
+                )
             )
             receipt = {
                 "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,

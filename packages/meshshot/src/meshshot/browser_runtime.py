@@ -53,6 +53,13 @@ PLAYWRIGHT_PACKAGE_REVISION_CHECKS = frozenset(
         "frozen_browser_revision_match",
     }
 )
+PRIVATE_VERSION_EXECUTION_CHECKS = frozenset(
+    {
+        "sealed_memfd_creation_policy",
+        "private_version_probe_spawn",
+        "private_version_probe_timeout",
+    }
+)
 _SourceIdentity = tuple[int, int, int, int]
 _PROFILE_RESOURCE = "prelaunched_cdp_playwright_1_60_v1.json"
 MESHSHOT_EXECUTABLE_ROOT = Path("/meshshot-exec")
@@ -133,9 +140,17 @@ class BrowserRuntimeError(RuntimeError):
         self.browser_identity_check = (
             browser_identity_check
             if (
-                self.browser_identity_phase
-                == "playwright_package_revision_identity"
-                and browser_identity_check in PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+                (
+                    self.browser_identity_phase
+                    == "playwright_package_revision_identity"
+                    and browser_identity_check
+                    in PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+                )
+                or (
+                    self.browser_identity_phase
+                    == "private_launch_version_execution"
+                    and browser_identity_check in PRIVATE_VERSION_EXECUTION_CHECKS
+                )
             )
             else None
         )
@@ -367,10 +382,17 @@ def _attest(executable: _PinnedExecutable, profile: dict[str, Any]) -> dict[str,
         completed = executable.run_version(
             float(profile["startup_timeout_ms"]) / 1000
         )
+    except subprocess.TimeoutExpired as exc:
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="private_launch_version_execution",
+            browser_identity_check="private_version_probe_timeout",
+        ) from exc
     except (OSError, subprocess.SubprocessError) as exc:
         raise BrowserRuntimeError(
             "browser_identity",
             browser_identity_phase="private_launch_version_execution",
+            browser_identity_check="private_version_probe_spawn",
         ) from exc
     try:
         version = completed.stdout.decode("utf-8").strip()
@@ -791,6 +813,12 @@ class _PinnedExecutable:
         if cleanup_failed:
             raise BrowserRuntimeError("browser_cleanup") from failure
         if failure is not None:
+            if isinstance(failure, OSError):
+                raise BrowserRuntimeError(
+                    "browser_identity",
+                    browser_identity_phase="private_launch_version_execution",
+                    browser_identity_check="sealed_memfd_creation_policy",
+                ) from failure
             raise failure
         assert result is not None
         return result

@@ -153,7 +153,7 @@ _SANDBOX_PROFILE = {
         "mount_namespace": "inherit-outer",
         "receipt": "run/preview-sandbox-enforcement.json",
         "browser_identity_diagnostic": {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/3",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/4",
             "receipt": "run/browser-identity-diagnostic.json",
             "operation": "preview_browser_identity",
             "substages": [
@@ -177,6 +177,11 @@ _SANDBOX_PROFILE = {
                 "frozen_playwright_version_match",
                 "playwright_package_manifest",
                 "python_distribution_metadata",
+            ],
+            "private_version_execution_checks": [
+                "private_version_probe_spawn",
+                "private_version_probe_timeout",
+                "sealed_memfd_creation_policy",
             ],
             "binding": [
                 "run/scenario-failure.json",
@@ -598,6 +603,15 @@ def _runtime_authority_failure_verdict(
             "frozen_playwright_version_match",
             "frozen_browser_revision_match",
         }
+        private_version_execution_checks = {
+            "sealed_memfd_creation_policy",
+            "private_version_probe_spawn",
+            "private_version_probe_timeout",
+        }
+        checks_by_phase = {
+            "playwright_package_revision_identity": package_revision_checks,
+            "private_launch_version_execution": private_version_execution_checks,
+        }
         identity_failure_keys = {
             "schema",
             "scenario_identity",
@@ -611,10 +625,7 @@ def _runtime_authority_failure_verdict(
             == "private_snapshot_launch_image_identity"
         ):
             identity_failure_keys.add("browser_identity_phase")
-            if (
-                failure.get("browser_identity_phase")
-                == "playwright_package_revision_identity"
-            ):
+            if failure.get("browser_identity_phase") in checks_by_phase:
                 identity_failure_keys.add("browser_identity_check")
         identity_failure = (
             isinstance(failure, dict)
@@ -633,17 +644,11 @@ def _runtime_authority_failure_verdict(
                 in private_snapshot_phases
             )
             and (
-                (
-                    failure.get("browser_identity_phase")
-                    == "playwright_package_revision_identity"
-                    and failure.get("browser_identity_check")
-                    in package_revision_checks
-                )
-                or (
-                    failure.get("browser_identity_phase")
-                    != "playwright_package_revision_identity"
-                    and failure.get("browser_identity_check") is None
-                )
+                (failure.get("browser_identity_phase") in checks_by_phase
+                 and failure.get("browser_identity_check")
+                 in checks_by_phase[failure["browser_identity_phase"]])
+                or (failure.get("browser_identity_phase") not in checks_by_phase
+                    and failure.get("browser_identity_check") is None)
             )
         )
         if failure != wrapper_publication_failure and not identity_failure:
@@ -729,7 +734,7 @@ def _runtime_authority_failure_verdict(
             identity_bytes = identity_path.read_bytes()
             identity = _read_json(identity_path)
             expected_identity = {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/3",
+                "schema": "cvm.provider-free-browser-identity-diagnostic/4",
                 "operation": "preview_browser_identity",
                 "substage": failure["browser_identity_substage"],
                 "scenario_failure": {

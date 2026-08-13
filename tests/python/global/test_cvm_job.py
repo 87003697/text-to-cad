@@ -517,6 +517,9 @@ class CvmJobTests(unittest.TestCase):
                     "playwright_package_revision_checks": sorted(
                         protocol.PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
                     ),
+                    "private_version_execution_checks": sorted(
+                        protocol.PROVIDER_FREE_PRIVATE_VERSION_EXECUTION_CHECKS
+                    ),
                     "binding": [
                         protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
                         "artifact_manifest.json",
@@ -1522,6 +1525,51 @@ class CvmJobTests(unittest.TestCase):
             "substage": "private_snapshot_launch_image_identity",
             "phase": "playwright_package_revision_identity",
             "check": "frozen_playwright_version_match",
+        }
+        self.assertEqual(expected, state["browser_identity_diagnostic"])
+        public = runtime.status_job(
+            handle,
+            state_root=self.state_root,
+            include_observation=False,
+        )
+        self.assertEqual(expected, public["browser_identity_diagnostic"])
+        self.assertNotIn("sha256", json.dumps(public))
+
+    def test_monitor_projects_manifest_bound_version_execution_check(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **kwargs):
+            raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
+            self.write_provider_free_failure_evidence(
+                handle,
+                stage="native_measurement",
+                operation="preview_browser_identity",
+                browser_identity_substage=(
+                    "private_snapshot_launch_image_identity"
+                ),
+                browser_identity_phase="private_launch_version_execution",
+                browser_identity_check="private_version_probe_timeout",
+                stripped=raw_stripped.split(",") if raw_stripped else [],
+            )
+            return 1, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        expected = {
+            "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+            "substage": "private_snapshot_launch_image_identity",
+            "phase": "private_launch_version_execution",
+            "check": "private_version_probe_timeout",
         }
         self.assertEqual(expected, state["browser_identity_diagnostic"])
         public = runtime.status_job(

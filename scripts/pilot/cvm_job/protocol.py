@@ -55,7 +55,7 @@ PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH = (
     "run/browser-identity-diagnostic.json"
 )
 PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA = (
-    "cvm.provider-free-browser-identity-diagnostic/3"
+    "cvm.provider-free-browser-identity-diagnostic/4"
 )
 PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES = frozenset(
     {
@@ -85,6 +85,23 @@ PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS = frozenset(
         "frozen_browser_revision_match",
     }
 )
+PROVIDER_FREE_PRIVATE_VERSION_EXECUTION_CHECKS = frozenset(
+    {
+        "sealed_memfd_creation_policy",
+        "private_version_probe_spawn",
+        "private_version_probe_timeout",
+    }
+)
+
+
+def provider_free_browser_identity_checks(phase: object) -> frozenset[str]:
+    if phase == "playwright_package_revision_identity":
+        return PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+    if phase == "private_launch_version_execution":
+        return PROVIDER_FREE_PRIVATE_VERSION_EXECUTION_CHECKS
+    return frozenset()
+
+
 PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH = (
     "run/preview-public-wrapper-diagnostic.json"
 )
@@ -304,7 +321,8 @@ def provider_free_browser_identity_diagnostic_allowed(
     }
     if substage == "private_snapshot_launch_image_identity":
         expected_keys.add("phase")
-    if receipt.get("phase") == "playwright_package_revision_identity":
+    allowed_checks = provider_free_browser_identity_checks(receipt.get("phase"))
+    if allowed_checks:
         expected_keys.add("check")
     if set(receipt) != expected_keys:
         return False
@@ -322,18 +340,9 @@ def provider_free_browser_identity_diagnostic_allowed(
                 in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
                 and receipt.get("phase") == expected_phase
                 and (
-                    (
-                        receipt.get("phase")
-                        == "playwright_package_revision_identity"
-                        and receipt.get("check")
-                        in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
-                        and receipt.get("check") == expected_check
-                    )
-                    or (
-                        receipt.get("phase")
-                        != "playwright_package_revision_identity"
-                        and expected_check is None
-                    )
+                    (allowed_checks and receipt.get("check") in allowed_checks
+                     and receipt.get("check") == expected_check)
+                    or (not allowed_checks and expected_check is None)
                 )
             )
             or (
@@ -804,7 +813,8 @@ def _public_provider_free_browser_identity_diagnostic(
     expected_keys = {"schema", "substage"}
     if substage == "private_snapshot_launch_image_identity":
         expected_keys.add("phase")
-    if phase == "playwright_package_revision_identity":
+    allowed_checks = provider_free_browser_identity_checks(phase)
+    if allowed_checks:
         expected_keys.add("check")
     if (
         set(value) != expected_keys
@@ -821,14 +831,12 @@ def _public_provider_free_browser_identity_diagnostic(
                 phase not in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
                 or scenario_failure.get("browser_identity_phase") != phase
                 or (
-                    phase == "playwright_package_revision_identity"
-                    and (
-                        check not in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
-                        or scenario_failure.get("browser_identity_check") != check
-                    )
+                    allowed_checks
+                    and (check not in allowed_checks
+                         or scenario_failure.get("browser_identity_check") != check)
                 )
                 or (
-                    phase != "playwright_package_revision_identity"
+                    not allowed_checks
                     and check is not None
                 )
             )
@@ -920,12 +928,12 @@ def _public_provider_free_scenario_failure(
             and browser_identity_phase is not None
         )
         or (
-            browser_identity_phase == "playwright_package_revision_identity"
+            provider_free_browser_identity_checks(browser_identity_phase)
             and browser_identity_check
-            not in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+            not in provider_free_browser_identity_checks(browser_identity_phase)
         )
         or (
-            browser_identity_phase != "playwright_package_revision_identity"
+            not provider_free_browser_identity_checks(browser_identity_phase)
             and browser_identity_check is not None
         )
     ):

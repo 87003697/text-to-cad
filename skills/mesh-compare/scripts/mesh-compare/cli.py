@@ -455,7 +455,7 @@ def _preview_main(argv: list[str]) -> int:
             )
         ):
             diagnostic = {
-                "schema": "meshshot.browser-identity-failure/3",
+                "schema": "meshshot.browser-identity-failure/4",
                 "substage": exc.browser_identity_substage,
             }
             if (
@@ -466,13 +466,19 @@ def _preview_main(argv: list[str]) -> int:
                 diagnostic["phase"] = exc.browser_identity_phase
                 if (
                     exc.browser_identity_phase
-                    == "playwright_package_revision_identity"
+                    in {
+                        "playwright_package_revision_identity",
+                        "private_launch_version_execution",
+                    }
                     and exc.browser_identity_check is not None
                 ):
                     diagnostic["check"] = exc.browser_identity_check
                 elif (
                     exc.browser_identity_phase
-                    == "playwright_package_revision_identity"
+                    in {
+                        "playwright_package_revision_identity",
+                        "private_launch_version_execution",
+                    }
                 ):
                     diagnostic = None
         return _emit_error(

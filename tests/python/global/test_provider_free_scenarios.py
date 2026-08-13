@@ -409,7 +409,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/3",
+                "schema": "cvm.provider-free-browser-identity-diagnostic/4",
                 "operation": "preview_browser_identity",
                 "substage": "loopback_listener_address_ownership",
                 "scenario_failure": {
@@ -480,7 +480,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/3",
+                "schema": "cvm.provider-free-browser-identity-diagnostic/4",
                 "operation": "preview_browser_identity",
                 "substage": "private_snapshot_launch_image_identity",
                 "phase": "private_tree_materialization",
@@ -550,7 +550,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self.assertEqual("browser_manifest_entry", failure["browser_identity_check"])
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/3",
+                "schema": "cvm.provider-free-browser-identity-diagnostic/4",
                 "operation": "preview_browser_identity",
                 "substage": "private_snapshot_launch_image_identity",
                 "phase": "playwright_package_revision_identity",
@@ -570,7 +570,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
     def test_public_command_rejects_duplicate_package_check(self) -> None:
         payload = (
             '{"error":{"classification":"preview_browser_identity_failed",'
-            '"diagnostic":{"schema":"meshshot.browser-identity-failure/3",'
+            '"diagnostic":{"schema":"meshshot.browser-identity-failure/4",'
             '"substage":"private_snapshot_launch_image_identity",'
             '"phase":"playwright_package_revision_identity",'
             '"check":"python_distribution_metadata",'
@@ -596,6 +596,36 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self.assertIsNone(raised.exception.browser_identity_substage)
         self.assertIsNone(raised.exception.browser_identity_phase)
         self.assertIsNone(raised.exception.browser_identity_check)
+
+    def test_public_command_preserves_closed_version_execution_check(self) -> None:
+        payload = (
+            '{"error":{"classification":"preview_browser_identity_failed",'
+            '"diagnostic":{"schema":"meshshot.browser-identity-failure/4",'
+            '"substage":"private_snapshot_launch_image_identity",'
+            '"phase":"private_launch_version_execution",'
+            '"check":"private_version_probe_spawn"}}}'
+        )
+        completed = subprocess.CompletedProcess(
+            ["mesh-compare", "preview"], 2, stdout=payload, stderr=""
+        )
+        with mock.patch.object(
+            provider_free_scenarios.subprocess,
+            "run",
+            return_value=completed,
+        ), self.assertRaises(provider_free_scenarios.ScenarioError) as raised:
+            provider_free_scenarios._run_public(
+                ["mesh-compare", "preview"],
+                cwd=self.repo,
+                command_log=self.repo / "outputs/group/commands.jsonl",
+            )
+        self.assertEqual(
+            "private_launch_version_execution",
+            raised.exception.browser_identity_phase,
+        )
+        self.assertEqual(
+            "private_version_probe_spawn",
+            raised.exception.browser_identity_check,
+        )
 
     def test_wrapper_publication_root_artifact_is_closed_and_nonrecursive(
         self,

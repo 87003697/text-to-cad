@@ -123,7 +123,7 @@ process group, readiness port, endpoint, environment, stderr, or launch argv.
 
 When the public operation is `preview_browser_identity`, terminal state also
 projects one `browser_identity_diagnostic` with schema
-`cvm.provider-free-browser-identity-diagnostic/3`. It contains only the first
+`cvm.provider-free-browser-identity-diagnostic/4`. It contains only the first
 failing repository-owned substage:
 
 - `private_snapshot_launch_image_identity`
@@ -150,6 +150,12 @@ The `playwright_package_revision_identity` phase carries exactly one check:
 - `browser_manifest_entry`
 - `frozen_playwright_version_match`
 - `frozen_browser_revision_match`
+
+The `private_launch_version_execution` phase carries exactly one check:
+
+- `sealed_memfd_creation_policy`
+- `private_version_probe_spawn`
+- `private_version_probe_timeout`
 
 Every other phase and substage must omit check.
 

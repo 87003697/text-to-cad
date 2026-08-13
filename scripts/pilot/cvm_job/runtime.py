@@ -27,6 +27,7 @@ from .protocol import (
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
+    PROVIDER_FREE_PRIVATE_VERSION_EXECUTION_CHECKS,
     PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS,
     PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
     PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES,
@@ -39,6 +40,7 @@ from .protocol import (
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
+    provider_free_browser_identity_checks,
     PROVIDER_FREE_STAGED_BROWSER_CACHE,
     PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
     ProtocolError,
@@ -624,6 +626,9 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             ),
             "playwright_package_revision_checks": sorted(
                 PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+            ),
+            "private_version_execution_checks": sorted(
+                PROVIDER_FREE_PRIVATE_VERSION_EXECUTION_CHECKS
             ),
             "binding": [
                 PROVIDER_FREE_SCENARIO_FAILURE_PATH,
@@ -1465,7 +1470,7 @@ def _provider_free_failure_evidence_result(
         expected_failure_keys.add("browser_identity_substage")
         if browser_identity_substage == "private_snapshot_launch_image_identity":
             expected_failure_keys.add("browser_identity_phase")
-        if browser_identity_phase == "playwright_package_revision_identity":
+        if provider_free_browser_identity_checks(browser_identity_phase):
             expected_failure_keys.add("browser_identity_check")
     if (
         not isinstance(failure, dict)
@@ -1500,12 +1505,12 @@ def _provider_free_failure_evidence_result(
             and browser_identity_phase is not None
         )
         or (
-            browser_identity_phase == "playwright_package_revision_identity"
+            provider_free_browser_identity_checks(browser_identity_phase)
             and browser_identity_check
-            not in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+            not in provider_free_browser_identity_checks(browser_identity_phase)
         )
         or (
-            browser_identity_phase != "playwright_package_revision_identity"
+            not provider_free_browser_identity_checks(browser_identity_phase)
             and browser_identity_check is not None
         )
     ):

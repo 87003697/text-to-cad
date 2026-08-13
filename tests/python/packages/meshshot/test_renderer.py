@@ -1146,6 +1146,45 @@ class ResidualRendererTests(unittest.TestCase):
             )
             self.assertEqual(check, raised.exception.browser_identity_check)
 
+    def test_public_render_preserves_each_private_version_execution_check(
+        self,
+    ) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError
+
+        checks = (
+            "sealed_memfd_creation_policy",
+            "private_version_probe_spawn",
+            "private_version_probe_timeout",
+        )
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = mock.MagicMock()
+        for check in checks:
+            with self.subTest(check=check), mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_EXECUTABLE": "/attested/chrome-headless-shell"},
+            ), mock.patch(
+                "playwright.sync_api.sync_playwright",
+                sync_playwright,
+            ), mock.patch(
+                "meshshot.renderer.PrelaunchedCdpRuntime",
+                side_effect=BrowserRuntimeError(
+                    "browser_identity",
+                    browser_identity_phase="private_launch_version_execution",
+                    browser_identity_check=check,
+                ),
+            ), self.assertRaises(MeshshotError) as raised:
+                render_residual_preview(
+                    _geometry(triangle),
+                    _geometry(triangle),
+                    variant="step",
+                )
+            self.assertEqual(
+                "private_launch_version_execution",
+                raised.exception.browser_identity_phase,
+            )
+            self.assertEqual(check, raised.exception.browser_identity_check)
+
     def test_public_render_selects_exact_playwright_package_revision_check(
         self,
     ) -> None:
@@ -1371,6 +1410,34 @@ class ResidualRendererTests(unittest.TestCase):
                 side_effect=exception,
             ), self.assertRaises(type(exception)):
                 _playwright_revision("chromium-headless-shell")
+
+    def test_version_execution_identity_does_not_swallow_control_flow(self) -> None:
+        from meshshot.browser_runtime import _attest
+
+        executable = mock.Mock()
+        executable.sha256.return_value = "a" * 64
+        profile = {
+            "playwright": "1.60.0",
+            "browser": "chromium-headless-shell",
+            "revision": "1223",
+            "startup_timeout_ms": 15000,
+            "browser_version": "148.0.7778.96",
+        }
+        for exception in (KeyboardInterrupt(), SystemExit(23)):
+            executable.run_version.side_effect = exception
+            with (
+                self.subTest(exception=type(exception).__name__),
+                mock.patch(
+                    "meshshot.browser_runtime.metadata.version",
+                    return_value="1.60.0",
+                ),
+                mock.patch(
+                    "meshshot.browser_runtime._playwright_revision",
+                    return_value="1223",
+                ),
+                self.assertRaises(type(exception)),
+            ):
+                _attest(executable, profile)
 
     def test_public_render_selects_exact_private_snapshot_failure_phase(self) -> None:
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
@@ -2375,8 +2442,12 @@ class ResidualRendererTests(unittest.TestCase):
                         _PinnedExecutable(executable)
                 self.assertEqual("browser_identity", raised.exception.operation)
                 self.assertEqual(
-                    "private_launch_image_identity",
+                    "private_launch_version_execution",
                     raised.exception.browser_identity_phase,
+                )
+                self.assertEqual(
+                    "sealed_memfd_creation_policy",
+                    raised.exception.browser_identity_check,
                 )
                 self.assertEqual([], list(launch_parent.iterdir()))
                 if fake_memfd is not None:
@@ -2417,8 +2488,12 @@ class ResidualRendererTests(unittest.TestCase):
             kernel.assert_called_once_with("meshshot-browser", 0x0013)
             self.assertEqual("browser_identity", raised.exception.operation)
             self.assertEqual(
-                "private_launch_image_identity",
+                "private_launch_version_execution",
                 raised.exception.browser_identity_phase,
+            )
+            self.assertEqual(
+                "sealed_memfd_creation_policy",
+                raised.exception.browser_identity_check,
             )
             self.assertEqual([], list(launches.iterdir()))
 

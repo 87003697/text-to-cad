@@ -620,7 +620,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                     write_diagnostic(substage="raw-linux-errno")
                 elif mutation == "duplicate":
                     diagnostic_path.write_text(
-                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/3\","
+                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/4\","
                         "\"operation\":\"preview_browser_identity\","
                         "\"substage\":\"live_running_image_identity\","
                         "\"substage\":\"connected_cdp_browser_version_identity\","
@@ -672,7 +672,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
                 "operation": "preview_browser_identity",
                 "substage": "private_snapshot_launch_image_identity",
-                "phase": "playwright_package_revision_identity",
+                "phase": failure.get("browser_identity_phase"),
                 "check": failure.get("browser_identity_check"),
                 "scenario_failure": {
                     "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
@@ -709,7 +709,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 elif mutation == "duplicate":
                     digest = hashlib.sha256(failure_path.read_bytes()).hexdigest()
                     diagnostic_path.write_text(
-                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/3\","
+                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/4\","
                         "\"operation\":\"preview_browser_identity\","
                         "\"substage\":\"private_snapshot_launch_image_identity\","
                         "\"phase\":\"playwright_package_revision_identity\","
@@ -756,6 +756,30 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                         exp_dir,
                         "issue15-runtime-authority",
                     )
+        for check in sorted(
+            protocol.PROVIDER_FREE_PRIVATE_VERSION_EXECUTION_CHECKS
+        ):
+            with self.subTest(private_version_execution_check=check):
+                failure["browser_identity_phase"] = (
+                    "private_launch_version_execution"
+                )
+                failure["browser_identity_check"] = check
+                write_check_diagnostic()
+                provider_free_runner._validate_scenario_failure_evidence(
+                    exp_dir,
+                    "issue15-runtime-authority",
+                )
+        failure["browser_identity_phase"] = "private_launch_version_execution"
+        failure["browser_identity_check"] = "browser_manifest_entry"
+        write_check_diagnostic()
+        with self.assertRaisesRegex(
+            provider_free_runner.ProviderFreeError,
+            "scenario failure receipt",
+        ):
+            provider_free_runner._validate_scenario_failure_evidence(
+                exp_dir,
+                "issue15-runtime-authority",
+            )
         write_diagnostic()
 
     def test_failure_requires_matching_closed_preview_public_wrapper(self) -> None:
@@ -938,7 +962,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                     )
                 elif mutation == "duplicate":
                     diagnostic_path.write_text(
-                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/3\","
+                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/4\","
                         "\"operation\":\"preview_browser_identity\","
                         "\"substage\":\"private_snapshot_launch_image_identity\","
                         "\"phase\":\"source_executable_identity\","

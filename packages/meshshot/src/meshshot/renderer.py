@@ -19,6 +19,7 @@ from meshshot.browser_runtime import (
     BROWSER_IDENTITY_SUBSTAGES,
     PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     PLAYWRIGHT_PACKAGE_REVISION_CHECKS,
+    PRIVATE_VERSION_EXECUTION_CHECKS,
     BrowserRuntimeError,
     PrelaunchedCdpRuntime,
     default_executable,
@@ -100,6 +101,11 @@ class MeshshotError(RuntimeError):
                 self.browser_identity_phase
                 == "playwright_package_revision_identity"
                 and browser_identity_check in PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+            )
+            or (
+                self.browser_identity_phase
+                == "private_launch_version_execution"
+                and browser_identity_check in PRIVATE_VERSION_EXECUTION_CHECKS
             )
             else None
         )

@@ -35,7 +35,6 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
-    PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS,
     PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
@@ -43,6 +42,7 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+    provider_free_browser_identity_checks,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
     ProtocolError,
     provider_free_browser_runtime_allowed,
@@ -641,7 +641,10 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
         expected_receipt_keys.add("browser_identity_substage")
         if browser_identity_substage == "private_snapshot_launch_image_identity":
             expected_receipt_keys.add("browser_identity_phase")
-        if browser_identity_phase == "playwright_package_revision_identity":
+        allowed_checks = provider_free_browser_identity_checks(
+            browser_identity_phase
+        )
+        if allowed_checks:
             expected_receipt_keys.add("browser_identity_check")
     if (
         not isinstance(receipt, dict)
@@ -676,12 +679,12 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
             and browser_identity_phase is not None
         )
         or (
-            browser_identity_phase == "playwright_package_revision_identity"
+            provider_free_browser_identity_checks(browser_identity_phase)
             and browser_identity_check
-            not in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+            not in provider_free_browser_identity_checks(browser_identity_phase)
         )
         or (
-            browser_identity_phase != "playwright_package_revision_identity"
+            not provider_free_browser_identity_checks(browser_identity_phase)
             and browser_identity_check is not None
         )
     ):
