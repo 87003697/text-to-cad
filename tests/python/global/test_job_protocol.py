@@ -179,6 +179,37 @@ class JobProtocolTests(unittest.TestCase):
             )
         )
 
+    def test_playwright_package_diagnostic_requires_one_exact_check(self) -> None:
+        checks = (
+            "python_distribution_metadata",
+            "playwright_package_manifest",
+            "browser_manifest_entry",
+            "frozen_playwright_version_match",
+            "frozen_browser_revision_match",
+        )
+        for check in checks:
+            receipt = {
+                "schema": "cvm.provider-free-browser-identity-diagnostic/3",
+                "operation": "preview_browser_identity",
+                "substage": "private_snapshot_launch_image_identity",
+                "phase": "playwright_package_revision_identity",
+                "check": check,
+                "scenario_failure": {
+                    "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                    "sha256": "f" * 64,
+                },
+            }
+            with self.subTest(check=check):
+                self.assertTrue(
+                    protocol.provider_free_browser_identity_diagnostic_allowed(
+                        receipt,
+                        expected_failure_sha256="f" * 64,
+                        expected_substage="private_snapshot_launch_image_identity",
+                        expected_phase="playwright_package_revision_identity",
+                        expected_check=check,
+                    )
+                )
+
     def test_prelaunched_cdp_runtime_receipt_requires_frozen_exact_identities(self) -> None:
         receipt = {
             "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,

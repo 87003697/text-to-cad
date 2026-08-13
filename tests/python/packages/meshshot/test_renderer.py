@@ -887,6 +887,52 @@ class ResidualRendererTests(unittest.TestCase):
                 raised.exception.browser_identity_phase,
             )
 
+    def test_public_render_preserves_each_playwright_package_revision_check(
+        self,
+    ) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError
+
+        checks = (
+            "python_distribution_metadata",
+            "playwright_package_manifest",
+            "browser_manifest_entry",
+            "frozen_playwright_version_match",
+            "frozen_browser_revision_match",
+        )
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = mock.MagicMock()
+        for check in checks:
+            with self.subTest(check=check), mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_EXECUTABLE": "/attested/chrome-headless-shell"},
+            ), mock.patch(
+                "playwright.sync_api.sync_playwright",
+                sync_playwright,
+            ), mock.patch(
+                "meshshot.renderer.PrelaunchedCdpRuntime",
+                side_effect=BrowserRuntimeError(
+                    "browser_identity",
+                    browser_identity_phase="playwright_package_revision_identity",
+                    browser_identity_check=check,
+                ),
+            ), self.assertRaises(MeshshotError) as raised:
+                render_residual_preview(
+                    _geometry(triangle),
+                    _geometry(triangle),
+                    variant="step",
+                )
+            self.assertEqual("browser_identity", raised.exception.phase)
+            self.assertEqual(
+                "private_snapshot_launch_image_identity",
+                raised.exception.browser_identity_substage,
+            )
+            self.assertEqual(
+                "playwright_package_revision_identity",
+                raised.exception.browser_identity_phase,
+            )
+            self.assertEqual(check, raised.exception.browser_identity_check)
+
     def test_public_render_selects_exact_private_snapshot_failure_phase(self) -> None:
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
         sync_playwright = mock.MagicMock()
