@@ -2314,14 +2314,18 @@ class ResidualRendererTests(unittest.TestCase):
                 close_fds=True,
             )
         self.assertEqual(
-            ["/private/image/chrome-headless-shell", "--headless"],
-            popen.call_args.args[0],
+            os.fspath(Path(browser_runtime.__file__).with_name("fd_exec_handoff.py")),
+            popen.call_args.args[0][3],
         )
         self.assertEqual(
-            "/proc/self/fd/73",
+            browser_runtime.sys.executable,
             popen.call_args.kwargs["executable"],
         )
-        self.assertEqual((73,), popen.call_args.kwargs["pass_fds"])
+        self.assertNotIn(
+            "/proc/self/fd",
+            " ".join(str(value) for value in popen.call_args.args[0]),
+        )
+        self.assertIn(73, popen.call_args.kwargs["pass_fds"])
         self.assertTrue(popen.call_args.kwargs["close_fds"])
 
     def test_linux_version_executes_the_same_sealed_fd(self) -> None:
