@@ -727,6 +727,40 @@ class ResidualRendererTests(unittest.TestCase):
             finally:
                 pinned.close()
 
+    def test_runtime_snapshot_resists_in_place_source_overwrite(self) -> None:
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_text(
+                "#!/bin/sh\nprintf 'attested\\n'\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            expected_sha256 = __import__("hashlib").sha256(
+                executable.read_bytes()
+            ).hexdigest()
+            pinned = _PinnedExecutable(executable)
+            try:
+                with executable.open("wb") as stream:
+                    stream.write(b"#!/bin/sh\nprintf 'substituted\\n'\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                process = pinned.popen(
+                    [os.fspath(executable)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    close_fds=True,
+                )
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(b"attested\n", stdout)
+                self.assertEqual(b"", stderr)
+                self.assertEqual(0, process.returncode)
+                self.assertEqual(expected_sha256, pinned.sha256())
+            finally:
+                pinned.close()
+
     def test_linux_runtime_executes_inherited_pinned_descriptor(self) -> None:
         from meshshot.browser_runtime import _PinnedExecutable
 
