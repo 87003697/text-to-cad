@@ -75,6 +75,136 @@ def _attested_connected_browser() -> mock.MagicMock:
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_default_executable_closes_final_candidate_disappearance_and_swap(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, default_executable
+
+        for mutation in ("disappear", "symlink_swap"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                full_browser = (
+                    root
+                    / "chromium-1223"
+                    / "chrome-mac"
+                    / "Google Chrome for Testing"
+                )
+                candidate = (
+                    root
+                    / "chromium_headless_shell-1223"
+                    / "chrome-headless-shell-mac-arm64"
+                    / "chrome-headless-shell"
+                )
+                replacement = root / "outside-browser"
+                for executable in (full_browser, candidate, replacement):
+                    executable.parent.mkdir(parents=True, exist_ok=True)
+                    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                    executable.chmod(0o755)
+
+                original_resolve = Path.resolve
+                mutated = False
+
+                def mutate_on_final_resolve(
+                    path: Path,
+                    strict: bool = False,
+                ) -> Path:
+                    nonlocal mutated
+                    if (
+                        path.name == "chrome-headless-shell"
+                        and path.parent.name == "chrome-headless-shell-mac-arm64"
+                        and not mutated
+                    ):
+                        mutated = True
+                        candidate.unlink()
+                        if mutation == "symlink_swap":
+                            candidate.symlink_to(replacement)
+                    return original_resolve(path, strict=strict)
+
+                with mock.patch.object(Path, "resolve", mutate_on_final_resolve), self.assertRaises(
+                    BrowserRuntimeError
+                ) as raised:
+                    default_executable(os.fspath(full_browser))
+                self.assertTrue(mutated)
+                self.assertEqual("browser_identity", raised.exception.operation)
+                self.assertEqual(
+                    "private_snapshot_launch_image_identity",
+                    raised.exception.browser_identity_substage,
+                )
+                self.assertEqual(
+                    "source_executable_identity",
+                    raised.exception.browser_identity_phase,
+                )
+
+    def test_public_render_closes_default_executable_race_before_pinning(self) -> None:
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+        for mutation in ("disappear", "symlink_swap"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                full_browser = (
+                    root
+                    / "chromium-1223"
+                    / "chrome-mac"
+                    / "Google Chrome for Testing"
+                )
+                candidate = (
+                    root
+                    / "chromium_headless_shell-1223"
+                    / "chrome-headless-shell-mac-arm64"
+                    / "chrome-headless-shell"
+                )
+                replacement = root / "outside-browser"
+                for executable in (full_browser, candidate, replacement):
+                    executable.parent.mkdir(parents=True, exist_ok=True)
+                    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                    executable.chmod(0o755)
+
+                original_resolve = Path.resolve
+                mutated = False
+
+                def mutate_on_final_resolve(
+                    path: Path,
+                    strict: bool = False,
+                ) -> Path:
+                    nonlocal mutated
+                    if (
+                        path.name == "chrome-headless-shell"
+                        and path.parent.name == "chrome-headless-shell-mac-arm64"
+                        and not mutated
+                    ):
+                        mutated = True
+                        candidate.unlink()
+                        if mutation == "symlink_swap":
+                            candidate.symlink_to(replacement)
+                    return original_resolve(path, strict=strict)
+
+                sync_playwright = mock.MagicMock()
+                sync_playwright.return_value.__enter__.return_value.chromium.executable_path = (
+                    os.fspath(full_browser)
+                )
+                runtime = mock.patch("meshshot.renderer.PrelaunchedCdpRuntime")
+                with (
+                    mock.patch.dict(os.environ, {}, clear=False),
+                    mock.patch.object(Path, "resolve", mutate_on_final_resolve),
+                    mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+                    runtime as runtime_class,
+                ):
+                    os.environ.pop("MESHSHOT_BROWSER_EXECUTABLE", None)
+                    with self.assertRaises(MeshshotError) as raised:
+                        render_residual_preview(
+                            _geometry(triangle),
+                            _geometry(triangle),
+                            variant="step",
+                        )
+                self.assertTrue(mutated)
+                self.assertEqual("browser_identity", raised.exception.phase)
+                self.assertEqual(
+                    "private_snapshot_launch_image_identity",
+                    raised.exception.browser_identity_substage,
+                )
+                self.assertEqual(
+                    "source_executable_identity",
+                    raised.exception.browser_identity_phase,
+                )
+                runtime_class.assert_not_called()
+
     def test_public_render_rejects_evil_prefix_as_outside_origin(self) -> None:
         page = mock.MagicMock()
         context = mock.MagicMock()
