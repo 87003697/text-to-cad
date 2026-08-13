@@ -2913,6 +2913,132 @@ class ResidualRendererTests(unittest.TestCase):
                     process.wait(timeout=5)
                 pinned.close()
 
+    def test_linux_handoff_rejects_exact_proof_after_absolute_deadline(self) -> None:
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.poll.return_value = None
+        with (
+            mock.patch(
+                "meshshot.browser_runtime.time.monotonic",
+                return_value=10.0,
+            ),
+            mock.patch.object(pinned, "verify_running_image") as verify,
+            self.assertRaises(subprocess.TimeoutExpired),
+        ):
+            pinned._wait_for_exec_replacement(process, 10.0)
+        verify.assert_not_called()
+
+    def test_linux_running_image_digest_obeys_one_absolute_deadline(self) -> None:
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 73
+        identity = mock.Mock(st_dev=1, st_ino=2)
+        with (
+            mock.patch("meshshot.browser_runtime.os.fstat", return_value=identity),
+            mock.patch("meshshot.browser_runtime.os.readlink", return_value="sealed"),
+            mock.patch("meshshot.browser_runtime.os.open", return_value=74),
+            mock.patch("meshshot.browser_runtime.os.dup", side_effect=(75, 76)),
+            mock.patch("meshshot.browser_runtime.os.lseek"),
+            mock.patch(
+                "meshshot.browser_runtime.os.read",
+                side_effect=(b"first chunk", b"", b"first chunk", b""),
+            ),
+            mock.patch("meshshot.browser_runtime.os.close"),
+            mock.patch(
+                "meshshot.browser_runtime.time.monotonic",
+                side_effect=(1.0, 1.0, 2.0),
+            ),
+            self.assertRaises(subprocess.TimeoutExpired),
+        ):
+            pinned._verify_running_image_until(43210, 2.0)
+
+    def test_linux_fast_exact_version_exit_is_authenticated(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 73
+        pinned.launch_path = Path("/private/image/chrome-headless-shell")
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.poll.return_value = 0
+        process.returncode = 0
+        process.communicate.return_value = (
+            b"Google Chrome for Testing 148.0.7778.96\n",
+            b"",
+        )
+        with (
+            mock.patch.object(browser_runtime.sys, "platform", "linux"),
+            mock.patch("meshshot.browser_runtime.subprocess.Popen", return_value=process),
+            mock.patch("meshshot.browser_runtime.select.select", return_value=([101], [], [])),
+            mock.patch("meshshot.browser_runtime.os.pipe", return_value=(101, 102)),
+            mock.patch("meshshot.browser_runtime.os.set_inheritable"),
+            mock.patch("meshshot.browser_runtime.os.close"),
+            mock.patch("meshshot.browser_runtime.os.read", return_value=b""),
+            mock.patch("meshshot.browser_runtime._wait_group_empty", return_value=True),
+        ):
+            completed = pinned.run_version(
+                timeout=5,
+                expected_version="148.0.7778.96",
+            )
+        self.assertEqual(0, completed.returncode)
+
+    def test_linux_fast_helper_death_cannot_authenticate_version(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 73
+        pinned.launch_path = Path("/private/image/chrome-headless-shell")
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.poll.return_value = 127
+        process.returncode = 127
+        process.communicate.return_value = (b"", b"")
+        with (
+            mock.patch.object(browser_runtime.sys, "platform", "linux"),
+            mock.patch("meshshot.browser_runtime.subprocess.Popen", return_value=process),
+            mock.patch("meshshot.browser_runtime.select.select", return_value=([101], [], [])),
+            mock.patch("meshshot.browser_runtime.os.pipe", return_value=(101, 102)),
+            mock.patch("meshshot.browser_runtime.os.set_inheritable"),
+            mock.patch("meshshot.browser_runtime.os.close"),
+            mock.patch("meshshot.browser_runtime.os.read", return_value=b""),
+            mock.patch.object(pinned, "_reap_failed_handoff", return_value=False) as reap,
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            pinned.run_version(timeout=5, expected_version="148.0.7778.96")
+        self.assertEqual("browser_identity", raised.exception.operation)
+        reap.assert_called_once()
+
+    def test_linux_running_image_descriptor_close_failure_is_cleanup(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 73
+        identity = mock.Mock(st_dev=1, st_ino=2)
+        closes: list[int] = []
+
+        def close(descriptor: int) -> None:
+            closes.append(descriptor)
+            if descriptor == 74:
+                raise OSError("closed descriptor cleanup")
+
+        with (
+            mock.patch("meshshot.browser_runtime.os.fstat", return_value=identity),
+            mock.patch("meshshot.browser_runtime.os.readlink", return_value="sealed"),
+            mock.patch("meshshot.browser_runtime.os.open", return_value=74),
+            mock.patch.object(_PinnedExecutable, "_sha256_fd", return_value="a" * 64),
+            mock.patch("meshshot.browser_runtime.os.close", side_effect=close),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            pinned.verify_running_image(43210, timeout=5)
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual([74], closes)
+
     def test_macos_readiness_deadline_starts_after_live_image_verification(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
