@@ -581,7 +581,7 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
                     "/usr/sbin/lsof",
                     "-nP",
                     "-a",
-                    f"-iTCP@127.0.0.1:{port}",
+                    f"-iTCP:{port}",
                     "-sTCP:LISTEN",
                     "-F",
                     "pgfnPT",
@@ -601,16 +601,28 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
         process_has_file = False
         group: int | None = None
         file_active = False
+        protocol: str | None = None
         name: str | None = None
         state: str | None = None
+        receive_queue: int | None = None
+        send_queue: int | None = None
 
         def finish_file() -> None:
-            nonlocal file_active, name, state, process_has_file
-            if not file_active or name is None or state != "LISTEN":
+            nonlocal file_active, protocol, name, state
+            nonlocal receive_queue, send_queue, process_has_file
+            if (
+                not file_active
+                or protocol != "TCP"
+                or name is None
+                or state != "LISTEN"
+                or receive_queue is None
+                or send_queue is None
+            ):
                 raise BrowserRuntimeError("browser_identity")
             records.append((group, name, state))
             process_has_file = True
-            file_active, name, state = False, None, None
+            file_active, protocol, name, state = False, None, None, None
+            receive_queue, send_queue = None, None
 
         def finish_process() -> None:
             nonlocal process_active, process_has_file, group
@@ -630,7 +642,7 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
                     raise BrowserRuntimeError("browser_identity")
                 process_active = True
             elif line.startswith("f"):
-                if not process_active or group is None or not line[1:]:
+                if not process_active or group is None or not line[1:].isdigit():
                     raise BrowserRuntimeError("browser_identity")
                 if file_active:
                     finish_file()
@@ -643,7 +655,12 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
                 except ValueError as exc:
                     raise BrowserRuntimeError("browser_identity") from exc
             elif line.startswith("n"):
-                if not file_active or name is not None or state is not None:
+                if (
+                    not file_active
+                    or protocol != "TCP"
+                    or name is not None
+                    or state is not None
+                ):
                     raise BrowserRuntimeError("browser_identity")
                 name = line[1:]
             elif line == "TST=LISTEN":
@@ -651,10 +668,37 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
                     raise BrowserRuntimeError("browser_identity")
                 state = "LISTEN"
             elif line.startswith("P"):
+                if (
+                    not file_active
+                    or protocol is not None
+                    or name is not None
+                    or line != "PTCP"
+                ):
+                    raise BrowserRuntimeError("browser_identity")
+                protocol = "TCP"
+            elif line.startswith("T"):
                 if not file_active:
                     raise BrowserRuntimeError("browser_identity")
-            elif line.startswith("T"):
-                if not file_active or not line.startswith(("TQR=", "TQS=")):
+                if line.startswith("TQR="):
+                    value = line[4:]
+                    if (
+                        state != "LISTEN"
+                        or receive_queue is not None
+                        or send_queue is not None
+                        or not value.isdigit()
+                    ):
+                        raise BrowserRuntimeError("browser_identity")
+                    receive_queue = int(value)
+                elif line.startswith("TQS="):
+                    value = line[4:]
+                    if (
+                        receive_queue is None
+                        or send_queue is not None
+                        or not value.isdigit()
+                    ):
+                        raise BrowserRuntimeError("browser_identity")
+                    send_queue = int(value)
+                else:
                     raise BrowserRuntimeError("browser_identity")
             else:
                 raise BrowserRuntimeError("browser_identity")
