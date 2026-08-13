@@ -2570,6 +2570,36 @@ class ResidualRendererTests(unittest.TestCase):
             )
         self.assertTrue(failed)
 
+    def test_failed_handoff_group_proof_errors_still_kill_and_fail_cleanup(self) -> None:
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        for boundary in ("term-proof", "kill-proof"):
+            failed = False
+            process = mock.MagicMock(spec=subprocess.Popen)
+            process.pid = 43210
+            process.wait.return_value = 127
+            proof = (
+                (OSError("closed TERM group proof"), True)
+                if boundary == "term-proof"
+                else (False, OSError("closed KILL group proof"))
+            )
+            with (
+                self.subTest(boundary=boundary),
+                mock.patch("meshshot.browser_runtime.os.killpg") as killpg,
+                mock.patch(
+                    "meshshot.browser_runtime._wait_group_empty",
+                    side_effect=proof,
+                ),
+            ):
+                failed = _PinnedExecutable._reap_failed_handoff(
+                    process,
+                    process_group=True,
+                    cleanup_term_timeout=1.0,
+                    cleanup_kill_timeout=1.0,
+                )
+            self.assertTrue(failed)
+            self.assertIn(mock.call(43210, signal.SIGKILL), killpg.mock_calls)
+
     def test_linux_version_probe_owns_process_group_for_descendant_cleanup(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import _PinnedExecutable
@@ -2807,6 +2837,66 @@ class ResidualRendererTests(unittest.TestCase):
         )
         self.assertIn(mock.call(43210, signal.SIGTERM), killpg.mock_calls)
         pinned.close.assert_called_once_with()
+
+    def test_linux_handoff_rejects_actual_helper_death_eof_before_return(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nsleep 5\n", encoding="utf-8")
+            executable.chmod(0o755)
+            dead_helper = root / "dead-helper.py"
+            dead_helper.write_text(
+                "import os\nos._exit(127)\n",
+                encoding="utf-8",
+            )
+            pinned = _PinnedExecutable(executable)
+            started: list[subprocess.Popen[bytes]] = []
+            real_popen = subprocess.Popen
+
+            def record_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+                process = real_popen(*args, **kwargs)
+                started.append(process)
+                return process
+
+            try:
+                with (
+                    mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                    mock.patch.object(
+                        browser_runtime,
+                        "_FD_EXEC_HANDOFF",
+                        dead_helper,
+                    ),
+                    mock.patch(
+                        "meshshot.browser_runtime.subprocess.Popen",
+                        side_effect=record_popen,
+                    ),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    pinned.popen(
+                        [os.fspath(executable), "--headless"],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                        close_fds=True,
+                        _handoff_deadline=time.monotonic() + 2,
+                    )
+                self.assertIn(
+                    raised.exception.operation,
+                    {"browser_identity", "browser_cleanup"},
+                )
+            finally:
+                for process in started:
+                    if process.poll() is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    process.wait(timeout=5)
+                pinned.close()
 
     def test_macos_readiness_deadline_starts_after_live_image_verification(self) -> None:
         from meshshot import browser_runtime
