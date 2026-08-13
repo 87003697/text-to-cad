@@ -15,6 +15,7 @@ import statistics
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -62,6 +63,15 @@ def _runtime_patch(browser: object) -> tuple[mock._patch, mock.MagicMock]:
     runtime.open.side_effect = opened
     runtime_class = mock.MagicMock(return_value=runtime)
     return mock.patch("meshshot.renderer.PrelaunchedCdpRuntime", runtime_class), runtime
+
+
+def _attested_connected_browser() -> mock.MagicMock:
+    browser = mock.MagicMock()
+    session = browser.new_browser_cdp_session.return_value
+    session.send.return_value = {
+        "product": "HeadlessChrome/148.0.7778.96",
+    }
+    return browser
 
 
 class ResidualRendererTests(unittest.TestCase):
@@ -228,16 +238,25 @@ class ResidualRendererTests(unittest.TestCase):
                 process.wait.side_effect = lambda **_kwargs: events.append("cleanup") or 0
                 runtime = object.__new__(PrelaunchedCdpRuntime)
                 runtime._profile = {
+                    "browser_version": "148.0.7778.96",
                     "startup_timeout_ms": 1,
                     "cleanup_term_ms": 1,
                     "cleanup_kill_ms": 1,
                 }
                 runtime._profile_dir = Path(directory) / "profile"
                 runtime._profile_dir.mkdir()
+                runtime._profile_parent_fd = os.open(directory, os.O_RDONLY)
+                runtime._profile_fd = os.open(runtime._profile_dir, os.O_RDONLY)
+                profile_info = os.fstat(runtime._profile_fd)
+                runtime._profile_identity = (
+                    profile_info.st_dev,
+                    profile_info.st_ino,
+                )
+                runtime._profile_cleanup_forbidden = False
                 runtime._process = process
                 runtime._process_group = 43210
                 chromium = mock.MagicMock()
-                chromium.connect_over_cdp.return_value = mock.MagicMock()
+                chromium.connect_over_cdp.return_value = _attested_connected_browser()
                 installed: dict[int, object] = {}
 
                 def previous(_signum: int, _frame: object) -> None:
@@ -276,9 +295,12 @@ class ResidualRendererTests(unittest.TestCase):
 
         events: list[str] = []
         runtime = object.__new__(PrelaunchedCdpRuntime)
-        runtime._profile = {"startup_timeout_ms": 1}
+        runtime._profile = {
+            "browser_version": "148.0.7778.96",
+            "startup_timeout_ms": 1,
+        }
         chromium = mock.MagicMock()
-        chromium.connect_over_cdp.return_value = mock.MagicMock()
+        chromium.connect_over_cdp.return_value = _attested_connected_browser()
         installed: dict[int, object] = {}
 
         def previous(_signum: int, _frame: object) -> None:
@@ -509,7 +531,7 @@ class ResidualRendererTests(unittest.TestCase):
     def test_browser_crash_is_projected_as_closed_public_render_failure(self) -> None:
         page = mock.MagicMock()
         context = mock.MagicMock()
-        browser = mock.MagicMock()
+        browser = _attested_connected_browser()
         playwright = mock.MagicMock()
         context.new_page.return_value = page
         browser.new_context.return_value = context
@@ -652,6 +674,9 @@ class ResidualRendererTests(unittest.TestCase):
                         ),
                         mock.patch("subprocess.Popen", side_effect=prelaunch),
                         mock.patch(
+                            "meshshot.browser_runtime._PinnedExecutable.verify_running_image"
+                        ),
+                        mock.patch(
                             "tempfile.mkdtemp",
                             side_effect=lambda **_kwargs: (
                                 profile.mkdir() or os.fspath(profile)
@@ -724,6 +749,14 @@ class ResidualRendererTests(unittest.TestCase):
                     },
                 ),
                 mock.patch("subprocess.Popen", side_effect=prelaunch),
+                mock.patch.object(
+                    __import__("meshshot.browser_runtime", fromlist=["_PinnedExecutable"])
+                    ._PinnedExecutable,
+                    "verify_running_image",
+                ),
+                mock.patch(
+                    "meshshot.browser_runtime._verify_listener_owner"
+                ),
                 mock.patch(
                     "tempfile.mkdtemp",
                     side_effect=lambda **_kwargs: (
@@ -925,11 +958,16 @@ class ResidualRendererTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             executable = root / "chrome-headless-shell"
-            shutil.copyfile("/bin/sleep", executable)
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             executable.chmod(0o755)
             pinned = _PinnedExecutable(executable)
             replacement = root / "replacement-browser"
-            shutil.copyfile("/usr/bin/yes", replacement)
+            marker = root / "replacement-executed"
+            replacement.write_text(
+                f"#!/bin/sh\nprintf 'substituted\\n' > {marker!s}\n"
+                "while :; do sleep 1; done\n",
+                encoding="utf-8",
+            )
             replacement.chmod(0o755)
             assert pinned.launch_path is not None
             launch_root = pinned.launch_path.parent
@@ -940,13 +978,17 @@ class ResidualRendererTests(unittest.TestCase):
                 os.replace(pinned.launch_path, saved)
                 os.replace(replacement, pinned.launch_path)
                 process = pinned.popen(
-                    [os.fspath(executable), "20"],
+                    [os.fspath(executable)],
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     start_new_session=True,
                     close_fds=True,
                 )
+                deadline = time.monotonic() + 5
+                while not marker.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual("substituted\n", marker.read_text(encoding="utf-8"))
                 os.replace(pinned.launch_path, replacement)
                 os.replace(saved, pinned.launch_path)
                 pinned._freeze_directories(launch_root)
@@ -959,8 +1001,7 @@ class ResidualRendererTests(unittest.TestCase):
                         os.killpg(process.pid, __import__("signal").SIGKILL)
                     except ProcessLookupError:
                         pass
-                    if process.poll() is None:
-                        process.kill()
+                    process.kill()
                     process.wait(timeout=5)
                 pinned.close()
 
@@ -1125,7 +1166,7 @@ class ResidualRendererTests(unittest.TestCase):
     ) -> None:
         page = mock.MagicMock()
         context = mock.MagicMock()
-        browser = mock.MagicMock()
+        browser = _attested_connected_browser()
         playwright = mock.MagicMock()
         context.new_page.return_value = page
         browser.new_context.return_value = context
@@ -1182,6 +1223,10 @@ class ResidualRendererTests(unittest.TestCase):
                     "playwright.sync_api.sync_playwright", sync_playwright
                 ),
                 mock.patch("subprocess.Popen", side_effect=prelaunch),
+                mock.patch(
+                    "meshshot.browser_runtime._PinnedExecutable.verify_running_image"
+                ),
+                mock.patch("meshshot.browser_runtime._verify_listener_owner"),
                 mock.patch(
                     "subprocess.run",
                     return_value=version,

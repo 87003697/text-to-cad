@@ -15,6 +15,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -222,12 +223,7 @@ def _private_directory(prefix: str) -> Path:
 
 
 class _PinnedExecutable:
-    """Own one exact executable image from attestation through production exec.
-
-    The private tree's non-writable modes are the repo's ordinary unprivileged
-    workload boundary. A privileged actor that deliberately changes those modes
-    is outside this runtime's threat model.
-    """
+    """Own one exact executable image from attestation through production exec."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -453,6 +449,75 @@ class _PinnedExecutable:
         launch_argv = [os.fspath(self.launch_path), *argv[1:]]
         return subprocess.Popen(launch_argv, **options)
 
+    def verify_running_image(self, pid: int, timeout: float) -> None:
+        assert self.fd is not None
+        expected = os.fstat(self.fd)
+        if sys.platform.startswith("linux"):
+            proc_exe = Path(f"/proc/{pid}/exe")
+            try:
+                if not os.readlink(proc_exe):
+                    raise BrowserRuntimeError("browser_identity")
+                descriptor = os.open(proc_exe, os.O_RDONLY)
+            except OSError as exc:
+                raise BrowserRuntimeError("browser_identity") from exc
+            try:
+                actual = os.fstat(descriptor)
+                matches = (
+                    actual.st_dev == expected.st_dev
+                    and actual.st_ino == expected.st_ino
+                    and self._sha256_fd(descriptor) == self._sha256_fd(self.fd)
+                )
+            finally:
+                os.close(descriptor)
+            if not matches:
+                raise BrowserRuntimeError("browser_identity")
+            return
+        if sys.platform == "darwin":
+            try:
+                completed = subprocess.run(
+                    [
+                        "/usr/sbin/lsof",
+                        "-p",
+                        str(pid),
+                        "-a",
+                        "-d",
+                        "txt",
+                        "-F",
+                        "fDin",
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                    timeout=timeout,
+                    close_fds=True,
+                )
+                lines = completed.stdout.decode("utf-8").splitlines()
+            except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
+                raise BrowserRuntimeError("browser_identity") from exc
+            identities: set[tuple[int, int]] = set()
+            device: int | None = None
+            for line in lines:
+                if line.startswith("D"):
+                    try:
+                        device = int(line[1:], 0)
+                    except ValueError as exc:
+                        raise BrowserRuntimeError("browser_identity") from exc
+                elif line.startswith("i"):
+                    try:
+                        if device is not None:
+                            identities.add((device, int(line[1:])))
+                    except ValueError as exc:
+                        raise BrowserRuntimeError("browser_identity") from exc
+            if (
+                completed.returncode != 0
+                or completed.stderr != b""
+                or (expected.st_dev, expected.st_ino) not in identities
+            ):
+                raise BrowserRuntimeError("browser_identity")
+            return
+        raise BrowserRuntimeError("browser_identity")
+
     def run_version(self, timeout: float) -> subprocess.CompletedProcess[bytes]:
         assert self.fd is not None and self.launch_path is not None
         options: dict[str, Any] = {
@@ -508,6 +573,92 @@ def _wait_group_empty(process_group: int, timeout: float) -> bool:
         time.sleep(0.02)
 
 
+def _verify_listener_owner(process_group: int, port: int, timeout: float) -> None:
+    if sys.platform == "darwin":
+        try:
+            completed = subprocess.run(
+                [
+                    "/usr/sbin/lsof",
+                    "-nP",
+                    "-a",
+                    f"-iTCP@127.0.0.1:{port}",
+                    "-sTCP:LISTEN",
+                    "-F",
+                    "pgfnPT",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                timeout=timeout,
+                close_fds=True,
+            )
+            lines = completed.stdout.decode("utf-8").splitlines()
+        except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
+            raise BrowserRuntimeError("browser_identity") from exc
+        groups = []
+        for line in lines:
+            if line.startswith("g"):
+                try:
+                    groups.append(int(line[1:]))
+                except ValueError as exc:
+                    raise BrowserRuntimeError("browser_identity") from exc
+        if (
+            completed.returncode != 0
+            or completed.stderr != b""
+            or process_group not in groups
+            or "TST=LISTEN" not in lines
+        ):
+            raise BrowserRuntimeError("browser_identity")
+        return
+    if sys.platform.startswith("linux"):
+        socket_inodes: set[str] = set()
+        try:
+            for table in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
+                for line in table.read_text(encoding="utf-8").splitlines()[1:]:
+                    fields = line.split()
+                    local_address, state = fields[1], fields[3]
+                    if int(local_address.rsplit(":", 1)[1], 16) == port and state == "0A":
+                        socket_inodes.add(fields[9])
+            owned = False
+            for process_path in Path("/proc").iterdir():
+                if not process_path.name.isdigit():
+                    continue
+                stat_line = (process_path / "stat").read_text(encoding="utf-8")
+                tail = stat_line[stat_line.rfind(")") + 2 :].split()
+                if int(tail[2]) != process_group:
+                    continue
+                for descriptor in (process_path / "fd").iterdir():
+                    target = os.readlink(descriptor)
+                    if target.startswith("socket:[") and target[8:-1] in socket_inodes:
+                        owned = True
+                        break
+                if owned:
+                    break
+        except (OSError, ValueError, IndexError) as exc:
+            raise BrowserRuntimeError("browser_identity") from exc
+        if not socket_inodes or not owned:
+            raise BrowserRuntimeError("browser_identity")
+        return
+    raise BrowserRuntimeError("browser_identity")
+
+
+@contextmanager
+def _blocked_runtime_signals() -> Iterator[None]:
+    runtime_signals = {signal.SIGINT, signal.SIGTERM}
+    if (
+        threading.current_thread() is threading.main_thread()
+        and hasattr(signal, "pthread_sigmask")
+    ):
+        previous = signal.pthread_sigmask(signal.SIG_BLOCK, runtime_signals)
+        try:
+            yield
+        finally:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+    else:
+        yield
+
+
 class PrelaunchedCdpRuntime:
     """Deep internal adapter: attest, launch, attach, and clean one browser."""
 
@@ -530,6 +681,10 @@ class PrelaunchedCdpRuntime:
             "result": "passed",
         }
         self._profile_dir: Path | None = None
+        self._profile_identity: tuple[int, int] | None = None
+        self._profile_cleanup_forbidden = False
+        self._profile_fd: int | None = None
+        self._profile_parent_fd: int | None = None
         self._process: subprocess.Popen[bytes] | None = None
         self._process_group: int | None = None
 
@@ -541,12 +696,35 @@ class PrelaunchedCdpRuntime:
                 raise BrowserRuntimeError("browser_profile") from exc
             self._profile_dir = profile
             try:
-                mode = profile.lstat().st_mode
+                directory_flags = (
+                    os.O_RDONLY
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                )
+                self._profile_parent_fd = os.open(profile.parent, directory_flags)
+                self._profile_fd = os.open(
+                    profile.name,
+                    directory_flags,
+                    dir_fd=self._profile_parent_fd,
+                )
+                profile_info = os.fstat(self._profile_fd)
+                path_info = os.stat(
+                    profile.name,
+                    dir_fd=self._profile_parent_fd,
+                    follow_symlinks=False,
+                )
+                mode = profile_info.st_mode
                 profile_nonempty = any(profile.iterdir())
             except OSError as exc:
                 raise BrowserRuntimeError("browser_profile") from exc
-            if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode) or profile_nonempty:
-                self._profile_dir = None
+            self._profile_identity = (profile_info.st_dev, profile_info.st_ino)
+            if (
+                stat.S_ISLNK(path_info.st_mode)
+                or not stat.S_ISDIR(mode)
+                or (path_info.st_dev, path_info.st_ino) != self._profile_identity
+                or profile_nonempty
+            ):
+                self._profile_cleanup_forbidden = True
                 raise BrowserRuntimeError("browser_profile")
             try:
                 os.chmod(profile, 0o700)
@@ -561,15 +739,20 @@ class PrelaunchedCdpRuntime:
                 "about:blank",
             ]
             try:
-                self._process = self._pinned_executable.popen(
-                    argv,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                    close_fds=True,
+                with _blocked_runtime_signals():
+                    self._process = self._pinned_executable.popen(
+                        argv,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                        close_fds=True,
+                    )
+                    self._process_group = self._process.pid
+                self._pinned_executable.verify_running_image(
+                    self._process.pid,
+                    float(self._profile["startup_timeout_ms"]) / 1000,
                 )
-                self._process_group = self._process.pid
             except OSError as exc:
                 raise BrowserRuntimeError(_prelaunch_operation(exc)) from exc
             deadline = time.monotonic() + float(self._profile["startup_timeout_ms"]) / 1000
@@ -589,6 +772,11 @@ class PrelaunchedCdpRuntime:
                     or _DEVTOOLS_PATH.fullmatch(lines[1]) is None
                 ):
                     raise BrowserRuntimeError("browser_readiness")
+                _verify_listener_owner(
+                    self._process_group,
+                    int(lines[0]),
+                    float(self._profile["startup_timeout_ms"]) / 1000,
+                )
                 return f"http://127.0.0.1:{int(lines[0])}"
             raise BrowserRuntimeError("browser_readiness_timeout")
         except BaseException:
@@ -640,12 +828,77 @@ class PrelaunchedCdpRuntime:
             if not group_empty:
                 failure = True
         if self._profile_dir is not None:
-            try:
-                shutil.rmtree(self._profile_dir)
-            except OSError:
+            if getattr(self, "_profile_cleanup_forbidden", False):
                 failure = True
-            if os.path.lexists(self._profile_dir):
-                failure = True
+            else:
+                quarantine: Path | None = None
+                quarantine_fd: int | None = None
+                try:
+                    profile_fd = getattr(self, "_profile_fd", None)
+                    parent_fd = getattr(self, "_profile_parent_fd", None)
+                    if profile_fd is None or parent_fd is None:
+                        raise OSError("profile identity changed")
+                    profile_info = os.fstat(profile_fd)
+                    if (
+                        getattr(self, "_profile_identity", None) is None
+                        or (profile_info.st_dev, profile_info.st_ino)
+                        != self._profile_identity
+                    ):
+                        raise OSError("profile identity changed")
+                    quarantine = _private_directory("meshshot-profile-cleanup-")
+                    quarantine_fd = os.open(
+                        quarantine,
+                        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+                    )
+                    os.rename(
+                        self._profile_dir.name,
+                        "profile",
+                        src_dir_fd=parent_fd,
+                        dst_dir_fd=quarantine_fd,
+                    )
+                    moved_info = os.stat(
+                        "profile",
+                        dir_fd=quarantine_fd,
+                        follow_symlinks=False,
+                    )
+                    if (
+                        stat.S_ISLNK(moved_info.st_mode)
+                        or not stat.S_ISDIR(moved_info.st_mode)
+                        or (moved_info.st_dev, moved_info.st_ino)
+                        != self._profile_identity
+                    ):
+                        os.rename(
+                            "profile",
+                            self._profile_dir.name,
+                            src_dir_fd=quarantine_fd,
+                            dst_dir_fd=parent_fd,
+                        )
+                        raise OSError("profile identity changed")
+                    shutil.rmtree(quarantine / "profile")
+                except OSError:
+                    failure = True
+                finally:
+                    if quarantine_fd is not None:
+                        try:
+                            os.close(quarantine_fd)
+                        except OSError:
+                            failure = True
+                    if quarantine is not None:
+                        try:
+                            quarantine.rmdir()
+                        except OSError:
+                            failure = True
+            for attribute in ("_profile_fd", "_profile_parent_fd"):
+                descriptor = getattr(self, attribute, None)
+                if descriptor is not None:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        failure = True
+                    setattr(self, attribute, None)
+            if not getattr(self, "_profile_cleanup_forbidden", False):
+                if os.path.lexists(self._profile_dir):
+                    failure = True
         pinned = getattr(self, "_pinned_executable", None)
         if pinned is not None:
             try:
@@ -654,6 +907,29 @@ class PrelaunchedCdpRuntime:
                 failure = True
         if failure:
             raise BrowserRuntimeError("browser_cleanup")
+
+    def _verify_connected_browser(self, browser: Any) -> None:
+        session = None
+        try:
+            session = browser.new_browser_cdp_session()
+            response = session.send("Browser.getVersion")
+        except BaseException as exc:
+            raise BrowserRuntimeError("browser_identity") from exc
+        finally:
+            if session is not None:
+                try:
+                    session.detach()
+                except BaseException as exc:
+                    raise BrowserRuntimeError("browser_identity") from exc
+        if not isinstance(response, dict) or "product" not in response:
+            raise BrowserRuntimeError("browser_identity")
+        product = response["product"]
+        if (
+            not isinstance(product, str)
+            or "/" not in product
+            or product.rsplit("/", 1)[-1] != self._profile["browser_version"]
+        ):
+            raise BrowserRuntimeError("browser_identity")
 
     @contextmanager
     def open(self, chromium: Any) -> Iterator[Any]:
@@ -666,6 +942,7 @@ class PrelaunchedCdpRuntime:
                         timeout=int(self._profile["startup_timeout_ms"]),
                         is_local=True,
                     )
+                    self._verify_connected_browser(browser)
                 except BaseException as exc:
                     try:
                         self._cleanup()
