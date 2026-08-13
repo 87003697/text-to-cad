@@ -2442,6 +2442,68 @@ class ResidualRendererTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     os.fstat(fd)
 
+    def test_post_seal_identity_and_close_failure_still_cleans_private_tree(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            executable = source / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            launch_parent = root / "launches"
+            launch_parent.mkdir()
+            snapshot = root / "snapshot-fd"
+            snapshot.write_bytes(executable.read_bytes())
+            snapshot.chmod(0o555)
+            snapshot_fd = os.open(snapshot, os.O_RDONLY)
+            real_close = os.close
+            close_calls: list[int] = []
+            thaw_calls: list[Path] = []
+            real_thaw = _PinnedExecutable._thaw_directories
+
+            def close_snapshot_fails(fd: int) -> None:
+                close_calls.append(fd)
+                real_close(fd)
+                if fd == snapshot_fd:
+                    raise OSError("closed snapshot cleanup")
+
+            def record_thaw(path: Path) -> None:
+                thaw_calls.append(path)
+                real_thaw(path)
+
+            with (
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch(
+                    "meshshot.browser_runtime._private_directory",
+                    side_effect=lambda _prefix: Path(
+                        tempfile.mkdtemp(dir=launch_parent)
+                    ),
+                ),
+                mock.patch.object(
+                    _PinnedExecutable,
+                    "_sealed_snapshot_fd",
+                    return_value=snapshot_fd,
+                ),
+                mock.patch.object(
+                    _PinnedExecutable,
+                    "_sha256_fd",
+                    return_value="0" * 64,
+                ),
+                mock.patch.object(browser_runtime.os, "close", close_snapshot_fails),
+                mock.patch.object(_PinnedExecutable, "_thaw_directories", record_thaw),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable(executable)
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+            self.assertEqual([snapshot_fd], close_calls)
+            self.assertEqual(1, len(thaw_calls))
+            self.assertEqual([], list(launch_parent.iterdir()))
+            with self.assertRaises(OSError):
+                os.fstat(snapshot_fd)
+
     def test_prelaunched_runtime_cleanup_failure_is_terminal_and_closed(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
 
