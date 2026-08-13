@@ -728,8 +728,10 @@ class _PinnedExecutable:
         launch: Path,
         source_info: os.stat_result,
     ) -> int:
-        flags = getattr(os, "MFD_ALLOW_SEALING", 0x0002) | getattr(
-            os, "MFD_CLOEXEC", 0x0001
+        flags = (
+            getattr(os, "MFD_EXEC", 0x0010)
+            | getattr(os, "MFD_ALLOW_SEALING", 0x0002)
+            | getattr(os, "MFD_CLOEXEC", 0x0001)
         )
         descriptor: int | None = None
         source: int | None = None
