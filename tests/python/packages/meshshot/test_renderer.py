@@ -2376,6 +2376,45 @@ class ResidualRendererTests(unittest.TestCase):
                     with self.assertRaises(OSError):
                         os.fstat(fake_memfd)
 
+    def test_linux_memfd_requests_explicit_executable_policy_without_retry(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            executable = source / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            launches = root / "launches"
+            launches.mkdir()
+            kernel = mock.Mock(side_effect=OSError("executable memfd rejected"))
+            with (
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch.object(
+                    browser_runtime.os,
+                    "memfd_create",
+                    kernel,
+                    create=True,
+                ),
+                mock.patch(
+                    "meshshot.browser_runtime._private_directory",
+                    side_effect=lambda _prefix: Path(
+                        tempfile.mkdtemp(dir=launches)
+                    ),
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable(executable)
+            kernel.assert_called_once_with("meshshot-browser", 0x0013)
+            self.assertEqual("browser_identity", raised.exception.operation)
+            self.assertEqual(
+                "private_launch_image_identity",
+                raised.exception.browser_identity_phase,
+            )
+            self.assertEqual([], list(launches.iterdir()))
+
     def test_linux_sealed_snapshot_fd_source_close_failure_is_cleanup(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
