@@ -3327,6 +3327,77 @@ class ResidualRendererTests(unittest.TestCase):
         reap.assert_not_called()
         killpg.assert_not_called()
 
+    def test_linux_authenticated_version_group_failure_is_completion(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        for proof in (False, OSError("closed group proof")):
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.fd = 73
+            pinned.launch_path = Path("/private/image/chrome-headless-shell")
+            process = mock.MagicMock(spec=subprocess.Popen)
+            process.pid = 43210
+            process.returncode = 0
+            process.communicate.return_value = (
+                b"Google Chrome for Testing 148.0.7778.96\n",
+                b"",
+            )
+            proof_patch = (
+                mock.patch(
+                    "meshshot.browser_runtime._wait_group_empty",
+                    side_effect=proof,
+                )
+                if isinstance(proof, BaseException)
+                else mock.patch(
+                    "meshshot.browser_runtime._wait_group_empty",
+                    return_value=proof,
+                )
+            )
+            with (
+                self.subTest(proof=type(proof).__name__),
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch.object(pinned, "popen", return_value=process),
+                proof_patch,
+                mock.patch.object(
+                    pinned,
+                    "_reap_failed_handoff",
+                    return_value=False,
+                ) as reap,
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned.run_version(timeout=5)
+            self.assertEqual("browser_identity", raised.exception.operation)
+            self.assertEqual(
+                "private_version_probe_completion",
+                raised.exception.browser_identity_check,
+            )
+            reap.assert_called_once()
+
+    def test_linux_authenticated_version_cleanup_failure_dominates_completion(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 73
+        pinned.launch_path = Path("/private/image/chrome-headless-shell")
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.returncode = 0
+        process.communicate.return_value = (
+            b"Google Chrome for Testing 148.0.7778.96\n",
+            b"",
+        )
+        with (
+            mock.patch.object(browser_runtime.sys, "platform", "linux"),
+            mock.patch.object(pinned, "popen", return_value=process),
+            mock.patch("meshshot.browser_runtime._wait_group_empty", return_value=False),
+            mock.patch.object(pinned, "_reap_failed_handoff", return_value=True),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            pinned.run_version(timeout=5)
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertIsNone(raised.exception.browser_identity_check)
+
     def test_linux_running_image_descriptor_close_failure_is_cleanup(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
