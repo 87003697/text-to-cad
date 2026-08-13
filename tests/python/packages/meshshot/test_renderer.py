@@ -2582,6 +2582,43 @@ class ResidualRendererTests(unittest.TestCase):
             )
             self.assertNotIn("private detail", str(raised.exception))
 
+    def test_linux_helper_spawn_descriptor_cleanup_failure_dominates(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 73
+        pinned.launch_path = Path("/private/image/chrome-headless-shell")
+
+        def close(descriptor: int) -> None:
+            if descriptor == 101:
+                raise OSError("private descriptor cleanup detail")
+
+        with (
+            mock.patch.object(browser_runtime.sys, "platform", "linux"),
+            mock.patch(
+                "meshshot.browser_runtime.subprocess.Popen",
+                side_effect=OSError(errno.EACCES, "private spawn detail"),
+            ),
+            mock.patch(
+                "meshshot.browser_runtime.os.pipe",
+                return_value=(101, 102),
+            ),
+            mock.patch("meshshot.browser_runtime.os.set_inheritable"),
+            mock.patch("meshshot.browser_runtime.os.close", side_effect=close),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            pinned.popen(
+                ["ignored", "--version"],
+                start_new_session=True,
+                close_fds=True,
+                _handoff_deadline=time.monotonic() + 1,
+                _handoff_completion="version",
+            )
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertIsNone(raised.exception.browser_identity_check)
+        self.assertNotIn("private", str(raised.exception))
+
     def test_linux_parent_write_close_failure_preserves_setup_classification(
         self,
     ) -> None:
