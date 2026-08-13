@@ -26,6 +26,7 @@ from .protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
+    PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
@@ -498,12 +499,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/12",
+    "id": "issue15.provider-free-bounded/13",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/12",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/13",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/12",
+    "schema": "cvm.provider-free-linux-sandbox/13",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -603,6 +604,14 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "receipt": PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
             "operations": sorted(PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS),
             "published": "closed-operation-only-no-process-data",
+            "publication_failure": {
+                "operation": (
+                    PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION
+                ),
+                "scenario_failure": PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                "terminal_manifest": "artifact_manifest.json",
+                "wrapper_receipt": "absent",
+            },
         },
     },
     "untrusted_canonical_worker": {
@@ -1480,6 +1489,17 @@ def _provider_free_failure_evidence_result(
                 None,
                 "provider-free preview public wrapper evidence is not bound",
             )
+    elif operation == (
+        PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION
+    ) and (
+        os.path.lexists(exp_dir / PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH)
+        or PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH in by_path
+    ):
+        return (
+            None,
+            None,
+            "provider-free preview public wrapper must be absent for publication failure",
+        )
     proof_path, error = _provider_free_common_evidence_result(
         exp_dir,
         handle=handle,

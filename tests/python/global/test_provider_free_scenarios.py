@@ -355,6 +355,91 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     operation,
                 )
 
+    def test_wrapper_publication_root_artifact_is_closed_and_nonrecursive(
+        self,
+    ) -> None:
+        workspace = self.repo / "outputs/group/wrapper-publication-root"
+        workspace.mkdir(parents=True)
+        dangerous = (
+            "OPENAI_API_KEY=secret --argv http://127.0.0.1:9222 "
+            "../../private/wrapper-path"
+        )
+        candidate = workspace / "work/candidate"
+        defaults = {
+            "deployed_viewer_receipt": {"viewer_version": "test"},
+            "deployed_runtime_tree_receipt": {"files": []},
+            "cadpy_runtime_evidence": {"schema": "cadpy"},
+            "viewer_fallback_evidence": {"action": "start"},
+            "_prepare_candidate": candidate,
+            "_prepare_workspace": None,
+            "_finalize_workspace": {"final": {}},
+        }
+        patchers = [
+            mock.patch.object(
+                provider_free_scenarios,
+                helper,
+                return_value=value,
+            )
+            for helper, value in defaults.items()
+        ]
+        for patcher in patchers:
+            patcher.start()
+        try:
+            with (
+                mock.patch.object(
+                    provider_free_scenarios,
+                    "_publish_measured_step",
+                    side_effect=provider_free_scenarios.ScenarioError(
+                        dangerous,
+                        operation=(
+                            "preview_public_wrapper_evidence_publication"
+                        ),
+                    ),
+                ),
+                mock.patch("sys.stderr", new_callable=io.StringIO) as stderr,
+            ):
+                status = provider_free_scenarios.main(
+                    [
+                        "run",
+                        "issue15-runtime-authority",
+                        "--workspace",
+                        str(workspace),
+                    ]
+                )
+        finally:
+            for patcher in reversed(patchers):
+                patcher.stop()
+
+        self.assertEqual(status, 1)
+        failure_path = workspace / "run/scenario-failure.json"
+        failure_text = failure_path.read_text(encoding="utf-8")
+        self.assertEqual(
+            {
+                "schema": "cvm.provider-free-scenario-failure/1",
+                "scenario_identity": (
+                    "issue15.provider-free.runtime-authority/1"
+                ),
+                "stage": "native_measurement",
+                "operation": "preview_public_wrapper_evidence_publication",
+            },
+            json.loads(failure_text),
+        )
+        self.assertFalse(
+            (
+                workspace
+                / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+            ).exists()
+        )
+        for forbidden in (
+            "OPENAI_API_KEY",
+            "secret",
+            "--argv",
+            "127.0.0.1",
+            "private/wrapper-path",
+        ):
+            self.assertNotIn(forbidden, failure_text)
+            self.assertNotIn(forbidden, stderr.getvalue())
+
     def test_native_measurement_operations_follow_production_boundaries(self) -> None:
         workspace = self.repo / "outputs/group/native-operations"
         candidate = workspace / "work/candidate"
@@ -466,6 +551,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             "preview_browser_render",
             "preview_browser_result",
             *sorted(protocol.PROVIDER_FREE_PREVIEW_PUBLIC_FAILURE_OPERATIONS),
+            "preview_public_wrapper_evidence_publication",
         ):
             with self.subTest(operation=operation):
                 self.assertTrue(
@@ -716,6 +802,235 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     },
                     json.loads(wrapper_path.read_text(encoding="utf-8")),
                 )
+
+    def test_preview_wrapper_publication_failure_uses_nonrecursive_root_operation(
+        self,
+    ) -> None:
+        command_log = self.repo / "run/provider-free-commands.jsonl"
+        cases = (
+            (
+                "after-public-failure",
+                provider_free_scenarios.ScenarioError("sensitive public failure"),
+            ),
+            (
+                "after-public-success",
+                {"ok": True},
+            ),
+        )
+        for name, public_result in cases:
+            with self.subTest(name=name):
+                with (
+                    mock.patch.object(
+                        provider_free_scenarios.platform,
+                        "system",
+                        return_value="Linux",
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_validate_attested_browser_runtime",
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_run_exact_browser_version_probe",
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_nested_browser_exec_probe_argv",
+                        return_value=["nested-browser-probe"],
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_nested_node_browser_exec_probe_argv",
+                        return_value=["nested-node-probe"],
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_run_closed_node_browser_version_probe",
+                        side_effect=[None, None],
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_preview_sandbox_argv",
+                        return_value=["nested-preview"],
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_publish_preview_sandbox_enforcement",
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_run_public",
+                        side_effect=(
+                            public_result
+                            if isinstance(public_result, BaseException)
+                            else None
+                        ),
+                        return_value=(
+                            public_result
+                            if isinstance(public_result, dict)
+                            else None
+                        ),
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_publish_browser_exec_diagnostic",
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_publish_preview_public_wrapper",
+                        side_effect=OSError("sensitive wrapper publication denial"),
+                    ),
+                    self.assertRaises(
+                        provider_free_scenarios.ScenarioError
+                    ) as raised,
+                ):
+                    provider_free_scenarios._run_failure_operation(
+                        "native_measurement",
+                        "voxblame_preview",
+                        provider_free_scenarios._run_voxblame_preview,
+                        ["mesh-compare", "voxblame-preview"],
+                        cwd=self.repo,
+                        command_log=command_log,
+                    )
+
+                self.assertEqual(
+                    "preview_public_wrapper_evidence_publication",
+                    raised.exception.operation,
+                )
+                self.assertNotIn("sensitive", str(raised.exception))
+
+    def test_every_preview_wrapper_publication_call_site_uses_root_operation(
+        self,
+    ) -> None:
+        command_log = self.repo / "run/provider-free-commands.jsonl"
+        cases = (
+            (
+                "sandbox-setup",
+                OSError("sensitive sandbox receipt denial"),
+                None,
+                None,
+                None,
+            ),
+            (
+                "failure-diagnostic",
+                None,
+                provider_free_scenarios.ScenarioError(
+                    "sensitive public failure"
+                ),
+                None,
+                OSError("sensitive diagnostic denial"),
+            ),
+            (
+                "playwright-classification",
+                None,
+                provider_free_scenarios.ScenarioError(
+                    "sensitive launch failure",
+                    classification="preview_browser_launch_failed",
+                ),
+                None,
+                None,
+            ),
+            (
+                "renderer-classification",
+                None,
+                provider_free_scenarios.ScenarioError(
+                    "sensitive renderer failure",
+                    classification="preview_browser_render_failed",
+                ),
+                None,
+                None,
+            ),
+            (
+                "success-diagnostic",
+                None,
+                None,
+                {"ok": True},
+                OSError("sensitive diagnostic denial"),
+            ),
+        )
+        for (
+            name,
+            sandbox_effect,
+            public_effect,
+            public_result,
+            diagnostic_effect,
+        ) in cases:
+            with self.subTest(name=name):
+                with (
+                    mock.patch.object(
+                        provider_free_scenarios.platform,
+                        "system",
+                        return_value="Linux",
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_validate_attested_browser_runtime",
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_run_exact_browser_version_probe",
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_nested_browser_exec_probe_argv",
+                        return_value=["nested-browser-probe"],
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_nested_node_browser_exec_probe_argv",
+                        return_value=["nested-node-probe"],
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_run_closed_node_browser_version_probe",
+                        side_effect=[None, None],
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_preview_sandbox_argv",
+                        return_value=["nested-preview"],
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_publish_preview_sandbox_enforcement",
+                        side_effect=sandbox_effect,
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_run_public",
+                        side_effect=public_effect,
+                        return_value=public_result,
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_publish_browser_exec_diagnostic",
+                        side_effect=diagnostic_effect,
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_publish_preview_public_wrapper",
+                        side_effect=OSError(
+                            "sensitive wrapper publication denial"
+                        ),
+                    ),
+                    self.assertRaises(
+                        provider_free_scenarios.ScenarioError
+                    ) as raised,
+                ):
+                    provider_free_scenarios._run_failure_operation(
+                        "native_measurement",
+                        "voxblame_preview",
+                        provider_free_scenarios._run_voxblame_preview,
+                        ["mesh-compare", "voxblame-preview"],
+                        cwd=self.repo,
+                        command_log=command_log,
+                    )
+
+                self.assertEqual(
+                    "preview_public_wrapper_evidence_publication",
+                    raised.exception.operation,
+                )
+                self.assertNotIn("sensitive", str(raised.exception))
 
     def test_preview_reports_outer_exact_browser_exec_probe_failure(self) -> None:
         command_log = self.repo / "run/provider-free-commands.jsonl"

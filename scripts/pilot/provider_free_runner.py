@@ -34,6 +34,7 @@ from scripts.pilot.cvm_job.runtime import (
 from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
+    PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
@@ -635,6 +636,12 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
             raise ProviderFreeError(
                 "provider-free preview public wrapper conflicts"
             )
+    elif operation == (
+        PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION
+    ) and os.path.lexists(exp_dir / PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH):
+        raise ProviderFreeError(
+            "provider-free preview public wrapper must be absent for publication failure"
+        )
 
 
 def run_scenario(

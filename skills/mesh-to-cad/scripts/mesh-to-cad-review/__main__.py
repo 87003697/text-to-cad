@@ -63,7 +63,7 @@ _SANDBOX_SETUP_CAPABILITIES = (
     "CAP_SETFCAP",
 )
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/12",
+    "schema": "cvm.provider-free-linux-sandbox/13",
     "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -200,6 +200,12 @@ _SANDBOX_PROFILE = {
                 }
             ),
             "published": "closed-operation-only-no-process-data",
+            "publication_failure": {
+                "operation": "preview_public_wrapper_evidence_publication",
+                "scenario_failure": "run/scenario-failure.json",
+                "terminal_manifest": "artifact_manifest.json",
+                "wrapper_receipt": "absent",
+            },
         },
     },
     "untrusted_canonical_worker": {
@@ -506,12 +512,130 @@ def _runner_verdict(workspace: Path) -> tuple[str, list[dict[str, str]]]:
     return ("pass" if manifest.get("final_status") == 0 else "fail"), []
 
 
+def _runtime_authority_failure_verdict(
+    workspace: Path,
+) -> tuple[str, dict[str, str], list[dict[str, str]], list[str]] | None:
+    """Reconstruct the nonrecursive wrapper-publication root failure."""
+
+    failure_relative = "run/scenario-failure.json"
+    wrapper_relative = "run/preview-public-wrapper-diagnostic.json"
+    failure_path = workspace / failure_relative
+    if not failure_path.is_file():
+        return None
+    try:
+        failure = json.loads(failure_path.read_bytes())
+        manifest = json.loads((workspace / "artifact_manifest.json").read_bytes())
+        if failure != {
+            "schema": "cvm.provider-free-scenario-failure/1",
+            "scenario_identity": "issue15.provider-free.runtime-authority/1",
+            "stage": "native_measurement",
+            "operation": "preview_public_wrapper_evidence_publication",
+        }:
+            raise ReviewError("wrapper publication root failure is not closed")
+        if (
+            not isinstance(manifest, dict)
+            or set(manifest)
+            != {"schema_version", "workload_status", "final_status", "files"}
+            or manifest.get("schema_version") != 1
+            or isinstance(manifest.get("workload_status"), bool)
+            or not isinstance(manifest.get("workload_status"), int)
+            or manifest.get("workload_status") == 0
+            or isinstance(manifest.get("final_status"), bool)
+            or not isinstance(manifest.get("final_status"), int)
+            or manifest.get("final_status") == 0
+            or not isinstance(manifest.get("files"), list)
+        ):
+            raise ReviewError("wrapper publication root terminal manifest is invalid")
+        manifest_by_path: dict[str, dict[str, Any]] = {}
+        for entry in manifest["files"]:
+            if not isinstance(entry, dict) or set(entry) != {
+                "path",
+                "size_bytes",
+                "sha256",
+            }:
+                raise ReviewError("wrapper publication root manifest entry is invalid")
+            relative = entry.get("path")
+            size_bytes = entry.get("size_bytes")
+            digest = entry.get("sha256")
+            pure = PurePosixPath(relative) if isinstance(relative, str) else None
+            if (
+                pure is None
+                or pure.is_absolute()
+                or not pure.parts
+                or any(part in {"", ".", ".."} for part in pure.parts)
+                or pure.as_posix() != relative
+                or isinstance(size_bytes, bool)
+                or not isinstance(size_bytes, int)
+                or size_bytes < 0
+                or not isinstance(digest, str)
+                or len(digest) != 64
+                or any(character not in "0123456789abcdef" for character in digest)
+                or relative in manifest_by_path
+            ):
+                raise ReviewError("wrapper publication root manifest entry is invalid")
+            manifest_by_path[relative] = entry
+        failure_bytes = failure_path.read_bytes()
+        if manifest_by_path.get(failure_relative) != {
+            "path": failure_relative,
+            "size_bytes": len(failure_bytes),
+            "sha256": hashlib.sha256(failure_bytes).hexdigest(),
+        }:
+            raise ReviewError(
+                "terminal manifest does not bind wrapper publication root failure"
+            )
+        wrapper_path = workspace / wrapper_relative
+        if (
+            wrapper_path.exists()
+            or wrapper_path.is_symlink()
+            or wrapper_relative in manifest_by_path
+        ):
+            raise ReviewError(
+                "preview public wrapper must be absent for publication failure"
+            )
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ReviewError) as exc:
+        detail = (
+            str(exc)
+            if isinstance(exc, ReviewError)
+            else "wrapper publication root evidence is unreadable"
+        )
+        return (
+            "not_auditable",
+            {},
+            [
+                {
+                    "classification": "observability-gap",
+                    "detail": detail,
+                    "evidence": failure_relative,
+                }
+            ],
+            ["provider-free production runtime failure evidence failed closed audit"],
+        )
+    return (
+        "fail",
+        {
+            "runtime_authority_failure": failure_relative,
+            "terminal_manifest": "artifact_manifest.json",
+        },
+        [
+            {
+                "classification": "closed-runtime-failure",
+                "detail": "preview_public_wrapper_evidence_publication",
+                "evidence": failure_relative,
+            }
+        ],
+        [],
+    )
+
+
 def _runtime_authority_verdict(
     workspace: Path,
     payload: dict[str, Any] | None = None,
 ) -> tuple[str, dict[str, str], list[dict[str, str]], list[str]]:
     """Audit the optional closed provider-free runtime-authority receipt."""
 
+    failure_verdict = _runtime_authority_failure_verdict(workspace)
+    if failure_verdict is not None:
+        return failure_verdict
     receipt_path = workspace / "run/runtime-authority-smoke.json"
     if not receipt_path.is_file():
         return (
@@ -840,14 +964,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/12",
+                "id": "issue15.provider-free-bounded/13",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/12",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/13",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/12",
+                "resource_profile": "issue15.provider-free-bounded/13",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False

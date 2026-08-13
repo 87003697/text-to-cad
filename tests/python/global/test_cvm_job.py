@@ -491,6 +491,14 @@ class CvmJobTests(unittest.TestCase):
                         protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS
                     ),
                     "published": "closed-operation-only-no-process-data",
+                    "publication_failure": {
+                        "operation": (
+                            "preview_public_wrapper_evidence_publication"
+                        ),
+                        "scenario_failure": "run/scenario-failure.json",
+                        "terminal_manifest": "artifact_manifest.json",
+                        "wrapper_receipt": "absent",
+                    },
                 },
             },
             runtime.PROVIDER_FREE_SANDBOX_PROFILE["preview_process"],
@@ -995,9 +1003,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/12",
+                "id": "issue15.provider-free-bounded/13",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/12",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/13",
             },
         )
         self.assertEqual(
@@ -1123,7 +1131,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/12",
+            "issue15.provider-free-bounded/13",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],
@@ -2192,6 +2200,77 @@ server.listen(0, host, () => {
 
         self.assertEqual("failed", state["state"])
         self.assertEqual(operation, state["scenario_failure"]["operation"])
+
+    def test_monitor_projects_wrapper_publication_root_without_wrapper(self) -> None:
+        operation = "preview_public_wrapper_evidence_publication"
+        for index, extra_wrapper in enumerate((False, True)):
+            with self.subTest(extra_wrapper=extra_wrapper):
+                group = f"20260813-12{index:04d}-wrapper-root"
+                handle = runtime.submit_provider_free(
+                    "issue15-runtime-authority",
+                    group,
+                    state_root=self.state_root,
+                    detach=lambda *args: 1234,
+                )["job"]
+
+                def fake_run(*_args, **kwargs):
+                    raw_stripped = kwargs["env"][
+                        "CVM_PROVIDER_FREE_STRIPPED_NAMES"
+                    ]
+                    self.write_provider_free_failure_evidence(
+                        handle,
+                        stage="native_measurement",
+                        operation=operation,
+                        stripped=(
+                            raw_stripped.split(",") if raw_stripped else []
+                        ),
+                    )
+                    exp_dir = self.repo_root / "outputs" / handle
+                    wrapper_path = (
+                        exp_dir
+                        / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+                    )
+                    manifest_path = exp_dir / "artifact_manifest.json"
+                    if not extra_wrapper:
+                        wrapper_path.unlink()
+                        manifest = json.loads(
+                            manifest_path.read_text(encoding="utf-8")
+                        )
+                        manifest["files"] = [
+                            entry
+                            for entry in manifest["files"]
+                            if entry["path"]
+                            != protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+                        ]
+                        manifest_path.write_text(
+                            json.dumps(manifest, sort_keys=True) + "\n",
+                            encoding="utf-8",
+                        )
+                    return 1, 4321
+
+                with mock.patch.object(
+                    runtime,
+                    "_run_with_heartbeat",
+                    side_effect=fake_run,
+                ):
+                    state = runtime.supervise_provider_free(
+                        handle,
+                        state_root=self.state_root,
+                        environ={"PATH": os.environ["PATH"]},
+                    )
+
+                self.assertEqual("failed", state["state"])
+                if extra_wrapper:
+                    self.assertNotIn("scenario_failure", state)
+                    self.assertIn(
+                        "preview public wrapper must be absent",
+                        state["failure_reason"],
+                    )
+                else:
+                    self.assertEqual(
+                        operation,
+                        state["scenario_failure"]["operation"],
+                    )
 
     def test_provider_free_scenario_failure_rejects_unbound_or_open_values(self) -> None:
         for index, mutation in enumerate(

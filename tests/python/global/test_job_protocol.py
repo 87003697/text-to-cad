@@ -53,6 +53,10 @@ class JobProtocolTests(unittest.TestCase):
             },
             {
                 "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+                "operation": "preview_public_wrapper_evidence_publication",
+            },
+            {
+                "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
                 "operation": "preview_public_spawn",
                 "stderr": "sensitive",
             },

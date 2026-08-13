@@ -333,6 +333,95 @@ class PilotReviewTests(unittest.TestCase):
         )
         self.assertTrue((self.exp / "review.md").is_file())
 
+    def test_reviewer_reconstructs_wrapper_publication_root_without_wrapper(
+        self,
+    ) -> None:
+        helper = self.helper(self.canonical_experiment())
+        failure_path = self.exp / "run/scenario-failure.json"
+        write_json(
+            failure_path,
+            {
+                "schema": "cvm.provider-free-scenario-failure/1",
+                "scenario_identity": "issue15.provider-free.runtime-authority/1",
+                "stage": "native_measurement",
+                "operation": "preview_public_wrapper_evidence_publication",
+            },
+        )
+        failure_bytes = failure_path.read_bytes()
+        manifest = {
+            "schema_version": 1,
+            "workload_status": 1,
+            "final_status": 1,
+            "files": [
+                {
+                    "path": "run/scenario-failure.json",
+                    "size_bytes": len(failure_bytes),
+                    "sha256": hashlib.sha256(failure_bytes).hexdigest(),
+                }
+            ],
+        }
+        write_json(self.exp / "artifact_manifest.json", manifest)
+
+        status = self.reviewer.main(
+            [str(self.exp), "--workspace-helper", str(helper)]
+        )
+
+        self.assertEqual(status, 0)
+        review = json.loads(
+            (self.exp / "review.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            "fail",
+            review["verdicts"]["production_runtime_integration"],
+            review["issues"],
+        )
+        self.assertEqual(
+            "run/scenario-failure.json",
+            review["contract_provenance"]["runtime_authority_failure"],
+        )
+        self.assertEqual(
+            "preview_public_wrapper_evidence_publication",
+            next(
+                issue["detail"]
+                for issue in review["issues"]
+                if issue["classification"] == "closed-runtime-failure"
+            ),
+        )
+
+        wrapper_path = self.exp / "run/preview-public-wrapper-diagnostic.json"
+        write_json(
+            wrapper_path,
+            {
+                "schema": "cvm.provider-free-preview-public-wrapper/1",
+                "operation": "preview_public_spawn",
+            },
+        )
+        wrapper_bytes = wrapper_path.read_bytes()
+        manifest["files"].append(
+            {
+                "path": "run/preview-public-wrapper-diagnostic.json",
+                "size_bytes": len(wrapper_bytes),
+                "sha256": hashlib.sha256(wrapper_bytes).hexdigest(),
+            }
+        )
+        write_json(self.exp / "artifact_manifest.json", manifest)
+
+        status = self.reviewer.main(
+            [str(self.exp), "--workspace-helper", str(helper)]
+        )
+        review = json.loads(
+            (self.exp / "review.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            "not_auditable",
+            review["verdicts"]["production_runtime_integration"],
+        )
+        self.assertIn(
+            "preview public wrapper must be absent",
+            " ".join(issue["detail"] for issue in review["issues"]),
+        )
+
     def test_reviewer_binds_exec_permitted_browser_staging_profile(self) -> None:
         self.assertEqual(
             {
@@ -496,13 +585,13 @@ class PilotReviewTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/12",
+                "id": "issue15.provider-free-bounded/13",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/12",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/13",
             },
             "sandbox": {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/12",
+                "resource_profile": "issue15.provider-free-bounded/13",
             },
             "provider_environment": {
                 "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],

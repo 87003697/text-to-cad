@@ -30,6 +30,7 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+    PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA,
     PROVIDER_FREE_STAGED_BROWSER_CACHE,
@@ -555,6 +556,22 @@ def _publish_preview_public_wrapper(
             "operation": operation,
         },
     )
+
+
+def _require_preview_public_wrapper(
+    command_log: Path, *, operation: str
+) -> None:
+    """Map failure to publish wrapper evidence to its nonrecursive root."""
+
+    try:
+        _publish_preview_public_wrapper(command_log, operation=operation)
+    except OSError as exc:
+        raise ScenarioError(
+            "provider-free preview public wrapper evidence publication failed",
+            operation=(
+                PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION
+            ),
+        ) from exc
 
 
 def _run_exact_browser_version_probe(argv: Sequence[str], *, cwd: Path) -> None:
@@ -1229,7 +1246,7 @@ def _run_voxblame_preview(
             _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
         except Exception as exc:
             operation = "preview_public_sandbox_setup"
-            _publish_preview_public_wrapper(
+            _require_preview_public_wrapper(
                 command_log,
                 operation=operation,
             )
@@ -1261,7 +1278,7 @@ def _run_voxblame_preview(
                     )
                 except Exception as diagnostic_exc:
                     operation = "preview_public_failure_diagnostic_publication"
-                    _publish_preview_public_wrapper(
+                    _require_preview_public_wrapper(
                         command_log,
                         operation=operation,
                     )
@@ -1277,7 +1294,7 @@ def _run_voxblame_preview(
                     operation = (
                         "preview_browser_playwright_launch_after_direct_probes"
                     )
-                    _publish_preview_public_wrapper(
+                    _require_preview_public_wrapper(
                         command_log,
                         operation=operation,
                     )
@@ -1286,7 +1303,7 @@ def _run_voxblame_preview(
                         operation=operation,
                     ) from exc
             operation = renderer_operation or public_operation
-            _publish_preview_public_wrapper(
+            _require_preview_public_wrapper(
                 command_log,
                 operation=operation,
             )
@@ -1307,7 +1324,7 @@ def _run_voxblame_preview(
                 )
             except Exception as exc:
                 operation = "preview_public_success_diagnostic_publication"
-                _publish_preview_public_wrapper(
+                _require_preview_public_wrapper(
                     command_log,
                     operation=operation,
                 )
@@ -1315,7 +1332,7 @@ def _run_voxblame_preview(
                     "provider-free successful-public diagnostic publication failed",
                     operation=operation,
                 ) from exc
-        _publish_preview_public_wrapper(command_log, operation="passed")
+        _require_preview_public_wrapper(command_log, operation="passed")
         return result
     except ScenarioError as exc:
         operation = operations.get(exc.classification)

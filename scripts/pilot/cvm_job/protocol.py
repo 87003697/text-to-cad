@@ -60,6 +60,9 @@ PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH = (
 PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA = (
     "cvm.provider-free-preview-public-wrapper/1"
 )
+PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION = (
+    "preview_public_wrapper_evidence_publication"
+)
 PROVIDER_FREE_PREVIEW_PUBLIC_FAILURE_OPERATIONS = frozenset(
     {
         "preview_public_sandbox_setup",
@@ -318,6 +321,7 @@ PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS_BY_STAGE = {
             "preview_browser_render",
             "preview_browser_result",
             *PROVIDER_FREE_PREVIEW_PUBLIC_FAILURE_OPERATIONS,
+            PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
             "step_publication",
         }
     ),
