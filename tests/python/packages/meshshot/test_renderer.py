@@ -237,6 +237,43 @@ class ResidualRendererTests(unittest.TestCase):
                 raised.exception.browser_identity_phase,
             )
 
+    def test_linux_private_snapshot_rejects_root_owned_by_another_uid(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            executable_root = root / "meshshot-exec"
+            executable_root.mkdir(mode=0o755)
+            foreign_uid = executable_root.stat().st_uid + 1
+            with (
+                mock.patch.object(
+                    browser_runtime,
+                    "MESHSHOT_EXECUTABLE_ROOT",
+                    executable_root,
+                ),
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch.object(
+                    browser_runtime.os,
+                    "geteuid",
+                    return_value=foreign_uid,
+                ),
+                mock.patch.dict(
+                    os.environ,
+                    {"MESHSHOT_EXECUTABLE_ROOT": os.fspath(executable_root)},
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable(executable)
+            self.assertEqual("browser_identity", raised.exception.operation)
+            self.assertEqual(
+                "private_tree_materialization",
+                raised.exception.browser_identity_phase,
+            )
+
     def test_default_executable_closes_final_candidate_disappearance_and_swap(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, default_executable
 

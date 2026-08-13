@@ -74,6 +74,12 @@ _SANDBOX_PROFILE = {
     "die_with_parent": True,
     "new_session": True,
     "temporary_filesystem": "/tmp",
+    "private_browser_image_filesystem": {
+        "root": "/meshshot-exec",
+        "mount": "repository-owned-exec-permitted-tmpfs",
+        "scope": "single-preview-runtime",
+        "cleanup": "python-runtime-terminal-all-exit-classes",
+    },
     "repository_mount": "read-only",
     "output_mount": "read-write-exact-experiment",
     "browser_cache_mount": "read-only-job-scoped-attested-revision",
@@ -158,19 +164,19 @@ _SANDBOX_PROFILE = {
                 "runtime_evidence_cross_binding",
             ],
             "private_snapshot_phases": [
-                "source_executable_identity",
-                "private_tree_materialization",
-                "private_launch_image_identity",
                 "playwright_package_revision_identity",
+                "private_launch_image_identity",
                 "private_launch_version_execution",
                 "private_launch_version_output_identity",
+                "private_tree_materialization",
+                "source_executable_identity",
             ],
             "playwright_package_revision_checks": [
-                "python_distribution_metadata",
-                "playwright_package_manifest",
                 "browser_manifest_entry",
-                "frozen_playwright_version_match",
                 "frozen_browser_revision_match",
+                "frozen_playwright_version_match",
+                "playwright_package_manifest",
+                "python_distribution_metadata",
             ],
             "binding": [
                 "run/scenario-failure.json",
@@ -254,6 +260,7 @@ _SANDBOX_REQUIRED_ENVIRONMENT = {
     "HOME": "/home/provider-free",
     "PATH": "/workspace/repo/.venv/bin:/usr/local/bin:/usr/bin:/bin",
     "PLAYWRIGHT_BROWSERS_PATH": "/tmp/provider-free-playwright",
+    "MESHSHOT_EXECUTABLE_ROOT": "/meshshot-exec",
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 _SYSTEM_RO_PATHS = (
@@ -326,6 +333,8 @@ def _validate_provider_free_sandbox_argv(
         "/proc",
         "--tmpfs",
         "/tmp",
+        "--tmpfs",
+        "/meshshot-exec",
         "--dir",
         "/workspace",
         "--ro-bind",
@@ -994,6 +1003,7 @@ def _runtime_authority_verdict(
                     "LANG",
                     "PATH",
                     "PLAYWRIGHT_BROWSERS_PATH",
+                    "MESHSHOT_EXECUTABLE_ROOT",
                     "PYTHONDONTWRITEBYTECODE",
                     "TZ",
                 }
@@ -1002,6 +1012,7 @@ def _runtime_authority_verdict(
                 "HOME",
                 "PATH",
                 "PLAYWRIGHT_BROWSERS_PATH",
+                "MESHSHOT_EXECUTABLE_ROOT",
                 "PYTHONDONTWRITEBYTECODE",
             }.issubset(
                 sandbox.get("environment_names", [])
@@ -1278,6 +1289,9 @@ def _runtime_authority_verdict(
                 "/tmp/provider-free-playwright/attested/"
                 "chrome-headless-shell-linux64/chrome-headless-shell"
             ),
+            "--setenv",
+            "MESHSHOT_EXECUTABLE_ROOT",
+            "/meshshot-exec",
             "--chdir",
             sandbox_root,
             "--",
