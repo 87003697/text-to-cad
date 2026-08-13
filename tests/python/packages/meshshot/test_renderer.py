@@ -3123,6 +3123,85 @@ class ResidualRendererTests(unittest.TestCase):
                 elif isinstance(failure, SystemExit):
                     self.assertEqual(7, raised.exception.code)
 
+    def test_linux_version_post_spawn_control_flow_always_reaps_owned_group(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        for boundary in ("validation", "group-proof"):
+            for cleanup_failed in (False, True):
+                pinned = object.__new__(_PinnedExecutable)
+                pinned.fd = 73
+                pinned.launch_path = Path("/private/image/chrome-headless-shell")
+                process = mock.MagicMock(spec=subprocess.Popen)
+                process.pid = 43210
+                process.returncode = 0
+                process.communicate.return_value = (
+                    b"Google Chrome for Testing 148.0.7778.96\n",
+                    b"",
+                )
+
+                def validation(_value: object) -> object:
+                    raise KeyboardInterrupt()
+
+                with ExitStack() as stack:
+                    stack.enter_context(
+                        self.subTest(
+                            boundary=boundary,
+                            cleanup_failed=cleanup_failed,
+                        )
+                    )
+                    stack.enter_context(
+                        mock.patch.object(browser_runtime.sys, "platform", "linux")
+                    )
+                    stack.enter_context(
+                        mock.patch.object(pinned, "popen", return_value=process)
+                    )
+                    if boundary == "validation":
+                        stack.enter_context(
+                            mock.patch.object(
+                                browser_runtime,
+                                "_VERSION_OUTPUT",
+                                mock.Mock(fullmatch=validation),
+                            )
+                        )
+                        stack.enter_context(
+                            mock.patch(
+                                "meshshot.browser_runtime._wait_group_empty",
+                                return_value=True,
+                            )
+                        )
+                    else:
+                        stack.enter_context(
+                            mock.patch(
+                                "meshshot.browser_runtime._wait_group_empty",
+                                side_effect=SystemExit(9),
+                            )
+                        )
+                    reap = stack.enter_context(
+                        mock.patch.object(
+                            pinned,
+                            "_reap_failed_handoff",
+                            return_value=cleanup_failed,
+                        )
+                    )
+                    raised = stack.enter_context(
+                        self.assertRaises(
+                            BrowserRuntimeError
+                            if cleanup_failed
+                            else (
+                                KeyboardInterrupt
+                                if boundary == "validation"
+                                else SystemExit
+                            )
+                        )
+                    )
+                    pinned.run_version(timeout=5)
+                reap.assert_called_once()
+                if cleanup_failed:
+                    self.assertEqual("browser_cleanup", raised.exception.operation)
+                elif boundary == "group-proof":
+                    self.assertEqual(9, raised.exception.code)
+
     def test_linux_running_image_descriptor_close_failure_is_cleanup(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
