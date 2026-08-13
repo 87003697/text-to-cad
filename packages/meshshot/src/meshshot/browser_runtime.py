@@ -222,7 +222,12 @@ def _private_directory(prefix: str) -> Path:
 
 
 class _PinnedExecutable:
-    """Own one exact executable image from attestation through production exec."""
+    """Own one exact executable image from attestation through production exec.
+
+    The private tree's non-writable modes are the repo's ordinary unprivileged
+    workload boundary. A privileged actor that deliberately changes those modes
+    is outside this runtime's threat model.
+    """
 
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -295,6 +300,43 @@ class _PinnedExecutable:
         finally:
             os.close(descriptor)
 
+    @staticmethod
+    def _freeze_directories(root: Path) -> None:
+        for current, _directories, _files in os.walk(
+            root,
+            topdown=False,
+            followlinks=False,
+        ):
+            directory = Path(current)
+            info = directory.lstat()
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise BrowserRuntimeError("browser_identity")
+            os.chmod(directory, 0o555)
+
+    @staticmethod
+    def _thaw_directories(root: Path) -> None:
+        info = root.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise BrowserRuntimeError("browser_cleanup")
+        os.chmod(root, 0o700)
+        for current, directories, _files in os.walk(
+            root,
+            topdown=True,
+            followlinks=False,
+        ):
+            directory = Path(current)
+            info = directory.lstat()
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise BrowserRuntimeError("browser_cleanup")
+            os.chmod(directory, 0o700)
+            for name in directories:
+                child = directory / name
+                child_info = child.lstat()
+                if not stat.S_ISLNK(child_info.st_mode):
+                    if not stat.S_ISDIR(child_info.st_mode):
+                        raise BrowserRuntimeError("browser_cleanup")
+                    os.chmod(child, 0o700)
+
     def _materialize_private_image(
         self,
         source_fd: int,
@@ -335,6 +377,7 @@ class _PinnedExecutable:
                 if sibling.name != self.path.name:
                     self._snapshot_resource(sibling, root / sibling.name)
             self._fsync_directory(root)
+            self._freeze_directories(root)
             snapshot_fd = os.open(
                 launch,
                 os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
@@ -361,7 +404,19 @@ class _PinnedExecutable:
         except BaseException as exc:
             if snapshot_fd is not None:
                 os.close(snapshot_fd)
-            shutil.rmtree(root, ignore_errors=True)
+            cleanup_failed = False
+            try:
+                self._thaw_directories(root)
+            except (BrowserRuntimeError, OSError):
+                cleanup_failed = True
+            try:
+                shutil.rmtree(root)
+            except OSError:
+                cleanup_failed = True
+            if os.path.lexists(root):
+                cleanup_failed = True
+            if cleanup_failed:
+                raise BrowserRuntimeError("browser_cleanup") from exc
             if isinstance(exc, OSError):
                 raise BrowserRuntimeError("browser_identity") from exc
             raise
@@ -422,8 +477,9 @@ class _PinnedExecutable:
             self.fd = None
         if self.launch_root is not None:
             try:
+                self._thaw_directories(self.launch_root)
                 shutil.rmtree(self.launch_root)
-            except OSError:
+            except (BrowserRuntimeError, OSError):
                 failure = True
             if os.path.lexists(self.launch_root):
                 failure = True
@@ -478,14 +534,24 @@ class PrelaunchedCdpRuntime:
         self._process_group: int | None = None
 
     def _prelaunch(self) -> str:
-        profile = Path(tempfile.mkdtemp(prefix="meshshot-cdp-"))
-        self._profile_dir = profile
         try:
-            mode = profile.lstat().st_mode
-            if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode) or any(profile.iterdir()):
+            try:
+                profile = Path(tempfile.mkdtemp(prefix="meshshot-cdp-"))
+            except (OSError, TypeError, ValueError) as exc:
+                raise BrowserRuntimeError("browser_profile") from exc
+            self._profile_dir = profile
+            try:
+                mode = profile.lstat().st_mode
+                profile_nonempty = any(profile.iterdir())
+            except OSError as exc:
+                raise BrowserRuntimeError("browser_profile") from exc
+            if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode) or profile_nonempty:
                 self._profile_dir = None
                 raise BrowserRuntimeError("browser_profile")
-            os.chmod(profile, 0o700)
+            try:
+                os.chmod(profile, 0o700)
+            except OSError as exc:
+                raise BrowserRuntimeError("browser_profile") from exc
             argv = [
                 os.fspath(self._executable),
                 *self._profile["arguments"],
@@ -503,7 +569,7 @@ class PrelaunchedCdpRuntime:
                     start_new_session=True,
                     close_fds=True,
                 )
-                self._process_group = os.getpgid(self._process.pid)
+                self._process_group = self._process.pid
             except OSError as exc:
                 raise BrowserRuntimeError(_prelaunch_operation(exc)) from exc
             deadline = time.monotonic() + float(self._profile["startup_timeout_ms"]) / 1000

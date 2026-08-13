@@ -886,6 +886,32 @@ class ResidualRendererTests(unittest.TestCase):
             finally:
                 pinned.close()
 
+    def test_private_launch_tree_cleanup_failure_is_terminal(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            pinned = _PinnedExecutable(executable)
+            launch_root = pinned.launch_root
+            assert launch_root is not None
+            try:
+                with (
+                    mock.patch(
+                        "meshshot.browser_runtime.shutil.rmtree",
+                        side_effect=OSError("sensitive cleanup"),
+                    ),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    pinned.close()
+                self.assertEqual("browser_cleanup", raised.exception.operation)
+                self.assertNotIn("sensitive", str(raised.exception))
+            finally:
+                if launch_root.exists():
+                    _PinnedExecutable._thaw_directories(launch_root)
+                    __import__("shutil").rmtree(launch_root)
+
     def test_runtime_executes_private_read_only_snapshot_path(self) -> None:
         from meshshot.browser_runtime import _PinnedExecutable
 
@@ -893,6 +919,9 @@ class ResidualRendererTests(unittest.TestCase):
             executable = Path(directory) / "chrome-headless-shell"
             executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             executable.chmod(0o755)
+            resources = Path(directory) / "resources"
+            resources.mkdir()
+            (resources / "runtime.dat").write_bytes(b"resource")
             pinned = _PinnedExecutable(executable)
             try:
                 assert pinned.launch_path is not None
@@ -911,6 +940,13 @@ class ResidualRendererTests(unittest.TestCase):
                 self.assertNotIn("pass_fds", popen.call_args.kwargs)
                 mode = pinned.launch_path.stat().st_mode
                 self.assertEqual(0, mode & 0o222)
+                assert pinned.launch_root is not None
+                for path in pinned.launch_root.rglob("*"):
+                    self.assertEqual(0, path.stat().st_mode & 0o222)
+                self.assertEqual(
+                    0,
+                    pinned.launch_root.stat().st_mode & 0o222,
+                )
                 if os.geteuid() != 0:
                     with self.assertRaises(PermissionError):
                         pinned.launch_path.open("wb")
