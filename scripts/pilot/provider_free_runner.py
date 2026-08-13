@@ -33,6 +33,8 @@ from scripts.pilot.cvm_job.runtime import (
 )
 from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
+    PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
+    PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
@@ -40,6 +42,8 @@ from scripts.pilot.cvm_job.protocol import (
     ProtocolError,
     provider_free_browser_exec_diagnostic_allowed,
     provider_free_browser_exec_diagnostic_matches_operation,
+    provider_free_preview_public_wrapper_allowed,
+    provider_free_preview_public_wrapper_matches_operation,
     provider_free_preview_sandbox_receipt_allowed,
     provider_free_scenario_failure_operation_allowed,
     request_authority_sha256,
@@ -532,6 +536,23 @@ def _validate_scenario_evidence(exp_dir: Path, scenario_name: str) -> None:
         raise ProviderFreeError(
             "runtime-authority browser exec diagnostic conflicts"
         )
+    try:
+        public_wrapper = json.loads(
+            (exp_dir / PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH).read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ProviderFreeError(
+            "runtime-authority preview public wrapper is missing or invalid"
+        ) from exc
+    if (
+        not provider_free_preview_public_wrapper_allowed(public_wrapper)
+        or public_wrapper["operation"] != "passed"
+    ):
+        raise ProviderFreeError(
+            "runtime-authority preview public wrapper conflicts"
+        )
     for authority_name in ("workspace-authority.json", "workspace-authority.bundle"):
         if not (exp_dir / authority_name).is_file():
             raise ProviderFreeError("runtime-authority portable Workspace authority is missing")
@@ -595,6 +616,24 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
         ):
             raise ProviderFreeError(
                 "provider-free browser exec diagnostic conflicts"
+            )
+    if operation in PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS:
+        try:
+            public_wrapper = json.loads(
+                (
+                    exp_dir / PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+                ).read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ProviderFreeError(
+                "provider-free preview public wrapper is missing or invalid"
+            ) from exc
+        if not provider_free_preview_public_wrapper_matches_operation(
+            public_wrapper,
+            operation,
+        ):
+            raise ProviderFreeError(
+                "provider-free preview public wrapper conflicts"
             )
 
 

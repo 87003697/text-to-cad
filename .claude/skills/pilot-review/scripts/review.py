@@ -63,7 +63,7 @@ _SANDBOX_SETUP_CAPABILITIES = (
     "CAP_SETFCAP",
 )
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/11",
+    "schema": "cvm.provider-free-linux-sandbox/12",
     "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -167,6 +167,40 @@ _SANDBOX_PROFILE = {
         "capabilities": "drop-all",
         "mount_namespace": "inherit-outer",
         "receipt": "run/preview-sandbox-enforcement.json",
+        "public_wrapper": {
+            "schema": "cvm.provider-free-preview-public-wrapper/1",
+            "receipt": "run/preview-public-wrapper-diagnostic.json",
+            "operations": sorted(
+                {
+                    "preview_browser_launch",
+                    "preview_browser_launch_address_space",
+                    "preview_browser_launch_executable",
+                    "preview_browser_launch_executable_dependency",
+                    "preview_browser_launch_executable_missing",
+                    "preview_browser_launch_executable_permission",
+                    "preview_browser_launch_executable_spawn_permission",
+                    "preview_browser_launch_file_limit",
+                    "preview_browser_launch_filesystem_permission",
+                    "preview_browser_launch_process_limit",
+                    "preview_browser_launch_sandbox_permission",
+                    "preview_browser_launch_shared_memory",
+                    "preview_browser_playwright_launch_after_direct_probes",
+                    "preview_browser_render",
+                    "preview_browser_result",
+                    "preview_dependency",
+                    "preview_public_command_evidence_publication",
+                    "preview_public_failure_diagnostic_publication",
+                    "preview_public_result_shape",
+                    "preview_public_sandbox_setup",
+                    "preview_public_spawn",
+                    "preview_public_success_diagnostic_publication",
+                    "preview_public_timeout",
+                    "preview_public_unclassified_exit",
+                    "preview_runtime",
+                }
+            ),
+            "published": "closed-operation-only-no-process-data",
+        },
     },
     "untrusted_canonical_worker": {
         "profile": "cad.canonical-build-worker/2",
@@ -503,6 +537,9 @@ def _runtime_authority_verdict(
         browser_exec_diagnostic = _read_json(
             workspace / "run/browser-exec-diagnostic.json"
         )
+        public_wrapper = _read_json(
+            workspace / "run/preview-public-wrapper-diagnostic.json"
+        )
         manifest = _read_json(workspace / "artifact_manifest.json")
         if (
             deployed.get("schema") != "cvm.deployed-source-authority/1"
@@ -803,14 +840,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/11",
+                "id": "issue15.provider-free-bounded/12",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/11",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/12",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/11",
+                "resource_profile": "issue15.provider-free-bounded/12",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False
@@ -969,6 +1006,11 @@ def _runtime_authority_verdict(
             "playwright": "passed",
         }:
             raise ReviewError("browser exec diagnostic is incomplete")
+        if public_wrapper != {
+            "schema": "cvm.provider-free-preview-public-wrapper/1",
+            "operation": "passed",
+        }:
+            raise ReviewError("preview public wrapper diagnostic is incomplete")
         manifest_files = manifest.get("files")
         if manifest.get("final_status") != 0 or not isinstance(manifest_files, list):
             raise ReviewError("terminal artifact manifest is incomplete")
@@ -983,6 +1025,7 @@ def _runtime_authority_verdict(
             command_path,
             preview_path,
             "run/browser-exec-diagnostic.json",
+            "run/preview-public-wrapper-diagnostic.json",
             "run/deployed-source-authority.json",
             "run/sandbox-enforcement.json",
         ):

@@ -54,6 +54,24 @@ PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA = (
 PROVIDER_FREE_BROWSER_EXEC_FAILURE_KINDS = frozenset(
     {"spawn-event", "nonzero-exit", "timeout", "output-shape"}
 )
+PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH = (
+    "run/preview-public-wrapper-diagnostic.json"
+)
+PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA = (
+    "cvm.provider-free-preview-public-wrapper/1"
+)
+PROVIDER_FREE_PREVIEW_PUBLIC_FAILURE_OPERATIONS = frozenset(
+    {
+        "preview_public_sandbox_setup",
+        "preview_public_spawn",
+        "preview_public_timeout",
+        "preview_public_unclassified_exit",
+        "preview_public_result_shape",
+        "preview_public_command_evidence_publication",
+        "preview_public_failure_diagnostic_publication",
+        "preview_public_success_diagnostic_publication",
+    }
+)
 PROVIDER_FREE_STAGED_BROWSER_CACHE = "/tmp/provider-free-playwright"
 PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE = (
     f"{PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested/"
@@ -100,6 +118,31 @@ def provider_free_preview_sandbox_argv(group: str, exp: str) -> list[str]:
         "--variant",
         "step",
     ]
+
+
+def provider_free_preview_public_wrapper_allowed(receipt: object) -> bool:
+    """Validate one closed public-wrapper result without raw process data."""
+
+    return (
+        isinstance(receipt, dict)
+        and set(receipt) == {"schema", "operation"}
+        and receipt.get("schema")
+        == PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA
+        and receipt.get("operation")
+        in ({"passed"} | PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS)
+    )
+
+
+def provider_free_preview_public_wrapper_matches_operation(
+    receipt: object, operation: object
+) -> bool:
+    """Require the wrapper receipt to name the exact terminal operation."""
+
+    return (
+        provider_free_preview_public_wrapper_allowed(receipt)
+        and operation in PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS
+        and receipt.get("operation") == operation
+    )
 
 
 def provider_free_preview_sandbox_receipt_allowed(
@@ -274,10 +317,33 @@ PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS_BY_STAGE = {
             "preview_browser_launch_executable_dependency",
             "preview_browser_render",
             "preview_browser_result",
+            *PROVIDER_FREE_PREVIEW_PUBLIC_FAILURE_OPERATIONS,
             "step_publication",
         }
     ),
 }
+PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS = frozenset(
+    {
+        *PROVIDER_FREE_PREVIEW_PUBLIC_FAILURE_OPERATIONS,
+        "preview_runtime",
+        "preview_dependency",
+        "preview_browser_launch",
+        "preview_browser_launch_process_limit",
+        "preview_browser_launch_file_limit",
+        "preview_browser_launch_address_space",
+        "preview_browser_launch_shared_memory",
+        "preview_browser_launch_executable",
+        "preview_browser_launch_executable_missing",
+        "preview_browser_launch_executable_permission",
+        "preview_browser_launch_executable_spawn_permission",
+        "preview_browser_launch_sandbox_permission",
+        "preview_browser_launch_filesystem_permission",
+        "preview_browser_launch_executable_dependency",
+        "preview_browser_render",
+        "preview_browser_result",
+        "preview_browser_playwright_launch_after_direct_probes",
+    }
+)
 _RESERVED_UPDATE_FIELDS = frozenset(
     {
         "schema_version",

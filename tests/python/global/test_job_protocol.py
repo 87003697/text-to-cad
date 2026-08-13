@@ -26,6 +26,46 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 
 
 class JobProtocolTests(unittest.TestCase):
+    def test_preview_public_wrapper_receipt_is_closed_and_operation_bound(self) -> None:
+        for operation in (
+            "passed",
+            *sorted(protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS),
+        ):
+            with self.subTest(operation=operation):
+                receipt = {
+                    "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+                    "operation": operation,
+                }
+                self.assertTrue(
+                    protocol.provider_free_preview_public_wrapper_allowed(receipt)
+                )
+                if operation != "passed":
+                    self.assertTrue(
+                        protocol.provider_free_preview_public_wrapper_matches_operation(
+                            receipt,
+                            operation,
+                        )
+                    )
+        for receipt in (
+            {
+                "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+                "operation": "voxblame_preview",
+            },
+            {
+                "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+                "operation": "preview_public_spawn",
+                "stderr": "sensitive",
+            },
+            {
+                "schema": "cvm.provider-free-preview-public-wrapper/0",
+                "operation": "preview_public_timeout",
+            },
+        ):
+            with self.subTest(receipt=receipt):
+                self.assertFalse(
+                    protocol.provider_free_preview_public_wrapper_allowed(receipt)
+                )
+
     def test_browser_exec_diagnostic_receipt_is_closed(self) -> None:
         receipt = {
             "schema": "cvm.provider-free-browser-exec-diagnostic/4",

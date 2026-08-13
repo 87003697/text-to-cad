@@ -496,13 +496,13 @@ class PilotReviewTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/11",
+                "id": "issue15.provider-free-bounded/12",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/11",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/12",
             },
             "sandbox": {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/11",
+                "resource_profile": "issue15.provider-free-bounded/12",
             },
             "provider_environment": {
                 "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],
@@ -874,6 +874,13 @@ class PilotReviewTests(unittest.TestCase):
                 "node_detached": "passed",
                 "node_failure_kind": "not-run",
                 "playwright": "passed",
+            },
+        )
+        write_json(
+            self.exp / "run/preview-public-wrapper-diagnostic.json",
+            {
+                "schema": "cvm.provider-free-preview-public-wrapper/1",
+                "operation": "passed",
             },
         )
         write_json(self.exp / "run/runtime-authority-smoke.json", receipt)

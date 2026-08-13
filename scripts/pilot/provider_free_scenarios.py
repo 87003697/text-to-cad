@@ -28,6 +28,8 @@ from scripts.pilot import deployment_authority
 from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
+    PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
+    PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_PREVIEW_SANDBOX_SCHEMA,
     PROVIDER_FREE_STAGED_BROWSER_CACHE,
@@ -85,6 +87,12 @@ _NODE_BROWSER_PROBE_RESULT_BYTES = {
         for kind in _NODE_BROWSER_PROBE_FAILURE_KINDS
     },
 }
+_PUBLIC_SPAWN_CLASSIFICATION = "preview_public_spawn_failed"
+_PUBLIC_TIMEOUT_CLASSIFICATION = "preview_public_timeout_failed"
+_PUBLIC_COMMAND_EVIDENCE_CLASSIFICATION = (
+    "preview_public_command_evidence_publication_failed"
+)
+_PUBLIC_RESULT_SHAPE_CLASSIFICATION = "preview_public_result_shape_failed"
 
 
 class ScenarioError(RuntimeError):
@@ -385,8 +393,16 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
             stderr=subprocess.PIPE,
             timeout=COMMAND_TIMEOUT_SECONDS,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise ScenarioError(
+            "public command timed out",
+            classification=_PUBLIC_TIMEOUT_CLASSIFICATION,
+        ) from exc
     except (OSError, subprocess.SubprocessError) as exc:
-        raise ScenarioError(f"public command could not run: {argv[0]}: {exc}") from exc
+        raise ScenarioError(
+            "public command could not start",
+            classification=_PUBLIC_SPAWN_CLASSIFICATION,
+        ) from exc
     record = {
         "schema": "cvm.provider-free-command/1",
         "argv": list(argv),
@@ -396,9 +412,17 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
         "stderr_sha256": hashlib.sha256(completed.stderr.encode()).hexdigest(),
         "elapsed_seconds": round(time.monotonic() - started, 3),
     }
-    command_log.parent.mkdir(parents=True, exist_ok=True)
-    with command_log.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+    try:
+        command_log.parent.mkdir(parents=True, exist_ok=True)
+        with command_log.open("a", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+            )
+    except OSError as exc:
+        raise ScenarioError(
+            "public command evidence publication failed",
+            classification=_PUBLIC_COMMAND_EVIDENCE_CLASSIFICATION,
+        ) from exc
     if completed.returncode != 0:
         classification = None
         try:
@@ -423,9 +447,15 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise ScenarioError("public command returned invalid JSON") from exc
+        raise ScenarioError(
+            "public command returned invalid JSON",
+            classification=_PUBLIC_RESULT_SHAPE_CLASSIFICATION,
+        ) from exc
     if not isinstance(payload, dict) or payload.get("ok") is not True:
-        raise ScenarioError("public command did not return an ok result")
+        raise ScenarioError(
+            "public command did not return an ok result",
+            classification=_PUBLIC_RESULT_SHAPE_CLASSIFICATION,
+        )
     return payload
 
 
@@ -508,6 +538,21 @@ def _publish_browser_exec_diagnostic(
             "node_detached": node_detached,
             "node_failure_kind": node_failure_kind,
             "playwright": playwright,
+        },
+    )
+
+
+def _publish_preview_public_wrapper(
+    command_log: Path, *, operation: str
+) -> None:
+    """Publish only the closed public-wrapper operation or success state."""
+
+    _write_json(
+        command_log.parent
+        / Path(PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH).name,
+        {
+            "schema": PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+            "operation": operation,
         },
     )
 
@@ -1080,6 +1125,14 @@ def _run_voxblame_preview(
         "preview_browser_render_failed": "preview_browser_render",
         "preview_browser_result_failed": "preview_browser_result",
     }
+    public_failure_operations = {
+        _PUBLIC_SPAWN_CLASSIFICATION: "preview_public_spawn",
+        _PUBLIC_TIMEOUT_CLASSIFICATION: "preview_public_timeout",
+        _PUBLIC_COMMAND_EVIDENCE_CLASSIFICATION: (
+            "preview_public_command_evidence_publication"
+        ),
+        _PUBLIC_RESULT_SHAPE_CLASSIFICATION: "preview_public_result_shape",
+    }
     is_linux = platform.system() == "Linux"
     try:
         if is_linux:
@@ -1171,8 +1224,19 @@ def _run_voxblame_preview(
                         f"{node_failure_kind.replace('-', '_')}"
                     ),
                 )
-        sandbox_argv = _preview_sandbox_argv(argv, cwd=cwd)
-        _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
+        try:
+            sandbox_argv = _preview_sandbox_argv(argv, cwd=cwd)
+            _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
+        except Exception as exc:
+            operation = "preview_public_sandbox_setup"
+            _publish_preview_public_wrapper(
+                command_log,
+                operation=operation,
+            )
+            raise ScenarioError(
+                "provider-free preview sandbox setup failed",
+                operation=operation,
+            ) from exc
         try:
             result = _run_public(
                 sandbox_argv,
@@ -1180,7 +1244,58 @@ def _run_voxblame_preview(
                 command_log=command_log,
             )
         except ScenarioError as exc:
+            renderer_operation = operations.get(exc.classification)
+            public_operation = public_failure_operations.get(exc.classification)
+            if renderer_operation is None and public_operation is None:
+                public_operation = "preview_public_unclassified_exit"
             if is_linux:
+                try:
+                    _publish_browser_exec_diagnostic(
+                        command_log,
+                        outer="passed",
+                        nested="passed",
+                        node_attached="passed",
+                        node_detached="passed",
+                        node_failure_kind="not-run",
+                        playwright="failed",
+                    )
+                except Exception as diagnostic_exc:
+                    operation = "preview_public_failure_diagnostic_publication"
+                    _publish_preview_public_wrapper(
+                        command_log,
+                        operation=operation,
+                    )
+                    raise ScenarioError(
+                        "provider-free failed-public diagnostic publication failed",
+                        operation=operation,
+                    ) from diagnostic_exc
+                if exc.classification in {
+                    classification
+                    for classification in operations
+                    if classification.startswith("preview_browser_launch")
+                }:
+                    operation = (
+                        "preview_browser_playwright_launch_after_direct_probes"
+                    )
+                    _publish_preview_public_wrapper(
+                        command_log,
+                        operation=operation,
+                    )
+                    raise ScenarioError(
+                        "Playwright failed after all direct exec probes passed",
+                        operation=operation,
+                    ) from exc
+            operation = renderer_operation or public_operation
+            _publish_preview_public_wrapper(
+                command_log,
+                operation=operation,
+            )
+            raise ScenarioError(
+                "provider-free preview public wrapper failed",
+                operation=operation,
+            ) from exc
+        if is_linux:
+            try:
                 _publish_browser_exec_diagnostic(
                     command_log,
                     outer="passed",
@@ -1188,30 +1303,19 @@ def _run_voxblame_preview(
                     node_attached="passed",
                     node_detached="passed",
                     node_failure_kind="not-run",
-                    playwright="failed",
+                    playwright="passed",
                 )
-                if exc.classification in {
-                    classification
-                    for classification in operations
-                    if classification.startswith("preview_browser_launch")
-                }:
-                    raise ScenarioError(
-                        "Playwright failed after all direct exec probes passed",
-                        operation=(
-                            "preview_browser_playwright_launch_after_direct_probes"
-                        ),
-                    ) from exc
-            raise
-        if is_linux:
-            _publish_browser_exec_diagnostic(
-                command_log,
-                outer="passed",
-                nested="passed",
-                node_attached="passed",
-                node_detached="passed",
-                node_failure_kind="not-run",
-                playwright="passed",
-            )
+            except Exception as exc:
+                operation = "preview_public_success_diagnostic_publication"
+                _publish_preview_public_wrapper(
+                    command_log,
+                    operation=operation,
+                )
+                raise ScenarioError(
+                    "provider-free successful-public diagnostic publication failed",
+                    operation=operation,
+                ) from exc
+        _publish_preview_public_wrapper(command_log, operation="passed")
         return result
     except ScenarioError as exc:
         operation = operations.get(exc.classification)

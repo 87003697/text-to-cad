@@ -484,6 +484,14 @@ class CvmJobTests(unittest.TestCase):
                 "capabilities": "drop-all",
                 "mount_namespace": "inherit-outer",
                 "receipt": protocol.PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
+                "public_wrapper": {
+                    "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+                    "receipt": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
+                    "operations": sorted(
+                        protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS
+                    ),
+                    "published": "closed-operation-only-no-process-data",
+                },
             },
             runtime.PROVIDER_FREE_SANDBOX_PROFILE["preview_process"],
         )
@@ -801,6 +809,22 @@ class CvmJobTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
+            (
+                exp_dir / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+            ).write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA
+                        ),
+                        "operation": "passed",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             for name, data in (
                 ("run/runtime-authority-smoke.json", b"{}\n"),
                 ("workspace-authority.json", b"{}\n"),
@@ -882,6 +906,23 @@ class CvmJobTests(unittest.TestCase):
         }
         if operation is not None:
             failure["operation"] = operation
+        if operation in protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS:
+            (
+                exp_dir / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+            ).write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA
+                        ),
+                        "operation": operation,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         failure_path = exp_dir / "run/scenario-failure.json"
         failure_path.write_text(
             json.dumps(failure, sort_keys=True, separators=(",", ":")) + "\n",
@@ -954,9 +995,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/11",
+                "id": "issue15.provider-free-bounded/12",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/11",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/12",
             },
         )
         self.assertEqual(
@@ -1082,7 +1123,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/11",
+            "issue15.provider-free-bounded/12",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],
@@ -2117,6 +2158,41 @@ server.listen(0, host, () => {
         )
         self.assertNotIn("scenario_failure", public)
 
+    def test_monitor_projects_manifest_bound_preview_public_wrapper_failure(
+        self,
+    ) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+        operation = "preview_public_unclassified_exit"
+
+        def fake_run(*_args, **kwargs):
+            raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
+            self.write_provider_free_failure_evidence(
+                handle,
+                stage="native_measurement",
+                operation=operation,
+                stripped=raw_stripped.split(",") if raw_stripped else [],
+            )
+            return 1, 4321
+
+        with mock.patch.object(
+            runtime,
+            "_run_with_heartbeat",
+            side_effect=fake_run,
+        ):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        self.assertEqual("failed", state["state"])
+        self.assertEqual(operation, state["scenario_failure"]["operation"])
+
     def test_provider_free_scenario_failure_rejects_unbound_or_open_values(self) -> None:
         for index, mutation in enumerate(
             (
@@ -2772,6 +2848,55 @@ server.listen(0, host, () => {
 
         self.assertEqual("failed", state["state"])
         self.assertIn("browser exec diagnostic", state["failure_reason"])
+
+    def test_provider_free_supervisor_rejects_tampered_preview_public_wrapper(
+        self,
+    ) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **_kwargs):
+            self.write_provider_free_terminal_evidence(handle, stripped=[])
+            exp_dir = self.repo_root / "outputs" / handle
+            path = exp_dir / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+            wrapper = json.loads(path.read_text(encoding="utf-8"))
+            wrapper["stderr"] = "sensitive raw public output"
+            path.write_text(
+                json.dumps(wrapper, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            manifest_path = exp_dir / "artifact_manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            data = path.read_bytes()
+            entry = next(
+                item
+                for item in manifest["files"]
+                if item["path"]
+                == protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+            )
+            entry.update(
+                size_bytes=len(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+            )
+            manifest_path.write_text(
+                json.dumps(manifest, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return 0, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        self.assertEqual("failed", state["state"])
+        self.assertIn("preview public wrapper", state["failure_reason"])
 
     def test_submit_launch_failure_is_terminal(self) -> None:
         def fail_detach(handle, command, root):

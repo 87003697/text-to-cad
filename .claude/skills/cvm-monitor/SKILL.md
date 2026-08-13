@@ -86,6 +86,14 @@ Native measurement operations are:
 - `preview_browser_launch_executable_dependency`
 - `preview_browser_render`
 - `preview_browser_result`
+- `preview_public_sandbox_setup`
+- `preview_public_spawn`
+- `preview_public_timeout`
+- `preview_public_unclassified_exit`
+- `preview_public_result_shape`
+- `preview_public_command_evidence_publication`
+- `preview_public_failure_diagnostic_publication`
+- `preview_public_success_diagnostic_publication`
 - `step_publication`
 
 The attached Node probe runs first with `detached=false`; the detached Node
@@ -107,7 +115,19 @@ environment values, and arbitrary operations are never projected by the
 monitor. A diagnostic operation is rejected unless its receipt has the
 corresponding exact outcome tuple and manifest binding. Historical three-field
 receipts, operations on another stage, or values outside these lists are
-rejected by profile `/11`.
+rejected by profile `/12`.
+
+The eight public-wrapper operations distinguish the complete expected boundary
+after direct browser probes: pre-public sandbox setup or enforcement evidence,
+subprocess spawn, timeout, unclassified nonzero exit, invalid success-result
+shape, public-command evidence publication, diagnostic publication while
+handling a failed public command, and diagnostic publication after a successful
+public command. Each is backed by the manifest-bound
+`run/preview-public-wrapper-diagnostic.json` receipt, which contains only its
+schema and the exact closed operation. Successful runs bind `passed`; recognized
+renderer classifications keep their existing operations and bind that same
+operation. No return code, output, exception, argv, environment, digest, or log
+content is included.
 
 The failure path does not require successful Workspace, runtime-authority, or
 Final Delivery artifacts before reporting the primary stage. It still requires

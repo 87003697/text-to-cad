@@ -465,6 +465,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             "preview_browser_launch_executable_dependency",
             "preview_browser_render",
             "preview_browser_result",
+            *sorted(protocol.PROVIDER_FREE_PREVIEW_PUBLIC_FAILURE_OPERATIONS),
         ):
             with self.subTest(operation=operation):
                 self.assertTrue(
@@ -544,6 +545,177 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                         )
 
                 self.assertEqual(operation, raised.exception.operation)
+
+    def test_preview_generic_fallback_is_split_into_eight_closed_operations(
+        self,
+    ) -> None:
+        command_log = self.repo / "run/provider-free-commands.jsonl"
+        wrapper_path = self.repo / "run/preview-public-wrapper-diagnostic.json"
+        cases = (
+            (
+                "pre-public-setup",
+                "preview_public_sandbox_setup",
+                OSError("sensitive sandbox evidence denial"),
+                None,
+                None,
+            ),
+            (
+                "spawn",
+                "preview_public_spawn",
+                None,
+                PermissionError("sensitive subprocess spawn denial"),
+                None,
+            ),
+            (
+                "timeout",
+                "preview_public_timeout",
+                None,
+                subprocess.TimeoutExpired(["nested-preview"], 600),
+                None,
+            ),
+            (
+                "unclassified-nonzero",
+                "preview_public_unclassified_exit",
+                None,
+                subprocess.CompletedProcess(
+                    ["nested-preview"], 9, stdout="not-json", stderr="sensitive"
+                ),
+                None,
+            ),
+            (
+                "invalid-result-shape",
+                "preview_public_result_shape",
+                None,
+                subprocess.CompletedProcess(
+                    ["nested-preview"], 0, stdout="not-json", stderr=""
+                ),
+                None,
+            ),
+            (
+                "command-evidence-publication",
+                "preview_public_command_evidence_publication",
+                None,
+                subprocess.CompletedProcess(
+                    ["nested-preview"], 0, stdout='{"ok":true}', stderr=""
+                ),
+                "command-log",
+            ),
+            (
+                "failure-diagnostic-publication",
+                "preview_public_failure_diagnostic_publication",
+                None,
+                subprocess.CompletedProcess(
+                    ["nested-preview"], 7, stdout="not-json", stderr="sensitive"
+                ),
+                "browser-diagnostic",
+            ),
+            (
+                "success-diagnostic-publication",
+                "preview_public_success_diagnostic_publication",
+                None,
+                subprocess.CompletedProcess(
+                    ["nested-preview"], 0, stdout='{"ok":true}', stderr=""
+                ),
+                "browser-diagnostic",
+            ),
+        )
+        original_path_open = Path.open
+        for name, operation, setup_failure, public_result, publication_failure in cases:
+            with self.subTest(name=name):
+                shutil.rmtree(command_log.parent, ignore_errors=True)
+                command_log.parent.mkdir(parents=True)
+
+                def guarded_open(path: Path, *args: object, **kwargs: object):
+                    if publication_failure == "command-log" and path == command_log:
+                        raise OSError("sensitive command evidence denial")
+                    return original_path_open(path, *args, **kwargs)
+
+                diagnostic_effect = (
+                    OSError("sensitive browser diagnostic denial")
+                    if publication_failure == "browser-diagnostic"
+                    else None
+                )
+                with (
+                    mock.patch.object(
+                        provider_free_scenarios.platform,
+                        "system",
+                        return_value="Linux",
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_validate_attested_browser_runtime",
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_run_exact_browser_version_probe",
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_nested_browser_exec_probe_argv",
+                        return_value=["nested-browser-probe"],
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_nested_node_browser_exec_probe_argv",
+                        return_value=["nested-node-probe"],
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_run_closed_node_browser_version_probe",
+                        side_effect=[None, None],
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_preview_sandbox_argv",
+                        return_value=["nested-preview"],
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_publish_preview_sandbox_enforcement",
+                        side_effect=setup_failure,
+                    ),
+                    mock.patch.object(
+                        provider_free_scenarios.subprocess,
+                        "run",
+                        side_effect=(
+                            public_result
+                            if isinstance(public_result, BaseException)
+                            else None
+                        ),
+                        return_value=(
+                            public_result
+                            if isinstance(public_result, subprocess.CompletedProcess)
+                            else None
+                        ),
+                    ),
+                    mock.patch.object(Path, "open", guarded_open),
+                    mock.patch.object(
+                        provider_free_scenarios,
+                        "_publish_browser_exec_diagnostic",
+                        side_effect=diagnostic_effect,
+                    ),
+                    self.assertRaises(
+                        provider_free_scenarios.ScenarioError
+                    ) as raised,
+                ):
+                    provider_free_scenarios._run_failure_operation(
+                        "native_measurement",
+                        "voxblame_preview",
+                        provider_free_scenarios._run_voxblame_preview,
+                        ["mesh-compare", "voxblame-preview"],
+                        cwd=self.repo,
+                        command_log=command_log,
+                    )
+
+                self.assertEqual(operation, raised.exception.operation)
+                self.assertNotIn("sensitive", str(raised.exception))
+                self.assertEqual(
+                    {
+                        "schema": "cvm.provider-free-preview-public-wrapper/1",
+                        "operation": operation,
+                    },
+                    json.loads(wrapper_path.read_text(encoding="utf-8")),
+                )
 
     def test_preview_reports_outer_exact_browser_exec_probe_failure(self) -> None:
         command_log = self.repo / "run/provider-free-commands.jsonl"

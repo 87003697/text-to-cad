@@ -25,6 +25,9 @@ from . import tap_observer
 from .protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
+    PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
+    PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
+    PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
     PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_PATH,
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
@@ -40,6 +43,8 @@ from .protocol import (
     parse_handle,
     provider_free_browser_exec_diagnostic_allowed,
     provider_free_browser_exec_diagnostic_matches_operation,
+    provider_free_preview_public_wrapper_allowed,
+    provider_free_preview_public_wrapper_matches_operation,
     provider_free_preview_sandbox_receipt_allowed,
     provider_free_scenario_failure_operation_allowed,
     public_state,
@@ -493,12 +498,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/11",
+    "id": "issue15.provider-free-bounded/12",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/11",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/12",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/11",
+    "schema": "cvm.provider-free-linux-sandbox/12",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -593,6 +598,12 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
         "capabilities": "drop-all",
         "mount_namespace": "inherit-outer",
         "receipt": PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
+        "public_wrapper": {
+            "schema": PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+            "receipt": PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
+            "operations": sorted(PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS),
+            "published": "closed-operation-only-no-process-data",
+        },
     },
     "untrusted_canonical_worker": {
         "profile": "cad.canonical-build-worker/2",
@@ -1315,6 +1326,25 @@ def _provider_free_evidence_result(
     }
     if by_path.get(PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH) != diagnostic_entry:
         return None, "provider-free browser exec diagnostic evidence is not bound"
+    try:
+        public_wrapper_bytes = (
+            exp_dir / PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+        ).read_bytes()
+        public_wrapper = json.loads(public_wrapper_bytes)
+    except (OSError, json.JSONDecodeError):
+        return None, "provider-free preview public wrapper evidence is invalid"
+    if (
+        not provider_free_preview_public_wrapper_allowed(public_wrapper)
+        or public_wrapper["operation"] != "passed"
+    ):
+        return None, "provider-free preview public wrapper evidence conflicts"
+    public_wrapper_entry = {
+        "path": PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
+        "size_bytes": len(public_wrapper_bytes),
+        "sha256": hashlib.sha256(public_wrapper_bytes).hexdigest(),
+    }
+    if by_path.get(PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH) != public_wrapper_entry:
+        return None, "provider-free preview public wrapper evidence is not bound"
     for relative in (
         "run/runtime-authority-smoke.json",
         "workspace-authority.json",
@@ -1418,6 +1448,37 @@ def _provider_free_failure_evidence_result(
                 None,
                 None,
                 "provider-free browser exec diagnostic evidence is not bound",
+            )
+    if operation in PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS:
+        public_wrapper_path = exp_dir / PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+        try:
+            public_wrapper_bytes = public_wrapper_path.read_bytes()
+            public_wrapper = json.loads(public_wrapper_bytes)
+        except (OSError, json.JSONDecodeError):
+            return (
+                None,
+                None,
+                "provider-free preview public wrapper evidence is invalid",
+            )
+        if not provider_free_preview_public_wrapper_matches_operation(
+            public_wrapper,
+            operation,
+        ):
+            return (
+                None,
+                None,
+                "provider-free preview public wrapper evidence conflicts",
+            )
+        public_wrapper_entry = {
+            "path": PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
+            "size_bytes": len(public_wrapper_bytes),
+            "sha256": hashlib.sha256(public_wrapper_bytes).hexdigest(),
+        }
+        if by_path.get(PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH) != public_wrapper_entry:
+            return (
+                None,
+                None,
+                "provider-free preview public wrapper evidence is not bound",
             )
     proof_path, error = _provider_free_common_evidence_result(
         exp_dir,
