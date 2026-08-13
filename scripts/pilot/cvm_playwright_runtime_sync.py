@@ -14,10 +14,12 @@ from scripts.pilot.cvm_push import CommandRunner, REPO_ROOT
 
 RECEIPT_SCHEMA = "cvm-playwright-runtime-sync.receipt/1"
 INSTALL_COMMAND = (
-    "cd ~/text-to-cad && "
-    "python3 -m pip --python ./.venv/bin/python install "
+    "cd / && /usr/bin/env -i HOME=/root PATH=/usr/bin:/bin "
+    "PIP_CONFIG_FILE=/dev/null /usr/bin/python3 -I -m pip --isolated "
+    "--python /root/text-to-cad/.venv/bin/python install "
     "--disable-pip-version-check "
-    "--no-input --no-deps --upgrade --force-reinstall playwright==1.60.0"
+    "--no-input --no-deps --upgrade --force-reinstall --no-cache-dir "
+    "playwright==1.60.0"
 )
 
 
