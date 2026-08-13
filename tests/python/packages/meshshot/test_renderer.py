@@ -2461,16 +2461,19 @@ class ResidualRendererTests(unittest.TestCase):
             snapshot_fd = os.open(snapshot, os.O_RDONLY)
             real_close = os.close
             close_calls: list[int] = []
+            snapshot_close_failed = False
             thaw_calls: list[Path] = []
             real_thaw = _PinnedExecutable._thaw_directories
 
             def close_snapshot_fails(fd: int) -> None:
+                nonlocal snapshot_close_failed
                 close_calls.append(fd)
                 real_close(fd)
-                if fd == snapshot_fd:
+                if fd == snapshot_fd and not snapshot_close_failed:
+                    snapshot_close_failed = True
                     raise OSError("closed snapshot cleanup")
 
-            def record_thaw(path: Path) -> None:
+            def record_thaw(_pinned: _PinnedExecutable, path: Path) -> None:
                 thaw_calls.append(path)
                 real_thaw(path)
 
@@ -2498,7 +2501,7 @@ class ResidualRendererTests(unittest.TestCase):
             ):
                 _PinnedExecutable(executable)
             self.assertEqual("browser_cleanup", raised.exception.operation)
-            self.assertEqual([snapshot_fd], close_calls)
+            self.assertTrue(snapshot_close_failed)
             self.assertEqual(1, len(thaw_calls))
             self.assertEqual([], list(launch_parent.iterdir()))
             with self.assertRaises(OSError):

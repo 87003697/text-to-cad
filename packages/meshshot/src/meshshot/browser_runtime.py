@@ -689,9 +689,12 @@ class _PinnedExecutable:
             self.launch_root = root
             self.launch_path = launch
         except BaseException as exc:
-            if snapshot_fd is not None:
-                os.close(snapshot_fd)
             cleanup_failed = False
+            if snapshot_fd is not None:
+                try:
+                    os.close(snapshot_fd)
+                except OSError:
+                    cleanup_failed = True
             try:
                 self._thaw_directories(root)
             except (BrowserRuntimeError, OSError):
