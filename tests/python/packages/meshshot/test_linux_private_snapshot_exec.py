@@ -203,6 +203,57 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
             [argv for argv in calls if argv[1:3] == ["rm", "--force"]],
         )
 
+    def test_cleanup_accepts_only_exact_absent_container_evidence(self) -> None:
+        cases = (
+            ("absent", 1, b"[]\n", None),
+            ("retained", 0, b'[{"Id":"retained"}]\n', AssertionError),
+            ("daemon-error", 1, b"", AssertionError),
+        )
+        for label, inspect_status, inspect_stdout, expected in cases:
+            calls: list[list[str]] = []
+
+            def fake_run(
+                argv: list[str], **_kwargs: object
+            ) -> subprocess.CompletedProcess:
+                calls.append(argv)
+                if argv[1:3] == ["image", "inspect"]:
+                    return subprocess.CompletedProcess(argv, 0)
+                if "create" in argv:
+                    raise subprocess.TimeoutExpired(argv, 15)
+                if argv[1:3] == ["rm", "--force"]:
+                    return subprocess.CompletedProcess(argv, 1)
+                if argv[1:3] == ["container", "inspect"]:
+                    return subprocess.CompletedProcess(
+                        argv,
+                        inspect_status,
+                        stdout=inspect_stdout,
+                        stderr=b"",
+                    )
+                return subprocess.CompletedProcess(argv, 0)
+
+            context = (
+                self.assertRaises(expected)
+                if expected is not None
+                else self.assertRaises(subprocess.TimeoutExpired)
+            )
+            with (
+                self.subTest(cleanup=label),
+                mock.patch.object(shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(subprocess, "run", side_effect=fake_run),
+                mock.patch.object(
+                    self,
+                    "_local_docker_socket",
+                    return_value=Path("/private/local/docker.sock"),
+                    create=True,
+                ),
+                context,
+            ):
+                self.test_local_linux_noexec_harness()
+            self.assertEqual(
+                1,
+                sum(argv[1:3] == ["container", "inspect"] for argv in calls),
+            )
+
     def test_local_linux_noexec_harness(self) -> None:
         docker = shutil.which("docker")
         if docker is None:
