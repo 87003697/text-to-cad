@@ -262,7 +262,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class ComponentPayloadSaltTest(unittest.TestCase):
+class ComponentPackageVersionSaltTest(unittest.TestCase):
     """The cid must move when the component PAYLOAD changes, not only the geometry.
 
     A cid addresses a built component GLB, and that GLB embeds the topology tables the
@@ -271,12 +271,12 @@ class ComponentPayloadSaltTest(unittest.TestCase):
     reuses it (see build_package_from_compound's ``force`` handling).
     """
 
-    def test_digest_is_salted_with_the_payload_version(self) -> None:
+    def test_digest_is_salted_with_the_package_version(self) -> None:
         import hashlib
 
         digest, brep = component_package._content_hash_and_bytes(Box(1, 1, 1))
         expected = hashlib.sha256(
-            component_package.COMPONENT_PAYLOAD_VERSION.encode("utf-8") + b"\x00" + brep
+            str(component_package.STEP_PACKAGE_VERSION).encode("utf-8") + b"\x00" + brep
         ).hexdigest()
         self.assertEqual(expected, digest)
         self.assertNotEqual(
@@ -285,15 +285,15 @@ class ComponentPayloadSaltTest(unittest.TestCase):
             "an unsalted digest would survive an extractor change",
         )
 
-    def test_bumping_the_payload_version_changes_every_cid(self) -> None:
+    def test_bumping_the_package_version_changes_every_cid(self) -> None:
         box = Box(1, 1, 1)
         before = component_package._content_hash_and_bytes(box)[0]
-        original = component_package.COMPONENT_PAYLOAD_VERSION
+        original = component_package.STEP_PACKAGE_VERSION
         try:
-            component_package.COMPONENT_PAYLOAD_VERSION = f"{original}-next"
+            component_package.STEP_PACKAGE_VERSION = original + 1
             after = component_package._content_hash_and_bytes(box)[0]
         finally:
-            component_package.COMPONENT_PAYLOAD_VERSION = original
+            component_package.STEP_PACKAGE_VERSION = original
         self.assertNotEqual(before, after)
         self.assertEqual(before, component_package._content_hash_and_bytes(box)[0])
 

@@ -46,7 +46,7 @@ from cadgen._internal.implicit_package import (
     implicit_bake_settings,
 )
 from cadgen._internal.package_freshness import (
-    ASSEMBLY_PACKAGE_SCHEMA_VERSION,
+    STEP_PACKAGE_VERSION,
     bake_hash_matches,
     canonical_bake_hash,
     schema_version_matches,
@@ -115,7 +115,7 @@ def owns_entry(entry) -> bool:
 _STEP_PACKAGE = {
     "descriptor": "assembly.json",
     "package_kind": "assembly-package",
-    "schema_version": ASSEMBLY_PACKAGE_SCHEMA_VERSION,
+    "schema_version": STEP_PACKAGE_VERSION,
     # The digest an IMPORTED entry's descriptor must record for its source file.
     "source_digest_field": "stepHash",
     "missing_digest": "missing_step_hash",

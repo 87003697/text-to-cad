@@ -14,7 +14,7 @@ from cadgen._internal.drawing_package import (
 )
 from cadgen._internal.glb_topology import read_step_topology_manifest_from_glb
 from cadgen._internal.package_freshness import (
-    ASSEMBLY_PACKAGE_SCHEMA_VERSION,
+    STEP_PACKAGE_VERSION,
     canonical_bake_hash,
 )
 from cadgen._internal.source_hash import closure_for_files
@@ -123,7 +123,7 @@ class ProducerGateMirrorsTheViewerTests(unittest.TestCase):
     def _descriptor(self, options) -> dict:
         return {
             "kind": PACKAGE_KIND,
-            "packageSchemaVersion": ASSEMBLY_PACKAGE_SCHEMA_VERSION,
+            "packageSchemaVersion": STEP_PACKAGE_VERSION,
             "sourceKind": "python",
             "components": {"abc": {"glb": "components/abc.glb"}},
             "mesh": {
@@ -156,7 +156,7 @@ class ProducerGateMirrorsTheViewerTests(unittest.TestCase):
 
     def test_older_schema_version_is_not_current(self) -> None:
         descriptor = self._descriptor(self.options)
-        descriptor["packageSchemaVersion"] = ASSEMBLY_PACKAGE_SCHEMA_VERSION - 1
+        descriptor["packageSchemaVersion"] = STEP_PACKAGE_VERSION - 1
         self.assertFalse(self._match(descriptor))
 
     def test_recorded_bake_hash_is_not_current_because_step_bakes_nothing(self) -> None:

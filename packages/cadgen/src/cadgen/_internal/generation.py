@@ -32,7 +32,7 @@ from cadgen.cli_logging import CliLogger
 from cadgen._internal.cli_locking import lock_wait_notice
 from cadgen._internal.file_metadata import text_to_cad_identity_metadata, write_dxf_text_to_cad_metadata
 from cadgen._internal.package_freshness import (
-    ASSEMBLY_PACKAGE_SCHEMA_VERSION,
+    STEP_PACKAGE_VERSION,
     bake_hash_matches,
     schema_version_matches,
 )
@@ -1209,7 +1209,7 @@ def _package_descriptor_matches_spec(
     manifest = read_package_descriptor(package_dir)
     if not isinstance(manifest, dict):
         return False
-    if not schema_version_matches(manifest, ASSEMBLY_PACKAGE_SCHEMA_VERSION):
+    if not schema_version_matches(manifest, STEP_PACKAGE_VERSION):
         return False
     # The assembly package bakes no format settings into its payload (components are pure
     # geometry at recorded mesh tolerances, and those are compared below), so the expected

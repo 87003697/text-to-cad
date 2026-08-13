@@ -36,7 +36,7 @@ from cadgen._internal.implicit_package import (  # noqa: E402
     implicit_bake_settings,
 )
 from cadgen._internal.package_freshness import (  # noqa: E402
-    ASSEMBLY_PACKAGE_SCHEMA_VERSION as _STEP_SCHEMA_VERSION,
+    STEP_PACKAGE_VERSION as _STEP_SCHEMA_VERSION,
     canonical_bake_hash,
 )
 
