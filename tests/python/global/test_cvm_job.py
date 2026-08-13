@@ -1410,6 +1410,67 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(expected, public["browser_identity_diagnostic"])
         self.assertNotIn("sha256", json.dumps(public))
 
+    def test_supervisor_rejects_duplicate_manifest_bound_public_wrapper(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **kwargs):
+            raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
+            self.write_provider_free_failure_evidence(
+                handle,
+                stage="native_measurement",
+                operation="preview_browser_identity",
+                browser_identity_substage="live_running_image_identity",
+                stripped=raw_stripped.split(",") if raw_stripped else [],
+            )
+            exp_dir = self.repo_root / "outputs" / handle
+            wrapper_path = (
+                exp_dir / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+            )
+            wrapper_path.write_text(
+                "{\"schema\":\"cvm.provider-free-preview-public-wrapper/1\","
+                "\"operation\":\"passed\","
+                "\"operation\":\"preview_browser_identity\"}",
+                encoding="utf-8",
+            )
+            manifest_path = exp_dir / "artifact_manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            wrapper_bytes = wrapper_path.read_bytes()
+            entry = next(
+                item
+                for item in manifest["files"]
+                if item["path"]
+                == protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+            )
+            entry.update(
+                size_bytes=len(wrapper_bytes),
+                sha256=hashlib.sha256(wrapper_bytes).hexdigest(),
+            )
+            manifest_path.write_text(
+                json.dumps(manifest, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return 1, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        self.assertEqual("failed", state["state"])
+        self.assertNotIn("scenario_failure", state)
+        self.assertNotIn("browser_identity_diagnostic", state)
+        self.assertIn(
+            "preview public wrapper evidence is invalid",
+            state["failure_reason"],
+        )
+
     def test_monitor_rejects_unbound_browser_exec_diagnostic(self) -> None:
         handle = runtime.submit_provider_free(
             "issue15-runtime-authority",

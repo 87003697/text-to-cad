@@ -581,6 +581,25 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             exp_dir,
             "issue15-runtime-authority",
         )
+        failure_path.write_text(
+            "{\"schema\":\"cvm.provider-free-scenario-failure/1\","
+            "\"scenario_identity\":\"issue15.provider-free.runtime-authority/1\","
+            "\"stage\":\"native_measurement\","
+            "\"operation\":\"preview_browser_identity\","
+            "\"browser_identity_substage\":\"connected_cdp_browser_version_identity\","
+            "\"browser_identity_substage\":\"live_running_image_identity\"}",
+            encoding="utf-8",
+        )
+        write_diagnostic()
+        with self.assertRaisesRegex(
+            provider_free_runner.ProviderFreeError,
+            "scenario failure receipt",
+        ):
+            provider_free_runner._validate_scenario_failure_evidence(
+                exp_dir,
+                "issue15-runtime-authority",
+            )
+        failure_path.write_text(json.dumps(failure), encoding="utf-8")
         for mutation in (
             "missing",
             "unknown",
@@ -681,6 +700,20 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(
             provider_free_runner.ProviderFreeError,
             "preview public wrapper conflicts",
+        ):
+            provider_free_runner._validate_scenario_failure_evidence(
+                exp_dir,
+                "issue15-runtime-authority",
+            )
+        wrapper_path.write_text(
+            "{\"schema\":\"cvm.provider-free-preview-public-wrapper/1\","
+            "\"operation\":\"passed\","
+            f"\"operation\":{json.dumps(operation)}}}",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            provider_free_runner.ProviderFreeError,
+            "preview public wrapper",
         ):
             provider_free_runner._validate_scenario_failure_evidence(
                 exp_dir,
