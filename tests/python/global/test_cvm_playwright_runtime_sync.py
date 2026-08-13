@@ -210,7 +210,11 @@ class PlaywrightRuntimeSyncTests(unittest.TestCase):
         self.assertEqual(receipt["exit_status"], 0)
         self.assertEqual(len(runner.commands), 3)
         install = runner.commands[1]
-        self.assertIn("./.venv/bin/python -m pip install", install)
+        self.assertIn(
+            "python3 -m pip --python ./.venv/bin/python install",
+            install,
+        )
+        self.assertNotIn("./.venv/bin/python -m pip", install)
         self.assertIn("--no-input", install)
         self.assertIn("--no-deps", install)
         self.assertIn("--force-reinstall", install)
