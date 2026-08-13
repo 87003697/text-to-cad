@@ -458,6 +458,18 @@ class CvmJobTests(unittest.TestCase):
             repo_root=self.repo_root,
         )
 
+        executable_tmpfs = argv.index("--tmpfs", argv.index("--tmpfs") + 1)
+        self.assertEqual(
+            ["--tmpfs", "/meshshot-exec"],
+            argv[executable_tmpfs : executable_tmpfs + 2],
+        )
+        self.assertEqual(
+            "/meshshot-exec",
+            runtime.PROVIDER_FREE_REQUIRED_ENVIRONMENT[
+                "MESHSHOT_EXECUTABLE_ROOT"
+            ],
+        )
+
         self.assertEqual(
             ["user", "network", "pid", "ipc", "uts"],
             runtime.PROVIDER_FREE_SANDBOX_PROFILE["namespaces"],

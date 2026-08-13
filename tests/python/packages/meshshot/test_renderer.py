@@ -75,6 +75,109 @@ def _attested_connected_browser() -> mock.MagicMock:
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_linux_private_snapshot_executes_from_fixed_sandbox_root(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable_root = root / "meshshot-exec"
+            executable_root.mkdir(mode=0o755)
+            executable = root / "chrome-headless-shell"
+            executable.write_text(
+                "#!/bin/sh\nprintf 'Google Chrome for Testing 148.0.7778.96\\n'\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+
+            with (
+                mock.patch.object(
+                    browser_runtime,
+                    "MESHSHOT_EXECUTABLE_ROOT",
+                    executable_root,
+                    create=True,
+                ),
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "MESHSHOT_EXECUTABLE_ROOT": os.fspath(
+                            executable_root
+                        )
+                    },
+                ),
+            ):
+                pinned = _PinnedExecutable(executable)
+            try:
+                assert pinned.launch_root is not None
+                self.assertEqual(executable_root, pinned.launch_root.parent)
+                completed = pinned.run_version(timeout=5)
+                self.assertEqual(0, completed.returncode)
+                self.assertEqual(
+                    b"Google Chrome for Testing 148.0.7778.96\n",
+                    completed.stdout,
+                )
+                self.assertEqual(b"", completed.stderr)
+            finally:
+                pinned.close()
+
+    def test_public_render_closes_version_exec_permission_and_timeout(self) -> None:
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = mock.MagicMock()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            for failure in (
+                PermissionError(13, "private path and argv must stay closed"),
+                subprocess.TimeoutExpired(
+                    ["/private/raw-browser", "--version"],
+                    15,
+                    stderr=b"private stderr",
+                ),
+            ):
+                with (
+                    self.subTest(failure=type(failure).__name__),
+                    mock.patch.dict(
+                        os.environ,
+                        {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(executable)},
+                    ),
+                    mock.patch(
+                        "playwright.sync_api.sync_playwright", sync_playwright
+                    ),
+                    mock.patch(
+                        "meshshot.browser_runtime.metadata.version",
+                        return_value="1.60.0",
+                    ),
+                    mock.patch(
+                        "meshshot.browser_runtime._playwright_revision",
+                        return_value="1223",
+                    ),
+                    mock.patch(
+                        "meshshot.browser_runtime._PinnedExecutable.run_version",
+                        side_effect=failure,
+                    ),
+                    self.assertRaises(MeshshotError) as raised,
+                ):
+                    render_residual_preview(
+                        _geometry(triangle),
+                        _geometry(triangle),
+                        variant="step",
+                    )
+                self.assertEqual("browser_identity", raised.exception.phase)
+                self.assertEqual(
+                    "private_snapshot_launch_image_identity",
+                    raised.exception.browser_identity_substage,
+                )
+                self.assertEqual(
+                    "private_launch_version_execution",
+                    raised.exception.browser_identity_phase,
+                )
+                self.assertNotIn("private", str(raised.exception))
+                self.assertNotIn("stderr", str(raised.exception))
+
     def test_default_executable_closes_final_candidate_disappearance_and_swap(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, default_executable
 

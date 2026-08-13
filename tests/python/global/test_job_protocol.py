@@ -449,6 +449,15 @@ class JobProtocolTests(unittest.TestCase):
             ],
             argv[executable_setenv : executable_setenv + 3],
         )
+        root_setenv = argv.index("--setenv", executable_setenv + 1)
+        self.assertEqual(
+            [
+                "--setenv",
+                "MESHSHOT_EXECUTABLE_ROOT",
+                "/meshshot-exec",
+            ],
+            argv[root_setenv : root_setenv + 3],
+        )
         for field, value in (
             ("capabilities", "inherit"),
             ("mount_namespace", "host"),
