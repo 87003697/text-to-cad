@@ -15,7 +15,8 @@ from scripts.pilot.cvm_push import CommandRunner, REPO_ROOT
 RECEIPT_SCHEMA = "cvm-playwright-runtime-sync.receipt/1"
 INSTALL_COMMAND = (
     "cd ~/text-to-cad && "
-    "./.venv/bin/python -m pip install --disable-pip-version-check "
+    "python3 -m pip --python ./.venv/bin/python install "
+    "--disable-pip-version-check "
     "--no-input --no-deps --upgrade --force-reinstall playwright==1.60.0"
 )
 
