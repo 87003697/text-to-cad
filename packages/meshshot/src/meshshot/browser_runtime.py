@@ -57,7 +57,12 @@ PLAYWRIGHT_PACKAGE_REVISION_CHECKS = frozenset(
 PRIVATE_VERSION_EXECUTION_CHECKS = frozenset(
     {
         "sealed_memfd_creation_policy",
-        "private_version_helper_spawn",
+        "private_version_helper_spawn_executable_missing",
+        "private_version_helper_spawn_permission",
+        "private_version_helper_spawn_process_limit",
+        "private_version_helper_spawn_file_limit",
+        "private_version_helper_spawn_address_space",
+        "private_version_helper_spawn_other",
         "private_version_handoff_setup",
         "private_version_handoff_timeout",
         "private_version_helper_exec",
@@ -74,6 +79,20 @@ def _private_version_execution_error(check: str) -> BrowserRuntimeError:
         browser_identity_phase="private_launch_version_execution",
         browser_identity_check=check,
     )
+
+
+def _private_version_helper_spawn_check(exc: OSError) -> str:
+    if exc.errno in {errno.ENOENT, errno.ENOTDIR}:
+        return "private_version_helper_spawn_executable_missing"
+    if exc.errno in {errno.EACCES, errno.EPERM, errno.ETXTBSY}:
+        return "private_version_helper_spawn_permission"
+    if exc.errno == errno.EAGAIN:
+        return "private_version_helper_spawn_process_limit"
+    if exc.errno in {errno.EMFILE, errno.ENFILE}:
+        return "private_version_helper_spawn_file_limit"
+    if exc.errno == errno.ENOMEM:
+        return "private_version_helper_spawn_address_space"
+    return "private_version_helper_spawn_other"
 _SourceIdentity = tuple[int, int, int, int]
 _PROFILE_RESOURCE = "prelaunched_cdp_playwright_1_60_v1.json"
 _FD_EXEC_HANDOFF = Path(__file__).with_name("fd_exec_handoff.py")
@@ -1067,8 +1086,11 @@ class _PinnedExecutable:
                 for name in sorted(_FD_EXEC_ENVIRONMENT)
                 if name in os.environ
             }
-            failure_check = "private_version_helper_spawn"
-            process = subprocess.Popen(helper_argv, **options)
+            try:
+                process = subprocess.Popen(helper_argv, **options)
+            except OSError as exc:
+                failure_check = _private_version_helper_spawn_check(exc)
+                raise
             failure_check = "private_version_handoff_setup"
             parent_write_fd = write_fd
             write_fd = None

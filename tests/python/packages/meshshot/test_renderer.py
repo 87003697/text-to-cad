@@ -1154,7 +1154,12 @@ class ResidualRendererTests(unittest.TestCase):
 
         checks = (
             "sealed_memfd_creation_policy",
-            "private_version_helper_spawn",
+            "private_version_helper_spawn_executable_missing",
+            "private_version_helper_spawn_permission",
+            "private_version_helper_spawn_process_limit",
+            "private_version_helper_spawn_file_limit",
+            "private_version_helper_spawn_address_space",
+            "private_version_helper_spawn_other",
             "private_version_handoff_setup",
             "private_version_handoff_timeout",
             "private_version_helper_exec",
@@ -2451,7 +2456,7 @@ class ResidualRendererTests(unittest.TestCase):
         from meshshot.browser_runtime import _PinnedExecutable
 
         cases = {
-            "helper-spawn": "private_version_helper_spawn",
+            "helper-spawn": "private_version_helper_spawn_other",
             "select": "private_version_handoff_setup",
             "read": "private_version_handoff_setup",
             "fd-exec": "private_version_helper_exec",

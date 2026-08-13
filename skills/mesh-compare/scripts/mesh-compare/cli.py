@@ -455,7 +455,7 @@ def _preview_main(argv: list[str]) -> int:
             )
         ):
             diagnostic = {
-                "schema": "meshshot.browser-identity-failure/5",
+                "schema": "meshshot.browser-identity-failure/6",
                 "substage": exc.browser_identity_substage,
             }
             if (

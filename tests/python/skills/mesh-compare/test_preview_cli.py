@@ -420,7 +420,7 @@ class PreviewCliTests(unittest.TestCase):
                     "headless residual browser runtime failed: browser_identity"
                 ),
                 "diagnostic": {
-                    "schema": "meshshot.browser-identity-failure/5",
+                    "schema": "meshshot.browser-identity-failure/6",
                     "substage": "live_running_image_identity",
                 },
             },
@@ -459,7 +459,7 @@ class PreviewCliTests(unittest.TestCase):
                     "headless residual browser runtime failed: browser_identity"
                 ),
                 "diagnostic": {
-                    "schema": "meshshot.browser-identity-failure/5",
+                    "schema": "meshshot.browser-identity-failure/6",
                     "substage": "private_snapshot_launch_image_identity",
                     "phase": "private_tree_materialization",
                 },
@@ -496,7 +496,7 @@ class PreviewCliTests(unittest.TestCase):
                 "classification": "preview_browser_identity_failed",
                 "detail": "headless residual browser runtime failed: browser_identity",
                 "diagnostic": {
-                    "schema": "meshshot.browser-identity-failure/5",
+                    "schema": "meshshot.browser-identity-failure/6",
                     "substage": "private_snapshot_launch_image_identity",
                     "phase": "playwright_package_revision_identity",
                     "check": "frozen_browser_revision_match",
@@ -531,7 +531,7 @@ class PreviewCliTests(unittest.TestCase):
         self.assertEqual(2, status)
         self.assertEqual(
             {
-                "schema": "meshshot.browser-identity-failure/5",
+                "schema": "meshshot.browser-identity-failure/6",
                 "substage": "private_snapshot_launch_image_identity",
                 "phase": "private_launch_version_execution",
                 "check": "private_version_probe_timeout",

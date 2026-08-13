@@ -153,7 +153,7 @@ _SANDBOX_PROFILE = {
         "mount_namespace": "inherit-outer",
         "receipt": "run/preview-sandbox-enforcement.json",
         "browser_identity_diagnostic": {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/5",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/6",
             "receipt": "run/browser-identity-diagnostic.json",
             "operation": "preview_browser_identity",
             "substages": [
@@ -183,7 +183,12 @@ _SANDBOX_PROFILE = {
                 "private_version_handoff_setup",
                 "private_version_handoff_timeout",
                 "private_version_helper_exec",
-                "private_version_helper_spawn",
+                "private_version_helper_spawn_address_space",
+                "private_version_helper_spawn_executable_missing",
+                "private_version_helper_spawn_file_limit",
+                "private_version_helper_spawn_other",
+                "private_version_helper_spawn_permission",
+                "private_version_helper_spawn_process_limit",
                 "private_version_probe_completion",
                 "private_version_probe_timeout",
                 "sealed_memfd_creation_policy",
@@ -610,7 +615,12 @@ def _runtime_authority_failure_verdict(
         }
         private_version_execution_checks = {
             "sealed_memfd_creation_policy",
-            "private_version_helper_spawn",
+            "private_version_helper_spawn_executable_missing",
+            "private_version_helper_spawn_permission",
+            "private_version_helper_spawn_process_limit",
+            "private_version_helper_spawn_file_limit",
+            "private_version_helper_spawn_address_space",
+            "private_version_helper_spawn_other",
             "private_version_handoff_setup",
             "private_version_handoff_timeout",
             "private_version_helper_exec",
@@ -744,7 +754,7 @@ def _runtime_authority_failure_verdict(
             identity_bytes = identity_path.read_bytes()
             identity = _read_json(identity_path)
             expected_identity = {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/5",
+                "schema": "cvm.provider-free-browser-identity-diagnostic/6",
                 "operation": "preview_browser_identity",
                 "substage": failure["browser_identity_substage"],
                 "scenario_failure": {

@@ -28,11 +28,16 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 class JobProtocolTests(unittest.TestCase):
     def test_version_execution_diagnostic_requires_one_exact_check(self) -> None:
         self.assertEqual(
-            "cvm.provider-free-browser-identity-diagnostic/5",
+            "cvm.provider-free-browser-identity-diagnostic/6",
             protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
         )
         checks = (
-            "private_version_helper_spawn",
+            "private_version_helper_spawn_executable_missing",
+            "private_version_helper_spawn_permission",
+            "private_version_helper_spawn_process_limit",
+            "private_version_helper_spawn_file_limit",
+            "private_version_helper_spawn_address_space",
+            "private_version_helper_spawn_other",
             "private_version_handoff_setup",
             "private_version_handoff_timeout",
             "private_version_helper_exec",
@@ -43,7 +48,7 @@ class JobProtocolTests(unittest.TestCase):
         )
         for check in checks:
             receipt = {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/5",
+                "schema": "cvm.provider-free-browser-identity-diagnostic/6",
                 "operation": "preview_browser_identity",
                 "substage": "private_snapshot_launch_image_identity",
                 "phase": "private_launch_version_execution",
@@ -66,6 +71,7 @@ class JobProtocolTests(unittest.TestCase):
                 for mutation in (
                     {key: value for key, value in receipt.items() if key != "check"},
                     {**receipt, "check": "raw-exec-error"},
+                    {**receipt, "check": "private_version_helper_spawn"},
                     {**receipt, "schema": "cvm.provider-free-browser-identity-diagnostic/3"},
                 ):
                     self.assertFalse(
@@ -80,7 +86,7 @@ class JobProtocolTests(unittest.TestCase):
 
     def test_browser_identity_diagnostic_is_closed_and_failure_bound(self) -> None:
         receipt = {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/5",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/6",
             "operation": "preview_browser_identity",
             "substage": "connected_cdp_browser_version_identity",
             "scenario_failure": {

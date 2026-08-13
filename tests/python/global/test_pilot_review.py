@@ -1208,7 +1208,7 @@ class PilotReviewTests(unittest.TestCase):
         failure_bytes = (self.exp / "run/scenario-failure.json").read_bytes()
         identity_diagnostic_path = self.exp / "run/browser-identity-diagnostic.json"
         identity_diagnostic = {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/5",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/6",
             "operation": "preview_browser_identity",
             "substage": "live_running_image_identity",
             "scenario_failure": {
@@ -1276,7 +1276,7 @@ class PilotReviewTests(unittest.TestCase):
                     self.exp / "run/scenario-failure.json"
                 ).read_bytes()
                 private_diagnostic = {
-                    "schema": "cvm.provider-free-browser-identity-diagnostic/5",
+                    "schema": "cvm.provider-free-browser-identity-diagnostic/6",
                     "operation": "preview_browser_identity",
                     "substage": "private_snapshot_launch_image_identity",
                     "phase": phase,
@@ -1318,7 +1318,7 @@ class PilotReviewTests(unittest.TestCase):
             self.exp / "run/scenario-failure.json"
         ).read_bytes()
         private_diagnostic = {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/5",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/6",
             "operation": "preview_browser_identity",
             "substage": "private_snapshot_launch_image_identity",
             "phase": phase,
@@ -1433,7 +1433,7 @@ class PilotReviewTests(unittest.TestCase):
                 write_json(
                     identity_diagnostic_path,
                     {
-                        "schema": "cvm.provider-free-browser-identity-diagnostic/5",
+                        "schema": "cvm.provider-free-browser-identity-diagnostic/6",
                         "operation": "preview_browser_identity",
                         "substage": "private_snapshot_launch_image_identity",
                         "phase": "playwright_package_revision_identity",
@@ -1458,7 +1458,12 @@ class PilotReviewTests(unittest.TestCase):
 
         version_checks = (
             "sealed_memfd_creation_policy",
-            "private_version_helper_spawn",
+            "private_version_helper_spawn_executable_missing",
+            "private_version_helper_spawn_permission",
+            "private_version_helper_spawn_process_limit",
+            "private_version_helper_spawn_file_limit",
+            "private_version_helper_spawn_address_space",
+            "private_version_helper_spawn_other",
             "private_version_handoff_setup",
             "private_version_handoff_timeout",
             "private_version_helper_exec",
@@ -1483,7 +1488,7 @@ class PilotReviewTests(unittest.TestCase):
                 write_json(
                     identity_diagnostic_path,
                     {
-                        "schema": "cvm.provider-free-browser-identity-diagnostic/5",
+                        "schema": "cvm.provider-free-browser-identity-diagnostic/6",
                         "operation": "preview_browser_identity",
                         "substage": "private_snapshot_launch_image_identity",
                         "phase": "private_launch_version_execution",
@@ -1515,7 +1520,7 @@ class PilotReviewTests(unittest.TestCase):
         failure_path = self.exp / "run/scenario-failure.json"
         write_json(failure_path, package_failure)
         package_diagnostic = {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/5",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/6",
             "operation": "preview_browser_identity",
             "substage": "private_snapshot_launch_image_identity",
             "phase": "playwright_package_revision_identity",
