@@ -1019,6 +1019,82 @@ class ResidualRendererTests(unittest.TestCase):
         finally:
             listener.close()
 
+    def test_macos_listener_rejects_foreign_colistener_and_wildcard(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _verify_listener_owner
+
+        cases = (
+            (
+                b"p101\ng43210\nf3\nn127.0.0.1:49152\nTST=LISTEN\n"
+                b"p202\ng99999\nf4\nn127.0.0.1:49152\nTST=LISTEN\n"
+            ),
+            b"p101\ng43210\nf3\nn*:49152\nTST=LISTEN\n",
+        )
+        for output in cases:
+            with self.subTest(output=output):
+                with (
+                    mock.patch("meshshot.browser_runtime.sys.platform", "darwin"),
+                    mock.patch(
+                        "meshshot.browser_runtime.subprocess.run",
+                        return_value=subprocess.CompletedProcess(
+                            args=[], returncode=0, stdout=output, stderr=b""
+                        ),
+                    ),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    _verify_listener_owner(43210, 49152, timeout=5)
+                self.assertEqual("browser_identity", raised.exception.operation)
+
+    def test_cleanup_quarantine_failure_still_closes_all_authorities(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        runtime = object.__new__(PrelaunchedCdpRuntime)
+        runtime._profile = {"cleanup_term_ms": 0, "cleanup_kill_ms": 0}
+        runtime._process = None
+        runtime._process_group = None
+        runtime._profile_dir = Path("/private/tmp/meshshot-profile-owned")
+        runtime._profile_identity = (1, 2)
+        runtime._profile_cleanup_forbidden = False
+        runtime._profile_fd = 101
+        runtime._profile_parent_fd = 102
+        runtime._pinned_executable = mock.MagicMock()
+        with (
+            mock.patch("os.fstat", return_value=mock.Mock(st_dev=1, st_ino=2)),
+            mock.patch(
+                "meshshot.browser_runtime._private_directory",
+                side_effect=BrowserRuntimeError("browser_identity"),
+            ),
+            mock.patch("os.close") as close,
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            runtime._cleanup()
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual([mock.call(101), mock.call(102)], close.mock_calls)
+        runtime._pinned_executable.close.assert_called_once_with()
+
+    def test_connected_browser_identity_failure_preserves_identity_classification(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        runtime = object.__new__(PrelaunchedCdpRuntime)
+        runtime._profile = {
+            "startup_timeout_ms": 1,
+            "browser_version": "148.0.7778.96",
+        }
+        chromium = mock.MagicMock()
+        browser = _attested_connected_browser()
+        browser.new_browser_cdp_session.return_value.send.return_value = {
+            "product": "HeadlessChrome/148.0.7778.95"
+        }
+        chromium.connect_over_cdp.return_value = browser
+        with (
+            mock.patch.object(runtime, "_prelaunch", return_value="http://127.0.0.1:49152"),
+            mock.patch.object(runtime, "_cleanup") as cleanup,
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            with runtime.open(chromium):
+                self.fail("identity failure must precede render")
+        self.assertEqual("browser_identity", raised.exception.operation)
+        cleanup.assert_called_once_with()
+
     def test_private_launch_tree_rejects_atomic_executable_replacement(self) -> None:
         from meshshot.browser_runtime import _PinnedExecutable
 
