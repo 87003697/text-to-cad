@@ -26,6 +26,49 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 
 
 class JobProtocolTests(unittest.TestCase):
+    def test_browser_identity_diagnostic_is_closed_and_failure_bound(self) -> None:
+        receipt = {
+            "schema": "cvm.provider-free-browser-identity-diagnostic/1",
+            "operation": "preview_browser_identity",
+            "substage": "connected_cdp_browser_version_identity",
+            "scenario_failure": {
+                "path": "run/scenario-failure.json",
+                "sha256": "a" * 64,
+            },
+        }
+
+        self.assertTrue(
+            protocol.provider_free_browser_identity_diagnostic_allowed(
+                receipt,
+                expected_failure_sha256="a" * 64,
+            )
+        )
+        for mutation in (
+            {**receipt, "pid": 1234},
+            {**receipt, "operation": "preview_browser_runtime_evidence"},
+            {**receipt, "substage": "raw-linux-error"},
+            {
+                **receipt,
+                "scenario_failure": {
+                    **receipt["scenario_failure"],
+                    "path": "../../scenario-failure.json",
+                },
+            },
+        ):
+            with self.subTest(mutation=mutation):
+                self.assertFalse(
+                    protocol.provider_free_browser_identity_diagnostic_allowed(
+                        mutation,
+                        expected_failure_sha256="a" * 64,
+                    )
+                )
+        self.assertFalse(
+            protocol.provider_free_browser_identity_diagnostic_allowed(
+                receipt,
+                expected_failure_sha256="b" * 64,
+            )
+        )
+
     def test_prelaunched_cdp_runtime_receipt_requires_frozen_exact_identities(self) -> None:
         receipt = {
             "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,

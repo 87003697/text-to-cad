@@ -390,6 +390,44 @@ class PreviewCliTests(unittest.TestCase):
                 self.assertEqual(expected, payload["error"]["classification"])
                 self.assertIn(expected, stderr)
 
+    def test_browser_identity_failure_projects_only_versioned_closed_substage(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            cli,
+            "render_residual_preview",
+            side_effect=cli.MeshshotError(
+                "headless residual browser runtime failed: browser_identity",
+                phase="browser_identity",
+                browser_identity_substage="live_running_image_identity",
+            ),
+        ):
+            status, payload, stderr = self.invoke(*self.preview_arguments(
+                str(self.candidate),
+                "--reference",
+                str(self.reference),
+                "--output",
+                str(self.root / "identity-failure"),
+                "--variant",
+                "step",
+            ))
+
+        self.assertEqual(2, status)
+        self.assertEqual(
+            {
+                "classification": "preview_browser_identity_failed",
+                "detail": (
+                    "headless residual browser runtime failed: browser_identity"
+                ),
+                "diagnostic": {
+                    "schema": "meshshot.browser-identity-failure/1",
+                    "substage": "live_running_image_identity",
+                },
+            },
+            payload["error"],
+        )
+        self.assertNotIn("live_running_image_identity", stderr)
+
     def test_preview_rejects_experiment_profile_conflict_before_rendering(self) -> None:
         experiment = json.loads(self.experiment.read_text(encoding="utf-8"))
         experiment["preview_profile"]["sha256"] = "0" * 64

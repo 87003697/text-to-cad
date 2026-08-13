@@ -355,6 +355,71 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     operation,
                 )
 
+    def test_browser_identity_failure_publishes_scenario_bound_diagnostic(
+        self,
+    ) -> None:
+        workspace = self.repo / "outputs/group/browser-identity-diagnostic"
+        workspace.mkdir(parents=True)
+        candidate = workspace / "work/candidate"
+        defaults = {
+            "deployed_viewer_receipt": {"viewer_version": "test"},
+            "deployed_runtime_tree_receipt": {"files": []},
+            "cadpy_runtime_evidence": {"schema": "cadpy"},
+            "viewer_fallback_evidence": {"action": "start"},
+            "_prepare_candidate": candidate,
+            "_prepare_workspace": None,
+        }
+        patchers = [
+            mock.patch.object(provider_free_scenarios, helper, return_value=value)
+            for helper, value in defaults.items()
+        ]
+        patchers.append(
+            mock.patch.object(
+                provider_free_scenarios,
+                "_publish_measured_step",
+                side_effect=provider_free_scenarios.ScenarioError(
+                    "closed browser identity failure",
+                    operation="preview_browser_identity",
+                    browser_identity_substage="loopback_listener_address_ownership",
+                ),
+            )
+        )
+        for patcher in patchers:
+            patcher.start()
+        try:
+            with mock.patch("sys.stderr", new_callable=io.StringIO):
+                status = provider_free_scenarios.main(
+                    [
+                        "run",
+                        "issue15-runtime-authority",
+                        "--workspace",
+                        str(workspace),
+                    ]
+                )
+        finally:
+            for patcher in reversed(patchers):
+                patcher.stop()
+
+        self.assertEqual(1, status)
+        failure_path = workspace / "run/scenario-failure.json"
+        failure_bytes = failure_path.read_bytes()
+        self.assertEqual(
+            {
+                "schema": "cvm.provider-free-browser-identity-diagnostic/1",
+                "operation": "preview_browser_identity",
+                "substage": "loopback_listener_address_ownership",
+                "scenario_failure": {
+                    "path": "run/scenario-failure.json",
+                    "sha256": hashlib.sha256(failure_bytes).hexdigest(),
+                },
+            },
+            json.loads(
+                (workspace / "run/browser-identity-diagnostic.json").read_text(
+                    encoding="utf-8"
+                )
+            ),
+        )
+
     def test_wrapper_publication_root_artifact_is_closed_and_nonrecursive(
         self,
     ) -> None:
