@@ -620,7 +620,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                     write_diagnostic(substage="raw-linux-errno")
                 elif mutation == "duplicate":
                     diagnostic_path.write_text(
-                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/1\","
+                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/2\","
                         "\"operation\":\"preview_browser_identity\","
                         "\"substage\":\"live_running_image_identity\","
                         "\"substage\":\"connected_cdp_browser_version_identity\","
@@ -719,6 +719,166 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 exp_dir,
                 "issue15-runtime-authority",
             )
+
+    def test_private_snapshot_failure_requires_phase_bound_diagnostic(self) -> None:
+        exp_dir = self.repo / "outputs" / self.handle
+        run_dir = exp_dir / "run"
+        run_dir.mkdir(parents=True)
+        failure = {
+            "schema": protocol.PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+            "scenario_identity": "issue15.provider-free.runtime-authority/1",
+            "stage": "native_measurement",
+            "operation": "preview_browser_identity",
+            "browser_identity_substage": (
+                "private_snapshot_launch_image_identity"
+            ),
+            "browser_identity_phase": "private_launch_image_identity",
+        }
+        failure_path = exp_dir / protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH
+        failure_path.write_text(json.dumps(failure), encoding="utf-8")
+        (
+            exp_dir / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+        ).write_text(
+            json.dumps(
+                {
+                    "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+                    "operation": "preview_browser_identity",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (
+            exp_dir / protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
+        ).write_text(
+            json.dumps(
+                {
+                    "schema": protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
+                    "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+                    "probe": "chromium-version-immediate-exit",
+                    "outer": "passed",
+                    "nested": "passed",
+                    "node_attached": "not-run",
+                    "node_detached": "not-run",
+                    "node_failure_kind": "not-run",
+                    "prelaunched_cdp": "failed",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (
+            exp_dir / protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
+        ).write_text(
+            json.dumps(
+                {
+                    "schema": (
+                        protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA
+                    ),
+                    "operation": "preview_browser_identity",
+                    "substage": "private_snapshot_launch_image_identity",
+                    "phase": "private_launch_image_identity",
+                    "scenario_failure": {
+                        "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                        "sha256": hashlib.sha256(
+                            failure_path.read_bytes()
+                        ).hexdigest(),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        provider_free_runner._validate_scenario_failure_evidence(
+            exp_dir,
+            "issue15-runtime-authority",
+        )
+
+        diagnostic_path = (
+            exp_dir / protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
+        )
+
+        def write_phase_diagnostic(**overrides: object) -> None:
+            diagnostic = {
+                "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+                "operation": "preview_browser_identity",
+                "substage": "private_snapshot_launch_image_identity",
+                "phase": failure["browser_identity_phase"],
+                "scenario_failure": {
+                    "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                    "sha256": hashlib.sha256(
+                        failure_path.read_bytes()
+                    ).hexdigest(),
+                },
+                **overrides,
+            }
+            diagnostic_path.write_text(json.dumps(diagnostic), encoding="utf-8")
+
+        for mutation in (
+            "missing",
+            "duplicate",
+            "unknown",
+            "reordered",
+            "unbound",
+            "recomputed",
+        ):
+            with self.subTest(mutation=mutation):
+                failure["browser_identity_phase"] = (
+                    "private_launch_image_identity"
+                )
+                failure_path.write_text(json.dumps(failure), encoding="utf-8")
+                write_phase_diagnostic()
+                if mutation == "missing":
+                    diagnostic = json.loads(
+                        diagnostic_path.read_text(encoding="utf-8")
+                    )
+                    diagnostic.pop("phase")
+                    diagnostic_path.write_text(
+                        json.dumps(diagnostic), encoding="utf-8"
+                    )
+                elif mutation == "duplicate":
+                    diagnostic_path.write_text(
+                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/2\","
+                        "\"operation\":\"preview_browser_identity\","
+                        "\"substage\":\"private_snapshot_launch_image_identity\","
+                        "\"phase\":\"source_executable_identity\","
+                        "\"phase\":\"private_launch_image_identity\","
+                        "\"scenario_failure\":{"
+                        "\"path\":\"run/scenario-failure.json\","
+                        f"\"sha256\":\"{hashlib.sha256(failure_path.read_bytes()).hexdigest()}\"}}",
+                        encoding="utf-8",
+                    )
+                elif mutation == "unknown":
+                    write_phase_diagnostic(phase="raw-copy-error")
+                elif mutation == "reordered":
+                    write_phase_diagnostic(
+                        phase="private_tree_materialization"
+                    )
+                elif mutation == "unbound":
+                    write_phase_diagnostic(
+                        scenario_failure={
+                            "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                            "sha256": "0" * 64,
+                        }
+                    )
+                else:
+                    failure_path.write_text(
+                        "{\"schema\":\"cvm.provider-free-scenario-failure/1\","
+                        "\"scenario_identity\":\"issue15.provider-free.runtime-authority/1\","
+                        "\"stage\":\"native_measurement\","
+                        "\"operation\":\"preview_browser_identity\","
+                        "\"browser_identity_substage\":\"private_snapshot_launch_image_identity\","
+                        "\"browser_identity_phase\":\"source_executable_identity\","
+                        "\"browser_identity_phase\":\"private_launch_image_identity\"}",
+                        encoding="utf-8",
+                    )
+                    write_phase_diagnostic()
+                with self.assertRaisesRegex(
+                    provider_free_runner.ProviderFreeError,
+                    "(browser identity diagnostic|scenario failure receipt)",
+                ):
+                    provider_free_runner._validate_scenario_failure_evidence(
+                        exp_dir,
+                        "issue15-runtime-authority",
+                    )
 
     def test_wrapper_publication_root_requires_absent_wrapper_receipt(self) -> None:
         exp_dir = self.repo / "outputs" / self.handle

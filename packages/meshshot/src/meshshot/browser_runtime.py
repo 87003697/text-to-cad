@@ -32,6 +32,16 @@ BROWSER_IDENTITY_SUBSTAGES = frozenset(
         "runtime_evidence_cross_binding",
     }
 )
+PRIVATE_SNAPSHOT_IDENTITY_PHASES = frozenset(
+    {
+        "source_executable_identity",
+        "private_tree_materialization",
+        "private_launch_image_identity",
+        "playwright_package_revision_identity",
+        "private_launch_version_execution",
+        "private_launch_version_output_identity",
+    }
+)
 _PROFILE_RESOURCE = "prelaunched_cdp_playwright_1_60_v1.json"
 ADAPTER_PROFILE_SHA256 = "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
 _DEVTOOLS_PATH = re.compile(r"^/devtools/browser/[0-9A-Za-z._-]+$")
@@ -82,6 +92,7 @@ class BrowserRuntimeError(RuntimeError):
         operation: str,
         *,
         browser_identity_substage: str | None = None,
+        browser_identity_phase: str | None = None,
     ) -> None:
         super().__init__(operation)
         self.operation = operation
@@ -94,6 +105,16 @@ class BrowserRuntimeError(RuntimeError):
             self.browser_identity_substage = (
                 "private_snapshot_launch_image_identity"
             )
+        self.browser_identity_phase = (
+            browser_identity_phase
+            if (
+                operation == "browser_identity"
+                and self.browser_identity_substage
+                == "private_snapshot_launch_image_identity"
+                and browser_identity_phase in PRIVATE_SNAPSHOT_IDENTITY_PHASES
+            )
+            else None
+        )
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -150,9 +171,15 @@ def _playwright_revision(browser_name: str) -> str:
             if item.get("name") == browser_name
         ]
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
-        raise BrowserRuntimeError("browser_identity") from exc
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="playwright_package_revision_identity",
+        ) from exc
     if len(matches) != 1 or not isinstance(matches[0].get("revision"), str):
-        raise BrowserRuntimeError("browser_identity")
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="playwright_package_revision_identity",
+        )
     return matches[0]["revision"]
 
 
@@ -160,7 +187,13 @@ def default_executable(chromium_executable: str) -> Path:
     """Resolve the exact headless-shell sibling installed by Playwright."""
 
     profile, _profile_sha256 = _load_profile()
-    full_browser = Path(chromium_executable).resolve(strict=True)
+    try:
+        full_browser = Path(chromium_executable).resolve(strict=True)
+    except OSError as exc:
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="source_executable_identity",
+        ) from exc
     revision_dir = next(
         (
             parent
@@ -170,17 +203,31 @@ def default_executable(chromium_executable: str) -> Path:
         None,
     )
     if revision_dir is None:
-        raise BrowserRuntimeError("browser_identity")
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="source_executable_identity",
+        )
     shell_revision = revision_dir.parent / (
         f"chromium_headless_shell-{profile['revision']}"
     )
-    candidates = [
-        path
-        for path in shell_revision.glob("chrome-headless-shell-*/chrome-headless-shell")
-        if path.is_file() and not path.is_symlink()
-    ]
+    try:
+        candidates = [
+            path
+            for path in shell_revision.glob(
+                "chrome-headless-shell-*/chrome-headless-shell"
+            )
+            if path.is_file() and not path.is_symlink()
+        ]
+    except OSError as exc:
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="source_executable_identity",
+        ) from exc
     if len(candidates) != 1:
-        raise BrowserRuntimeError("browser_identity")
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="source_executable_identity",
+        )
     return candidates[0].resolve(strict=True)
 
 
@@ -188,36 +235,58 @@ def _attest(executable: _PinnedExecutable, profile: dict[str, Any]) -> dict[str,
     try:
         playwright_version = metadata.version("playwright")
     except metadata.PackageNotFoundError as exc:
-        raise BrowserRuntimeError("browser_identity") from exc
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="playwright_package_revision_identity",
+        ) from exc
     revision = _playwright_revision(str(profile["browser"]))
     if (
         playwright_version != profile["playwright"]
         or revision != profile["revision"]
     ):
-        raise BrowserRuntimeError("browser_identity")
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="playwright_package_revision_identity",
+        )
     try:
         completed = executable.run_version(
             float(profile["startup_timeout_ms"]) / 1000
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise BrowserRuntimeError("browser_identity") from exc
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="private_launch_version_execution",
+        ) from exc
     try:
         version = completed.stdout.decode("utf-8").strip()
     except (AttributeError, UnicodeDecodeError) as exc:
-        raise BrowserRuntimeError("browser_identity") from exc
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="private_launch_version_output_identity",
+        ) from exc
     if (
         completed.returncode != 0
         or completed.stderr != b""
         or not _VERSION_OUTPUT.fullmatch(version)
         or version.rsplit(" ", 1)[-1] != profile["browser_version"]
     ):
-        raise BrowserRuntimeError("browser_identity")
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="private_launch_version_output_identity",
+        )
+    try:
+        executable_sha256 = executable.sha256()
+    except OSError as exc:
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="private_launch_image_identity",
+        ) from exc
     return {
         "playwright": playwright_version,
         "browser": str(profile["browser"]),
         "revision": revision,
         "version": version,
-        "sha256": executable.sha256(),
+        "sha256": executable_sha256,
     }
 
 
@@ -229,20 +298,34 @@ def _private_directory(prefix: str) -> Path:
             path.mkdir(mode=0o700)
         except FileExistsError:
             continue
+        except OSError as exc:
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            ) from exc
         try:
             os.chmod(path, 0o700)
             info = path.lstat()
         except OSError as exc:
             shutil.rmtree(path, ignore_errors=True)
-            raise BrowserRuntimeError("browser_identity") from exc
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            ) from exc
         if (
             not stat.S_ISDIR(info.st_mode)
             or stat.S_IMODE(info.st_mode) != 0o700
         ):
             shutil.rmtree(path, ignore_errors=True)
-            raise BrowserRuntimeError("browser_identity")
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            )
         return path
-    raise BrowserRuntimeError("browser_identity")
+    raise BrowserRuntimeError(
+        "browser_identity",
+        browser_identity_phase="private_tree_materialization",
+    )
 
 
 class _PinnedExecutable:
@@ -258,14 +341,20 @@ class _PinnedExecutable:
             source_fd = os.open(path, flags)
             source_info = os.fstat(source_fd)
         except OSError as exc:
-            raise BrowserRuntimeError("browser_identity") from exc
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="source_executable_identity",
+            ) from exc
         if (
             not path.is_absolute()
             or not stat.S_ISREG(source_info.st_mode)
             or source_info.st_mode & 0o111 == 0
         ):
             os.close(source_fd)
-            raise BrowserRuntimeError("browser_identity")
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="source_executable_identity",
+            )
         try:
             self._materialize_private_image(source_fd, source_info)
         except BaseException:
@@ -276,7 +365,10 @@ class _PinnedExecutable:
                 os.close(source_fd)
             except OSError as exc:
                 self.close()
-                raise BrowserRuntimeError("browser_identity") from exc
+                raise BrowserRuntimeError(
+                    "browser_identity",
+                    browser_identity_phase="source_executable_identity",
+                ) from exc
 
     @staticmethod
     def _snapshot_resource(
@@ -289,7 +381,10 @@ class _PinnedExecutable:
             if stat.S_ISDIR(info.st_mode):
                 identity = (info.st_dev, info.st_ino)
                 if identity in ancestors:
-                    raise BrowserRuntimeError("browser_identity")
+                    raise BrowserRuntimeError(
+                        "browser_identity",
+                        browser_identity_phase="private_tree_materialization",
+                    )
                 target.mkdir(mode=0o700)
                 os.chmod(target, 0o700)
                 for child in source.iterdir():
@@ -300,11 +395,17 @@ class _PinnedExecutable:
                     )
                 return
             if not stat.S_ISREG(info.st_mode):
-                raise BrowserRuntimeError("browser_identity")
+                raise BrowserRuntimeError(
+                    "browser_identity",
+                    browser_identity_phase="private_tree_materialization",
+                )
             shutil.copyfile(source, target, follow_symlinks=True)
             os.chmod(target, stat.S_IMODE(info.st_mode) & ~0o222)
         except OSError as exc:
-            raise BrowserRuntimeError("browser_identity") from exc
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            ) from exc
 
     @staticmethod
     def _fsync_directory(path: Path) -> None:
@@ -329,7 +430,10 @@ class _PinnedExecutable:
             directory = Path(current)
             info = directory.lstat()
             if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-                raise BrowserRuntimeError("browser_identity")
+                raise BrowserRuntimeError(
+                    "browser_identity",
+                    browser_identity_phase="private_tree_materialization",
+                )
             os.chmod(directory, 0o555)
 
     @staticmethod
@@ -364,6 +468,7 @@ class _PinnedExecutable:
         root = _private_directory("meshshot-image-")
         launch = root / self.path.name
         snapshot_fd: int | None = None
+        phase = "private_tree_materialization"
         try:
             digest = hashlib.sha256()
             written_total = 0
@@ -397,6 +502,7 @@ class _PinnedExecutable:
                     self._snapshot_resource(sibling, root / sibling.name)
             self._fsync_directory(root)
             self._freeze_directories(root)
+            phase = "private_launch_image_identity"
             snapshot_fd = os.open(
                 launch,
                 os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
@@ -436,8 +542,20 @@ class _PinnedExecutable:
                 cleanup_failed = True
             if cleanup_failed:
                 raise BrowserRuntimeError("browser_cleanup") from exc
+            if (
+                isinstance(exc, BrowserRuntimeError)
+                and exc.operation == "browser_identity"
+                and exc.browser_identity_phase is None
+            ):
+                raise BrowserRuntimeError(
+                    "browser_identity",
+                    browser_identity_phase=phase,
+                ) from exc
             if isinstance(exc, OSError):
-                raise BrowserRuntimeError("browser_identity") from exc
+                raise BrowserRuntimeError(
+                    "browser_identity",
+                    browser_identity_phase=phase,
+                ) from exc
             raise
 
     @staticmethod

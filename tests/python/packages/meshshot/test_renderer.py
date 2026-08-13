@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from io import BytesIO
 import json
 import os
@@ -627,6 +627,149 @@ class ResidualRendererTests(unittest.TestCase):
             raised.exception.browser_identity_phase,
         )
         popen.assert_not_called()
+
+    def test_public_render_preserves_each_private_snapshot_phase(self) -> None:
+        from meshshot.browser_runtime import (
+            BrowserRuntimeError,
+            PRIVATE_SNAPSHOT_IDENTITY_PHASES,
+        )
+
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = mock.MagicMock()
+        for phase in sorted(PRIVATE_SNAPSHOT_IDENTITY_PHASES):
+            with self.subTest(phase=phase), mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_EXECUTABLE": "/attested/chrome-headless-shell"},
+            ), mock.patch(
+                "playwright.sync_api.sync_playwright",
+                sync_playwright,
+            ), mock.patch(
+                "meshshot.renderer.PrelaunchedCdpRuntime",
+                side_effect=BrowserRuntimeError(
+                    "browser_identity",
+                    browser_identity_phase=phase,
+                ),
+            ), self.assertRaises(MeshshotError) as raised:
+                render_residual_preview(
+                    _geometry(triangle),
+                    _geometry(triangle),
+                    variant="step",
+                )
+            self.assertEqual("browser_identity", raised.exception.phase)
+            self.assertEqual(
+                "private_snapshot_launch_image_identity",
+                raised.exception.browser_identity_substage,
+            )
+            self.assertEqual(
+                phase,
+                raised.exception.browser_identity_phase,
+            )
+
+    def test_public_render_selects_exact_private_snapshot_failure_phase(self) -> None:
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = mock.MagicMock()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            (root / "resource.pak").write_bytes(b"resource")
+            cases = (
+                (
+                    "source_executable_identity",
+                    root / "missing-browser",
+                    (),
+                ),
+                (
+                    "private_tree_materialization",
+                    executable,
+                    (
+                        mock.patch(
+                            "meshshot.browser_runtime._PinnedExecutable._snapshot_resource",
+                            side_effect=OSError("closed materialization failure"),
+                        ),
+                    ),
+                ),
+                (
+                    "private_launch_image_identity",
+                    executable,
+                    (
+                        mock.patch(
+                            "meshshot.browser_runtime._PinnedExecutable._sha256_fd",
+                            return_value="0" * 64,
+                        ),
+                    ),
+                ),
+                (
+                    "playwright_package_revision_identity",
+                    executable,
+                    (
+                        mock.patch(
+                            "meshshot.browser_runtime.metadata.version",
+                            return_value="0.0.0",
+                        ),
+                        mock.patch(
+                            "meshshot.browser_runtime._playwright_revision",
+                            return_value="1223",
+                        ),
+                    ),
+                ),
+                (
+                    "private_launch_version_execution",
+                    executable,
+                    (
+                        mock.patch(
+                            "meshshot.browser_runtime.metadata.version",
+                            return_value="1.60.0",
+                        ),
+                        mock.patch(
+                            "meshshot.browser_runtime._playwright_revision",
+                            return_value="1223",
+                        ),
+                        mock.patch(
+                            "meshshot.browser_runtime._PinnedExecutable.run_version",
+                            side_effect=OSError("closed version execution failure"),
+                        ),
+                    ),
+                ),
+            )
+            for phase, configured_executable, patchers in cases:
+                with self.subTest(phase=phase), ExitStack() as stack:
+                    stack.enter_context(
+                        mock.patch.dict(
+                            os.environ,
+                            {
+                                "MESHSHOT_BROWSER_EXECUTABLE": os.fspath(
+                                    configured_executable
+                                )
+                            },
+                        )
+                    )
+                    stack.enter_context(
+                        mock.patch(
+                            "playwright.sync_api.sync_playwright",
+                            sync_playwright,
+                        )
+                    )
+                    for patcher in patchers:
+                        stack.enter_context(patcher)
+                    with self.assertRaises(MeshshotError) as raised:
+                        render_residual_preview(
+                            _geometry(triangle),
+                            _geometry(triangle),
+                            variant="step",
+                        )
+                self.assertEqual("browser_identity", raised.exception.phase)
+                self.assertEqual(
+                    "private_snapshot_launch_image_identity",
+                    raised.exception.browser_identity_substage,
+                )
+                self.assertEqual(
+                    phase,
+                    raised.exception.browser_identity_phase,
+                )
 
     def test_prelaunched_runtime_rejects_malformed_readiness_and_removes_profile(
         self,

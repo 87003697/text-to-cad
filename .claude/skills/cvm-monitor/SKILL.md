@@ -121,7 +121,7 @@ process group, readiness port, endpoint, environment, stderr, or launch argv.
 
 When the public operation is `preview_browser_identity`, terminal state also
 projects one `browser_identity_diagnostic` with schema
-`cvm.provider-free-browser-identity-diagnostic/1`. It contains only the first
+`cvm.provider-free-browser-identity-diagnostic/2`. It contains only the first
 failing repository-owned substage:
 
 - `private_snapshot_launch_image_identity`
@@ -130,8 +130,20 @@ failing repository-owned substage:
 - `connected_cdp_browser_version_identity`
 - `runtime_evidence_cross_binding`
 
+Only `private_snapshot_launch_image_identity` also carries exactly one phase:
+
+- `source_executable_identity`
+- `private_tree_materialization`
+- `private_launch_image_identity`
+- `playwright_package_revision_identity`
+- `private_launch_version_execution`
+- `private_launch_version_output_identity`
+
+Every other substage must omit phase.
+
 The retained `run/browser-identity-diagnostic.json` must name the same substage
-as `run/scenario-failure.json`, bind that exact failure receipt by SHA-256, and
+and, when applicable, phase as `run/scenario-failure.json`, bind that exact
+failure receipt by SHA-256, and
 itself be bound by `artifact_manifest.json`. Missing, duplicate, reordered,
 unknown, inconsistent, unbound, or recomputed evidence is rejected. The monitor
 projection strips the binding digest and still exposes no PID, PGID, port,

@@ -147,7 +147,7 @@ _SANDBOX_PROFILE = {
         "mount_namespace": "inherit-outer",
         "receipt": "run/preview-sandbox-enforcement.json",
         "browser_identity_diagnostic": {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/1",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/2",
             "receipt": "run/browser-identity-diagnostic.json",
             "operation": "preview_browser_identity",
             "substages": [
@@ -156,6 +156,14 @@ _SANDBOX_PROFILE = {
                 "loopback_listener_address_ownership",
                 "connected_cdp_browser_version_identity",
                 "runtime_evidence_cross_binding",
+            ],
+            "private_snapshot_phases": [
+                "source_executable_identity",
+                "private_tree_materialization",
+                "private_launch_image_identity",
+                "playwright_package_revision_identity",
+                "private_launch_version_execution",
+                "private_launch_version_output_identity",
             ],
             "binding": [
                 "run/scenario-failure.json",
@@ -559,16 +567,30 @@ def _runtime_authority_failure_verdict(
             "connected_cdp_browser_version_identity",
             "runtime_evidence_cross_binding",
         }
+        private_snapshot_phases = {
+            "source_executable_identity",
+            "private_tree_materialization",
+            "private_launch_image_identity",
+            "playwright_package_revision_identity",
+            "private_launch_version_execution",
+            "private_launch_version_output_identity",
+        }
+        identity_failure_keys = {
+            "schema",
+            "scenario_identity",
+            "stage",
+            "operation",
+            "browser_identity_substage",
+        }
+        if (
+            isinstance(failure, dict)
+            and failure.get("browser_identity_substage")
+            == "private_snapshot_launch_image_identity"
+        ):
+            identity_failure_keys.add("browser_identity_phase")
         identity_failure = (
             isinstance(failure, dict)
-            and set(failure)
-            == {
-                "schema",
-                "scenario_identity",
-                "stage",
-                "operation",
-                "browser_identity_substage",
-            }
+            and set(failure) == identity_failure_keys
             and failure.get("schema")
             == "cvm.provider-free-scenario-failure/1"
             and failure.get("scenario_identity")
@@ -576,6 +598,12 @@ def _runtime_authority_failure_verdict(
             and failure.get("stage") == "native_measurement"
             and failure.get("operation") == "preview_browser_identity"
             and failure.get("browser_identity_substage") in identity_substages
+            and (
+                failure.get("browser_identity_substage")
+                != "private_snapshot_launch_image_identity"
+                or failure.get("browser_identity_phase")
+                in private_snapshot_phases
+            )
         )
         if failure != wrapper_publication_failure and not identity_failure:
             raise ReviewError("runtime identity failure is not closed")
@@ -659,15 +687,18 @@ def _runtime_authority_failure_verdict(
                 raise ReviewError("browser identity wrapper failure is not closed")
             identity_bytes = identity_path.read_bytes()
             identity = _read_json(identity_path)
-            if identity != {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/1",
+            expected_identity = {
+                "schema": "cvm.provider-free-browser-identity-diagnostic/2",
                 "operation": "preview_browser_identity",
                 "substage": failure["browser_identity_substage"],
                 "scenario_failure": {
                     "path": failure_relative,
                     "sha256": hashlib.sha256(failure_bytes).hexdigest(),
                 },
-            }:
+            }
+            if failure.get("browser_identity_phase") is not None:
+                expected_identity["phase"] = failure["browser_identity_phase"]
+            if identity != expected_identity:
                 raise ReviewError("browser identity diagnostic conflicts")
             for relative, data in (
                 (wrapper_relative, wrapper_bytes),
@@ -716,6 +747,11 @@ def _runtime_authority_failure_verdict(
                 "detail": (
                     "preview_browser_identity/"
                     + str(failure["browser_identity_substage"])
+                    + (
+                        "/" + str(failure["browser_identity_phase"])
+                        if failure.get("browser_identity_phase") is not None
+                        else ""
+                    )
                     if identity_failure
                     else "preview_public_wrapper_evidence_publication"
                 ),

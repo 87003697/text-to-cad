@@ -448,11 +448,22 @@ def _preview_main(argv: list[str]) -> int:
         if (
             exc.phase == "browser_identity"
             and exc.browser_identity_substage is not None
+            and (
+                exc.browser_identity_substage
+                != "private_snapshot_launch_image_identity"
+                or exc.browser_identity_phase is not None
+            )
         ):
             diagnostic = {
-                "schema": "meshshot.browser-identity-failure/1",
+                "schema": "meshshot.browser-identity-failure/2",
                 "substage": exc.browser_identity_substage,
             }
+            if (
+                exc.browser_identity_substage
+                == "private_snapshot_launch_image_identity"
+                and exc.browser_identity_phase is not None
+            ):
+                diagnostic["phase"] = exc.browser_identity_phase
         return _emit_error(
             classification,
             _compact_detail(exc),

@@ -55,7 +55,7 @@ PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH = (
     "run/browser-identity-diagnostic.json"
 )
 PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA = (
-    "cvm.provider-free-browser-identity-diagnostic/1"
+    "cvm.provider-free-browser-identity-diagnostic/2"
 )
 PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES = frozenset(
     {
@@ -64,6 +64,16 @@ PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES = frozenset(
         "loopback_listener_address_ownership",
         "connected_cdp_browser_version_identity",
         "runtime_evidence_cross_binding",
+    }
+)
+PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES = frozenset(
+    {
+        "source_executable_identity",
+        "private_tree_materialization",
+        "private_launch_image_identity",
+        "playwright_package_revision_identity",
+        "private_launch_version_execution",
+        "private_launch_version_output_identity",
     }
 )
 PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH = (
@@ -265,15 +275,22 @@ def provider_free_browser_identity_diagnostic_allowed(
     *,
     expected_failure_sha256: object,
     expected_substage: object,
+    expected_phase: object = None,
 ) -> bool:
     """Validate one closed first-failing identity substage and failure binding."""
 
-    if not isinstance(receipt, dict) or set(receipt) != {
+    if not isinstance(receipt, dict):
+        return False
+    substage = receipt.get("substage")
+    expected_keys = {
         "schema",
         "operation",
         "substage",
         "scenario_failure",
-    }:
+    }
+    if substage == "private_snapshot_launch_image_identity":
+        expected_keys.add("phase")
+    if set(receipt) != expected_keys:
         return False
     failure = receipt.get("scenario_failure")
     return (
@@ -282,6 +299,18 @@ def provider_free_browser_identity_diagnostic_allowed(
         and receipt.get("operation") == "preview_browser_identity"
         and receipt.get("substage") in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
         and receipt.get("substage") == expected_substage
+        and (
+            (
+                substage == "private_snapshot_launch_image_identity"
+                and receipt.get("phase")
+                in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+                and receipt.get("phase") == expected_phase
+            )
+            or (
+                substage != "private_snapshot_launch_image_identity"
+                and expected_phase is None
+            )
+        )
         and isinstance(failure, dict)
         and set(failure) == {"path", "sha256"}
         and failure.get("path") == PROVIDER_FREE_SCENARIO_FAILURE_PATH
@@ -736,9 +765,15 @@ def _public_provider_free_browser_identity_diagnostic(
 ) -> dict[str, str] | None:
     """Project no identity detail beyond the fixed versioned substage."""
 
+    if not isinstance(value, dict):
+        return None
+    substage = value.get("substage")
+    phase = value.get("phase")
+    expected_keys = {"schema", "substage"}
+    if substage == "private_snapshot_launch_image_identity":
+        expected_keys.add("phase")
     if (
-        not isinstance(value, dict)
-        or set(value) != {"schema", "substage"}
+        set(value) != expected_keys
         or value.get("schema")
         != PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA
         or value.get("substage") not in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
@@ -746,12 +781,26 @@ def _public_provider_free_browser_identity_diagnostic(
         or scenario_failure.get("operation") != "preview_browser_identity"
         or scenario_failure.get("browser_identity_substage")
         != value.get("substage")
+        or (
+            substage == "private_snapshot_launch_image_identity"
+            and (
+                phase not in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+                or scenario_failure.get("browser_identity_phase") != phase
+            )
+        )
+        or (
+            substage != "private_snapshot_launch_image_identity"
+            and phase is not None
+        )
     ):
         return None
-    return {
+    result = {
         "schema": PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
         "substage": value["substage"],
     }
+    if phase is not None:
+        result["phase"] = phase
+    return result
 
 
 def _public_provider_free_bootstrap_diagnostic(
@@ -794,6 +843,7 @@ def _public_provider_free_scenario_failure(
     stage = value.get("stage")
     operation = value.get("operation")
     browser_identity_substage = value.get("browser_identity_substage")
+    browser_identity_phase = value.get("browser_identity_phase")
     if (
         value.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
         or not isinstance(expected_identity, str)
@@ -809,6 +859,17 @@ def _public_provider_free_scenario_failure(
             operation == "preview_browser_identity"
             and browser_identity_substage
             not in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
+        )
+        or (
+            browser_identity_substage
+            == "private_snapshot_launch_image_identity"
+            and browser_identity_phase
+            not in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+        )
+        or (
+            browser_identity_substage
+            != "private_snapshot_launch_image_identity"
+            and browser_identity_phase is not None
         )
     ):
         return None

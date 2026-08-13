@@ -17,6 +17,7 @@ from PIL import Image
 
 from meshshot.browser_runtime import (
     BROWSER_IDENTITY_SUBSTAGES,
+    PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     BrowserRuntimeError,
     PrelaunchedCdpRuntime,
     default_executable,
@@ -70,6 +71,7 @@ class MeshshotError(RuntimeError):
         *,
         phase: MeshshotPhase | None = None,
         browser_identity_substage: str | None = None,
+        browser_identity_phase: str | None = None,
     ) -> None:
         super().__init__(message)
         self.phase = phase
@@ -78,6 +80,15 @@ class MeshshotError(RuntimeError):
             if (
                 phase == "browser_identity"
                 and browser_identity_substage in BROWSER_IDENTITY_SUBSTAGES
+            )
+            else None
+        )
+        self.browser_identity_phase = (
+            browser_identity_phase
+            if (
+                self.browser_identity_substage
+                == "private_snapshot_launch_image_identity"
+                and browser_identity_phase in PRIVATE_SNAPSHOT_IDENTITY_PHASES
             )
             else None
         )
@@ -272,6 +283,7 @@ def render_residual_preview(
             f"headless residual browser runtime failed: {exc.operation}",
             phase=exc.operation,
             browser_identity_substage=exc.browser_identity_substage,
+            browser_identity_phase=exc.browser_identity_phase,
         ) from exc
     except Exception as exc:
         stage = (

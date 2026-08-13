@@ -420,7 +420,7 @@ class PreviewCliTests(unittest.TestCase):
                     "headless residual browser runtime failed: browser_identity"
                 ),
                 "diagnostic": {
-                    "schema": "meshshot.browser-identity-failure/1",
+                    "schema": "meshshot.browser-identity-failure/2",
                     "substage": "live_running_image_identity",
                 },
             },
@@ -467,6 +467,33 @@ class PreviewCliTests(unittest.TestCase):
             payload["error"],
         )
         self.assertNotIn("private_tree_materialization", stderr)
+
+    def test_private_snapshot_failure_without_phase_publishes_no_diagnostic(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            cli,
+            "render_residual_preview",
+            side_effect=cli.MeshshotError(
+                "headless residual browser runtime failed: browser_identity",
+                phase="browser_identity",
+                browser_identity_substage=(
+                    "private_snapshot_launch_image_identity"
+                ),
+            ),
+        ):
+            status, payload, _stderr = self.invoke(*self.preview_arguments(
+                str(self.candidate),
+                "--reference",
+                str(self.reference),
+                "--output",
+                str(self.root / "missing-private-phase"),
+                "--variant",
+                "step",
+            ))
+
+        self.assertEqual(2, status)
+        self.assertNotIn("diagnostic", payload["error"])
 
     def test_preview_rejects_experiment_profile_conflict_before_rendering(self) -> None:
         experiment = json.loads(self.experiment.read_text(encoding="utf-8"))

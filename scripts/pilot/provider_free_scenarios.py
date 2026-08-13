@@ -32,6 +32,7 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
+    PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
@@ -112,6 +113,7 @@ class ScenarioError(RuntimeError):
         operation: str | None = None,
         classification: str | None = None,
         browser_identity_substage: str | None = None,
+        browser_identity_phase: str | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = stage
@@ -120,6 +122,16 @@ class ScenarioError(RuntimeError):
         self.browser_identity_substage = (
             browser_identity_substage
             if browser_identity_substage in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
+            else None
+        )
+        self.browser_identity_phase = (
+            browser_identity_phase
+            if (
+                self.browser_identity_substage
+                == "private_snapshot_launch_image_identity"
+                and browser_identity_phase
+                in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+            )
             else None
         )
 
@@ -146,6 +158,11 @@ def _run_stage(
             operation=classified_operation,
             browser_identity_substage=(
                 exc.browser_identity_substage
+                if isinstance(exc, ScenarioError)
+                else None
+            ),
+            browser_identity_phase=(
+                exc.browser_identity_phase
                 if isinstance(exc, ScenarioError)
                 else None
             ),
@@ -193,6 +210,11 @@ def _run_failure_operation(
             operation=classified_operation,
             browser_identity_substage=(
                 exc.browser_identity_substage
+                if isinstance(exc, ScenarioError)
+                else None
+            ),
+            browser_identity_phase=(
+                exc.browser_identity_phase
                 if isinstance(exc, ScenarioError)
                 else None
             ),
@@ -478,20 +500,31 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
             classification = error["classification"]
         diagnostic = error.get("diagnostic") if isinstance(error, dict) else None
         browser_identity_substage = None
+        browser_identity_phase = None
         if (
             classification == "preview_browser_identity_failed"
             and isinstance(diagnostic, dict)
-            and set(diagnostic) == {"schema", "substage"}
-            and diagnostic.get("schema") == "meshshot.browser-identity-failure/1"
+            and diagnostic.get("schema") == "meshshot.browser-identity-failure/2"
             and diagnostic.get("substage")
             in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
         ):
-            browser_identity_substage = diagnostic["substage"]
+            substage = diagnostic["substage"]
+            expected_keys = {"schema", "substage"}
+            if substage == "private_snapshot_launch_image_identity":
+                expected_keys.add("phase")
+            if set(diagnostic) == expected_keys and (
+                substage != "private_snapshot_launch_image_identity"
+                or diagnostic.get("phase")
+                in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+            ):
+                browser_identity_substage = substage
+                browser_identity_phase = diagnostic.get("phase")
         detail = " ".join((completed.stderr or completed.stdout).split())[:1000]
         raise ScenarioError(
             f"public command failed ({completed.returncode}): {detail}",
             classification=classification,
             browser_identity_substage=browser_identity_substage,
+            browser_identity_phase=browser_identity_phase,
         )
     try:
         payload = _loads_json_strict(completed.stdout)
@@ -1361,6 +1394,7 @@ def _run_voxblame_preview(
                 "provider-free preview public wrapper failed",
                 operation=operation,
                 browser_identity_substage=exc.browser_identity_substage,
+                browser_identity_phase=exc.browser_identity_phase,
             ) from exc
         if is_linux:
             try:
@@ -1715,6 +1749,15 @@ def main(argv: list[str] | None = None) -> int:
                 failure["browser_identity_substage"] = (
                     exc.browser_identity_substage
                 )
+                if (
+                    exc.browser_identity_substage
+                    == "private_snapshot_launch_image_identity"
+                    and exc.browser_identity_phase
+                    in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+                ):
+                    failure["browser_identity_phase"] = (
+                        exc.browser_identity_phase
+                    )
             _write_json(
                 workspace / PROVIDER_FREE_SCENARIO_FAILURE_PATH,
                 failure,
@@ -1724,12 +1767,17 @@ def main(argv: list[str] | None = None) -> int:
                 and exc.browser_identity_substage
                 in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
             ):
+                phase_allowed = (
+                    exc.browser_identity_substage
+                    != "private_snapshot_launch_image_identity"
+                    or exc.browser_identity_phase
+                    in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+                )
                 failure_bytes = (
                     workspace / PROVIDER_FREE_SCENARIO_FAILURE_PATH
                 ).read_bytes()
-                _write_json(
-                    workspace / PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
-                    {
+                if phase_allowed:
+                    diagnostic = {
                         "schema": (
                             PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA
                         ),
@@ -1739,8 +1787,14 @@ def main(argv: list[str] | None = None) -> int:
                             "path": PROVIDER_FREE_SCENARIO_FAILURE_PATH,
                             "sha256": hashlib.sha256(failure_bytes).hexdigest(),
                         },
-                    },
-                )
+                    }
+                    if exc.browser_identity_phase is not None:
+                        diagnostic["phase"] = exc.browser_identity_phase
+                    _write_json(
+                        workspace
+                        / PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
+                        diagnostic,
+                    )
         print(f"provider-free-scenario: {exc}", file=sys.stderr)
         return 1
     print(json.dumps({"ok": True, "scenario": receipt}, sort_keys=True, separators=(",", ":")))

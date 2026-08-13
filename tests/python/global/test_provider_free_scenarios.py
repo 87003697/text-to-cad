@@ -409,7 +409,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/1",
+                "schema": "cvm.provider-free-browser-identity-diagnostic/2",
                 "operation": "preview_browser_identity",
                 "substage": "loopback_listener_address_ownership",
                 "scenario_failure": {

@@ -28,7 +28,7 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 class JobProtocolTests(unittest.TestCase):
     def test_browser_identity_diagnostic_is_closed_and_failure_bound(self) -> None:
         receipt = {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/1",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/2",
             "operation": "preview_browser_identity",
             "substage": "connected_cdp_browser_version_identity",
             "scenario_failure": {
@@ -84,23 +84,100 @@ class JobProtocolTests(unittest.TestCase):
     def test_browser_identity_diagnostic_accepts_every_versioned_substage(self) -> None:
         for substage in sorted(protocol.PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES):
             with self.subTest(substage=substage):
+                phase = (
+                    "private_launch_image_identity"
+                    if substage == "private_snapshot_launch_image_identity"
+                    else None
+                )
+                diagnostic = {
+                    "schema": (
+                        protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA
+                    ),
+                    "operation": "preview_browser_identity",
+                    "substage": substage,
+                    "scenario_failure": {
+                        "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                        "sha256": "c" * 64,
+                    },
+                }
+                if phase is not None:
+                    diagnostic["phase"] = phase
                 self.assertTrue(
                     protocol.provider_free_browser_identity_diagnostic_allowed(
-                        {
-                            "schema": (
-                                protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA
-                            ),
-                            "operation": "preview_browser_identity",
-                            "substage": substage,
-                            "scenario_failure": {
-                                "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
-                                "sha256": "c" * 64,
-                            },
-                        },
+                        diagnostic,
                         expected_failure_sha256="c" * 64,
                         expected_substage=substage,
+                        expected_phase=phase,
                     )
                 )
+
+    def test_private_snapshot_diagnostic_requires_one_exact_phase(self) -> None:
+        for phase in sorted(
+            protocol.PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+        ):
+            receipt = {
+                "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+                "operation": "preview_browser_identity",
+                "substage": "private_snapshot_launch_image_identity",
+                "phase": phase,
+                "scenario_failure": {
+                    "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                    "sha256": "d" * 64,
+                },
+            }
+            with self.subTest(phase=phase):
+                self.assertTrue(
+                    protocol.provider_free_browser_identity_diagnostic_allowed(
+                        receipt,
+                        expected_failure_sha256="d" * 64,
+                        expected_substage=(
+                            "private_snapshot_launch_image_identity"
+                        ),
+                        expected_phase=phase,
+                    )
+                )
+                for mutation in (
+                    {key: value for key, value in receipt.items() if key != "phase"},
+                    {**receipt, "phase": "raw-copy-error"},
+                    {
+                        **receipt,
+                        "phase": next(
+                            value
+                            for value in sorted(
+                                protocol.PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+                            )
+                            if value != phase
+                        ),
+                    },
+                    {**receipt, "detail": "permission denied"},
+                ):
+                    self.assertFalse(
+                        protocol.provider_free_browser_identity_diagnostic_allowed(
+                            mutation,
+                            expected_failure_sha256="d" * 64,
+                            expected_substage=(
+                                "private_snapshot_launch_image_identity"
+                            ),
+                            expected_phase=phase,
+                        )
+                    )
+        non_private = {
+            "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+            "operation": "preview_browser_identity",
+            "substage": "live_running_image_identity",
+            "phase": "source_executable_identity",
+            "scenario_failure": {
+                "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                "sha256": "e" * 64,
+            },
+        }
+        self.assertFalse(
+            protocol.provider_free_browser_identity_diagnostic_allowed(
+                non_private,
+                expected_failure_sha256="e" * 64,
+                expected_substage="live_running_image_identity",
+            )
+        )
 
     def test_prelaunched_cdp_runtime_receipt_requires_frozen_exact_identities(self) -> None:
         receipt = {

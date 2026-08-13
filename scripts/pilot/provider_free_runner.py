@@ -34,6 +34,8 @@ from scripts.pilot.cvm_job.runtime import (
 from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
+    PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
+    PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
@@ -621,20 +623,21 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
         if isinstance(receipt, dict)
         else None
     )
+    browser_identity_phase = (
+        receipt.get("browser_identity_phase")
+        if isinstance(receipt, dict)
+        else None
+    )
+    expected_receipt_keys = {"schema", "scenario_identity", "stage"}
+    if operation is not None:
+        expected_receipt_keys.add("operation")
+    if operation == "preview_browser_identity":
+        expected_receipt_keys.add("browser_identity_substage")
+        if browser_identity_substage == "private_snapshot_launch_image_identity":
+            expected_receipt_keys.add("browser_identity_phase")
     if (
         not isinstance(receipt, dict)
-        or receipt_keys
-        not in (
-            {"schema", "scenario_identity", "stage"},
-            {"schema", "scenario_identity", "stage", "operation"},
-            {
-                "schema",
-                "scenario_identity",
-                "stage",
-                "operation",
-                "browser_identity_substage",
-            },
-        )
+        or receipt_keys != expected_receipt_keys
         or receipt.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
         or receipt.get("scenario_identity") != scenario.identity
         or receipt.get("stage") not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES
@@ -647,6 +650,22 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
         or (
             (browser_identity_substage is not None)
             != (operation == "preview_browser_identity")
+        )
+        or (
+            operation == "preview_browser_identity"
+            and browser_identity_substage
+            not in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
+        )
+        or (
+            browser_identity_substage
+            == "private_snapshot_launch_image_identity"
+            and browser_identity_phase
+            not in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+        )
+        or (
+            browser_identity_substage
+            != "private_snapshot_launch_image_identity"
+            and browser_identity_phase is not None
         )
     ):
         raise ProviderFreeError(
@@ -669,6 +688,7 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
             identity_diagnostic,
             expected_failure_sha256=hashlib.sha256(failure_bytes).hexdigest(),
             expected_substage=browser_identity_substage,
+            expected_phase=browser_identity_phase,
         ):
             raise ProviderFreeError(
                 "provider-free browser identity diagnostic conflicts"

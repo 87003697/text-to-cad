@@ -26,6 +26,8 @@ from .protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+    PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
+    PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
@@ -609,6 +611,9 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
                 "connected_cdp_browser_version_identity",
                 "runtime_evidence_cross_binding",
             ],
+            "private_snapshot_phases": sorted(
+                PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+            ),
             "binding": [
                 PROVIDER_FREE_SCENARIO_FAILURE_PATH,
                 "artifact_manifest.json",
@@ -1422,20 +1427,21 @@ def _provider_free_failure_evidence_result(
         if isinstance(failure, dict)
         else None
     )
+    browser_identity_phase = (
+        failure.get("browser_identity_phase")
+        if isinstance(failure, dict)
+        else None
+    )
+    expected_failure_keys = {"schema", "scenario_identity", "stage"}
+    if operation is not None:
+        expected_failure_keys.add("operation")
+    if operation == "preview_browser_identity":
+        expected_failure_keys.add("browser_identity_substage")
+        if browser_identity_substage == "private_snapshot_launch_image_identity":
+            expected_failure_keys.add("browser_identity_phase")
     if (
         not isinstance(failure, dict)
-        or failure_keys
-        not in (
-            {"schema", "scenario_identity", "stage"},
-            {"schema", "scenario_identity", "stage", "operation"},
-            {
-                "schema",
-                "scenario_identity",
-                "stage",
-                "operation",
-                "browser_identity_substage",
-            },
-        )
+        or failure_keys != expected_failure_keys
         or failure.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
         or failure.get("scenario_identity") != record["scenario"]["identity"]
         or failure.get("stage") not in PROVIDER_FREE_SCENARIO_FAILURE_STAGES
@@ -1448,6 +1454,22 @@ def _provider_free_failure_evidence_result(
         or (
             (browser_identity_substage is not None)
             != (operation == "preview_browser_identity")
+        )
+        or (
+            operation == "preview_browser_identity"
+            and browser_identity_substage
+            not in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
+        )
+        or (
+            browser_identity_substage
+            == "private_snapshot_launch_image_identity"
+            and browser_identity_phase
+            not in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+        )
+        or (
+            browser_identity_substage
+            != "private_snapshot_launch_image_identity"
+            and browser_identity_phase is not None
         )
     ):
         return None, None, None, "provider-free scenario failure identity conflicts"
@@ -1477,6 +1499,7 @@ def _provider_free_failure_evidence_result(
             identity_diagnostic,
             expected_failure_sha256=hashlib.sha256(failure_bytes).hexdigest(),
             expected_substage=browser_identity_substage,
+            expected_phase=browser_identity_phase,
         ):
             return (
                 None,
@@ -1500,6 +1523,8 @@ def _provider_free_failure_evidence_result(
             "schema": PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
             "substage": browser_identity_substage,
         }
+        if browser_identity_phase is not None:
+            public_identity_diagnostic["phase"] = browser_identity_phase
     elif (
         os.path.lexists(identity_diagnostic_path)
         or PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH in by_path

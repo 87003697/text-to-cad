@@ -499,6 +499,9 @@ class CvmJobTests(unittest.TestCase):
                         "connected_cdp_browser_version_identity",
                         "runtime_evidence_cross_binding",
                     ],
+                    "private_snapshot_phases": sorted(
+                        protocol.PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+                    ),
                     "binding": [
                         protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
                         "artifact_manifest.json",
@@ -895,6 +898,7 @@ class CvmJobTests(unittest.TestCase):
         operation: str | None = None,
         stripped: list[str] | None = None,
         browser_identity_substage: str | None = None,
+        browser_identity_phase: str | None = None,
     ) -> None:
         """Publish common authority plus one manifest-bound closed failure."""
 
@@ -917,6 +921,8 @@ class CvmJobTests(unittest.TestCase):
             failure["operation"] = operation
         if browser_identity_substage is not None:
             failure["browser_identity_substage"] = browser_identity_substage
+        if browser_identity_phase is not None:
+            failure["browser_identity_phase"] = browser_identity_phase
         if operation in protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS:
             (
                 exp_dir / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
@@ -956,17 +962,26 @@ class CvmJobTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            (exp_dir / protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH).write_text(
+            identity_diagnostic = {
+                "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+                "operation": "preview_browser_identity",
+                "substage": browser_identity_substage,
+                "scenario_failure": {
+                    "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                    "sha256": hashlib.sha256(
+                        failure_path.read_bytes()
+                    ).hexdigest(),
+                },
+            }
+            if browser_identity_phase is not None:
+                identity_diagnostic["phase"] = browser_identity_phase
+            identity_path = (
+                exp_dir
+                / protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
+            )
+            identity_path.write_text(
                 json.dumps(
-                    {
-                        "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
-                        "operation": "preview_browser_identity",
-                        "substage": browser_identity_substage,
-                        "scenario_failure": {
-                            "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
-                            "sha256": hashlib.sha256(failure_path.read_bytes()).hexdigest(),
-                        },
-                    },
+                    identity_diagnostic,
                     sort_keys=True,
                     separators=(",", ":"),
                 )
@@ -1409,6 +1424,129 @@ class CvmJobTests(unittest.TestCase):
         )
         self.assertEqual(expected, public["browser_identity_diagnostic"])
         self.assertNotIn("sha256", json.dumps(public))
+
+    def test_monitor_projects_manifest_bound_private_snapshot_phase(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **kwargs):
+            raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
+            self.write_provider_free_failure_evidence(
+                handle,
+                stage="native_measurement",
+                operation="preview_browser_identity",
+                browser_identity_substage=(
+                    "private_snapshot_launch_image_identity"
+                ),
+                browser_identity_phase="private_tree_materialization",
+                stripped=raw_stripped.split(",") if raw_stripped else [],
+            )
+            return 1, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        expected = {
+            "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+            "substage": "private_snapshot_launch_image_identity",
+            "phase": "private_tree_materialization",
+        }
+        self.assertEqual(expected, state["browser_identity_diagnostic"])
+        public = runtime.status_job(
+            handle,
+            state_root=self.state_root,
+            include_observation=False,
+        )
+        self.assertEqual(expected, public["browser_identity_diagnostic"])
+        self.assertNotIn("sha256", json.dumps(public))
+
+    def test_supervisor_rejects_recomputed_duplicate_private_phase(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **kwargs):
+            raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
+            self.write_provider_free_failure_evidence(
+                handle,
+                stage="native_measurement",
+                operation="preview_browser_identity",
+                browser_identity_substage=(
+                    "private_snapshot_launch_image_identity"
+                ),
+                browser_identity_phase="private_launch_image_identity",
+                stripped=raw_stripped.split(",") if raw_stripped else [],
+            )
+            exp_dir = self.repo_root / "outputs" / handle
+            failure_path = exp_dir / protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH
+            failure_path.write_text(
+                "{\"schema\":\"cvm.provider-free-scenario-failure/1\","
+                "\"scenario_identity\":\"issue15.provider-free.runtime-authority/1\","
+                "\"stage\":\"native_measurement\","
+                "\"operation\":\"preview_browser_identity\","
+                "\"browser_identity_substage\":\"private_snapshot_launch_image_identity\","
+                "\"browser_identity_phase\":\"source_executable_identity\","
+                "\"browser_identity_phase\":\"private_launch_image_identity\"}",
+                encoding="utf-8",
+            )
+            diagnostic_path = (
+                exp_dir / protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
+            )
+            diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+            diagnostic["scenario_failure"]["sha256"] = hashlib.sha256(
+                failure_path.read_bytes()
+            ).hexdigest()
+            diagnostic_path.write_text(
+                json.dumps(diagnostic, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            manifest_path = exp_dir / "artifact_manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for relative in (
+                protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
+            ):
+                data = (exp_dir / relative).read_bytes()
+                entry = next(
+                    item
+                    for item in manifest["files"]
+                    if item["path"] == relative
+                )
+                entry.update(
+                    size_bytes=len(data),
+                    sha256=hashlib.sha256(data).hexdigest(),
+                )
+            manifest_path.write_text(
+                json.dumps(manifest, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return 1, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        self.assertEqual("failed", state["state"])
+        self.assertNotIn("scenario_failure", state)
+        self.assertNotIn("browser_identity_diagnostic", state)
+        self.assertIn(
+            "scenario failure evidence is invalid",
+            state["failure_reason"],
+        )
 
     def test_supervisor_rejects_duplicate_manifest_bound_public_wrapper(self) -> None:
         handle = runtime.submit_provider_free(

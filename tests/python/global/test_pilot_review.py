@@ -1318,7 +1318,7 @@ class PilotReviewTests(unittest.TestCase):
         failure_bytes = (self.exp / "run/scenario-failure.json").read_bytes()
         identity_diagnostic_path = self.exp / "run/browser-identity-diagnostic.json"
         identity_diagnostic = {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/1",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/2",
             "operation": "preview_browser_identity",
             "substage": "live_running_image_identity",
             "scenario_failure": {
@@ -1352,6 +1352,157 @@ class PilotReviewTests(unittest.TestCase):
         self.assertEqual({}, provenance)
         self.assertEqual("observability-gap", issues[0]["classification"])
         self.assertTrue(gaps)
+
+        private_phases = (
+            "source_executable_identity",
+            "private_tree_materialization",
+            "private_launch_image_identity",
+            "playwright_package_revision_identity",
+            "private_launch_version_execution",
+            "private_launch_version_output_identity",
+        )
+        for phase in private_phases:
+            with self.subTest(private_snapshot_phase=phase):
+                private_failure = {
+                    **identity_failure,
+                    "browser_identity_substage": (
+                        "private_snapshot_launch_image_identity"
+                    ),
+                    "browser_identity_phase": phase,
+                }
+                write_json(
+                    self.exp / "run/scenario-failure.json",
+                    private_failure,
+                )
+                private_failure_bytes = (
+                    self.exp / "run/scenario-failure.json"
+                ).read_bytes()
+                private_diagnostic = {
+                    "schema": "cvm.provider-free-browser-identity-diagnostic/2",
+                    "operation": "preview_browser_identity",
+                    "substage": "private_snapshot_launch_image_identity",
+                    "phase": phase,
+                    "scenario_failure": {
+                        "path": "run/scenario-failure.json",
+                        "sha256": hashlib.sha256(
+                            private_failure_bytes
+                        ).hexdigest(),
+                    },
+                }
+                write_json(identity_diagnostic_path, private_diagnostic)
+                write_terminal_manifest(status=1)
+                verdict, _provenance, issues, gaps = (
+                    self.reviewer._runtime_authority_verdict(
+                        self.exp, workspace_payload
+                    )
+                )
+                self.assertEqual("fail", verdict, issues)
+                self.assertIn(phase, issues[0]["detail"])
+                self.assertEqual([], gaps)
+
+        phase = "private_launch_image_identity"
+        private_failure = {
+            **identity_failure,
+            "browser_identity_substage": (
+                "private_snapshot_launch_image_identity"
+            ),
+            "browser_identity_phase": phase,
+        }
+        write_json(self.exp / "run/scenario-failure.json", private_failure)
+        private_failure_bytes = (
+            self.exp / "run/scenario-failure.json"
+        ).read_bytes()
+        private_diagnostic = {
+            "schema": "cvm.provider-free-browser-identity-diagnostic/2",
+            "operation": "preview_browser_identity",
+            "substage": "private_snapshot_launch_image_identity",
+            "phase": phase,
+            "scenario_failure": {
+                "path": "run/scenario-failure.json",
+                "sha256": hashlib.sha256(private_failure_bytes).hexdigest(),
+            },
+        }
+        for mutation in (
+            "missing",
+            "unknown",
+            "reordered",
+            "unbound",
+            "duplicate",
+            "recomputed",
+        ):
+            with self.subTest(private_phase_mutation=mutation):
+                write_json(
+                    self.exp / "run/scenario-failure.json",
+                    private_failure,
+                )
+                write_json(identity_diagnostic_path, private_diagnostic)
+                if mutation == "missing":
+                    mutated = {**private_diagnostic}
+                    mutated.pop("phase")
+                    write_json(identity_diagnostic_path, mutated)
+                elif mutation == "unknown":
+                    write_json(
+                        identity_diagnostic_path,
+                        {**private_diagnostic, "phase": "raw-copy-error"},
+                    )
+                elif mutation == "reordered":
+                    write_json(
+                        identity_diagnostic_path,
+                        {
+                            **private_diagnostic,
+                            "phase": "private_tree_materialization",
+                        },
+                    )
+                elif mutation == "unbound":
+                    write_json(
+                        identity_diagnostic_path,
+                        {
+                            **private_diagnostic,
+                            "scenario_failure": {
+                                "path": "run/scenario-failure.json",
+                                "sha256": "0" * 64,
+                            },
+                        },
+                    )
+                elif mutation == "duplicate":
+                    identity_diagnostic_path.write_text(
+                        json.dumps(private_diagnostic).replace(
+                            f'"phase": "{phase}"',
+                            '"phase": "source_executable_identity", '
+                            f'"phase": "{phase}"',
+                        ),
+                        encoding="utf-8",
+                    )
+                else:
+                    failure_path = self.exp / "run/scenario-failure.json"
+                    failure_path.write_text(
+                        json.dumps(private_failure).replace(
+                            f'"browser_identity_phase": "{phase}"',
+                            '"browser_identity_phase": "source_executable_identity", '
+                            f'"browser_identity_phase": "{phase}"',
+                        ),
+                        encoding="utf-8",
+                    )
+                    recomputed = {
+                        **private_diagnostic,
+                        "scenario_failure": {
+                            "path": "run/scenario-failure.json",
+                            "sha256": hashlib.sha256(
+                                failure_path.read_bytes()
+                            ).hexdigest(),
+                        },
+                    }
+                    write_json(identity_diagnostic_path, recomputed)
+                write_terminal_manifest(status=1)
+                verdict, provenance, issues, gaps = (
+                    self.reviewer._runtime_authority_verdict(
+                        self.exp, workspace_payload
+                    )
+                )
+                self.assertEqual("not_auditable", verdict)
+                self.assertEqual({}, provenance)
+                self.assertEqual("observability-gap", issues[0]["classification"])
+                self.assertTrue(gaps)
 
         browser_exec["prelaunched_cdp"] = "passed"
         write_json(browser_exec_path, browser_exec)
