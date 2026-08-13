@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from contextlib import contextmanager, ExitStack
+import errno
 from io import BytesIO
 import json
 import os
@@ -2526,6 +2527,55 @@ class ResidualRendererTests(unittest.TestCase):
                 )
             if boundary == "helper-spawn":
                 self.assertEqual(1, popen.call_count)
+
+    def test_linux_helper_spawn_errno_selects_one_closed_cause(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        cases = (
+            (errno.ENOENT, "private_version_helper_spawn_executable_missing"),
+            (errno.ENOTDIR, "private_version_helper_spawn_executable_missing"),
+            (errno.EACCES, "private_version_helper_spawn_permission"),
+            (errno.EPERM, "private_version_helper_spawn_permission"),
+            (errno.ETXTBSY, "private_version_helper_spawn_permission"),
+            (errno.EAGAIN, "private_version_helper_spawn_process_limit"),
+            (errno.EMFILE, "private_version_helper_spawn_file_limit"),
+            (errno.ENFILE, "private_version_helper_spawn_file_limit"),
+            (errno.ENOMEM, "private_version_helper_spawn_address_space"),
+            (errno.EIO, "private_version_helper_spawn_other"),
+        )
+        for error_number, expected_check in cases:
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.fd = 73
+            pinned.launch_path = Path("/private/image/chrome-headless-shell")
+            with (
+                self.subTest(error_number=error_number),
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch(
+                    "meshshot.browser_runtime.subprocess.Popen",
+                    side_effect=OSError(error_number, "private detail"),
+                ),
+                mock.patch(
+                    "meshshot.browser_runtime.os.pipe",
+                    return_value=(101, 102),
+                ),
+                mock.patch("meshshot.browser_runtime.os.set_inheritable"),
+                mock.patch("meshshot.browser_runtime.os.close"),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned.popen(
+                    ["ignored", "--version"],
+                    start_new_session=True,
+                    close_fds=True,
+                    _handoff_deadline=time.monotonic() + 1,
+                    _handoff_completion="version",
+                )
+            self.assertEqual("browser_identity", raised.exception.operation)
+            self.assertEqual(
+                expected_check,
+                raised.exception.browser_identity_check,
+            )
+            self.assertNotIn("private detail", str(raised.exception))
 
     def test_linux_parent_write_close_failure_preserves_setup_classification(
         self,
