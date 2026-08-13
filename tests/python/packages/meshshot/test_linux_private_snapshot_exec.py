@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 from pathlib import Path
 import secrets
@@ -344,11 +345,14 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
                 raise AssertionError("Linux harness cleanup failed") from exc
             if removed.returncode != 0:
                 inspected = run_docker(
-                    ["container", "inspect", name], timeout=10, quiet=True
+                    ["container", "inspect", name], timeout=10
                 )
-                self.assertNotEqual(
-                    0,
-                    inspected.returncode,
+                try:
+                    inspection = json.loads(inspected.stdout)
+                except (TypeError, UnicodeDecodeError, ValueError) as exc:
+                    raise AssertionError("Linux harness cleanup failed") from exc
+                self.assertTrue(
+                    inspected.returncode != 0 and inspection == [],
                     "Linux harness cleanup failed",
                 )
 
