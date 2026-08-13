@@ -4,7 +4,7 @@ import hashlib
 import io
 import json
 import os
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import signal
 import shutil
 import subprocess
@@ -136,6 +136,69 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 str(provider_free_scenarios.MESHSHOT_BROWSER_SUPERVISOR),
             ],
             popen.call_args.args[0],
+        )
+
+    def test_supervisor_spawn_blocks_runtime_signals_until_process_owned(self) -> None:
+        process = mock.MagicMock()
+        process.pid = 4242
+        process.poll.return_value = 1
+        blocked = False
+
+        def popen(*_args: object, **_kwargs: object) -> mock.MagicMock:
+            self.assertTrue(blocked)
+            return process
+
+        @contextmanager
+        def signal_guard():
+            nonlocal blocked
+            blocked = True
+            try:
+                yield
+            finally:
+                blocked = False
+
+        with (
+            mock.patch.object(
+                provider_free_scenarios,
+                "_blocked_supervisor_signals",
+                signal_guard,
+                create=True,
+            ),
+            mock.patch.object(
+                provider_free_scenarios.subprocess,
+                "Popen",
+                side_effect=popen,
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_cleanup_browser_supervisor",
+            ),
+            self.assertRaises(provider_free_scenarios.ScenarioError),
+        ):
+            with self.browser_supervisor():
+                pass
+
+    def test_closed_supervisor_result_preserves_browser_identity_fields(self) -> None:
+        result = {
+            "schema": "meshshot.browser-supervisor-result/1",
+            "operation": "browser_identity",
+            "browser_identity_substage": "private_snapshot_launch_image_identity",
+            "browser_identity_phase": "private_launch_version_execution",
+            "browser_identity_check": "private_version_helper_spawn_permission",
+        }
+        error = provider_free_scenarios._closed_supervisor_failure(result)
+        self.assertEqual("preview_browser_identity_failed", error.classification)
+        self.assertEqual(
+            "private_snapshot_launch_image_identity",
+            error.browser_identity_substage,
+        )
+        self.assertEqual(
+            "private_launch_version_execution",
+            error.browser_identity_phase,
+        )
+        self.assertEqual(
+            "private_version_helper_spawn_permission",
+            error.browser_identity_check,
         )
 
     def test_supervisor_failure_always_uses_owned_group_cleanup(self) -> None:
@@ -2217,6 +2280,8 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 "--ro-bind",
                 "/meshshot-supervisor",
                 "/run/meshshot-supervisor",
+                "--tmpfs",
+                "/meshshot-supervisor",
                 "--setenv",
                 "PLAYWRIGHT_BROWSERS_PATH",
                 "/tmp/provider-free-playwright",

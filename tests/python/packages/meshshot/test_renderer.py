@@ -13,6 +13,7 @@ import shutil
 import signal
 import socket
 import statistics
+import struct
 import subprocess
 import tempfile
 import threading
@@ -76,6 +77,105 @@ def _attested_connected_browser() -> mock.MagicMock:
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_attachment_requires_exact_supervisor_peer_and_fresh_packet_nonce(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+
+        attachment = object.__new__(
+            browser_runtime.SupervisedCdpAttachmentRuntime
+        )
+        connection = mock.MagicMock()
+        connection.getsockopt.return_value = struct.pack("3i", 4242, os.geteuid(), os.getegid())
+        attachment._validate_supervisor_peer(connection, expected_pid=4242)
+        with self.assertRaises(browser_runtime.BrowserRuntimeError):
+            attachment._validate_supervisor_peer(connection, expected_pid=4343)
+
+        nonce = "a" * 64
+        attachment._profile = {"startup_timeout_ms": 100}
+        attachment.evidence = {"schema": browser_runtime.RUNTIME_SCHEMA}
+        authority = {
+            "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
+            "type": "authority",
+            "nonce": nonce,
+            "endpoint": "http://127.0.0.1:9222",
+            "process_group": 42,
+            "browser_runtime": attachment.evidence,
+        }
+        with mock.patch.object(browser_runtime, "_verify_listener_owner"):
+            attachment._validate_authority(authority, expected_nonce=nonce)
+            with self.assertRaises(browser_runtime.BrowserRuntimeError):
+                attachment._validate_authority(
+                    authority,
+                    expected_nonce="b" * 64,
+                )
+
+    def test_supervisor_rejects_same_uid_foreign_first_client_and_replay(self) -> None:
+        from meshshot import browser_supervisor
+
+        server = mock.MagicMock()
+        foreign = mock.MagicMock()
+        expected = mock.MagicMock()
+        server.accept.side_effect = [(foreign, None), (expected, None)]
+        credentials = {
+            id(foreign): (1111, os.geteuid(), os.getegid()),
+            id(expected): (2222, os.geteuid(), os.getegid()),
+        }
+        nonce = "a" * 64
+        with (
+            mock.patch.object(
+                browser_supervisor,
+                "_peer_credentials",
+                side_effect=lambda connection: credentials[id(connection)],
+                create=True,
+            ),
+            mock.patch.object(
+                browser_supervisor,
+                "_receive_supervisor_packet",
+                side_effect=[
+                    {"schema": "meshshot.browser-supervisor/1", "type": "hello", "nonce": nonce},
+                    {"schema": "meshshot.browser-supervisor/1", "type": "hello", "nonce": nonce},
+                ],
+            ),
+        ):
+            accepted = browser_supervisor._accept_authenticated_client(
+                server,
+                expected_pid=2222,
+                nonce=nonce,
+                deadline=time.monotonic() + 1,
+            )
+        self.assertIs(expected, accepted)
+        foreign.close.assert_called_once()
+
+        with self.assertRaises(Exception):
+            browser_supervisor._validate_message(
+                {"schema": "meshshot.browser-supervisor/1", "type": "completion", "nonce": nonce, "result": "passed"},
+                expected_type="completion",
+                nonce="b" * 64,
+            )
+
+    def test_owned_socket_cleanup_rejects_replacement_without_deleting_it(self) -> None:
+        from meshshot import browser_supervisor
+
+        unlink_owned_socket = browser_supervisor._unlink_owned_socket
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            endpoint = root / "authority.sock"
+            endpoint.touch()
+            original = endpoint.lstat()
+            endpoint.unlink()
+            endpoint.write_text("replacement", encoding="utf-8")
+            descriptor = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                with self.assertRaises(Exception):
+                    unlink_owned_socket(
+                        descriptor,
+                        (original.st_dev, original.st_ino),
+                    )
+            finally:
+                os.close(descriptor)
+            self.assertEqual("replacement", endpoint.read_text(encoding="utf-8"))
+
     def test_supervisor_protocol_rejects_duplicate_unknown_and_oversize_packets(
         self,
     ) -> None:
