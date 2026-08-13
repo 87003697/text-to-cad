@@ -41,6 +41,7 @@ class JobProtocolTests(unittest.TestCase):
             protocol.provider_free_browser_identity_diagnostic_allowed(
                 receipt,
                 expected_failure_sha256="a" * 64,
+                expected_substage="connected_cdp_browser_version_identity",
             )
         )
         for mutation in (
@@ -60,14 +61,46 @@ class JobProtocolTests(unittest.TestCase):
                     protocol.provider_free_browser_identity_diagnostic_allowed(
                         mutation,
                         expected_failure_sha256="a" * 64,
+                        expected_substage=(
+                            "connected_cdp_browser_version_identity"
+                        ),
                     )
                 )
         self.assertFalse(
             protocol.provider_free_browser_identity_diagnostic_allowed(
                 receipt,
                 expected_failure_sha256="b" * 64,
+                expected_substage="connected_cdp_browser_version_identity",
             )
         )
+        self.assertFalse(
+            protocol.provider_free_browser_identity_diagnostic_allowed(
+                receipt,
+                expected_failure_sha256="a" * 64,
+                expected_substage="live_running_image_identity",
+            )
+        )
+
+    def test_browser_identity_diagnostic_accepts_every_versioned_substage(self) -> None:
+        for substage in sorted(protocol.PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES):
+            with self.subTest(substage=substage):
+                self.assertTrue(
+                    protocol.provider_free_browser_identity_diagnostic_allowed(
+                        {
+                            "schema": (
+                                protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA
+                            ),
+                            "operation": "preview_browser_identity",
+                            "substage": substage,
+                            "scenario_failure": {
+                                "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                                "sha256": "c" * 64,
+                            },
+                        },
+                        expected_failure_sha256="c" * 64,
+                        expected_substage=substage,
+                    )
+                )
 
     def test_prelaunched_cdp_runtime_receipt_requires_frozen_exact_identities(self) -> None:
         receipt = {

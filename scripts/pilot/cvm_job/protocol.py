@@ -51,6 +51,21 @@ PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH = (
 PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA = (
     "cvm.provider-free-browser-exec-diagnostic/5"
 )
+PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH = (
+    "run/browser-identity-diagnostic.json"
+)
+PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA = (
+    "cvm.provider-free-browser-identity-diagnostic/1"
+)
+PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES = frozenset(
+    {
+        "private_snapshot_launch_image_identity",
+        "live_running_image_identity",
+        "loopback_listener_address_ownership",
+        "connected_cdp_browser_version_identity",
+        "runtime_evidence_cross_binding",
+    }
+)
 PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH = (
     "run/preview-public-wrapper-diagnostic.json"
 )
@@ -243,6 +258,37 @@ def provider_free_browser_exec_diagnostic_allowed(receipt: object) -> bool:
     }:
         return False
     return receipt.get("node_failure_kind") == "not-run"
+
+
+def provider_free_browser_identity_diagnostic_allowed(
+    receipt: object,
+    *,
+    expected_failure_sha256: object,
+    expected_substage: object,
+) -> bool:
+    """Validate one closed first-failing identity substage and failure binding."""
+
+    if not isinstance(receipt, dict) or set(receipt) != {
+        "schema",
+        "operation",
+        "substage",
+        "scenario_failure",
+    }:
+        return False
+    failure = receipt.get("scenario_failure")
+    return (
+        receipt.get("schema")
+        == PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA
+        and receipt.get("operation") == "preview_browser_identity"
+        and receipt.get("substage") in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
+        and receipt.get("substage") == expected_substage
+        and isinstance(failure, dict)
+        and set(failure) == {"path", "sha256"}
+        and failure.get("path") == PROVIDER_FREE_SCENARIO_FAILURE_PATH
+        and isinstance(expected_failure_sha256, str)
+        and re.fullmatch(r"[0-9a-f]{64}", expected_failure_sha256) is not None
+        and failure.get("sha256") == expected_failure_sha256
+    )
 
 
 def provider_free_browser_exec_diagnostic_matches_operation(
@@ -669,7 +715,43 @@ def public_state(state: dict[str, Any], stale_after: float) -> dict[str, Any]:
         )
         if state.get("job_kind") == "provider-free" and scenario_failure is not None:
             result["scenario_failure"] = scenario_failure
+        browser_identity_diagnostic = (
+            _public_provider_free_browser_identity_diagnostic(
+                state.get("browser_identity_diagnostic"),
+                scenario_failure=state.get("scenario_failure"),
+            )
+        )
+        if (
+            state.get("job_kind") == "provider-free"
+            and browser_identity_diagnostic is not None
+        ):
+            result["browser_identity_diagnostic"] = browser_identity_diagnostic
     return result
+
+
+def _public_provider_free_browser_identity_diagnostic(
+    value: object,
+    *,
+    scenario_failure: object,
+) -> dict[str, str] | None:
+    """Project no identity detail beyond the fixed versioned substage."""
+
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schema", "substage"}
+        or value.get("schema")
+        != PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA
+        or value.get("substage") not in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
+        or not isinstance(scenario_failure, dict)
+        or scenario_failure.get("operation") != "preview_browser_identity"
+        or scenario_failure.get("browser_identity_substage")
+        != value.get("substage")
+    ):
+        return None
+    return {
+        "schema": PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+        "substage": value["substage"],
+    }
 
 
 def _public_provider_free_bootstrap_diagnostic(
@@ -711,6 +793,7 @@ def _public_provider_free_scenario_failure(
     scenario_identity = value.get("scenario_identity")
     stage = value.get("stage")
     operation = value.get("operation")
+    browser_identity_substage = value.get("browser_identity_substage")
     if (
         value.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
         or not isinstance(expected_identity, str)
@@ -721,6 +804,11 @@ def _public_provider_free_scenario_failure(
             and not provider_free_scenario_failure_operation_allowed(
                 stage, operation
             )
+        )
+        or (
+            operation == "preview_browser_identity"
+            and browser_identity_substage
+            not in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
         )
     ):
         return None

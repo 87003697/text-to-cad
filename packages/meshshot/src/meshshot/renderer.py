@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from PIL import Image
 
 from meshshot.browser_runtime import (
+    BROWSER_IDENTITY_SUBSTAGES,
     BrowserRuntimeError,
     PrelaunchedCdpRuntime,
     default_executable,
@@ -63,9 +64,23 @@ MeshshotPhase = Literal[
 class MeshshotError(RuntimeError):
     """Stable renderer failure surfaced through the public preview command."""
 
-    def __init__(self, message: str, *, phase: MeshshotPhase | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        phase: MeshshotPhase | None = None,
+        browser_identity_substage: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.phase = phase
+        self.browser_identity_substage = (
+            browser_identity_substage
+            if (
+                phase == "browser_identity"
+                and browser_identity_substage in BROWSER_IDENTITY_SUBSTAGES
+            )
+            else None
+        )
 
 
 @dataclass(frozen=True)
@@ -256,6 +271,7 @@ def render_residual_preview(
         raise MeshshotError(
             f"headless residual browser runtime failed: {exc.operation}",
             phase=exc.operation,
+            browser_identity_substage=exc.browser_identity_substage,
         ) from exc
     except Exception as exc:
         stage = (

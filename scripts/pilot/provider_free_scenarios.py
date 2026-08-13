@@ -29,6 +29,9 @@ from scripts.pilot import deployment_authority
 from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
+    PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
+    PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+    PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
@@ -108,11 +111,17 @@ class ScenarioError(RuntimeError):
         stage: str | None = None,
         operation: str | None = None,
         classification: str | None = None,
+        browser_identity_substage: str | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = stage
         self.operation = operation
         self.classification = classification
+        self.browser_identity_substage = (
+            browser_identity_substage
+            if browser_identity_substage in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
+            else None
+        )
 
 
 def _run_stage(
@@ -135,6 +144,11 @@ def _run_stage(
             f"provider-free scenario stage failed: {stage}",
             stage=stage,
             operation=classified_operation,
+            browser_identity_substage=(
+                exc.browser_identity_substage
+                if isinstance(exc, ScenarioError)
+                else None
+            ),
         ) from exc
 
 
@@ -177,6 +191,11 @@ def _run_failure_operation(
         raise ScenarioError(
             f"provider-free scenario operation failed: {stage}/{classified_operation}",
             operation=classified_operation,
+            browser_identity_substage=(
+                exc.browser_identity_substage
+                if isinstance(exc, ScenarioError)
+                else None
+            ),
         ) from exc
 
 
@@ -189,6 +208,17 @@ def _json_bytes(payload: object) -> bytes:
         json.dumps(payload, indent=2, sort_keys=True, separators=(",", ": "))
         + "\n"
     ).encode("utf-8")
+
+
+def _reject_duplicate_json_pairs(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON field")
+        value[key] = item
+    return value
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -429,8 +459,11 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
     if completed.returncode != 0:
         classification = None
         try:
-            failure_payload = json.loads(completed.stdout)
-        except json.JSONDecodeError:
+            failure_payload = json.loads(
+                completed.stdout,
+                object_pairs_hook=_reject_duplicate_json_pairs,
+            )
+        except (json.JSONDecodeError, ValueError):
             failure_payload = None
         error = (
             failure_payload.get("error")
@@ -442,10 +475,22 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
             and isinstance(error.get("classification"), str)
         ):
             classification = error["classification"]
+        diagnostic = error.get("diagnostic") if isinstance(error, dict) else None
+        browser_identity_substage = None
+        if (
+            classification == "preview_browser_identity_failed"
+            and isinstance(diagnostic, dict)
+            and set(diagnostic) == {"schema", "substage"}
+            and diagnostic.get("schema") == "meshshot.browser-identity-failure/1"
+            and diagnostic.get("substage")
+            in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
+        ):
+            browser_identity_substage = diagnostic["substage"]
         detail = " ".join((completed.stderr or completed.stdout).split())[:1000]
         raise ScenarioError(
             f"public command failed ({completed.returncode}): {detail}",
             classification=classification,
+            browser_identity_substage=browser_identity_substage,
         )
     try:
         payload = json.loads(completed.stdout)
@@ -1312,6 +1357,7 @@ def _run_voxblame_preview(
             raise ScenarioError(
                 "provider-free preview public wrapper failed",
                 operation=operation,
+                browser_identity_substage=exc.browser_identity_substage,
             ) from exc
         if is_linux:
             try:
@@ -1350,11 +1396,12 @@ def _run_voxblame_preview(
                 expected_browser_sha256=expected_browser_sha256,
             )
         ):
-            operation = "preview_browser_runtime_evidence"
+            operation = "preview_browser_identity"
             _require_preview_public_wrapper(command_log, operation=operation)
             raise ScenarioError(
                 "provider-free browser runtime evidence is invalid",
-                operation=operation,
+                operation="preview_browser_identity",
+                browser_identity_substage="runtime_evidence_cross_binding",
             )
         return result
     except ScenarioError as exc:
@@ -1364,6 +1411,7 @@ def _run_voxblame_preview(
         raise ScenarioError(
             f"provider-free preview operation failed: {operation}",
             operation=operation,
+            browser_identity_substage=exc.browser_identity_substage,
         ) from exc
 
 
@@ -1652,10 +1700,40 @@ def main(argv: list[str] | None = None) -> int:
             }
             if exc.operation is not None:
                 failure["operation"] = exc.operation
+            if (
+                exc.operation == "preview_browser_identity"
+                and exc.browser_identity_substage
+                in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
+            ):
+                failure["browser_identity_substage"] = (
+                    exc.browser_identity_substage
+                )
             _write_json(
                 workspace / PROVIDER_FREE_SCENARIO_FAILURE_PATH,
                 failure,
             )
+            if (
+                exc.operation == "preview_browser_identity"
+                and exc.browser_identity_substage
+                in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
+            ):
+                failure_bytes = (
+                    workspace / PROVIDER_FREE_SCENARIO_FAILURE_PATH
+                ).read_bytes()
+                _write_json(
+                    workspace / PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
+                    {
+                        "schema": (
+                            PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA
+                        ),
+                        "operation": "preview_browser_identity",
+                        "substage": exc.browser_identity_substage,
+                        "scenario_failure": {
+                            "path": PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                            "sha256": hashlib.sha256(failure_bytes).hexdigest(),
+                        },
+                    },
+                )
         print(f"provider-free-scenario: {exc}", file=sys.stderr)
         return 1
     print(json.dumps({"ok": True, "scenario": receipt}, sort_keys=True, separators=(",", ":")))

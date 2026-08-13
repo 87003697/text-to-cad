@@ -484,6 +484,27 @@ class CvmJobTests(unittest.TestCase):
                 "capabilities": "drop-all",
                 "mount_namespace": "inherit-outer",
                 "receipt": protocol.PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
+                "browser_identity_diagnostic": {
+                    "schema": (
+                        protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA
+                    ),
+                    "receipt": (
+                        protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
+                    ),
+                    "operation": "preview_browser_identity",
+                    "substages": [
+                        "private_snapshot_launch_image_identity",
+                        "live_running_image_identity",
+                        "loopback_listener_address_ownership",
+                        "connected_cdp_browser_version_identity",
+                        "runtime_evidence_cross_binding",
+                    ],
+                    "binding": [
+                        protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                        "artifact_manifest.json",
+                    ],
+                    "published": "first-failing-closed-substage-only",
+                },
                 "public_wrapper": {
                     "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
                     "receipt": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
@@ -873,6 +894,7 @@ class CvmJobTests(unittest.TestCase):
         stage: str = "viewer_fallback",
         operation: str | None = None,
         stripped: list[str] | None = None,
+        browser_identity_substage: str | None = None,
     ) -> None:
         """Publish common authority plus one manifest-bound closed failure."""
 
@@ -893,6 +915,8 @@ class CvmJobTests(unittest.TestCase):
         }
         if operation is not None:
             failure["operation"] = operation
+        if browser_identity_substage is not None:
+            failure["browser_identity_substage"] = browser_identity_substage
         if operation in protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS:
             (
                 exp_dir / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
@@ -915,6 +939,40 @@ class CvmJobTests(unittest.TestCase):
             json.dumps(failure, sort_keys=True, separators=(",", ":")) + "\n",
             encoding="utf-8",
         )
+        if browser_identity_substage is not None:
+            browser_exec_path = (
+                exp_dir / protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
+            )
+            browser_exec = json.loads(
+                browser_exec_path.read_text(encoding="utf-8")
+            )
+            browser_exec["prelaunched_cdp"] = (
+                "passed"
+                if browser_identity_substage == "runtime_evidence_cross_binding"
+                else "failed"
+            )
+            browser_exec_path.write_text(
+                json.dumps(browser_exec, sort_keys=True, separators=(",", ":"))
+                + "\n",
+                encoding="utf-8",
+            )
+            (exp_dir / protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH).write_text(
+                json.dumps(
+                    {
+                        "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+                        "operation": "preview_browser_identity",
+                        "substage": browser_identity_substage,
+                        "scenario_failure": {
+                            "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                            "sha256": hashlib.sha256(failure_path.read_bytes()).hexdigest(),
+                        },
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         files = []
         for path in sorted(exp_dir.rglob("*")):
             if not path.is_file() or path.name == "artifact_manifest.json":
@@ -1312,6 +1370,45 @@ class CvmJobTests(unittest.TestCase):
             self.assertEqual(result["process_exit_code"], 1)
             self.assertEqual(result["runner_final_status"], 1)
         self.assertEqual(exit_code, 1)
+
+    def test_monitor_projects_manifest_bound_browser_identity_substage(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **kwargs):
+            raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
+            self.write_provider_free_failure_evidence(
+                handle,
+                stage="native_measurement",
+                operation="preview_browser_identity",
+                browser_identity_substage="live_running_image_identity",
+                stripped=raw_stripped.split(",") if raw_stripped else [],
+            )
+            return 1, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        expected = {
+            "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+            "substage": "live_running_image_identity",
+        }
+        self.assertEqual(expected, state["browser_identity_diagnostic"])
+        public = runtime.status_job(
+            handle,
+            state_root=self.state_root,
+            include_observation=False,
+        )
+        self.assertEqual(expected, public["browser_identity_diagnostic"])
+        self.assertNotIn("sha256", json.dumps(public))
 
     def test_monitor_rejects_unbound_browser_exec_diagnostic(self) -> None:
         handle = runtime.submit_provider_free(

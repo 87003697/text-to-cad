@@ -517,6 +517,126 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 "issue15-runtime-authority",
             )
 
+    def test_identity_failure_requires_scenario_bound_closed_diagnostic(self) -> None:
+        exp_dir = self.repo / "outputs" / self.handle
+        run_dir = exp_dir / "run"
+        run_dir.mkdir(parents=True)
+        failure = {
+            "schema": protocol.PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+            "scenario_identity": "issue15.provider-free.runtime-authority/1",
+            "stage": "native_measurement",
+            "operation": "preview_browser_identity",
+            "browser_identity_substage": "live_running_image_identity",
+        }
+        failure_path = exp_dir / protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH
+        failure_path.write_text(json.dumps(failure), encoding="utf-8")
+        diagnostic_path = (
+            exp_dir / protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
+        )
+        (
+            exp_dir / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+        ).write_text(
+            json.dumps(
+                {
+                    "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+                    "operation": "preview_browser_identity",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (
+            exp_dir / protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
+        ).write_text(
+            json.dumps(
+                {
+                    "schema": protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
+                    "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+                    "probe": "chromium-version-immediate-exit",
+                    "outer": "passed",
+                    "nested": "passed",
+                    "node_attached": "not-run",
+                    "node_detached": "not-run",
+                    "node_failure_kind": "not-run",
+                    "prelaunched_cdp": "failed",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        def write_diagnostic(**overrides: object) -> None:
+            diagnostic = {
+                "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+                "operation": "preview_browser_identity",
+                "substage": failure["browser_identity_substage"],
+                "scenario_failure": {
+                    "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                    "sha256": hashlib.sha256(failure_path.read_bytes()).hexdigest(),
+                },
+                **overrides,
+            }
+            diagnostic_path.write_text(json.dumps(diagnostic), encoding="utf-8")
+
+        write_diagnostic()
+        provider_free_runner._validate_scenario_failure_evidence(
+            exp_dir,
+            "issue15-runtime-authority",
+        )
+        for mutation in (
+            "missing",
+            "unknown",
+            "duplicate",
+            "inconsistent",
+            "reordered",
+            "unbound",
+            "open",
+        ):
+            with self.subTest(mutation=mutation):
+                failure["browser_identity_substage"] = (
+                    "live_running_image_identity"
+                )
+                failure_path.write_text(json.dumps(failure), encoding="utf-8")
+                if mutation == "missing":
+                    diagnostic_path.unlink(missing_ok=True)
+                elif mutation == "unknown":
+                    write_diagnostic(substage="raw-linux-errno")
+                elif mutation == "duplicate":
+                    diagnostic_path.write_text(
+                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/1\","
+                        "\"operation\":\"preview_browser_identity\","
+                        "\"substage\":\"live_running_image_identity\","
+                        "\"substage\":\"connected_cdp_browser_version_identity\","
+                        "\"scenario_failure\":{"
+                        "\"path\":\"run/scenario-failure.json\","
+                        f"\"sha256\":\"{hashlib.sha256(failure_path.read_bytes()).hexdigest()}\"}}",
+                        encoding="utf-8",
+                    )
+                elif mutation == "inconsistent":
+                    write_diagnostic(substage="connected_cdp_browser_version_identity")
+                elif mutation == "reordered":
+                    failure["browser_identity_substage"] = (
+                        "connected_cdp_browser_version_identity"
+                    )
+                    failure_path.write_text(json.dumps(failure), encoding="utf-8")
+                    write_diagnostic(substage="live_running_image_identity")
+                elif mutation == "unbound":
+                    write_diagnostic(
+                        scenario_failure={
+                            "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                            "sha256": "0" * 64,
+                        }
+                    )
+                else:
+                    write_diagnostic(endpoint="http://127.0.0.1:49152")
+                with self.assertRaisesRegex(
+                    provider_free_runner.ProviderFreeError,
+                    "browser identity diagnostic",
+                ):
+                    provider_free_runner._validate_scenario_failure_evidence(
+                        exp_dir,
+                        "issue15-runtime-authority",
+                    )
+        write_diagnostic()
+
     def test_failure_requires_matching_closed_preview_public_wrapper(self) -> None:
         exp_dir = self.repo / "outputs" / self.handle
         (exp_dir / "run").mkdir(parents=True)

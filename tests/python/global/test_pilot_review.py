@@ -1296,6 +1296,78 @@ class PilotReviewTests(unittest.TestCase):
         self.assertTrue(gaps)
         (self.exp / "run/preview-public-wrapper-diagnostic.json").unlink()
 
+        browser_exec_path = self.exp / "run/browser-exec-diagnostic.json"
+        browser_exec = json.loads(browser_exec_path.read_text(encoding="utf-8"))
+        browser_exec["prelaunched_cdp"] = "failed"
+        write_json(browser_exec_path, browser_exec)
+        write_json(
+            self.exp / "run/preview-public-wrapper-diagnostic.json",
+            {
+                "schema": "cvm.provider-free-preview-public-wrapper/1",
+                "operation": "preview_browser_identity",
+            },
+        )
+        identity_failure = {
+            "schema": "cvm.provider-free-scenario-failure/1",
+            "scenario_identity": "issue15.provider-free.runtime-authority/1",
+            "stage": "native_measurement",
+            "operation": "preview_browser_identity",
+            "browser_identity_substage": "live_running_image_identity",
+        }
+        write_json(self.exp / "run/scenario-failure.json", identity_failure)
+        failure_bytes = (self.exp / "run/scenario-failure.json").read_bytes()
+        identity_diagnostic_path = self.exp / "run/browser-identity-diagnostic.json"
+        identity_diagnostic = {
+            "schema": "cvm.provider-free-browser-identity-diagnostic/1",
+            "operation": "preview_browser_identity",
+            "substage": "live_running_image_identity",
+            "scenario_failure": {
+                "path": "run/scenario-failure.json",
+                "sha256": hashlib.sha256(failure_bytes).hexdigest(),
+            },
+        }
+        write_json(identity_diagnostic_path, identity_diagnostic)
+        write_json(self.exp / "run/runtime-authority-smoke.json", receipt)
+        write_terminal_manifest(status=1)
+        verdict, provenance, issues, gaps = self.reviewer._runtime_authority_verdict(
+            self.exp, workspace_payload
+        )
+        self.assertEqual("fail", verdict, issues)
+        self.assertEqual(
+            "run/browser-identity-diagnostic.json",
+            provenance["browser_identity_diagnostic"],
+        )
+        self.assertEqual("closed-runtime-failure", issues[0]["classification"])
+        self.assertIn("live_running_image_identity", issues[0]["detail"])
+        self.assertEqual([], gaps)
+
+        tampered_identity = json.loads(json.dumps(identity_diagnostic))
+        tampered_identity["substage"] = "connected_cdp_browser_version_identity"
+        write_json(identity_diagnostic_path, tampered_identity)
+        write_terminal_manifest(status=1)
+        verdict, provenance, issues, gaps = self.reviewer._runtime_authority_verdict(
+            self.exp, workspace_payload
+        )
+        self.assertEqual("not_auditable", verdict)
+        self.assertEqual({}, provenance)
+        self.assertEqual("observability-gap", issues[0]["classification"])
+        self.assertTrue(gaps)
+
+        browser_exec["prelaunched_cdp"] = "passed"
+        write_json(browser_exec_path, browser_exec)
+        identity_diagnostic_path.unlink()
+        (self.exp / "run/preview-public-wrapper-diagnostic.json").unlink()
+        write_json(
+            self.exp / "run/scenario-failure.json",
+            {
+                "schema": "cvm.provider-free-scenario-failure/1",
+                "scenario_identity": "issue15.provider-free.runtime-authority/1",
+                "stage": "native_measurement",
+                "operation": "preview_public_wrapper_evidence_publication",
+            },
+        )
+        write_terminal_manifest(status=1)
+
         tampered_receipt = json.loads(json.dumps(receipt))
         tampered_receipt["scenario_identity"] = "tampered"
         write_json(

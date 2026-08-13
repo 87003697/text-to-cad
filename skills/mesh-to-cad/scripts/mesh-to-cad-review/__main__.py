@@ -146,6 +146,23 @@ _SANDBOX_PROFILE = {
         "capabilities": "drop-all",
         "mount_namespace": "inherit-outer",
         "receipt": "run/preview-sandbox-enforcement.json",
+        "browser_identity_diagnostic": {
+            "schema": "cvm.provider-free-browser-identity-diagnostic/1",
+            "receipt": "run/browser-identity-diagnostic.json",
+            "operation": "preview_browser_identity",
+            "substages": [
+                "private_snapshot_launch_image_identity",
+                "live_running_image_identity",
+                "loopback_listener_address_ownership",
+                "connected_cdp_browser_version_identity",
+                "runtime_evidence_cross_binding",
+            ],
+            "binding": [
+                "run/scenario-failure.json",
+                "artifact_manifest.json",
+            ],
+            "published": "first-failing-closed-substage-only",
+        },
         "public_wrapper": {
             "schema": "cvm.provider-free-preview-public-wrapper/1",
             "receipt": "run/preview-public-wrapper-diagnostic.json",
@@ -375,9 +392,20 @@ def _validate_provider_free_sandbox_argv(
 
 
 def _read_json(path: Path) -> dict[str, Any]:
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate JSON field")
+            value[key] = item
+        return value
+
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=reject_duplicates,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ReviewError(f"cannot read {path}: {exc}") from exc
     if not isinstance(value, dict):
         raise ReviewError(f"expected JSON object: {path}")
@@ -503,23 +531,50 @@ def _runner_verdict(workspace: Path) -> tuple[str, list[dict[str, str]]]:
 def _runtime_authority_failure_verdict(
     workspace: Path,
 ) -> tuple[str, dict[str, str], list[dict[str, str]], list[str]] | None:
-    """Reconstruct the nonrecursive wrapper-publication root failure."""
+    """Reconstruct one closed manifest-bound runtime-authority failure."""
 
     failure_relative = "run/scenario-failure.json"
     wrapper_relative = "run/preview-public-wrapper-diagnostic.json"
+    identity_relative = "run/browser-identity-diagnostic.json"
     failure_path = workspace / failure_relative
     if not failure_path.is_file():
         return None
     try:
-        failure = json.loads(failure_path.read_bytes())
-        manifest = json.loads((workspace / "artifact_manifest.json").read_bytes())
-        if failure != {
+        failure = _read_json(failure_path)
+        manifest = _read_json(workspace / "artifact_manifest.json")
+        wrapper_publication_failure = {
             "schema": "cvm.provider-free-scenario-failure/1",
             "scenario_identity": "issue15.provider-free.runtime-authority/1",
             "stage": "native_measurement",
             "operation": "preview_public_wrapper_evidence_publication",
-        }:
-            raise ReviewError("wrapper publication root failure is not closed")
+        }
+        identity_substages = {
+            "private_snapshot_launch_image_identity",
+            "live_running_image_identity",
+            "loopback_listener_address_ownership",
+            "connected_cdp_browser_version_identity",
+            "runtime_evidence_cross_binding",
+        }
+        identity_failure = (
+            isinstance(failure, dict)
+            and set(failure)
+            == {
+                "schema",
+                "scenario_identity",
+                "stage",
+                "operation",
+                "browser_identity_substage",
+            }
+            and failure.get("schema")
+            == "cvm.provider-free-scenario-failure/1"
+            and failure.get("scenario_identity")
+            == "issue15.provider-free.runtime-authority/1"
+            and failure.get("stage") == "native_measurement"
+            and failure.get("operation") == "preview_browser_identity"
+            and failure.get("browser_identity_substage") in identity_substages
+        )
+        if failure != wrapper_publication_failure and not identity_failure:
+            raise ReviewError("runtime identity failure is not closed")
         if (
             not isinstance(manifest, dict)
             or set(manifest)
@@ -572,14 +627,56 @@ def _runtime_authority_failure_verdict(
                 "terminal manifest does not bind wrapper publication root failure"
             )
         wrapper_path = workspace / wrapper_relative
-        if (
-            wrapper_path.exists()
-            or wrapper_path.is_symlink()
-            or wrapper_relative in manifest_by_path
-        ):
-            raise ReviewError(
-                "preview public wrapper must be absent for publication failure"
-            )
+        identity_path = workspace / identity_relative
+        if failure == wrapper_publication_failure:
+            if (
+                wrapper_path.exists()
+                or wrapper_path.is_symlink()
+                or wrapper_relative in manifest_by_path
+            ):
+                raise ReviewError(
+                    "preview public wrapper must be absent for publication failure"
+                )
+            if (
+                identity_path.exists()
+                or identity_path.is_symlink()
+                or identity_relative in manifest_by_path
+            ):
+                raise ReviewError(
+                    "browser identity diagnostic must be absent for wrapper publication failure"
+                )
+        else:
+            wrapper_bytes = wrapper_path.read_bytes()
+            wrapper = _read_json(wrapper_path)
+            if wrapper != {
+                "schema": "cvm.provider-free-preview-public-wrapper/1",
+                "operation": "preview_browser_identity",
+            }:
+                raise ReviewError("browser identity wrapper failure is not closed")
+            identity_bytes = identity_path.read_bytes()
+            identity = _read_json(identity_path)
+            if identity != {
+                "schema": "cvm.provider-free-browser-identity-diagnostic/1",
+                "operation": "preview_browser_identity",
+                "substage": failure["browser_identity_substage"],
+                "scenario_failure": {
+                    "path": failure_relative,
+                    "sha256": hashlib.sha256(failure_bytes).hexdigest(),
+                },
+            }:
+                raise ReviewError("browser identity diagnostic conflicts")
+            for relative, data in (
+                (wrapper_relative, wrapper_bytes),
+                (identity_relative, identity_bytes),
+            ):
+                if manifest_by_path.get(relative) != {
+                    "path": relative,
+                    "size_bytes": len(data),
+                    "sha256": hashlib.sha256(data).hexdigest(),
+                }:
+                    raise ReviewError(
+                        f"terminal manifest does not bind {relative}"
+                    )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, ReviewError) as exc:
         detail = (
             str(exc)
@@ -603,11 +700,21 @@ def _runtime_authority_failure_verdict(
         {
             "runtime_authority_failure": failure_relative,
             "terminal_manifest": "artifact_manifest.json",
+            **(
+                {"browser_identity_diagnostic": identity_relative}
+                if identity_failure
+                else {}
+            ),
         },
         [
             {
                 "classification": "closed-runtime-failure",
-                "detail": "preview_public_wrapper_evidence_publication",
+                "detail": (
+                    "preview_browser_identity/"
+                    + str(failure["browser_identity_substage"])
+                    if identity_failure
+                    else "preview_public_wrapper_evidence_publication"
+                ),
                 "evidence": failure_relative,
             }
         ],
@@ -637,6 +744,11 @@ def _runtime_authority_verdict(
     ).is_file()
     evidence = "run/runtime-authority-smoke.json"
     try:
+        failure_receipt = (
+            _read_json(workspace / "run/scenario-failure.json")
+            if runtime_authority_failure
+            else None
+        )
         receipt = _read_json(receipt_path)
         proof = _read_json(workspace / "run/provider-free-execution.json")
         deployed_path = workspace / "run/deployed-source-authority.json"
@@ -649,12 +761,18 @@ def _runtime_authority_verdict(
         browser_exec_diagnostic = _read_json(
             workspace / "run/browser-exec-diagnostic.json"
         )
+        public_wrapper_path = (
+            workspace / "run/preview-public-wrapper-diagnostic.json"
+        )
         public_wrapper = (
-            None
-            if runtime_authority_failure
-            else _read_json(
-                workspace / "run/preview-public-wrapper-diagnostic.json"
+            _read_json(public_wrapper_path)
+            if public_wrapper_path.is_file()
+            and (
+                not runtime_authority_failure
+                or failure_receipt.get("operation")
+                == "preview_browser_identity"
             )
+            else None
         )
         manifest = _read_json(workspace / "artifact_manifest.json")
         if (
@@ -1107,6 +1225,17 @@ def _runtime_authority_verdict(
             or preview_sandbox.get("mount_namespace") != "inherit-outer"
         ):
             raise ReviewError("preview sandbox enforcement is incomplete")
+        expected_prelaunched_cdp = (
+            (
+                "passed"
+                if failure_receipt.get("browser_identity_substage")
+                == "runtime_evidence_cross_binding"
+                else "failed"
+            )
+            if isinstance(failure_receipt, dict)
+            and failure_receipt.get("operation") == "preview_browser_identity"
+            else "passed"
+        )
         if browser_exec_diagnostic != {
             "schema": "cvm.provider-free-browser-exec-diagnostic/5",
             "executable": (
@@ -1119,13 +1248,24 @@ def _runtime_authority_verdict(
             "node_attached": "not-run",
             "node_detached": "not-run",
             "node_failure_kind": "not-run",
-            "prelaunched_cdp": "passed",
+            "prelaunched_cdp": expected_prelaunched_cdp,
         }:
             raise ReviewError("browser exec diagnostic is incomplete")
-        if not runtime_authority_failure and public_wrapper != {
-            "schema": "cvm.provider-free-preview-public-wrapper/1",
-            "operation": "passed",
-        }:
+        expected_public_wrapper = (
+            {
+                "schema": "cvm.provider-free-preview-public-wrapper/1",
+                "operation": "preview_browser_identity",
+            }
+            if isinstance(failure_receipt, dict)
+            and failure_receipt.get("operation") == "preview_browser_identity"
+            else None
+            if runtime_authority_failure
+            else {
+                "schema": "cvm.provider-free-preview-public-wrapper/1",
+                "operation": "passed",
+            }
+        )
+        if public_wrapper != expected_public_wrapper:
             raise ReviewError("preview public wrapper diagnostic is incomplete")
         manifest_files = manifest.get("files")
         if (
@@ -1159,11 +1299,23 @@ def _runtime_authority_verdict(
             "run/deployed-source-authority.json",
             "run/sandbox-enforcement.json",
         ]
-        required_manifest_paths.append(
-            "run/scenario-failure.json"
-            if runtime_authority_failure
-            else "run/preview-public-wrapper-diagnostic.json"
-        )
+        if runtime_authority_failure:
+            required_manifest_paths.append("run/scenario-failure.json")
+            if (
+                isinstance(failure_receipt, dict)
+                and failure_receipt.get("operation")
+                == "preview_browser_identity"
+            ):
+                required_manifest_paths.extend(
+                    [
+                        "run/preview-public-wrapper-diagnostic.json",
+                        "run/browser-identity-diagnostic.json",
+                    ]
+                )
+        else:
+            required_manifest_paths.append(
+                "run/preview-public-wrapper-diagnostic.json"
+            )
         for relative in required_manifest_paths:
             path = workspace / relative
             data = path.read_bytes()

@@ -33,6 +33,7 @@ from scripts.pilot.cvm_job.runtime import (
 )
 from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
+    PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
@@ -44,6 +45,7 @@ from scripts.pilot.cvm_job.protocol import (
     provider_free_browser_runtime_allowed,
     provider_free_browser_exec_diagnostic_allowed,
     provider_free_browser_exec_diagnostic_matches_operation,
+    provider_free_browser_identity_diagnostic_allowed,
     provider_free_preview_public_wrapper_allowed,
     provider_free_preview_public_wrapper_matches_operation,
     provider_free_preview_sandbox_receipt_allowed,
@@ -78,6 +80,17 @@ _CONTROL_ENVIRONMENT = frozenset(
 
 class ProviderFreeError(RuntimeError):
     """The provider-free scenario cannot satisfy its fixed execution contract."""
+
+
+def _reject_duplicate_json_pairs(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON field")
+        value[key] = item
+    return value
 
 
 def _validate_interpreter_environment(environ: Mapping[str, str]) -> None:
@@ -426,8 +439,11 @@ def _validate_scenario_evidence(
 
     path = exp_dir / "run" / "runtime-authority-smoke.json"
     try:
-        receipt = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        receipt = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ProviderFreeError("runtime-authority scenario receipt is missing or invalid") from exc
     required = {
         "schema",
@@ -598,12 +614,24 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
     scenario = PROVIDER_FREE_SCENARIOS[scenario_name]
     receipt_keys = set(receipt) if isinstance(receipt, dict) else set()
     operation = receipt.get("operation") if isinstance(receipt, dict) else None
+    browser_identity_substage = (
+        receipt.get("browser_identity_substage")
+        if isinstance(receipt, dict)
+        else None
+    )
     if (
         not isinstance(receipt, dict)
         or receipt_keys
         not in (
             {"schema", "scenario_identity", "stage"},
             {"schema", "scenario_identity", "stage", "operation"},
+            {
+                "schema",
+                "scenario_identity",
+                "stage",
+                "operation",
+                "browser_identity_substage",
+            },
         )
         or receipt.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
         or receipt.get("scenario_identity") != scenario.identity
@@ -614,9 +642,39 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
                 receipt.get("stage"), operation
             )
         )
+        or (
+            (browser_identity_substage is not None)
+            != (operation == "preview_browser_identity")
+        )
     ):
         raise ProviderFreeError(
             "provider-free scenario failure receipt conflicts with request"
+        )
+    identity_diagnostic_path = (
+        exp_dir / PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
+    )
+    if operation == "preview_browser_identity":
+        try:
+            failure_bytes = path.read_bytes()
+            identity_diagnostic = json.loads(
+                identity_diagnostic_path.read_text(encoding="utf-8"),
+                object_pairs_hook=_reject_duplicate_json_pairs,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise ProviderFreeError(
+                "provider-free browser identity diagnostic is missing or invalid"
+            ) from exc
+        if not provider_free_browser_identity_diagnostic_allowed(
+            identity_diagnostic,
+            expected_failure_sha256=hashlib.sha256(failure_bytes).hexdigest(),
+            expected_substage=browser_identity_substage,
+        ):
+            raise ProviderFreeError(
+                "provider-free browser identity diagnostic conflicts"
+            )
+    elif os.path.lexists(identity_diagnostic_path):
+        raise ProviderFreeError(
+            "provider-free browser identity diagnostic is inconsistent"
         )
     diagnostic_operations = {
         "preview_browser_outer_exec_probe",

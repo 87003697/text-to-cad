@@ -404,6 +404,10 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         failure_path = workspace / "run/scenario-failure.json"
         failure_bytes = failure_path.read_bytes()
         self.assertEqual(
+            "loopback_listener_address_ownership",
+            json.loads(failure_bytes)["browser_identity_substage"],
+        )
+        self.assertEqual(
             {
                 "schema": "cvm.provider-free-browser-identity-diagnostic/1",
                 "operation": "preview_browser_identity",
@@ -1501,6 +1505,83 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             },
             json.loads(
                 (self.repo / "run/browser-exec-diagnostic.json").read_text(
+                    encoding="utf-8"
+                )
+            ),
+        )
+
+    def test_runtime_evidence_cross_binding_is_identity_diagnostic(self) -> None:
+        bwrap = self.repo / "bwrap"
+        bwrap.write_text("#!/bin/sh\n", encoding="utf-8")
+        bwrap.chmod(0o755)
+        command_log = self.repo / "run/provider-free-commands.jsonl"
+        passed = subprocess.CompletedProcess(
+            [protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE, "--version"],
+            0,
+            stdout=b"Chromium 123.0.0.0\n",
+            stderr=b"",
+        )
+        invalid_runtime = {
+            "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,
+            "adapter_profile": {
+                "name": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE,
+                "sha256": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE_SHA256,
+            },
+            "browser_identity": {
+                "playwright": "1.60.0",
+                "browser": "chromium-headless-shell",
+                "revision": "1223",
+                "version": "Google Chrome for Testing 148.0.7778.96",
+                "sha256": "3" * 64,
+            },
+            "result": "passed",
+        }
+        with (
+            mock.patch.object(
+                provider_free_scenarios.platform,
+                "system",
+                return_value="Linux",
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "TRUSTED_BWRAP_PATH",
+                bwrap,
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_validate_attested_browser_runtime",
+                return_value="2" * 64,
+            ),
+            mock.patch.object(
+                provider_free_scenarios.subprocess,
+                "run",
+                side_effect=[passed, passed],
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_run_public",
+                return_value={"ok": True, "preview": {"browser_runtime": invalid_runtime}},
+            ),
+            self.assertRaises(provider_free_scenarios.ScenarioError) as raised,
+        ):
+            provider_free_scenarios._run_voxblame_preview(
+                ["mesh-compare", "voxblame-preview"],
+                cwd=self.repo,
+                command_log=command_log,
+            )
+
+        self.assertEqual("preview_browser_identity", raised.exception.operation)
+        self.assertEqual(
+            "runtime_evidence_cross_binding",
+            raised.exception.browser_identity_substage,
+        )
+        self.assertEqual(
+            {
+                "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+                "operation": "preview_browser_identity",
+            },
+            json.loads(
+                (self.repo / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH).read_text(
                     encoding="utf-8"
                 )
             ),

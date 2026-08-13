@@ -68,17 +68,25 @@ _PREVIEW_FAILURE_CLASSIFICATIONS = {
 }
 
 
-def _emit_error(classification: str, detail: str) -> int:
+def _emit_error(
+    classification: str,
+    detail: str,
+    *,
+    diagnostic: dict[str, str] | None = None,
+) -> int:
     """Write one stable public error envelope."""
 
+    error = {
+        "classification": classification,
+        "detail": detail,
+    }
+    if diagnostic is not None:
+        error["diagnostic"] = diagnostic
     print(
         json.dumps(
             {
                 "ok": False,
-                "error": {
-                    "classification": classification,
-                    "detail": detail,
-                },
+                "error": error,
             },
             separators=(",", ":"),
         )
@@ -436,7 +444,20 @@ def _preview_main(argv: list[str]) -> int:
         classification = _PREVIEW_FAILURE_CLASSIFICATIONS.get(
             exc.phase, "preview_failed"
         )
-        return _emit_error(classification, _compact_detail(exc))
+        diagnostic = None
+        if (
+            exc.phase == "browser_identity"
+            and exc.browser_identity_substage is not None
+        ):
+            diagnostic = {
+                "schema": "meshshot.browser-identity-failure/1",
+                "substage": exc.browser_identity_substage,
+            }
+        return _emit_error(
+            classification,
+            _compact_detail(exc),
+            diagnostic=diagnostic,
+        )
     except Exception as exc:
         return _emit_error("preview_failed", _compact_detail(exc))
     print(

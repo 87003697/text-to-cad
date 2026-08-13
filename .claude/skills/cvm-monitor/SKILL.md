@@ -119,6 +119,27 @@ must match the shipped profile, and its Chromium digest must exactly match the
 retained deployment/runtime identity. It never exposes the temporary profile,
 process group, readiness port, endpoint, environment, stderr, or launch argv.
 
+When the public operation is `preview_browser_identity`, terminal state also
+projects one `browser_identity_diagnostic` with schema
+`cvm.provider-free-browser-identity-diagnostic/1`. It contains only the first
+failing repository-owned substage:
+
+- `private_snapshot_launch_image_identity`
+- `live_running_image_identity`
+- `loopback_listener_address_ownership`
+- `connected_cdp_browser_version_identity`
+- `runtime_evidence_cross_binding`
+
+The retained `run/browser-identity-diagnostic.json` must name the same substage
+as `run/scenario-failure.json`, bind that exact failure receipt by SHA-256, and
+itself be bound by `artifact_manifest.json`. Missing, duplicate, reordered,
+unknown, inconsistent, unbound, or recomputed evidence is rejected. The monitor
+projection strips the binding digest and still exposes no PID, PGID, port,
+endpoint, path, inode, executable digest, argv, environment, output, or
+exception text. This substage is diagnostic evidence under the existing
+`preview_browser_identity` operation; it is not a new operation surface and
+does not weaken any browser identity check.
+
 The eight public-wrapper operations distinguish the complete expected boundary
 after direct browser probes: pre-public sandbox setup or enforcement evidence,
 subprocess spawn, timeout, unclassified nonzero exit, invalid success-result

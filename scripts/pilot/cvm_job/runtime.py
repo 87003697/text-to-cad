@@ -24,6 +24,8 @@ from scripts.pilot import provider_free_output
 from . import tap_observer
 from .protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
+    PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
+    PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
@@ -44,6 +46,7 @@ from .protocol import (
     parse_handle,
     provider_free_browser_exec_diagnostic_allowed,
     provider_free_browser_exec_diagnostic_matches_operation,
+    provider_free_browser_identity_diagnostic_allowed,
     provider_free_preview_public_wrapper_allowed,
     provider_free_preview_public_wrapper_matches_operation,
     provider_free_preview_sandbox_receipt_allowed,
@@ -111,6 +114,17 @@ _PROVIDER_FREE_RUNNER_ERROR_CLASSIFICATIONS = (
         "runner-output-path-rejected",
     ),
 )
+
+
+def _reject_duplicate_json_pairs(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON field")
+        value[key] = item
+    return value
 _PROVIDER_FREE_RUNNER_ERROR_MARKER = b"provider-free-runner:"
 _SECRET_HEADLINE = re.compile(
     r"(?i)(token|secret|password|api[_-]?key)\s*[=:]\s*\S+|[A-Za-z0-9_=-]{32,}"
@@ -578,6 +592,23 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
         "capabilities": "drop-all",
         "mount_namespace": "inherit-outer",
         "receipt": PROVIDER_FREE_PREVIEW_SANDBOX_PATH,
+        "browser_identity_diagnostic": {
+            "schema": PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+            "receipt": PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
+            "operation": "preview_browser_identity",
+            "substages": [
+                "private_snapshot_launch_image_identity",
+                "live_running_image_identity",
+                "loopback_listener_address_ownership",
+                "connected_cdp_browser_version_identity",
+                "runtime_evidence_cross_binding",
+            ],
+            "binding": [
+                PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                "artifact_manifest.json",
+            ],
+            "published": "first-failing-closed-substage-only",
+        },
         "public_wrapper": {
             "schema": PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
             "receipt": PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
@@ -1361,24 +1392,44 @@ def _provider_free_failure_evidence_result(
     record: dict[str, Any],
     expected_stripped: list[str],
     manifest: _ProviderFreeTerminalManifest,
-) -> tuple[str | None, dict[str, str] | None, str | None]:
+) -> tuple[
+    str | None,
+    dict[str, str] | None,
+    dict[str, str] | None,
+    str | None,
+]:
     """Validate the failure-only evidence path without requiring success files."""
 
     by_path = manifest.by_path
     failure_path = exp_dir / PROVIDER_FREE_SCENARIO_FAILURE_PATH
     try:
         failure_bytes = failure_path.read_bytes()
-        failure = json.loads(failure_bytes)
-    except (OSError, json.JSONDecodeError):
-        return None, None, "provider-free scenario failure evidence is invalid"
+        failure = json.loads(
+            failure_bytes,
+            object_pairs_hook=_reject_duplicate_json_pairs,
+        )
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None, None, None, "provider-free scenario failure evidence is invalid"
     failure_keys = set(failure) if isinstance(failure, dict) else set()
     operation = failure.get("operation") if isinstance(failure, dict) else None
+    browser_identity_substage = (
+        failure.get("browser_identity_substage")
+        if isinstance(failure, dict)
+        else None
+    )
     if (
         not isinstance(failure, dict)
         or failure_keys
         not in (
             {"schema", "scenario_identity", "stage"},
             {"schema", "scenario_identity", "stage", "operation"},
+            {
+                "schema",
+                "scenario_identity",
+                "stage",
+                "operation",
+                "browser_identity_substage",
+            },
         )
         or failure.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
         or failure.get("scenario_identity") != record["scenario"]["identity"]
@@ -1389,15 +1440,74 @@ def _provider_free_failure_evidence_result(
                 failure.get("stage"), operation
             )
         )
+        or (
+            (browser_identity_substage is not None)
+            != (operation == "preview_browser_identity")
+        )
     ):
-        return None, None, "provider-free scenario failure identity conflicts"
+        return None, None, None, "provider-free scenario failure identity conflicts"
     expected_entry = {
         "path": PROVIDER_FREE_SCENARIO_FAILURE_PATH,
         "size_bytes": len(failure_bytes),
         "sha256": hashlib.sha256(failure_bytes).hexdigest(),
     }
     if by_path.get(PROVIDER_FREE_SCENARIO_FAILURE_PATH) != expected_entry:
-        return None, None, "provider-free scenario failure evidence is not bound"
+        return None, None, None, "provider-free scenario failure evidence is not bound"
+    public_identity_diagnostic: dict[str, str] | None = None
+    identity_diagnostic_path = (
+        exp_dir / PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
+    )
+    if operation == "preview_browser_identity":
+        try:
+            identity_diagnostic_bytes = identity_diagnostic_path.read_bytes()
+            identity_diagnostic = json.loads(
+                identity_diagnostic_bytes,
+                object_pairs_hook=_reject_duplicate_json_pairs,
+            )
+        except (OSError, ValueError, json.JSONDecodeError):
+            return (
+                None,
+                None,
+                None,
+                "provider-free browser identity diagnostic evidence is invalid",
+            )
+        if not provider_free_browser_identity_diagnostic_allowed(
+            identity_diagnostic,
+            expected_failure_sha256=hashlib.sha256(failure_bytes).hexdigest(),
+            expected_substage=browser_identity_substage,
+        ):
+            return (
+                None,
+                None,
+                None,
+                "provider-free browser identity diagnostic evidence conflicts",
+            )
+        identity_entry = {
+            "path": PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
+            "size_bytes": len(identity_diagnostic_bytes),
+            "sha256": hashlib.sha256(identity_diagnostic_bytes).hexdigest(),
+        }
+        if by_path.get(PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH) != identity_entry:
+            return (
+                None,
+                None,
+                None,
+                "provider-free browser identity diagnostic evidence is not bound",
+            )
+        public_identity_diagnostic = {
+            "schema": PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+            "substage": browser_identity_substage,
+        }
+    elif (
+        os.path.lexists(identity_diagnostic_path)
+        or PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH in by_path
+    ):
+        return (
+            None,
+            None,
+            None,
+            "provider-free browser identity diagnostic evidence is inconsistent",
+        )
     diagnostic_operations = {
         "preview_browser_outer_exec_probe",
         "preview_browser_nested_exec_probe",
@@ -1411,6 +1521,7 @@ def _provider_free_failure_evidence_result(
             return (
                 None,
                 None,
+                None,
                 "provider-free browser exec diagnostic evidence is invalid",
             )
         if not provider_free_browser_exec_diagnostic_matches_operation(
@@ -1418,6 +1529,7 @@ def _provider_free_failure_evidence_result(
             operation,
         ):
             return (
+                None,
                 None,
                 None,
                 "provider-free browser exec diagnostic evidence conflicts",
@@ -1431,6 +1543,7 @@ def _provider_free_failure_evidence_result(
             return (
                 None,
                 None,
+                None,
                 "provider-free browser exec diagnostic evidence is not bound",
             )
     if operation in PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS:
@@ -1442,6 +1555,7 @@ def _provider_free_failure_evidence_result(
             return (
                 None,
                 None,
+                None,
                 "provider-free preview public wrapper evidence is invalid",
             )
         if not provider_free_preview_public_wrapper_matches_operation(
@@ -1449,6 +1563,7 @@ def _provider_free_failure_evidence_result(
             operation,
         ):
             return (
+                None,
                 None,
                 None,
                 "provider-free preview public wrapper evidence conflicts",
@@ -1462,6 +1577,7 @@ def _provider_free_failure_evidence_result(
             return (
                 None,
                 None,
+                None,
                 "provider-free preview public wrapper evidence is not bound",
             )
     elif operation == (
@@ -1471,6 +1587,7 @@ def _provider_free_failure_evidence_result(
         or PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH in by_path
     ):
         return (
+            None,
             None,
             None,
             "provider-free preview public wrapper must be absent for publication failure",
@@ -1483,8 +1600,8 @@ def _provider_free_failure_evidence_result(
         manifest=manifest,
     )
     if error is not None:
-        return None, None, error
-    return proof_path, failure, None
+        return None, None, None, error
+    return proof_path, failure, public_identity_diagnostic, None
 
 
 def supervise_provider_free(
@@ -1634,7 +1751,12 @@ def supervise_provider_free(
                 raise AssertionError("validated terminal manifest is missing")
             workload_status = terminal_manifest.workload_status
             if workload_status != 0:
-                proof_path, scenario_failure, failure_error = (
+                (
+                    proof_path,
+                    scenario_failure,
+                    browser_identity_diagnostic,
+                    failure_error,
+                ) = (
                     _provider_free_failure_evidence_result(
                         exp_dir,
                         handle=handle,
@@ -1653,6 +1775,10 @@ def supervise_provider_free(
                         **updates,
                     )
                 updates["scenario_failure"] = scenario_failure
+                if browser_identity_diagnostic is not None:
+                    updates["browser_identity_diagnostic"] = (
+                        browser_identity_diagnostic
+                    )
                 if runner_status != workload_status:
                     reason = "provider-free scenario final status conflicts"
                 elif process_status != runner_status:

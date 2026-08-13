@@ -23,6 +23,15 @@ from typing import Any, Iterator
 
 
 RUNTIME_SCHEMA = "meshshot.prelaunched-cdp-runtime/1"
+BROWSER_IDENTITY_SUBSTAGES = frozenset(
+    {
+        "private_snapshot_launch_image_identity",
+        "live_running_image_identity",
+        "loopback_listener_address_ownership",
+        "connected_cdp_browser_version_identity",
+        "runtime_evidence_cross_binding",
+    }
+)
 _PROFILE_RESOURCE = "prelaunched_cdp_playwright_1_60_v1.json"
 ADAPTER_PROFILE_SHA256 = "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
 _DEVTOOLS_PATH = re.compile(r"^/devtools/browser/[0-9A-Za-z._-]+$")
@@ -68,9 +77,23 @@ def _prelaunch_operation(exc: OSError) -> str:
 class BrowserRuntimeError(RuntimeError):
     """The private browser runtime rejected or failed a closed lifecycle stage."""
 
-    def __init__(self, operation: str) -> None:
+    def __init__(
+        self,
+        operation: str,
+        *,
+        browser_identity_substage: str | None = None,
+    ) -> None:
         super().__init__(operation)
         self.operation = operation
+        self.browser_identity_substage = (
+            browser_identity_substage
+            if operation == "browser_identity"
+            else None
+        )
+        if operation == "browser_identity" and self.browser_identity_substage is None:
+            self.browser_identity_substage = (
+                "private_snapshot_launch_image_identity"
+            )
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -870,6 +893,13 @@ class PrelaunchedCdpRuntime:
                     self._process.pid,
                     float(self._profile["startup_timeout_ms"]) / 1000,
                 )
+            except BrowserRuntimeError as exc:
+                if exc.operation != "browser_identity":
+                    raise
+                raise BrowserRuntimeError(
+                    "browser_identity",
+                    browser_identity_substage="live_running_image_identity",
+                ) from exc
             except OSError as exc:
                 raise BrowserRuntimeError(_prelaunch_operation(exc)) from exc
             deadline = time.monotonic() + float(self._profile["startup_timeout_ms"]) / 1000
@@ -889,11 +919,19 @@ class PrelaunchedCdpRuntime:
                     or _DEVTOOLS_PATH.fullmatch(lines[1]) is None
                 ):
                     raise BrowserRuntimeError("browser_readiness")
-                _verify_listener_owner(
-                    self._process_group,
-                    int(lines[0]),
-                    float(self._profile["startup_timeout_ms"]) / 1000,
-                )
+                try:
+                    _verify_listener_owner(
+                        self._process_group,
+                        int(lines[0]),
+                        float(self._profile["startup_timeout_ms"]) / 1000,
+                    )
+                except BrowserRuntimeError as exc:
+                    raise BrowserRuntimeError(
+                        "browser_identity",
+                        browser_identity_substage=(
+                            "loopback_listener_address_ownership"
+                        ),
+                    ) from exc
                 return f"http://127.0.0.1:{int(lines[0])}"
             raise BrowserRuntimeError("browser_readiness_timeout")
         except BaseException:
@@ -1072,9 +1110,14 @@ class PrelaunchedCdpRuntime:
                     raise BrowserRuntimeError("browser_connect") from exc
                 try:
                     self._verify_connected_browser(browser)
-                except BrowserRuntimeError:
+                except BrowserRuntimeError as exc:
                     self._cleanup()
-                    raise
+                    raise BrowserRuntimeError(
+                        "browser_identity",
+                        browser_identity_substage=(
+                            "connected_cdp_browser_version_identity"
+                        ),
+                    ) from exc
                 interrupted: _RuntimeSignal | None = None
                 try:
                     yield browser
