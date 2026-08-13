@@ -761,30 +761,36 @@ class ResidualRendererTests(unittest.TestCase):
             finally:
                 pinned.close()
 
-    def test_linux_runtime_executes_inherited_pinned_descriptor(self) -> None:
+    def test_runtime_executes_private_read_only_snapshot_path(self) -> None:
         from meshshot.browser_runtime import _PinnedExecutable
 
         with tempfile.TemporaryDirectory() as directory:
             executable = Path(directory) / "chrome-headless-shell"
             executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             executable.chmod(0o755)
-            with mock.patch("meshshot.browser_runtime.sys.platform", "linux"):
-                pinned = _PinnedExecutable(executable)
-                try:
-                    with mock.patch(
-                        "meshshot.browser_runtime.subprocess.Popen"
-                    ) as popen:
-                        pinned.popen([os.fspath(executable)], close_fds=True)
-                    self.assertEqual(
-                        f"/proc/self/fd/{pinned.fd}",
-                        popen.call_args.kwargs["executable"],
-                    )
-                    self.assertEqual(
-                        (pinned.fd,),
-                        popen.call_args.kwargs["pass_fds"],
-                    )
-                finally:
-                    pinned.close()
+            pinned = _PinnedExecutable(executable)
+            try:
+                assert pinned.launch_path is not None
+                with mock.patch(
+                    "meshshot.browser_runtime.subprocess.Popen"
+                ) as popen:
+                    pinned.popen([os.fspath(executable)], close_fds=True)
+                self.assertEqual(
+                    os.fspath(pinned.launch_path),
+                    popen.call_args.args[0][0],
+                )
+                self.assertEqual(
+                    os.fspath(pinned.launch_path),
+                    popen.call_args.kwargs["executable"],
+                )
+                self.assertNotIn("pass_fds", popen.call_args.kwargs)
+                mode = pinned.launch_path.stat().st_mode
+                self.assertEqual(0, mode & 0o222)
+                if os.geteuid() != 0:
+                    with self.assertRaises(PermissionError):
+                        pinned.launch_path.open("wb")
+            finally:
+                pinned.close()
 
     def test_prelaunched_runtime_cleanup_failure_is_terminal_and_closed(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
@@ -991,7 +997,11 @@ class ResidualRendererTests(unittest.TestCase):
                     variant="step",
                 )
 
-            self.assertEqual(os.fspath(executable), popen.call_args.args[0][0])
+            launched = Path(popen.call_args.args[0][0])
+            self.assertEqual(executable.name, launched.name)
+            self.assertNotEqual(executable, launched)
+            self.assertTrue(launched.parent.name.startswith("meshshot-image-"))
+            self.assertFalse(launched.parent.exists())
             playwright.chromium.launch.assert_not_called()
 
     def test_explicit_browser_executable_rejects_unsafe_file_types(self) -> None:

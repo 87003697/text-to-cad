@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import errno
 import hashlib
 from importlib import metadata, resources
 import json
@@ -14,7 +15,6 @@ import shutil
 import signal
 import stat
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -231,90 +231,145 @@ class _PinnedExecutable:
         self.launch_root: Path | None = None
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
-            fd = os.open(path, flags)
-            info = os.fstat(fd)
+            source_fd = os.open(path, flags)
+            source_info = os.fstat(source_fd)
         except OSError as exc:
             raise BrowserRuntimeError("browser_identity") from exc
         if (
             not path.is_absolute()
-            or not stat.S_ISREG(info.st_mode)
-            or info.st_mode & 0o111 == 0
+            or not stat.S_ISREG(source_info.st_mode)
+            or source_info.st_mode & 0o111 == 0
         ):
-            os.close(fd)
+            os.close(source_fd)
             raise BrowserRuntimeError("browser_identity")
-        self.fd = fd
-        self.identity = (
-            info.st_dev,
-            info.st_ino,
-            info.st_size,
-            stat.S_IMODE(info.st_mode),
-        )
         try:
-            if sys.platform.startswith("linux"):
-                self.launch_path = Path(f"/proc/self/fd/{fd}")
-            else:
-                self._materialize_private_image()
+            self._materialize_private_image(source_fd, source_info)
         except BaseException:
             self.close()
             raise
+        finally:
+            try:
+                os.close(source_fd)
+            except OSError as exc:
+                self.close()
+                raise BrowserRuntimeError("browser_identity") from exc
 
-    def _materialize_private_image(self) -> None:
-        root = _private_directory("meshshot-image-")
-        launch = root / self.path.name
+    @staticmethod
+    def _snapshot_resource(
+        source: Path,
+        target: Path,
+        ancestors: frozenset[tuple[int, int]] = frozenset(),
+    ) -> None:
+        try:
+            info = source.stat()
+            if stat.S_ISDIR(info.st_mode):
+                identity = (info.st_dev, info.st_ino)
+                if identity in ancestors:
+                    raise BrowserRuntimeError("browser_identity")
+                target.mkdir(mode=0o700)
+                os.chmod(target, 0o700)
+                for child in source.iterdir():
+                    _PinnedExecutable._snapshot_resource(
+                        child,
+                        target / child.name,
+                        ancestors | {identity},
+                    )
+                return
+            if not stat.S_ISREG(info.st_mode):
+                raise BrowserRuntimeError("browser_identity")
+            shutil.copyfile(source, target, follow_symlinks=True)
+            os.chmod(target, stat.S_IMODE(info.st_mode) & ~0o222)
+        except OSError as exc:
+            raise BrowserRuntimeError("browser_identity") from exc
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        descriptor = os.open(path, flags)
         try:
             try:
-                os.link(self.path, launch, follow_symlinks=False)
-            except OSError:
-                assert self.fd is not None
-                os.lseek(self.fd, 0, os.SEEK_SET)
-                output_fd = os.open(
-                    launch,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    self.identity[3],
-                )
-                try:
-                    os.fchmod(output_fd, self.identity[3])
-                    while True:
-                        chunk = os.read(self.fd, 1024 * 1024)
-                        if not chunk:
-                            break
-                        view = memoryview(chunk)
-                        while view:
-                            written = os.write(output_fd, view)
-                            view = view[written:]
-                    os.fsync(output_fd)
-                finally:
-                    os.close(output_fd)
-            launch_info = launch.stat(follow_symlinks=False)
+                os.fsync(descriptor)
+            except OSError as exc:
+                if exc.errno not in {errno.EINVAL, errno.ENOTSUP, errno.EBADF}:
+                    raise
+        finally:
+            os.close(descriptor)
+
+    def _materialize_private_image(
+        self,
+        source_fd: int,
+        source_info: os.stat_result,
+    ) -> None:
+        root = _private_directory("meshshot-image-")
+        launch = root / self.path.name
+        snapshot_fd: int | None = None
+        try:
+            digest = hashlib.sha256()
+            written_total = 0
+            os.lseek(source_fd, 0, os.SEEK_SET)
+            output_fd = os.open(
+                launch,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            try:
+                while True:
+                    chunk = os.read(source_fd, 4 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    written_total += len(chunk)
+                    if written_total > source_info.st_size:
+                        raise BrowserRuntimeError("browser_identity")
+                    digest.update(chunk)
+                    view = memoryview(chunk)
+                    while view:
+                        written = os.write(output_fd, view)
+                        view = view[written:]
+                if written_total != source_info.st_size:
+                    raise BrowserRuntimeError("browser_identity")
+                os.fchmod(output_fd, stat.S_IMODE(source_info.st_mode) & 0o555)
+                os.fsync(output_fd)
+            finally:
+                os.close(output_fd)
+            for sibling in self.path.parent.iterdir():
+                if sibling.name != self.path.name:
+                    self._snapshot_resource(sibling, root / sibling.name)
+            self._fsync_directory(root)
+            snapshot_fd = os.open(
+                launch,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
+            launch_info = os.fstat(snapshot_fd)
             if (
-                launch_info.st_size != self.identity[2]
-                or stat.S_IMODE(launch_info.st_mode) != self.identity[3]
-                or self.sha256(launch) != self.sha256()
+                not stat.S_ISREG(launch_info.st_mode)
+                or launch_info.st_size != source_info.st_size
+                or stat.S_IMODE(launch_info.st_mode) & 0o222
+                or launch_info.st_mode & 0o111 == 0
+                or self._sha256_fd(snapshot_fd) != digest.hexdigest()
             ):
                 raise BrowserRuntimeError("browser_identity")
-            for sibling in self.path.parent.iterdir():
-                if sibling.name == self.path.name:
-                    continue
-                target = root / sibling.name
-                target.symlink_to(
-                    sibling.resolve(strict=True),
-                    target_is_directory=sibling.is_dir(),
-                )
+            self.fd = snapshot_fd
+            snapshot_fd = None
+            self.identity = (
+                launch_info.st_dev,
+                launch_info.st_ino,
+                launch_info.st_size,
+                stat.S_IMODE(launch_info.st_mode),
+            )
             self.launch_root = root
             self.launch_path = launch
-        except BaseException:
+        except BaseException as exc:
+            if snapshot_fd is not None:
+                os.close(snapshot_fd)
             shutil.rmtree(root, ignore_errors=True)
+            if isinstance(exc, OSError):
+                raise BrowserRuntimeError("browser_identity") from exc
             raise
 
-    def sha256(self, path: Path | None = None) -> str:
+    @staticmethod
+    def _sha256_fd(descriptor: int) -> str:
         digest = hashlib.sha256()
-        if path is not None:
-            with path.open("rb") as stream:
-                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                    digest.update(chunk)
-            return digest.hexdigest()
-        assert self.fd is not None
-        duplicate = os.dup(self.fd)
+        duplicate = os.dup(descriptor)
         try:
             os.lseek(duplicate, 0, os.SEEK_SET)
             while True:
@@ -326,18 +381,27 @@ class _PinnedExecutable:
             os.close(duplicate)
         return digest.hexdigest()
 
+    def sha256(self, path: Path | None = None) -> str:
+        digest = hashlib.sha256()
+        if path is not None:
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return digest.hexdigest()
+        assert self.fd is not None
+        return self._sha256_fd(self.fd)
+
     def popen(self, argv: list[str], **kwargs: Any) -> subprocess.Popen[bytes]:
         assert self.fd is not None and self.launch_path is not None
         options = dict(kwargs)
         options["executable"] = os.fspath(self.launch_path)
-        if sys.platform.startswith("linux"):
-            options["pass_fds"] = (self.fd,)
-        return subprocess.Popen(argv, **options)
+        launch_argv = [os.fspath(self.launch_path), *argv[1:]]
+        return subprocess.Popen(launch_argv, **options)
 
     def run_version(self, timeout: float) -> subprocess.CompletedProcess[bytes]:
         assert self.fd is not None and self.launch_path is not None
         options: dict[str, Any] = {
-            "args": [os.fspath(self.path), "--version"],
+            "args": [os.fspath(self.launch_path), "--version"],
             "executable": os.fspath(self.launch_path),
             "stdin": subprocess.DEVNULL,
             "stdout": subprocess.PIPE,
@@ -346,8 +410,6 @@ class _PinnedExecutable:
             "timeout": timeout,
             "close_fds": True,
         }
-        if sys.platform.startswith("linux"):
-            options["pass_fds"] = (self.fd,)
         return subprocess.run(**options)
 
     def close(self) -> None:
