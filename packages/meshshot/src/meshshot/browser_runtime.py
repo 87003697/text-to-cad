@@ -1259,6 +1259,7 @@ class _PinnedExecutable:
             deadline = time.monotonic() + timeout
             process: subprocess.Popen[bytes] | None = None
             group_proven_empty = False
+            authenticated_completion = False
             try:
                 with _blocked_runtime_signals():
                     process = self.popen(
@@ -1292,13 +1293,16 @@ class _PinnedExecutable:
                     and stderr == b""
                     and _VERSION_OUTPUT.fullmatch(version) is not None
                 )
+                authenticated_completion = valid
                 try:
                     group_empty = _wait_group_empty(
                         process.pid,
                         max(0.0, deadline - time.monotonic()),
                     )
                 except OSError as exc:
-                    raise BrowserRuntimeError("browser_cleanup") from exc
+                    raise _private_version_execution_error(
+                        "private_version_probe_completion"
+                    ) from exc
                 group_proven_empty = group_empty
                 if time.monotonic() >= deadline:
                     raise subprocess.TimeoutExpired(
@@ -1313,7 +1317,8 @@ class _PinnedExecutable:
                     )
                 if process.returncode != 0 or not group_empty:
                     if (
-                        getattr(
+                        not authenticated_completion
+                        and getattr(
                             process,
                             "_meshshot_version_handoff_eof",
                             False,

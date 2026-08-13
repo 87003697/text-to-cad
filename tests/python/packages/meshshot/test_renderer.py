@@ -3091,7 +3091,10 @@ class ResidualRendererTests(unittest.TestCase):
                 pinned.run_version(timeout=5)
             reap.assert_called_once()
             if boundary == "group-proof":
-                self.assertEqual("browser_cleanup", raised.exception.operation)
+                self.assertEqual(
+                    "private_version_probe_completion",
+                    raised.exception.browser_identity_check,
+                )
             else:
                 self.assertEqual(
                     "private_version_probe_timeout",
