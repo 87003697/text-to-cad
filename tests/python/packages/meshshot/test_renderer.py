@@ -3074,6 +3074,55 @@ class ResidualRendererTests(unittest.TestCase):
             if boundary == "group-proof":
                 self.assertEqual("browser_cleanup", raised.exception.operation)
 
+    def test_linux_version_communicate_failure_always_reaps_owned_group(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        for failure in (
+            OSError("closed communicate"),
+            KeyboardInterrupt(),
+            SystemExit(7),
+        ):
+            for cleanup_failed in (False, True):
+                pinned = object.__new__(_PinnedExecutable)
+                pinned.fd = 73
+                pinned.launch_path = Path("/private/image/chrome-headless-shell")
+                process = mock.MagicMock(spec=subprocess.Popen)
+                process.communicate.side_effect = failure
+                with (
+                    self.subTest(
+                        failure=type(failure).__name__,
+                        cleanup_failed=cleanup_failed,
+                    ),
+                    mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                    mock.patch.object(pinned, "popen", return_value=process),
+                    mock.patch.object(
+                        pinned,
+                        "_reap_failed_handoff",
+                        return_value=cleanup_failed,
+                    ) as reap,
+                    self.assertRaises(
+                        BrowserRuntimeError
+                        if cleanup_failed
+                        else type(failure)
+                    ) as raised,
+                ):
+                    pinned.run_version(timeout=5)
+                reap.assert_called_once_with(
+                    process,
+                    process_group=True,
+                    cleanup_term_timeout=(
+                        browser_runtime._FD_EXEC_CLEANUP_TERM_SECONDS
+                    ),
+                    cleanup_kill_timeout=(
+                        browser_runtime._FD_EXEC_CLEANUP_KILL_SECONDS
+                    ),
+                )
+                if cleanup_failed:
+                    self.assertEqual("browser_cleanup", raised.exception.operation)
+                elif isinstance(failure, SystemExit):
+                    self.assertEqual(7, raised.exception.code)
+
     def test_linux_running_image_descriptor_close_failure_is_cleanup(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
