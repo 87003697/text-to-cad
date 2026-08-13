@@ -541,12 +541,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         (
             exp_dir / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
         ).write_text(
-            json.dumps(
-                {
-                    "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
-                    "operation": "preview_public_spawn",
-                }
-            ),
+            '{"schema":"partial"',
             encoding="utf-8",
         )
         with self.assertRaisesRegex(

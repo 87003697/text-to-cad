@@ -18,6 +18,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Any, Sequence
@@ -548,14 +549,57 @@ def _publish_preview_public_wrapper(
 ) -> None:
     """Publish only the closed public-wrapper operation or success state."""
 
-    _write_json(
+    destination = (
         command_log.parent
-        / Path(PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH).name,
-        {
-            "schema": PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
-            "operation": operation,
-        },
+        / Path(PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH).name
     )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_fd, temporary_name = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(temporary_fd, "wb") as stream:
+            temporary_fd = -1
+            stream.write(
+                _json_bytes(
+                    {
+                        "schema": PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+                        "operation": operation,
+                    }
+                )
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+    except BaseException:
+        if temporary_fd >= 0:
+            os.close(temporary_fd)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _discard_preview_public_wrapper_residue(command_log: Path) -> None:
+    """Remove only the exact failed final receipt without following links."""
+
+    destination = (
+        command_log.parent
+        / Path(PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH).name
+    )
+    try:
+        mode = destination.lstat().st_mode
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(mode):
+        raise OSError("preview public wrapper residue is a directory")
+    destination.unlink()
+    if os.path.lexists(destination):
+        raise OSError("preview public wrapper residue changed during cleanup")
 
 
 def _require_preview_public_wrapper(
@@ -566,6 +610,12 @@ def _require_preview_public_wrapper(
     try:
         _publish_preview_public_wrapper(command_log, operation=operation)
     except OSError as exc:
+        try:
+            _discard_preview_public_wrapper_residue(command_log)
+        except OSError as cleanup_exc:
+            raise ScenarioError(
+                "provider-free preview public wrapper residue cleanup failed"
+            ) from cleanup_exc
         raise ScenarioError(
             "provider-free preview public wrapper evidence publication failed",
             operation=(

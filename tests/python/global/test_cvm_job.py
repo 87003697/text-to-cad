@@ -2231,7 +2231,29 @@ server.listen(0, host, () => {
                         / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
                     )
                     manifest_path = exp_dir / "artifact_manifest.json"
-                    if not extra_wrapper:
+                    if extra_wrapper:
+                        wrapper_path.write_text(
+                            '{"schema":"partial"', encoding="utf-8"
+                        )
+                        wrapper_data = wrapper_path.read_bytes()
+                        manifest = json.loads(
+                            manifest_path.read_text(encoding="utf-8")
+                        )
+                        wrapper_entry = next(
+                            entry
+                            for entry in manifest["files"]
+                            if entry["path"]
+                            == protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+                        )
+                        wrapper_entry.update(
+                            size_bytes=len(wrapper_data),
+                            sha256=hashlib.sha256(wrapper_data).hexdigest(),
+                        )
+                        manifest_path.write_text(
+                            json.dumps(manifest, sort_keys=True) + "\n",
+                            encoding="utf-8",
+                        )
+                    else:
                         wrapper_path.unlink()
                         manifest = json.loads(
                             manifest_path.read_text(encoding="utf-8")

@@ -807,6 +807,23 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self,
     ) -> None:
         command_log = self.repo / "run/provider-free-commands.jsonl"
+        wrapper_path = (
+            self.repo / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
+        )
+
+        def leave_partial_wrapper_then_fail(
+            _command_log: Path,
+            *,
+            operation: str,
+        ) -> None:
+            wrapper_path.parent.mkdir(parents=True, exist_ok=True)
+            wrapper_path.write_text(
+                '{"schema":"partial","operation":'
+                + json.dumps(operation),
+                encoding="utf-8",
+            )
+            raise OSError("sensitive wrapper publication denial")
+
         cases = (
             (
                 "after-public-failure",
@@ -878,7 +895,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     mock.patch.object(
                         provider_free_scenarios,
                         "_publish_preview_public_wrapper",
-                        side_effect=OSError("sensitive wrapper publication denial"),
+                        side_effect=leave_partial_wrapper_then_fail,
                     ),
                     self.assertRaises(
                         provider_free_scenarios.ScenarioError
@@ -898,6 +915,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     raised.exception.operation,
                 )
                 self.assertNotIn("sensitive", str(raised.exception))
+                self.assertFalse(os.path.lexists(wrapper_path))
 
     def test_every_preview_wrapper_publication_call_site_uses_root_operation(
         self,

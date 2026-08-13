@@ -633,9 +633,6 @@ def _runtime_authority_verdict(
 ) -> tuple[str, dict[str, str], list[dict[str, str]], list[str]]:
     """Audit the optional closed provider-free runtime-authority receipt."""
 
-    failure_verdict = _runtime_authority_failure_verdict(workspace)
-    if failure_verdict is not None:
-        return failure_verdict
     receipt_path = workspace / "run/runtime-authority-smoke.json"
     if not receipt_path.is_file():
         return (
@@ -647,6 +644,9 @@ def _runtime_authority_verdict(
                 "installed-skill, bundle, parity, and isolation gate evidence"
             ],
         )
+    runtime_authority_failure = (
+        workspace / "run/scenario-failure.json"
+    ).is_file()
     evidence = "run/runtime-authority-smoke.json"
     try:
         receipt = _read_json(receipt_path)
@@ -661,8 +661,12 @@ def _runtime_authority_verdict(
         browser_exec_diagnostic = _read_json(
             workspace / "run/browser-exec-diagnostic.json"
         )
-        public_wrapper = _read_json(
-            workspace / "run/preview-public-wrapper-diagnostic.json"
+        public_wrapper = (
+            None
+            if runtime_authority_failure
+            else _read_json(
+                workspace / "run/preview-public-wrapper-diagnostic.json"
+            )
         )
         manifest = _read_json(workspace / "artifact_manifest.json")
         if (
@@ -1130,29 +1134,49 @@ def _runtime_authority_verdict(
             "playwright": "passed",
         }:
             raise ReviewError("browser exec diagnostic is incomplete")
-        if public_wrapper != {
+        if not runtime_authority_failure and public_wrapper != {
             "schema": "cvm.provider-free-preview-public-wrapper/1",
             "operation": "passed",
         }:
             raise ReviewError("preview public wrapper diagnostic is incomplete")
         manifest_files = manifest.get("files")
-        if manifest.get("final_status") != 0 or not isinstance(manifest_files, list):
+        if (
+            not isinstance(manifest_files, list)
+            or (
+                runtime_authority_failure
+                and any(
+                    isinstance(manifest.get(field), bool)
+                    or not isinstance(manifest.get(field), int)
+                    or manifest.get(field) == 0
+                    for field in ("workload_status", "final_status")
+                )
+            )
+            or (
+                not runtime_authority_failure
+                and manifest.get("final_status") != 0
+            )
+        ):
             raise ReviewError("terminal artifact manifest is incomplete")
         manifest_by_path = {
             item.get("path"): item
             for item in manifest_files
             if isinstance(item, dict) and isinstance(item.get("path"), str)
         }
-        for relative in (
+        required_manifest_paths = [
             evidence,
             "run/provider-free-execution.json",
             command_path,
             preview_path,
             "run/browser-exec-diagnostic.json",
-            "run/preview-public-wrapper-diagnostic.json",
             "run/deployed-source-authority.json",
             "run/sandbox-enforcement.json",
-        ):
+        ]
+        required_manifest_paths.append(
+            "run/scenario-failure.json"
+            if runtime_authority_failure
+            else "run/preview-public-wrapper-diagnostic.json"
+        )
+        for relative in required_manifest_paths:
             path = workspace / relative
             data = path.read_bytes()
             entry = manifest_by_path.get(relative)
@@ -1178,6 +1202,23 @@ def _runtime_authority_verdict(
                 }
             ],
             ["provider-free production runtime evidence failed closed audit"],
+        )
+    if runtime_authority_failure:
+        failure_verdict = _runtime_authority_failure_verdict(workspace)
+        if failure_verdict is None:
+            raise AssertionError("runtime authority failure disappeared during audit")
+        verdict, provenance, issues, gaps = failure_verdict
+        if verdict != "fail":
+            return failure_verdict
+        return (
+            verdict,
+            {
+                "runtime_authority": evidence,
+                "provider_free_execution": "run/provider-free-execution.json",
+                **provenance,
+            },
+            issues,
+            gaps,
         )
     return (
         "pass",

@@ -333,7 +333,7 @@ class PilotReviewTests(unittest.TestCase):
         )
         self.assertTrue((self.exp / "review.md").is_file())
 
-    def test_reviewer_reconstructs_wrapper_publication_root_without_wrapper(
+    def test_reviewer_requires_runtime_authority_for_wrapper_publication_root(
         self,
     ) -> None:
         helper = self.helper(self.canonical_experiment())
@@ -371,55 +371,17 @@ class PilotReviewTests(unittest.TestCase):
             (self.exp / "review.json").read_text(encoding="utf-8")
         )
         self.assertEqual(
-            "fail",
+            "not_auditable",
             review["verdicts"]["production_runtime_integration"],
             review["issues"],
         )
-        self.assertEqual(
-            "run/scenario-failure.json",
-            review["contract_provenance"]["runtime_authority_failure"],
-        )
-        self.assertEqual(
-            "preview_public_wrapper_evidence_publication",
-            next(
-                issue["detail"]
-                for issue in review["issues"]
-                if issue["classification"] == "closed-runtime-failure"
-            ),
-        )
-
-        wrapper_path = self.exp / "run/preview-public-wrapper-diagnostic.json"
-        write_json(
-            wrapper_path,
-            {
-                "schema": "cvm.provider-free-preview-public-wrapper/1",
-                "operation": "preview_public_spawn",
-            },
-        )
-        wrapper_bytes = wrapper_path.read_bytes()
-        manifest["files"].append(
-            {
-                "path": "run/preview-public-wrapper-diagnostic.json",
-                "size_bytes": len(wrapper_bytes),
-                "sha256": hashlib.sha256(wrapper_bytes).hexdigest(),
-            }
-        )
-        write_json(self.exp / "artifact_manifest.json", manifest)
-
-        status = self.reviewer.main(
-            [str(self.exp), "--workspace-helper", str(helper)]
-        )
-        review = json.loads(
-            (self.exp / "review.json").read_text(encoding="utf-8")
-        )
-        self.assertEqual(status, 0)
-        self.assertEqual(
-            "not_auditable",
-            review["verdicts"]["production_runtime_integration"],
+        self.assertNotIn(
+            "runtime_authority_failure",
+            review["contract_provenance"],
         )
         self.assertIn(
-            "preview public wrapper must be absent",
-            " ".join(issue["detail"] for issue in review["issues"]),
+            "production runtime integration requires",
+            " ".join(review["evidence_gaps"]),
         )
 
     def test_reviewer_binds_exec_permitted_browser_staging_profile(self) -> None:
@@ -1206,6 +1168,85 @@ class PilotReviewTests(unittest.TestCase):
         self.assertEqual("not_auditable", verdict)
         self.assertEqual({}, provenance)
         self.assertEqual("observability-gap", issues[0]["classification"])
+        self.assertTrue(gaps)
+
+        def write_terminal_manifest(*, status: int) -> None:
+            files = []
+            for path in sorted((self.exp / "run").rglob("*")):
+                if path.is_file():
+                    data = path.read_bytes()
+                    files.append(
+                        {
+                            "path": path.relative_to(self.exp).as_posix(),
+                            "size_bytes": len(data),
+                            "sha256": hashlib.sha256(data).hexdigest(),
+                        }
+                    )
+            write_json(
+                self.exp / "artifact_manifest.json",
+                {
+                    "schema_version": 1,
+                    "workload_status": status,
+                    "final_status": status,
+                    "files": files,
+                },
+            )
+
+        write_json(self.exp / "run/runtime-authority-smoke.json", receipt)
+        write_json(
+            self.exp / "run/provider-free-execution.json", authoritative_proof
+        )
+        (self.exp / "run/preview-public-wrapper-diagnostic.json").unlink()
+        write_json(
+            self.exp / "run/scenario-failure.json",
+            {
+                "schema": "cvm.provider-free-scenario-failure/1",
+                "scenario_identity": "issue15.provider-free.runtime-authority/1",
+                "stage": "native_measurement",
+                "operation": "preview_public_wrapper_evidence_publication",
+            },
+        )
+        write_terminal_manifest(status=1)
+        verdict, provenance, issues, gaps = self.reviewer._runtime_authority_verdict(
+            self.exp, workspace_payload
+        )
+        self.assertEqual("fail", verdict)
+        self.assertEqual(
+            "run/runtime-authority-smoke.json", provenance["runtime_authority"]
+        )
+        self.assertEqual(
+            "run/scenario-failure.json", provenance["runtime_authority_failure"]
+        )
+        self.assertEqual("closed-runtime-failure", issues[0]["classification"])
+        self.assertEqual([], gaps)
+
+        (self.exp / "run/preview-public-wrapper-diagnostic.json").write_text(
+            '{"schema":"partial"', encoding="utf-8"
+        )
+        write_terminal_manifest(status=1)
+        verdict, provenance, issues, gaps = self.reviewer._runtime_authority_verdict(
+            self.exp, workspace_payload
+        )
+        self.assertEqual("not_auditable", verdict)
+        self.assertEqual({}, provenance)
+        self.assertEqual("observability-gap", issues[0]["classification"])
+        self.assertIn("must be absent", issues[0]["detail"])
+        self.assertTrue(gaps)
+        (self.exp / "run/preview-public-wrapper-diagnostic.json").unlink()
+
+        tampered_receipt = json.loads(json.dumps(receipt))
+        tampered_receipt["scenario_identity"] = "tampered"
+        write_json(
+            self.exp / "run/runtime-authority-smoke.json", tampered_receipt
+        )
+        write_terminal_manifest(status=1)
+        verdict, provenance, issues, gaps = self.reviewer._runtime_authority_verdict(
+            self.exp, workspace_payload
+        )
+        self.assertEqual("not_auditable", verdict)
+        self.assertEqual({}, provenance)
+        self.assertEqual("observability-gap", issues[0]["classification"])
+        self.assertIn("identity conflicts", issues[0]["detail"])
         self.assertTrue(gaps)
 
     def test_reviewer_audits_portable_authority_and_records_materialized_evidence(self) -> None:
