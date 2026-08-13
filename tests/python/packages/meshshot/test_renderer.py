@@ -2376,6 +2376,72 @@ class ResidualRendererTests(unittest.TestCase):
                     with self.assertRaises(OSError):
                         os.fstat(fake_memfd)
 
+    def test_linux_sealed_snapshot_fd_source_close_failure_is_cleanup(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            launch = Path(directory) / "snapshot"
+            launch.write_bytes(b"sealed executable")
+            launch.chmod(0o555)
+            source_fd = os.open(launch, os.O_RDONLY)
+            descriptor_fd = os.open(Path(directory) / "memfd", os.O_RDWR | os.O_CREAT)
+            real_close = os.close
+            close_calls: list[int] = []
+
+            def close_source_fails(fd: int) -> None:
+                close_calls.append(fd)
+                real_close(fd)
+                if fd == source_fd:
+                    raise OSError("closed source cleanup")
+
+            with (
+                mock.patch.object(browser_runtime.os, "memfd_create", return_value=descriptor_fd, create=True),
+                mock.patch.object(browser_runtime.os, "open", return_value=source_fd),
+                mock.patch.object(browser_runtime.os, "close", close_source_fails),
+                mock.patch("meshshot.browser_runtime.fcntl.fcntl", return_value=0xF),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable._sealed_snapshot_fd(launch, launch.stat())
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+            self.assertEqual([source_fd, descriptor_fd], close_calls)
+            for fd in (source_fd, descriptor_fd):
+                with self.assertRaises(OSError):
+                    os.fstat(fd)
+
+    def test_linux_sealed_snapshot_fd_failure_closes_all_descriptors(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            launch = Path(directory) / "snapshot"
+            launch.write_bytes(b"sealed executable")
+            launch.chmod(0o555)
+            source_fd = os.open(launch, os.O_RDONLY)
+            descriptor_fd = os.open(Path(directory) / "memfd", os.O_RDWR | os.O_CREAT)
+            real_close = os.close
+            close_calls: list[int] = []
+
+            def descriptor_close_fails(fd: int) -> None:
+                close_calls.append(fd)
+                real_close(fd)
+                if fd == descriptor_fd:
+                    raise OSError("closed descriptor cleanup")
+
+            with (
+                mock.patch.object(browser_runtime.os, "memfd_create", return_value=descriptor_fd, create=True),
+                mock.patch.object(browser_runtime.os, "open", return_value=source_fd),
+                mock.patch.object(browser_runtime.os, "close", descriptor_close_fails),
+                mock.patch("meshshot.browser_runtime.fcntl.fcntl", side_effect=OSError("construction failed")),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable._sealed_snapshot_fd(launch, launch.stat())
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+            self.assertEqual([source_fd, descriptor_fd], close_calls)
+            for fd in (source_fd, descriptor_fd):
+                with self.assertRaises(OSError):
+                    os.fstat(fd)
+
     def test_prelaunched_runtime_cleanup_failure_is_terminal_and_closed(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
 
