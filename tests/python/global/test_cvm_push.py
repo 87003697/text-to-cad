@@ -539,6 +539,47 @@ class BuildInputTests(unittest.TestCase):
 
 
 class StageTests(unittest.TestCase):
+    def test_python_playwright_dependency_is_pinned_to_frozen_profile(self) -> None:
+        requirements = (REPO_ROOT / "requirements-dev.txt").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        meshshot = (REPO_ROOT / "packages/meshshot/pyproject.toml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("playwright==1.60.0", requirements)
+        self.assertNotIn("\nplaywright\n", f"\n{requirements}\n")
+        self.assertIn('"playwright==1.60.0"', meshshot)
+
+    def test_stage_requires_exactly_one_frozen_headless_shell_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            stage = Path(root_text)
+            create_runtime(stage)
+            manifest = (
+                stage
+                / "skills/implicit-cad/scripts/packages/implicitjs/"
+                "node_modules/playwright-core/browsers.json"
+            )
+            workflow = cvm_push.CvmPush(FakeRunner(), repo_root=stage, environ={})
+
+            for browsers in (
+                [],
+                [
+                    {"name": "chromium-headless-shell", "revision": "1223"},
+                    {"name": "chromium-headless-shell", "revision": "1223"},
+                ],
+                [{"name": "chromium-headless-shell", "revision": "1224"}],
+            ):
+                with self.subTest(browsers=browsers):
+                    manifest.write_text(
+                        json.dumps({"browsers": browsers}), encoding="utf-8"
+                    )
+                    with self.assertRaisesRegex(
+                        cvm_push.PushError,
+                        "exactly one.*1223",
+                    ):
+                        workflow.attest_stage(stage)
+
     def test_skill_documents_the_closed_durable_fixture_deployment_exception(self) -> None:
         contract = (REPO_ROOT / ".claude/skills/cvm-push/SKILL.md").read_text(
             encoding="utf-8"
@@ -1010,6 +1051,99 @@ class StageTests(unittest.TestCase):
 
 
 class TransferAndVerifyTests(unittest.TestCase):
+    def test_remote_preflight_closes_on_python_playwright_mismatch(self) -> None:
+        runner = FakeRunner()
+        runner.respond("df --output", "20\n")
+        runner.respond(
+            "cvm.playwright-runtime-identity/1",
+            json.dumps(
+                {
+                    "schema": "cvm.playwright-runtime-identity/1",
+                    "matched": False,
+                    "browser_sha256": "a" * 64,
+                }
+            ),
+        )
+        workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})
+
+        with self.assertRaisesRegex(
+            cvm_push.PushError,
+            "Playwright runtime identity mismatch",
+        ) as error:
+            workflow.preflight_remote()
+
+        self.assertEqual(error.exception.status, 7)
+        self.assertEqual(len(runner.remote_commands), 2)
+
+    def test_remote_preflight_rejects_malformed_identity_receipts(self) -> None:
+        malformed = (
+            "not-json",
+            '{"schema":"cvm.playwright-runtime-identity/1",'
+            '"matched":true,"matched":false,"browser_sha256":"'
+            + "a" * 64
+            + '"}',
+            json.dumps(
+                {
+                    "schema": "cvm.playwright-runtime-identity/1",
+                    "matched": True,
+                    "browser_sha256": "a" * 64,
+                    "raw_path": "/secret",
+                }
+            ),
+        )
+        for raw in malformed:
+            with self.subTest(raw=raw):
+                runner = FakeRunner()
+                runner.respond("df --output", "20\n")
+                runner.respond("cvm.playwright-runtime-identity/1", raw)
+                workflow = cvm_push.CvmPush(
+                    runner, repo_root=REPO_ROOT, environ={}
+                )
+
+                with self.assertRaisesRegex(
+                    cvm_push.PushError,
+                    "identity verification failed",
+                ) as error:
+                    workflow.preflight_remote()
+
+                self.assertEqual(error.exception.status, 7)
+
+    def test_remote_verification_rejects_changed_browser_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            stage = Path(root_text)
+            attestation = create_runtime(stage)
+            runner = FakeRunner()
+            runner.respond(
+                "sha256sum",
+                "".join(
+                    f"{relative}\t{digest}\n"
+                    for relative, digest in attestation.hashes.items()
+                ),
+            )
+            runner.respond(
+                "cvm.playwright-runtime-identity/1",
+                json.dumps(
+                    {
+                        "schema": "cvm.playwright-runtime-identity/1",
+                        "matched": True,
+                        "browser_sha256": "b" * 64,
+                    }
+                ),
+            )
+            workflow = cvm_push.CvmPush(runner, repo_root=stage, environ={})
+            workflow.remote_preflight = cvm_push.RemotePreflight(
+                free_gb=20,
+                browser_sha256="a" * 64,
+            )
+
+            with self.assertRaisesRegex(
+                cvm_push.PushError,
+                "browser executable identity changed",
+            ) as error:
+                workflow.verify_remote(attestation)
+
+            self.assertEqual(error.exception.status, 7)
+
     def test_remote_native_build_publishes_complete_deployed_source_authority(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
