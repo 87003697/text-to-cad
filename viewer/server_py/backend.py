@@ -254,8 +254,8 @@ class LocalAssetBackend:
             # A same-stem `<name>.step.py` generator OWNS the entry even when an
             # exported `<name>.step` sits beside it. The export is the generator's
             # output, and only the generator can declare the model's `params`
-            # sidecar -- the documented way to attach one to an imported STEP
-            # (skills/cad/references/parameters.md). Resolving it here keeps the
+            # sidecar -- the documented way to attach one to an imported STEP.
+            # Resolving it here keeps the
             # build, the freshness check and STEP export all keyed on the same
             # source. cadgen's generator mode writes only the render package, so
             # the exported `.step` beside it is never rewritten.

@@ -5,17 +5,17 @@
 <br>
 
 <pre>
-████████╗███████╗██╗  ██╗████████╗   ████████╗ ██████╗     ██████╗ █████╗ ██████╗ 
-╚══██╔══╝██╔════╝╚██╗██╔╝╚══██╔══╝   ╚══██╔══╝██╔═══██╗   ██╔════╝██╔══██╗██╔══██╗
-   ██║   █████╗   ╚███╔╝    ██║         ██║   ██║   ██║   ██║     ███████║██║  ██║
-   ██║   ██╔══╝   ██╔██╗    ██║         ██║   ██║   ██║   ██║     ██╔══██║██║  ██║
-   ██║   ███████╗██╔╝ ██╗   ██║   ██╗   ██║   ╚██████╔╝██╗╚██████╗██║  ██║██████╔╝
-   ╚═╝   ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚═╝   ╚═╝    ╚═════╝ ╚═╝ ╚═════╝╚═╝  ╚═╝╚═════╝ 
+████████╗███████╗██╗  ██╗████████╗██████╗  ██████╗ █████╗ ██████╗ 
+╚══██╔══╝██╔════╝╚██╗██╔╝╚══██╔══╝╚════██╗██╔════╝██╔══██╗██╔══██╗
+   ██║   █████╗   ╚███╔╝    ██║    █████╔╝██║     ███████║██║  ██║
+   ██║   ██╔══╝   ██╔██╗    ██║   ██╔═══╝ ██║     ██╔══██║██║  ██║
+   ██║   ███████╗██╔╝ ██╗   ██║   ███████╗╚██████╗██║  ██║██████╔╝
+   ╚═╝   ╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝ ╚═════╝╚═╝  ╚═╝╚═════╝ 
 </pre>
 
 A library of agent skills for CAD, CAE and CAM
 
-[Docs](https://www.texttocad.dev) | [Demo](https://cad.fun)
+[Docs](https://www.texttocad.dev)
 
 [![Tests](https://img.shields.io/github/actions/workflow/status/earthtojake/text-to-cad/test.yml?branch=develop&style=for-the-badge&logo=githubactions&logoColor=white&label=Tests)](https://github.com/earthtojake/text-to-cad/actions/workflows/test.yml?query=branch%3Adevelop)
 [![Join Discord](https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/5FGB9DwJYU)
@@ -37,6 +37,29 @@ A library of agent skills for CAD, CAE and CAM
 text-to-cad is a library of agent skills for generating, inspecting, sourcing,
 slicing, and handing off CAD and robot-description artifacts from local project
 files.
+
+<table>
+  <tr>
+    <td width="33%">
+      <a href="./assets/text-to-cad-demo.gif">
+        <img src="./assets/text-to-cad-demo.gif" alt="CAD skill demo showing generated geometry in CAD Viewer" width="100%">
+      </a>
+      <a href="./skills/cad/SKILL.md"><strong>CAD</strong></a>
+    </td>
+    <td width="33%">
+      <a href="./assets/urdf-demo.gif">
+        <img src="./assets/urdf-demo.gif" alt="URDF skill demo showing robot description output in CAD Viewer" width="100%">
+      </a>
+      <a href="./skills/urdf/SKILL.md"><strong>URDF</strong></a>
+    </td>
+    <td width="33%">
+      <a href="./assets/srdf-moveit2-demo.gif">
+        <img src="./assets/srdf-moveit2-demo.gif" alt="SRDF MoveIt2 skill demo showing inverse kinematics in CAD Viewer" width="100%">
+      </a>
+      <a href="./skills/srdf/SKILL.md"><strong>SRDF / MoveIt2</strong></a>
+    </td>
+  </tr>
+</table>
 
 ## 🧰 Skills
 
@@ -96,39 +119,6 @@ claude plugin install cad@text-to-cad
 Restart your agent if newly installed skills do not appear. For local
 development, branch from `develop`, open PRs against `develop`, and use the symlink
 workflow in [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## 📸 Screenshots
-
-The repo stores heavyweight GIF assets in `assets/**` through Git LFS and
-excludes that tree from default LFS pulls, so lightweight clones do not fetch
-them. To hydrate the demo assets locally, run:
-
-```bash
-git lfs pull --include="assets/**"
-```
-
-<table>
-  <tr>
-    <td width="33%">
-      <a href="./assets/text-to-cad-demo.gif">
-        <img src="./assets/text-to-cad-demo.gif" alt="CAD skill demo showing generated geometry in CAD Viewer" width="100%">
-      </a>
-      <a href="./skills/cad/SKILL.md"><strong>CAD</strong></a>
-    </td>
-    <td width="33%">
-      <a href="./assets/urdf-demo.gif">
-        <img src="./assets/urdf-demo.gif" alt="URDF skill demo showing robot description output in CAD Viewer" width="100%">
-      </a>
-      <a href="./skills/urdf/SKILL.md"><strong>URDF</strong></a>
-    </td>
-    <td width="33%">
-      <a href="./assets/srdf-moveit2-demo.gif">
-        <img src="./assets/srdf-moveit2-demo.gif" alt="SRDF MoveIt2 skill demo showing inverse kinematics in CAD Viewer" width="100%">
-      </a>
-      <a href="./skills/srdf/SKILL.md"><strong>SRDF / MoveIt2</strong></a>
-    </td>
-  </tr>
-</table>
 
 ## 🛠️ Contributing
 
