@@ -21,6 +21,7 @@ from typing import Any, Iterator
 
 RUNTIME_SCHEMA = "meshshot.prelaunched-cdp-runtime/1"
 _PROFILE_RESOURCE = "prelaunched_cdp_playwright_1_60_v1.json"
+ADAPTER_PROFILE_SHA256 = "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
 _DEVTOOLS_PATH = re.compile(r"^/devtools/browser/[0-9A-Za-z._-]+$")
 _VERSION_OUTPUT = re.compile(
     r"^(?:Google Chrome for Testing|Chromium|Chrome|HeadlessChrome) "
@@ -80,6 +81,8 @@ def _load_profile() -> tuple[dict[str, Any], str]:
         .joinpath(_PROFILE_RESOURCE)
         .read_bytes()
     )
+    if hashlib.sha256(raw).hexdigest() != ADAPTER_PROFILE_SHA256:
+        raise BrowserRuntimeError("browser_adapter_profile")
     try:
         profile = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -104,7 +107,7 @@ def _load_profile() -> tuple[dict[str, Any], str]:
         or not all(isinstance(value, str) for value in profile["arguments"])
     ):
         raise BrowserRuntimeError("browser_adapter_profile")
-    return profile, hashlib.sha256(raw).hexdigest()
+    return profile, ADAPTER_PROFILE_SHA256
 
 
 def _playwright_revision(browser_name: str) -> str:
@@ -244,6 +247,7 @@ class PrelaunchedCdpRuntime:
         try:
             mode = profile.lstat().st_mode
             if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode) or any(profile.iterdir()):
+                self._profile_dir = None
                 raise BrowserRuntimeError("browser_profile")
             os.chmod(profile, 0o700)
             argv = [
@@ -345,15 +349,33 @@ class PrelaunchedCdpRuntime:
                         is_local=True,
                     )
                 except BaseException as exc:
-                    self._cleanup()
+                    try:
+                        self._cleanup()
+                    except BrowserRuntimeError as cleanup_exc:
+                        if isinstance(exc, _RuntimeSignal):
+                            exc.cleanup_error = cleanup_exc
+                        else:
+                            raise
                     if isinstance(exc, _RuntimeSignal):
                         raise
                     raise BrowserRuntimeError("browser_connect") from exc
+                interrupted: _RuntimeSignal | None = None
                 try:
                     yield browser
+                except _RuntimeSignal as exc:
+                    interrupted = exc
                 finally:
-                    self._cleanup()
+                    try:
+                        self._cleanup()
+                    except BrowserRuntimeError as cleanup_exc:
+                        if interrupted is None:
+                            raise
+                        interrupted.cleanup_error = cleanup_exc
+                if interrupted is not None:
+                    raise interrupted
         except _RuntimeSignal as exc:
+            if exc.cleanup_error is not None:
+                raise exc.cleanup_error
             raise BrowserRuntimeError("browser_signal") from exc
 
 
@@ -361,24 +383,39 @@ class _RuntimeSignal(BaseException):
     def __init__(self, signum: int) -> None:
         super().__init__(signum)
         self.signum = signum
+        self.cleanup_error: BrowserRuntimeError | None = None
 
 
 @contextmanager
 def _runtime_signal_cleanup() -> Iterator[None]:
     if threading.current_thread() is not threading.main_thread():
-        raise BrowserRuntimeError("browser_signal")
+        yield
+        return
     watched = (signal.SIGINT, signal.SIGTERM)
     previous = {signum: signal.getsignal(signum) for signum in watched}
+    installed = tuple(
+        signum for signum in watched if previous[signum] is not signal.SIG_IGN
+    )
+    caught: _RuntimeSignal | None = None
 
     def interrupt(signum: int, _frame: Any) -> None:
-        for watched_signal in watched:
-            signal.signal(watched_signal, signal.SIG_IGN)
         raise _RuntimeSignal(signum)
 
     try:
-        for signum in watched:
+        for signum in installed:
             signal.signal(signum, interrupt)
-        yield
+        try:
+            yield
+        except _RuntimeSignal as exc:
+            caught = exc
     finally:
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
+        for signum in installed:
+            signal.signal(signum, previous[signum])
+    if caught is None:
+        return
+    handler = previous[caught.signum]
+    if callable(handler):
+        handler(caught.signum, None)
+    elif handler is signal.SIG_DFL:
+        os.kill(os.getpid(), caught.signum)
+    raise caught

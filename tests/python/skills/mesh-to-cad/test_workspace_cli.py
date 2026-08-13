@@ -267,7 +267,9 @@ class WorkspaceCliTests(unittest.TestCase):
                     "schema": "meshshot.prelaunched-cdp-runtime/1",
                     "adapter_profile": {
                         "name": "playwright-1.60-chromium-1223-loopback-cdp/1",
-                        "sha256": "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04",
+                        "sha256": (
+                            "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
+                        ),
                     },
                     "browser_identity": {
                         "playwright": "1.60.0",
@@ -304,11 +306,23 @@ class WorkspaceCliTests(unittest.TestCase):
         )
         self.assertEqual(0, status, stderr)
         status, attempt, stderr = self.invoke(
-            "begin-attempt", "--workspace", str(self.workspace), "--plan", str(self.initial_plan()), "--intended-step", "0"
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(self.initial_plan()),
+            "--intended-step",
+            "0",
         )
         self.assertEqual(0, status, stderr)
         candidate, candidate_sha = self.candidate("candidate-runtime-tamper", b"candidate")
-        measurement = self.measurement(step=0, compare_to=None, candidate_sha=candidate_sha, observable_sha="9" * 64, accepted=False)
+        measurement = self.measurement(
+            step=0,
+            compare_to=None,
+            candidate_sha=candidate_sha,
+            observable_sha="9" * 64,
+            accepted=False,
+        )
         preview = self.preview("preview-runtime-tamper", candidate_sha)
         metadata_path = preview / "preview.json"
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))

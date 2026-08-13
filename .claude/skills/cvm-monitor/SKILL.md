@@ -62,15 +62,6 @@ Native measurement operations are:
 - `preview_browser_runtime_staging`
 - `preview_browser_outer_exec_probe`
 - `preview_browser_nested_exec_probe`
-- `preview_browser_node_attached_spawn_event`
-- `preview_browser_node_attached_nonzero_exit`
-- `preview_browser_node_attached_timeout`
-- `preview_browser_node_attached_output_shape`
-- `preview_browser_node_detached_spawn_event`
-- `preview_browser_node_detached_nonzero_exit`
-- `preview_browser_node_detached_timeout`
-- `preview_browser_node_detached_output_shape`
-- `preview_browser_playwright_launch_after_direct_probes`
 - `preview_dependency`
 - `preview_browser_launch`
 - `preview_browser_launch_process_limit`
@@ -84,6 +75,16 @@ Native measurement operations are:
 - `preview_browser_launch_sandbox_permission`
 - `preview_browser_launch_filesystem_permission`
 - `preview_browser_launch_executable_dependency`
+- `preview_browser_adapter_profile`
+- `preview_browser_identity`
+- `preview_browser_profile`
+- `preview_browser_prelaunch`
+- `preview_browser_readiness`
+- `preview_browser_readiness_timeout`
+- `preview_browser_connect`
+- `preview_browser_cleanup`
+- `preview_browser_signal`
+- `preview_browser_runtime_evidence`
 - `preview_browser_render`
 - `preview_browser_result`
 - `preview_public_sandbox_setup`
@@ -97,26 +98,26 @@ Native measurement operations are:
 - `preview_public_wrapper_evidence_publication`
 - `step_publication`
 
-The attached Node probe runs first with `detached=false`; the detached Node
-probe runs second with `detached=true`. All other probe inputs are identical.
-The later Playwright operation is valid only after both Node modes passed.
-Each Node failure publishes exactly one of `spawn-event`, `nonzero-exit`,
-`timeout`, or `output-shape`; signal exits are `nonzero-exit`, and missing,
-extra, or invalid result tokens are `output-shape`.
-
-The eleven browser-exec diagnostic operations are backed by the manifest-bound
+The browser-exec diagnostic operations are backed by the manifest-bound
 `run/browser-exec-diagnostic.json` receipt. It contains only closed
 `passed`/`failed`/`not-run` outcomes for the outer direct Chromium `--version`
-probe, the same exact executable through the nested preview sandbox, the same
-nested spawn repeated by Playwright's bundled Node in attached and detached
-modes, and the subsequent Playwright launch. The probes use a five-second outer timeout, a closed
+probe, the same exact executable through the nested preview sandbox, and the
+subsequent Python-owned prelaunched-CDP runtime. The retired Node fields remain
+exactly `not-run`; Playwright only attaches with `connect_over_cdp` after Python
+has attested and prelaunched the exact browser. The probes use a five-second outer timeout, a closed
 `HOME`/`LANG`/`PATH` environment, no provider or network access, and accept only
 the exact bounded result for their caller. Raw stdout, stderr, exception text,
-environment values, and arbitrary operations are never projected by the
-monitor. A diagnostic operation is rejected unless its receipt has the
-corresponding exact outcome tuple and manifest binding. Historical three-field
-receipts, operations on another stage, or values outside these lists are
-rejected by profile `/13`.
+environment values, PID, endpoint, argv, and arbitrary operations are never
+projected by the monitor. A diagnostic operation is rejected unless its `/5`
+receipt has the corresponding exact outcome tuple and manifest binding.
+Historical Node-launch outcomes, operations on another stage, or values outside
+these lists are rejected by sandbox profile `/14`.
+
+Successful preview evidence also carries the closed
+`meshshot.prelaunched-cdp-runtime/1` receipt. Its frozen adapter-profile digest
+must match the shipped profile, and its Chromium digest must exactly match the
+retained deployment/runtime identity. It never exposes the temporary profile,
+process group, readiness port, endpoint, environment, stderr, or launch argv.
 
 The eight public-wrapper operations distinguish the complete expected boundary
 after direct browser probes: pre-public sandbox setup or enforcement evidence,

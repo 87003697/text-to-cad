@@ -54,7 +54,13 @@ class JobProtocolTests(unittest.TestCase):
                 "c" * 64,
             ),
             (
-                {**receipt, "browser_identity": {**receipt["browser_identity"], "sha256": "2" * 64}},
+                {
+                    **receipt,
+                    "browser_identity": {
+                        **receipt["browser_identity"],
+                        "sha256": "2" * 64,
+                    },
+                },
                 "c" * 64,
             ),
         ):

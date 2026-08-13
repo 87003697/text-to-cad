@@ -271,7 +271,10 @@ class PreviewCliTests(unittest.TestCase):
             views=views,
             browser_runtime={
                 "schema": "meshshot.prelaunched-cdp-runtime/1",
-                "adapter_profile": {"name": "test/1", "sha256": "1" * 64},
+                "adapter_profile": {
+                    "name": "playwright-1.60-chromium-1223-loopback-cdp/1",
+                    "sha256": "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04",
+                },
                 "browser_identity": {
                     "playwright": "1.60.0",
                     "browser": "chromium-headless-shell",

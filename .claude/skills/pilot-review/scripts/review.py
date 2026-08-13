@@ -1178,6 +1178,58 @@ def _runtime_authority_verdict(
             relative = f"run/deployed-source/{item['path']}"
             if manifest_by_path.get(relative) != {**item, "path": relative}:
                 raise ReviewError(f"terminal manifest does not bind {relative}")
+        if not runtime_authority_failure:
+            graph = payload.get("graph") if isinstance(payload, dict) else None
+            steps = graph.get("steps") if isinstance(graph, dict) else None
+            if not isinstance(steps, list) or not steps:
+                raise ReviewError("validated Workspace has no browser runtime evidence")
+            preview_relatives = [
+                str(
+                    step.get("preview")
+                    or f"steps/{int(step['step']):06d}/preview/preview.json"
+                )
+                for step in steps
+                if isinstance(step, dict)
+            ]
+            if (workspace / "final/preview.json").is_file():
+                preview_relatives.append("final/preview.json")
+            for relative in preview_relatives:
+                preview_file = workspace / relative
+                preview_bytes = preview_file.read_bytes()
+                preview = json.loads(preview_bytes)
+                runtime = preview.get("browser_runtime") if isinstance(preview, dict) else None
+                adapter = runtime.get("adapter_profile") if isinstance(runtime, dict) else None
+                browser = runtime.get("browser_identity") if isinstance(runtime, dict) else None
+                if (
+                    not isinstance(runtime, dict)
+                    or set(runtime)
+                    != {"schema", "adapter_profile", "browser_identity", "result"}
+                    or runtime.get("schema") != "meshshot.prelaunched-cdp-runtime/1"
+                    or runtime.get("result") != "passed"
+                    or adapter
+                    != {
+                        "name": "playwright-1.60-chromium-1223-loopback-cdp/1",
+                        "sha256": (
+                            "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
+                        ),
+                    }
+                    or not isinstance(browser, dict)
+                    or browser.get("playwright") != "1.60.0"
+                    or browser.get("browser") != "chromium-headless-shell"
+                    or browser.get("revision") != "1223"
+                    or browser.get("version")
+                    != "Google Chrome for Testing 148.0.7778.96"
+                    or browser.get("sha256") != chromium_identity["sha256"]
+                ):
+                    raise ReviewError(
+                        "preview browser identity conflicts with deployed runtime authority"
+                    )
+                if manifest_by_path.get(relative) != {
+                    "path": relative,
+                    "size_bytes": len(preview_bytes),
+                    "sha256": hashlib.sha256(preview_bytes).hexdigest(),
+                }:
+                    raise ReviewError(f"terminal manifest does not bind {relative}")
     except (IndexError, OSError, TypeError, ValueError, ReviewError) as exc:
         return (
             "not_auditable",

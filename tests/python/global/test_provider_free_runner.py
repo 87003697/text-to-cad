@@ -320,6 +320,30 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        preview_path = exp_dir / "steps/000000/preview/preview.json"
+        preview_path.parent.mkdir(parents=True, exist_ok=True)
+        preview_path.write_text(
+            json.dumps(
+                {
+                    "browser_runtime": {
+                        "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,
+                        "adapter_profile": {
+                            "name": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE,
+                            "sha256": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE_SHA256,
+                        },
+                        "browser_identity": {
+                            "playwright": "1.60.0",
+                            "browser": "chromium-headless-shell",
+                            "revision": "1223",
+                            "version": "Google Chrome for Testing 148.0.7778.96",
+                            "sha256": self.runtime_identity["chromium"]["sha256"],
+                        },
+                        "result": "passed",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
         files = [{"path": "runtime-identity.json", "size_bytes": 1, "sha256": "a" * 64}]
         tree_bytes = json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
         artifact = {
@@ -392,7 +416,9 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             "preview sandbox evidence conflicts",
         ):
             provider_free_runner._validate_scenario_evidence(
-                exp_dir, "issue15-runtime-authority"
+                exp_dir,
+                "issue15-runtime-authority",
+                expected_browser_sha256=self.runtime_identity["chromium"]["sha256"],
             )
 
     def test_success_rejects_tampered_browser_exec_diagnostic(self) -> None:
@@ -409,7 +435,31 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             "browser exec diagnostic conflicts",
         ):
             provider_free_runner._validate_scenario_evidence(
-                exp_dir, "issue15-runtime-authority"
+                exp_dir,
+                "issue15-runtime-authority",
+                expected_browser_sha256=self.runtime_identity["chromium"]["sha256"],
+            )
+
+    def test_success_rejects_preview_browser_digest_outside_deployment_authority(self) -> None:
+        self.write_success_evidence()
+        self.write_authority(self.repo / "outputs" / self.handle)
+        exp_dir = self.repo / "outputs" / self.handle
+        preview_path = exp_dir / "steps/000000/preview/preview.json"
+        preview = json.loads(preview_path.read_text(encoding="utf-8"))
+        preview["browser_runtime"]["browser_identity"]["sha256"] = "2" * 64
+        preview["preview_identity_sha256"] = hashlib.sha256(
+            json.dumps(preview, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        preview_path.write_text(json.dumps(preview), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            provider_free_runner.ProviderFreeError,
+            "browser runtime evidence conflicts",
+        ):
+            provider_free_runner._validate_scenario_evidence(
+                exp_dir,
+                "issue15-runtime-authority",
+                expected_browser_sha256=self.runtime_identity["chromium"]["sha256"],
             )
 
     def test_failure_requires_matching_closed_browser_exec_diagnostic(

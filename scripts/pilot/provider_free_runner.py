@@ -41,6 +41,7 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
     ProtocolError,
+    provider_free_browser_runtime_allowed,
     provider_free_browser_exec_diagnostic_allowed,
     provider_free_browser_exec_diagnostic_matches_operation,
     provider_free_preview_public_wrapper_allowed,
@@ -415,7 +416,12 @@ def _publish_sandbox_enforcement(
     )
 
 
-def _validate_scenario_evidence(exp_dir: Path, scenario_name: str) -> None:
+def _validate_scenario_evidence(
+    exp_dir: Path,
+    scenario_name: str,
+    *,
+    expected_browser_sha256: str,
+) -> None:
     """Require every Issue #37 runtime-authority evidence layer before success."""
 
     path = exp_dir / "run" / "runtime-authority-smoke.json"
@@ -554,6 +560,26 @@ def _validate_scenario_evidence(exp_dir: Path, scenario_name: str) -> None:
         raise ProviderFreeError(
             "runtime-authority preview public wrapper conflicts"
         )
+    preview_paths = sorted((exp_dir / "steps").glob("*/preview/preview.json"))
+    final_preview = exp_dir / "final/preview.json"
+    if final_preview.is_file():
+        preview_paths.append(final_preview)
+    if not preview_paths:
+        raise ProviderFreeError("runtime-authority browser runtime evidence is missing")
+    for preview_path in preview_paths:
+        try:
+            preview = json.loads(preview_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ProviderFreeError(
+                "runtime-authority browser runtime evidence is invalid"
+            ) from exc
+        if not provider_free_browser_runtime_allowed(
+            preview.get("browser_runtime") if isinstance(preview, dict) else None,
+            expected_browser_sha256=expected_browser_sha256,
+        ):
+            raise ProviderFreeError(
+                "runtime-authority browser runtime evidence conflicts"
+            )
     for authority_name in ("workspace-authority.json", "workspace-authority.bundle"):
         if not (exp_dir / authority_name).is_file():
             raise ProviderFreeError("runtime-authority portable Workspace authority is missing")
@@ -741,7 +767,11 @@ def run_scenario(
         try:
             pilot_runner.validate_workspace_delivery(exp_dir)
             pilot_runner.publish_workspace_authority(exp_dir)
-            _validate_scenario_evidence(exp_dir, scenario_name)
+            _validate_scenario_evidence(
+                exp_dir,
+                scenario_name,
+                expected_browser_sha256=runtime_identity["chromium"]["sha256"],
+            )
         except (pilot_runner.PilotError, ProviderFreeError) as exc:
             print(f"provider-free-runner: {exc}", file=sys.stderr)
             final_status = pilot_runner.ARTIFACT_CONTRACT_STATUS

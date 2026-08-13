@@ -79,9 +79,16 @@ PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE = (
 )
 PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA = "meshshot.prelaunched-cdp-runtime/1"
 PROVIDER_FREE_BROWSER_ADAPTER_PROFILE = "playwright-1.60-chromium-1223-loopback-cdp/1"
+PROVIDER_FREE_BROWSER_ADAPTER_PROFILE_SHA256 = (
+    "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
+)
 
 
-def provider_free_browser_runtime_allowed(receipt: object) -> bool:
+def provider_free_browser_runtime_allowed(
+    receipt: object,
+    *,
+    expected_browser_sha256: object,
+) -> bool:
     """Validate the closed production browser result without lifecycle internals."""
 
     if not isinstance(receipt, dict) or set(receipt) != {
@@ -99,8 +106,7 @@ def provider_free_browser_runtime_allowed(receipt: object) -> bool:
         and isinstance(adapter, dict)
         and set(adapter) == {"name", "sha256"}
         and adapter.get("name") == PROVIDER_FREE_BROWSER_ADAPTER_PROFILE
-        and isinstance(adapter.get("sha256"), str)
-        and re.fullmatch(r"[0-9a-f]{64}", adapter["sha256"]) is not None
+        and adapter.get("sha256") == PROVIDER_FREE_BROWSER_ADAPTER_PROFILE_SHA256
         and isinstance(browser, dict)
         and set(browser)
         == {"playwright", "browser", "revision", "version", "sha256"}
@@ -108,8 +114,9 @@ def provider_free_browser_runtime_allowed(receipt: object) -> bool:
         and browser.get("browser") == "chromium-headless-shell"
         and browser.get("revision") == "1223"
         and browser.get("version") == "Google Chrome for Testing 148.0.7778.96"
-        and isinstance(browser.get("sha256"), str)
-        and re.fullmatch(r"[0-9a-f]{64}", browser["sha256"]) is not None
+        and isinstance(expected_browser_sha256, str)
+        and re.fullmatch(r"[0-9a-f]{64}", expected_browser_sha256) is not None
+        and browser.get("sha256") == expected_browser_sha256
     )
 
 

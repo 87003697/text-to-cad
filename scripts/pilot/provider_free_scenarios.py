@@ -828,7 +828,7 @@ def _nested_browser_exec_probe_argv(
 
 def _validate_attested_browser_runtime(
     staging_cache: Path = Path(PROVIDER_FREE_STAGED_BROWSER_CACHE),
-) -> None:
+) -> str:
     """Validate the exact host-pre-staged browser without copying a host cache."""
 
     try:
@@ -865,7 +865,7 @@ def _validate_attested_browser_runtime(
             "chrome-headless-shell-linux64/chrome-headless-shell"
         )
         if (
-            hashlib.sha256(executable.read_bytes()).hexdigest()
+            (browser_sha256 := hashlib.sha256(executable.read_bytes()).hexdigest())
             != chromium["sha256"]
             or not executable.lstat().st_mode & 0o111
         ):
@@ -881,6 +881,7 @@ def _validate_attested_browser_runtime(
             "provider-free browser runtime identity is unavailable",
             operation="preview_browser_runtime_staging",
         ) from exc
+    return browser_sha256
 
 
 class _RejectedViewerHandler(http.server.BaseHTTPRequestHandler):
@@ -1213,9 +1214,10 @@ def _run_voxblame_preview(
         _PUBLIC_RESULT_SHAPE_CLASSIFICATION: "preview_public_result_shape",
     }
     is_linux = platform.system() == "Linux"
+    expected_browser_sha256: str | None = None
     try:
         if is_linux:
-            _validate_attested_browser_runtime()
+            expected_browser_sha256 = _validate_attested_browser_runtime()
             try:
                 _run_exact_browser_version_probe(
                     [
@@ -1337,7 +1339,17 @@ def _run_voxblame_preview(
         browser_runtime = (
             preview.get("browser_runtime") if isinstance(preview, dict) else None
         )
-        if not provider_free_browser_runtime_allowed(browser_runtime):
+        if not is_linux and isinstance(browser_runtime, dict):
+            identity = browser_runtime.get("browser_identity")
+            if isinstance(identity, dict):
+                expected_browser_sha256 = identity.get("sha256")
+        if (
+            expected_browser_sha256 is None
+            or not provider_free_browser_runtime_allowed(
+                browser_runtime,
+                expected_browser_sha256=expected_browser_sha256,
+            )
+        ):
             operation = "preview_browser_runtime_evidence"
             _require_preview_public_wrapper(command_log, operation=operation)
             raise ScenarioError(

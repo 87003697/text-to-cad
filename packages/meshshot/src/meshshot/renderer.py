@@ -11,6 +11,7 @@ import math
 import os
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from PIL import Image
 
@@ -171,7 +172,18 @@ def render_residual_preview(
                     )
 
                     def reject_outside_origin(route: Any) -> None:
-                        if str(route.request.url).startswith(_ORIGIN):
+                        try:
+                            parsed = urlsplit(str(route.request.url))
+                            same_origin = (
+                                parsed.scheme == "http"
+                                and parsed.hostname == "meshshot.local"
+                                and (parsed.port or 80) == 80
+                                and parsed.username is None
+                                and parsed.password is None
+                            )
+                        except ValueError:
+                            same_origin = False
+                        if same_origin:
                             route.continue_()
                         else:
                             route.abort("blockedbyclient")
@@ -252,7 +264,7 @@ def render_residual_preview(
             else "; no renderer stage event received"
         )
         raise MeshshotError(
-            f"headless residual render failed: {exc}{stage}",
+            f"headless residual render failed{stage}",
             phase="browser_render",
         ) from exc
 

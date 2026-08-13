@@ -163,8 +163,26 @@ def publish_preview(
         or browser_runtime.get("schema") != "meshshot.prelaunched-cdp-runtime/1"
         or browser_runtime.get("result") != "passed"
         or set(browser_runtime.get("adapter_profile", {})) != {"name", "sha256"}
+        or browser_runtime.get("adapter_profile", {}).get("name")
+        != "playwright-1.60-chromium-1223-loopback-cdp/1"
+        or browser_runtime.get("adapter_profile", {}).get("sha256")
+        != "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
         or set(browser_runtime.get("browser_identity", {}))
         != {"playwright", "browser", "revision", "version", "sha256"}
+        or browser_runtime.get("browser_identity", {}).get("playwright") != "1.60.0"
+        or browser_runtime.get("browser_identity", {}).get("browser")
+        != "chromium-headless-shell"
+        or browser_runtime.get("browser_identity", {}).get("revision") != "1223"
+        or browser_runtime.get("browser_identity", {}).get("version")
+        != "Google Chrome for Testing 148.0.7778.96"
+        or not isinstance(
+            browser_runtime.get("browser_identity", {}).get("sha256"), str
+        )
+        or len(browser_runtime["browser_identity"]["sha256"]) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in browser_runtime["browser_identity"]["sha256"]
+        )
     ):
         raise OctreeError("browser runtime evidence is incomplete")
     exterior_exact = scene.exterior.exact

@@ -2315,6 +2315,8 @@ def _validate_preview_boundary(value: Mapping[str, Any], root: Path) -> None:
         or not isinstance(adapter, Mapping)
         or set(adapter) != {"name", "sha256"}
         or adapter.get("name") != "playwright-1.60-chromium-1223-loopback-cdp/1"
+        or adapter.get("sha256")
+        != "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
         or not isinstance(browser, Mapping)
         or set(browser)
         != {"playwright", "browser", "revision", "version", "sha256"}
@@ -2357,9 +2359,8 @@ def _browser_runtime_allowed(value: object) -> bool:
         and isinstance(adapter, Mapping)
         and set(adapter) == {"name", "sha256"}
         and adapter.get("name") == "playwright-1.60-chromium-1223-loopback-cdp/1"
-        and isinstance(adapter.get("sha256"), str)
-        and len(adapter["sha256"]) == 64
-        and all(character in "0123456789abcdef" for character in adapter["sha256"])
+        and adapter.get("sha256")
+        == "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
         and isinstance(browser, Mapping)
         and set(browser)
         == {"playwright", "browser", "revision", "version", "sha256"}

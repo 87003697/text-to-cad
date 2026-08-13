@@ -915,8 +915,49 @@ class PilotReviewTests(unittest.TestCase):
         )
         write_json(self.exp / "run/runtime-authority-smoke.json", receipt)
         write_json(self.exp / "run/provider-free-execution.json", proof)
+        runtime_evidence = {
+            "schema": "meshshot.prelaunched-cdp-runtime/1",
+            "adapter_profile": {
+                "name": "playwright-1.60-chromium-1223-loopback-cdp/1",
+                "sha256": "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04",
+            },
+            "browser_identity": {
+                "playwright": "1.60.0",
+                "browser": "chromium-headless-shell",
+                "revision": "1223",
+                "version": "Google Chrome for Testing 148.0.7778.96",
+                "sha256": runtime_identity["chromium"]["sha256"],
+            },
+            "result": "passed",
+        }
+        preview_relatives = [
+            "steps/000000/preview/preview.json",
+            "steps/000001/preview/preview.json",
+        ]
+        for relative in preview_relatives:
+            preview = {
+                "schema": "voxblame.preview/1",
+                "browser_runtime": runtime_evidence,
+            }
+            preview["preview_identity_sha256"] = hashlib.sha256(
+                b"voxblame.preview/1\0"
+                + (
+                    json.dumps(
+                        preview,
+                        indent=2,
+                        sort_keys=True,
+                        separators=(",", ": "),
+                    )
+                    + "\n"
+                ).encode()
+            ).hexdigest()
+            write_json(self.exp / relative, preview)
         manifest_files = []
-        for path in sorted((self.exp / "run").rglob("*")):
+        manifest_candidates = [
+            *sorted((self.exp / "run").rglob("*")),
+            *(self.exp / relative for relative in preview_relatives),
+        ]
+        for path in manifest_candidates:
             if path.is_file():
                 data = path.read_bytes()
                 manifest_files.append(
@@ -955,6 +996,48 @@ class PilotReviewTests(unittest.TestCase):
         authoritative_manifest = json.loads(
             (self.exp / "artifact_manifest.json").read_text(encoding="utf-8")
         )
+        authoritative_preview = json.loads(
+            (self.exp / preview_relatives[0]).read_text(encoding="utf-8")
+        )
+        for field, value in (("adapter_profile", "1" * 64), ("browser_identity", "2" * 64)):
+            with self.subTest(browser_runtime_tamper=field):
+                candidate = json.loads(json.dumps(authoritative_preview))
+                candidate["browser_runtime"][field]["sha256"] = value
+                source = dict(candidate)
+                source.pop("preview_identity_sha256")
+                candidate["preview_identity_sha256"] = hashlib.sha256(
+                    b"voxblame.preview/1\0"
+                    + (
+                        json.dumps(
+                            source,
+                            indent=2,
+                            sort_keys=True,
+                            separators=(",", ": "),
+                        )
+                        + "\n"
+                    ).encode()
+                ).hexdigest()
+                preview_path = self.exp / preview_relatives[0]
+                write_json(preview_path, candidate)
+                candidate_manifest = json.loads(json.dumps(authoritative_manifest))
+                entry = next(
+                    item for item in candidate_manifest["files"]
+                    if item["path"] == preview_relatives[0]
+                )
+                preview_bytes = preview_path.read_bytes()
+                entry.update(
+                    size_bytes=len(preview_bytes),
+                    sha256=hashlib.sha256(preview_bytes).hexdigest(),
+                )
+                write_json(self.exp / "artifact_manifest.json", candidate_manifest)
+                self.assertEqual(
+                    "not_auditable",
+                    self.reviewer._runtime_authority_verdict(
+                        self.exp, workspace_payload
+                    )[0],
+                )
+        write_json(self.exp / preview_relatives[0], authoritative_preview)
+        write_json(self.exp / "artifact_manifest.json", authoritative_manifest)
         for field in (
             "schema",
             "deployment_receipt",

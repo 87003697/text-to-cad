@@ -469,7 +469,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                                     "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,
                                     "adapter_profile": {
                                         "name": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE,
-                                        "sha256": "1" * 64,
+                                        "sha256": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE_SHA256,
                                     },
                                     "browser_identity": {
                                         "playwright": "1.60.0",
@@ -747,6 +747,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     mock.patch.object(
                         provider_free_scenarios,
                         "_validate_attested_browser_runtime",
+                        return_value="2" * 64,
                     ),
                     mock.patch.object(
                         provider_free_scenarios,
@@ -862,6 +863,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     mock.patch.object(
                         provider_free_scenarios,
                         "_validate_attested_browser_runtime",
+                        return_value="2" * 64,
                     ),
                     mock.patch.object(
                         provider_free_scenarios,
@@ -1000,6 +1002,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     mock.patch.object(
                         provider_free_scenarios,
                         "_validate_attested_browser_runtime",
+                        return_value="2" * 64,
                     ),
                     mock.patch.object(
                         provider_free_scenarios,
@@ -1078,6 +1081,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             mock.patch.object(
                 provider_free_scenarios,
                 "_validate_attested_browser_runtime",
+                return_value="2" * 64,
             ),
             mock.patch.object(
                 provider_free_scenarios,
@@ -1169,6 +1173,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             mock.patch.object(
                 provider_free_scenarios,
                 "_validate_attested_browser_runtime",
+                return_value="2" * 64,
             ),
             mock.patch.object(
                 provider_free_scenarios,
@@ -1284,6 +1289,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             mock.patch.object(
                 provider_free_scenarios,
                 "_validate_attested_browser_runtime",
+                return_value="2" * 64,
             ),
             mock.patch.object(
                 provider_free_scenarios.subprocess,
@@ -1369,6 +1375,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             mock.patch.object(
                 provider_free_scenarios,
                 "_validate_attested_browser_runtime",
+                return_value="2" * 64,
             ),
             mock.patch.object(
                 provider_free_scenarios.subprocess,
@@ -1390,7 +1397,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                             "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,
                             "adapter_profile": {
                                 "name": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE,
-                                "sha256": "1" * 64,
+                                "sha256": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE_SHA256,
                             },
                             "browser_identity": {
                                 "playwright": "1.60.0",
@@ -1699,6 +1706,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             mock.patch.object(
                 provider_free_scenarios,
                 "_validate_attested_browser_runtime",
+                return_value="2" * 64,
             ),
             mock.patch.object(
                 provider_free_scenarios.subprocess,
@@ -1720,7 +1728,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                             "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,
                             "adapter_profile": {
                                 "name": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE,
-                                "sha256": "1" * 64,
+                                "sha256": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE_SHA256,
                             },
                             "browser_identity": {
                                 "playwright": "1.60.0",
