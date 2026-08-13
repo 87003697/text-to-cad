@@ -205,6 +205,97 @@ class ResidualRendererTests(unittest.TestCase):
                 )
                 runtime_class.assert_not_called()
 
+    def test_public_render_rejects_regular_replacement_before_authoritative_open(
+        self,
+    ) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            full_browser = (
+                root
+                / "chromium-1223"
+                / "chrome-mac"
+                / "Google Chrome for Testing"
+            )
+            candidate = (
+                root
+                / "chromium_headless_shell-1223"
+                / "chrome-headless-shell-mac-arm64"
+                / "chrome-headless-shell"
+            )
+            replacement = root / "replacement-browser"
+            full_browser.parent.mkdir(parents=True, exist_ok=True)
+            full_browser.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            full_browser.chmod(0o755)
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+            original_bytes = b"#!/bin/sh\nprintf original\n"
+            replacement_bytes = b"#!/bin/sh\nprintf replaced\n"
+            self.assertEqual(len(original_bytes), len(replacement_bytes))
+            candidate.write_bytes(original_bytes)
+            candidate.chmod(0o755)
+            replacement.write_bytes(replacement_bytes)
+            replacement.chmod(0o755)
+
+            real_open = os.open
+            swapped = False
+
+            def swap_before_open(path: object, flags: int, *args: object) -> int:
+                nonlocal swapped
+                if Path(path) == candidate and not swapped:
+                    swapped = True
+                    os.replace(replacement, candidate)
+                return real_open(path, flags, *args)
+
+            observed: list[bytes] = []
+
+            def observe_source(
+                _pinned: _PinnedExecutable,
+                fd: int,
+                _source_info: os.stat_result,
+            ) -> None:
+                observed.append(os.pread(fd, len(replacement_bytes), 0))
+                raise BrowserRuntimeError(
+                    "browser_identity",
+                    browser_identity_phase="private_tree_materialization",
+                )
+
+            sync_playwright = mock.MagicMock()
+            sync_playwright.return_value.__enter__.return_value.chromium.executable_path = (
+                os.fspath(full_browser)
+            )
+            with (
+                mock.patch.dict(os.environ, {}, clear=False),
+                mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+                mock.patch("meshshot.browser_runtime.os.open", swap_before_open),
+                mock.patch.object(
+                    _PinnedExecutable,
+                    "_materialize_private_image",
+                    autospec=True,
+                    side_effect=observe_source,
+                ) as materialize,
+            ):
+                os.environ.pop("MESHSHOT_BROWSER_EXECUTABLE", None)
+                with self.assertRaises(MeshshotError) as raised:
+                    render_residual_preview(
+                        _geometry(triangle),
+                        _geometry(triangle),
+                        variant="step",
+                    )
+            self.assertTrue(swapped)
+            self.assertEqual([], observed)
+            materialize.assert_not_called()
+            self.assertEqual("browser_identity", raised.exception.phase)
+            self.assertEqual(
+                "private_snapshot_launch_image_identity",
+                raised.exception.browser_identity_substage,
+            )
+            self.assertEqual(
+                "source_executable_identity",
+                raised.exception.browser_identity_phase,
+            )
+
     def test_public_render_rejects_evil_prefix_as_outside_origin(self) -> None:
         page = mock.MagicMock()
         context = mock.MagicMock()
