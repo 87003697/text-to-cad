@@ -228,7 +228,44 @@ def default_executable(chromium_executable: str) -> Path:
             "browser_identity",
             browser_identity_phase="source_executable_identity",
         )
-    return candidates[0].resolve(strict=True)
+    candidate = candidates[0]
+    try:
+        shell_lstat = shell_revision.lstat()
+        resolved_shell_revision = shell_revision.resolve(strict=True)
+        candidate_lstat = candidate.lstat()
+        resolved_candidate = candidate.resolve(strict=True)
+        resolved_lstat = resolved_candidate.lstat()
+        relative_candidate = resolved_candidate.relative_to(
+            resolved_shell_revision
+        )
+    except (OSError, ValueError) as exc:
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="source_executable_identity",
+        ) from exc
+    if (
+        not stat.S_ISDIR(shell_lstat.st_mode)
+        or shell_revision != resolved_shell_revision
+        or not stat.S_ISREG(candidate_lstat.st_mode)
+        or candidate_lstat.st_mode
+        & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        == 0
+        or candidate != resolved_candidate
+        or len(relative_candidate.parts) != 2
+        or relative_candidate.parts[1] != "chrome-headless-shell"
+        or not relative_candidate.parts[0].startswith("chrome-headless-shell-")
+        or not stat.S_ISREG(resolved_lstat.st_mode)
+        or resolved_lstat.st_mode
+        & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        == 0
+        or (candidate_lstat.st_dev, candidate_lstat.st_ino)
+        != (resolved_lstat.st_dev, resolved_lstat.st_ino)
+    ):
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="source_executable_identity",
+        )
+    return resolved_candidate
 
 
 def _attest(executable: _PinnedExecutable, profile: dict[str, Any]) -> dict[str, str]:
