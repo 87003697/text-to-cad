@@ -525,12 +525,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/15",
+    "id": "issue15.provider-free-bounded/16",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/15",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/16",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/15",
+    "schema": "cvm.provider-free-linux-sandbox/16",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -546,6 +546,17 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
         "mount": "repository-owned-exec-permitted-tmpfs",
         "scope": "single-preview-runtime",
         "cleanup": "python-runtime-terminal-all-exit-classes",
+    },
+    "browser_supervisor": {
+        "schema": "meshshot.browser-supervisor/1",
+        "runtime_mode": "provider-free-supervised-cdp/1",
+        "outer_root": "/meshshot-supervisor",
+        "nested_root": "/run/meshshot-supervisor",
+        "socket": "authority.sock",
+        "transport": "AF_UNIX-SOCK_SEQPACKET-one-shot",
+        "nested_mount": "read-only-exact",
+        "ambient_file_descriptors": "forbidden",
+        "launch_owner": "outer-trusted-supervisor",
     },
     "repository_mount": "read-only",
     "output_mount": "read-write-exact-experiment",
@@ -587,9 +598,9 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             },
             "seams": [
                 "outer-python-direct",
-                "nested-python-direct",
-                "python-prelaunch",
-                "playwright-loopback-cdp-attach",
+                "outer-supervised-python-prelaunch",
+                "fixed-unix-authority",
+                "nested-playwright-loopback-cdp-attach",
             ],
             "published": "closed-outcomes-only-no-raw-output",
             "cleanup": "no-profile-or-persistent-process-artifacts",
@@ -599,7 +610,7 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "environment": "MESHSHOT_BROWSER_EXECUTABLE",
             "value": PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
             "validation": "absolute-regular-non-symlink-executable",
-            "launch_owner": "python-prelaunched-cdp-runtime",
+            "launch_owner": "outer-trusted-browser-supervisor",
             "playwright_option": "connect_over_cdp-is-local",
         },
         "cleanup": "supervisor-context-terminal-all-exit-classes",
@@ -679,6 +690,7 @@ PROVIDER_FREE_REQUIRED_ENVIRONMENT = {
     "PATH": "/workspace/repo/.venv/bin:/usr/local/bin:/usr/bin:/bin",
     "PLAYWRIGHT_BROWSERS_PATH": PROVIDER_FREE_STAGED_BROWSER_CACHE,
     "MESHSHOT_EXECUTABLE_ROOT": PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
+    "MESHSHOT_BROWSER_RUNTIME_MODE": "provider-free-supervised-cdp/1",
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 PROVIDER_FREE_SYSTEM_RO_PATHS = tuple(
@@ -758,6 +770,8 @@ def provider_free_sandbox_argv(
         "/tmp",
         "--tmpfs",
         PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
+        "--tmpfs",
+        "/meshshot-supervisor",
         "--dir",
         "/workspace",
         "--ro-bind",
@@ -1285,11 +1299,13 @@ def _provider_free_common_evidence_result(
                 *PROVIDER_FREE_ENV_ALLOWLIST,
                 "PLAYWRIGHT_BROWSERS_PATH",
                 "MESHSHOT_EXECUTABLE_ROOT",
+                "MESHSHOT_BROWSER_RUNTIME_MODE",
             }
         )
         or not {
             "PLAYWRIGHT_BROWSERS_PATH",
             "MESHSHOT_EXECUTABLE_ROOT",
+            "MESHSHOT_BROWSER_RUNTIME_MODE",
         }.issubset(environment_names)
         or sandbox.get("required_environment")
         != PROVIDER_FREE_REQUIRED_ENVIRONMENT

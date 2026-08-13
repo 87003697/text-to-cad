@@ -16,6 +16,7 @@ import select
 import secrets
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -23,9 +24,17 @@ import tempfile
 import threading
 import time
 from typing import Any, Iterator
+from urllib.parse import urlsplit
 
 
 RUNTIME_SCHEMA = "meshshot.prelaunched-cdp-runtime/1"
+SUPERVISOR_PROTOCOL_SCHEMA = "meshshot.browser-supervisor/1"
+SUPERVISOR_RUNTIME_MODE = "provider-free-supervised-cdp/1"
+SUPERVISOR_OUTER_ROOT = Path("/meshshot-supervisor")
+SUPERVISOR_OUTER_SOCKET = SUPERVISOR_OUTER_ROOT / "authority.sock"
+SUPERVISOR_NESTED_ROOT = Path("/run/meshshot-supervisor")
+SUPERVISOR_NESTED_SOCKET = SUPERVISOR_NESTED_ROOT / "authority.sock"
+_SUPERVISOR_PACKET_LIMIT = 16 * 1024
 BROWSER_IDENTITY_SUBSTAGES = frozenset(
     {
         "private_snapshot_launch_image_identity",
@@ -198,6 +207,46 @@ class BrowserRuntimeError(RuntimeError):
 
 def _canonical_bytes(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _loads_json_strict(raw: bytes) -> Any:
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    try:
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicates)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_substage="runtime_evidence_cross_binding",
+        ) from exc
+
+
+def _send_supervisor_packet(connection: socket.socket, payload: object) -> None:
+    raw = _canonical_bytes(payload)
+    if not raw or len(raw) > _SUPERVISOR_PACKET_LIMIT:
+        raise BrowserRuntimeError("browser_connect")
+    try:
+        sent = connection.send(raw)
+    except OSError as exc:
+        raise BrowserRuntimeError("browser_connect") from exc
+    if sent != len(raw):
+        raise BrowserRuntimeError("browser_connect")
+
+
+def _receive_supervisor_packet(connection: socket.socket) -> Any:
+    try:
+        raw = connection.recv(_SUPERVISOR_PACKET_LIMIT + 1)
+    except (OSError, socket.timeout) as exc:
+        raise BrowserRuntimeError("browser_connect") from exc
+    if not raw or len(raw) > _SUPERVISOR_PACKET_LIMIT:
+        raise BrowserRuntimeError("browser_connect")
+    return _loads_json_strict(raw)
 
 
 def _load_profile() -> tuple[dict[str, Any], str]:
@@ -470,6 +519,97 @@ def _attest(executable: _PinnedExecutable, profile: dict[str, Any]) -> dict[str,
         "revision": revision,
         "version": version,
         "sha256": executable_sha256,
+    }
+
+
+def _attest_attachment(executable: Path, profile: dict[str, Any]) -> dict[str, str]:
+    """Reconstruct the frozen identity without executing in the nested sandbox."""
+
+    try:
+        playwright_version = metadata.version("playwright")
+    except (
+        metadata.PackageNotFoundError,
+        OSError,
+        ValueError,
+        TypeError,
+    ) as exc:
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="playwright_package_revision_identity",
+            browser_identity_check="python_distribution_metadata",
+        ) from exc
+    revision = _playwright_revision(str(profile["browser"]))
+    if playwright_version != profile["playwright"]:
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="playwright_package_revision_identity",
+            browser_identity_check="frozen_playwright_version_match",
+        )
+    if revision != profile["revision"]:
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="playwright_package_revision_identity",
+            browser_identity_check="frozen_browser_revision_match",
+        )
+    descriptor: int | None = None
+    digest = hashlib.sha256()
+    failure: BaseException | None = None
+    try:
+        descriptor = os.open(
+            executable,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        descriptor_info = os.fstat(descriptor)
+        path_info = executable.lstat()
+        if (
+            not executable.is_absolute()
+            or not stat.S_ISREG(descriptor_info.st_mode)
+            or stat.S_ISLNK(path_info.st_mode)
+            or (descriptor_info.st_dev, descriptor_info.st_ino)
+            != (path_info.st_dev, path_info.st_ino)
+            or descriptor_info.st_mode
+            & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            == 0
+        ):
+            raise OSError("browser identity is not an executable regular file")
+        while True:
+            chunk = os.read(descriptor, 4 * 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mode,
+        ) != (
+            descriptor_info.st_dev,
+            descriptor_info.st_ino,
+            descriptor_info.st_size,
+            descriptor_info.st_mode,
+        ):
+            raise OSError("browser identity changed")
+    except (OSError, TypeError, ValueError) as exc:
+        failure = BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="source_executable_identity",
+        )
+        failure.__cause__ = exc
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError as exc:
+                raise BrowserRuntimeError("browser_cleanup") from exc
+    if failure is not None:
+        raise failure
+    return {
+        "playwright": playwright_version,
+        "browser": str(profile["browser"]),
+        "revision": revision,
+        "version": f"Google Chrome for Testing {profile['browser_version']}",
+        "sha256": digest.hexdigest(),
     }
 
 
@@ -1627,6 +1767,30 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
     raise BrowserRuntimeError("browser_identity")
 
 
+def _verify_connected_browser_version(browser: Any, expected_version: str) -> None:
+    session = None
+    try:
+        session = browser.new_browser_cdp_session()
+        response = session.send("Browser.getVersion")
+    except BaseException as exc:
+        raise BrowserRuntimeError("browser_identity") from exc
+    finally:
+        if session is not None:
+            try:
+                session.detach()
+            except BaseException as exc:
+                raise BrowserRuntimeError("browser_identity") from exc
+    if not isinstance(response, dict) or "product" not in response:
+        raise BrowserRuntimeError("browser_identity")
+    product = response["product"]
+    if (
+        not isinstance(product, str)
+        or "/" not in product
+        or product.rsplit("/", 1)[-1] != expected_version
+    ):
+        raise BrowserRuntimeError("browser_identity")
+
+
 @contextmanager
 def _blocked_runtime_signals() -> Iterator[None]:
     runtime_signals = {signal.SIGINT, signal.SIGTERM}
@@ -1680,6 +1844,7 @@ class PrelaunchedCdpRuntime:
         self._profile_parent_fd: int | None = None
         self._process: subprocess.Popen[bytes] | None = None
         self._process_group: int | None = None
+        self._endpoint: str | None = None
 
     def _prelaunch(self) -> str:
         try:
@@ -1796,7 +1961,8 @@ class PrelaunchedCdpRuntime:
                             "loopback_listener_address_ownership"
                         ),
                     ) from exc
-                return f"http://127.0.0.1:{int(lines[0])}"
+                self._endpoint = f"http://127.0.0.1:{int(lines[0])}"
+                return self._endpoint
             raise BrowserRuntimeError("browser_readiness_timeout")
         except BaseException:
             self._cleanup()
@@ -1928,27 +2094,23 @@ class PrelaunchedCdpRuntime:
             raise BrowserRuntimeError("browser_cleanup")
 
     def _verify_connected_browser(self, browser: Any) -> None:
-        session = None
-        try:
-            session = browser.new_browser_cdp_session()
-            response = session.send("Browser.getVersion")
-        except BaseException as exc:
-            raise BrowserRuntimeError("browser_identity") from exc
-        finally:
-            if session is not None:
-                try:
-                    session.detach()
-                except BaseException as exc:
-                    raise BrowserRuntimeError("browser_identity") from exc
-        if not isinstance(response, dict) or "product" not in response:
-            raise BrowserRuntimeError("browser_identity")
-        product = response["product"]
-        if (
-            not isinstance(product, str)
-            or "/" not in product
-            or product.rsplit("/", 1)[-1] != self._profile["browser_version"]
-        ):
-            raise BrowserRuntimeError("browser_identity")
+        _verify_connected_browser_version(
+            browser,
+            str(self._profile["browser_version"]),
+        )
+
+    def supervisor_authority(self) -> dict[str, Any]:
+        """Return the fixed private authority only while the browser is live."""
+
+        if self._endpoint is None or self._process_group is None:
+            raise BrowserRuntimeError("browser_connect")
+        return {
+            "schema": SUPERVISOR_PROTOCOL_SCHEMA,
+            "type": "authority",
+            "endpoint": self._endpoint,
+            "process_group": self._process_group,
+            "browser_runtime": self.evidence,
+        }
 
     @contextmanager
     def open(self, chromium: Any) -> Iterator[Any]:
@@ -2000,6 +2162,191 @@ class PrelaunchedCdpRuntime:
             if exc.cleanup_error is not None:
                 raise exc.cleanup_error
             raise BrowserRuntimeError("browser_signal") from exc
+
+
+class SupervisedCdpAttachmentRuntime:
+    """Attach to the one browser owned outside the nested exec-denial sandbox."""
+
+    def __init__(self, executable: Path | _SelectedExecutable) -> None:
+        executable_path = (
+            executable.path
+            if isinstance(executable, _SelectedExecutable)
+            else executable
+        )
+        self._profile, profile_sha256 = _load_profile()
+        browser_identity = _attest_attachment(executable_path, self._profile)
+        self.evidence = {
+            "schema": RUNTIME_SCHEMA,
+            "adapter_profile": {
+                "name": self._profile["name"],
+                "sha256": profile_sha256,
+            },
+            "browser_identity": browser_identity,
+            "result": "passed",
+        }
+
+    @staticmethod
+    def _validate_socket_path() -> None:
+        try:
+            root = SUPERVISOR_NESTED_ROOT.lstat()
+            endpoint = SUPERVISOR_NESTED_SOCKET.lstat()
+        except OSError as exc:
+            raise BrowserRuntimeError("browser_connect") from exc
+        if (
+            stat.S_ISLNK(root.st_mode)
+            or not stat.S_ISDIR(root.st_mode)
+            or root.st_uid != os.geteuid()
+            or stat.S_IMODE(root.st_mode) & 0o022
+            or stat.S_ISLNK(endpoint.st_mode)
+            or not stat.S_ISSOCK(endpoint.st_mode)
+            or endpoint.st_uid != os.geteuid()
+            or stat.S_IMODE(endpoint.st_mode) & 0o077
+        ):
+            raise BrowserRuntimeError("browser_connect")
+
+    def _validate_authority(self, authority: Any) -> tuple[str, int]:
+        if not isinstance(authority, dict) or set(authority) != {
+            "schema",
+            "type",
+            "endpoint",
+            "process_group",
+            "browser_runtime",
+        }:
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_substage="runtime_evidence_cross_binding",
+            )
+        endpoint = authority.get("endpoint")
+        process_group = authority.get("process_group")
+        runtime = authority.get("browser_runtime")
+        if (
+            authority.get("schema") != SUPERVISOR_PROTOCOL_SCHEMA
+            or authority.get("type") != "authority"
+            or not isinstance(endpoint, str)
+            or isinstance(process_group, bool)
+            or not isinstance(process_group, int)
+            or process_group <= 1
+            or runtime != self.evidence
+        ):
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_substage="runtime_evidence_cross_binding",
+            )
+        parsed = urlsplit(endpoint)
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname != "127.0.0.1"
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_substage="loopback_listener_address_ownership",
+            )
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_substage="loopback_listener_address_ownership",
+            ) from exc
+        if port is None or not 0 < port < 65536:
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_substage="loopback_listener_address_ownership",
+            )
+        try:
+            _verify_listener_owner(
+                process_group,
+                port,
+                float(self._profile["startup_timeout_ms"]) / 1000,
+            )
+        except BrowserRuntimeError as exc:
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_substage="loopback_listener_address_ownership",
+            ) from exc
+        return endpoint, process_group
+
+    @contextmanager
+    def open(self, chromium: Any) -> Iterator[Any]:
+        self._validate_socket_path()
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        browser = None
+        try:
+            connection.settimeout(
+                float(self._profile["startup_timeout_ms"]) / 1000
+            )
+            try:
+                connection.connect(os.fspath(SUPERVISOR_NESTED_SOCKET))
+            except (OSError, socket.timeout) as exc:
+                raise BrowserRuntimeError("browser_connect") from exc
+            _send_supervisor_packet(
+                connection,
+                {"schema": SUPERVISOR_PROTOCOL_SCHEMA, "type": "hello"},
+            )
+            authority = _receive_supervisor_packet(connection)
+            endpoint, _process_group = self._validate_authority(authority)
+            try:
+                completion_result = "failed"
+                yielded = False
+                try:
+                    browser = chromium.connect_over_cdp(
+                        endpoint,
+                        timeout=int(self._profile["startup_timeout_ms"]),
+                        is_local=True,
+                    )
+                except BaseException as exc:
+                    raise BrowserRuntimeError("browser_connect") from exc
+                try:
+                    _verify_connected_browser_version(
+                        browser,
+                        str(self._profile["browser_version"]),
+                    )
+                except BrowserRuntimeError as exc:
+                    raise BrowserRuntimeError(
+                        "browser_identity",
+                        browser_identity_substage=(
+                            "connected_cdp_browser_version_identity"
+                        ),
+                    ) from exc
+                yielded = True
+                yield browser
+                completion_result = "passed"
+            finally:
+                cleanup_failed = False
+                try:
+                    if not yielded and browser is not None:
+                        browser.close()
+                except BaseException:
+                    cleanup_failed = True
+                try:
+                    _send_supervisor_packet(
+                        connection,
+                        {
+                            "schema": SUPERVISOR_PROTOCOL_SCHEMA,
+                            "type": "completion",
+                            "result": completion_result,
+                        },
+                    )
+                    shutdown = _receive_supervisor_packet(connection)
+                    if shutdown != {
+                        "schema": SUPERVISOR_PROTOCOL_SCHEMA,
+                        "type": "shutdown",
+                    }:
+                        raise BrowserRuntimeError("browser_cleanup")
+                except BrowserRuntimeError:
+                    cleanup_failed = True
+                if cleanup_failed:
+                    raise BrowserRuntimeError("browser_cleanup")
+        finally:
+            try:
+                connection.close()
+            except OSError as exc:
+                raise BrowserRuntimeError("browser_cleanup") from exc
 
 
 class _RuntimeSignal(BaseException):

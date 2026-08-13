@@ -600,9 +600,9 @@ class CvmJobTests(unittest.TestCase):
                     },
                     "seams": [
                         "outer-python-direct",
-                        "nested-python-direct",
-                        "python-prelaunch",
-                        "playwright-loopback-cdp-attach",
+                        "outer-supervised-python-prelaunch",
+                        "fixed-unix-authority",
+                        "nested-playwright-loopback-cdp-attach",
                     ],
                     "published": "closed-outcomes-only-no-raw-output",
                     "cleanup": "no-profile-or-persistent-process-artifacts",
@@ -612,7 +612,7 @@ class CvmJobTests(unittest.TestCase):
                     "environment": "MESHSHOT_BROWSER_EXECUTABLE",
                     "value": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                     "validation": "absolute-regular-non-symlink-executable",
-                    "launch_owner": "python-prelaunched-cdp-runtime",
+                    "launch_owner": "outer-trusted-browser-supervisor",
                     "playwright_option": "connect_over_cdp-is-local",
                 },
                 "cleanup": "supervisor-context-terminal-all-exit-classes",
@@ -786,6 +786,7 @@ class CvmJobTests(unittest.TestCase):
                             "PATH",
                             "PLAYWRIGHT_BROWSERS_PATH",
                             "MESHSHOT_EXECUTABLE_ROOT",
+                            "MESHSHOT_BROWSER_RUNTIME_MODE",
                             "PYTHONDONTWRITEBYTECODE",
                             "TZ",
                         ],
@@ -832,7 +833,7 @@ class CvmJobTests(unittest.TestCase):
                         ),
                         "probe": "chromium-version-immediate-exit",
                         "outer": "passed",
-                        "nested": "passed",
+                        "nested": "not-run",
                         "node_attached": "not-run",
                         "node_detached": "not-run",
                         "node_failure_kind": "not-run",
@@ -1084,9 +1085,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/15",
+                "id": "issue15.provider-free-bounded/16",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/15",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/16",
             },
         )
         self.assertEqual(
@@ -1212,7 +1213,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/15",
+            "issue15.provider-free-bounded/16",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],

@@ -434,9 +434,9 @@ class PilotReviewTests(unittest.TestCase):
                     },
                     "seams": [
                         "outer-python-direct",
-                        "nested-python-direct",
-                        "python-prelaunch",
-                        "playwright-loopback-cdp-attach",
+                        "outer-supervised-python-prelaunch",
+                        "fixed-unix-authority",
+                        "nested-playwright-loopback-cdp-attach",
                     ],
                     "published": "closed-outcomes-only-no-raw-output",
                     "cleanup": "no-profile-or-persistent-process-artifacts",
@@ -449,7 +449,7 @@ class PilotReviewTests(unittest.TestCase):
                         "chrome-headless-shell-linux64/chrome-headless-shell"
                     ),
                     "validation": "absolute-regular-non-symlink-executable",
-                    "launch_owner": "python-prelaunched-cdp-runtime",
+                    "launch_owner": "outer-trusted-browser-supervisor",
                     "playwright_option": "connect_over_cdp-is-local",
                 },
                 "cleanup": "supervisor-context-terminal-all-exit-classes",
@@ -530,7 +530,7 @@ class PilotReviewTests(unittest.TestCase):
             },
             "sandbox": {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/15",
+                "resource_profile": "issue15.provider-free-bounded/16",
             },
             "provider_environment": {
                 "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],
@@ -755,6 +755,7 @@ class PilotReviewTests(unittest.TestCase):
                     "PATH",
                     "PLAYWRIGHT_BROWSERS_PATH",
                     "MESHSHOT_EXECUTABLE_ROOT",
+                    "MESHSHOT_BROWSER_RUNTIME_MODE",
                     "PYTHONDONTWRITEBYTECODE",
                     "TZ",
                 ],
@@ -789,7 +790,7 @@ class PilotReviewTests(unittest.TestCase):
                 ),
                 "probe": "chromium-version-immediate-exit",
                 "outer": "passed",
-                "nested": "passed",
+                "nested": "not-run",
                 "node_attached": "not-run",
                 "node_detached": "not-run",
                 "node_failure_kind": "not-run",

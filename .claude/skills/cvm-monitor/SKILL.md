@@ -101,19 +101,22 @@ Native measurement operations are:
 The browser-exec diagnostic operations are backed by the manifest-bound
 `run/browser-exec-diagnostic.json` receipt. It contains only closed
 `passed`/`failed`/`not-run` outcomes for the outer direct Chromium `--version`
-probe, the same exact executable through the nested preview sandbox, and the
-subsequent Python-owned prelaunched-CDP runtime. The retired Node fields remain
-exactly `not-run`; Playwright only attaches with `connect_over_cdp` after Python
-has attested and prelaunched the exact browser. The probes use a five-second outer timeout, a closed
+probe and the subsequent outer-supervised prelaunched-CDP runtime. Nested
+Chromium execution and the retired Node fields remain exactly `not-run`;
+Playwright inside the preview sandbox only attaches with `connect_over_cdp`
+through the fixed one-shot supervisor authority socket after the outer owner
+has attested and prelaunched the exact browser. The probe uses a five-second outer timeout, a closed
 `HOME`/`LANG`/`PATH` environment, no provider or network access, and accept only
 the exact bounded result for their caller. Raw stdout, stderr, exception text,
 environment values, PID, endpoint, argv, and arbitrary operations are never
 projected by the monitor. A diagnostic operation is rejected unless its `/5`
 receipt has the corresponding exact outcome tuple and manifest binding.
 Historical Node-launch outcomes, operations on another stage, or values outside
-these lists are rejected by sandbox profile `/15`. The `/15` sandbox also
+these lists are rejected by sandbox profile `/16`. The `/16` sandbox also
 binds the Python-owned private browser image to the isolated executable tmpfs
-at `/meshshot-exec`; arbitrary temporary roots remain forbidden.
+at `/meshshot-exec` and binds the outer `/meshshot-supervisor` tmpfs read-only
+at nested `/run/meshshot-supervisor`. Arbitrary socket paths, endpoints,
+ambient descriptors, and temporary roots remain forbidden.
 
 Successful preview evidence also carries the closed
 `meshshot.prelaunched-cdp-runtime/1` receipt. Its frozen adapter-profile digest

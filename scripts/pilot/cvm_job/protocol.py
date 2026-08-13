@@ -135,6 +135,9 @@ PROVIDER_FREE_PREVIEW_PUBLIC_FAILURE_OPERATIONS = frozenset(
 )
 PROVIDER_FREE_STAGED_BROWSER_CACHE = "/tmp/provider-free-playwright"
 PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT = "/meshshot-exec"
+PROVIDER_FREE_BROWSER_SUPERVISOR_OUTER_ROOT = "/meshshot-supervisor"
+PROVIDER_FREE_BROWSER_SUPERVISOR_NESTED_ROOT = "/run/meshshot-supervisor"
+PROVIDER_FREE_BROWSER_RUNTIME_MODE = "provider-free-supervised-cdp/1"
 PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE = (
     f"{PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested/"
     "chrome-headless-shell-linux64/chrome-headless-shell"
@@ -199,6 +202,9 @@ def provider_free_preview_sandbox_argv(group: str, exp: str) -> list[str]:
         "--ro-bind",
         PROVIDER_FREE_STAGED_BROWSER_CACHE,
         PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        "--ro-bind",
+        PROVIDER_FREE_BROWSER_SUPERVISOR_OUTER_ROOT,
+        PROVIDER_FREE_BROWSER_SUPERVISOR_NESTED_ROOT,
         "--setenv",
         "PLAYWRIGHT_BROWSERS_PATH",
         PROVIDER_FREE_STAGED_BROWSER_CACHE,
@@ -208,6 +214,9 @@ def provider_free_preview_sandbox_argv(group: str, exp: str) -> list[str]:
         "--setenv",
         "MESHSHOT_EXECUTABLE_ROOT",
         PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
+        "--setenv",
+        "MESHSHOT_BROWSER_RUNTIME_MODE",
+        PROVIDER_FREE_BROWSER_RUNTIME_MODE,
         "--chdir",
         sandbox_root,
         "--",
@@ -302,9 +311,8 @@ def provider_free_browser_exec_diagnostic_allowed(receipt: object) -> bool:
     )
     if outcomes not in {
         ("failed", "not-run", "not-run", "not-run", "not-run"),
-        ("passed", "failed", "not-run", "not-run", "not-run"),
-        ("passed", "passed", "not-run", "not-run", "failed"),
-        ("passed", "passed", "not-run", "not-run", "passed"),
+        ("passed", "not-run", "not-run", "not-run", "failed"),
+        ("passed", "not-run", "not-run", "not-run", "passed"),
     }:
         return False
     return receipt.get("node_failure_kind") == "not-run"
@@ -386,13 +394,6 @@ def provider_free_browser_exec_diagnostic_matches_operation(
             "not-run",
             "not-run",
         ),
-        "preview_browser_nested_exec_probe": (
-            "passed",
-            "failed",
-            "not-run",
-            "not-run",
-            "not-run",
-        ),
     }.get(operation)
     return expected_outcomes == (
         receipt.get("outer"),
@@ -432,7 +433,6 @@ PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS_BY_STAGE = {
             "preview_runtime",
             "preview_browser_runtime_staging",
             "preview_browser_outer_exec_probe",
-            "preview_browser_nested_exec_probe",
             "preview_dependency",
             "preview_browser_launch",
             "preview_browser_launch_process_limit",

@@ -76,6 +76,148 @@ def _attested_connected_browser() -> mock.MagicMock:
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_supervisor_protocol_rejects_duplicate_unknown_and_oversize_packets(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+
+        for packet in (
+            b'{"schema":"meshshot.browser-supervisor/1","type":"hello","type":"authority"}',
+            b'{"schema":"meshshot.browser-supervisor/1","type":"hello","unknown":true}',
+            b"x" * (browser_runtime._SUPERVISOR_PACKET_LIMIT + 1),
+        ):
+            with self.subTest(size=len(packet)):
+                connection = mock.MagicMock()
+                connection.recv.return_value = packet
+                with self.assertRaises(browser_runtime.BrowserRuntimeError):
+                    value = browser_runtime._receive_supervisor_packet(connection)
+                    if value != {
+                        "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
+                        "type": "hello",
+                    }:
+                        raise browser_runtime.BrowserRuntimeError("browser_connect")
+
+    def test_attachment_rejects_foreign_endpoint_and_unbound_runtime_evidence(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+
+        attachment = object.__new__(
+            browser_runtime.SupervisedCdpAttachmentRuntime
+        )
+        attachment._profile = {
+            "startup_timeout_ms": 100,
+            "browser_version": "148.0.7778.96",
+        }
+        attachment.evidence = {"schema": browser_runtime.RUNTIME_SCHEMA}
+        base = {
+            "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
+            "type": "authority",
+            "endpoint": "http://127.0.0.1:9222",
+            "process_group": 42,
+            "browser_runtime": attachment.evidence,
+        }
+        for mutation, substage in (
+            ({**base, "endpoint": "http://0.0.0.0:9222"}, "loopback_listener_address_ownership"),
+            ({**base, "endpoint": "http://127.0.0.1.evil:9222"}, "loopback_listener_address_ownership"),
+            ({**base, "browser_runtime": {"schema": browser_runtime.RUNTIME_SCHEMA, "extra": True}}, "runtime_evidence_cross_binding"),
+            ({**base, "process_group": True}, "runtime_evidence_cross_binding"),
+        ):
+            with self.subTest(mutation=mutation), self.assertRaises(
+                browser_runtime.BrowserRuntimeError
+            ) as raised:
+                attachment._validate_authority(mutation)
+            self.assertEqual(substage, raised.exception.browser_identity_substage)
+
+    def test_attachment_requires_independent_exact_listener_ownership(self) -> None:
+        from meshshot import browser_runtime
+
+        attachment = object.__new__(
+            browser_runtime.SupervisedCdpAttachmentRuntime
+        )
+        attachment._profile = {
+            "startup_timeout_ms": 100,
+            "browser_version": "148.0.7778.96",
+        }
+        attachment.evidence = {"schema": browser_runtime.RUNTIME_SCHEMA}
+        authority = {
+            "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
+            "type": "authority",
+            "endpoint": "http://127.0.0.1:9222",
+            "process_group": 42,
+            "browser_runtime": attachment.evidence,
+        }
+        with mock.patch.object(
+            browser_runtime,
+            "_verify_listener_owner",
+        ) as verify:
+            self.assertEqual(
+                ("http://127.0.0.1:9222", 42),
+                attachment._validate_authority(authority),
+            )
+        verify.assert_called_once_with(42, 9222, 0.1)
+
+    def test_attachment_reports_failed_completion_before_closed_connect_error(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+
+        attachment = object.__new__(
+            browser_runtime.SupervisedCdpAttachmentRuntime
+        )
+        attachment._profile = {
+            "startup_timeout_ms": 100,
+            "browser_version": "148.0.7778.96",
+        }
+        attachment.evidence = {"schema": browser_runtime.RUNTIME_SCHEMA}
+        authority = {
+            "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
+            "type": "authority",
+            "endpoint": "http://127.0.0.1:9222",
+            "process_group": 42,
+            "browser_runtime": attachment.evidence,
+        }
+        connection = mock.MagicMock()
+        chromium = mock.MagicMock()
+        chromium.connect_over_cdp.side_effect = OSError("private raw failure")
+        with (
+            mock.patch.object(attachment, "_validate_socket_path"),
+            mock.patch.object(
+                browser_runtime.socket,
+                "socket",
+                return_value=connection,
+            ),
+            mock.patch.object(
+                browser_runtime,
+                "_receive_supervisor_packet",
+                side_effect=[
+                    authority,
+                    {
+                        "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
+                        "type": "shutdown",
+                    },
+                ],
+            ),
+            mock.patch.object(browser_runtime, "_verify_listener_owner"),
+            mock.patch.object(
+                browser_runtime,
+                "_send_supervisor_packet",
+            ) as send,
+            self.assertRaises(browser_runtime.BrowserRuntimeError) as raised,
+        ):
+            with attachment.open(chromium):
+                self.fail("failed connection must never yield")
+
+        self.assertEqual("browser_connect", raised.exception.operation)
+        self.assertEqual(
+            {
+                "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
+                "type": "completion",
+                "result": "failed",
+            },
+            send.call_args_list[1].args[1],
+        )
+
     def test_provider_profile_attaches_without_nested_browser_owner_spawn(
         self,
     ) -> None:

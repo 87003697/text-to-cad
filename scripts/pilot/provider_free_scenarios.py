@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager, nullcontext
 import hashlib
 import http.server
 import importlib
@@ -32,6 +33,9 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
+    PROVIDER_FREE_BROWSER_RUNTIME_MODE,
+    PROVIDER_FREE_BROWSER_SUPERVISOR_NESTED_ROOT,
+    PROVIDER_FREE_BROWSER_SUPERVISOR_OUTER_ROOT,
     PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
     PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
@@ -54,6 +58,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
 MESH_COMPARE = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare"
 MESH_COMPARE_ENTRYPOINT = MESH_COMPARE / "cli.py"
+MESHSHOT_BROWSER_SUPERVISOR = (
+    REPO_ROOT
+    / "skills/mesh-compare/scripts/packages/meshshot/src/meshshot/"
+    "browser_supervisor.py"
+)
 CAD_BUILD = REPO_ROOT / "skills/cad/scripts/canonical-build"
 CAD_BUILD_ENTRYPOINT = CAD_BUILD / "__main__.py"
 PREVIEW_PROFILE = (
@@ -82,6 +91,8 @@ BROWSER_EXEC_PROBE_ENVIRONMENT = {
     "LANG": "C.UTF-8",
     "PATH": "/usr/bin:/bin",
 }
+_BROWSER_SUPERVISOR_SOCKET = Path("/meshshot-supervisor/authority.sock")
+_BROWSER_SUPERVISOR_TIMEOUT_SECONDS = 15.0
 _BROWSER_VERSION_OUTPUT = re.compile(
     rb"(?:Google Chrome for Testing|Chromium|Chrome|HeadlessChrome) "
     rb"[0-9]+(?:\.[0-9]+){3}\n"
@@ -603,6 +614,9 @@ def _preview_sandbox_argv(argv: Sequence[str], *, cwd: Path) -> list[str]:
         "--ro-bind",
         PROVIDER_FREE_STAGED_BROWSER_CACHE,
         PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        "--ro-bind",
+        PROVIDER_FREE_BROWSER_SUPERVISOR_OUTER_ROOT,
+        PROVIDER_FREE_BROWSER_SUPERVISOR_NESTED_ROOT,
         "--setenv",
         "PLAYWRIGHT_BROWSERS_PATH",
         PROVIDER_FREE_STAGED_BROWSER_CACHE,
@@ -612,11 +626,158 @@ def _preview_sandbox_argv(argv: Sequence[str], *, cwd: Path) -> list[str]:
         "--setenv",
         "MESHSHOT_EXECUTABLE_ROOT",
         PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
+        "--setenv",
+        "MESHSHOT_BROWSER_RUNTIME_MODE",
+        PROVIDER_FREE_BROWSER_RUNTIME_MODE,
         "--chdir",
         os.fspath(cwd),
         "--",
         *command,
     ]
+
+
+def _browser_supervisor_group_empty(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
+def _cleanup_browser_supervisor(process: subprocess.Popen[bytes]) -> None:
+    failure = False
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        failure = True
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        pass
+    except OSError:
+        failure = True
+    deadline = time.monotonic() + 1.0
+    while not _browser_supervisor_group_empty(process.pid) and time.monotonic() < deadline:
+        time.sleep(0.02)
+    if not _browser_supervisor_group_empty(process.pid):
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            failure = True
+        try:
+            process.wait(timeout=1.0)
+        except (OSError, subprocess.TimeoutExpired):
+            failure = True
+        deadline = time.monotonic() + 1.0
+        while (
+            not _browser_supervisor_group_empty(process.pid)
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+    if not _browser_supervisor_group_empty(process.pid):
+        failure = True
+    if failure:
+        raise ScenarioError(
+            "provider-free browser supervisor cleanup failed",
+            operation="preview_browser_cleanup",
+        )
+
+
+@contextmanager
+def _browser_supervisor() -> Any:
+    """Start one fixed outer owner and require terminal socket/process cleanup."""
+
+    environment = {
+        "HOME": "/home/provider-free",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/workspace/repo/.venv/bin:/usr/local/bin:/usr/bin:/bin",
+        "PLAYWRIGHT_BROWSERS_PATH": PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        "MESHSHOT_BROWSER_EXECUTABLE": PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+        "MESHSHOT_EXECUTABLE_ROOT": PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        process = subprocess.Popen(
+            [sys.executable, os.fspath(MESHSHOT_BROWSER_SUPERVISOR)],
+            cwd=REPO_ROOT,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            close_fds=True,
+        )
+        deadline = time.monotonic() + _BROWSER_SUPERVISOR_TIMEOUT_SECONDS
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise ScenarioError(
+                    "provider-free browser supervisor failed before readiness",
+                    operation="preview_browser_prelaunch",
+                )
+            try:
+                info = _BROWSER_SUPERVISOR_SOCKET.lstat()
+            except FileNotFoundError:
+                time.sleep(0.02)
+                continue
+            except OSError as exc:
+                raise ScenarioError(
+                    "provider-free browser supervisor readiness failed",
+                    operation="preview_browser_readiness",
+                ) from exc
+            if (
+                stat.S_ISLNK(info.st_mode)
+                or not stat.S_ISSOCK(info.st_mode)
+                or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600
+            ):
+                raise ScenarioError(
+                    "provider-free browser supervisor socket invalid",
+                    operation="preview_browser_readiness",
+                )
+            break
+        else:
+            raise ScenarioError(
+                "provider-free browser supervisor readiness timed out",
+                operation="preview_browser_readiness_timeout",
+            )
+        yield
+        try:
+            process.wait(timeout=_BROWSER_SUPERVISOR_TIMEOUT_SECONDS)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ScenarioError(
+                "provider-free browser supervisor did not terminate",
+                operation="preview_browser_cleanup",
+            ) from exc
+        if process.returncode != 0 or not _browser_supervisor_group_empty(
+            process.pid
+        ):
+            raise ScenarioError(
+                "provider-free browser supervisor failed",
+                operation="preview_browser_cleanup",
+            )
+        process = None
+    finally:
+        cleanup_error: ScenarioError | None = None
+        if process is not None:
+            try:
+                _cleanup_browser_supervisor(process)
+            except ScenarioError as exc:
+                cleanup_error = exc
+        if os.path.lexists(_BROWSER_SUPERVISOR_SOCKET):
+            cleanup_error = ScenarioError(
+                "provider-free browser supervisor socket remained",
+                operation="preview_browser_cleanup",
+            )
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 def _publish_preview_sandbox_enforcement(
@@ -1362,25 +1523,6 @@ def _run_voxblame_preview(
                     "provider-free outer browser exec probe failed",
                     operation="preview_browser_outer_exec_probe",
                 ) from exc
-            try:
-                _run_exact_browser_version_probe(
-                    _nested_browser_exec_probe_argv(cwd=cwd),
-                    cwd=cwd,
-                )
-            except ScenarioError as exc:
-                _publish_browser_exec_diagnostic(
-                    command_log,
-                    outer="passed",
-                    nested="failed",
-                    node_attached="not-run",
-                    node_detached="not-run",
-                    node_failure_kind="not-run",
-                    prelaunched_cdp="not-run",
-                )
-                raise ScenarioError(
-                    "provider-free nested browser exec probe failed",
-                    operation="preview_browser_nested_exec_probe",
-                ) from exc
         try:
             sandbox_argv = _preview_sandbox_argv(argv, cwd=cwd)
             _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
@@ -1395,11 +1537,13 @@ def _run_voxblame_preview(
                 operation=operation,
             ) from exc
         try:
-            result = _run_public(
-                sandbox_argv,
-                cwd=cwd,
-                command_log=command_log,
-            )
+            supervisor = _browser_supervisor() if is_linux else nullcontext()
+            with supervisor:
+                result = _run_public(
+                    sandbox_argv,
+                    cwd=cwd,
+                    command_log=command_log,
+                )
         except ScenarioError as exc:
             renderer_operation = operations.get(exc.classification)
             public_operation = public_failure_operations.get(exc.classification)
@@ -1410,7 +1554,7 @@ def _run_voxblame_preview(
                     _publish_browser_exec_diagnostic(
                         command_log,
                         outer="passed",
-                        nested="passed",
+                        nested="not-run",
                         node_attached="not-run",
                         node_detached="not-run",
                         node_failure_kind="not-run",
@@ -1443,7 +1587,7 @@ def _run_voxblame_preview(
                 _publish_browser_exec_diagnostic(
                     command_log,
                     outer="passed",
-                    nested="passed",
+                    nested="not-run",
                     node_attached="not-run",
                     node_detached="not-run",
                     node_failure_kind="not-run",

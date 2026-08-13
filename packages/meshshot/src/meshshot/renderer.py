@@ -22,6 +22,8 @@ from meshshot.browser_runtime import (
     PRIVATE_VERSION_EXECUTION_CHECKS,
     BrowserRuntimeError,
     PrelaunchedCdpRuntime,
+    SUPERVISOR_RUNTIME_MODE,
+    SupervisedCdpAttachmentRuntime,
     default_executable,
 )
 from meshshot.profile import load_profile
@@ -205,7 +207,12 @@ def render_residual_preview(
                 if configured_executable is not None
                 else default_executable(playwright.chromium.executable_path)
             )
-            runtime = PrelaunchedCdpRuntime(executable)
+            runtime_mode = os.environ.get("MESHSHOT_BROWSER_RUNTIME_MODE")
+            runtime = (
+                SupervisedCdpAttachmentRuntime(executable)
+                if runtime_mode == SUPERVISOR_RUNTIME_MODE
+                else PrelaunchedCdpRuntime(executable)
+            )
             with runtime.open(playwright.chromium) as browser:
                 browser_runtime = dict(runtime.evidence)
                 try:

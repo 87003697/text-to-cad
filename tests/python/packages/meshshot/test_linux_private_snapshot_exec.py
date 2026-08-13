@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import secrets
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -30,6 +31,72 @@ except IndexError:
     "requires the controlled Linux noexec-/tmp + exec-root harness",
 )
 class LinuxPrivateSnapshotExecutionTests(unittest.TestCase):
+    def test_fixed_seqpacket_authority_crosses_read_only_nested_bind(self) -> None:
+        if not Path("/usr/bin/bwrap").is_file():
+            self.skipTest("controlled Linux image lacks the existing bwrap runtime")
+        outer = Path("/meshshot-supervisor")
+        outer.mkdir(mode=0o700, exist_ok=True)
+        endpoint = outer / "authority.sock"
+        if os.path.lexists(endpoint):
+            self.fail("controlled supervisor socket must start absent")
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        child: subprocess.Popen[bytes] | None = None
+        try:
+            server.bind(os.fspath(endpoint))
+            endpoint.chmod(0o600)
+            server.listen(1)
+            child = subprocess.Popen(
+                [
+                    "/usr/bin/bwrap",
+                    "--die-with-parent",
+                    "--new-session",
+                    "--cap-drop",
+                    "ALL",
+                    "--bind",
+                    "/",
+                    "/",
+                    "--ro-bind",
+                    "/meshshot-supervisor",
+                    "/run/meshshot-supervisor",
+                    "--",
+                    "/usr/bin/python3",
+                    "-c",
+                    (
+                        "import socket;"
+                        "s=socket.socket(socket.AF_UNIX,socket.SOCK_SEQPACKET);"
+                        "s.connect('/run/meshshot-supervisor/authority.sock');"
+                        "s.send(b'hello');"
+                        "assert s.recv(16)==b'authority';s.close()"
+                    ),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+                close_fds=True,
+            )
+            server.settimeout(5)
+            connection, _address = server.accept()
+            try:
+                self.assertEqual(b"hello", connection.recv(16))
+                connection.send(b"authority")
+            finally:
+                connection.close()
+            stdout, stderr = child.communicate(timeout=5)
+            self.assertEqual(
+                0,
+                child.returncode,
+                (stdout + stderr).decode("utf-8", errors="replace"),
+            )
+            child = None
+        finally:
+            if child is not None:
+                child.kill()
+                child.wait(timeout=5)
+            server.close()
+            if os.path.lexists(endpoint):
+                endpoint.unlink()
+
     def test_private_image_moves_execution_off_noexec_tmp(self) -> None:
         runtime_source = Path(
             os.environ.get(
@@ -447,6 +514,8 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
                     "/meshshot-exec:exec,mode=0755,uid=65534,gid=65534",
                     "--tmpfs",
                     "/fixture:exec,mode=0755,uid=65534,gid=65534",
+                    "--tmpfs",
+                    "/meshshot-supervisor:exec,mode=0700,uid=65534,gid=65534",
                     "-e",
                     "PYTHONDONTWRITEBYTECODE=1",
                     "-e",
@@ -469,6 +538,10 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
                 (
                     REPO_ROOT / "packages/meshshot/src/meshshot/fd_exec_handoff.py",
                     "/fd_exec_handoff.py",
+                ),
+                (
+                    REPO_ROOT / "packages/meshshot/src/meshshot/browser_supervisor.py",
+                    "/browser_supervisor.py",
                 ),
                 (Path(__file__), "/test_linux_private_snapshot_exec.py"),
             ):

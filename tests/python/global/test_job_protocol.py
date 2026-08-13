@@ -441,7 +441,7 @@ class JobProtocolTests(unittest.TestCase):
             "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
             "probe": "chromium-version-immediate-exit",
             "outer": "passed",
-            "nested": "passed",
+            "nested": "not-run",
             "node_attached": "not-run",
             "node_detached": "not-run",
             "node_failure_kind": "not-run",

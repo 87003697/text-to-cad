@@ -63,7 +63,7 @@ _SANDBOX_SETUP_CAPABILITIES = (
     "CAP_SETFCAP",
 )
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/15",
+    "schema": "cvm.provider-free-linux-sandbox/16",
     "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -79,6 +79,17 @@ _SANDBOX_PROFILE = {
         "mount": "repository-owned-exec-permitted-tmpfs",
         "scope": "single-preview-runtime",
         "cleanup": "python-runtime-terminal-all-exit-classes",
+    },
+    "browser_supervisor": {
+        "schema": "meshshot.browser-supervisor/1",
+        "runtime_mode": "provider-free-supervised-cdp/1",
+        "outer_root": "/meshshot-supervisor",
+        "nested_root": "/run/meshshot-supervisor",
+        "socket": "authority.sock",
+        "transport": "AF_UNIX-SOCK_SEQPACKET-one-shot",
+        "nested_mount": "read-only-exact",
+        "ambient_file_descriptors": "forbidden",
+        "launch_owner": "outer-trusted-supervisor",
     },
     "repository_mount": "read-only",
     "output_mount": "read-write-exact-experiment",
@@ -126,9 +137,9 @@ _SANDBOX_PROFILE = {
             },
             "seams": [
                 "outer-python-direct",
-                "nested-python-direct",
-                "python-prelaunch",
-                "playwright-loopback-cdp-attach",
+                "outer-supervised-python-prelaunch",
+                "fixed-unix-authority",
+                "nested-playwright-loopback-cdp-attach",
             ],
             "published": "closed-outcomes-only-no-raw-output",
             "cleanup": "no-profile-or-persistent-process-artifacts",
@@ -141,7 +152,7 @@ _SANDBOX_PROFILE = {
                 "chrome-headless-shell-linux64/chrome-headless-shell"
             ),
             "validation": "absolute-regular-non-symlink-executable",
-            "launch_owner": "python-prelaunched-cdp-runtime",
+            "launch_owner": "outer-trusted-browser-supervisor",
             "playwright_option": "connect_over_cdp-is-local",
         },
         "cleanup": "supervisor-context-terminal-all-exit-classes",
@@ -276,6 +287,7 @@ _SANDBOX_REQUIRED_ENVIRONMENT = {
     "PATH": "/workspace/repo/.venv/bin:/usr/local/bin:/usr/bin:/bin",
     "PLAYWRIGHT_BROWSERS_PATH": "/tmp/provider-free-playwright",
     "MESHSHOT_EXECUTABLE_ROOT": "/meshshot-exec",
+    "MESHSHOT_BROWSER_RUNTIME_MODE": "provider-free-supervised-cdp/1",
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 _SYSTEM_RO_PATHS = (
@@ -350,6 +362,8 @@ def _validate_provider_free_sandbox_argv(
         "/tmp",
         "--tmpfs",
         "/meshshot-exec",
+        "--tmpfs",
+        "/meshshot-supervisor",
         "--dir",
         "/workspace",
         "--ro-bind",
@@ -1029,6 +1043,7 @@ def _runtime_authority_verdict(
                     "PATH",
                     "PLAYWRIGHT_BROWSERS_PATH",
                     "MESHSHOT_EXECUTABLE_ROOT",
+                    "MESHSHOT_BROWSER_RUNTIME_MODE",
                     "PYTHONDONTWRITEBYTECODE",
                     "TZ",
                 }
@@ -1038,6 +1053,7 @@ def _runtime_authority_verdict(
                 "PATH",
                 "PLAYWRIGHT_BROWSERS_PATH",
                 "MESHSHOT_EXECUTABLE_ROOT",
+                "MESHSHOT_BROWSER_RUNTIME_MODE",
                 "PYTHONDONTWRITEBYTECODE",
             }.issubset(
                 sandbox.get("environment_names", [])
@@ -1189,14 +1205,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/15",
+                "id": "issue15.provider-free-bounded/16",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/15",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/16",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/15",
+                "resource_profile": "issue15.provider-free-bounded/16",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False
@@ -1305,6 +1321,9 @@ def _runtime_authority_verdict(
             "--ro-bind",
             "/tmp/provider-free-playwright",
             "/tmp/provider-free-playwright",
+            "--ro-bind",
+            "/meshshot-supervisor",
+            "/run/meshshot-supervisor",
             "--setenv",
             "PLAYWRIGHT_BROWSERS_PATH",
             "/tmp/provider-free-playwright",
@@ -1317,6 +1336,9 @@ def _runtime_authority_verdict(
             "--setenv",
             "MESHSHOT_EXECUTABLE_ROOT",
             "/meshshot-exec",
+            "--setenv",
+            "MESHSHOT_BROWSER_RUNTIME_MODE",
+            "provider-free-supervised-cdp/1",
             "--chdir",
             sandbox_root,
             "--",
@@ -1362,7 +1384,7 @@ def _runtime_authority_verdict(
             ),
             "probe": "chromium-version-immediate-exit",
             "outer": "passed",
-            "nested": "passed",
+            "nested": "not-run",
             "node_attached": "not-run",
             "node_detached": "not-run",
             "node_failure_kind": "not-run",

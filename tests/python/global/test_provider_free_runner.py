@@ -105,7 +105,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/15",
+                "id": "issue15.provider-free-bounded/16",
                 "provider_access": "forbidden",
             },
             "request_authority": {
@@ -130,7 +130,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
             "PYTHONDONTWRITEBYTECODE": "1",
-            "CVM_PROVIDER_FREE_PROFILE": "issue15.provider-free-bounded/15",
+            "CVM_PROVIDER_FREE_PROFILE": "issue15.provider-free-bounded/16",
             "CVM_PROVIDER_FREE_STRIPPED_NAMES": (
                 "ANTHROPIC_API_KEY,HTTPS_PROXY,OPENAI_API_KEY,VENUS_TOKEN"
             ),
@@ -302,7 +302,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                     ),
                     "probe": "chromium-version-immediate-exit",
                     "outer": "passed",
-                    "nested": "passed",
+                    "nested": "not-run",
                     "node_attached": "not-run",
                     "node_detached": "not-run",
                     "node_failure_kind": "not-run",
@@ -462,7 +462,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 expected_browser_sha256=self.runtime_identity["chromium"]["sha256"],
             )
 
-    def test_failure_requires_matching_closed_browser_exec_diagnostic(
+    def test_retired_nested_exec_failure_is_rejected(
         self,
     ) -> None:
         exp_dir = self.repo / "outputs" / self.handle
@@ -499,10 +499,11 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        provider_free_runner._validate_scenario_failure_evidence(
-            exp_dir,
-            "issue15-runtime-authority",
-        )
+        with self.assertRaises(provider_free_runner.ProviderFreeError):
+            provider_free_runner._validate_scenario_failure_evidence(
+                exp_dir,
+                "issue15-runtime-authority",
+            )
         failure_path = exp_dir / protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH
         failure = json.loads(failure_path.read_text(encoding="utf-8"))
         failure["operation"] = "preview_browser_outer_exec_probe"
@@ -553,7 +554,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                     "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                     "probe": "chromium-version-immediate-exit",
                     "outer": "passed",
-                    "nested": "passed",
+                    "nested": "not-run",
                     "node_attached": "not-run",
                     "node_detached": "not-run",
                     "node_failure_kind": "not-run",
@@ -882,7 +883,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                     "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                     "probe": "chromium-version-immediate-exit",
                     "outer": "passed",
-                    "nested": "passed",
+                    "nested": "not-run",
                     "node_attached": "not-run",
                     "node_detached": "not-run",
                     "node_failure_kind": "not-run",
