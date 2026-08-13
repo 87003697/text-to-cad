@@ -1044,6 +1044,66 @@ class ResidualRendererTests(unittest.TestCase):
                     _verify_listener_owner(43210, 49152, timeout=5)
                 self.assertEqual("browser_identity", raised.exception.operation)
 
+    def test_macos_listener_rejects_second_socket_record_under_same_process(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _verify_listener_owner
+
+        output = (
+            b"p101\ng43210\nf3\nn*:49152\nTST=LISTEN\n"
+            b"f4\nn127.0.0.1:49152\nTST=LISTEN\n"
+        )
+        with (
+            mock.patch("meshshot.browser_runtime.sys.platform", "darwin"),
+            mock.patch(
+                "meshshot.browser_runtime.subprocess.run",
+                return_value=subprocess.CompletedProcess(
+                    args=[], returncode=0, stdout=output, stderr=b""
+                ),
+            ),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            _verify_listener_owner(43210, 49152, timeout=5)
+        self.assertEqual("browser_identity", raised.exception.operation)
+
+    def test_linux_listener_rejects_non_loopback_addresses(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _verify_listener_owner
+
+        header = "sl local_address rem_address st tx rx tr tm retr uid timeout inode\n"
+        cases = (
+            ("00000000:C000", "wildcard-ipv4"),
+            ("0200007F:C000", "wrong-ipv4"),
+            ("00000000000000000000000000000000:C000", "wildcard-ipv6"),
+            ("00000000000000000000000001000000:C000", "loopback-ipv6"),
+        )
+
+        class ProcPath:
+            name = "101"
+
+            def __truediv__(self, value: str) -> object:
+                if value == "stat":
+                    return mock.Mock(read_text=lambda **_kwargs: "101 (browser) S 1 43210 1")
+                if value == "fd":
+                    return mock.Mock(iterdir=lambda: ["fd3"])
+                raise AssertionError(value)
+
+        for address, label in cases:
+            tcp = header + f"0: {address} 00000000:0000 0A 0 0 0 0 0 12345\n"
+            with self.subTest(label=label):
+                with (
+                    mock.patch("meshshot.browser_runtime.sys.platform", "linux"),
+                    mock.patch(
+                        "meshshot.browser_runtime.Path.read_text",
+                        side_effect=[tcp, header],
+                    ),
+                    mock.patch(
+                        "meshshot.browser_runtime.Path.iterdir",
+                        return_value=[ProcPath()],
+                    ),
+                    mock.patch("os.readlink", return_value="socket:[12345]"),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    _verify_listener_owner(43210, 49152, timeout=5)
+                self.assertEqual("browser_identity", raised.exception.operation)
+
     def test_cleanup_quarantine_failure_still_closes_all_authorities(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
 
