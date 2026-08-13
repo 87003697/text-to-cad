@@ -2379,8 +2379,9 @@ class ResidualRendererTests(unittest.TestCase):
                 pinned.run_version(timeout=5)
             reap.assert_called_once_with(
                 process,
-                process_group=False,
-                cleanup_timeout=browser_runtime._FD_EXEC_CLEANUP_SECONDS,
+                process_group=True,
+                cleanup_term_timeout=browser_runtime._FD_EXEC_CLEANUP_TERM_SECONDS,
+                cleanup_kill_timeout=browser_runtime._FD_EXEC_CLEANUP_KILL_SECONDS,
             )
             if cleanup_failed:
                 self.assertEqual("browser_cleanup", raised.exception.operation)
@@ -2479,7 +2480,8 @@ class ResidualRendererTests(unittest.TestCase):
                 reap.assert_called_once_with(
                     process,
                     process_group=True,
-                    cleanup_timeout=browser_runtime._FD_EXEC_CLEANUP_SECONDS,
+                    cleanup_term_timeout=browser_runtime._FD_EXEC_CLEANUP_TERM_SECONDS,
+                    cleanup_kill_timeout=browser_runtime._FD_EXEC_CLEANUP_KILL_SECONDS,
                 )
             if boundary == "helper-spawn":
                 self.assertEqual(1, popen.call_count)
@@ -2495,18 +2497,25 @@ class ResidualRendererTests(unittest.TestCase):
         with (
             mock.patch("meshshot.browser_runtime.os.killpg") as killpg,
             mock.patch(
-                "meshshot.browser_runtime.time.monotonic",
-                side_effect=(100.0, 100.5),
+                "meshshot.browser_runtime._wait_group_empty",
+                side_effect=(False, True),
             ),
         ):
             failed = _PinnedExecutable._reap_failed_handoff(
                 process,
                 process_group=True,
-                cleanup_timeout=2.0,
+                cleanup_term_timeout=1.0,
+                cleanup_kill_timeout=1.0,
             )
         self.assertFalse(failed)
-        killpg.assert_called_once_with(43210, signal.SIGKILL)
-        process.wait.assert_called_once_with(timeout=1.5)
+        self.assertEqual(
+            [
+                mock.call(43210, signal.SIGTERM),
+                mock.call(43210, signal.SIGKILL),
+            ],
+            killpg.mock_calls,
+        )
+        self.assertEqual(2, process.wait.call_count)
 
     def test_failed_handoff_kills_group_after_leader_already_exited(self) -> None:
         from meshshot import browser_runtime
@@ -2520,17 +2529,24 @@ class ResidualRendererTests(unittest.TestCase):
             mock.patch("meshshot.browser_runtime.os.killpg") as killpg,
             mock.patch(
                 "meshshot.browser_runtime._wait_group_empty",
-                return_value=True,
+                side_effect=(False, True),
             ) as wait_group,
         ):
             failed = _PinnedExecutable._reap_failed_handoff(
                 process,
                 process_group=True,
-                cleanup_timeout=2.0,
+                cleanup_term_timeout=1.0,
+                cleanup_kill_timeout=1.0,
             )
         self.assertFalse(failed)
-        killpg.assert_called_once_with(43210, signal.SIGKILL)
-        wait_group.assert_called_once_with(43210, mock.ANY)
+        self.assertEqual(
+            [
+                mock.call(43210, signal.SIGTERM),
+                mock.call(43210, signal.SIGKILL),
+            ],
+            killpg.mock_calls,
+        )
+        self.assertEqual(2, wait_group.call_count)
 
     def test_failed_handoff_reports_cleanup_when_group_survives_kill(self) -> None:
         from meshshot.browser_runtime import _PinnedExecutable
@@ -2549,7 +2565,8 @@ class ResidualRendererTests(unittest.TestCase):
             failed = _PinnedExecutable._reap_failed_handoff(
                 process,
                 process_group=True,
-                cleanup_timeout=2.0,
+                cleanup_term_timeout=1.0,
+                cleanup_kill_timeout=1.0,
             )
         self.assertTrue(failed)
 
@@ -2579,7 +2596,8 @@ class ResidualRendererTests(unittest.TestCase):
         reap.assert_called_once_with(
             process,
             process_group=True,
-            cleanup_timeout=browser_runtime._FD_EXEC_CLEANUP_SECONDS,
+            cleanup_term_timeout=browser_runtime._FD_EXEC_CLEANUP_TERM_SECONDS,
+            cleanup_kill_timeout=browser_runtime._FD_EXEC_CLEANUP_KILL_SECONDS,
         )
 
     def test_linux_handoff_descriptor_close_failure_is_terminal_cleanup(self) -> None:
@@ -2789,6 +2807,56 @@ class ResidualRendererTests(unittest.TestCase):
         )
         self.assertIn(mock.call(43210, signal.SIGTERM), killpg.mock_calls)
         pinned.close.assert_called_once_with()
+
+    def test_macos_readiness_deadline_starts_after_live_image_verification(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.poll.return_value = None
+        process.wait.return_value = 0
+        pinned = mock.MagicMock()
+        pinned.popen.return_value = process
+        runtime = object.__new__(PrelaunchedCdpRuntime)
+        runtime._executable = Path("/private/image/chrome-headless-shell")
+        runtime._profile = {
+            "arguments": [],
+            "startup_timeout_ms": 1000,
+            "cleanup_term_ms": 100,
+            "cleanup_kill_ms": 100,
+        }
+        runtime._pinned_executable = pinned
+        runtime._profile_dir = None
+        runtime._profile_identity = None
+        runtime._profile_cleanup_forbidden = False
+        runtime._profile_fd = None
+        runtime._profile_parent_fd = None
+        runtime._process = None
+        runtime._process_group = None
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "profile"
+            times = iter((100.0, 101.0, 102.0))
+            with (
+                mock.patch.object(browser_runtime.sys, "platform", "darwin"),
+                mock.patch(
+                    "meshshot.browser_runtime.tempfile.mkdtemp",
+                    side_effect=lambda **_kwargs: (
+                        profile.mkdir() or os.fspath(profile)
+                    ),
+                ),
+                mock.patch(
+                    "meshshot.browser_runtime.time.monotonic",
+                    side_effect=lambda: next(times),
+                ),
+                mock.patch(
+                    "meshshot.browser_runtime.os.killpg",
+                    side_effect=ProcessLookupError,
+                ),
+                self.assertRaises(BrowserRuntimeError),
+            ):
+                runtime._prelaunch()
+        self.assertNotIn("_handoff_deadline", pinned.popen.call_args.kwargs)
 
     def test_linux_memfd_creation_and_sealing_fail_closed_and_cleanup(self) -> None:
         from meshshot import browser_runtime

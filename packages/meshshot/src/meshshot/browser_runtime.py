@@ -68,7 +68,8 @@ _FD_EXEC_HANDOFF_SCHEMA = "meshshot.fd-exec-handoff/1"
 _FD_EXEC_ENVIRONMENT = frozenset(
     {"HOME", "LANG", "LC_ALL", "PATH", "TMPDIR", "TZ"}
 )
-_FD_EXEC_CLEANUP_SECONDS = 2.0
+_FD_EXEC_CLEANUP_TERM_SECONDS = 1.0
+_FD_EXEC_CLEANUP_KILL_SECONDS = 1.0
 MESHSHOT_EXECUTABLE_ROOT = Path("/meshshot-exec")
 _MESHSHOT_EXECUTABLE_ROOT_ENV = "MESHSHOT_EXECUTABLE_ROOT"
 ADAPTER_PROFILE_SHA256 = "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
@@ -871,24 +872,73 @@ class _PinnedExecutable:
         process: subprocess.Popen[bytes],
         *,
         process_group: bool,
-        cleanup_timeout: float = _FD_EXEC_CLEANUP_SECONDS,
+        cleanup_term_timeout: float = _FD_EXEC_CLEANUP_TERM_SECONDS,
+        cleanup_kill_timeout: float = _FD_EXEC_CLEANUP_KILL_SECONDS,
     ) -> bool:
-        deadline = time.monotonic() + cleanup_timeout
         failed = False
-        if process.poll() is None:
+        if process_group:
             try:
-                if process_group:
-                    os.killpg(process.pid, signal.SIGKILL)
-                else:
-                    process.kill()
+                os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
             except OSError:
                 failed = True
-        try:
-            process.wait(timeout=max(0.001, deadline - time.monotonic()))
-        except (OSError, subprocess.SubprocessError):
-            failed = True
+            term_deadline = time.monotonic() + cleanup_term_timeout
+            try:
+                process.wait(
+                    timeout=max(0.001, term_deadline - time.monotonic())
+                )
+            except subprocess.TimeoutExpired:
+                pass
+            except OSError:
+                failed = True
+            group_empty = _wait_group_empty(
+                process.pid,
+                max(0.0, term_deadline - time.monotonic()),
+            )
+            if not group_empty:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                except OSError:
+                    failed = True
+                kill_deadline = time.monotonic() + cleanup_kill_timeout
+                try:
+                    process.wait(
+                        timeout=max(0.001, kill_deadline - time.monotonic())
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    failed = True
+                group_empty = _wait_group_empty(
+                    process.pid,
+                    max(0.0, kill_deadline - time.monotonic()),
+                )
+            if not group_empty:
+                failed = True
+        else:
+            deadline = time.monotonic() + cleanup_term_timeout
+            if process.poll() is None:
+                try:
+                    process.terminate()
+                except OSError:
+                    failed = True
+            try:
+                process.wait(timeout=max(0.001, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                except OSError:
+                    failed = True
+                kill_deadline = time.monotonic() + cleanup_kill_timeout
+                try:
+                    process.wait(
+                        timeout=max(0.001, kill_deadline - time.monotonic())
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    failed = True
+            except OSError:
+                failed = True
         return failed
 
     def _linux_popen(
@@ -961,7 +1011,8 @@ class _PinnedExecutable:
                         self._reap_failed_handoff(
                             process,
                             process_group=bool(options.get("start_new_session")),
-                            cleanup_timeout=_FD_EXEC_CLEANUP_SECONDS,
+                            cleanup_term_timeout=_FD_EXEC_CLEANUP_TERM_SECONDS,
+                            cleanup_kill_timeout=_FD_EXEC_CLEANUP_KILL_SECONDS,
                         )
                         or cleanup_failed
                     )
@@ -1063,6 +1114,7 @@ class _PinnedExecutable:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                start_new_session=True,
                 close_fds=True,
                 _handoff_deadline=deadline,
             )
@@ -1073,8 +1125,9 @@ class _PinnedExecutable:
             except subprocess.TimeoutExpired as exc:
                 if self._reap_failed_handoff(
                     process,
-                    process_group=False,
-                    cleanup_timeout=_FD_EXEC_CLEANUP_SECONDS,
+                    process_group=True,
+                    cleanup_term_timeout=_FD_EXEC_CLEANUP_TERM_SECONDS,
+                    cleanup_kill_timeout=_FD_EXEC_CLEANUP_KILL_SECONDS,
                 ):
                     raise BrowserRuntimeError("browser_cleanup") from exc
                 raise
@@ -1380,9 +1433,6 @@ class PrelaunchedCdpRuntime:
 
     def _prelaunch(self) -> str:
         try:
-            deadline = time.monotonic() + float(
-                self._profile["startup_timeout_ms"]
-            ) / 1000
             try:
                 profile = Path(tempfile.mkdtemp(prefix="meshshot-cdp-"))
             except (OSError, TypeError, ValueError) as exc:
@@ -1432,6 +1482,12 @@ class PrelaunchedCdpRuntime:
                 "about:blank",
             ]
             try:
+                launch_options: dict[str, Any] = {}
+                if sys.platform.startswith("linux"):
+                    launch_options["_handoff_deadline"] = (
+                        time.monotonic()
+                        + float(self._profile["startup_timeout_ms"]) / 1000
+                    )
                 with _blocked_runtime_signals():
                     self._process = self._pinned_executable.popen(
                         argv,
@@ -1440,7 +1496,7 @@ class PrelaunchedCdpRuntime:
                         stderr=subprocess.DEVNULL,
                         start_new_session=True,
                         close_fds=True,
-                        _handoff_deadline=deadline,
+                        **launch_options,
                     )
                     self._process_group = self._process.pid
                 self._pinned_executable.verify_running_image(
@@ -1458,6 +1514,9 @@ class PrelaunchedCdpRuntime:
                 raise BrowserRuntimeError("browser_readiness_timeout") from exc
             except OSError as exc:
                 raise BrowserRuntimeError(_prelaunch_operation(exc)) from exc
+            deadline = time.monotonic() + float(
+                self._profile["startup_timeout_ms"]
+            ) / 1000
             readiness = profile / "DevToolsActivePort"
             while time.monotonic() < deadline:
                 if self._process.poll() is not None:
