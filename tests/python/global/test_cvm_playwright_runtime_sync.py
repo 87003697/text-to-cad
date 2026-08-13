@@ -221,7 +221,9 @@ class PlaywrightRuntimeSyncTests(unittest.TestCase):
 
     def test_matching_identity_is_idempotent_and_skips_install(self) -> None:
         module = load_module()
-        runner = FakeRunner([(0, identity(matched=True))])
+        runner = FakeRunner(
+            [(0, identity(matched=True)), (0, identity(matched=True))]
+        )
         stdout = io.StringIO()
         with redirect_stdout(stdout):
             status = module.execute(runner, repo_root=REPO_ROOT)
@@ -230,7 +232,23 @@ class PlaywrightRuntimeSyncTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(receipt["before"], "matched")
         self.assertEqual(receipt["after"], "matched")
-        self.assertEqual(len(runner.commands), 1)
+        self.assertEqual(len(runner.commands), 2)
+        self.assertEqual(runner.commands[0], runner.commands[1])
+
+    def test_matching_identity_closes_if_noop_postcheck_changes(self) -> None:
+        module = load_module()
+        runner = FakeRunner(
+            [(0, identity(matched=True)), (0, identity(matched=False))]
+        )
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            status = module.execute(runner, repo_root=REPO_ROOT)
+        receipt = json.loads(stdout.getvalue())
+
+        self.assertEqual(status, 1)
+        self.assertEqual(receipt["before"], "matched")
+        self.assertEqual(receipt["after"], "mismatched")
+        self.assertEqual(len(runner.commands), 2)
 
     def test_failure_matrix_is_closed_and_never_emits_remote_output(self) -> None:
         cases = (
