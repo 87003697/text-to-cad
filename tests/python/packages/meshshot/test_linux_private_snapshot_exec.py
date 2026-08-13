@@ -12,6 +12,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 
 try:
@@ -82,6 +83,76 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
     """Run the Linux proof when a pre-existing local Docker image is available."""
 
     _IMAGE = "node:22-bookworm"
+
+    def test_harness_scrubs_hostile_docker_routing_environment(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def fake_run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            calls.append({"argv": argv, **kwargs})
+            return subprocess.CompletedProcess(argv, 1)
+
+        hostile = {
+            "DOCKER_HOST": "tcp://attacker.invalid:2375",
+            "DOCKER_CONTEXT": "remote-production",
+            "DOCKER_TLS_VERIFY": "1",
+            "DOCKER_CERT_PATH": "/private/client-certificates",
+        }
+        with (
+            mock.patch.dict(os.environ, hostile),
+            mock.patch.object(shutil, "which", return_value="/usr/bin/docker"),
+            mock.patch.object(subprocess, "run", side_effect=fake_run),
+            mock.patch.object(
+                self,
+                "_local_docker_socket",
+                return_value=Path("/private/local/docker.sock"),
+                create=True,
+            ),
+        ):
+            with self.assertRaises(unittest.SkipTest):
+                self.test_local_linux_noexec_harness()
+        self.assertTrue(calls)
+        for call in calls:
+            environment = call["env"]
+            self.assertEqual(
+                "unix:///private/local/docker.sock",
+                environment["DOCKER_HOST"],
+            )
+            self.assertNotIn("DOCKER_CONTEXT", environment)
+            self.assertNotIn("DOCKER_TLS_VERIFY", environment)
+            self.assertNotIn("DOCKER_CERT_PATH", environment)
+
+    def test_create_timeout_still_removes_only_the_randomized_exact_name(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+            calls.append(argv)
+            if "create" in argv:
+                raise subprocess.TimeoutExpired(argv, 15)
+            if argv[1:3] == ["image", "inspect"]:
+                return subprocess.CompletedProcess(argv, 0)
+            if argv[1:3] == ["rm", "--force"]:
+                return subprocess.CompletedProcess(argv, 0)
+            return subprocess.CompletedProcess(argv, 0)
+
+        with (
+            mock.patch.object(shutil, "which", return_value="/usr/bin/docker"),
+            mock.patch.object(subprocess, "run", side_effect=fake_run),
+            mock.patch.object(
+                self,
+                "_local_docker_socket",
+                return_value=Path("/private/local/docker.sock"),
+                create=True,
+            ),
+            self.assertRaises(subprocess.TimeoutExpired),
+        ):
+            self.test_local_linux_noexec_harness()
+        create = next(argv for argv in calls if "create" in argv)
+        name = create[create.index("--name") + 1]
+        self.assertRegex(name, r"^meshshot-linux-exec-[0-9]+-[0-9a-f]{12}$")
+        self.assertEqual(
+            [["/usr/bin/docker", "rm", "--force", name]],
+            [argv for argv in calls if argv[1:3] == ["rm", "--force"]],
+        )
 
     def test_local_linux_noexec_harness(self) -> None:
         docker = shutil.which("docker")
