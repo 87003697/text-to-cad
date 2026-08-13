@@ -263,6 +263,21 @@ class WorkspaceCliTests(unittest.TestCase):
                     "canonical_reference_sha256": self.reference_sha,
                 },
                 "candidate": {"mesh_sha256": candidate_sha},
+                "browser_runtime": {
+                    "schema": "meshshot.prelaunched-cdp-runtime/1",
+                    "adapter_profile": {
+                        "name": "playwright-1.60-chromium-1223-loopback-cdp/1",
+                        "sha256": "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04",
+                    },
+                    "browser_identity": {
+                        "playwright": "1.60.0",
+                        "browser": "chromium-headless-shell",
+                        "revision": "1223",
+                        "version": "Google Chrome for Testing 148.0.7778.96",
+                        "sha256": "c" * 64,
+                    },
+                    "result": "passed",
+                },
                 "image": {
                     "path": "preview.png",
                     "sha256": _sha(png),
@@ -282,6 +297,39 @@ class WorkspaceCliTests(unittest.TestCase):
         ).hexdigest()
         _write_json(root / "preview.json", metadata)
         return root
+
+    def test_workspace_rejects_recomputed_preview_identity_with_wrong_runtime_digests(self) -> None:
+        status, _payload, stderr = self.invoke(
+            "init", "--workspace", str(self.workspace), "--prepared", str(self.prepared_setup())
+        )
+        self.assertEqual(0, status, stderr)
+        status, attempt, stderr = self.invoke(
+            "begin-attempt", "--workspace", str(self.workspace), "--plan", str(self.initial_plan()), "--intended-step", "0"
+        )
+        self.assertEqual(0, status, stderr)
+        candidate, candidate_sha = self.candidate("candidate-runtime-tamper", b"candidate")
+        measurement = self.measurement(step=0, compare_to=None, candidate_sha=candidate_sha, observable_sha="9" * 64, accepted=False)
+        preview = self.preview("preview-runtime-tamper", candidate_sha)
+        metadata_path = preview / "preview.json"
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["browser_runtime"]["adapter_profile"]["sha256"] = "1" * 64
+        metadata["browser_runtime"]["browser_identity"]["sha256"] = "2" * 64
+        source = dict(metadata)
+        source.pop("preview_identity_sha256")
+        metadata["preview_identity_sha256"] = _identity("voxblame.preview/1", source)
+        _write_json(metadata_path, metadata)
+
+        status, rejected, _stderr = self.invoke(
+            "publish-step-zero",
+            "--workspace", str(self.workspace),
+            "--attempt", str(attempt["attempt"]["attempt"]),
+            "--candidate", str(candidate),
+            "--candidate-mesh", "artifacts/model.glb",
+            "--measurement", str(measurement),
+            "--preview", str(preview),
+        )
+        self.assertEqual(2, status)
+        self.assertEqual("invalid_preview", rejected["error"]["classification"])
 
     def repair_plan(self, name: str, *, from_step: int) -> Path:
         path = self.root / f"{name}.json"

@@ -11,6 +11,7 @@ from pathlib import Path
 import statistics
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -58,6 +59,195 @@ def _runtime_patch(browser: object) -> tuple[mock._patch, mock.MagicMock]:
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_public_render_rejects_evil_prefix_as_outside_origin(self) -> None:
+        page = mock.MagicMock()
+        context = mock.MagicMock()
+        browser = mock.MagicMock()
+        playwright = mock.MagicMock()
+        context.new_page.return_value = page
+        browser.new_context.return_value = context
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = playwright
+        runtime_patch, _runtime = _runtime_patch(browser)
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+
+        routed: list[str] = []
+        png = BytesIO()
+        Image.new("RGB", (504, 1008), (0, 0, 0)).save(png, format="PNG")
+
+        def expose_sealed_route(_script: str) -> object:
+            sealed_route = context.route.call_args.args[1]
+            route = mock.MagicMock()
+            route.request.url = "http://meshshot.local.evil/payload.json"
+            sealed_route(route)
+            if route.abort.call_args == mock.call("blockedbyclient"):
+                routed.append("aborted")
+            if route.continue_.called:
+                routed.append("continued")
+            return {
+                "ok": True,
+                "pngDataUrl": "data:image/png;base64,"
+                + base64.b64encode(png.getvalue()).decode("ascii"),
+                "views": [
+                    {"name": name}
+                    for name in ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
+                ],
+            }
+
+        page.evaluate.side_effect = expose_sealed_route
+        with (
+            mock.patch.dict(os.environ, {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(Path(os.__file__))}),
+            mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+            runtime_patch,
+        ):
+            render_residual_preview(_geometry(triangle), _geometry(triangle), variant="step")
+        self.assertEqual(["aborted"], routed)
+
+    def test_public_render_can_run_from_non_main_thread_without_signal_mutation(self) -> None:
+        from meshshot.browser_runtime import _runtime_signal_cleanup
+
+        observed: list[str] = []
+
+        def worker() -> None:
+            try:
+                with mock.patch("signal.signal") as install:
+                    with _runtime_signal_cleanup():
+                        observed.append("entered")
+                    install.assert_not_called()
+            except BaseException as exc:  # pragma: no cover - assertion reports value
+                observed.append(type(exc).__name__)
+
+        thread = threading.Thread(target=worker)
+        thread.start()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(["entered"], observed)
+
+    def test_signal_cleanup_restores_and_dispatches_custom_handlers_after_cleanup(self) -> None:
+        import signal
+        from meshshot.browser_runtime import _RuntimeSignal, _runtime_signal_cleanup
+
+        calls: list[tuple[str, int]] = []
+
+        def previous(signum: int, _frame: object) -> None:
+            calls.append(("previous", signum))
+
+        for caught in (signal.SIGINT, signal.SIGTERM):
+            with self.subTest(caught=caught):
+                calls.clear()
+                handlers = {signal.SIGINT: previous, signal.SIGTERM: previous}
+                installed: dict[int, object] = {}
+
+                def getsignal(signum: int) -> object:
+                    return handlers[signum]
+
+                def set_signal(signum: int, handler: object) -> object:
+                    installed[signum] = handler
+                    handlers[signum] = handler
+                    return handler
+
+                with (
+                    mock.patch("signal.getsignal", side_effect=getsignal),
+                    mock.patch("signal.signal", side_effect=set_signal),
+                    self.assertRaises(_RuntimeSignal) as raised,
+                ):
+                    with _runtime_signal_cleanup():
+                        installed[caught](caught, None)
+
+                self.assertEqual(caught, raised.exception.signum)
+                self.assertIs(previous, handlers[signal.SIGINT])
+                self.assertIs(previous, handlers[signal.SIGTERM])
+                self.assertEqual([("previous", caught)], calls)
+
+    def test_signal_cleanup_preserves_ignored_handler_without_interception(self) -> None:
+        import signal
+        from meshshot.browser_runtime import _runtime_signal_cleanup
+
+        handlers = {signal.SIGINT: signal.SIG_IGN, signal.SIGTERM: signal.SIG_IGN}
+        with (
+            mock.patch("signal.getsignal", side_effect=lambda signum: handlers[signum]),
+            mock.patch("signal.signal") as install,
+        ):
+            with _runtime_signal_cleanup():
+                pass
+        install.assert_not_called()
+
+    def test_prelaunched_runtime_readiness_timeout_reaps_and_removes_profile(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.poll.return_value = None
+        process.wait.return_value = 0
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "profile"
+            runtime = object.__new__(PrelaunchedCdpRuntime)
+            runtime._profile = {
+                "arguments": [], "startup_timeout_ms": 0,
+                "cleanup_term_ms": 1, "cleanup_kill_ms": 1,
+            }
+            runtime._executable = Path(os.__file__)
+            runtime._profile_dir = None
+            runtime._process = None
+            runtime._process_group = None
+            with (
+                mock.patch("tempfile.mkdtemp", side_effect=lambda **_kwargs: (profile.mkdir() or os.fspath(profile))),
+                mock.patch("subprocess.Popen", return_value=process),
+                mock.patch("os.getpgid", return_value=43210),
+                mock.patch("os.killpg", side_effect=lambda _pgid, signum: (_ for _ in ()).throw(ProcessLookupError()) if signum == 0 else None),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                runtime._prelaunch()
+            self.assertEqual("browser_readiness_timeout", raised.exception.operation)
+            self.assertFalse(profile.exists())
+
+    def test_browser_crash_is_projected_as_closed_public_render_failure(self) -> None:
+        page = mock.MagicMock()
+        context = mock.MagicMock()
+        browser = mock.MagicMock()
+        playwright = mock.MagicMock()
+        context.new_page.return_value = page
+        browser.new_context.return_value = context
+        page.evaluate.side_effect = RuntimeError("sensitive crash pid=43210 endpoint=http://127.0.0.1:49152")
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = playwright
+        runtime_patch, _runtime = _runtime_patch(browser)
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+        with (
+            mock.patch.dict(os.environ, {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(Path(os.__file__))}),
+            mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+            runtime_patch,
+            self.assertRaises(MeshshotError) as raised,
+        ):
+            render_residual_preview(_geometry(triangle), _geometry(triangle), variant="step")
+        self.assertEqual("browser_render", raised.exception.phase)
+        self.assertNotIn("43210", str(raised.exception))
+        self.assertNotIn("127.0.0.1", str(raised.exception))
+
+    def test_prelaunched_runtime_rejects_nonempty_colliding_profile_before_spawn(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "collision"
+            profile.mkdir()
+            (profile / "stale").write_text("owned elsewhere", encoding="utf-8")
+            runtime = object.__new__(PrelaunchedCdpRuntime)
+            runtime._profile = {"arguments": [], "startup_timeout_ms": 1, "cleanup_term_ms": 1, "cleanup_kill_ms": 1}
+            runtime._executable = Path(os.__file__)
+            runtime._profile_dir = None
+            runtime._process = None
+            runtime._process_group = None
+            with (
+                mock.patch("tempfile.mkdtemp", return_value=os.fspath(profile)),
+                mock.patch("subprocess.Popen") as popen,
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                runtime._prelaunch()
+            self.assertEqual("browser_profile", raised.exception.operation)
+            popen.assert_not_called()
+            self.assertTrue(profile.is_dir())
+            self.assertEqual("owned elsewhere", (profile / "stale").read_text(encoding="utf-8"))
+
     def test_prelaunched_runtime_rejects_wrong_browser_identity_before_spawn(self) -> None:
         playwright = mock.MagicMock()
         sync_playwright = mock.MagicMock()

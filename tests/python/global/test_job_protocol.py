@@ -26,12 +26,52 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 
 
 class JobProtocolTests(unittest.TestCase):
+    def test_prelaunched_cdp_runtime_receipt_requires_frozen_exact_identities(self) -> None:
+        receipt = {
+            "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,
+            "adapter_profile": {
+                "name": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE,
+                "sha256": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE_SHA256,
+            },
+            "browser_identity": {
+                "playwright": "1.60.0",
+                "browser": "chromium-headless-shell",
+                "revision": "1223",
+                "version": "Google Chrome for Testing 148.0.7778.96",
+                "sha256": "c" * 64,
+            },
+            "result": "passed",
+        }
+        self.assertTrue(
+            protocol.provider_free_browser_runtime_allowed(
+                receipt,
+                expected_browser_sha256="c" * 64,
+            )
+        )
+        for mutation, expected in (
+            (
+                {**receipt, "adapter_profile": {**receipt["adapter_profile"], "sha256": "1" * 64}},
+                "c" * 64,
+            ),
+            (
+                {**receipt, "browser_identity": {**receipt["browser_identity"], "sha256": "2" * 64}},
+                "c" * 64,
+            ),
+        ):
+            with self.subTest(mutation=mutation):
+                self.assertFalse(
+                    protocol.provider_free_browser_runtime_allowed(
+                        mutation,
+                        expected_browser_sha256=expected,
+                    )
+                )
+
     def test_prelaunched_cdp_runtime_receipt_is_closed(self) -> None:
         receipt = {
             "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,
             "adapter_profile": {
                 "name": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE,
-                "sha256": "1" * 64,
+                "sha256": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE_SHA256,
             },
             "browser_identity": {
                 "playwright": "1.60.0",
@@ -42,7 +82,12 @@ class JobProtocolTests(unittest.TestCase):
             },
             "result": "passed",
         }
-        self.assertTrue(protocol.provider_free_browser_runtime_allowed(receipt))
+        self.assertTrue(
+            protocol.provider_free_browser_runtime_allowed(
+                receipt,
+                expected_browser_sha256="2" * 64,
+            )
+        )
         for mutation in (
             {**receipt, "endpoint": "http://127.0.0.1:49152"},
             {**receipt, "pid": 1234},
@@ -59,7 +104,10 @@ class JobProtocolTests(unittest.TestCase):
         ):
             with self.subTest(mutation=mutation):
                 self.assertFalse(
-                    protocol.provider_free_browser_runtime_allowed(mutation)
+                    protocol.provider_free_browser_runtime_allowed(
+                        mutation,
+                        expected_browser_sha256="2" * 64,
+                    )
                 )
 
     def test_preview_public_wrapper_receipt_is_closed_and_operation_bound(self) -> None:
