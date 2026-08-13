@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 import errno
 import hashlib
 from importlib import metadata, resources
@@ -42,6 +43,7 @@ PRIVATE_SNAPSHOT_IDENTITY_PHASES = frozenset(
         "private_launch_version_output_identity",
     }
 )
+_SourceIdentity = tuple[int, int, int, int]
 _PROFILE_RESOURCE = "prelaunched_cdp_playwright_1_60_v1.json"
 ADAPTER_PROFILE_SHA256 = "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
 _DEVTOOLS_PATH = re.compile(r"^/devtools/browser/[0-9A-Za-z._-]+$")
@@ -183,7 +185,13 @@ def _playwright_revision(browser_name: str) -> str:
     return matches[0]["revision"]
 
 
-def default_executable(chromium_executable: str) -> Path:
+@dataclass(frozen=True)
+class _SelectedExecutable:
+    path: Path
+    source_identity: _SourceIdentity
+
+
+def default_executable(chromium_executable: str) -> _SelectedExecutable:
     """Resolve the exact headless-shell sibling installed by Playwright."""
 
     profile, _profile_sha256 = _load_profile()
@@ -265,7 +273,15 @@ def default_executable(chromium_executable: str) -> Path:
             "browser_identity",
             browser_identity_phase="source_executable_identity",
         )
-    return resolved_candidate
+    return _SelectedExecutable(
+        path=resolved_candidate,
+        source_identity=(
+            resolved_lstat.st_dev,
+            resolved_lstat.st_ino,
+            resolved_lstat.st_size,
+            resolved_lstat.st_mode,
+        ),
+    )
 
 
 def _attest(executable: _PinnedExecutable, profile: dict[str, Any]) -> dict[str, str]:
@@ -368,7 +384,11 @@ def _private_directory(prefix: str) -> Path:
 class _PinnedExecutable:
     """Own one exact executable image from attestation through production exec."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        expected_source_identity: _SourceIdentity | None = None,
+    ) -> None:
         self.path = path
         self.fd: int | None = None
         self.launch_path: Path | None = None
@@ -382,10 +402,20 @@ class _PinnedExecutable:
                 "browser_identity",
                 browser_identity_phase="source_executable_identity",
             ) from exc
+        actual_source_identity = (
+            source_info.st_dev,
+            source_info.st_ino,
+            source_info.st_size,
+            source_info.st_mode,
+        )
         if (
             not path.is_absolute()
             or not stat.S_ISREG(source_info.st_mode)
             or source_info.st_mode & 0o111 == 0
+            or (
+                expected_source_identity is not None
+                and actual_source_identity != expected_source_identity
+            )
         ):
             os.close(source_fd)
             raise BrowserRuntimeError(
@@ -957,10 +987,19 @@ def _blocked_runtime_signals() -> Iterator[None]:
 class PrelaunchedCdpRuntime:
     """Deep internal adapter: attest, launch, attach, and clean one browser."""
 
-    def __init__(self, executable: Path) -> None:
-        self._executable = executable
+    def __init__(self, executable: Path | _SelectedExecutable) -> None:
+        if isinstance(executable, _SelectedExecutable):
+            executable_path = executable.path
+            expected_source_identity = executable.source_identity
+        else:
+            executable_path = executable
+            expected_source_identity = None
+        self._executable = executable_path
         self._profile, profile_sha256 = _load_profile()
-        self._pinned_executable = _PinnedExecutable(executable)
+        self._pinned_executable = _PinnedExecutable(
+            executable_path,
+            expected_source_identity=expected_source_identity,
+        )
         try:
             browser_identity = _attest(self._pinned_executable, self._profile)
         except BaseException:
