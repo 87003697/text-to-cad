@@ -2308,11 +2308,16 @@ class ResidualRendererTests(unittest.TestCase):
         with (
             mock.patch.object(browser_runtime.sys, "platform", "linux"),
             mock.patch("meshshot.browser_runtime.subprocess.Popen") as popen,
+            mock.patch.object(
+                pinned,
+                "_wait_for_exec_replacement",
+            ) as wait_for_exec,
         ):
             pinned.popen(
                 ["source-browser", "--headless"],
                 close_fds=True,
             )
+        wait_for_exec.assert_called_once()
         self.assertEqual(
             os.fspath(Path(browser_runtime.__file__).with_name("fd_exec_handoff.py")),
             popen.call_args.args[0][2],
@@ -2338,10 +2343,15 @@ class ResidualRendererTests(unittest.TestCase):
         with (
             mock.patch.object(browser_runtime.sys, "platform", "linux"),
             mock.patch("meshshot.browser_runtime.subprocess.Popen") as popen,
+            mock.patch.object(
+                pinned,
+                "_wait_for_exec_replacement",
+            ) as wait_for_exec,
         ):
             popen.return_value.communicate.return_value = (b"version\n", b"")
             popen.return_value.returncode = 0
             pinned.run_version(timeout=5)
+        wait_for_exec.assert_called_once()
         self.assertEqual(browser_runtime.sys.executable, popen.call_args.kwargs["executable"])
         self.assertIn(91, popen.call_args.kwargs["pass_fds"])
         self.assertTrue(popen.call_args.kwargs["close_fds"])
@@ -2405,8 +2415,13 @@ class ResidualRendererTests(unittest.TestCase):
                 clear=True,
             ),
             mock.patch("meshshot.browser_runtime.subprocess.Popen") as popen,
+            mock.patch.object(
+                pinned,
+                "_wait_for_exec_replacement",
+            ) as wait_for_exec,
         ):
             pinned.popen(["ignored", "--headless"], close_fds=True)
+        wait_for_exec.assert_called_once()
         self.assertEqual(
             {"HOME": "/closed-home", "PATH": "/usr/bin:/bin"},
             popen.call_args.kwargs["env"],

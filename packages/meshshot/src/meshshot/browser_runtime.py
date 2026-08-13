@@ -390,6 +390,14 @@ def _attest(executable: _PinnedExecutable, profile: dict[str, Any]) -> dict[str,
         completed = executable.run_version(
             float(profile["startup_timeout_ms"]) / 1000
         )
+    except BrowserRuntimeError as exc:
+        if exc.operation != "browser_identity":
+            raise
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="private_launch_version_execution",
+            browser_identity_check="private_version_probe_spawn",
+        ) from exc
     except subprocess.TimeoutExpired as exc:
         raise BrowserRuntimeError(
             "browser_identity",
@@ -892,10 +900,14 @@ class _PinnedExecutable:
                 pass
             except OSError:
                 failed = True
-            group_empty = _wait_group_empty(
-                process.pid,
-                max(0.0, term_deadline - time.monotonic()),
-            )
+            try:
+                group_empty = _wait_group_empty(
+                    process.pid,
+                    max(0.0, term_deadline - time.monotonic()),
+                )
+            except OSError:
+                failed = True
+                group_empty = False
             if not group_empty:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
@@ -910,10 +922,14 @@ class _PinnedExecutable:
                     )
                 except (OSError, subprocess.SubprocessError):
                     failed = True
-                group_empty = _wait_group_empty(
-                    process.pid,
-                    max(0.0, kill_deadline - time.monotonic()),
-                )
+                try:
+                    group_empty = _wait_group_empty(
+                        process.pid,
+                        max(0.0, kill_deadline - time.monotonic()),
+                    )
+                except OSError:
+                    failed = True
+                    group_empty = False
             if not group_empty:
                 failed = True
         else:
@@ -940,6 +956,25 @@ class _PinnedExecutable:
             except OSError:
                 failed = True
         return failed
+
+    def _wait_for_exec_replacement(
+        self,
+        process: subprocess.Popen[bytes],
+        deadline: float,
+    ) -> None:
+        while True:
+            if process.poll() is not None:
+                raise BrowserRuntimeError("browser_identity")
+            try:
+                self.verify_running_image(
+                    process.pid,
+                    max(0.001, deadline - time.monotonic()),
+                )
+                return
+            except (BrowserRuntimeError, OSError) as exc:
+                if time.monotonic() >= deadline:
+                    raise BrowserRuntimeError("browser_identity") from exc
+                time.sleep(0.002)
 
     def _linux_popen(
         self,
@@ -998,6 +1033,7 @@ class _PinnedExecutable:
                 status = os.read(read_fd, 1)
                 if status != b"":
                     raise OSError("fd-native browser execution failed")
+                self._wait_for_exec_replacement(process, deadline)
         except BaseException as exc:
             failure = exc
         finally:

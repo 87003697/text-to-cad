@@ -43,12 +43,36 @@ class LinuxPrivateSnapshotExecutionTests(unittest.TestCase):
         runtime = importlib.import_module("meshshot.browser_runtime")
 
         with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory) / "chrome-headless-shell"
-            source.write_text(
-                "#!/bin/sh\nprintf 'Google Chrome for Testing 148.0.7778.96\\n'\n",
+            root = Path(directory)
+            source = root / "chrome-headless-shell"
+            c_source = root / "version.c"
+            c_source.write_text(
+                "#include <stdio.h>\n"
+                "int main(void) {\n"
+                "  puts(\"Google Chrome for Testing 148.0.7778.96\");\n"
+                "  return 0;\n"
+                "}\n",
                 encoding="utf-8",
             )
-            source.chmod(0o755)
+            compiled = subprocess.run(
+                [
+                    "/usr/bin/gcc",
+                    "-O2",
+                    os.fspath(c_source),
+                    "-o",
+                    os.fspath(source),
+                ],
+                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=15,
+            )
+            self.assertEqual(
+                0,
+                compiled.returncode,
+                "Linux ELF fixture compile failed",
+            )
             with self.assertRaises(PermissionError):
                 subprocess.run(
                     [source, "--version"],
