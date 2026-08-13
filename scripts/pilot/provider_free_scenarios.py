@@ -221,6 +221,10 @@ def _reject_duplicate_json_pairs(
     return value
 
 
+def _loads_json_strict(value: str | bytes) -> Any:
+    return json.loads(value, object_pairs_hook=_reject_duplicate_json_pairs)
+
+
 def _write_json(path: Path, payload: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(_json_bytes(payload))
@@ -258,8 +262,8 @@ def _physical_contained_file(root: Path, relative_text: object, label: str) -> P
 
 def _closed_identity_document(path: Path) -> dict[str, Any]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        value = _loads_json_strict(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ScenarioError(f"Viewer runtime identity is missing or invalid: {exc}") from exc
     if not isinstance(value, dict) or set(value) != {
         "schema",
@@ -459,10 +463,7 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
     if completed.returncode != 0:
         classification = None
         try:
-            failure_payload = json.loads(
-                completed.stdout,
-                object_pairs_hook=_reject_duplicate_json_pairs,
-            )
+            failure_payload = _loads_json_strict(completed.stdout)
         except (json.JSONDecodeError, ValueError):
             failure_payload = None
         error = (
@@ -493,8 +494,8 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
             browser_identity_substage=browser_identity_substage,
         )
     try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
+        payload = _loads_json_strict(completed.stdout)
+    except (ValueError, json.JSONDecodeError) as exc:
         raise ScenarioError(
             "public command returned invalid JSON",
             classification=_PUBLIC_RESULT_SHAPE_CLASSIFICATION,
@@ -877,7 +878,7 @@ def _validate_attested_browser_runtime(
     """Validate the exact host-pre-staged browser without copying a host cache."""
 
     try:
-        receipt = json.loads(
+        receipt = _loads_json_strict(
             (REPO_ROOT / deployment_authority.RECEIPT_PATH).read_text(
                 encoding="utf-8"
             )
@@ -1141,7 +1142,9 @@ def _prepare_reference(workspace: Path, candidate: Path, command_log: Path) -> N
         cwd=REPO_ROOT,
         command_log=command_log,
     )
-    input_document = json.loads((prepared / "input/input.json").read_text(encoding="utf-8"))
+    input_document = _loads_json_strict(
+        (prepared / "input/input.json").read_text(encoding="utf-8")
+    )
     reference_sha = input_document["canonical_reference_sha256"]
     profile_sha = _sha256(PREVIEW_PROFILE)
     _write_json(prepared / "setup/route.json", {"schema": "mesh-to-cad.route/1", "route": "cad"})
@@ -1521,7 +1524,11 @@ def _publish_measured_step(workspace: Path, candidate: Path, command_log: Path) 
 
 
 def _finalize_workspace(workspace: Path, command_log: Path) -> dict[str, Any]:
-    preview = json.loads((workspace / "steps/000000/preview/preview.json").read_text(encoding="utf-8"))
+    preview = _loads_json_strict(
+        (workspace / "steps/000000/preview/preview.json").read_text(
+            encoding="utf-8"
+        )
+    )
     measurement_path = workspace / "steps/000000/measurement.json"
     selection = workspace / "work/final-selection.json"
     _write_json(

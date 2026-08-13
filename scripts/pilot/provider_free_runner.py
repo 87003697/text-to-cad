@@ -13,7 +13,7 @@ import shutil
 import stat
 import subprocess
 import sys
-from typing import Mapping
+from typing import Any, Mapping
 
 from scripts.pilot import runner as pilot_runner
 from scripts.pilot import deployment_authority
@@ -91,6 +91,10 @@ def _reject_duplicate_json_pairs(
             raise ValueError("duplicate JSON field")
         value[key] = item
     return value
+
+
+def _loads_json_strict(value: str | bytes) -> Any:
+    return json.loads(value, object_pairs_hook=_reject_duplicate_json_pairs)
 
 
 def _validate_interpreter_environment(environ: Mapping[str, str]) -> None:
@@ -174,10 +178,10 @@ def _validate_environment(environ: Mapping[str, str]) -> list[str]:
         ):
             raise ProviderFreeError(f"provider-free {name} is missing or invalid")
     try:
-        immutable_request = json.loads(
+        immutable_request = _loads_json_strict(
             environ.get("CVM_PROVIDER_FREE_REQUEST_JSON", "")
         )
-    except json.JSONDecodeError as exc:
+    except (ValueError, json.JSONDecodeError) as exc:
         raise ProviderFreeError("provider-free immutable request is invalid") from exc
     if not isinstance(immutable_request, dict):
         raise ProviderFreeError("provider-free immutable request is invalid")
@@ -206,7 +210,7 @@ def _apply_resource_limits() -> None:
 def _trusted_runtime(environ: Mapping[str, str]) -> dict[str, object]:
     """Remeasure the immutable trusted runtime before sandbox launch."""
 
-    immutable = json.loads(environ["CVM_PROVIDER_FREE_REQUEST_JSON"])
+    immutable = _loads_json_strict(environ["CVM_PROVIDER_FREE_REQUEST_JSON"])
     request = immutable.get("request_authority")
     identity = request.get("runtime_identity") if isinstance(request, dict) else None
     bwrap = identity.get("bwrap") if isinstance(identity, dict) else None
@@ -292,7 +296,7 @@ def _publish_no_provider_proof(
                 "deployment_tree_sha256": environ[
                     "CVM_PROVIDER_FREE_DEPLOYMENT_TREE_SHA256"
                 ],
-                "immutable_request": json.loads(
+                "immutable_request": _loads_json_strict(
                     environ["CVM_PROVIDER_FREE_REQUEST_JSON"]
                 ),
             },
@@ -383,7 +387,7 @@ def _retain_deployment_authority(exp_dir: Path) -> dict[str, object]:
     receipt_path = REPO_ROOT / deployment_authority.RECEIPT_PATH
     try:
         receipt_bytes = receipt_path.read_bytes()
-        receipt = json.loads(receipt_bytes)
+        receipt = _loads_json_strict(receipt_bytes)
         deployment_authority.verify_receipt(REPO_ROOT, receipt)
         if receipt.get("contract_paths") != list(
             deployment_authority.EXECUTION_AUTHORITY_PATHS
@@ -398,6 +402,7 @@ def _retain_deployment_authority(exp_dir: Path) -> dict[str, object]:
         )
     except (
         OSError,
+        ValueError,
         json.JSONDecodeError,
         deployment_authority.DeploymentAuthorityError,
     ) as exc:
@@ -439,10 +444,7 @@ def _validate_scenario_evidence(
 
     path = exp_dir / "run" / "runtime-authority-smoke.json"
     try:
-        receipt = json.loads(
-            path.read_text(encoding="utf-8"),
-            object_pairs_hook=_reject_duplicate_json_pairs,
-        )
+        receipt = _loads_json_strict(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ProviderFreeError("runtime-authority scenario receipt is missing or invalid") from exc
     required = {
@@ -526,12 +528,12 @@ def _validate_scenario_evidence(
     if receipt["preview_sandbox"] != PROVIDER_FREE_PREVIEW_SANDBOX_PATH:
         raise ProviderFreeError("runtime-authority preview sandbox path conflicts")
     try:
-        preview_sandbox = json.loads(
+        preview_sandbox = _loads_json_strict(
             (exp_dir / PROVIDER_FREE_PREVIEW_SANDBOX_PATH).read_text(
                 encoding="utf-8"
             )
         )
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ProviderFreeError(
             "runtime-authority preview sandbox evidence is missing or invalid"
         ) from exc
@@ -544,12 +546,12 @@ def _validate_scenario_evidence(
             "runtime-authority preview sandbox evidence conflicts"
         )
     try:
-        browser_exec_diagnostic = json.loads(
+        browser_exec_diagnostic = _loads_json_strict(
             (exp_dir / PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH).read_text(
                 encoding="utf-8"
             )
         )
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ProviderFreeError(
             "runtime-authority browser exec diagnostic is missing or invalid"
         ) from exc
@@ -560,12 +562,12 @@ def _validate_scenario_evidence(
             "runtime-authority browser exec diagnostic conflicts"
         )
     try:
-        public_wrapper = json.loads(
+        public_wrapper = _loads_json_strict(
             (exp_dir / PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH).read_text(
                 encoding="utf-8"
             )
         )
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ProviderFreeError(
             "runtime-authority preview public wrapper is missing or invalid"
         ) from exc
@@ -584,8 +586,8 @@ def _validate_scenario_evidence(
         raise ProviderFreeError("runtime-authority browser runtime evidence is missing")
     for preview_path in preview_paths:
         try:
-            preview = json.loads(preview_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            preview = _loads_json_strict(preview_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
             raise ProviderFreeError(
                 "runtime-authority browser runtime evidence is invalid"
             ) from exc
@@ -606,8 +608,8 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
 
     path = exp_dir / PROVIDER_FREE_SCENARIO_FAILURE_PATH
     try:
-        receipt = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        receipt = _loads_json_strict(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ProviderFreeError(
             "provider-free scenario failure receipt is missing or invalid"
         ) from exc
@@ -656,9 +658,8 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
     if operation == "preview_browser_identity":
         try:
             failure_bytes = path.read_bytes()
-            identity_diagnostic = json.loads(
-                identity_diagnostic_path.read_text(encoding="utf-8"),
-                object_pairs_hook=_reject_duplicate_json_pairs,
+            identity_diagnostic = _loads_json_strict(
+                identity_diagnostic_path.read_text(encoding="utf-8")
             )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             raise ProviderFreeError(
@@ -682,12 +683,12 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
     }
     if operation in diagnostic_operations:
         try:
-            browser_exec_diagnostic = json.loads(
+            browser_exec_diagnostic = _loads_json_strict(
                 (
                     exp_dir / PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
                 ).read_text(encoding="utf-8")
             )
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
             raise ProviderFreeError(
                 "provider-free browser exec diagnostic is missing or invalid"
             ) from exc
@@ -700,12 +701,12 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
             )
     if operation in PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS:
         try:
-            public_wrapper = json.loads(
+            public_wrapper = _loads_json_strict(
                 (
                     exp_dir / PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
                 ).read_text(encoding="utf-8")
             )
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
             raise ProviderFreeError(
                 "provider-free preview public wrapper is missing or invalid"
             ) from exc

@@ -391,20 +391,24 @@ def _validate_provider_free_sandbox_argv(
         raise ReviewError("provider-free sandbox command contract conflicts")
 
 
-def _read_json(path: Path) -> dict[str, Any]:
-    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        value: dict[str, Any] = {}
-        for key, item in pairs:
-            if key in value:
-                raise ValueError("duplicate JSON field")
-            value[key] = item
-        return value
+def _reject_duplicate_json_pairs(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON field")
+        value[key] = item
+    return value
 
+
+def _loads_json_strict(value: str | bytes) -> Any:
+    return json.loads(value, object_pairs_hook=_reject_duplicate_json_pairs)
+
+
+def _read_json(path: Path) -> dict[str, Any]:
     try:
-        value = json.loads(
-            path.read_text(encoding="utf-8"),
-            object_pairs_hook=reject_duplicates,
-        )
+        value = _loads_json_strict(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         raise ReviewError(f"cannot read {path}: {exc}") from exc
     if not isinstance(value, dict):
@@ -438,8 +442,8 @@ def _validate(
     except (OSError, subprocess.SubprocessError) as exc:
         raise ReviewError(f"Workspace validator failed to run: {exc}") from exc
     try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
+        payload = _loads_json_strict(completed.stdout)
+    except (ValueError, json.JSONDecodeError) as exc:
         raise ReviewError("Workspace validator returned invalid JSON") from exc
     if not isinstance(payload, dict):
         raise ReviewError("Workspace validator returned a non-object")
@@ -497,8 +501,8 @@ def _audit_portable_authority(
     except OSError as exc:
         raise ReviewError(f"portable authority helper failed to run: {exc}") from exc
     try:
-        payload = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
+        payload = _loads_json_strict(completed.stdout)
+    except (ValueError, json.JSONDecodeError) as exc:
         raise ReviewError("portable authority helper returned invalid JSON") from exc
     if not isinstance(payload, dict):
         raise ReviewError("portable authority helper returned a non-object")
@@ -753,7 +757,7 @@ def _runtime_authority_verdict(
         proof = _read_json(workspace / "run/provider-free-execution.json")
         deployed_path = workspace / "run/deployed-source-authority.json"
         deployed_bytes = deployed_path.read_bytes()
-        deployed = json.loads(deployed_bytes)
+        deployed = _loads_json_strict(deployed_bytes)
         sandbox = _read_json(workspace / "run/sandbox-enforcement.json")
         preview_sandbox = _read_json(
             workspace / "run/preview-sandbox-enforcement.json"
@@ -1348,7 +1352,7 @@ def _runtime_authority_verdict(
             for relative in preview_relatives:
                 preview_file = workspace / relative
                 preview_bytes = preview_file.read_bytes()
-                preview = json.loads(preview_bytes)
+                preview = _loads_json_strict(preview_bytes)
                 runtime = preview.get("browser_runtime") if isinstance(preview, dict) else None
                 adapter = runtime.get("adapter_profile") if isinstance(runtime, dict) else None
                 browser = runtime.get("browser_identity") if isinstance(runtime, dict) else None

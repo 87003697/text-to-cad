@@ -125,6 +125,12 @@ def _reject_duplicate_json_pairs(
             raise ValueError("duplicate JSON field")
         value[key] = item
     return value
+
+
+def _loads_json_strict(value: str | bytes) -> Any:
+    return json.loads(value, object_pairs_hook=_reject_duplicate_json_pairs)
+
+
 _PROVIDER_FREE_RUNNER_ERROR_MARKER = b"provider-free-runner:"
 _SECRET_HEADLINE = re.compile(
     r"(?i)(token|secret|password|api[_-]?key)\s*[=:]\s*\S+|[A-Za-z0-9_=-]{32,}"
@@ -1007,7 +1013,7 @@ def submit_provider_free(
     receipt_path = REPO_ROOT / deployment_authority.RECEIPT_PATH
     try:
         receipt_bytes = receipt_path.read_bytes()
-        deployment_receipt = json.loads(receipt_bytes)
+        deployment_receipt = _loads_json_strict(receipt_bytes)
         deployment_authority.verify_receipt(REPO_ROOT, deployment_receipt)
         deployment_authority.validate_runtime_identity(
             REPO_ROOT,
@@ -1016,6 +1022,7 @@ def submit_provider_free(
         )
     except (
         OSError,
+        ValueError,
         json.JSONDecodeError,
         deployment_authority.DeploymentAuthorityError,
     ) as exc:
@@ -1128,10 +1135,10 @@ def _provider_free_common_evidence_result(
     proof_path = exp_dir / PROVIDER_FREE_PROOF
     try:
         proof_bytes = proof_path.read_bytes()
-        proof = json.loads(proof_bytes)
+        proof = _loads_json_strict(proof_bytes)
     except FileNotFoundError:
         return None, "provider-free execution evidence missing"
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError):
         return None, "provider-free execution evidence invalid"
     try:
         sandbox_bytes = (exp_dir / "run/sandbox-enforcement.json").read_bytes()
@@ -1176,13 +1183,14 @@ def _provider_free_common_evidence_result(
         retained_receipt_bytes = (
             exp_dir / "run/deployed-source-authority.json"
         ).read_bytes()
-        retained_receipt = json.loads(retained_receipt_bytes)
+        retained_receipt = _loads_json_strict(retained_receipt_bytes)
         deployment_authority.verify_materialized(
             exp_dir / "run/deployed-source",
             retained_receipt,
         )
     except (
         OSError,
+        ValueError,
         json.JSONDecodeError,
         deployment_authority.DeploymentAuthorityError,
     ):
@@ -1212,10 +1220,10 @@ def _provider_free_common_evidence_result(
             "provider-free retained deployment authority conflicts with job"
         )
     try:
-        sandbox = json.loads(
+        sandbox = _loads_json_strict(
             (exp_dir / "run/sandbox-enforcement.json").read_text(encoding="utf-8")
         )
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError):
         return None, "provider-free sandbox enforcement evidence is invalid"
     argv = sandbox.get("argv") if isinstance(sandbox, dict) else None
     environment_names = (
@@ -1310,8 +1318,8 @@ def _provider_free_evidence_result(
         preview_sandbox_bytes = (
             exp_dir / PROVIDER_FREE_PREVIEW_SANDBOX_PATH
         ).read_bytes()
-        preview_sandbox = json.loads(preview_sandbox_bytes)
-    except (OSError, json.JSONDecodeError):
+        preview_sandbox = _loads_json_strict(preview_sandbox_bytes)
+    except (OSError, ValueError, json.JSONDecodeError):
         return None, "provider-free preview sandbox evidence is invalid"
     if not provider_free_preview_sandbox_receipt_allowed(
         preview_sandbox,
@@ -1330,8 +1338,8 @@ def _provider_free_evidence_result(
         diagnostic_bytes = (
             exp_dir / PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
         ).read_bytes()
-        diagnostic = json.loads(diagnostic_bytes)
-    except (OSError, json.JSONDecodeError):
+        diagnostic = _loads_json_strict(diagnostic_bytes)
+    except (OSError, ValueError, json.JSONDecodeError):
         return None, "provider-free browser exec diagnostic evidence is invalid"
     if (
         not provider_free_browser_exec_diagnostic_allowed(diagnostic)
@@ -1349,8 +1357,8 @@ def _provider_free_evidence_result(
         public_wrapper_bytes = (
             exp_dir / PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
         ).read_bytes()
-        public_wrapper = json.loads(public_wrapper_bytes)
-    except (OSError, json.JSONDecodeError):
+        public_wrapper = _loads_json_strict(public_wrapper_bytes)
+    except (OSError, ValueError, json.JSONDecodeError):
         return None, "provider-free preview public wrapper evidence is invalid"
     if (
         not provider_free_preview_public_wrapper_allowed(public_wrapper)
@@ -1404,10 +1412,7 @@ def _provider_free_failure_evidence_result(
     failure_path = exp_dir / PROVIDER_FREE_SCENARIO_FAILURE_PATH
     try:
         failure_bytes = failure_path.read_bytes()
-        failure = json.loads(
-            failure_bytes,
-            object_pairs_hook=_reject_duplicate_json_pairs,
-        )
+        failure = _loads_json_strict(failure_bytes)
     except (OSError, ValueError, json.JSONDecodeError):
         return None, None, None, "provider-free scenario failure evidence is invalid"
     failure_keys = set(failure) if isinstance(failure, dict) else set()
@@ -1460,10 +1465,7 @@ def _provider_free_failure_evidence_result(
     if operation == "preview_browser_identity":
         try:
             identity_diagnostic_bytes = identity_diagnostic_path.read_bytes()
-            identity_diagnostic = json.loads(
-                identity_diagnostic_bytes,
-                object_pairs_hook=_reject_duplicate_json_pairs,
-            )
+            identity_diagnostic = _loads_json_strict(identity_diagnostic_bytes)
         except (OSError, ValueError, json.JSONDecodeError):
             return (
                 None,
@@ -1516,8 +1518,8 @@ def _provider_free_failure_evidence_result(
         diagnostic_path = exp_dir / PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
         try:
             diagnostic_bytes = diagnostic_path.read_bytes()
-            diagnostic = json.loads(diagnostic_bytes)
-        except (OSError, json.JSONDecodeError):
+            diagnostic = _loads_json_strict(diagnostic_bytes)
+        except (OSError, ValueError, json.JSONDecodeError):
             return (
                 None,
                 None,
@@ -1550,8 +1552,8 @@ def _provider_free_failure_evidence_result(
         public_wrapper_path = exp_dir / PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
         try:
             public_wrapper_bytes = public_wrapper_path.read_bytes()
-            public_wrapper = json.loads(public_wrapper_bytes)
-        except (OSError, json.JSONDecodeError):
+            public_wrapper = _loads_json_strict(public_wrapper_bytes)
+        except (OSError, ValueError, json.JSONDecodeError):
             return (
                 None,
                 None,
@@ -1631,7 +1633,7 @@ def supervise_provider_free(
         receipt_path = REPO_ROOT / deployment_authority.RECEIPT_PATH
         try:
             receipt_bytes = receipt_path.read_bytes()
-            live_receipt = json.loads(receipt_bytes)
+            live_receipt = _loads_json_strict(receipt_bytes)
             deployment_authority.verify_receipt(REPO_ROOT, live_receipt)
             deployment_authority.validate_runtime_identity(
                 REPO_ROOT,
@@ -1640,6 +1642,7 @@ def supervise_provider_free(
             )
         except (
             OSError,
+            ValueError,
             json.JSONDecodeError,
             deployment_authority.DeploymentAuthorityError,
         ) as exc:
@@ -1972,10 +1975,10 @@ def _terminate_process_group(
 
 def _manifest_result(path: Path) -> tuple[int | None, str | None]:
     try:
-        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest = _loads_json_strict(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None, "artifact manifest missing"
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError):
         return None, "artifact manifest invalid"
     final_status = manifest.get("final_status")
     if isinstance(final_status, bool) or not isinstance(final_status, int):
@@ -1989,10 +1992,10 @@ def _provider_free_manifest_result(
     """Parse and validate one closed provider-free terminal manifest once."""
 
     try:
-        manifest = json.loads(path.read_bytes())
+        manifest = _loads_json_strict(path.read_bytes())
     except FileNotFoundError:
         return None, "artifact manifest missing"
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
         return None, "artifact manifest invalid"
     if (
         not isinstance(manifest, dict)

@@ -3087,6 +3087,95 @@ server.listen(0, host, () => {
         self.assertEqual("failed", state["state"])
         self.assertIn("browser exec diagnostic", state["failure_reason"])
 
+    def test_provider_free_supervisor_rejects_duplicate_browser_exec_field(
+        self,
+    ) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **_kwargs):
+            self.write_provider_free_terminal_evidence(handle, stripped=[])
+            exp_dir = self.repo_root / "outputs" / handle
+            path = exp_dir / protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
+            original = path.read_text(encoding="utf-8")
+            path.write_text(
+                original.replace(
+                    '"prelaunched_cdp":"passed"',
+                    '"prelaunched_cdp":"failed","prelaunched_cdp":"passed"',
+                ),
+                encoding="utf-8",
+            )
+            manifest_path = exp_dir / "artifact_manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            data = path.read_bytes()
+            entry = next(
+                item
+                for item in manifest["files"]
+                if item["path"]
+                == protocol.PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
+            )
+            entry.update(
+                size_bytes=len(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+            )
+            manifest_path.write_text(
+                json.dumps(manifest, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return 0, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        self.assertEqual("failed", state["state"])
+        self.assertIn(
+            "browser exec diagnostic evidence is invalid",
+            state["failure_reason"],
+        )
+
+    def test_provider_free_supervisor_rejects_duplicate_terminal_manifest_field(
+        self,
+    ) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **_kwargs):
+            self.write_provider_free_terminal_evidence(handle, stripped=[])
+            manifest_path = (
+                self.repo_root / "outputs" / handle / "artifact_manifest.json"
+            )
+            original = manifest_path.read_text(encoding="utf-8")
+            manifest_path.write_text(
+                original.replace(
+                    '"final_status": 0',
+                    '"final_status": 1, "final_status": 0',
+                ),
+                encoding="utf-8",
+            )
+            return 0, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        self.assertEqual("failed", state["state"])
+        self.assertIn("artifact manifest invalid", state["failure_reason"])
+
     def test_provider_free_supervisor_rejects_tampered_preview_public_wrapper(
         self,
     ) -> None:
