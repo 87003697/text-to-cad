@@ -57,10 +57,23 @@ PLAYWRIGHT_PACKAGE_REVISION_CHECKS = frozenset(
 PRIVATE_VERSION_EXECUTION_CHECKS = frozenset(
     {
         "sealed_memfd_creation_policy",
-        "private_version_probe_spawn",
+        "private_version_helper_spawn",
+        "private_version_handoff_setup",
+        "private_version_handoff_timeout",
+        "private_version_helper_exec",
+        "private_version_exec_replacement",
+        "private_version_probe_completion",
         "private_version_probe_timeout",
     }
 )
+
+
+def _private_version_execution_error(check: str) -> BrowserRuntimeError:
+    return BrowserRuntimeError(
+        "browser_identity",
+        browser_identity_phase="private_launch_version_execution",
+        browser_identity_check=check,
+    )
 _SourceIdentity = tuple[int, int, int, int]
 _PROFILE_RESOURCE = "prelaunched_cdp_playwright_1_60_v1.json"
 _FD_EXEC_HANDOFF = Path(__file__).with_name("fd_exec_handoff.py")
@@ -395,10 +408,8 @@ def _attest(executable: _PinnedExecutable, profile: dict[str, Any]) -> dict[str,
             raise
         if exc.browser_identity_phase is not None:
             raise
-        raise BrowserRuntimeError(
-            "browser_identity",
-            browser_identity_phase="private_launch_version_execution",
-            browser_identity_check="private_version_probe_spawn",
+        raise _private_version_execution_error(
+            "private_version_probe_completion"
         ) from exc
     except subprocess.TimeoutExpired as exc:
         raise BrowserRuntimeError(
@@ -407,10 +418,8 @@ def _attest(executable: _PinnedExecutable, profile: dict[str, Any]) -> dict[str,
             browser_identity_check="private_version_probe_timeout",
         ) from exc
     except (OSError, subprocess.SubprocessError) as exc:
-        raise BrowserRuntimeError(
-            "browser_identity",
-            browser_identity_phase="private_launch_version_execution",
-            browser_identity_check="private_version_probe_spawn",
+        raise _private_version_execution_error(
+            "private_version_probe_completion"
         ) from exc
     try:
         version = completed.stdout.decode("utf-8").strip()
@@ -1035,6 +1044,7 @@ class _PinnedExecutable:
         process: subprocess.Popen[bytes] | None = None
         cleanup_failed = False
         failure: BaseException | None = None
+        failure_check = "private_version_handoff_setup"
         try:
             read_fd, write_fd = os.pipe()
             os.set_inheritable(read_fd, False)
@@ -1057,7 +1067,9 @@ class _PinnedExecutable:
                 for name in sorted(_FD_EXEC_ENVIRONMENT)
                 if name in os.environ
             }
+            failure_check = "private_version_helper_spawn"
             process = subprocess.Popen(helper_argv, **options)
+            failure_check = "private_version_handoff_setup"
             parent_write_fd = write_fd
             write_fd = None
             try:
@@ -1068,19 +1080,26 @@ class _PinnedExecutable:
             if failure is None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    failure_check = "private_version_handoff_timeout"
                     raise subprocess.TimeoutExpired([_FD_EXEC_HANDOFF_SCHEMA], 0)
                 ready, _writable, _errors = select.select(
                     [read_fd], [], [], remaining
                 )
                 if not ready:
+                    failure_check = "private_version_handoff_timeout"
                     raise subprocess.TimeoutExpired(
                         [_FD_EXEC_HANDOFF_SCHEMA], remaining
                     )
                 status = os.read(read_fd, 1)
-                if status != b"":
+                if status == b"F":
+                    failure_check = "private_version_helper_exec"
                     raise OSError("fd-native browser execution failed")
+                if status != b"":
+                    raise OSError("fd-native handoff protocol failed")
                 if completion == "live":
                     self._wait_for_exec_replacement(process, deadline)
+                else:
+                    setattr(process, "_meshshot_version_handoff_eof", True)
         except BaseException as exc:
             failure = exc
         finally:
@@ -1102,6 +1121,11 @@ class _PinnedExecutable:
         if cleanup_failed:
             raise BrowserRuntimeError("browser_cleanup") from failure
         if failure is not None:
+            if (
+                completion == "version"
+                and isinstance(failure, (OSError, subprocess.SubprocessError))
+            ):
+                raise _private_version_execution_error(failure_check) from failure
             raise failure
         assert process is not None
         return process
@@ -1288,12 +1312,19 @@ class _PinnedExecutable:
                         stderr=stderr,
                     )
                 if process.returncode != 0 or not group_empty:
-                    raise BrowserRuntimeError(
-                        "browser_identity",
-                        browser_identity_phase=(
-                            "private_launch_version_execution"
-                        ),
-                        browser_identity_check="private_version_probe_spawn",
+                    if (
+                        getattr(
+                            process,
+                            "_meshshot_version_handoff_eof",
+                            False,
+                        )
+                        is True
+                    ):
+                        raise _private_version_execution_error(
+                            "private_version_exec_replacement"
+                        )
+                    raise _private_version_execution_error(
+                        "private_version_probe_completion"
                     )
                 raise BrowserRuntimeError(
                     "browser_identity",
@@ -1315,6 +1346,14 @@ class _PinnedExecutable:
                     and exc.operation == "browser_cleanup"
                 ):
                     raise BrowserRuntimeError("browser_cleanup") from exc
+                if isinstance(exc, subprocess.TimeoutExpired):
+                    raise _private_version_execution_error(
+                        "private_version_probe_timeout"
+                    ) from exc
+                if isinstance(exc, (OSError, subprocess.SubprocessError)):
+                    raise _private_version_execution_error(
+                        "private_version_probe_completion"
+                    ) from exc
                 raise
         options: dict[str, Any] = {
             "args": [os.fspath(self.launch_path), "--version"],

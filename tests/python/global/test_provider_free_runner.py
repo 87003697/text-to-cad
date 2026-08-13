@@ -620,7 +620,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                     write_diagnostic(substage="raw-linux-errno")
                 elif mutation == "duplicate":
                     diagnostic_path.write_text(
-                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/4\","
+                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/5\","
                         "\"operation\":\"preview_browser_identity\","
                         "\"substage\":\"live_running_image_identity\","
                         "\"substage\":\"connected_cdp_browser_version_identity\","
@@ -709,7 +709,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 elif mutation == "duplicate":
                     digest = hashlib.sha256(failure_path.read_bytes()).hexdigest()
                     diagnostic_path.write_text(
-                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/4\","
+                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/5\","
                         "\"operation\":\"preview_browser_identity\","
                         "\"substage\":\"private_snapshot_launch_image_identity\","
                         "\"phase\":\"playwright_package_revision_identity\","
@@ -962,7 +962,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                     )
                 elif mutation == "duplicate":
                     diagnostic_path.write_text(
-                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/4\","
+                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/5\","
                         "\"operation\":\"preview_browser_identity\","
                         "\"substage\":\"private_snapshot_launch_image_identity\","
                         "\"phase\":\"source_executable_identity\","

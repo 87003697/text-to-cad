@@ -28,17 +28,22 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 class JobProtocolTests(unittest.TestCase):
     def test_version_execution_diagnostic_requires_one_exact_check(self) -> None:
         self.assertEqual(
-            "cvm.provider-free-browser-identity-diagnostic/4",
+            "cvm.provider-free-browser-identity-diagnostic/5",
             protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
         )
         checks = (
-            "private_version_probe_spawn",
+            "private_version_helper_spawn",
+            "private_version_handoff_setup",
+            "private_version_handoff_timeout",
+            "private_version_helper_exec",
+            "private_version_exec_replacement",
+            "private_version_probe_completion",
             "private_version_probe_timeout",
             "sealed_memfd_creation_policy",
         )
         for check in checks:
             receipt = {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/4",
+                "schema": "cvm.provider-free-browser-identity-diagnostic/5",
                 "operation": "preview_browser_identity",
                 "substage": "private_snapshot_launch_image_identity",
                 "phase": "private_launch_version_execution",
@@ -75,7 +80,7 @@ class JobProtocolTests(unittest.TestCase):
 
     def test_browser_identity_diagnostic_is_closed_and_failure_bound(self) -> None:
         receipt = {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/4",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/5",
             "operation": "preview_browser_identity",
             "substage": "connected_cdp_browser_version_identity",
             "scenario_failure": {

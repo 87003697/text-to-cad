@@ -528,7 +528,7 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
         if (
             classification == "preview_browser_identity_failed"
             and isinstance(diagnostic, dict)
-            and diagnostic.get("schema") == "meshshot.browser-identity-failure/4"
+            and diagnostic.get("schema") == "meshshot.browser-identity-failure/5"
             and diagnostic.get("substage")
             in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
         ):

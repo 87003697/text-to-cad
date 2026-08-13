@@ -55,7 +55,7 @@ PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH = (
     "run/browser-identity-diagnostic.json"
 )
 PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA = (
-    "cvm.provider-free-browser-identity-diagnostic/4"
+    "cvm.provider-free-browser-identity-diagnostic/5"
 )
 PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES = frozenset(
     {
@@ -88,7 +88,12 @@ PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS = frozenset(
 PROVIDER_FREE_PRIVATE_VERSION_EXECUTION_CHECKS = frozenset(
     {
         "sealed_memfd_creation_policy",
-        "private_version_probe_spawn",
+        "private_version_helper_spawn",
+        "private_version_handoff_setup",
+        "private_version_handoff_timeout",
+        "private_version_helper_exec",
+        "private_version_exec_replacement",
+        "private_version_probe_completion",
         "private_version_probe_timeout",
     }
 )

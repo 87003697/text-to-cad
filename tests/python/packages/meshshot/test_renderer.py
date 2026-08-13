@@ -142,7 +142,7 @@ class ResidualRendererTests(unittest.TestCase):
             for failure, check in (
                 (
                     PermissionError(13, "private path and argv must stay closed"),
-                    "private_version_probe_spawn",
+                    "private_version_probe_completion",
                 ),
                 (
                     subprocess.TimeoutExpired(
@@ -2383,10 +2383,7 @@ class ResidualRendererTests(unittest.TestCase):
         pinned = object.__new__(_PinnedExecutable)
         pinned.fd = 91
         pinned.launch_path = Path("/private/image/chrome-headless-shell")
-        for cleanup_failed, expected in (
-            (False, subprocess.TimeoutExpired),
-            (True, BrowserRuntimeError),
-        ):
+        for cleanup_failed in (False, True):
             process = mock.MagicMock(spec=subprocess.Popen)
             process.communicate.side_effect = subprocess.TimeoutExpired(
                 ["closed-version-probe"], 5
@@ -2400,7 +2397,7 @@ class ResidualRendererTests(unittest.TestCase):
                     "_reap_failed_handoff",
                     return_value=cleanup_failed,
                 ) as reap,
-                self.assertRaises(expected) as raised,
+                self.assertRaises(BrowserRuntimeError) as raised,
             ):
                 pinned.run_version(timeout=5)
             reap.assert_called_once_with(
@@ -2411,6 +2408,11 @@ class ResidualRendererTests(unittest.TestCase):
             )
             if cleanup_failed:
                 self.assertEqual("browser_cleanup", raised.exception.operation)
+            else:
+                self.assertEqual(
+                    "private_version_probe_timeout",
+                    raised.exception.browser_identity_check,
+                )
 
     def test_linux_handoff_passes_only_closed_browser_environment(self) -> None:
         from meshshot import browser_runtime
@@ -2641,7 +2643,7 @@ class ResidualRendererTests(unittest.TestCase):
 
     def test_linux_version_probe_owns_process_group_for_descendant_cleanup(self) -> None:
         from meshshot import browser_runtime
-        from meshshot.browser_runtime import _PinnedExecutable
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
 
         pinned = object.__new__(_PinnedExecutable)
         pinned.fd = 91
@@ -2658,9 +2660,13 @@ class ResidualRendererTests(unittest.TestCase):
                 "_reap_failed_handoff",
                 return_value=False,
             ) as reap,
-            self.assertRaises(subprocess.TimeoutExpired),
+            self.assertRaises(BrowserRuntimeError) as raised,
         ):
             pinned.run_version(timeout=5)
+        self.assertEqual(
+            "private_version_probe_timeout",
+            raised.exception.browser_identity_check,
+        )
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
         reap.assert_called_once_with(
             process,
@@ -3036,6 +3042,10 @@ class ResidualRendererTests(unittest.TestCase):
         ):
             pinned.run_version(timeout=5)
         self.assertEqual("browser_identity", raised.exception.operation)
+        self.assertEqual(
+            "private_version_exec_replacement",
+            raised.exception.browser_identity_check,
+        )
         reap.assert_not_called()
 
     def test_linux_version_completion_deadline_and_group_proof_fail_closed(self) -> None:
@@ -3076,16 +3086,17 @@ class ResidualRendererTests(unittest.TestCase):
                     "_reap_failed_handoff",
                     return_value=False,
                 ) as reap,
-                self.assertRaises(
-                    subprocess.TimeoutExpired
-                    if boundary == "expired"
-                    else BrowserRuntimeError
-                ) as raised,
+                self.assertRaises(BrowserRuntimeError) as raised,
             ):
                 pinned.run_version(timeout=5)
             reap.assert_called_once()
             if boundary == "group-proof":
                 self.assertEqual("browser_cleanup", raised.exception.operation)
+            else:
+                self.assertEqual(
+                    "private_version_probe_timeout",
+                    raised.exception.browser_identity_check,
+                )
 
     def test_linux_version_communicate_failure_always_reaps_owned_group(self) -> None:
         from meshshot import browser_runtime
@@ -3116,7 +3127,7 @@ class ResidualRendererTests(unittest.TestCase):
                     ) as reap,
                     self.assertRaises(
                         BrowserRuntimeError
-                        if cleanup_failed
+                        if cleanup_failed or isinstance(failure, OSError)
                         else type(failure)
                     ) as raised,
                 ):
@@ -3133,6 +3144,11 @@ class ResidualRendererTests(unittest.TestCase):
                 )
                 if cleanup_failed:
                     self.assertEqual("browser_cleanup", raised.exception.operation)
+                elif isinstance(failure, OSError):
+                    self.assertEqual(
+                        "private_version_probe_completion",
+                        raised.exception.browser_identity_check,
+                    )
                 elif isinstance(failure, SystemExit):
                     self.assertEqual(7, raised.exception.code)
 
