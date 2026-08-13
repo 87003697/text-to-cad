@@ -3023,7 +3023,7 @@ class ResidualRendererTests(unittest.TestCase):
         ):
             pinned.run_version(timeout=5)
         self.assertEqual("browser_identity", raised.exception.operation)
-        reap.assert_called_once()
+        reap.assert_not_called()
 
     def test_linux_version_completion_deadline_and_group_proof_fail_closed(self) -> None:
         from meshshot import browser_runtime
