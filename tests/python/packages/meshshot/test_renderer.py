@@ -1064,6 +1064,50 @@ class ResidualRendererTests(unittest.TestCase):
             _verify_listener_owner(43210, 49152, timeout=5)
         self.assertEqual("browser_identity", raised.exception.operation)
 
+    def test_macos_listener_rejects_ambiguous_record_grammar(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _verify_listener_owner
+
+        cases = (
+            (
+                "missing-file-field",
+                b"p101\ng43210\nn127.0.0.1:49152\nTST=LISTEN\n",
+            ),
+            (
+                "duplicate-name",
+                b"p101\ng43210\nf3\nn*:49152\nn127.0.0.1:49152\nTST=LISTEN\n",
+            ),
+            (
+                "duplicate-group",
+                b"p101\ng99999\ng43210\nf3\nn127.0.0.1:49152\nTST=LISTEN\n",
+            ),
+            (
+                "name-before-file",
+                b"p101\ng43210\nn127.0.0.1:49152\nf3\nTST=LISTEN\n",
+            ),
+            (
+                "file-before-group",
+                b"p101\nf3\ng43210\nn127.0.0.1:49152\nTST=LISTEN\n",
+            ),
+            (
+                "state-before-name",
+                b"p101\ng43210\nf3\nTST=LISTEN\nn127.0.0.1:49152\n",
+            ),
+        )
+        for label, output in cases:
+            with self.subTest(label=label):
+                with (
+                    mock.patch("meshshot.browser_runtime.sys.platform", "darwin"),
+                    mock.patch(
+                        "meshshot.browser_runtime.subprocess.run",
+                        return_value=subprocess.CompletedProcess(
+                            args=[], returncode=0, stdout=output, stderr=b""
+                        ),
+                    ),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    _verify_listener_owner(43210, 49152, timeout=5)
+                self.assertEqual("browser_identity", raised.exception.operation)
+
     def test_linux_listener_rejects_non_loopback_addresses(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, _verify_listener_owner
 
