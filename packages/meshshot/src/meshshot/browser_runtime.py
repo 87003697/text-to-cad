@@ -54,6 +54,8 @@ PLAYWRIGHT_PACKAGE_REVISION_CHECKS = frozenset(
 )
 _SourceIdentity = tuple[int, int, int, int]
 _PROFILE_RESOURCE = "prelaunched_cdp_playwright_1_60_v1.json"
+MESHSHOT_EXECUTABLE_ROOT = Path("/meshshot-exec")
+_MESHSHOT_EXECUTABLE_ROOT_ENV = "MESHSHOT_EXECUTABLE_ROOT"
 ADAPTER_PROFILE_SHA256 = "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
 _DEVTOOLS_PATH = re.compile(r"^/devtools/browser/[0-9A-Za-z._-]+$")
 _VERSION_OUTPUT = re.compile(
@@ -403,7 +405,37 @@ def _attest(executable: _PinnedExecutable, profile: dict[str, Any]) -> dict[str,
 
 
 def _private_directory(prefix: str) -> Path:
-    root = Path(tempfile.gettempdir())
+    configured_root = os.environ.get(_MESHSHOT_EXECUTABLE_ROOT_ENV)
+    if configured_root is not None:
+        if (
+            not sys.platform.startswith("linux")
+            or Path(configured_root) != MESHSHOT_EXECUTABLE_ROOT
+        ):
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            )
+        root = MESHSHOT_EXECUTABLE_ROOT
+        try:
+            root_info = root.lstat()
+        except OSError as exc:
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            ) from exc
+        if (
+            not root.is_absolute()
+            or stat.S_ISLNK(root_info.st_mode)
+            or not stat.S_ISDIR(root_info.st_mode)
+            or root_info.st_uid != os.geteuid()
+            or stat.S_IMODE(root_info.st_mode) & 0o022
+        ):
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            )
+    else:
+        root = Path(tempfile.gettempdir())
     for _attempt in range(16):
         path = root / f"{prefix}{secrets.token_hex(16)}"
         try:

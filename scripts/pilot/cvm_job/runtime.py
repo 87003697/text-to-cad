@@ -28,6 +28,7 @@ from .protocol import (
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
     PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS,
+    PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
     PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
@@ -522,12 +523,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/14",
+    "id": "issue15.provider-free-bounded/15",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/14",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/15",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/14",
+    "schema": "cvm.provider-free-linux-sandbox/15",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -538,6 +539,12 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
     "die_with_parent": True,
     "new_session": True,
     "temporary_filesystem": "/tmp",
+    "private_browser_image_filesystem": {
+        "root": PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
+        "mount": "repository-owned-exec-permitted-tmpfs",
+        "scope": "single-preview-runtime",
+        "cleanup": "python-runtime-terminal-all-exit-classes",
+    },
     "repository_mount": "read-only",
     "output_mount": "read-write-exact-experiment",
     "browser_cache_mount": "read-only-job-scoped-attested-revision",
@@ -666,6 +673,7 @@ PROVIDER_FREE_REQUIRED_ENVIRONMENT = {
     "HOME": "/home/provider-free",
     "PATH": "/workspace/repo/.venv/bin:/usr/local/bin:/usr/bin:/bin",
     "PLAYWRIGHT_BROWSERS_PATH": PROVIDER_FREE_STAGED_BROWSER_CACHE,
+    "MESHSHOT_EXECUTABLE_ROOT": PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 PROVIDER_FREE_SYSTEM_RO_PATHS = tuple(
@@ -743,6 +751,8 @@ def provider_free_sandbox_argv(
         "/proc",
         "--tmpfs",
         "/tmp",
+        "--tmpfs",
+        PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
         "--dir",
         "/workspace",
         "--ro-bind",
@@ -1266,9 +1276,16 @@ def _provider_free_common_evidence_result(
             environment_names
         )
         or not set(environment_names).issubset(
-            {*PROVIDER_FREE_ENV_ALLOWLIST, "PLAYWRIGHT_BROWSERS_PATH"}
+            {
+                *PROVIDER_FREE_ENV_ALLOWLIST,
+                "PLAYWRIGHT_BROWSERS_PATH",
+                "MESHSHOT_EXECUTABLE_ROOT",
+            }
         )
-        or "PLAYWRIGHT_BROWSERS_PATH" not in environment_names
+        or not {
+            "PLAYWRIGHT_BROWSERS_PATH",
+            "MESHSHOT_EXECUTABLE_ROOT",
+        }.issubset(environment_names)
         or sandbox.get("required_environment")
         != PROVIDER_FREE_REQUIRED_ENVIRONMENT
     ):

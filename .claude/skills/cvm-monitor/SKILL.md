@@ -111,7 +111,9 @@ environment values, PID, endpoint, argv, and arbitrary operations are never
 projected by the monitor. A diagnostic operation is rejected unless its `/5`
 receipt has the corresponding exact outcome tuple and manifest binding.
 Historical Node-launch outcomes, operations on another stage, or values outside
-these lists are rejected by sandbox profile `/14`.
+these lists are rejected by sandbox profile `/15`. The `/15` sandbox also
+binds the Python-owned private browser image to the isolated executable tmpfs
+at `/meshshot-exec`; arbitrary temporary roots remain forbidden.
 
 Successful preview evidence also carries the closed
 `meshshot.prelaunched-cdp-runtime/1` receipt. Its frozen adapter-profile digest

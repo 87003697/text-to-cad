@@ -63,7 +63,7 @@ _SANDBOX_SETUP_CAPABILITIES = (
     "CAP_SETFCAP",
 )
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/14",
+    "schema": "cvm.provider-free-linux-sandbox/15",
     "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -1153,14 +1153,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/14",
+                "id": "issue15.provider-free-bounded/15",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/14",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/15",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/14",
+                "resource_profile": "issue15.provider-free-bounded/15",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False

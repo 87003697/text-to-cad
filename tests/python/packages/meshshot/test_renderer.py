@@ -83,7 +83,9 @@ class ResidualRendererTests(unittest.TestCase):
             root = Path(directory)
             executable_root = root / "meshshot-exec"
             executable_root.mkdir(mode=0o755)
-            executable = root / "chrome-headless-shell"
+            source_root = root / "browser-source"
+            source_root.mkdir()
+            executable = source_root / "chrome-headless-shell"
             executable.write_text(
                 "#!/bin/sh\nprintf 'Google Chrome for Testing 148.0.7778.96\\n'\n",
                 encoding="utf-8",
@@ -177,6 +179,63 @@ class ResidualRendererTests(unittest.TestCase):
                 )
                 self.assertNotIn("private", str(raised.exception))
                 self.assertNotIn("stderr", str(raised.exception))
+
+    def test_linux_private_snapshot_rejects_unowned_or_arbitrary_roots(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            expected_root = root / "meshshot-exec"
+            expected_root.mkdir(mode=0o755)
+            cases = (
+                (root / "arbitrary", expected_root),
+                (expected_root, root / "missing"),
+            )
+            for configured, actual in cases:
+                with (
+                    self.subTest(configured=configured, actual=actual),
+                    mock.patch.object(
+                        browser_runtime,
+                        "MESHSHOT_EXECUTABLE_ROOT",
+                        actual,
+                    ),
+                    mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                    mock.patch.dict(
+                        os.environ,
+                        {"MESHSHOT_EXECUTABLE_ROOT": os.fspath(configured)},
+                    ),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    _PinnedExecutable(executable)
+                self.assertEqual("browser_identity", raised.exception.operation)
+                self.assertEqual(
+                    "private_tree_materialization",
+                    raised.exception.browser_identity_phase,
+                )
+
+            os.chmod(expected_root, 0o777)
+            with (
+                mock.patch.object(
+                    browser_runtime,
+                    "MESHSHOT_EXECUTABLE_ROOT",
+                    expected_root,
+                ),
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch.dict(
+                    os.environ,
+                    {"MESHSHOT_EXECUTABLE_ROOT": os.fspath(expected_root)},
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable(executable)
+            self.assertEqual(
+                "private_tree_materialization",
+                raised.exception.browser_identity_phase,
+            )
 
     def test_default_executable_closes_final_candidate_disappearance_and_swap(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, default_executable

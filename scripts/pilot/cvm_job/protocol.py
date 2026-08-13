@@ -107,6 +107,7 @@ PROVIDER_FREE_PREVIEW_PUBLIC_FAILURE_OPERATIONS = frozenset(
     }
 )
 PROVIDER_FREE_STAGED_BROWSER_CACHE = "/tmp/provider-free-playwright"
+PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT = "/meshshot-exec"
 PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE = (
     f"{PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested/"
     "chrome-headless-shell-linux64/chrome-headless-shell"
@@ -177,6 +178,9 @@ def provider_free_preview_sandbox_argv(group: str, exp: str) -> list[str]:
         "--setenv",
         "MESHSHOT_BROWSER_EXECUTABLE",
         PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
+        "--setenv",
+        "MESHSHOT_EXECUTABLE_ROOT",
+        PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
         "--chdir",
         sandbox_root,
         "--",

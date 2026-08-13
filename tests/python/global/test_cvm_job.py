@@ -777,6 +777,7 @@ class CvmJobTests(unittest.TestCase):
                             "LANG",
                             "PATH",
                             "PLAYWRIGHT_BROWSERS_PATH",
+                            "MESHSHOT_EXECUTABLE_ROOT",
                             "PYTHONDONTWRITEBYTECODE",
                             "TZ",
                         ],
@@ -1075,9 +1076,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/14",
+                "id": "issue15.provider-free-bounded/15",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/14",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/15",
             },
         )
         self.assertEqual(
@@ -1203,7 +1204,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/14",
+            "issue15.provider-free-bounded/15",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],
@@ -1812,10 +1813,12 @@ class CvmJobTests(unittest.TestCase):
                 for value in command
             ]
             command[0] = sys.executable
+            emulated_environment = dict(kwargs["env"])
+            emulated_environment.pop("MESHSHOT_EXECUTABLE_ROOT", None)
             return real_run(
                 command,
                 cwd=self.repo_root,
-                env=kwargs["env"],
+                env=emulated_environment,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -2145,6 +2148,7 @@ server.listen(0, host, () => {
             emulated_environment["MESHSHOT_BROWSER_EXECUTABLE"] = os.fspath(
                 host_executable
             )
+            emulated_environment.pop("MESHSHOT_EXECUTABLE_ROOT", None)
             captured["emulated_environment"] = emulated_environment
             completed = real_run(
                 command,
