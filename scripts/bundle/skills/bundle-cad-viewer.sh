@@ -97,9 +97,26 @@ require_command() {
   fi
 }
 
+# The COMMITTED lockfile decides, not what happens to be installed on this machine. The
+# repository commits viewer/package-lock.json, so preferring pnpm merely because it is on
+# PATH made the release build depend on the builder's laptop: pnpm and npm lay out
+# node_modules differently (which is why resolve_esbuild_bin has to search .pnpm at all),
+# so the same source revision could be bundled against a different tree. The committed npm
+# lockfile is checked first on purpose: a stray local `pnpm install` leaves an untracked
+# pnpm-lock.yaml behind, and that must not be able to flip a release build either. An explicit
+# CAD_VIEWER_PACKAGE_MANAGER still wins -- someone deliberately switching should not have to
+# delete a lockfile to do it.
 resolve_viewer_package_manager() {
   if [ -n "$VIEWER_PACKAGE_MANAGER" ]; then
     echo "$VIEWER_PACKAGE_MANAGER"
+    return
+  fi
+  if [ -f "$VIEWER_DIR/package-lock.json" ]; then
+    echo "npm"
+    return
+  fi
+  if [ -f "$VIEWER_DIR/pnpm-lock.yaml" ]; then
+    echo "pnpm"
     return
   fi
   if command -v pnpm >/dev/null 2>&1; then
