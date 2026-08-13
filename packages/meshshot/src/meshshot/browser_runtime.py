@@ -730,6 +730,9 @@ class _PinnedExecutable:
         )
         descriptor: int | None = None
         source: int | None = None
+        result: int | None = None
+        failure: BaseException | None = None
+        cleanup_failed = False
         try:
             create_memfd = getattr(os, "memfd_create", None)
             if not callable(create_memfd):
@@ -766,14 +769,26 @@ class _PinnedExecutable:
             actual = fcntl.fcntl(descriptor, get_seals)
             if actual & required != required:
                 raise OSError("snapshot sealing failed")
-            return descriptor
-        except BaseException:
-            if descriptor is not None:
-                os.close(descriptor)
-            raise
+            result = descriptor
+        except BaseException as exc:
+            failure = exc
         finally:
             if source is not None:
-                os.close(source)
+                try:
+                    os.close(source)
+                except OSError:
+                    cleanup_failed = True
+            if (failure is not None or cleanup_failed) and descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    cleanup_failed = True
+        if cleanup_failed:
+            raise BrowserRuntimeError("browser_cleanup") from failure
+        if failure is not None:
+            raise failure
+        assert result is not None
+        return result
 
     @staticmethod
     def _sha256_fd(descriptor: int) -> str:
