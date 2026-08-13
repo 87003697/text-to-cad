@@ -1076,7 +1076,6 @@ class _PinnedExecutable:
                 os.close(parent_write_fd)
             except OSError as exc:
                 failure = exc
-                cleanup_failed = True
             if failure is None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -1288,12 +1287,14 @@ class _PinnedExecutable:
                             "private_launch_version_output_identity"
                         ),
                     ) from exc
-                valid = (
-                    process.returncode == 0
-                    and stderr == b""
-                    and _VERSION_OUTPUT.fullmatch(version) is not None
+                authenticated_completion = (
+                    _VERSION_OUTPUT.fullmatch(version) is not None
                 )
-                authenticated_completion = valid
+                valid = (
+                    authenticated_completion
+                    and process.returncode == 0
+                    and stderr == b""
+                )
                 try:
                     group_empty = _wait_group_empty(
                         process.pid,
@@ -1314,6 +1315,10 @@ class _PinnedExecutable:
                         returncode=process.returncode,
                         stdout=stdout,
                         stderr=stderr,
+                    )
+                if authenticated_completion:
+                    raise _private_version_execution_error(
+                        "private_version_probe_completion"
                     )
                 if process.returncode != 0 or not group_empty:
                     if (

@@ -2744,7 +2744,7 @@ class ResidualRendererTests(unittest.TestCase):
             cleanup_kill_timeout=browser_runtime._FD_EXEC_CLEANUP_KILL_SECONDS,
         )
 
-    def test_linux_handoff_descriptor_close_failure_is_terminal_cleanup(self) -> None:
+    def test_linux_handoff_descriptor_close_failure_preserves_boundary(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
 
@@ -2790,8 +2790,16 @@ class ResidualRendererTests(unittest.TestCase):
                     ["ignored", "--headless"],
                     start_new_session=True,
                     close_fds=True,
+                    _handoff_completion="version",
                 )
-            self.assertEqual("browser_cleanup", raised.exception.operation)
+            if failed_fd == 101:
+                self.assertEqual("browser_cleanup", raised.exception.operation)
+            else:
+                self.assertEqual("browser_identity", raised.exception.operation)
+                self.assertEqual(
+                    "private_version_handoff_setup",
+                    raised.exception.browser_identity_check,
+                )
             self.assertEqual({101, 102}, closed)
             reap.assert_called_once()
 
