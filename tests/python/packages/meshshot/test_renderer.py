@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import statistics
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -32,6 +33,89 @@ def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometr
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_public_render_prelaunches_attested_browser_and_attaches_over_loopback_cdp(
+        self,
+    ) -> None:
+        page = mock.MagicMock()
+        context = mock.MagicMock()
+        browser = mock.MagicMock()
+        playwright = mock.MagicMock()
+        context.new_page.return_value = page
+        browser.new_context.return_value = context
+        playwright.chromium.connect_over_cdp.return_value = browser
+        playwright.chromium.launch.side_effect = AssertionError(
+            "Playwright must not own the production browser process"
+        )
+
+        png = BytesIO()
+        Image.new("RGB", (504, 1008), (0, 0, 0)).save(png, format="PNG")
+        encoded = base64.b64encode(png.getvalue()).decode("ascii")
+        page.evaluate.return_value = {
+            "ok": True,
+            "pngDataUrl": f"data:image/png;base64,{encoded}",
+            "views": [{} for _ in range(8)],
+        }
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = playwright
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.poll.return_value = None
+        process.wait.return_value = 0
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            executable.write_bytes(b"attested-browser")
+            executable.chmod(0o755)
+            profile = root / "runtime-profile"
+
+            def prelaunch(*_args: object, **_kwargs: object) -> object:
+                profile.mkdir()
+                (profile / "DevToolsActivePort").write_text(
+                    "49152\n/devtools/browser/01234567-89ab-cdef-0123-456789abcdef\n",
+                    encoding="utf-8",
+                )
+                return process
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(executable)},
+                ),
+                mock.patch(
+                    "playwright.sync_api.sync_playwright", sync_playwright
+                ),
+                mock.patch("subprocess.Popen", side_effect=prelaunch),
+                mock.patch("tempfile.mkdtemp", return_value=os.fspath(profile)),
+                mock.patch("os.getpgid", return_value=43210),
+                mock.patch("os.killpg") as killpg,
+            ):
+                rendered = render_residual_preview(
+                    _geometry(triangle),
+                    _geometry(triangle),
+                    variant="step",
+                )
+
+        playwright.chromium.launch.assert_not_called()
+        playwright.chromium.connect_over_cdp.assert_called_once_with(
+            "http://127.0.0.1:49152",
+            timeout=mock.ANY,
+            is_local=True,
+        )
+        self.assertEqual("meshshot.prelaunched-cdp-runtime/1", rendered.browser_runtime["schema"])
+        self.assertEqual("passed", rendered.browser_runtime["result"])
+        self.assertEqual(
+            {"name", "sha256"},
+            set(rendered.browser_runtime["adapter_profile"]),
+        )
+        self.assertEqual(
+            {"playwright", "browser", "revision", "version", "sha256"},
+            set(rendered.browser_runtime["browser_identity"]),
+        )
+        self.assertFalse(profile.exists())
+        self.assertIn(mock.call(43210, __import__("signal").SIGTERM), killpg.mock_calls)
+
     def test_real_playwright_launches_explicit_attested_executable(self) -> None:
         """Exercise the production executable_path at the real launch seam."""
 
