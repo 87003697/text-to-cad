@@ -76,6 +76,72 @@ def _attested_connected_browser() -> mock.MagicMock:
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_provider_profile_attaches_without_nested_browser_owner_spawn(
+        self,
+    ) -> None:
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+        page = mock.MagicMock()
+        context = mock.MagicMock()
+        browser = mock.MagicMock()
+        playwright = mock.MagicMock()
+        context.new_page.return_value = page
+        browser.new_context.return_value = context
+        png = BytesIO()
+        Image.new("RGB", (504, 1008), (0, 0, 0)).save(png, format="PNG")
+        page.evaluate.return_value = {
+            "ok": True,
+            "pngDataUrl": "data:image/png;base64,"
+            + base64.b64encode(png.getvalue()).decode("ascii"),
+            "views": [
+                {"name": name}
+                for name in ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
+            ],
+        }
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = playwright
+        attachment = mock.MagicMock()
+        attachment.evidence = {
+            "schema": "meshshot.prelaunched-cdp-runtime/1",
+            "adapter_profile": {"name": "profile", "sha256": "a" * 64},
+            "browser_identity": {
+                "playwright": "1.60.0",
+                "browser": "chromium-headless-shell",
+                "revision": "1223",
+                "version": "Google Chrome for Testing 148.0.7778.96",
+                "sha256": "b" * 64,
+            },
+            "result": "passed",
+        }
+        attachment.open.return_value.__enter__.return_value = browser
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "MESHSHOT_BROWSER_RUNTIME_MODE": (
+                        "provider-free-supervised-cdp/1"
+                    ),
+                    "MESHSHOT_BROWSER_EXECUTABLE": "/fixed/browser",
+                },
+                clear=False,
+            ),
+            mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+            mock.patch(
+                "meshshot.renderer.SupervisedCdpAttachmentRuntime",
+                return_value=attachment,
+                create=True,
+            ) as supervised,
+            mock.patch("meshshot.renderer.PrelaunchedCdpRuntime") as owning,
+        ):
+            result = render_residual_preview(
+                _geometry(triangle),
+                _geometry(triangle),
+                variant="step",
+            )
+
+        self.assertEqual("step", result.variant)
+        supervised.assert_called_once_with(Path("/fixed/browser"))
+        owning.assert_not_called()
+
     def test_linux_private_snapshot_executes_from_fixed_sandbox_root(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import _PinnedExecutable

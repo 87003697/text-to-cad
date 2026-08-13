@@ -463,6 +463,11 @@ class CvmJobTests(unittest.TestCase):
             ["--tmpfs", "/meshshot-exec"],
             argv[executable_tmpfs : executable_tmpfs + 2],
         )
+        supervisor_tmpfs = argv.index("--tmpfs", executable_tmpfs + 1)
+        self.assertEqual(
+            ["--tmpfs", "/meshshot-supervisor"],
+            argv[supervisor_tmpfs : supervisor_tmpfs + 2],
+        )
         self.assertEqual(
             "/meshshot-exec",
             runtime.PROVIDER_FREE_REQUIRED_ENVIRONMENT[
