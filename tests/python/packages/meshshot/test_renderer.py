@@ -2308,6 +2308,10 @@ class ResidualRendererTests(unittest.TestCase):
         with (
             mock.patch.object(browser_runtime.sys, "platform", "linux"),
             mock.patch("meshshot.browser_runtime.subprocess.Popen") as popen,
+            mock.patch(
+                "meshshot.browser_runtime._wait_group_empty",
+                return_value=True,
+            ),
             mock.patch.object(
                 pinned,
                 "_wait_for_exec_replacement",
@@ -2343,15 +2347,22 @@ class ResidualRendererTests(unittest.TestCase):
         with (
             mock.patch.object(browser_runtime.sys, "platform", "linux"),
             mock.patch("meshshot.browser_runtime.subprocess.Popen") as popen,
+            mock.patch(
+                "meshshot.browser_runtime._wait_group_empty",
+                return_value=True,
+            ),
             mock.patch.object(
                 pinned,
                 "_wait_for_exec_replacement",
             ) as wait_for_exec,
         ):
-            popen.return_value.communicate.return_value = (b"version\n", b"")
+            popen.return_value.communicate.return_value = (
+                b"Google Chrome for Testing 148.0.7778.96\n",
+                b"",
+            )
             popen.return_value.returncode = 0
             pinned.run_version(timeout=5)
-        wait_for_exec.assert_called_once()
+        wait_for_exec.assert_not_called()
         self.assertEqual(browser_runtime.sys.executable, popen.call_args.kwargs["executable"])
         self.assertIn(91, popen.call_args.kwargs["pass_fds"])
         self.assertTrue(popen.call_args.kwargs["close_fds"])
@@ -2932,12 +2943,14 @@ class ResidualRendererTests(unittest.TestCase):
         verify.assert_not_called()
 
     def test_linux_running_image_digest_obeys_one_absolute_deadline(self) -> None:
+        from meshshot import browser_runtime
         from meshshot.browser_runtime import _PinnedExecutable
 
         pinned = object.__new__(_PinnedExecutable)
         pinned.fd = 73
         identity = mock.Mock(st_dev=1, st_ino=2)
         with (
+            mock.patch.object(browser_runtime.sys, "platform", "linux"),
             mock.patch("meshshot.browser_runtime.os.fstat", return_value=identity),
             mock.patch("meshshot.browser_runtime.os.readlink", return_value="sealed"),
             mock.patch("meshshot.browser_runtime.os.open", return_value=74),
@@ -2950,7 +2963,7 @@ class ResidualRendererTests(unittest.TestCase):
             mock.patch("meshshot.browser_runtime.os.close"),
             mock.patch(
                 "meshshot.browser_runtime.time.monotonic",
-                side_effect=(1.0, 1.0, 2.0),
+                side_effect=(1.0, 1.0, 1.0, 1.0, 1.0, 2.0),
             ),
             self.assertRaises(subprocess.TimeoutExpired),
         ):
@@ -2981,10 +2994,7 @@ class ResidualRendererTests(unittest.TestCase):
             mock.patch("meshshot.browser_runtime.os.read", return_value=b""),
             mock.patch("meshshot.browser_runtime._wait_group_empty", return_value=True),
         ):
-            completed = pinned.run_version(
-                timeout=5,
-                expected_version="148.0.7778.96",
-            )
+            completed = pinned.run_version(timeout=5)
         self.assertEqual(0, completed.returncode)
 
     def test_linux_fast_helper_death_cannot_authenticate_version(self) -> None:
@@ -3007,14 +3017,65 @@ class ResidualRendererTests(unittest.TestCase):
             mock.patch("meshshot.browser_runtime.os.set_inheritable"),
             mock.patch("meshshot.browser_runtime.os.close"),
             mock.patch("meshshot.browser_runtime.os.read", return_value=b""),
+            mock.patch("meshshot.browser_runtime._wait_group_empty", return_value=True),
             mock.patch.object(pinned, "_reap_failed_handoff", return_value=False) as reap,
             self.assertRaises(BrowserRuntimeError) as raised,
         ):
-            pinned.run_version(timeout=5, expected_version="148.0.7778.96")
+            pinned.run_version(timeout=5)
         self.assertEqual("browser_identity", raised.exception.operation)
         reap.assert_called_once()
 
+    def test_linux_version_completion_deadline_and_group_proof_fail_closed(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        for boundary in ("expired", "group-proof"):
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.fd = 73
+            pinned.launch_path = Path("/private/image/chrome-headless-shell")
+            process = mock.MagicMock(spec=subprocess.Popen)
+            process.pid = 43210
+            process.returncode = 0
+            process.communicate.return_value = (
+                b"Google Chrome for Testing 148.0.7778.96\n",
+                b"",
+            )
+            monotonic = (1.0, 1.0, 6.0) if boundary == "expired" else 1.0
+            with (
+                self.subTest(boundary=boundary),
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch.object(pinned, "popen", return_value=process),
+                mock.patch(
+                    "meshshot.browser_runtime.time.monotonic",
+                    side_effect=monotonic if isinstance(monotonic, tuple) else None,
+                    return_value=monotonic if isinstance(monotonic, float) else None,
+                ),
+                mock.patch(
+                    "meshshot.browser_runtime._wait_group_empty",
+                    side_effect=(
+                        OSError("closed group proof")
+                        if boundary == "group-proof"
+                        else None
+                    ),
+                ),
+                mock.patch.object(
+                    pinned,
+                    "_reap_failed_handoff",
+                    return_value=False,
+                ) as reap,
+                self.assertRaises(
+                    subprocess.TimeoutExpired
+                    if boundary == "expired"
+                    else BrowserRuntimeError
+                ) as raised,
+            ):
+                pinned.run_version(timeout=5)
+            reap.assert_called_once()
+            if boundary == "group-proof":
+                self.assertEqual("browser_cleanup", raised.exception.operation)
+
     def test_linux_running_image_descriptor_close_failure_is_cleanup(self) -> None:
+        from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
 
         pinned = object.__new__(_PinnedExecutable)
@@ -3028,10 +3089,15 @@ class ResidualRendererTests(unittest.TestCase):
                 raise OSError("closed descriptor cleanup")
 
         with (
+            mock.patch.object(browser_runtime.sys, "platform", "linux"),
             mock.patch("meshshot.browser_runtime.os.fstat", return_value=identity),
             mock.patch("meshshot.browser_runtime.os.readlink", return_value="sealed"),
             mock.patch("meshshot.browser_runtime.os.open", return_value=74),
-            mock.patch.object(_PinnedExecutable, "_sha256_fd", return_value="a" * 64),
+            mock.patch.object(
+                _PinnedExecutable,
+                "_sha256_fd_until",
+                return_value="a" * 64,
+            ),
             mock.patch("meshshot.browser_runtime.os.close", side_effect=close),
             self.assertRaises(BrowserRuntimeError) as raised,
         ):
