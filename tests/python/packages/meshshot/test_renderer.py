@@ -1108,6 +1108,70 @@ class ResidualRendererTests(unittest.TestCase):
                     _verify_listener_owner(43210, 49152, timeout=5)
                 self.assertEqual("browser_identity", raised.exception.operation)
 
+    def test_macos_listener_query_exposes_wildcard_colistener(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _verify_listener_owner
+
+        exact = (
+            b"p101\ng43210\nf3\nPTCP\nn127.0.0.1:49152\n"
+            b"TST=LISTEN\nTQR=0\nTQS=0\n"
+        )
+        mixed = exact + (
+            b"p202\ng99999\nf4\nPTCP\nn*:49152\n"
+            b"TST=LISTEN\nTQR=0\nTQS=0\n"
+        )
+
+        def lsof(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            output = exact if "-iTCP@127.0.0.1:49152" in argv else mixed
+            return subprocess.CompletedProcess(
+                args=argv,
+                returncode=0,
+                stdout=output,
+                stderr=b"",
+            )
+
+        with (
+            mock.patch("meshshot.browser_runtime.sys.platform", "darwin"),
+            mock.patch(
+                "meshshot.browser_runtime.subprocess.run",
+                side_effect=lsof,
+            ),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            _verify_listener_owner(43210, 49152, timeout=5)
+        self.assertEqual("browser_identity", raised.exception.operation)
+
+    def test_macos_listener_rejects_noncanonical_auxiliary_grammar(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _verify_listener_owner
+
+        prefix = b"p101\ng43210\nf3\n"
+        name = b"n127.0.0.1:49152\n"
+        cases = (
+            ("invalid-fd", b"p101\ng43210\nfabc\nPTCP\n" + name + b"TST=LISTEN\nTQR=0\nTQS=0\n"),
+            ("missing-protocol", prefix + name + b"TST=LISTEN\nTQR=0\nTQS=0\n"),
+            ("duplicate-protocol", prefix + b"PTCP\nPTCP\n" + name + b"TST=LISTEN\nTQR=0\nTQS=0\n"),
+            ("wrong-protocol", prefix + b"PUDP\n" + name + b"TST=LISTEN\nTQR=0\nTQS=0\n"),
+            ("protocol-after-name", prefix + name + b"PTCP\nTST=LISTEN\nTQR=0\nTQS=0\n"),
+            ("missing-queue", prefix + b"PTCP\n" + name + b"TST=LISTEN\n"),
+            ("duplicate-receive-queue", prefix + b"PTCP\n" + name + b"TST=LISTEN\nTQR=0\nTQR=0\nTQS=0\n"),
+            ("queue-order", prefix + b"PTCP\n" + name + b"TST=LISTEN\nTQS=0\nTQR=0\n"),
+            ("empty-queue", prefix + b"PTCP\n" + name + b"TST=LISTEN\nTQR=\nTQS=0\n"),
+            ("nonnumeric-queue", prefix + b"PTCP\n" + name + b"TST=LISTEN\nTQR=zero\nTQS=0\n"),
+        )
+        for label, output in cases:
+            with self.subTest(label=label):
+                with (
+                    mock.patch("meshshot.browser_runtime.sys.platform", "darwin"),
+                    mock.patch(
+                        "meshshot.browser_runtime.subprocess.run",
+                        return_value=subprocess.CompletedProcess(
+                            args=[], returncode=0, stdout=output, stderr=b""
+                        ),
+                    ),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    _verify_listener_owner(43210, 49152, timeout=5)
+                self.assertEqual("browser_identity", raised.exception.operation)
+
     def test_linux_listener_rejects_non_loopback_addresses(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, _verify_listener_owner
 
