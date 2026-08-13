@@ -139,12 +139,18 @@ class ResidualRendererTests(unittest.TestCase):
             executable = root / "chrome-headless-shell"
             executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
             executable.chmod(0o755)
-            for failure in (
-                PermissionError(13, "private path and argv must stay closed"),
-                subprocess.TimeoutExpired(
-                    ["/private/raw-browser", "--version"],
-                    15,
-                    stderr=b"private stderr",
+            for failure, check in (
+                (
+                    PermissionError(13, "private path and argv must stay closed"),
+                    "private_version_probe_spawn",
+                ),
+                (
+                    subprocess.TimeoutExpired(
+                        ["/private/raw-browser", "--version"],
+                        15,
+                        stderr=b"private stderr",
+                    ),
+                    "private_version_probe_timeout",
                 ),
             ):
                 with (
@@ -184,6 +190,7 @@ class ResidualRendererTests(unittest.TestCase):
                     "private_launch_version_execution",
                     raised.exception.browser_identity_phase,
                 )
+                self.assertEqual(check, raised.exception.browser_identity_check)
                 self.assertNotIn("private", str(raised.exception))
                 self.assertNotIn("stderr", str(raised.exception))
 

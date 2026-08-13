@@ -26,6 +26,53 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 
 
 class JobProtocolTests(unittest.TestCase):
+    def test_version_execution_diagnostic_requires_one_exact_check(self) -> None:
+        self.assertEqual(
+            "cvm.provider-free-browser-identity-diagnostic/4",
+            protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+        )
+        checks = (
+            "private_version_probe_spawn",
+            "private_version_probe_timeout",
+            "sealed_memfd_creation_policy",
+        )
+        for check in checks:
+            receipt = {
+                "schema": "cvm.provider-free-browser-identity-diagnostic/4",
+                "operation": "preview_browser_identity",
+                "substage": "private_snapshot_launch_image_identity",
+                "phase": "private_launch_version_execution",
+                "check": check,
+                "scenario_failure": {
+                    "path": "run/scenario-failure.json",
+                    "sha256": "9" * 64,
+                },
+            }
+            with self.subTest(check=check):
+                self.assertTrue(
+                    protocol.provider_free_browser_identity_diagnostic_allowed(
+                        receipt,
+                        expected_failure_sha256="9" * 64,
+                        expected_substage="private_snapshot_launch_image_identity",
+                        expected_phase="private_launch_version_execution",
+                        expected_check=check,
+                    )
+                )
+                for mutation in (
+                    {key: value for key, value in receipt.items() if key != "check"},
+                    {**receipt, "check": "raw-exec-error"},
+                    {**receipt, "schema": "cvm.provider-free-browser-identity-diagnostic/3"},
+                ):
+                    self.assertFalse(
+                        protocol.provider_free_browser_identity_diagnostic_allowed(
+                            mutation,
+                            expected_failure_sha256="9" * 64,
+                            expected_substage="private_snapshot_launch_image_identity",
+                            expected_phase="private_launch_version_execution",
+                            expected_check=check,
+                        )
+                    )
+
     def test_browser_identity_diagnostic_is_closed_and_failure_bound(self) -> None:
         receipt = {
             "schema": "cvm.provider-free-browser-identity-diagnostic/3",
