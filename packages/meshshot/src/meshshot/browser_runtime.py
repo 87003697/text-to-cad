@@ -605,6 +605,10 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
                 if name is not None or state is not None:
                     records.append((group, name, state))
                 group, name, state = None, None, None
+            elif line.startswith("f"):
+                if name is not None or state is not None:
+                    records.append((group, name, state))
+                name, state = None, None
             elif line.startswith("g"):
                 try:
                     group = int(line[1:])
@@ -631,12 +635,19 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
     if sys.platform.startswith("linux"):
         socket_inodes: set[str] = set()
         try:
-            for table in (Path("/proc/net/tcp"), Path("/proc/net/tcp6")):
+            for table, exact_address in (
+                (Path("/proc/net/tcp"), "0100007F"),
+                (Path("/proc/net/tcp6"), None),
+            ):
                 for line in table.read_text(encoding="utf-8").splitlines()[1:]:
                     fields = line.split()
                     local_address, state = fields[1], fields[3]
-                    if int(local_address.rsplit(":", 1)[1], 16) == port and state == "0A":
-                        socket_inodes.add(fields[9])
+                    address, port_hex = local_address.rsplit(":", 1)
+                    if int(port_hex, 16) != port or state != "0A":
+                        continue
+                    if exact_address is None or address != exact_address:
+                        raise BrowserRuntimeError("browser_identity")
+                    socket_inodes.add(fields[9])
             owners: dict[str, set[int]] = {
                 inode: set() for inode in socket_inodes
             }
