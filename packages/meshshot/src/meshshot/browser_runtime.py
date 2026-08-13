@@ -1256,6 +1256,15 @@ class _PinnedExecutable:
                 ):
                     raise BrowserRuntimeError("browser_cleanup") from exc
                 raise
+            except BaseException as exc:
+                if self._reap_failed_handoff(
+                    process,
+                    process_group=True,
+                    cleanup_term_timeout=_FD_EXEC_CLEANUP_TERM_SECONDS,
+                    cleanup_kill_timeout=_FD_EXEC_CLEANUP_KILL_SECONDS,
+                ):
+                    raise BrowserRuntimeError("browser_cleanup") from exc
+                raise
             if time.monotonic() >= deadline:
                 expired = subprocess.TimeoutExpired(
                     [_FD_EXEC_HANDOFF_SCHEMA], timeout
