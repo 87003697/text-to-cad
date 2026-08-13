@@ -23,7 +23,7 @@
 # Extra third-party requirements mirrored from skill-local runtime files.
 # - skills/cad/requirements.txt
 ezdxf
-playwright
+playwright==1.60.0
 
 # Extra third-party requirements used by repo tests.
 networkx

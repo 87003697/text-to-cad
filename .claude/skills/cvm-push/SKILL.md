@@ -25,6 +25,21 @@ description: >-
 3. 等待同一个 terminal session 或 background task 终止，按 § Long wait 执行。
 4. 从 receipt 汇报结果（见 § Handoff）。
 
+push 的远端 preflight 会在 staging/transfer 前闭合验证 CVM 项目 `.venv` 中的 Python
+distribution 是精确 `playwright==1.60.0`，其 package manifest 中恰有一个
+`chromium-headless-shell` revision `1223` entry，并冻结现有 rev-1223 executable 的
+SHA-256；部署后再验证同一 identity 且 executable 摘要未变化。任何不匹配以 exit 7
+停止，不能继续 submit。
+
+修复这个单一依赖是独立的 CVM 写操作，必须另行取得明确授权。获授权后只运行无参数
+入口 `scripts/pilot/cvm-sync-playwright-runtime.sh`；它没有 package/version/command
+输入，只会在 CVM 项目 `.venv` 中同步固定 `playwright==1.60.0`（`--no-deps`），不会
+执行 `playwright install`、清理 outputs 或修改 job/repo state。不要改用 raw SSH pip
+命令。stdout 只有一个 `cvm-playwright-runtime-sync.receipt/1`，公开字段仅包含 schema、
+固定 requested identity、before/after 闭合 match 状态和 exit status；远端原始输出、
+路径、环境与凭据不得进入 receipt。若现有 rev-1223 executable 身份无法先证明，sync
+会在 pip 前 fail closed。
+
 脚本会把当前 checkout 复制到隔离 staging，在 staging 内物化全部 production skill
 runtime，再把实体 bundle 上传到 CVM；不会修改 source checkout 的开发 symlink 或共享
 依赖缓存。稳定 shell 入口只负责调用 `cvm_push.py`；Python workflow 按 `Preflight →
@@ -88,6 +103,8 @@ blocking wait；terminal completion 会提前 hand back。精确的更早 deadli
   sync；staging → CVM 仍排除完整 `docs/`，因此它们不是 deployed-source 或 runtime
   authority。
 - Push 只部署代码；不创建、查询、等待、重试或清理 job。
+- Push 和固定 runtime sync 都不会安装浏览器；rev-1223 cache 缺失或变化必须停下，
+  不能用 `playwright install` 自动补齐或覆盖。
 
 ## 边界条件
 
@@ -151,8 +168,10 @@ compare SHA-256 for `scripts/pilot/cvm_job/`, `toys4k-pilot.sh`, and
 - exit 5（target-ABI meshscope build/import/identity 失败、远端 runtime 缺失、Viewer
   source/bundle/deployed receipt 不一致或 attested hash 不同）→ 不得 submit pilot；比较 staging 与 CVM 的精确 runtime 文件，并检查 CVM
   C++ toolchain 与项目 Python ABI
-- exit 6（Playwright browser revision 缺失）→ 在 CVM host 安装脚本报告的 revision，
-  随后重新 push
+- exit 7（Python Playwright version/package manifest 不匹配，或 rev-1223 executable
+  缺失/变化）→ 不得 submit；若且仅若已有浏览器 executable 身份可证明，另行授权运行
+  固定 `scripts/pilot/cvm-sync-playwright-runtime.sh` 后重试 push。浏览器缺失/变化不能
+  由此命令修复，也不能运行 `playwright install`
 - rsync code 23 且包含 `could not make way for new regular file: .git` →
   检查 `.cvmignore` 同时包含 `.git/` 和 `.git`
 - 其他 → 汇报 receipt `phase` / `error`；信息不足时再贴过滤后的 log 尾 20 行

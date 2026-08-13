@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Iterator, Mapping, Sequence
 
+from scripts.pilot import cvm_playwright_runtime
 from scripts.pilot import deployment_authority
 
 
@@ -189,6 +190,7 @@ class RemotePreflight:
     """Remote facts collected before any expensive local staging work."""
 
     free_gb: int
+    browser_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -497,6 +499,7 @@ class CvmPush:
         self.remote_head: str | None = None
         self.deployed_source_authority: Mapping[str, object] | None = None
         self.viewer_deployment: Mapping[str, object] | None = None
+        self.remote_preflight: RemotePreflight | None = None
 
     def _log(self, message: str, *, stderr: bool = False) -> None:
         self.output.human(message, stderr=stderr)
@@ -553,7 +556,31 @@ class CvmPush:
                 f"WARN: CVM disk low: {free_gb}G free (threshold 10G).",
                 stderr=True,
             )
-        return RemotePreflight(free_gb=free_gb)
+        identity = self._remote_playwright_identity()
+        if not identity.matched:
+            raise PushError("CVM Playwright runtime identity mismatch", 7)
+        return RemotePreflight(
+            free_gb=free_gb,
+            browser_sha256=identity.browser_sha256,
+        )
+
+    def _remote_playwright_identity(
+        self,
+    ) -> cvm_playwright_runtime.PlaywrightRuntimeIdentity:
+        result = self.runner.remote(
+            cvm_playwright_runtime.probe_command(),
+            cwd=self.repo_root,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise PushError("CVM Playwright identity verification failed", 7)
+        try:
+            return cvm_playwright_runtime.parse_identity(result.stdout)
+        except ValueError as exc:
+            raise PushError(
+                "CVM Playwright identity verification failed",
+                7,
+            ) from exc
 
     def inspect_source(self) -> SourceProvenance:
         """Record deployment identity independently from remote Git HEAD."""
@@ -998,22 +1025,23 @@ class CvmPush:
         browsers = payload.get("browsers") if isinstance(payload, dict) else None
         if not isinstance(browsers, list):
             raise PushError("Playwright browser manifest has no browsers list", 4)
-        revision: str | None = None
-        for entry in browsers:
-            if (
-                isinstance(entry, dict)
-                and entry.get("name") == "chromium-headless-shell"
-            ):
-                value = str(entry.get("revision", ""))
-                if value.isdigit():
-                    revision = value
-                break
-        if revision is None:
+        headless_entries = [
+            entry
+            for entry in browsers
+            if isinstance(entry, dict)
+            and entry.get("name") == cvm_playwright_runtime.HEADLESS_SHELL_NAME
+        ]
+        if (
+            len(headless_entries) != 1
+            or headless_entries[0].get("revision")
+            != cvm_playwright_runtime.HEADLESS_SHELL_REVISION
+        ):
             raise PushError(
-                "Playwright browser manifest has no numeric "
-                "chromium-headless-shell revision",
+                "Playwright browser manifest must have exactly one "
+                "chromium-headless-shell revision 1223 entry",
                 4,
             )
+        revision = cvm_playwright_runtime.HEADLESS_SHELL_REVISION
         return RuntimeAttestation(
             hashes=hashes,
             chromium_revision=revision,
@@ -1310,20 +1338,22 @@ class CvmPush:
                 5,
             )
 
-        revision = attestation.chromium_revision
-        browser = (
-            f'$HOME/.cache/ms-playwright/chromium_headless_shell-{revision}/'
-            "chrome-headless-shell-linux64/chrome-headless-shell"
-        )
-        browser_result = self.runner.remote(
-            f'test -x "{browser}"',
-            cwd=self.repo_root,
-            check=False,
-        )
-        if browser_result.returncode != 0:
+        remote_preflight = self.remote_preflight
+        if (
+            remote_preflight is None
+            or remote_preflight.browser_sha256 is None
+        ):
             raise PushError(
-                f"CVM Playwright browser revision {revision} is missing.",
-                6,
+                "CVM Playwright browser baseline identity is unavailable",
+                7,
+            )
+        identity_after = self._remote_playwright_identity()
+        if not identity_after.matched:
+            raise PushError("CVM Playwright runtime identity mismatch", 7)
+        if identity_after.browser_sha256 != remote_preflight.browser_sha256:
+            raise PushError(
+                "CVM Playwright browser executable identity changed",
+                7,
             )
         identity = attestation.viewer_identity
         if not isinstance(identity, Mapping):
@@ -1370,7 +1400,7 @@ class CvmPush:
 
         self._enter_phase("preflight")
         self.preflight_local()
-        self.preflight_remote()
+        self.remote_preflight = self.preflight_remote()
         self._log(f"Log: {self.log_path}")
 
         self.source = self.inspect_source()

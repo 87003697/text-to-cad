@@ -5,6 +5,7 @@ import io
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -49,6 +50,122 @@ def identity(*, matched: bool, digest: str | None = "a" * 64) -> str:
 
 
 class PlaywrightRuntimeSyncTests(unittest.TestCase):
+    def test_fixed_probe_closes_version_and_manifest_adversarial_matrix(self) -> None:
+        module = load_module()
+        cases = (
+            (
+                "1.60.0",
+                [{"name": "chromium-headless-shell", "revision": "1223"}],
+                True,
+            ),
+            (
+                "1.59.0",
+                [{"name": "chromium-headless-shell", "revision": "1223"}],
+                False,
+            ),
+            (
+                "1.60.0",
+                [{"name": "chromium-headless-shell", "revision": "1224"}],
+                False,
+            ),
+            (
+                "1.60.0",
+                [
+                    {"name": "chromium-headless-shell", "revision": "1223"},
+                    {"name": "chromium-headless-shell", "revision": "1223"},
+                ],
+                False,
+            ),
+        )
+        for version, browsers, expected in cases:
+            with self.subTest(version=version, browsers=browsers):
+                with tempfile.TemporaryDirectory() as root_text:
+                    root = Path(root_text)
+                    site = root / "site"
+                    package = site / "playwright/driver/package"
+                    package.mkdir(parents=True)
+                    (site / "playwright/__init__.py").write_text(
+                        "", encoding="utf-8"
+                    )
+                    (package / "browsers.json").write_text(
+                        json.dumps({"browsers": browsers}), encoding="utf-8"
+                    )
+                    metadata = site / f"playwright-{version}.dist-info/METADATA"
+                    metadata.parent.mkdir(parents=True)
+                    metadata.write_text(
+                        f"Metadata-Version: 2.1\nName: playwright\nVersion: {version}\n",
+                        encoding="utf-8",
+                    )
+                    browser = (
+                        root
+                        / "home/.cache/ms-playwright/chromium_headless_shell-1223/"
+                        "chrome-headless-shell-linux64/chrome-headless-shell"
+                    )
+                    browser.parent.mkdir(parents=True)
+                    browser.write_bytes(b"frozen browser")
+                    browser.chmod(0o755)
+                    environment = {
+                        "HOME": str(root / "home"),
+                        "PYTHONPATH": str(site),
+                        "PATH": "/usr/bin:/bin",
+                    }
+
+                    result = subprocess.run(
+                        [sys.executable, "-c", module.runtime._probe_source()],
+                        cwd=root,
+                        env=environment,
+                        check=False,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                receipt = json.loads(result.stdout)
+                self.assertEqual(receipt["matched"], expected)
+                self.assertEqual(len(receipt["browser_sha256"]), 64)
+                self.assertNotIn(str(root), result.stdout)
+
+    def test_fixed_probe_closes_invalid_utf8_manifest(self) -> None:
+        module = load_module()
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            site = root / "site"
+            package = site / "playwright/driver/package"
+            package.mkdir(parents=True)
+            (site / "playwright/__init__.py").write_text("", encoding="utf-8")
+            (package / "browsers.json").write_bytes(b"\xff")
+            metadata = site / "playwright-1.60.0.dist-info/METADATA"
+            metadata.parent.mkdir(parents=True)
+            metadata.write_text(
+                "Metadata-Version: 2.1\nName: playwright\nVersion: 1.60.0\n",
+                encoding="utf-8",
+            )
+            browser = (
+                root
+                / "home/.cache/ms-playwright/chromium_headless_shell-1223/"
+                "chrome-headless-shell-linux64/chrome-headless-shell"
+            )
+            browser.parent.mkdir(parents=True)
+            browser.write_bytes(b"frozen browser")
+            browser.chmod(0o755)
+            result = subprocess.run(
+                [sys.executable, "-c", module.runtime._probe_source()],
+                cwd=root,
+                env={
+                    "HOME": str(root / "home"),
+                    "PYTHONPATH": str(site),
+                    "PATH": "/usr/bin:/bin",
+                },
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(json.loads(result.stdout)["matched"])
+
     def test_wrapper_is_noninteractive_and_rejects_all_inputs(self) -> None:
         wrapper = REPO_ROOT / "scripts/pilot/cvm-sync-playwright-runtime.sh"
         result = subprocess.run(
@@ -96,6 +213,7 @@ class PlaywrightRuntimeSyncTests(unittest.TestCase):
         self.assertIn("./.venv/bin/python -m pip install", install)
         self.assertIn("--no-input", install)
         self.assertIn("--no-deps", install)
+        self.assertIn("--force-reinstall", install)
         self.assertIn("playwright==1.60.0", install)
         self.assertNotIn("playwright install", install)
         self.assertNotIn("outputs", install)
@@ -116,11 +234,40 @@ class PlaywrightRuntimeSyncTests(unittest.TestCase):
 
     def test_failure_matrix_is_closed_and_never_emits_remote_output(self) -> None:
         cases = (
+            ([(23, "private ssh output")], "not_checked", "not_run", 1),
             ([(0, "not-json")], "not_checked", "not_run", 1),
-            ([(0, identity(matched=False, digest=None))], "mismatched", "not_run", 1),
-            ([(0, identity(matched=False)), (19, "raw pip secret")], "mismatched", "not_run", 1),
-            ([(0, identity(matched=False)), (0, ""), (0, identity(matched=False))], "mismatched", "mismatched", 1),
-            ([(0, identity(matched=False)), (0, ""), (0, identity(matched=True, digest="b" * 64))], "mismatched", "mismatched", 1),
+            (
+                [(0, identity(matched=False, digest=None))],
+                "mismatched",
+                "not_run",
+                1,
+            ),
+            (
+                [(0, identity(matched=False)), (19, "raw pip secret")],
+                "mismatched",
+                "not_run",
+                1,
+            ),
+            (
+                [
+                    (0, identity(matched=False)),
+                    (0, ""),
+                    (0, identity(matched=False)),
+                ],
+                "mismatched",
+                "mismatched",
+                1,
+            ),
+            (
+                [
+                    (0, identity(matched=False)),
+                    (0, ""),
+                    (0, identity(matched=True, digest="b" * 64)),
+                ],
+                "mismatched",
+                "mismatched",
+                1,
+            ),
         )
         module = load_module()
         for responses, before, after, expected_status in cases:

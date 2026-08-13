@@ -9,7 +9,7 @@ description = "Versioned browser renderer for canonical mesh residual previews."
 requires-python = ">=3.11"
 dependencies = [
   "Pillow",
-  "playwright",
+  "playwright==1.60.0",
 ]
 
 [tool.setuptools.packages.find]

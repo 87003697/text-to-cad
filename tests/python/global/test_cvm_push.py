@@ -153,7 +153,7 @@ def create_runtime(stage: Path) -> cvm_push.RuntimeAttestation:
                         "browsers": [
                             {
                                 "name": "chromium-headless-shell",
-                                "revision": "1234",
+                                "revision": "1223",
                             }
                         ]
                     }
@@ -546,10 +546,15 @@ class StageTests(unittest.TestCase):
         meshshot = (REPO_ROOT / "packages/meshshot/pyproject.toml").read_text(
             encoding="utf-8"
         )
+        cad_requirements = (REPO_ROOT / "skills/cad/requirements.txt").read_text(
+            encoding="utf-8"
+        ).splitlines()
 
         self.assertIn("playwright==1.60.0", requirements)
-        self.assertNotIn("\nplaywright\n", f"\n{requirements}\n")
+        self.assertNotIn("playwright", requirements)
         self.assertIn('"playwright==1.60.0"', meshshot)
+        self.assertIn("playwright==1.60.0", cad_requirements)
+        self.assertNotIn("playwright", cad_requirements)
 
     def test_stage_requires_exactly_one_frozen_headless_shell_entry(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -593,6 +598,11 @@ class StageTests(unittest.TestCase):
         self.assertIn("models/simple/rectangular_clamp_block.py", contract)
         self.assertIn("models/simple/simple_model_library.py", contract)
         self.assertIn("deployed-source authority", contract)
+        self.assertIn("scripts/pilot/cvm-sync-playwright-runtime.sh", contract)
+        self.assertIn("cvm-playwright-runtime-sync.receipt/1", contract)
+        self.assertIn("playwright==1.60.0", contract)
+        self.assertIn("revision `1223`", contract)
+        self.assertIn("不要改用 raw SSH pip", contract)
 
     def test_runtime_attestation_hashes_all_provider_free_executed_code(self) -> None:
         for relative in (
@@ -1001,7 +1011,7 @@ class StageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root_text:
             stage = Path(root_text)
             attestation = create_runtime(stage)
-            self.assertEqual(attestation.chromium_revision, "1234")
+            self.assertEqual(attestation.chromium_revision, "1223")
             self.assertEqual(
                 "cad-viewer.runtime-identity/1",
                 attestation.viewer_identity["schema"],
@@ -1051,6 +1061,34 @@ class StageTests(unittest.TestCase):
 
 
 class TransferAndVerifyTests(unittest.TestCase):
+    def test_remote_preflight_captures_exact_playwright_browser_baseline(
+        self,
+    ) -> None:
+        runner = FakeRunner()
+        runner.respond("df --output", "20\n")
+        runner.respond(
+            "cvm.playwright-runtime-identity/1",
+            json.dumps(
+                {
+                    "schema": "cvm.playwright-runtime-identity/1",
+                    "matched": True,
+                    "browser_sha256": "a" * 64,
+                }
+            ),
+        )
+        workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})
+
+        preflight = workflow.preflight_remote()
+
+        self.assertEqual(preflight.free_gb, 20)
+        self.assertEqual(preflight.browser_sha256, "a" * 64)
+        probe = runner.remote_commands[1]
+        self.assertIn("./.venv/bin/python -I -c", probe)
+        self.assertIn("playwright", probe)
+        self.assertIn("1.60.0", probe)
+        self.assertIn("chromium-headless-shell", probe)
+        self.assertIn("1223", probe)
+
     def test_remote_preflight_closes_on_python_playwright_mismatch(self) -> None:
         runner = FakeRunner()
         runner.respond("df --output", "20\n")
@@ -1496,11 +1534,24 @@ class TransferAndVerifyTests(unittest.TestCase):
                 for relative, digest in attestation.hashes.items()
             )
             runner.respond("sha256sum", remote_output)
-            runner.respond("chromium_headless_shell-1234", "")
+            runner.respond(
+                "cvm.playwright-runtime-identity/1",
+                json.dumps(
+                    {
+                        "schema": "cvm.playwright-runtime-identity/1",
+                        "matched": True,
+                        "browser_sha256": "a" * 64,
+                    }
+                ),
+            )
             workflow = cvm_push.CvmPush(
                 runner,
                 repo_root=stage,
                 environ={},
+            )
+            workflow.remote_preflight = cvm_push.RemotePreflight(
+                free_gb=20,
+                browser_sha256="a" * 64,
             )
 
             receipt = workflow.verify_remote(attestation)
@@ -1524,7 +1575,10 @@ class TransferAndVerifyTests(unittest.TestCase):
                 self.assertIn(f"test -f {relative}", command)
             self.assertIn("meshscope.voxblame._native", command)
             self.assertIn("meshscope.voxblame.native-sat/1", command)
-            self.assertIn("chromium_headless_shell-1234", runner.remote_commands[1])
+            self.assertIn(
+                "cvm.playwright-runtime-identity/1",
+                runner.remote_commands[1],
+            )
 
             bad = dict(attestation.hashes)
             first = next(iter(bad))
