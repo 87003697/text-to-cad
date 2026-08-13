@@ -71,7 +71,7 @@ class PackageVersionIsOneNumberPerFileTypeTest(unittest.TestCase):
         source = (ROOT / "viewer/server_py/artifact.py").read_text()
         for constant in (
             "STEP_PACKAGE_VERSION",
-            "DRAWING_PACKAGE_SCHEMA_VERSION",
+            "DXF_PACKAGE_SCHEMA_VERSION",
             "IMPLICIT_PACKAGE_SCHEMA_VERSION",
         ):
             self.assertIn(

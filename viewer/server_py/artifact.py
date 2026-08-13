@@ -35,7 +35,7 @@ from pathlib import Path
 # would rebuild forever. cadgen._internal.source_hash is stdlib-only, so this costs the
 # server process nothing.
 from cadgen._internal.drawing_package import (
-    DRAWING_PACKAGE_SCHEMA_VERSION,
+    DXF_PACKAGE_SCHEMA_VERSION,
     drawing_preview_bake_settings,
 )
 from cadgen._internal.implicit_package import (
@@ -131,7 +131,7 @@ _STEP_PACKAGE = {
 _DRAWING_PACKAGE = {
     "descriptor": scanner.DRAWING_DESCRIPTOR_NAME,
     "package_kind": scanner.DRAWING_PACKAGE_KIND,
-    "schema_version": DRAWING_PACKAGE_SCHEMA_VERSION,
+    "schema_version": DXF_PACKAGE_SCHEMA_VERSION,
     "source_digest_field": "sourceDigest",
     # No dedicated "the drawing descriptor recorded no digest" code exists and none is
     # minted: a package that cannot be shown to be current IS stale, and stale_dxf_artifact

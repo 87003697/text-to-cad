@@ -8,7 +8,7 @@ from cadgen._internal import drawing_package, generation
 from cadgen._internal.component_package import PACKAGE_KIND
 from cadgen._internal.drawing_package import (
     DRAWING_PACKAGE_KIND,
-    DRAWING_PACKAGE_SCHEMA_VERSION,
+    DXF_PACKAGE_SCHEMA_VERSION,
     drawing_package_current,
     drawing_preview_bake_settings,
 )
@@ -179,7 +179,7 @@ class DrawingPackageCurrencyGateTests(unittest.TestCase):
         closure = closure_for_files(script, [], base=root)
         descriptor = {
             "kind": DRAWING_PACKAGE_KIND,
-            "packageSchemaVersion": DRAWING_PACKAGE_SCHEMA_VERSION,
+            "packageSchemaVersion": DXF_PACKAGE_SCHEMA_VERSION,
             "sourceKind": "python",
             "sourcePath": script.name,
             "dxf": "drawing.dxf",
@@ -209,7 +209,7 @@ class DrawingPackageCurrencyGateTests(unittest.TestCase):
     def test_wrong_schema_version_is_not_current(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             script = self._write(
-                Path(temp), packageSchemaVersion=DRAWING_PACKAGE_SCHEMA_VERSION + 1
+                Path(temp), packageSchemaVersion=DXF_PACKAGE_SCHEMA_VERSION + 1
             )
             self.assertFalse(drawing_package_current(script))
 
