@@ -1043,8 +1043,121 @@ class ResidualRendererTests(unittest.TestCase):
                 self.assertEqual(
                     "playwright_package_revision_identity",
                     raised.exception.browser_identity_phase,
-                )
+                    )
                 self.assertEqual(check, raised.exception.browser_identity_check)
+
+    def test_public_render_closes_package_revision_parse_boundaries(self) -> None:
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = mock.MagicMock()
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            original_read_text = Path.read_text
+
+            def manifest_text(value: str):
+                def read_text(path: Path, *args: object, **kwargs: object) -> str:
+                    if path.name == "browsers.json":
+                        return value
+                    return original_read_text(path, *args, **kwargs)
+
+                return read_text
+
+            def manifest_decode_error(
+                path: Path,
+                *args: object,
+                **kwargs: object,
+            ) -> str:
+                if path.name == "browsers.json":
+                    raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+                return original_read_text(path, *args, **kwargs)
+
+            cases = (
+                (
+                    "browser_manifest_entry",
+                    (
+                        mock.patch(
+                            "meshshot.browser_runtime.metadata.version",
+                            return_value="1.60.0",
+                        ),
+                        mock.patch.object(
+                            Path,
+                            "read_text",
+                            manifest_text('{"browsers":[42]}'),
+                        ),
+                    ),
+                ),
+                (
+                    "playwright_package_manifest",
+                    (
+                        mock.patch(
+                            "meshshot.browser_runtime.metadata.version",
+                            return_value="1.60.0",
+                        ),
+                        mock.patch.object(Path, "read_text", manifest_decode_error),
+                    ),
+                ),
+                (
+                    "python_distribution_metadata",
+                    (
+                        mock.patch(
+                            "meshshot.browser_runtime.metadata.version",
+                            side_effect=UnicodeDecodeError(
+                                "utf-8", b"\xff", 0, 1, "invalid"
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            observed: list[tuple[str | None, str | None]] = []
+            for check, patchers in cases:
+                with self.subTest(check=check), ExitStack() as stack:
+                    stack.enter_context(
+                        mock.patch.dict(
+                            os.environ,
+                            {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(executable)},
+                        )
+                    )
+                    stack.enter_context(
+                        mock.patch(
+                            "playwright.sync_api.sync_playwright",
+                            sync_playwright,
+                        )
+                    )
+                    for patcher in patchers:
+                        stack.enter_context(patcher)
+                    with self.assertRaises(MeshshotError) as raised:
+                        render_residual_preview(
+                            _geometry(triangle),
+                            _geometry(triangle),
+                            variant="step",
+                        )
+                    observed.append(
+                        (
+                            raised.exception.phase,
+                            raised.exception.browser_identity_check,
+                        )
+                    )
+            self.assertEqual(
+                [
+                    ("browser_identity", "browser_manifest_entry"),
+                    ("browser_identity", "playwright_package_manifest"),
+                    ("browser_identity", "python_distribution_metadata"),
+                ],
+                observed,
+            )
+
+    def test_package_revision_identity_does_not_swallow_control_flow(self) -> None:
+        from meshshot.browser_runtime import _playwright_revision
+
+        for exception in (KeyboardInterrupt(), SystemExit(23)):
+            with self.subTest(exception=type(exception).__name__), mock.patch.object(
+                Path,
+                "read_text",
+                side_effect=exception,
+            ), self.assertRaises(type(exception)):
+                _playwright_revision("chromium-headless-shell")
 
     def test_public_render_selects_exact_private_snapshot_failure_phase(self) -> None:
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
