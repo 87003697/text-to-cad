@@ -597,27 +597,69 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
         except (OSError, subprocess.SubprocessError, UnicodeDecodeError) as exc:
             raise BrowserRuntimeError("browser_identity") from exc
         records: list[tuple[int | None, str | None, str | None]] = []
+        process_active = False
+        process_has_file = False
         group: int | None = None
+        file_active = False
         name: str | None = None
         state: str | None = None
-        for line in [*lines, "pEND"]:
+
+        def finish_file() -> None:
+            nonlocal file_active, name, state, process_has_file
+            if not file_active or name is None or state != "LISTEN":
+                raise BrowserRuntimeError("browser_identity")
+            records.append((group, name, state))
+            process_has_file = True
+            file_active, name, state = False, None, None
+
+        def finish_process() -> None:
+            nonlocal process_active, process_has_file, group
+            if not process_active or group is None:
+                raise BrowserRuntimeError("browser_identity")
+            if file_active:
+                finish_file()
+            if not process_has_file:
+                raise BrowserRuntimeError("browser_identity")
+            process_active, process_has_file, group = False, False, None
+
+        for line in lines:
             if line.startswith("p"):
-                if name is not None or state is not None:
-                    records.append((group, name, state))
-                group, name, state = None, None, None
+                if process_active:
+                    finish_process()
+                if not line[1:].isdigit():
+                    raise BrowserRuntimeError("browser_identity")
+                process_active = True
             elif line.startswith("f"):
-                if name is not None or state is not None:
-                    records.append((group, name, state))
-                name, state = None, None
+                if not process_active or group is None or not line[1:]:
+                    raise BrowserRuntimeError("browser_identity")
+                if file_active:
+                    finish_file()
+                file_active = True
             elif line.startswith("g"):
+                if not process_active or group is not None or file_active:
+                    raise BrowserRuntimeError("browser_identity")
                 try:
                     group = int(line[1:])
                 except ValueError as exc:
                     raise BrowserRuntimeError("browser_identity") from exc
             elif line.startswith("n"):
+                if not file_active or name is not None or state is not None:
+                    raise BrowserRuntimeError("browser_identity")
                 name = line[1:]
             elif line == "TST=LISTEN":
+                if not file_active or name is None or state is not None:
+                    raise BrowserRuntimeError("browser_identity")
                 state = "LISTEN"
+            elif line.startswith("P"):
+                if not file_active:
+                    raise BrowserRuntimeError("browser_identity")
+            elif line.startswith("T"):
+                if not file_active or not line.startswith(("TQR=", "TQS=")):
+                    raise BrowserRuntimeError("browser_identity")
+            else:
+                raise BrowserRuntimeError("browser_identity")
+        if process_active:
+            finish_process()
         expected_name = f"127.0.0.1:{port}"
         if (
             completed.returncode != 0
