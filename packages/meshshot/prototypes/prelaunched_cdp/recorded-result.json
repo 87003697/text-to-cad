@@ -1,0 +1,237 @@
+{
+  "adapter_profile": {
+    "name": "playwright-1.60-defaults-loopback-cdp/1",
+    "sha256": "3babb1e1c8c0c4e0931f68c0c4c5af6eb14088552c84c1ccc486033a4313590c"
+  },
+  "baseline": {
+    "adapter": "playwright-launch",
+    "console_events": [
+      "meshshot-stage:payload-fetch:start",
+      "meshshot-stage:payload-fetch:done",
+      "meshshot-stage:payload-ready",
+      "meshshot-stage:reference-geometry:start",
+      "meshshot-stage:reference-geometry:done",
+      "meshshot-stage:candidate-geometry:start",
+      "meshshot-stage:candidate-geometry:done",
+      "meshshot-stage:+Z:reference:start",
+      "meshshot-stage:+Z:reference:done",
+      "meshshot-stage:+Z:candidate:start",
+      "meshshot-stage:+Z:candidate:done",
+      "meshshot-stage:-Z:reference:start",
+      "meshshot-stage:-Z:reference:done",
+      "meshshot-stage:-Z:candidate:start",
+      "meshshot-stage:-Z:candidate:done",
+      "meshshot-stage:+Y:reference:start",
+      "meshshot-stage:+Y:reference:done",
+      "meshshot-stage:+Y:candidate:start",
+      "meshshot-stage:+Y:candidate:done",
+      "meshshot-stage:-Y:reference:start",
+      "meshshot-stage:-Y:reference:done",
+      "meshshot-stage:-Y:candidate:start",
+      "meshshot-stage:-Y:candidate:done",
+      "meshshot-stage:+X:reference:start",
+      "meshshot-stage:+X:reference:done",
+      "meshshot-stage:+X:candidate:start",
+      "meshshot-stage:+X:candidate:done",
+      "meshshot-stage:-X:reference:start",
+      "meshshot-stage:-X:reference:done",
+      "meshshot-stage:-X:candidate:start",
+      "meshshot-stage:-X:candidate:done",
+      "meshshot-stage:Iso:reference:start",
+      "meshshot-stage:Iso:reference:done",
+      "meshshot-stage:Iso:candidate:start",
+      "meshshot-stage:Iso:candidate:done",
+      "meshshot-stage:-Iso:reference:start",
+      "meshshot-stage:-Iso:reference:done",
+      "meshshot-stage:-Iso:candidate:start",
+      "meshshot-stage:-Iso:candidate:done",
+      "meshshot-stage:png-encode:start",
+      "meshshot-stage:png-encode:done"
+    ],
+    "fulfilled": [
+      {
+        "path": "/render.html",
+        "status": 200
+      },
+      {
+        "path": "/residual-render.js",
+        "status": 200
+      },
+      {
+        "path": "/payload.json",
+        "status": 200
+      }
+    ],
+    "image": {
+      "dimensions": [
+        504,
+        1008
+      ],
+      "mode": "RGB",
+      "sha256": "0ec8883598e6ddd61977251bbe4eec2b07e6432f2591836c39db02c1c4029fdc"
+    },
+    "launch_started": true,
+    "ordered_views": [
+      "+Z",
+      "-Z",
+      "+Y",
+      "-Y",
+      "+X",
+      "-X",
+      "Iso",
+      "-Iso"
+    ],
+    "outside_request_rejected": true,
+    "page_evaluate": true,
+    "profile_sha256": "87da3cc3f625cb9c24f51bed41dcdc70402a4d461b2af29eaa19846b1e8f7241",
+    "readiness": true,
+    "release": {
+      "cleanup_seconds": null,
+      "process_group_empty": null,
+      "process_reaped": null,
+      "profile_removed": null
+    },
+    "render_seconds": 1.399973,
+    "route_registered": true,
+    "startup_seconds": 0.1112,
+    "status": "PASS"
+  },
+  "browser_identity": {
+    "browser": "chromium-headless-shell",
+    "playwright": "1.60.0",
+    "revision": "1223",
+    "sha256": "aa25f2e795c02d5cb5ef5d6987745cc5bbe7d8bea58827390c7a4c81c8d2dd7b",
+    "version": "Google Chrome for Testing 148.0.7778.96"
+  },
+  "comparison": {
+    "ordered_views_equal": true,
+    "png_bytes_equal": true,
+    "png_sha256": "0ec8883598e6ddd61977251bbe4eec2b07e6432f2591836c39db02c1c4029fdc",
+    "profile_sha256_equal": true,
+    "same_executable_identity": true
+  },
+  "deadlines_seconds": {
+    "cleanup_kill": 2.0,
+    "cleanup_term": 5.0,
+    "render": 120.0,
+    "startup_and_readiness": 15.0
+  },
+  "failures": [],
+  "forced_failure": {
+    "adapter": "prelaunched-cdp-forced-failure",
+    "console_events": [],
+    "expected_closed_failure_observed": true,
+    "fulfilled": [],
+    "launch_started": true,
+    "outside_request_rejected": false,
+    "page_evaluate": false,
+    "readiness": true,
+    "release": {
+      "cleanup_seconds": 0.034861,
+      "process_group_empty": true,
+      "process_reaped": true,
+      "profile_removed": true
+    },
+    "route_registered": false,
+    "startup_seconds": 0.098651,
+    "status": "PASS"
+  },
+  "not_run": [],
+  "prelaunched_cdp": {
+    "adapter": "prelaunched-cdp",
+    "console_events": [
+      "meshshot-stage:payload-fetch:start",
+      "meshshot-stage:payload-fetch:done",
+      "meshshot-stage:payload-ready",
+      "meshshot-stage:reference-geometry:start",
+      "meshshot-stage:reference-geometry:done",
+      "meshshot-stage:candidate-geometry:start",
+      "meshshot-stage:candidate-geometry:done",
+      "meshshot-stage:+Z:reference:start",
+      "meshshot-stage:+Z:reference:done",
+      "meshshot-stage:+Z:candidate:start",
+      "meshshot-stage:+Z:candidate:done",
+      "meshshot-stage:-Z:reference:start",
+      "meshshot-stage:-Z:reference:done",
+      "meshshot-stage:-Z:candidate:start",
+      "meshshot-stage:-Z:candidate:done",
+      "meshshot-stage:+Y:reference:start",
+      "meshshot-stage:+Y:reference:done",
+      "meshshot-stage:+Y:candidate:start",
+      "meshshot-stage:+Y:candidate:done",
+      "meshshot-stage:-Y:reference:start",
+      "meshshot-stage:-Y:reference:done",
+      "meshshot-stage:-Y:candidate:start",
+      "meshshot-stage:-Y:candidate:done",
+      "meshshot-stage:+X:reference:start",
+      "meshshot-stage:+X:reference:done",
+      "meshshot-stage:+X:candidate:start",
+      "meshshot-stage:+X:candidate:done",
+      "meshshot-stage:-X:reference:start",
+      "meshshot-stage:-X:reference:done",
+      "meshshot-stage:-X:candidate:start",
+      "meshshot-stage:-X:candidate:done",
+      "meshshot-stage:Iso:reference:start",
+      "meshshot-stage:Iso:reference:done",
+      "meshshot-stage:Iso:candidate:start",
+      "meshshot-stage:Iso:candidate:done",
+      "meshshot-stage:-Iso:reference:start",
+      "meshshot-stage:-Iso:reference:done",
+      "meshshot-stage:-Iso:candidate:start",
+      "meshshot-stage:-Iso:candidate:done",
+      "meshshot-stage:png-encode:start",
+      "meshshot-stage:png-encode:done"
+    ],
+    "fulfilled": [
+      {
+        "path": "/render.html",
+        "status": 200
+      },
+      {
+        "path": "/residual-render.js",
+        "status": 200
+      },
+      {
+        "path": "/payload.json",
+        "status": 200
+      }
+    ],
+    "image": {
+      "dimensions": [
+        504,
+        1008
+      ],
+      "mode": "RGB",
+      "sha256": "0ec8883598e6ddd61977251bbe4eec2b07e6432f2591836c39db02c1c4029fdc"
+    },
+    "launch_started": true,
+    "ordered_views": [
+      "+Z",
+      "-Z",
+      "+Y",
+      "-Y",
+      "+X",
+      "-X",
+      "Iso",
+      "-Iso"
+    ],
+    "outside_request_rejected": true,
+    "page_evaluate": true,
+    "profile_sha256": "87da3cc3f625cb9c24f51bed41dcdc70402a4d461b2af29eaa19846b1e8f7241",
+    "readiness": true,
+    "release": {
+      "cleanup_seconds": 0.047644,
+      "process_group_empty": true,
+      "process_reaped": true,
+      "profile_removed": true
+    },
+    "render_seconds": 1.2928,
+    "route_registered": true,
+    "startup_seconds": 0.09718,
+    "status": "PASS"
+  },
+  "question": "Can Python prelaunch the exact Playwright 1.60 headless shell on loopback and preserve meshshot semantics through connect_over_cdp()?",
+  "schema": "meshshot.prelaunched-cdp-prototype/1",
+  "throwaway": true,
+  "verdict": "PASS"
+}
