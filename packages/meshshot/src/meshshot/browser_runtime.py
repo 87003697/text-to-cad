@@ -1247,76 +1247,34 @@ class _PinnedExecutable:
                 stdout, stderr = process.communicate(
                     timeout=max(0.001, deadline - time.monotonic())
                 )
-            except subprocess.TimeoutExpired as exc:
-                if self._reap_failed_handoff(
-                    process,
-                    process_group=True,
-                    cleanup_term_timeout=_FD_EXEC_CLEANUP_TERM_SECONDS,
-                    cleanup_kill_timeout=_FD_EXEC_CLEANUP_KILL_SECONDS,
-                ):
-                    raise BrowserRuntimeError("browser_cleanup") from exc
-                raise
-            except BaseException as exc:
-                if self._reap_failed_handoff(
-                    process,
-                    process_group=True,
-                    cleanup_term_timeout=_FD_EXEC_CLEANUP_TERM_SECONDS,
-                    cleanup_kill_timeout=_FD_EXEC_CLEANUP_KILL_SECONDS,
-                ):
-                    raise BrowserRuntimeError("browser_cleanup") from exc
-                raise
-            if time.monotonic() >= deadline:
-                expired = subprocess.TimeoutExpired(
-                    [_FD_EXEC_HANDOFF_SCHEMA], timeout
-                )
-                if self._reap_failed_handoff(
-                    process,
-                    process_group=True,
-                    cleanup_term_timeout=_FD_EXEC_CLEANUP_TERM_SECONDS,
-                    cleanup_kill_timeout=_FD_EXEC_CLEANUP_KILL_SECONDS,
-                ):
-                    raise BrowserRuntimeError("browser_cleanup") from expired
-                raise expired
-            valid = False
-            try:
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(
+                        [_FD_EXEC_HANDOFF_SCHEMA], timeout
+                    )
                 version = stdout.decode("utf-8").strip()
                 valid = (
                     process.returncode == 0
                     and stderr == b""
                     and _VERSION_OUTPUT.fullmatch(version) is not None
                 )
-            except UnicodeDecodeError:
-                valid = False
-            proof_failed = False
-            try:
-                group_empty = _wait_group_empty(
-                    process.pid,
-                    max(0.0, deadline - time.monotonic()),
-                )
-            except OSError:
-                proof_failed = True
-                group_empty = False
-            if time.monotonic() >= deadline:
-                expired = subprocess.TimeoutExpired(
-                    [_FD_EXEC_HANDOFF_SCHEMA], timeout
-                )
-                if self._reap_failed_handoff(
-                    process,
-                    process_group=True,
-                    cleanup_term_timeout=_FD_EXEC_CLEANUP_TERM_SECONDS,
-                    cleanup_kill_timeout=_FD_EXEC_CLEANUP_KILL_SECONDS,
-                ):
-                    raise BrowserRuntimeError("browser_cleanup") from expired
-                raise expired
-            if not valid or not group_empty:
-                cleanup_failed = self._reap_failed_handoff(
-                    process,
-                    process_group=True,
-                    cleanup_term_timeout=_FD_EXEC_CLEANUP_TERM_SECONDS,
-                    cleanup_kill_timeout=_FD_EXEC_CLEANUP_KILL_SECONDS,
-                )
-                if cleanup_failed or proof_failed:
-                    raise BrowserRuntimeError("browser_cleanup")
+                try:
+                    group_empty = _wait_group_empty(
+                        process.pid,
+                        max(0.0, deadline - time.monotonic()),
+                    )
+                except OSError as exc:
+                    raise BrowserRuntimeError("browser_cleanup") from exc
+                if time.monotonic() >= deadline:
+                    raise subprocess.TimeoutExpired(
+                        [_FD_EXEC_HANDOFF_SCHEMA], timeout
+                    )
+                if valid and group_empty:
+                    return subprocess.CompletedProcess(
+                        args=[os.fspath(self.launch_path), "--version"],
+                        returncode=process.returncode,
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
                 if process.returncode != 0 or not group_empty:
                     raise BrowserRuntimeError(
                         "browser_identity",
@@ -1331,12 +1289,19 @@ class _PinnedExecutable:
                         "private_launch_version_output_identity"
                     ),
                 )
-            return subprocess.CompletedProcess(
-                args=[os.fspath(self.launch_path), "--version"],
-                returncode=process.returncode,
-                stdout=stdout,
-                stderr=stderr,
-            )
+            except BaseException as exc:
+                cleanup_failed = self._reap_failed_handoff(
+                    process,
+                    process_group=True,
+                    cleanup_term_timeout=_FD_EXEC_CLEANUP_TERM_SECONDS,
+                    cleanup_kill_timeout=_FD_EXEC_CLEANUP_KILL_SECONDS,
+                )
+                if cleanup_failed or (
+                    isinstance(exc, BrowserRuntimeError)
+                    and exc.operation == "browser_cleanup"
+                ):
+                    raise BrowserRuntimeError("browser_cleanup") from exc
+                raise
         options: dict[str, Any] = {
             "args": [os.fspath(self.launch_path), "--version"],
             "executable": os.fspath(self.launch_path),
