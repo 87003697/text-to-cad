@@ -118,6 +118,7 @@ def publish_preview(
     output: str | Path,
     profile: dict[str, Any],
     ordered_views: list[dict[str, Any]],
+    browser_runtime: dict[str, Any],
     identity: ValidatedPreviewIdentity,
 ) -> PublishPreviewResult:
     """Validate and atomically publish one self-describing formal preview."""
@@ -155,6 +156,17 @@ def publish_preview(
 
     image = _validate_png(png_bytes, profile, variant)
     image_sha256 = hashlib.sha256(png_bytes).hexdigest()
+    if (
+        not isinstance(browser_runtime, dict)
+        or set(browser_runtime)
+        != {"schema", "adapter_profile", "browser_identity", "result"}
+        or browser_runtime.get("schema") != "meshshot.prelaunched-cdp-runtime/1"
+        or browser_runtime.get("result") != "passed"
+        or set(browser_runtime.get("adapter_profile", {})) != {"name", "sha256"}
+        or set(browser_runtime.get("browser_identity", {}))
+        != {"playwright", "browser", "revision", "version", "sha256"}
+    ):
+        raise OctreeError("browser runtime evidence is incomplete")
     exterior_exact = scene.exterior.exact
     exterior_cells = scene.exterior.snapshot["cells"]
     metadata: dict[str, Any] = {
@@ -180,6 +192,7 @@ def publish_preview(
                 "sha256": identity.profile_sha256,
             },
         },
+        "browser_runtime": browser_runtime,
         "reference": scene.reference,
         "candidate": scene.candidate,
         "ordered_views": ordered_views,

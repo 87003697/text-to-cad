@@ -54,6 +54,15 @@ _PREVIEW_FAILURE_CLASSIFICATIONS = {
     "browser_launch_executable_dependency": (
         "preview_browser_launch_executable_dependency_failed"
     ),
+    "browser_adapter_profile": "preview_browser_adapter_profile_failed",
+    "browser_identity": "preview_browser_identity_failed",
+    "browser_profile": "preview_browser_profile_failed",
+    "browser_prelaunch": "preview_browser_prelaunch_failed",
+    "browser_readiness": "preview_browser_readiness_failed",
+    "browser_readiness_timeout": "preview_browser_readiness_timeout_failed",
+    "browser_connect": "preview_browser_connect_failed",
+    "browser_cleanup": "preview_browser_cleanup_failed",
+    "browser_signal": "preview_browser_signal_failed",
     "browser_render": "preview_browser_render_failed",
     "browser_result": "preview_browser_result_failed",
 }
@@ -420,6 +429,7 @@ def _preview_main(argv: list[str]) -> int:
             output=args.output,
             profile=loaded_profile.profile,
             ordered_views=[dict(view) for view in rendered.views],
+            browser_runtime=dict(rendered.browser_runtime or {}),
             identity=identity,
         )
     except MeshshotError as exc:

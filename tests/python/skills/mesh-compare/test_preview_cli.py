@@ -269,6 +269,18 @@ class PreviewCliTests(unittest.TestCase):
             variant="step",
             profile_sha256="0" * 64,
             views=views,
+            browser_runtime={
+                "schema": "meshshot.prelaunched-cdp-runtime/1",
+                "adapter_profile": {"name": "test/1", "sha256": "1" * 64},
+                "browser_identity": {
+                    "playwright": "1.60.0",
+                    "browser": "chromium-headless-shell",
+                    "revision": "1223",
+                    "version": "Google Chrome for Testing 148.0.7778.96",
+                    "sha256": "2" * 64,
+                },
+                "result": "passed",
+            },
         )
         output = self.root / "profile-conflict"
 

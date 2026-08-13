@@ -533,7 +533,7 @@ def _validate_scenario_evidence(exp_dir: Path, scenario_name: str) -> None:
         ) from exc
     if not provider_free_browser_exec_diagnostic_allowed(
         browser_exec_diagnostic
-    ) or browser_exec_diagnostic["playwright"] != "passed":
+    ) or browser_exec_diagnostic["prelaunched_cdp"] != "passed":
         raise ProviderFreeError(
             "runtime-authority browser exec diagnostic conflicts"
         )
@@ -595,12 +595,8 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
     diagnostic_operations = {
         "preview_browser_outer_exec_probe",
         "preview_browser_nested_exec_probe",
-        "preview_browser_playwright_launch_after_direct_probes",
     }
-    if operation in diagnostic_operations or (
-        isinstance(operation, str)
-        and operation.startswith("preview_browser_node_")
-    ):
+    if operation in diagnostic_operations:
         try:
             browser_exec_diagnostic = json.loads(
                 (

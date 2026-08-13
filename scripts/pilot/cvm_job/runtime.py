@@ -499,12 +499,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/13",
+    "id": "issue15.provider-free-bounded/14",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/13",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/14",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/13",
+    "schema": "cvm.provider-free-linux-sandbox/14",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -546,28 +546,7 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "environment_names": ["HOME", "LANG", "PATH"],
             "network": "none",
             "timeout_seconds": 5,
-            "node_probe": {
-                "script": "scripts/pilot/browser_exec_probe.js",
-                "runtime": "playwright-bundled-node",
-                "spawn": "child-process",
-                "failure_kinds": [
-                    "spawn-event",
-                    "nonzero-exit",
-                    "timeout",
-                    "output-shape",
-                ],
-                "modes": [
-                    {"name": "attached", "detached": False},
-                    {"name": "detached", "detached": True},
-                ],
-                "result": {
-                    "exit_code": "zero-only-on-passed",
-                    "stdout": "single-closed-result-token",
-                    "stderr": "empty",
-                    "child_stdout": "single-chromium-version-line",
-                    "child_stdout_max_bytes": 128,
-                },
-            },
+            "node_probe": "retired-by-python-prelaunch",
             "result": {
                 "exit_code": 0,
                 "stdout": "single-chromium-version-line",
@@ -577,9 +556,8 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "seams": [
                 "outer-python-direct",
                 "nested-python-direct",
-                "nested-node-attached-direct",
-                "nested-node-detached-direct",
-                "playwright-launch",
+                "python-prelaunch",
+                "playwright-loopback-cdp-attach",
             ],
             "published": "closed-outcomes-only-no-raw-output",
             "cleanup": "no-profile-or-persistent-process-artifacts",
@@ -589,7 +567,8 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "environment": "MESHSHOT_BROWSER_EXECUTABLE",
             "value": PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
             "validation": "absolute-regular-non-symlink-executable",
-            "playwright_option": "executable_path",
+            "launch_owner": "python-prelaunched-cdp-runtime",
+            "playwright_option": "connect_over_cdp-is-local",
         },
         "cleanup": "supervisor-context-terminal-all-exit-classes",
         "catchable_signal_cleanup": ["SIGINT", "SIGTERM"],
@@ -1325,7 +1304,7 @@ def _provider_free_evidence_result(
         return None, "provider-free browser exec diagnostic evidence is invalid"
     if (
         not provider_free_browser_exec_diagnostic_allowed(diagnostic)
-        or diagnostic["playwright"] != "passed"
+        or diagnostic["prelaunched_cdp"] != "passed"
     ):
         return None, "provider-free browser exec diagnostic evidence conflicts"
     diagnostic_entry = {
@@ -1422,12 +1401,8 @@ def _provider_free_failure_evidence_result(
     diagnostic_operations = {
         "preview_browser_outer_exec_probe",
         "preview_browser_nested_exec_probe",
-        "preview_browser_playwright_launch_after_direct_probes",
     }
-    if operation in diagnostic_operations or (
-        isinstance(operation, str)
-        and operation.startswith("preview_browser_node_")
-    ):
+    if operation in diagnostic_operations:
         diagnostic_path = exp_dir / PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH
         try:
             diagnostic_bytes = diagnostic_path.read_bytes()

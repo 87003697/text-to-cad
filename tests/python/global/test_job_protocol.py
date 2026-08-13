@@ -26,6 +26,42 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 
 
 class JobProtocolTests(unittest.TestCase):
+    def test_prelaunched_cdp_runtime_receipt_is_closed(self) -> None:
+        receipt = {
+            "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,
+            "adapter_profile": {
+                "name": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE,
+                "sha256": "1" * 64,
+            },
+            "browser_identity": {
+                "playwright": "1.60.0",
+                "browser": "chromium-headless-shell",
+                "revision": "1223",
+                "version": "Google Chrome for Testing 148.0.7778.96",
+                "sha256": "2" * 64,
+            },
+            "result": "passed",
+        }
+        self.assertTrue(protocol.provider_free_browser_runtime_allowed(receipt))
+        for mutation in (
+            {**receipt, "endpoint": "http://127.0.0.1:49152"},
+            {**receipt, "pid": 1234},
+            {**receipt, "argv": ["--remote-debugging-port=49152"]},
+            {**receipt, "stderr": "sensitive"},
+            {
+                **receipt,
+                "adapter_profile": {**receipt["adapter_profile"], "name": "stale/1"},
+            },
+            {
+                **receipt,
+                "browser_identity": {**receipt["browser_identity"], "revision": "1222"},
+            },
+        ):
+            with self.subTest(mutation=mutation):
+                self.assertFalse(
+                    protocol.provider_free_browser_runtime_allowed(mutation)
+                )
+
     def test_preview_public_wrapper_receipt_is_closed_and_operation_bound(self) -> None:
         for operation in (
             "passed",
@@ -72,48 +108,23 @@ class JobProtocolTests(unittest.TestCase):
 
     def test_browser_exec_diagnostic_receipt_is_closed(self) -> None:
         receipt = {
-            "schema": "cvm.provider-free-browser-exec-diagnostic/4",
+            "schema": "cvm.provider-free-browser-exec-diagnostic/5",
             "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
             "probe": "chromium-version-immediate-exit",
             "outer": "passed",
             "nested": "passed",
-            "node_attached": "passed",
-            "node_detached": "passed",
+            "node_attached": "not-run",
+            "node_detached": "not-run",
             "node_failure_kind": "not-run",
-            "playwright": "failed",
+            "prelaunched_cdp": "failed",
         }
 
         self.assertTrue(
             protocol.provider_free_browser_exec_diagnostic_allowed(receipt)
         )
-        attached_failure = {
-            **receipt,
-            "node_attached": "failed",
-            "node_detached": "not-run",
-            "node_failure_kind": "spawn-event",
-            "playwright": "not-run",
-        }
-        self.assertTrue(
-            protocol.provider_free_browser_exec_diagnostic_matches_operation(
-                attached_failure,
-                "preview_browser_node_attached_spawn_event",
-            )
-        )
-        detached_failure = {
-            **receipt,
-            "node_detached": "failed",
-            "node_failure_kind": "timeout",
-            "playwright": "not-run",
-        }
-        self.assertTrue(
-            protocol.provider_free_browser_exec_diagnostic_matches_operation(
-                detached_failure,
-                "preview_browser_node_detached_timeout",
-            )
-        )
         self.assertFalse(
             protocol.provider_free_browser_exec_diagnostic_matches_operation(
-                detached_failure,
+                receipt,
                 "preview_browser_nested_exec_probe",
             )
         )
@@ -121,9 +132,11 @@ class JobProtocolTests(unittest.TestCase):
             {**receipt, "stdout": "sensitive raw version"},
             {**receipt, "outer": "unknown"},
             {**receipt, "outer": "failed", "nested": "passed"},
-            {**receipt, "nested": "failed", "playwright": "passed"},
-            {**receipt, "node_attached": "failed", "playwright": "passed"},
-            {**receipt, "node_detached": "failed", "playwright": "passed"},
+            {**receipt, "nested": "failed", "prelaunched_cdp": "passed"},
+            {**receipt, "node_attached": "failed", "prelaunched_cdp": "passed"},
+            {**receipt, "node_detached": "failed", "prelaunched_cdp": "passed"},
+            {**receipt, "node_attached": "passed"},
+            {**receipt, "node_detached": "passed"},
             {**receipt, "node_failure_kind": "raw-errno"},
             {**receipt, "executable": "/tmp/other-browser"},
         ):

@@ -544,28 +544,7 @@ class CvmJobTests(unittest.TestCase):
                     "environment_names": ["HOME", "LANG", "PATH"],
                     "network": "none",
                     "timeout_seconds": 5,
-                    "node_probe": {
-                        "script": "scripts/pilot/browser_exec_probe.js",
-                        "runtime": "playwright-bundled-node",
-                        "spawn": "child-process",
-                        "failure_kinds": [
-                            "spawn-event",
-                            "nonzero-exit",
-                            "timeout",
-                            "output-shape",
-                        ],
-                        "modes": [
-                            {"name": "attached", "detached": False},
-                            {"name": "detached", "detached": True},
-                        ],
-                        "result": {
-                            "exit_code": "zero-only-on-passed",
-                            "stdout": "single-closed-result-token",
-                            "stderr": "empty",
-                            "child_stdout": "single-chromium-version-line",
-                            "child_stdout_max_bytes": 128,
-                        },
-                    },
+                    "node_probe": "retired-by-python-prelaunch",
                     "result": {
                         "exit_code": 0,
                         "stdout": "single-chromium-version-line",
@@ -575,9 +554,8 @@ class CvmJobTests(unittest.TestCase):
                     "seams": [
                         "outer-python-direct",
                         "nested-python-direct",
-                        "nested-node-attached-direct",
-                        "nested-node-detached-direct",
-                        "playwright-launch",
+                        "python-prelaunch",
+                        "playwright-loopback-cdp-attach",
                     ],
                     "published": "closed-outcomes-only-no-raw-output",
                     "cleanup": "no-profile-or-persistent-process-artifacts",
@@ -587,7 +565,8 @@ class CvmJobTests(unittest.TestCase):
                     "environment": "MESHSHOT_BROWSER_EXECUTABLE",
                     "value": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                     "validation": "absolute-regular-non-symlink-executable",
-                    "playwright_option": "executable_path",
+                    "launch_owner": "python-prelaunched-cdp-runtime",
+                    "playwright_option": "connect_over_cdp-is-local",
                 },
                 "cleanup": "supervisor-context-terminal-all-exit-classes",
                 "catchable_signal_cleanup": ["SIGINT", "SIGTERM"],
@@ -806,10 +785,10 @@ class CvmJobTests(unittest.TestCase):
                         "probe": "chromium-version-immediate-exit",
                         "outer": "passed",
                         "nested": "passed",
-                        "node_attached": "passed",
-                        "node_detached": "passed",
+                        "node_attached": "not-run",
+                        "node_detached": "not-run",
                         "node_failure_kind": "not-run",
-                        "playwright": "passed",
+                        "prelaunched_cdp": "passed",
                     },
                     sort_keys=True,
                     separators=(",", ":"),
@@ -1003,9 +982,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/13",
+                "id": "issue15.provider-free-bounded/14",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/13",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/14",
             },
         )
         self.assertEqual(
@@ -1131,7 +1110,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/13",
+            "issue15.provider-free-bounded/14",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],

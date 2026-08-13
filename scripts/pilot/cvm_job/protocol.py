@@ -49,10 +49,7 @@ PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH = (
     "run/browser-exec-diagnostic.json"
 )
 PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA = (
-    "cvm.provider-free-browser-exec-diagnostic/4"
-)
-PROVIDER_FREE_BROWSER_EXEC_FAILURE_KINDS = frozenset(
-    {"spawn-event", "nonzero-exit", "timeout", "output-shape"}
+    "cvm.provider-free-browser-exec-diagnostic/5"
 )
 PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH = (
     "run/preview-public-wrapper-diagnostic.json"
@@ -80,6 +77,40 @@ PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE = (
     f"{PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested/"
     "chrome-headless-shell-linux64/chrome-headless-shell"
 )
+PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA = "meshshot.prelaunched-cdp-runtime/1"
+PROVIDER_FREE_BROWSER_ADAPTER_PROFILE = "playwright-1.60-chromium-1223-loopback-cdp/1"
+
+
+def provider_free_browser_runtime_allowed(receipt: object) -> bool:
+    """Validate the closed production browser result without lifecycle internals."""
+
+    if not isinstance(receipt, dict) or set(receipt) != {
+        "schema",
+        "adapter_profile",
+        "browser_identity",
+        "result",
+    }:
+        return False
+    adapter = receipt.get("adapter_profile")
+    browser = receipt.get("browser_identity")
+    return (
+        receipt.get("schema") == PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA
+        and receipt.get("result") == "passed"
+        and isinstance(adapter, dict)
+        and set(adapter) == {"name", "sha256"}
+        and adapter.get("name") == PROVIDER_FREE_BROWSER_ADAPTER_PROFILE
+        and isinstance(adapter.get("sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", adapter["sha256"]) is not None
+        and isinstance(browser, dict)
+        and set(browser)
+        == {"playwright", "browser", "revision", "version", "sha256"}
+        and browser.get("playwright") == "1.60.0"
+        and browser.get("browser") == "chromium-headless-shell"
+        and browser.get("revision") == "1223"
+        and browser.get("version") == "Google Chrome for Testing 148.0.7778.96"
+        and isinstance(browser.get("sha256"), str)
+        and re.fullmatch(r"[0-9a-f]{64}", browser["sha256"]) is not None
+    )
 
 
 def provider_free_preview_sandbox_argv(group: str, exp: str) -> list[str]:
@@ -167,7 +198,7 @@ def provider_free_preview_sandbox_receipt_allowed(
 
 
 def provider_free_browser_exec_diagnostic_allowed(receipt: object) -> bool:
-    """Validate closed outer, nested, and Playwright launch outcomes."""
+    """Validate direct probes plus the Python-owned CDP runtime outcome."""
 
     if (
         not isinstance(receipt, dict)
@@ -181,7 +212,7 @@ def provider_free_browser_exec_diagnostic_allowed(receipt: object) -> bool:
             "node_attached",
             "node_detached",
             "node_failure_kind",
-            "playwright",
+            "prelaunched_cdp",
         }
         or receipt.get("schema")
         != PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA
@@ -195,26 +226,16 @@ def provider_free_browser_exec_diagnostic_allowed(receipt: object) -> bool:
         receipt.get("nested"),
         receipt.get("node_attached"),
         receipt.get("node_detached"),
-        receipt.get("playwright"),
+        receipt.get("prelaunched_cdp"),
     )
     if outcomes not in {
         ("failed", "not-run", "not-run", "not-run", "not-run"),
         ("passed", "failed", "not-run", "not-run", "not-run"),
-        ("passed", "passed", "failed", "not-run", "not-run"),
-        ("passed", "passed", "passed", "failed", "not-run"),
-        ("passed", "passed", "passed", "passed", "failed"),
-        ("passed", "passed", "passed", "passed", "passed"),
+        ("passed", "passed", "not-run", "not-run", "failed"),
+        ("passed", "passed", "not-run", "not-run", "passed"),
     }:
         return False
-    node_failed = receipt.get("node_attached") == "failed" or receipt.get(
-        "node_detached"
-    ) == "failed"
-    kind = receipt.get("node_failure_kind")
-    return (
-        kind in PROVIDER_FREE_BROWSER_EXEC_FAILURE_KINDS
-        if node_failed
-        else kind == "not-run"
-    )
+    return receipt.get("node_failure_kind") == "not-run"
 
 
 def provider_free_browser_exec_diagnostic_matches_operation(
@@ -240,33 +261,14 @@ def provider_free_browser_exec_diagnostic_matches_operation(
             "not-run",
             "not-run",
         ),
-        "preview_browser_playwright_launch_after_direct_probes": (
-            "passed",
-            "passed",
-            "passed",
-            "passed",
-            "failed",
-        ),
     }.get(operation)
-    expected_kind = "not-run"
-    if isinstance(operation, str):
-        for mode, outcomes in (
-            ("attached", ("passed", "passed", "failed", "not-run", "not-run")),
-            ("detached", ("passed", "passed", "passed", "failed", "not-run")),
-        ):
-            for kind in PROVIDER_FREE_BROWSER_EXEC_FAILURE_KINDS:
-                if operation == (
-                    f"preview_browser_node_{mode}_{kind.replace('-', '_')}"
-                ):
-                    expected_outcomes = outcomes
-                    expected_kind = kind
     return expected_outcomes == (
         receipt.get("outer"),
         receipt.get("nested"),
         receipt.get("node_attached"),
         receipt.get("node_detached"),
-        receipt.get("playwright"),
-    ) and receipt.get("node_failure_kind") == expected_kind
+        receipt.get("prelaunched_cdp"),
+    ) and receipt.get("node_failure_kind") == "not-run"
 
 
 PROVIDER_FREE_SCENARIO_FAILURE_STAGES = frozenset(
@@ -299,12 +301,6 @@ PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS_BY_STAGE = {
             "preview_browser_runtime_staging",
             "preview_browser_outer_exec_probe",
             "preview_browser_nested_exec_probe",
-            *{
-                f"preview_browser_node_{mode}_{kind.replace('-', '_')}"
-                for mode in ("attached", "detached")
-                for kind in PROVIDER_FREE_BROWSER_EXEC_FAILURE_KINDS
-            },
-            "preview_browser_playwright_launch_after_direct_probes",
             "preview_dependency",
             "preview_browser_launch",
             "preview_browser_launch_process_limit",
@@ -320,6 +316,16 @@ PROVIDER_FREE_SCENARIO_FAILURE_OPERATIONS_BY_STAGE = {
             "preview_browser_launch_executable_dependency",
             "preview_browser_render",
             "preview_browser_result",
+            "preview_browser_adapter_profile",
+            "preview_browser_identity",
+            "preview_browser_profile",
+            "preview_browser_prelaunch",
+            "preview_browser_readiness",
+            "preview_browser_readiness_timeout",
+            "preview_browser_connect",
+            "preview_browser_cleanup",
+            "preview_browser_signal",
+            "preview_browser_runtime_evidence",
             *PROVIDER_FREE_PREVIEW_PUBLIC_FAILURE_OPERATIONS,
             PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
             "step_publication",
@@ -345,7 +351,16 @@ PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS = frozenset(
         "preview_browser_launch_executable_dependency",
         "preview_browser_render",
         "preview_browser_result",
-        "preview_browser_playwright_launch_after_direct_probes",
+        "preview_browser_adapter_profile",
+        "preview_browser_identity",
+        "preview_browser_profile",
+        "preview_browser_prelaunch",
+        "preview_browser_readiness",
+        "preview_browser_readiness_timeout",
+        "preview_browser_connect",
+        "preview_browser_cleanup",
+        "preview_browser_signal",
+        "preview_browser_runtime_evidence",
     }
 )
 _RESERVED_UPDATE_FIELDS = frozenset(

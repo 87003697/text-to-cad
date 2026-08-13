@@ -40,6 +40,7 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
     provider_free_scenario_failure_operation_allowed,
+    provider_free_browser_runtime_allowed,
 )
 
 
@@ -523,7 +524,7 @@ def _publish_browser_exec_diagnostic(
     node_attached: str,
     node_detached: str,
     node_failure_kind: str,
-    playwright: str,
+    prelaunched_cdp: str,
 ) -> None:
     """Publish only closed outcomes for the exact staged-browser probes."""
 
@@ -539,7 +540,7 @@ def _publish_browser_exec_diagnostic(
             "node_attached": node_attached,
             "node_detached": node_detached,
             "node_failure_kind": node_failure_kind,
-            "playwright": playwright,
+            "prelaunched_cdp": prelaunched_cdp,
         },
     )
 
@@ -1189,6 +1190,17 @@ def _run_voxblame_preview(
         "preview_browser_launch_executable_dependency_failed": (
             "preview_browser_launch_executable_dependency"
         ),
+        "preview_browser_adapter_profile_failed": "preview_browser_adapter_profile",
+        "preview_browser_identity_failed": "preview_browser_identity",
+        "preview_browser_profile_failed": "preview_browser_profile",
+        "preview_browser_prelaunch_failed": "preview_browser_prelaunch",
+        "preview_browser_readiness_failed": "preview_browser_readiness",
+        "preview_browser_readiness_timeout_failed": (
+            "preview_browser_readiness_timeout"
+        ),
+        "preview_browser_connect_failed": "preview_browser_connect",
+        "preview_browser_cleanup_failed": "preview_browser_cleanup",
+        "preview_browser_signal_failed": "preview_browser_signal",
         "preview_browser_render_failed": "preview_browser_render",
         "preview_browser_result_failed": "preview_browser_result",
     }
@@ -1220,7 +1232,7 @@ def _run_voxblame_preview(
                     node_attached="not-run",
                     node_detached="not-run",
                     node_failure_kind="not-run",
-                    playwright="not-run",
+                    prelaunched_cdp="not-run",
                 )
                 raise ScenarioError(
                     "provider-free outer browser exec probe failed",
@@ -1239,58 +1251,12 @@ def _run_voxblame_preview(
                     node_attached="not-run",
                     node_detached="not-run",
                     node_failure_kind="not-run",
-                    playwright="not-run",
+                    prelaunched_cdp="not-run",
                 )
                 raise ScenarioError(
                     "provider-free nested browser exec probe failed",
                     operation="preview_browser_nested_exec_probe",
                 ) from exc
-            node_failure_kind = _run_closed_node_browser_version_probe(
-                _nested_node_browser_exec_probe_argv(
-                    cwd=cwd, mode="attached"
-                ),
-                cwd=cwd,
-            )
-            if node_failure_kind is not None:
-                _publish_browser_exec_diagnostic(
-                    command_log,
-                    outer="passed",
-                    nested="passed",
-                    node_attached="failed",
-                    node_detached="not-run",
-                    node_failure_kind=node_failure_kind,
-                    playwright="not-run",
-                )
-                raise ScenarioError(
-                    "provider-free attached Node browser exec probe failed",
-                    operation=(
-                        "preview_browser_node_attached_"
-                        f"{node_failure_kind.replace('-', '_')}"
-                    ),
-                )
-            node_failure_kind = _run_closed_node_browser_version_probe(
-                _nested_node_browser_exec_probe_argv(
-                    cwd=cwd, mode="detached"
-                ),
-                cwd=cwd,
-            )
-            if node_failure_kind is not None:
-                _publish_browser_exec_diagnostic(
-                    command_log,
-                    outer="passed",
-                    nested="passed",
-                    node_attached="passed",
-                    node_detached="failed",
-                    node_failure_kind=node_failure_kind,
-                    playwright="not-run",
-                )
-                raise ScenarioError(
-                    "provider-free detached Node browser exec probe failed",
-                    operation=(
-                        "preview_browser_node_detached_"
-                        f"{node_failure_kind.replace('-', '_')}"
-                    ),
-                )
         try:
             sandbox_argv = _preview_sandbox_argv(argv, cwd=cwd)
             _publish_preview_sandbox_enforcement(command_log, sandbox_argv)
@@ -1321,10 +1287,10 @@ def _run_voxblame_preview(
                         command_log,
                         outer="passed",
                         nested="passed",
-                        node_attached="passed",
-                        node_detached="passed",
+                        node_attached="not-run",
+                        node_detached="not-run",
                         node_failure_kind="not-run",
-                        playwright="failed",
+                        prelaunched_cdp="failed",
                     )
                 except Exception as diagnostic_exc:
                     operation = "preview_public_failure_diagnostic_publication"
@@ -1336,22 +1302,6 @@ def _run_voxblame_preview(
                         "provider-free failed-public diagnostic publication failed",
                         operation=operation,
                     ) from diagnostic_exc
-                if exc.classification in {
-                    classification
-                    for classification in operations
-                    if classification.startswith("preview_browser_launch")
-                }:
-                    operation = (
-                        "preview_browser_playwright_launch_after_direct_probes"
-                    )
-                    _require_preview_public_wrapper(
-                        command_log,
-                        operation=operation,
-                    )
-                    raise ScenarioError(
-                        "Playwright failed after all direct exec probes passed",
-                        operation=operation,
-                    ) from exc
             operation = renderer_operation or public_operation
             _require_preview_public_wrapper(
                 command_log,
@@ -1367,10 +1317,10 @@ def _run_voxblame_preview(
                     command_log,
                     outer="passed",
                     nested="passed",
-                    node_attached="passed",
-                    node_detached="passed",
+                    node_attached="not-run",
+                    node_detached="not-run",
                     node_failure_kind="not-run",
-                    playwright="passed",
+                    prelaunched_cdp="passed",
                 )
             except Exception as exc:
                 operation = "preview_public_success_diagnostic_publication"
@@ -1383,6 +1333,17 @@ def _run_voxblame_preview(
                     operation=operation,
                 ) from exc
         _require_preview_public_wrapper(command_log, operation="passed")
+        preview = result.get("preview") if isinstance(result, dict) else None
+        browser_runtime = (
+            preview.get("browser_runtime") if isinstance(preview, dict) else None
+        )
+        if not provider_free_browser_runtime_allowed(browser_runtime):
+            operation = "preview_browser_runtime_evidence"
+            _require_preview_public_wrapper(command_log, operation=operation)
+            raise ScenarioError(
+                "provider-free browser runtime evidence is invalid",
+                operation=operation,
+            )
         return result
     except ScenarioError as exc:
         operation = operations.get(exc.classification)

@@ -458,7 +458,33 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
 
         for operation, failing_boundary in operations:
             with self.subTest(operation=operation):
-                public_results = iter((begun, measured, {"ok": True}, {"ok": True}))
+                public_results = iter(
+                    (
+                        begun,
+                        measured,
+                        {
+                            "ok": True,
+                            "preview": {
+                                "browser_runtime": {
+                                    "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,
+                                    "adapter_profile": {
+                                        "name": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE,
+                                        "sha256": "1" * 64,
+                                    },
+                                    "browser_identity": {
+                                        "playwright": "1.60.0",
+                                        "browser": "chromium-headless-shell",
+                                        "revision": "1223",
+                                        "version": "Google Chrome for Testing 148.0.7778.96",
+                                        "sha256": "2" * 64,
+                                    },
+                                    "result": "passed",
+                                }
+                            },
+                        },
+                        {"ok": True},
+                    )
+                )
 
                 def run_public(argv, **_kwargs):
                     boundary = (
@@ -526,15 +552,6 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             "preview_browser_runtime_staging",
             "preview_browser_outer_exec_probe",
             "preview_browser_nested_exec_probe",
-            "preview_browser_node_attached_spawn_event",
-            "preview_browser_node_attached_nonzero_exit",
-            "preview_browser_node_attached_timeout",
-            "preview_browser_node_attached_output_shape",
-            "preview_browser_node_detached_spawn_event",
-            "preview_browser_node_detached_nonzero_exit",
-            "preview_browser_node_detached_timeout",
-            "preview_browser_node_detached_output_shape",
-            "preview_browser_playwright_launch_after_direct_probes",
             "preview_dependency",
             "preview_browser_launch",
             "preview_browser_launch_process_limit",
@@ -1110,7 +1127,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         run_public.assert_not_called()
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/4",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/5",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "failed",
@@ -1118,7 +1135,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 "node_attached": "not-run",
                 "node_detached": "not-run",
                 "node_failure_kind": "not-run",
-                "playwright": "not-run",
+                "prelaunched_cdp": "not-run",
             },
             json.loads(
                 (self.repo / "run/browser-exec-diagnostic.json").read_text(
@@ -1223,7 +1240,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         run_public.assert_not_called()
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/4",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/5",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "passed",
@@ -1231,7 +1248,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 "node_attached": "not-run",
                 "node_detached": "not-run",
                 "node_failure_kind": "not-run",
-                "playwright": "not-run",
+                "prelaunched_cdp": "not-run",
             },
             json.loads(
                 (self.repo / "run/browser-exec-diagnostic.json").read_text(
@@ -1240,7 +1257,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             ),
         )
 
-    def test_preview_distinguishes_playwright_after_all_direct_probes_pass(
+    def test_preview_preserves_prelaunched_cdp_closed_failure_after_direct_probes(
         self,
     ) -> None:
         bwrap = self.repo / "bwrap"
@@ -1300,21 +1317,21 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             )
 
         self.assertEqual(
-            "preview_browser_playwright_launch_after_direct_probes",
+            "preview_browser_launch_executable_spawn_permission",
             raised.exception.operation,
         )
         self.assertNotIn("sensitive", str(raised.exception))
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/4",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/5",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "passed",
                 "nested": "passed",
-                "node_attached": "passed",
-                "node_detached": "passed",
+                "node_attached": "not-run",
+                "node_detached": "not-run",
                 "node_failure_kind": "not-run",
-                "playwright": "failed",
+                "prelaunched_cdp": "failed",
             },
             json.loads(
                 (self.repo / "run/browser-exec-diagnostic.json").read_text(
@@ -1323,7 +1340,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             ),
         )
 
-    def test_preview_reports_nested_bundled_node_attached_spawn_event(
+    def test_preview_does_not_probe_bundled_node_before_prelaunched_cdp(
         self,
     ) -> None:
         from playwright._impl._driver import compute_driver_executable
@@ -1366,72 +1383,49 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             mock.patch.object(
                 provider_free_scenarios,
                 "_run_public",
-                return_value={"ok": True},
+                return_value={
+                    "ok": True,
+                    "preview": {
+                        "browser_runtime": {
+                            "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,
+                            "adapter_profile": {
+                                "name": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE,
+                                "sha256": "1" * 64,
+                            },
+                            "browser_identity": {
+                                "playwright": "1.60.0",
+                                "browser": "chromium-headless-shell",
+                                "revision": "1223",
+                                "version": "Google Chrome for Testing 148.0.7778.96",
+                                "sha256": "2" * 64,
+                            },
+                            "result": "passed",
+                        }
+                    },
+                },
             ) as run_public,
-            self.assertRaises(
-                provider_free_scenarios.ScenarioError
-            ) as raised,
         ):
-            provider_free_scenarios._run_voxblame_preview(
+            result = provider_free_scenarios._run_voxblame_preview(
                 ["mesh-compare", "voxblame-preview"],
                 cwd=self.repo,
                 command_log=command_log,
             )
 
-        self.assertEqual(
-            "preview_browser_node_attached_spawn_event",
-            raised.exception.operation,
-        )
+        self.assertTrue(result["ok"])
         self.assertEqual(2, run.call_count)
-        bundled_node = os.fspath(compute_driver_executable()[0])
-        self.assertEqual(
-            [
-                str(bwrap),
-                "--die-with-parent",
-                "--new-session",
-                "--cap-drop",
-                "ALL",
-                "--clearenv",
-                "--setenv",
-                "HOME",
-                "/nonexistent",
-                "--setenv",
-                "LANG",
-                "C.UTF-8",
-                "--setenv",
-                "PATH",
-                "/usr/bin:/bin",
-                "--bind",
-                "/",
-                "/",
-                "--ro-bind",
-                protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE,
-                protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE,
-                "--chdir",
-                str(self.repo),
-                "--",
-                bundled_node,
-                os.fspath(
-                    provider_free_scenarios.REPO_ROOT
-                    / "scripts/pilot/browser_exec_probe.js"
-                ),
-                "attached",
-                protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
-            ],
-            node_probe.call_args.args[0],
-        )
-        run_public.assert_not_called()
+        node_probe.assert_not_called()
+        run_public.assert_called_once()
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/4",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/5",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "passed",
                 "nested": "passed",
-                "node_attached": "failed",
+                "node_attached": "not-run",
                 "node_detached": "not-run",
-                "node_failure_kind": "spawn-event",
-                "playwright": "not-run",
+                "node_failure_kind": "not-run",
+                "prelaunched_cdp": "passed",
             },
             json.loads(
                 (self.repo / "run/browser-exec-diagnostic.json").read_text(
@@ -1680,7 +1674,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 except ProcessLookupError:
                     pass
 
-    def test_preview_reports_only_detached_node_exec_probe_failure(self) -> None:
+    def test_preview_ignores_retired_detached_node_probe(self) -> None:
         bwrap = self.repo / "bwrap"
         bwrap.write_text("#!/bin/sh\n", encoding="utf-8")
         bwrap.chmod(0o755)
@@ -1719,47 +1713,49 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             mock.patch.object(
                 provider_free_scenarios,
                 "_run_public",
-                return_value={"ok": True},
+                return_value={
+                    "ok": True,
+                    "preview": {
+                        "browser_runtime": {
+                            "schema": protocol.PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA,
+                            "adapter_profile": {
+                                "name": protocol.PROVIDER_FREE_BROWSER_ADAPTER_PROFILE,
+                                "sha256": "1" * 64,
+                            },
+                            "browser_identity": {
+                                "playwright": "1.60.0",
+                                "browser": "chromium-headless-shell",
+                                "revision": "1223",
+                                "version": "Google Chrome for Testing 148.0.7778.96",
+                                "sha256": "2" * 64,
+                            },
+                            "result": "passed",
+                        }
+                    },
+                },
             ) as run_public,
-            self.assertRaises(
-                provider_free_scenarios.ScenarioError
-            ) as raised,
         ):
-            provider_free_scenarios._run_voxblame_preview(
+            result = provider_free_scenarios._run_voxblame_preview(
                 ["mesh-compare", "voxblame-preview"],
                 cwd=self.repo,
                 command_log=command_log,
             )
 
-        self.assertEqual(
-            "preview_browser_node_detached_spawn_event",
-            raised.exception.operation,
-        )
+        self.assertTrue(result["ok"])
         self.assertEqual(2, run.call_count)
-        attached_argv = node_probe.call_args_list[0].args[0]
-        detached_argv = node_probe.call_args_list[1].args[0]
-        mode_index = attached_argv.index("attached")
-        self.assertEqual("detached", detached_argv[mode_index])
-        self.assertEqual(
-            attached_argv[:mode_index] + attached_argv[mode_index + 1 :],
-            detached_argv[:mode_index] + detached_argv[mode_index + 1 :],
-        )
-        self.assertEqual(
-            node_probe.call_args_list[0].kwargs,
-            node_probe.call_args_list[1].kwargs,
-        )
-        run_public.assert_not_called()
+        node_probe.assert_not_called()
+        run_public.assert_called_once()
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-exec-diagnostic/4",
+                "schema": "cvm.provider-free-browser-exec-diagnostic/5",
                 "executable": protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
                 "probe": "chromium-version-immediate-exit",
                 "outer": "passed",
                 "nested": "passed",
-                "node_attached": "passed",
-                "node_detached": "failed",
-                "node_failure_kind": "spawn-event",
-                "playwright": "not-run",
+                "node_attached": "not-run",
+                "node_detached": "not-run",
+                "node_failure_kind": "not-run",
+                "prelaunched_cdp": "passed",
             },
             json.loads(
                 (self.repo / "run/browser-exec-diagnostic.json").read_text(

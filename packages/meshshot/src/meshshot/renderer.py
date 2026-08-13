@@ -10,11 +10,15 @@ import json
 import math
 import os
 from pathlib import Path
-import stat
 from typing import Any, Literal
 
 from PIL import Image
 
+from meshshot.browser_runtime import (
+    BrowserRuntimeError,
+    PrelaunchedCdpRuntime,
+    default_executable,
+)
 from meshshot.profile import load_profile
 
 
@@ -23,7 +27,6 @@ _RENDER_URL = f"{_ORIGIN}/render.html"
 _ROUTE_GLOB = f"{_ORIGIN}/**"
 _PAYLOAD_PATH = "/payload.json"
 _RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
-_BROWSER_STARTUP_TIMEOUT_MS = 15_000
 _RENDER_TIMEOUT_MS = 120_000
 _OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
 
@@ -42,101 +45,18 @@ MeshshotPhase = Literal[
     "browser_launch_sandbox_permission",
     "browser_launch_filesystem_permission",
     "browser_launch_executable_dependency",
+    "browser_adapter_profile",
+    "browser_identity",
+    "browser_profile",
+    "browser_prelaunch",
+    "browser_readiness",
+    "browser_readiness_timeout",
+    "browser_connect",
+    "browser_cleanup",
+    "browser_signal",
     "browser_render",
     "browser_result",
 ]
-
-_BROWSER_LAUNCH_PHASE_PATTERNS: tuple[
-    tuple[MeshshotPhase, tuple[str, ...]], ...
-] = (
-    (
-        "browser_launch_process_limit",
-        (
-            "resource temporarily unavailable",
-            "cannot fork",
-            "fork failed",
-            "pthread_create",
-            "failed to create thread",
-            "eagain",
-        ),
-    ),
-    (
-        "browser_launch_file_limit",
-        ("too many open files", "emfile", "enfile"),
-    ),
-    (
-        "browser_launch_shared_memory",
-        ("/dev/shm", "shared memory"),
-    ),
-    (
-        "browser_launch_address_space",
-        (
-            "out of memory",
-            "cannot allocate memory",
-            "failed to reserve",
-            "virtual memory",
-            "enomem",
-        ),
-    ),
-    (
-        "browser_launch_executable_dependency",
-        (
-            "error while loading shared libraries",
-            "cannot open shared object file",
-        ),
-    ),
-    (
-        "browser_launch_executable_missing",
-        (
-            "executable doesn't exist",
-            "no such file or directory",
-            "enoent",
-        ),
-    ),
-)
-
-_PERMISSION_MARKERS = (
-    "permission denied",
-    "eacces",
-    "operation not permitted",
-    "eperm",
-)
-_SANDBOX_PERMISSION_MARKERS = (
-    "sandbox initialization",
-    "failed to move to new namespace",
-    "no usable sandbox",
-    "zygote",
-    "setuid sandbox",
-    "clone failed",
-)
-_FILESYSTEM_PERMISSION_MARKERS = ("read-only file system", "erofs")
-_FILESYSTEM_CREATION_MARKERS = ("cannot create", "failed to create", "mkdir")
-_FILESYSTEM_DIRECTORY_MARKERS = ("directory", "user data", "user-data-dir", "cache")
-_SPAWN_PERMISSION_MARKERS = ("spawn", "execve", "exec format")
-
-
-def _browser_launch_phase(exc: Exception) -> MeshshotPhase:
-    """Reduce a browser launch exception to a closed public phase."""
-
-    detail = str(exc).casefold()
-    for phase, patterns in _BROWSER_LAUNCH_PHASE_PATTERNS:
-        if any(pattern in detail for pattern in patterns):
-            return phase
-    filesystem_denial = any(
-        marker in detail for marker in _FILESYSTEM_PERMISSION_MARKERS
-    ) or (
-        any(marker in detail for marker in _FILESYSTEM_CREATION_MARKERS)
-        and any(marker in detail for marker in _FILESYSTEM_DIRECTORY_MARKERS)
-    )
-    if filesystem_denial:
-        return "browser_launch_filesystem_permission"
-    if any(marker in detail for marker in _PERMISSION_MARKERS):
-        if any(marker in detail for marker in _SPAWN_PERMISSION_MARKERS):
-            return "browser_launch_executable_spawn_permission"
-        if any(marker in detail for marker in _SANDBOX_PERMISSION_MARKERS):
-            return "browser_launch_sandbox_permission"
-        return "browser_launch_executable_permission"
-    return "browser_launch"
 
 
 class MeshshotError(RuntimeError):
@@ -179,6 +99,7 @@ class RenderedPreview:
     variant: str
     profile_sha256: str
     views: tuple[dict[str, Any], ...]
+    browser_runtime: dict[str, Any] | None = None
 
 
 def render_residual_preview(
@@ -231,110 +152,99 @@ def render_residual_preview(
             phase="dependency",
         ) from exc
 
-    browser_executable = os.environ.get("MESHSHOT_BROWSER_EXECUTABLE")
-    launch_options: dict[str, Any] = {
-        "headless": True,
-        "args": ["--no-sandbox"],
-        "timeout": _BROWSER_STARTUP_TIMEOUT_MS,
-    }
-    if browser_executable is not None:
-        executable_path = Path(browser_executable)
-        try:
-            executable_mode = executable_path.lstat().st_mode
-        except OSError as exc:
-            raise MeshshotError(
-                "attested browser executable is invalid",
-                phase="browser_launch_executable",
-            ) from exc
-        if (
-            not executable_path.is_absolute()
-            or stat.S_ISLNK(executable_mode)
-            or not stat.S_ISREG(executable_mode)
-            or not os.access(executable_path, os.X_OK)
-        ):
-            raise MeshshotError(
-                "attested browser executable is invalid",
-                phase="browser_launch_executable",
-            )
-        launch_options["executable_path"] = browser_executable
-
+    browser_runtime: dict[str, Any] | None = None
     try:
         with sync_playwright() as playwright:
-            try:
-                browser = playwright.chromium.launch(**launch_options)
-            except Exception as exc:
-                raise MeshshotError(
-                    f"headless residual browser launch failed: {exc}",
-                    phase=_browser_launch_phase(exc),
-                ) from exc
-            try:
-                context = browser.new_context(
-                    viewport={"width": 64, "height": 64},
-                    device_scale_factor=1,
-                )
-                page = context.new_page()
+            configured_executable = os.environ.get("MESHSHOT_BROWSER_EXECUTABLE")
+            executable = (
+                Path(configured_executable)
+                if configured_executable is not None
+                else default_executable(playwright.chromium.executable_path)
+            )
+            runtime = PrelaunchedCdpRuntime(executable)
+            with runtime.open(playwright.chromium) as browser:
+                browser_runtime = dict(runtime.evidence)
+                try:
+                    context = browser.new_context(
+                        viewport={"width": 64, "height": 64},
+                        device_scale_factor=1,
+                    )
 
-                def record_console(message: Any) -> None:
-                    text = str(message.text)
-                    if text.startswith("meshshot-stage:"):
-                        renderer_events.append(text)
+                    def reject_outside_origin(route: Any) -> None:
+                        if str(route.request.url).startswith(_ORIGIN):
+                            route.continue_()
+                        else:
+                            route.abort("blockedbyclient")
 
-                page.on("console", record_console)
-                page.on(
-                    "crash",
-                    lambda _: renderer_events.append("meshshot-stage:page-crash"),
-                )
+                    context.route("**/*", reject_outside_origin)
+                    page = context.new_page()
 
-                def handle_route(route: Any) -> None:
-                    request_path = route.request.url.removeprefix(_ORIGIN)
-                    path = runtime_files.get(request_path)
-                    if route.request.method != "GET":
-                        route.fulfill(status=405, body="method not allowed")
-                    elif request_path == _PAYLOAD_PATH:
-                        route.fulfill(
-                            status=200,
-                            content_type="application/json",
-                            headers={"cache-control": "no-store"},
-                            body=payload_bytes,
-                        )
-                    elif path is None or not path.is_file():
-                        route.fulfill(status=404, body="not found")
-                    else:
-                        content_type = (
-                            "text/html; charset=utf-8"
-                            if path.suffix == ".html"
-                            else "text/javascript; charset=utf-8"
-                        )
-                        route.fulfill(
-                            status=200,
-                            content_type=content_type,
-                            headers={"cache-control": "no-store"},
-                            body=path.read_bytes(),
-                        )
+                    def record_console(message: Any) -> None:
+                        text = str(message.text)
+                        if text.startswith("meshshot-stage:"):
+                            renderer_events.append(text)
 
-                page.route(_ROUTE_GLOB, handle_route)
-                page.goto(_RENDER_URL, wait_until="load", timeout=_RENDER_TIMEOUT_MS)
-                page.wait_for_function(
-                    "typeof window.__meshshotRender === 'function'",
-                    timeout=_RENDER_TIMEOUT_MS,
-                )
-                result = page.evaluate("""
-                    async () => {
-                      console.info("meshshot-stage:payload-fetch:start");
-                      const response = await fetch("/payload.json", { cache: "no-store" });
-                      if (!response.ok) {
-                        throw new Error(`meshshot payload fetch failed: ${response.status}`);
-                      }
-                      const renderPayload = await response.json();
-                      console.info("meshshot-stage:payload-fetch:done");
-                      return window.__meshshotRender(renderPayload);
-                    }
-                """)
-                context.close()
-            finally:
-                browser.close()
+                    page.on("console", record_console)
+                    page.on(
+                        "crash",
+                        lambda _: renderer_events.append("meshshot-stage:page-crash"),
+                    )
+
+                    def handle_route(route: Any) -> None:
+                        request_path = route.request.url.removeprefix(_ORIGIN)
+                        path = runtime_files.get(request_path)
+                        if route.request.method != "GET":
+                            route.fulfill(status=405, body="method not allowed")
+                        elif request_path == _PAYLOAD_PATH:
+                            route.fulfill(
+                                status=200,
+                                content_type="application/json",
+                                headers={"cache-control": "no-store"},
+                                body=payload_bytes,
+                            )
+                        elif path is None or not path.is_file():
+                            route.fulfill(status=404, body="not found")
+                        else:
+                            content_type = (
+                                "text/html; charset=utf-8"
+                                if path.suffix == ".html"
+                                else "text/javascript; charset=utf-8"
+                            )
+                            route.fulfill(
+                                status=200,
+                                content_type=content_type,
+                                headers={"cache-control": "no-store"},
+                                body=path.read_bytes(),
+                            )
+
+                    page.route(_ROUTE_GLOB, handle_route)
+                    page.goto(_RENDER_URL, wait_until="load", timeout=_RENDER_TIMEOUT_MS)
+                    page.wait_for_function(
+                        "typeof window.__meshshotRender === 'function'",
+                        timeout=_RENDER_TIMEOUT_MS,
+                    )
+                    result = page.evaluate("""
+                        async () => {
+                          console.info("meshshot-stage:payload-fetch:start");
+                          const response = await fetch("/payload.json", { cache: "no-store" });
+                          if (!response.ok) {
+                            throw new Error(`meshshot payload fetch failed: ${response.status}`);
+                          }
+                          const renderPayload = await response.json();
+                          console.info("meshshot-stage:payload-fetch:done");
+                          return window.__meshshotRender(renderPayload);
+                        }
+                    """)
+                    context.close()
+                finally:
+                    browser.close()
     except MeshshotError:
         raise
+    except BrowserRuntimeError as exc:
+        raise MeshshotError(
+            f"headless residual browser runtime failed: {exc.operation}",
+            phase=exc.operation,
+        ) from exc
     except Exception as exc:
         stage = (
             f"; last renderer event: {renderer_events[-1]}"
@@ -378,7 +288,16 @@ def render_residual_preview(
             phase="browser_result",
         ) from exc
     views = result.get("views")
-    if not isinstance(views, list) or len(views) != 8:
+    expected_view_names = [view["name"] for view in loaded.profile["views"]]
+    if (
+        not isinstance(views, list)
+        or len(views) != 8
+        or [
+            view.get("name") if isinstance(view, dict) else None
+            for view in views
+        ]
+        != expected_view_names
+    ):
         raise MeshshotError(
             "browser returned invalid view metadata", phase="browser_result"
         )
@@ -387,4 +306,5 @@ def render_residual_preview(
         variant=variant,
         profile_sha256=loaded.sha256,
         views=tuple(dict(view) for view in views),
+        browser_runtime=browser_runtime,
     )

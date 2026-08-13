@@ -1672,6 +1672,7 @@ def _validate_final_directory(
         != document["selected_measurement_sha256"]
         or preview.get("preview_identity_sha256")
         != document["preview_identity_sha256"]
+        or not _browser_runtime_allowed(preview.get("browser_runtime"))
     ):
         _fail("automatic_identity_conflict", "Final preview identity conflicts")
     preview_source = dict(preview)
@@ -2284,6 +2285,7 @@ def _validate_preview_boundary(value: Mapping[str, Any], root: Path) -> None:
         "profile",
         "reference",
         "candidate",
+        "browser_runtime",
         "image",
         "preview_identity_sha256",
     }
@@ -2301,6 +2303,29 @@ def _validate_preview_boundary(value: Mapping[str, Any], root: Path) -> None:
         item = value[key]
         if not isinstance(item, Mapping) or not required_fields.issubset(item):
             _fail("invalid_preview", f"preview {key} identity is incomplete")
+    runtime = value["browser_runtime"]
+    adapter = runtime.get("adapter_profile") if isinstance(runtime, Mapping) else None
+    browser = runtime.get("browser_identity") if isinstance(runtime, Mapping) else None
+    if (
+        not isinstance(runtime, Mapping)
+        or set(runtime)
+        != {"schema", "adapter_profile", "browser_identity", "result"}
+        or runtime.get("schema") != "meshshot.prelaunched-cdp-runtime/1"
+        or runtime.get("result") != "passed"
+        or not isinstance(adapter, Mapping)
+        or set(adapter) != {"name", "sha256"}
+        or adapter.get("name") != "playwright-1.60-chromium-1223-loopback-cdp/1"
+        or not isinstance(browser, Mapping)
+        or set(browser)
+        != {"playwright", "browser", "revision", "version", "sha256"}
+        or browser.get("playwright") != "1.60.0"
+        or browser.get("browser") != "chromium-headless-shell"
+        or browser.get("revision") != "1223"
+        or browser.get("version") != "Google Chrome for Testing 148.0.7778.96"
+    ):
+        _fail("invalid_preview", "preview browser runtime evidence is invalid")
+    _sha256(adapter.get("sha256"), "$.preview.browser_runtime.adapter_profile.sha256")
+    _sha256(browser.get("sha256"), "$.preview.browser_runtime.browser_identity.sha256")
     identity = value["profile"]["experiment_identity"]
     if not isinstance(identity, Mapping) or set(identity) != {"name", "sha256"}:
         _fail("invalid_preview", "preview profile experiment identity is invalid")
@@ -2318,6 +2343,34 @@ def _validate_preview_boundary(value: Mapping[str, Any], root: Path) -> None:
     _sha256(image.get("sha256"), "$.preview.image.sha256")
     if _file_sha256(root / "preview.png") != image["sha256"]:
         _fail("corrupt_workspace", "preview PNG digest mismatch")
+
+
+def _browser_runtime_allowed(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    adapter = value.get("adapter_profile")
+    browser = value.get("browser_identity")
+    return (
+        set(value) == {"schema", "adapter_profile", "browser_identity", "result"}
+        and value.get("schema") == "meshshot.prelaunched-cdp-runtime/1"
+        and value.get("result") == "passed"
+        and isinstance(adapter, Mapping)
+        and set(adapter) == {"name", "sha256"}
+        and adapter.get("name") == "playwright-1.60-chromium-1223-loopback-cdp/1"
+        and isinstance(adapter.get("sha256"), str)
+        and len(adapter["sha256"]) == 64
+        and all(character in "0123456789abcdef" for character in adapter["sha256"])
+        and isinstance(browser, Mapping)
+        and set(browser)
+        == {"playwright", "browser", "revision", "version", "sha256"}
+        and browser.get("playwright") == "1.60.0"
+        and browser.get("browser") == "chromium-headless-shell"
+        and browser.get("revision") == "1223"
+        and browser.get("version") == "Google Chrome for Testing 148.0.7778.96"
+        and isinstance(browser.get("sha256"), str)
+        and len(browser["sha256"]) == 64
+        and all(character in "0123456789abcdef" for character in browser["sha256"])
+    )
 
 
 def _closed_voxblame_object(

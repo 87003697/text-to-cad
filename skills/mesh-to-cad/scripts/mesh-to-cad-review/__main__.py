@@ -63,7 +63,7 @@ _SANDBOX_SETUP_CAPABILITIES = (
     "CAP_SETFCAP",
 )
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/13",
+    "schema": "cvm.provider-free-linux-sandbox/14",
     "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -100,7 +100,7 @@ _SANDBOX_PROFILE = {
             "expected_stdout": "cvm.browser-stage-exec-probe/1",
         },
         "sandbox_exec_diagnostics": {
-            "schema": "cvm.provider-free-browser-exec-diagnostic/4",
+            "schema": "cvm.provider-free-browser-exec-diagnostic/5",
             "receipt": "run/browser-exec-diagnostic.json",
             "executable": (
                 "/tmp/provider-free-playwright/attested/"
@@ -111,28 +111,7 @@ _SANDBOX_PROFILE = {
             "environment_names": ["HOME", "LANG", "PATH"],
             "network": "none",
             "timeout_seconds": 5,
-            "node_probe": {
-                "script": "scripts/pilot/browser_exec_probe.js",
-                "runtime": "playwright-bundled-node",
-                "spawn": "child-process",
-                "failure_kinds": [
-                    "spawn-event",
-                    "nonzero-exit",
-                    "timeout",
-                    "output-shape",
-                ],
-                "modes": [
-                    {"name": "attached", "detached": False},
-                    {"name": "detached", "detached": True},
-                ],
-                "result": {
-                    "exit_code": "zero-only-on-passed",
-                    "stdout": "single-closed-result-token",
-                    "stderr": "empty",
-                    "child_stdout": "single-chromium-version-line",
-                    "child_stdout_max_bytes": 128,
-                },
-            },
+            "node_probe": "retired-by-python-prelaunch",
             "result": {
                 "exit_code": 0,
                 "stdout": "single-chromium-version-line",
@@ -142,9 +121,8 @@ _SANDBOX_PROFILE = {
             "seams": [
                 "outer-python-direct",
                 "nested-python-direct",
-                "nested-node-attached-direct",
-                "nested-node-detached-direct",
-                "playwright-launch",
+                "python-prelaunch",
+                "playwright-loopback-cdp-attach",
             ],
             "published": "closed-outcomes-only-no-raw-output",
             "cleanup": "no-profile-or-persistent-process-artifacts",
@@ -157,7 +135,8 @@ _SANDBOX_PROFILE = {
                 "chrome-headless-shell-linux64/chrome-headless-shell"
             ),
             "validation": "absolute-regular-non-symlink-executable",
-            "playwright_option": "executable_path",
+            "launch_owner": "python-prelaunched-cdp-runtime",
+            "playwright_option": "connect_over_cdp-is-local",
         },
         "cleanup": "supervisor-context-terminal-all-exit-classes",
         "catchable_signal_cleanup": ["SIGINT", "SIGTERM"],
@@ -184,7 +163,16 @@ _SANDBOX_PROFILE = {
                     "preview_browser_launch_process_limit",
                     "preview_browser_launch_sandbox_permission",
                     "preview_browser_launch_shared_memory",
-                    "preview_browser_playwright_launch_after_direct_probes",
+                    "preview_browser_adapter_profile",
+                    "preview_browser_identity",
+                    "preview_browser_profile",
+                    "preview_browser_prelaunch",
+                    "preview_browser_readiness",
+                    "preview_browser_readiness_timeout",
+                    "preview_browser_connect",
+                    "preview_browser_cleanup",
+                    "preview_browser_signal",
+                    "preview_browser_runtime_evidence",
                     "preview_browser_render",
                     "preview_browser_result",
                     "preview_dependency",
@@ -968,14 +956,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/13",
+                "id": "issue15.provider-free-bounded/14",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/13",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/14",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/13",
+                "resource_profile": "issue15.provider-free-bounded/14",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False
@@ -1120,7 +1108,7 @@ def _runtime_authority_verdict(
         ):
             raise ReviewError("preview sandbox enforcement is incomplete")
         if browser_exec_diagnostic != {
-            "schema": "cvm.provider-free-browser-exec-diagnostic/4",
+            "schema": "cvm.provider-free-browser-exec-diagnostic/5",
             "executable": (
                 "/tmp/provider-free-playwright/attested/"
                 "chrome-headless-shell-linux64/chrome-headless-shell"
@@ -1128,10 +1116,10 @@ def _runtime_authority_verdict(
             "probe": "chromium-version-immediate-exit",
             "outer": "passed",
             "nested": "passed",
-            "node_attached": "passed",
-            "node_detached": "passed",
+            "node_attached": "not-run",
+            "node_detached": "not-run",
             "node_failure_kind": "not-run",
-            "playwright": "passed",
+            "prelaunched_cdp": "passed",
         }:
             raise ReviewError("browser exec diagnostic is incomplete")
         if not runtime_authority_failure and public_wrapper != {

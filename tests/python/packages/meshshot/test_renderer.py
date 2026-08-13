@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import contextmanager
 from io import BytesIO
 import json
 import os
@@ -32,7 +33,288 @@ def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometr
     return MeshGeometry(vertices=vertices, faces=faces)
 
 
+def _runtime_patch(browser: object) -> tuple[mock._patch, mock.MagicMock]:
+    runtime = mock.MagicMock()
+    runtime.evidence = {
+        "schema": "meshshot.prelaunched-cdp-runtime/1",
+        "adapter_profile": {"name": "test/1", "sha256": "1" * 64},
+        "browser_identity": {
+            "playwright": "1.60.0",
+            "browser": "chromium-headless-shell",
+            "revision": "1223",
+            "version": "Google Chrome for Testing 148.0.7778.96",
+            "sha256": "2" * 64,
+        },
+        "result": "passed",
+    }
+
+    @contextmanager
+    def opened(_chromium: object):
+        yield browser
+
+    runtime.open.side_effect = opened
+    runtime_class = mock.MagicMock(return_value=runtime)
+    return mock.patch("meshshot.renderer.PrelaunchedCdpRuntime", runtime_class), runtime
+
+
 class ResidualRendererTests(unittest.TestCase):
+    def test_prelaunched_runtime_rejects_wrong_browser_identity_before_spawn(self) -> None:
+        playwright = mock.MagicMock()
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = playwright
+        wrong_version = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=b"Google Chrome for Testing 148.0.7778.95\n",
+            stderr=b"",
+        )
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_bytes(b"wrong-browser")
+            executable.chmod(0o755)
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(executable)},
+                ),
+                mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+                mock.patch("subprocess.run", return_value=wrong_version),
+                mock.patch("subprocess.Popen") as popen,
+                self.assertRaises(MeshshotError) as raised,
+            ):
+                render_residual_preview(
+                    _geometry(triangle),
+                    _geometry(triangle),
+                    variant="step",
+                )
+
+        self.assertEqual("browser_identity", raised.exception.phase)
+        popen.assert_not_called()
+
+    def test_prelaunched_runtime_rejects_malformed_readiness_and_removes_profile(
+        self,
+    ) -> None:
+        cases = (
+            "49152\n/devtools/browser/good\nextra\n",
+            "/devtools/browser/reordered\n49152\n",
+            "0\n/devtools/browser/zero\n",
+            "49152\n/devtools/page/not-a-browser\n",
+        )
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+
+        for index, readiness in enumerate(cases):
+            with self.subTest(readiness=readiness):
+                playwright = mock.MagicMock()
+                sync_playwright = mock.MagicMock()
+                sync_playwright.return_value.__enter__.return_value = playwright
+                process = mock.MagicMock(spec=subprocess.Popen)
+                process.pid = 43210 + index
+                process.poll.return_value = None
+                process.wait.return_value = 0
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    executable = root / "chrome-headless-shell"
+                    executable.write_bytes(b"attested-browser")
+                    executable.chmod(0o755)
+                    profile = root / "profile"
+
+                    def prelaunch(*_args: object, **_kwargs: object) -> object:
+                        (profile / "DevToolsActivePort").write_text(
+                            readiness,
+                            encoding="utf-8",
+                        )
+                        return process
+
+                    with (
+                        mock.patch.dict(
+                            os.environ,
+                            {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(executable)},
+                        ),
+                        mock.patch(
+                            "playwright.sync_api.sync_playwright", sync_playwright
+                        ),
+                        mock.patch(
+                            "meshshot.browser_runtime._attest",
+                            return_value={
+                                "playwright": "1.60.0",
+                                "browser": "chromium-headless-shell",
+                                "revision": "1223",
+                                "version": "Google Chrome for Testing 148.0.7778.96",
+                                "sha256": "2" * 64,
+                            },
+                        ),
+                        mock.patch("subprocess.Popen", side_effect=prelaunch),
+                        mock.patch(
+                            "tempfile.mkdtemp",
+                            side_effect=lambda **_kwargs: (
+                                profile.mkdir() or os.fspath(profile)
+                            ),
+                        ),
+                        mock.patch("os.getpgid", return_value=process.pid),
+                        mock.patch(
+                            "os.killpg",
+                            side_effect=lambda _pgid, signum: (
+                                (_ for _ in ()).throw(ProcessLookupError())
+                                if signum == 0
+                                else None
+                            ),
+                        ),
+                        self.assertRaises(MeshshotError) as raised,
+                    ):
+                        render_residual_preview(
+                            _geometry(triangle),
+                            _geometry(triangle),
+                            variant="step",
+                        )
+
+                    self.assertEqual("browser_readiness", raised.exception.phase)
+                    self.assertFalse(profile.exists())
+                    playwright.chromium.connect_over_cdp.assert_not_called()
+
+    def test_prelaunched_runtime_connect_failure_reaps_group_and_removes_profile(
+        self,
+    ) -> None:
+        playwright = mock.MagicMock()
+        playwright.chromium.connect_over_cdp.side_effect = RuntimeError(
+            "sensitive endpoint failure"
+        )
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = playwright
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.poll.return_value = None
+        process.wait.return_value = 0
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            executable.write_bytes(b"attested-browser")
+            executable.chmod(0o755)
+            profile = root / "profile"
+
+            def prelaunch(*_args: object, **_kwargs: object) -> object:
+                (profile / "DevToolsActivePort").write_text(
+                    "49152\n/devtools/browser/good\n",
+                    encoding="utf-8",
+                )
+                return process
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(executable)},
+                ),
+                mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+                mock.patch(
+                    "meshshot.browser_runtime._attest",
+                    return_value={
+                        "playwright": "1.60.0",
+                        "browser": "chromium-headless-shell",
+                        "revision": "1223",
+                        "version": "Google Chrome for Testing 148.0.7778.96",
+                        "sha256": "2" * 64,
+                    },
+                ),
+                mock.patch("subprocess.Popen", side_effect=prelaunch),
+                mock.patch(
+                    "tempfile.mkdtemp",
+                    side_effect=lambda **_kwargs: (
+                        profile.mkdir() or os.fspath(profile)
+                    ),
+                ),
+                mock.patch("os.getpgid", return_value=43210),
+                mock.patch(
+                    "os.killpg",
+                    side_effect=lambda _pgid, signum: (
+                        (_ for _ in ()).throw(ProcessLookupError())
+                        if signum == 0
+                        else None
+                    ),
+                ) as killpg,
+                self.assertRaises(MeshshotError) as raised,
+            ):
+                render_residual_preview(
+                    _geometry(triangle),
+                    _geometry(triangle),
+                    variant="step",
+                )
+
+            self.assertEqual("browser_connect", raised.exception.phase)
+            self.assertFalse(profile.exists())
+            self.assertIn(
+                mock.call(43210, __import__("signal").SIGTERM),
+                killpg.mock_calls,
+            )
+
+    def test_prelaunched_runtime_escalates_term_to_kill(self) -> None:
+        from meshshot.browser_runtime import PrelaunchedCdpRuntime
+
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.poll.return_value = None
+        process.wait.side_effect = [subprocess.TimeoutExpired([], 5), 0]
+        runtime = object.__new__(PrelaunchedCdpRuntime)
+        runtime._profile = {"cleanup_term_ms": 1, "cleanup_kill_ms": 1}
+        runtime._profile_dir = None
+        runtime._process = process
+        runtime._process_group = 43210
+
+        with (
+            mock.patch(
+                "os.killpg",
+                side_effect=lambda _pgid, signum: (
+                    (_ for _ in ()).throw(ProcessLookupError())
+                    if signum == 0
+                    else None
+                ),
+            ) as killpg,
+        ):
+            runtime._cleanup()
+
+        self.assertEqual(
+            [
+                mock.call(43210, __import__("signal").SIGTERM),
+                mock.call(43210, __import__("signal").SIGKILL),
+                mock.call(43210, 0),
+                mock.call(43210, 0),
+            ],
+            killpg.mock_calls,
+        )
+
+    def test_prelaunched_runtime_cleanup_failure_is_terminal_and_closed(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.poll.return_value = None
+        process.wait.return_value = 0
+        runtime = object.__new__(PrelaunchedCdpRuntime)
+        runtime._profile = {"cleanup_term_ms": 1, "cleanup_kill_ms": 1}
+        runtime._profile_dir = Path("/private/tmp/meshshot-test-owned-profile")
+        runtime._process = process
+        runtime._process_group = 43210
+
+        with (
+            mock.patch(
+                "os.killpg",
+                side_effect=lambda _pgid, signum: (
+                    (_ for _ in ()).throw(ProcessLookupError())
+                    if signum == 0
+                    else None
+                ),
+            ),
+            mock.patch("shutil.rmtree", side_effect=OSError("sensitive cleanup")),
+            mock.patch("os.path.lexists", return_value=True),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            runtime._cleanup()
+
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertNotIn("sensitive", str(raised.exception))
+
     def test_public_render_prelaunches_attested_browser_and_attaches_over_loopback_cdp(
         self,
     ) -> None:
@@ -53,7 +335,10 @@ class ResidualRendererTests(unittest.TestCase):
         page.evaluate.return_value = {
             "ok": True,
             "pngDataUrl": f"data:image/png;base64,{encoded}",
-            "views": [{} for _ in range(8)],
+            "views": [
+                {"name": name}
+                for name in ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
+            ],
         }
         sync_playwright = mock.MagicMock()
         sync_playwright.return_value.__enter__.return_value = playwright
@@ -61,6 +346,12 @@ class ResidualRendererTests(unittest.TestCase):
         process.pid = 43210
         process.poll.return_value = None
         process.wait.return_value = 0
+        version = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=b"Google Chrome for Testing 148.0.7778.96\n",
+            stderr=b"",
+        )
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
 
         with tempfile.TemporaryDirectory() as directory:
@@ -71,7 +362,6 @@ class ResidualRendererTests(unittest.TestCase):
             profile = root / "runtime-profile"
 
             def prelaunch(*_args: object, **_kwargs: object) -> object:
-                profile.mkdir()
                 (profile / "DevToolsActivePort").write_text(
                     "49152\n/devtools/browser/01234567-89ab-cdef-0123-456789abcdef\n",
                     encoding="utf-8",
@@ -87,9 +377,25 @@ class ResidualRendererTests(unittest.TestCase):
                     "playwright.sync_api.sync_playwright", sync_playwright
                 ),
                 mock.patch("subprocess.Popen", side_effect=prelaunch),
-                mock.patch("tempfile.mkdtemp", return_value=os.fspath(profile)),
+                mock.patch(
+                    "subprocess.run",
+                    return_value=version,
+                ),
+                mock.patch(
+                    "tempfile.mkdtemp",
+                    side_effect=lambda **_kwargs: (
+                        profile.mkdir() or os.fspath(profile)
+                    ),
+                ),
                 mock.patch("os.getpgid", return_value=43210),
-                mock.patch("os.killpg") as killpg,
+                mock.patch(
+                    "os.killpg",
+                    side_effect=lambda _pgid, signum: (
+                        (_ for _ in ()).throw(ProcessLookupError())
+                        if signum == 0
+                        else None
+                    ),
+                ) as killpg,
             ):
                 rendered = render_residual_preview(
                     _geometry(triangle),
@@ -103,7 +409,12 @@ class ResidualRendererTests(unittest.TestCase):
             timeout=mock.ANY,
             is_local=True,
         )
-        self.assertEqual("meshshot.prelaunched-cdp-runtime/1", rendered.browser_runtime["schema"])
+        self.assertIsNotNone(rendered.browser_runtime)
+        assert rendered.browser_runtime is not None
+        self.assertEqual(
+            "meshshot.prelaunched-cdp-runtime/1",
+            rendered.browser_runtime["schema"],
+        )
         self.assertEqual("passed", rendered.browser_runtime["result"])
         self.assertEqual(
             {"name", "sha256"},
@@ -116,15 +427,9 @@ class ResidualRendererTests(unittest.TestCase):
         self.assertFalse(profile.exists())
         self.assertIn(mock.call(43210, __import__("signal").SIGTERM), killpg.mock_calls)
 
-    def test_real_playwright_launches_explicit_attested_executable(self) -> None:
-        """Exercise the production executable_path at the real launch seam."""
+    def test_real_prelaunched_cdp_runtime_renders_with_exact_headless_shell(self) -> None:
+        """Exercise the production prelaunch and CDP attach seam."""
 
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as playwright:
-            executable = Path(playwright.chromium.executable_path).resolve(
-                strict=True
-            )
         triangle = (
             (-0.2, -0.2, 0.0),
             (0.2, -0.2, 0.0),
@@ -132,23 +437,21 @@ class ResidualRendererTests(unittest.TestCase):
         )
         geometry = _geometry(triangle)
 
-        with mock.patch.dict(
-            os.environ,
-            {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(executable)},
-        ):
-            rendered = render_residual_preview(
-                geometry,
-                geometry,
-                variant="step",
-            )
+        rendered = render_residual_preview(
+            geometry,
+            geometry,
+            variant="step",
+        )
 
         self.assertEqual((504, 1008), Image.open(BytesIO(rendered.png_bytes)).size)
+        self.assertIsNotNone(rendered.browser_runtime)
+        assert rendered.browser_runtime is not None
+        self.assertEqual("passed", rendered.browser_runtime["result"])
 
     def test_explicit_attested_browser_executable_bypasses_registry_selection(
         self,
     ) -> None:
         playwright = mock.MagicMock()
-        playwright.chromium.launch.side_effect = RuntimeError("stop after launch")
         sync_playwright = mock.MagicMock()
         sync_playwright.return_value.__enter__.return_value = playwright
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
@@ -162,8 +465,21 @@ class ResidualRendererTests(unittest.TestCase):
                     os.environ,
                     {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(executable)},
                 ),
+                mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
                 mock.patch(
-                    "playwright.sync_api.sync_playwright", sync_playwright
+                    "meshshot.browser_runtime._attest",
+                    return_value={
+                        "playwright": "1.60.0",
+                        "browser": "chromium-headless-shell",
+                        "revision": "1223",
+                        "version": "Google Chrome for Testing 148.0.7778.96",
+                        "sha256": "2" * 64,
+                    },
+                ),
+                mock.patch("subprocess.Popen", side_effect=OSError("stop")) as popen,
+                mock.patch(
+                    "meshshot.renderer.default_executable",
+                    side_effect=AssertionError("registry selection is forbidden"),
                 ),
                 self.assertRaises(MeshshotError),
             ):
@@ -173,12 +489,8 @@ class ResidualRendererTests(unittest.TestCase):
                     variant="step",
                 )
 
-            playwright.chromium.launch.assert_called_once_with(
-                headless=True,
-                args=["--no-sandbox"],
-                timeout=15_000,
-                executable_path=os.fspath(executable),
-            )
+            self.assertEqual(os.fspath(executable), popen.call_args.args[0][0])
+            playwright.chromium.launch.assert_not_called()
 
     def test_explicit_browser_executable_rejects_unsafe_file_types(self) -> None:
         playwright = mock.MagicMock()
@@ -220,10 +532,10 @@ class ResidualRendererTests(unittest.TestCase):
                     )
 
                 self.assertEqual(
-                    "browser_launch_executable", raised.exception.phase
+                    "browser_identity", raised.exception.phase
                 )
 
-        playwright.chromium.launch.assert_not_called()
+        playwright.chromium.connect_over_cdp.assert_not_called()
 
     def test_browser_launch_failure_has_resource_specific_closed_phase(self) -> None:
         cases = {
@@ -279,14 +591,28 @@ class ResidualRendererTests(unittest.TestCase):
         for detail, expected in cases.items():
             with self.subTest(detail=detail):
                 playwright = mock.MagicMock()
-                playwright.chromium.launch.side_effect = RuntimeError(detail)
                 sync_playwright = mock.MagicMock()
                 sync_playwright.return_value.__enter__.return_value = playwright
 
                 with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(Path(os.__file__))},
+                    ),
                     mock.patch(
                         "playwright.sync_api.sync_playwright", sync_playwright
                     ),
+                    mock.patch(
+                        "meshshot.browser_runtime._attest",
+                        return_value={
+                            "playwright": "1.60.0",
+                            "browser": "chromium-headless-shell",
+                            "revision": "1223",
+                            "version": "Google Chrome for Testing 148.0.7778.96",
+                            "sha256": "2" * 64,
+                        },
+                    ),
+                    mock.patch("subprocess.Popen", side_effect=OSError(detail)),
                     self.assertRaises(MeshshotError) as raised,
                 ):
                     render_residual_preview(
@@ -299,13 +625,29 @@ class ResidualRendererTests(unittest.TestCase):
 
     def test_browser_launch_failure_has_closed_phase(self) -> None:
         playwright = mock.MagicMock()
-        playwright.chromium.launch.side_effect = RuntimeError("sensitive launch detail")
         sync_playwright = mock.MagicMock()
         sync_playwright.return_value.__enter__.return_value = playwright
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
 
         with (
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(Path(os.__file__))},
+            ),
             mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+            mock.patch(
+                "meshshot.browser_runtime._attest",
+                return_value={
+                    "playwright": "1.60.0",
+                    "browser": "chromium-headless-shell",
+                    "revision": "1223",
+                    "version": "Google Chrome for Testing 148.0.7778.96",
+                    "sha256": "2" * 64,
+                },
+            ),
+            mock.patch(
+                "subprocess.Popen", side_effect=OSError("sensitive launch detail")
+            ),
             self.assertRaises(MeshshotError) as raised,
         ):
             render_residual_preview(
@@ -323,7 +665,6 @@ class ResidualRendererTests(unittest.TestCase):
         playwright = mock.MagicMock()
         context.new_page.return_value = page
         browser.new_context.return_value = context
-        playwright.chromium.launch.return_value = browser
 
         png = BytesIO()
         Image.new("RGB", (1, 1), (0, 0, 0)).save(png, format="PNG")
@@ -337,8 +678,54 @@ class ResidualRendererTests(unittest.TestCase):
         sync_playwright.return_value.__enter__.return_value = playwright
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
 
+        runtime_patch, _runtime = _runtime_patch(browser)
         with (
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(Path(os.__file__))},
+            ),
             mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+            runtime_patch,
+            self.assertRaises(MeshshotError) as raised,
+        ):
+            render_residual_preview(
+                _geometry(triangle),
+                _geometry(triangle),
+                variant="step",
+            )
+
+        self.assertEqual("browser_result", raised.exception.phase)
+
+    def test_reordered_browser_view_evidence_has_browser_result_phase(self) -> None:
+        page = mock.MagicMock()
+        context = mock.MagicMock()
+        browser = mock.MagicMock()
+        playwright = mock.MagicMock()
+        context.new_page.return_value = page
+        browser.new_context.return_value = context
+        png = BytesIO()
+        Image.new("RGB", (504, 1008), (0, 0, 0)).save(png, format="PNG")
+        encoded = base64.b64encode(png.getvalue()).decode("ascii")
+        page.evaluate.return_value = {
+            "ok": True,
+            "pngDataUrl": f"data:image/png;base64,{encoded}",
+            "views": [
+                {"name": name}
+                for name in ("-Z", "+Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
+            ],
+        }
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = playwright
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+        runtime_patch, _runtime = _runtime_patch(browser)
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(Path(os.__file__))},
+            ),
+            mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+            runtime_patch,
             self.assertRaises(MeshshotError) as raised,
         ):
             render_residual_preview(
@@ -356,7 +743,6 @@ class ResidualRendererTests(unittest.TestCase):
         playwright = mock.MagicMock()
         context.new_page.return_value = page
         browser.new_context.return_value = context
-        playwright.chromium.launch.return_value = browser
 
         png = BytesIO()
         Image.new("RGB", (504, 1008), (0, 0, 0)).save(png, format="PNG")
@@ -377,7 +763,19 @@ class ResidualRendererTests(unittest.TestCase):
             return {
                 "ok": True,
                 "pngDataUrl": f"data:image/png;base64,{encoded}",
-                "views": [{} for _ in range(8)],
+                "views": [
+                    {"name": name}
+                    for name in (
+                        "+Z",
+                        "-Z",
+                        "+Y",
+                        "-Y",
+                        "+X",
+                        "-X",
+                        "Iso",
+                        "-Iso",
+                    )
+                ],
             }
 
         page.evaluate.side_effect = evaluate_without_payload
@@ -385,7 +783,15 @@ class ResidualRendererTests(unittest.TestCase):
         sync_playwright.return_value.__enter__.return_value = playwright
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
 
-        with mock.patch("playwright.sync_api.sync_playwright", sync_playwright):
+        runtime_patch, _runtime = _runtime_patch(browser)
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(Path(os.__file__))},
+            ),
+            mock.patch("playwright.sync_api.sync_playwright", sync_playwright),
+            runtime_patch,
+        ):
             rendered = render_residual_preview(
                 _geometry(triangle),
                 _geometry(triangle),
