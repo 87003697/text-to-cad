@@ -186,27 +186,44 @@ def _playwright_revision(browser_name: str) -> str:
             Path(playwright.__file__).resolve().parent
             / "driver/package/browsers.json"
         )
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        matches = [
-            item
-            for item in manifest["browsers"]
-            if item.get("name") == browser_name
-        ]
+        manifest_text = manifest_path.read_text(encoding="utf-8")
+        manifest = json.loads(manifest_text)
+    # ValueError covers bounded UTF-8 and JSON decoding failures. Control-flow
+    # BaseExceptions remain outside this data-boundary classification.
     except (
         ImportError,
         OSError,
-        KeyError,
+        ValueError,
         TypeError,
         AttributeError,
         RuntimeError,
-        json.JSONDecodeError,
     ) as exc:
         raise BrowserRuntimeError(
             "browser_identity",
             browser_identity_phase="playwright_package_revision_identity",
             browser_identity_check="playwright_package_manifest",
         ) from exc
-    if len(matches) != 1 or not isinstance(matches[0].get("revision"), str):
+    if (
+        not isinstance(manifest, dict)
+        or not isinstance(manifest.get("browsers"), list)
+    ):
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="playwright_package_revision_identity",
+            browser_identity_check="playwright_package_manifest",
+        )
+    entries = manifest["browsers"]
+    if not all(isinstance(item, dict) for item in entries):
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="playwright_package_revision_identity",
+            browser_identity_check="browser_manifest_entry",
+        )
+    matches = [item for item in entries if item.get("name") == browser_name]
+    if (
+        len(matches) != 1
+        or not isinstance(matches[0].get("revision"), str)
+    ):
         raise BrowserRuntimeError(
             "browser_identity",
             browser_identity_phase="playwright_package_revision_identity",
@@ -317,7 +334,14 @@ def default_executable(chromium_executable: str) -> _SelectedExecutable:
 def _attest(executable: _PinnedExecutable, profile: dict[str, Any]) -> dict[str, str]:
     try:
         playwright_version = metadata.version("playwright")
-    except metadata.PackageNotFoundError as exc:
+    # Distribution discovery can fail while reading or parsing installed
+    # metadata; ValueError includes its decoding failures.
+    except (
+        metadata.PackageNotFoundError,
+        OSError,
+        ValueError,
+        TypeError,
+    ) as exc:
         raise BrowserRuntimeError(
             "browser_identity",
             browser_identity_phase="playwright_package_revision_identity",

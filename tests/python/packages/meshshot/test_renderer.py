@@ -1043,7 +1043,7 @@ class ResidualRendererTests(unittest.TestCase):
                 self.assertEqual(
                     "playwright_package_revision_identity",
                     raised.exception.browser_identity_phase,
-                    )
+                )
                 self.assertEqual(check, raised.exception.browser_identity_check)
 
     def test_public_render_closes_package_revision_parse_boundaries(self) -> None:
