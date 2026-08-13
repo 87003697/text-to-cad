@@ -8,6 +8,9 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import shutil
+import signal
+import socket
 import statistics
 import subprocess
 import tempfile
@@ -429,6 +432,80 @@ class ResidualRendererTests(unittest.TestCase):
             )
             self.assertFalse(profile.exists())
 
+    def test_signal_delivery_after_popen_observes_owned_process_group(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 54321
+        process.poll.return_value = None
+        process.wait.return_value = 0
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory) / "profile"
+            runtime = object.__new__(PrelaunchedCdpRuntime)
+            runtime._profile = {
+                "arguments": [], "startup_timeout_ms": 0,
+                "cleanup_term_ms": 0, "cleanup_kill_ms": 0,
+            }
+            runtime._executable = Path(os.__file__)
+            runtime._pinned_executable = mock.MagicMock()
+            runtime._pinned_executable.popen.return_value = process
+            runtime._profile_dir = None
+            runtime._process = None
+            runtime._process_group = None
+            chromium = mock.MagicMock()
+            installed: dict[int, object] = {}
+            previous_events: list[str] = []
+
+            def previous(_signum: int, _frame: object) -> None:
+                previous_events.append("previous")
+
+            handlers = {signal.SIGINT: previous, signal.SIGTERM: previous}
+
+            def set_signal(signum: int, handler: object) -> object:
+                installed[signum] = handler
+                handlers[signum] = handler
+                return handler
+
+            mask_calls = 0
+
+            def pthread_sigmask(how: int, mask: object) -> set[int]:
+                nonlocal mask_calls
+                mask_calls += 1
+                if how == signal.SIG_SETMASK:
+                    self.assertEqual(54321, runtime._process_group)
+                    installed[signal.SIGTERM](signal.SIGTERM, None)
+                return set()
+
+            with (
+                mock.patch(
+                    "tempfile.mkdtemp",
+                    side_effect=lambda **_kwargs: (
+                        profile.mkdir() or os.fspath(profile)
+                    ),
+                ),
+                mock.patch("signal.getsignal", side_effect=lambda signum: handlers[signum]),
+                mock.patch("signal.signal", side_effect=set_signal),
+                mock.patch("signal.pthread_sigmask", side_effect=pthread_sigmask),
+                mock.patch(
+                    "os.killpg",
+                    side_effect=lambda _pgid, signum: (
+                        (_ for _ in ()).throw(ProcessLookupError())
+                        if signum == 0
+                        else None
+                    ),
+                ) as killpg,
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                with runtime.open(chromium):
+                    self.fail("signal should interrupt before browser attach")
+            self.assertEqual("browser_signal", raised.exception.operation)
+            self.assertGreaterEqual(mask_calls, 2)
+            self.assertIn(
+                mock.call(54321, __import__("signal").SIGTERM),
+                killpg.mock_calls,
+            )
+            self.assertEqual(["previous"], previous_events)
+
     def test_browser_crash_is_projected_as_closed_public_render_failure(self) -> None:
         page = mock.MagicMock()
         context = mock.MagicMock()
@@ -481,7 +558,7 @@ class ResidualRendererTests(unittest.TestCase):
                 self.assertRaises(BrowserRuntimeError) as raised,
             ):
                 runtime._prelaunch()
-            self.assertEqual("browser_profile", raised.exception.operation)
+            self.assertEqual("browser_cleanup", raised.exception.operation)
             popen.assert_not_called()
             self.assertTrue(profile.is_dir())
             self.assertEqual("owned elsewhere", (profile / "stale").read_text(encoding="utf-8"))
@@ -841,6 +918,65 @@ class ResidualRendererTests(unittest.TestCase):
                 self.assertEqual(expected_sha256, pinned.sha256())
             finally:
                 pinned.close()
+
+    def test_running_process_image_rejects_swap_exec_restore(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            shutil.copyfile("/bin/sleep", executable)
+            executable.chmod(0o755)
+            pinned = _PinnedExecutable(executable)
+            replacement = root / "replacement-browser"
+            shutil.copyfile("/usr/bin/yes", replacement)
+            replacement.chmod(0o755)
+            assert pinned.launch_path is not None
+            launch_root = pinned.launch_path.parent
+            saved = root / "saved-snapshot"
+            process: subprocess.Popen[bytes] | None = None
+            try:
+                pinned._thaw_directories(launch_root)
+                os.replace(pinned.launch_path, saved)
+                os.replace(replacement, pinned.launch_path)
+                process = pinned.popen(
+                    [os.fspath(executable), "20"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+                os.replace(pinned.launch_path, replacement)
+                os.replace(saved, pinned.launch_path)
+                pinned._freeze_directories(launch_root)
+                with self.assertRaises(BrowserRuntimeError) as raised:
+                    pinned.verify_running_image(process.pid, timeout=5)
+                self.assertEqual("browser_identity", raised.exception.operation)
+            finally:
+                if process is not None and process.poll() is None:
+                    try:
+                        os.killpg(process.pid, __import__("signal").SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    if process.poll() is None:
+                        process.kill()
+                    process.wait(timeout=5)
+                pinned.close()
+
+    def test_foreign_loopback_listener_is_not_browser_group_owned(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _verify_listener_owner
+
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            with self.assertRaises(BrowserRuntimeError) as raised:
+                _verify_listener_owner(os.getpid() + 100000, port, timeout=5)
+            self.assertEqual("browser_identity", raised.exception.operation)
+        finally:
+            listener.close()
 
     def test_private_launch_tree_rejects_atomic_executable_replacement(self) -> None:
         from meshshot.browser_runtime import _PinnedExecutable
