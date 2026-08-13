@@ -2315,7 +2315,7 @@ class ResidualRendererTests(unittest.TestCase):
             )
         self.assertEqual(
             os.fspath(Path(browser_runtime.__file__).with_name("fd_exec_handoff.py")),
-            popen.call_args.args[0][3],
+            popen.call_args.args[0][2],
         )
         self.assertEqual(
             browser_runtime.sys.executable,
@@ -2337,18 +2337,332 @@ class ResidualRendererTests(unittest.TestCase):
         pinned.launch_path = Path("/private/image/chrome-headless-shell")
         with (
             mock.patch.object(browser_runtime.sys, "platform", "linux"),
-            mock.patch(
-                "meshshot.browser_runtime.subprocess.run",
-                return_value=subprocess.CompletedProcess([], 0),
-            ) as run,
+            mock.patch("meshshot.browser_runtime.subprocess.Popen") as popen,
         ):
+            popen.return_value.communicate.return_value = (b"version\n", b"")
+            popen.return_value.returncode = 0
             pinned.run_version(timeout=5)
-        self.assertEqual(
-            "/proc/self/fd/91",
-            run.call_args.kwargs["executable"],
+        self.assertEqual(browser_runtime.sys.executable, popen.call_args.kwargs["executable"])
+        self.assertIn(91, popen.call_args.kwargs["pass_fds"])
+        self.assertTrue(popen.call_args.kwargs["close_fds"])
+        self.assertNotIn(
+            "/proc/self/fd",
+            " ".join(str(value) for value in popen.call_args.args[0]),
         )
-        self.assertEqual((91,), run.call_args.kwargs["pass_fds"])
-        self.assertTrue(run.call_args.kwargs["close_fds"])
+
+    def test_linux_version_timeout_reaps_or_fails_cleanup_closed(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 91
+        pinned.launch_path = Path("/private/image/chrome-headless-shell")
+        for cleanup_failed, expected in (
+            (False, subprocess.TimeoutExpired),
+            (True, BrowserRuntimeError),
+        ):
+            process = mock.MagicMock(spec=subprocess.Popen)
+            process.communicate.side_effect = subprocess.TimeoutExpired(
+                ["closed-version-probe"], 5
+            )
+            with (
+                self.subTest(cleanup_failed=cleanup_failed),
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch.object(pinned, "popen", return_value=process),
+                mock.patch.object(
+                    pinned,
+                    "_reap_failed_handoff",
+                    return_value=cleanup_failed,
+                ) as reap,
+                self.assertRaises(expected) as raised,
+            ):
+                pinned.run_version(timeout=5)
+            reap.assert_called_once_with(
+                process,
+                process_group=False,
+                cleanup_timeout=browser_runtime._FD_EXEC_CLEANUP_SECONDS,
+            )
+            if cleanup_failed:
+                self.assertEqual("browser_cleanup", raised.exception.operation)
+
+    def test_linux_handoff_passes_only_closed_browser_environment(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = 73
+        pinned.launch_path = Path("/private/image/chrome-headless-shell")
+        with (
+            mock.patch.object(browser_runtime.sys, "platform", "linux"),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "HOME": "/closed-home",
+                    "PATH": "/usr/bin:/bin",
+                    "OPENAI_API_KEY": "must-not-cross-browser-exec",
+                },
+                clear=True,
+            ),
+            mock.patch("meshshot.browser_runtime.subprocess.Popen") as popen,
+        ):
+            pinned.popen(["ignored", "--headless"], close_fds=True)
+        self.assertEqual(
+            {"HOME": "/closed-home", "PATH": "/usr/bin:/bin"},
+            popen.call_args.kwargs["env"],
+        )
+
+    def test_linux_handoff_failure_matrix_reaps_every_started_helper(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        cases = ("helper-spawn", "select", "read", "fd-exec", "timeout")
+        for boundary in cases:
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.fd = 73
+            pinned.launch_path = Path("/private/image/chrome-headless-shell")
+            process = mock.MagicMock(spec=subprocess.Popen)
+            process.pid = 43210
+            with (
+                self.subTest(boundary=boundary),
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch(
+                    "meshshot.browser_runtime.subprocess.Popen",
+                    side_effect=(
+                        OSError("closed helper spawn")
+                        if boundary == "helper-spawn"
+                        else None
+                    ),
+                    return_value=process,
+                ) as popen,
+                mock.patch(
+                    "meshshot.browser_runtime.select.select",
+                    side_effect=(
+                        OSError("closed select")
+                        if boundary == "select"
+                        else None
+                    ),
+                    return_value=(
+                        ([], [], [])
+                        if boundary == "timeout"
+                        else ([101], [], [])
+                    ),
+                ),
+                mock.patch(
+                    "meshshot.browser_runtime.os.pipe",
+                    return_value=(101, 102),
+                ),
+                mock.patch("meshshot.browser_runtime.os.set_inheritable"),
+                mock.patch("meshshot.browser_runtime.os.close"),
+                mock.patch(
+                    "meshshot.browser_runtime.os.read",
+                    side_effect=(
+                        OSError("closed read") if boundary == "read" else None
+                    ),
+                    return_value=b"F" if boundary == "fd-exec" else b"",
+                ),
+                mock.patch.object(
+                    pinned,
+                    "_reap_failed_handoff",
+                    return_value=False,
+                ) as reap,
+                self.assertRaises((OSError, subprocess.TimeoutExpired)),
+            ):
+                pinned.popen(
+                    ["ignored", "--headless"],
+                    start_new_session=True,
+                    close_fds=True,
+                    _handoff_deadline=time.monotonic() + 1,
+                )
+            if boundary == "helper-spawn":
+                reap.assert_not_called()
+            else:
+                reap.assert_called_once_with(
+                    process,
+                    process_group=True,
+                    cleanup_timeout=browser_runtime._FD_EXEC_CLEANUP_SECONDS,
+                )
+            if boundary == "helper-spawn":
+                self.assertEqual(1, popen.call_count)
+
+    def test_linux_failed_group_handoff_gets_bounded_kill_and_reap(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        process = mock.MagicMock(spec=subprocess.Popen)
+        process.pid = 43210
+        process.poll.return_value = None
+        process.wait.return_value = -9
+        with (
+            mock.patch("meshshot.browser_runtime.os.killpg") as killpg,
+            mock.patch(
+                "meshshot.browser_runtime.time.monotonic",
+                side_effect=(100.0, 100.5),
+            ),
+        ):
+            failed = _PinnedExecutable._reap_failed_handoff(
+                process,
+                process_group=True,
+                cleanup_timeout=2.0,
+            )
+        self.assertFalse(failed)
+        killpg.assert_called_once_with(43210, signal.SIGKILL)
+        process.wait.assert_called_once_with(timeout=1.5)
+
+    def test_linux_handoff_descriptor_close_failure_is_terminal_cleanup(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        for failed_fd in (101, 102):
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.fd = 73
+            pinned.launch_path = Path("/private/image/chrome-headless-shell")
+            process = mock.MagicMock(spec=subprocess.Popen)
+            process.pid = 43210
+            closed: set[int] = set()
+
+            def close(descriptor: int) -> None:
+                closed.add(descriptor)
+                if descriptor == failed_fd:
+                    raise OSError("closed descriptor cleanup")
+
+            with (
+                self.subTest(failed_fd=failed_fd),
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch(
+                    "meshshot.browser_runtime.subprocess.Popen",
+                    return_value=process,
+                ),
+                mock.patch(
+                    "meshshot.browser_runtime.os.pipe",
+                    return_value=(101, 102),
+                ),
+                mock.patch("meshshot.browser_runtime.os.set_inheritable"),
+                mock.patch("meshshot.browser_runtime.os.close", side_effect=close),
+                mock.patch(
+                    "meshshot.browser_runtime.select.select",
+                    return_value=([101], [], []),
+                ),
+                mock.patch("meshshot.browser_runtime.os.read", return_value=b""),
+                mock.patch.object(
+                    pinned,
+                    "_reap_failed_handoff",
+                    return_value=False,
+                ) as reap,
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned.popen(
+                    ["ignored", "--headless"],
+                    start_new_session=True,
+                    close_fds=True,
+                )
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+            self.assertEqual({101, 102}, closed)
+            reap.assert_called_once()
+
+    def test_fd_exec_helper_has_one_fixed_schema_and_failure_token(self) -> None:
+        from meshshot import fd_exec_handoff
+
+        cases = (
+            ("unsupported", False, OSError("must not execute")),
+            ("exec-rejected", True, OSError("closed exec")),
+        )
+        for label, supported, exec_failure in cases:
+            supports_fd = mock.MagicMock()
+            supports_fd.__contains__.return_value = supported
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    fd_exec_handoff.sys,
+                    "argv",
+                    [
+                        "fd_exec_handoff.py",
+                        "meshshot.fd-exec-handoff/1",
+                        "73",
+                        "74",
+                        "/private/image/chrome-headless-shell",
+                        "--version",
+                    ],
+                ),
+                mock.patch.object(fd_exec_handoff.os, "supports_fd", supports_fd),
+                mock.patch.object(
+                    fd_exec_handoff.os,
+                    "execve",
+                    side_effect=exec_failure,
+                ) as execve,
+                mock.patch.object(fd_exec_handoff.os, "set_inheritable") as cloexec,
+                mock.patch.object(fd_exec_handoff.os, "write") as write,
+            ):
+                self.assertEqual(127, fd_exec_handoff.main())
+            write.assert_called_once_with(74, b"F")
+            if label == "unsupported":
+                execve.assert_not_called()
+                cloexec.assert_not_called()
+            else:
+                cloexec.assert_called_once_with(74, False)
+                execve.assert_called_once_with(
+                    73,
+                    ["/private/image/chrome-headless-shell", "--version"],
+                    dict(os.environ),
+                )
+
+    def test_fd_exec_helper_rejects_schema_drift_without_exec(self) -> None:
+        from meshshot import fd_exec_handoff
+
+        with (
+            mock.patch.object(
+                fd_exec_handoff.sys,
+                "argv",
+                [
+                    "fd_exec_handoff.py",
+                    "meshshot.fd-exec-handoff/raw",
+                    "73",
+                    "74",
+                    "/private/image/chrome-headless-shell",
+                ],
+            ),
+            mock.patch.object(fd_exec_handoff.os, "execve") as execve,
+            mock.patch.object(fd_exec_handoff.os, "write") as write,
+        ):
+            self.assertEqual(127, fd_exec_handoff.main())
+        execve.assert_not_called()
+        write.assert_called_once_with(74, b"F")
+
+    def test_failed_helper_token_write_cannot_publish_version_success(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _attest
+
+        pinned = mock.Mock()
+        pinned.sha256.return_value = "a" * 64
+        pinned.run_version.return_value = subprocess.CompletedProcess(
+            args=["closed-helper"],
+            returncode=127,
+            stdout=b"",
+            stderr=b"",
+        )
+        profile = {
+            "playwright": "1.60.0",
+            "browser": "chromium-headless-shell",
+            "revision": "1223",
+            "startup_timeout_ms": 15000,
+            "browser_version": "148.0.7778.96",
+        }
+        with (
+            mock.patch.object(
+                browser_runtime.metadata, "version", return_value="1.60.0"
+            ),
+            mock.patch.object(
+                browser_runtime,
+                "_playwright_revision",
+                return_value="1223",
+            ),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            _attest(pinned, profile)
+        self.assertEqual("browser_identity", raised.exception.operation)
+        self.assertEqual(
+            "private_launch_version_output_identity",
+            raised.exception.browser_identity_phase,
+        )
 
     def test_linux_memfd_creation_and_sealing_fail_closed_and_cleanup(self) -> None:
         from meshshot import browser_runtime

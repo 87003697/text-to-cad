@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import secrets
 import shutil
 import signal
@@ -62,6 +63,12 @@ PRIVATE_VERSION_EXECUTION_CHECKS = frozenset(
 )
 _SourceIdentity = tuple[int, int, int, int]
 _PROFILE_RESOURCE = "prelaunched_cdp_playwright_1_60_v1.json"
+_FD_EXEC_HANDOFF = Path(__file__).with_name("fd_exec_handoff.py")
+_FD_EXEC_HANDOFF_SCHEMA = "meshshot.fd-exec-handoff/1"
+_FD_EXEC_ENVIRONMENT = frozenset(
+    {"HOME", "LANG", "LC_ALL", "PATH", "TMPDIR", "TZ"}
+)
+_FD_EXEC_CLEANUP_SECONDS = 2.0
 MESHSHOT_EXECUTABLE_ROOT = Path("/meshshot-exec")
 _MESHSHOT_EXECUTABLE_ROOT_ENV = "MESHSHOT_EXECUTABLE_ROOT"
 ADAPTER_PROFILE_SHA256 = "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
@@ -848,13 +855,131 @@ class _PinnedExecutable:
         assert self.fd is not None
         return self._sha256_fd(self.fd)
 
+    @staticmethod
+    def _close_handoff_descriptors(*descriptors: int | None) -> bool:
+        failed = False
+        for descriptor in descriptors:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    failed = True
+        return failed
+
+    @staticmethod
+    def _reap_failed_handoff(
+        process: subprocess.Popen[bytes],
+        *,
+        process_group: bool,
+        cleanup_timeout: float = _FD_EXEC_CLEANUP_SECONDS,
+    ) -> bool:
+        deadline = time.monotonic() + cleanup_timeout
+        failed = False
+        if process.poll() is None:
+            try:
+                if process_group:
+                    os.killpg(process.pid, signal.SIGKILL)
+                else:
+                    process.kill()
+            except ProcessLookupError:
+                pass
+            except OSError:
+                failed = True
+        try:
+            process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        except (OSError, subprocess.SubprocessError):
+            failed = True
+        return failed
+
+    def _linux_popen(
+        self,
+        argv: list[str],
+        *,
+        deadline: float,
+        options: dict[str, Any],
+    ) -> subprocess.Popen[bytes]:
+        assert self.fd is not None and self.launch_path is not None
+        read_fd: int | None = None
+        write_fd: int | None = None
+        process: subprocess.Popen[bytes] | None = None
+        cleanup_failed = False
+        failure: BaseException | None = None
+        try:
+            read_fd, write_fd = os.pipe()
+            os.set_inheritable(read_fd, False)
+            os.set_inheritable(write_fd, False)
+            launch_argv = [os.fspath(self.launch_path), *argv[1:]]
+            helper_argv = [
+                sys.executable,
+                "-I",
+                os.fspath(_FD_EXEC_HANDOFF),
+                _FD_EXEC_HANDOFF_SCHEMA,
+                str(self.fd),
+                str(write_fd),
+                *launch_argv,
+            ]
+            options["executable"] = sys.executable
+            options["pass_fds"] = (self.fd, write_fd)
+            options["close_fds"] = True
+            options["env"] = {
+                name: os.environ[name]
+                for name in sorted(_FD_EXEC_ENVIRONMENT)
+                if name in os.environ
+            }
+            process = subprocess.Popen(helper_argv, **options)
+            parent_write_fd = write_fd
+            write_fd = None
+            try:
+                os.close(parent_write_fd)
+            except OSError as exc:
+                failure = exc
+                cleanup_failed = True
+            if failure is None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired([_FD_EXEC_HANDOFF_SCHEMA], 0)
+                ready, _writable, _errors = select.select(
+                    [read_fd], [], [], remaining
+                )
+                if not ready:
+                    raise subprocess.TimeoutExpired(
+                        [_FD_EXEC_HANDOFF_SCHEMA], remaining
+                    )
+                status = os.read(read_fd, 1)
+                if status != b"":
+                    raise OSError("fd-native browser execution failed")
+        except BaseException as exc:
+            failure = exc
+        finally:
+            cleanup_failed = (
+                self._close_handoff_descriptors(read_fd, write_fd)
+                or cleanup_failed
+            )
+            if failure is not None or cleanup_failed:
+                if process is not None:
+                    cleanup_failed = (
+                        self._reap_failed_handoff(
+                            process,
+                            process_group=bool(options.get("start_new_session")),
+                            cleanup_timeout=_FD_EXEC_CLEANUP_SECONDS,
+                        )
+                        or cleanup_failed
+                    )
+        if cleanup_failed:
+            raise BrowserRuntimeError("browser_cleanup") from failure
+        if failure is not None:
+            raise failure
+        assert process is not None
+        return process
+
     def popen(self, argv: list[str], **kwargs: Any) -> subprocess.Popen[bytes]:
         assert self.fd is not None and self.launch_path is not None
         options = dict(kwargs)
+        deadline = options.pop("_handoff_deadline", None)
         if sys.platform.startswith("linux"):
-            options["executable"] = f"/proc/self/fd/{self.fd}"
-            options["pass_fds"] = (self.fd,)
-            options["close_fds"] = True
+            if not isinstance(deadline, (int, float)):
+                deadline = time.monotonic() + 15.0
+            return self._linux_popen(argv, deadline=deadline, options=options)
         else:
             options["executable"] = os.fspath(self.launch_path)
         launch_argv = [os.fspath(self.launch_path), *argv[1:]]
@@ -931,6 +1056,34 @@ class _PinnedExecutable:
 
     def run_version(self, timeout: float) -> subprocess.CompletedProcess[bytes]:
         assert self.fd is not None and self.launch_path is not None
+        if sys.platform.startswith("linux"):
+            deadline = time.monotonic() + timeout
+            process = self.popen(
+                [os.fspath(self.launch_path), "--version"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                close_fds=True,
+                _handoff_deadline=deadline,
+            )
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=max(0.001, deadline - time.monotonic())
+                )
+            except subprocess.TimeoutExpired as exc:
+                if self._reap_failed_handoff(
+                    process,
+                    process_group=False,
+                    cleanup_timeout=_FD_EXEC_CLEANUP_SECONDS,
+                ):
+                    raise BrowserRuntimeError("browser_cleanup") from exc
+                raise
+            return subprocess.CompletedProcess(
+                args=[os.fspath(self.launch_path), "--version"],
+                returncode=process.returncode,
+                stdout=stdout,
+                stderr=stderr,
+            )
         options: dict[str, Any] = {
             "args": [os.fspath(self.launch_path), "--version"],
             "executable": os.fspath(self.launch_path),
@@ -941,9 +1094,6 @@ class _PinnedExecutable:
             "timeout": timeout,
             "close_fds": True,
         }
-        if sys.platform.startswith("linux"):
-            options["executable"] = f"/proc/self/fd/{self.fd}"
-            options["pass_fds"] = (self.fd,)
         return subprocess.run(**options)
 
     def close(self) -> None:
@@ -1230,6 +1380,9 @@ class PrelaunchedCdpRuntime:
 
     def _prelaunch(self) -> str:
         try:
+            deadline = time.monotonic() + float(
+                self._profile["startup_timeout_ms"]
+            ) / 1000
             try:
                 profile = Path(tempfile.mkdtemp(prefix="meshshot-cdp-"))
             except (OSError, TypeError, ValueError) as exc:
@@ -1287,6 +1440,7 @@ class PrelaunchedCdpRuntime:
                         stderr=subprocess.DEVNULL,
                         start_new_session=True,
                         close_fds=True,
+                        _handoff_deadline=deadline,
                     )
                     self._process_group = self._process.pid
                 self._pinned_executable.verify_running_image(
@@ -1300,9 +1454,10 @@ class PrelaunchedCdpRuntime:
                     "browser_identity",
                     browser_identity_substage="live_running_image_identity",
                 ) from exc
+            except subprocess.TimeoutExpired as exc:
+                raise BrowserRuntimeError("browser_readiness_timeout") from exc
             except OSError as exc:
                 raise BrowserRuntimeError(_prelaunch_operation(exc)) from exc
-            deadline = time.monotonic() + float(self._profile["startup_timeout_ms"]) / 1000
             readiness = profile / "DevToolsActivePort"
             while time.monotonic() < deadline:
                 if self._process.poll() is not None:

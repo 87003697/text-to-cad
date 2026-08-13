@@ -170,6 +170,16 @@ int main(int argc, char **argv) {
                     close_fds=True,
                 )
                 try:
+                    self.assertIsNone(
+                        held.poll(),
+                        "successful exec must close the handshake before exit",
+                    )
+                    inherited = os.stat(f"/proc/{held.pid}/fd/{pinned.fd}")
+                    sealed = os.fstat(pinned.fd)
+                    self.assertEqual(
+                        (sealed.st_dev, sealed.st_ino),
+                        (inherited.st_dev, inherited.st_ino),
+                    )
                     pinned.verify_running_image(held.pid, timeout=5)
                 finally:
                     held.terminate()
@@ -432,6 +442,10 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
                     REPO_ROOT / "packages/meshshot/src/meshshot/browser_runtime.py",
                     "/browser_runtime.py",
                 ),
+                (
+                    REPO_ROOT / "packages/meshshot/src/meshshot/fd_exec_handoff.py",
+                    "/fd_exec_handoff.py",
+                ),
                 (Path(__file__), "/test_linux_private_snapshot_exec.py"),
             ):
                 copied = run_docker(
@@ -443,7 +457,14 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
                 ["start", "--attach", name],
                 timeout=30,
             )
-            self.assertEqual(0, completed.returncode, "Linux harness failed closed")
+            self.assertEqual(
+                0,
+                completed.returncode,
+                "Linux harness failed closed: "
+                + (completed.stdout + completed.stderr).decode(
+                    "utf-8", errors="replace"
+                ),
+            )
         finally:
             try:
                 removed = run_docker(
