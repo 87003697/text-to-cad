@@ -28,7 +28,7 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 class JobProtocolTests(unittest.TestCase):
     def test_browser_identity_diagnostic_is_closed_and_failure_bound(self) -> None:
         receipt = {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/2",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/3",
             "operation": "preview_browser_identity",
             "substage": "connected_cdp_browser_version_identity",
             "scenario_failure": {
@@ -110,11 +110,13 @@ class JobProtocolTests(unittest.TestCase):
                         expected_phase=phase,
                     )
                 )
-
     def test_private_snapshot_diagnostic_requires_one_exact_phase(self) -> None:
-        for phase in sorted(
-            protocol.PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
-        ):
+        for phase in sorted(protocol.PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES):
+            check = (
+                "python_distribution_metadata"
+                if phase == "playwright_package_revision_identity"
+                else None
+            )
             receipt = {
                 "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
                 "operation": "preview_browser_identity",
@@ -125,15 +127,16 @@ class JobProtocolTests(unittest.TestCase):
                     "sha256": "d" * 64,
                 },
             }
+            if check is not None:
+                receipt["check"] = check
             with self.subTest(phase=phase):
                 self.assertTrue(
                     protocol.provider_free_browser_identity_diagnostic_allowed(
                         receipt,
                         expected_failure_sha256="d" * 64,
-                        expected_substage=(
-                            "private_snapshot_launch_image_identity"
-                        ),
+                        expected_substage="private_snapshot_launch_image_identity",
                         expected_phase=phase,
+                        expected_check=check,
                     )
                 )
                 for mutation in (
@@ -155,10 +158,9 @@ class JobProtocolTests(unittest.TestCase):
                         protocol.provider_free_browser_identity_diagnostic_allowed(
                             mutation,
                             expected_failure_sha256="d" * 64,
-                            expected_substage=(
-                                "private_snapshot_launch_image_identity"
-                            ),
+                            expected_substage="private_snapshot_launch_image_identity",
                             expected_phase=phase,
+                            expected_check=check,
                         )
                     )
         non_private = {
@@ -180,16 +182,10 @@ class JobProtocolTests(unittest.TestCase):
         )
 
     def test_playwright_package_diagnostic_requires_one_exact_check(self) -> None:
-        checks = (
-            "python_distribution_metadata",
-            "playwright_package_manifest",
-            "browser_manifest_entry",
-            "frozen_playwright_version_match",
-            "frozen_browser_revision_match",
-        )
+        checks = tuple(sorted(protocol.PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS))
         for check in checks:
             receipt = {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/3",
+                "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
                 "operation": "preview_browser_identity",
                 "substage": "private_snapshot_launch_image_identity",
                 "phase": "playwright_package_revision_identity",
@@ -209,6 +205,39 @@ class JobProtocolTests(unittest.TestCase):
                         expected_check=check,
                     )
                 )
+                for mutation in (
+                    {key: value for key, value in receipt.items() if key != "check"},
+                    {**receipt, "check": "raw-package-error"},
+                    {**receipt, "check": next(value for value in checks if value != check)},
+                    {**receipt, "detail": "package path"},
+                ):
+                    self.assertFalse(
+                        protocol.provider_free_browser_identity_diagnostic_allowed(
+                            mutation,
+                            expected_failure_sha256="f" * 64,
+                            expected_substage="private_snapshot_launch_image_identity",
+                            expected_phase="playwright_package_revision_identity",
+                            expected_check=check,
+                        )
+                    )
+        self.assertFalse(
+            protocol.provider_free_browser_identity_diagnostic_allowed(
+                {
+                    "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+                    "operation": "preview_browser_identity",
+                    "substage": "private_snapshot_launch_image_identity",
+                    "phase": "private_launch_image_identity",
+                    "check": "browser_manifest_entry",
+                    "scenario_failure": {
+                        "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                        "sha256": "f" * 64,
+                    },
+                },
+                expected_failure_sha256="f" * 64,
+                expected_substage="private_snapshot_launch_image_identity",
+                expected_phase="private_launch_image_identity",
+            )
+        )
 
     def test_prelaunched_cdp_runtime_receipt_requires_frozen_exact_identities(self) -> None:
         receipt = {

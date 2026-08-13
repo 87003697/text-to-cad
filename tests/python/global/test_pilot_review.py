@@ -1318,7 +1318,7 @@ class PilotReviewTests(unittest.TestCase):
         failure_bytes = (self.exp / "run/scenario-failure.json").read_bytes()
         identity_diagnostic_path = self.exp / "run/browser-identity-diagnostic.json"
         identity_diagnostic = {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/2",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/3",
             "operation": "preview_browser_identity",
             "substage": "live_running_image_identity",
             "scenario_failure": {
@@ -1370,6 +1370,10 @@ class PilotReviewTests(unittest.TestCase):
                     ),
                     "browser_identity_phase": phase,
                 }
+                if phase == "playwright_package_revision_identity":
+                    private_failure["browser_identity_check"] = (
+                        "python_distribution_metadata"
+                    )
                 write_json(
                     self.exp / "run/scenario-failure.json",
                     private_failure,
@@ -1378,7 +1382,7 @@ class PilotReviewTests(unittest.TestCase):
                     self.exp / "run/scenario-failure.json"
                 ).read_bytes()
                 private_diagnostic = {
-                    "schema": "cvm.provider-free-browser-identity-diagnostic/2",
+                    "schema": "cvm.provider-free-browser-identity-diagnostic/3",
                     "operation": "preview_browser_identity",
                     "substage": "private_snapshot_launch_image_identity",
                     "phase": phase,
@@ -1389,6 +1393,10 @@ class PilotReviewTests(unittest.TestCase):
                         ).hexdigest(),
                     },
                 }
+                if phase == "playwright_package_revision_identity":
+                    private_diagnostic["check"] = (
+                        private_failure["browser_identity_check"]
+                    )
                 write_json(identity_diagnostic_path, private_diagnostic)
                 write_terminal_manifest(status=1)
                 verdict, _provenance, issues, gaps = (
@@ -1413,7 +1421,7 @@ class PilotReviewTests(unittest.TestCase):
             self.exp / "run/scenario-failure.json"
         ).read_bytes()
         private_diagnostic = {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/2",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/3",
             "operation": "preview_browser_identity",
             "substage": "private_snapshot_launch_image_identity",
             "phase": phase,
@@ -1493,6 +1501,161 @@ class PilotReviewTests(unittest.TestCase):
                         },
                     }
                     write_json(identity_diagnostic_path, recomputed)
+                write_terminal_manifest(status=1)
+                verdict, provenance, issues, gaps = (
+                    self.reviewer._runtime_authority_verdict(
+                        self.exp, workspace_payload
+                    )
+                )
+                self.assertEqual("not_auditable", verdict)
+                self.assertEqual({}, provenance)
+                self.assertEqual("observability-gap", issues[0]["classification"])
+                self.assertTrue(gaps)
+
+        package_checks = (
+            "python_distribution_metadata",
+            "playwright_package_manifest",
+            "browser_manifest_entry",
+            "frozen_playwright_version_match",
+            "frozen_browser_revision_match",
+        )
+        for check in package_checks:
+            with self.subTest(playwright_package_revision_check=check):
+                checked_failure = {
+                    **identity_failure,
+                    "browser_identity_substage": (
+                        "private_snapshot_launch_image_identity"
+                    ),
+                    "browser_identity_phase": (
+                        "playwright_package_revision_identity"
+                    ),
+                    "browser_identity_check": check,
+                }
+                checked_failure_path = self.exp / "run/scenario-failure.json"
+                write_json(checked_failure_path, checked_failure)
+                write_json(
+                    identity_diagnostic_path,
+                    {
+                        "schema": "cvm.provider-free-browser-identity-diagnostic/3",
+                        "operation": "preview_browser_identity",
+                        "substage": "private_snapshot_launch_image_identity",
+                        "phase": "playwright_package_revision_identity",
+                        "check": check,
+                        "scenario_failure": {
+                            "path": "run/scenario-failure.json",
+                            "sha256": hashlib.sha256(
+                                checked_failure_path.read_bytes()
+                            ).hexdigest(),
+                        },
+                    },
+                )
+                write_terminal_manifest(status=1)
+                verdict, _provenance, issues, gaps = (
+                    self.reviewer._runtime_authority_verdict(
+                        self.exp, workspace_payload
+                    )
+                )
+                self.assertEqual("fail", verdict, issues)
+                self.assertIn(check, issues[0]["detail"])
+                self.assertEqual([], gaps)
+
+        package_failure = {
+            **identity_failure,
+            "browser_identity_substage": "private_snapshot_launch_image_identity",
+            "browser_identity_phase": "playwright_package_revision_identity",
+            "browser_identity_check": "browser_manifest_entry",
+        }
+        failure_path = self.exp / "run/scenario-failure.json"
+        write_json(failure_path, package_failure)
+        package_diagnostic = {
+            "schema": "cvm.provider-free-browser-identity-diagnostic/3",
+            "operation": "preview_browser_identity",
+            "substage": "private_snapshot_launch_image_identity",
+            "phase": "playwright_package_revision_identity",
+            "check": "browser_manifest_entry",
+            "scenario_failure": {
+                "path": "run/scenario-failure.json",
+                "sha256": hashlib.sha256(failure_path.read_bytes()).hexdigest(),
+            },
+        }
+        for mutation in (
+            "missing",
+            "duplicate",
+            "unknown",
+            "reordered",
+            "other-phase",
+            "unbound",
+            "recomputed",
+        ):
+            with self.subTest(package_revision_check_mutation=mutation):
+                write_json(failure_path, package_failure)
+                write_json(identity_diagnostic_path, package_diagnostic)
+                if mutation == "missing":
+                    changed = {**package_diagnostic}
+                    changed.pop("check")
+                    write_json(identity_diagnostic_path, changed)
+                elif mutation == "duplicate":
+                    identity_diagnostic_path.write_text(
+                        json.dumps(package_diagnostic).replace(
+                            '"check": "browser_manifest_entry"',
+                            '"check": "python_distribution_metadata", '
+                            '"check": "browser_manifest_entry"',
+                        ),
+                        encoding="utf-8",
+                    )
+                elif mutation == "unknown":
+                    write_json(
+                        identity_diagnostic_path,
+                        {**package_diagnostic, "check": "raw-package-error"},
+                    )
+                elif mutation == "reordered":
+                    write_json(
+                        identity_diagnostic_path,
+                        {
+                            **package_diagnostic,
+                            "check": "python_distribution_metadata",
+                        },
+                    )
+                elif mutation == "other-phase":
+                    changed_failure = {**package_failure}
+                    changed_failure["browser_identity_phase"] = (
+                        "private_launch_image_identity"
+                    )
+                    changed_failure.pop("browser_identity_check")
+                    write_json(failure_path, changed_failure)
+                    changed = {**package_diagnostic}
+                    changed["phase"] = "private_launch_image_identity"
+                    changed["scenario_failure"] = {
+                        "path": "run/scenario-failure.json",
+                        "sha256": hashlib.sha256(failure_path.read_bytes()).hexdigest(),
+                    }
+                    write_json(identity_diagnostic_path, changed)
+                elif mutation == "unbound":
+                    write_json(
+                        identity_diagnostic_path,
+                        {
+                            **package_diagnostic,
+                            "scenario_failure": {
+                                "path": "run/scenario-failure.json",
+                                "sha256": "0" * 64,
+                            },
+                        },
+                    )
+                else:
+                    failure_path.write_text(
+                        json.dumps(package_failure).replace(
+                            '"browser_identity_check": "browser_manifest_entry"',
+                            '"browser_identity_check": "python_distribution_metadata", '
+                            '"browser_identity_check": "browser_manifest_entry"',
+                        ),
+                        encoding="utf-8",
+                    )
+                    changed = {**package_diagnostic}
+                    changed["scenario_failure"] = {
+                        "path": "run/scenario-failure.json",
+                        "sha256": hashlib.sha256(failure_path.read_bytes()).hexdigest(),
+                    }
+                    write_json(identity_diagnostic_path, changed)
                 write_terminal_manifest(status=1)
                 verdict, provenance, issues, gaps = (
                     self.reviewer._runtime_authority_verdict(

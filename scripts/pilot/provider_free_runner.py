@@ -35,6 +35,7 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
+    PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS,
     PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
@@ -628,6 +629,11 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
         if isinstance(receipt, dict)
         else None
     )
+    browser_identity_check = (
+        receipt.get("browser_identity_check")
+        if isinstance(receipt, dict)
+        else None
+    )
     expected_receipt_keys = {"schema", "scenario_identity", "stage"}
     if operation is not None:
         expected_receipt_keys.add("operation")
@@ -635,6 +641,8 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
         expected_receipt_keys.add("browser_identity_substage")
         if browser_identity_substage == "private_snapshot_launch_image_identity":
             expected_receipt_keys.add("browser_identity_phase")
+        if browser_identity_phase == "playwright_package_revision_identity":
+            expected_receipt_keys.add("browser_identity_check")
     if (
         not isinstance(receipt, dict)
         or receipt_keys != expected_receipt_keys
@@ -667,6 +675,15 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
             != "private_snapshot_launch_image_identity"
             and browser_identity_phase is not None
         )
+        or (
+            browser_identity_phase == "playwright_package_revision_identity"
+            and browser_identity_check
+            not in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+        )
+        or (
+            browser_identity_phase != "playwright_package_revision_identity"
+            and browser_identity_check is not None
+        )
     ):
         raise ProviderFreeError(
             "provider-free scenario failure receipt conflicts with request"
@@ -689,6 +706,7 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
             expected_failure_sha256=hashlib.sha256(failure_bytes).hexdigest(),
             expected_substage=browser_identity_substage,
             expected_phase=browser_identity_phase,
+            expected_check=browser_identity_check,
         ):
             raise ProviderFreeError(
                 "provider-free browser identity diagnostic conflicts"

@@ -43,6 +43,15 @@ PRIVATE_SNAPSHOT_IDENTITY_PHASES = frozenset(
         "private_launch_version_output_identity",
     }
 )
+PLAYWRIGHT_PACKAGE_REVISION_CHECKS = frozenset(
+    {
+        "python_distribution_metadata",
+        "playwright_package_manifest",
+        "browser_manifest_entry",
+        "frozen_playwright_version_match",
+        "frozen_browser_revision_match",
+    }
+)
 _SourceIdentity = tuple[int, int, int, int]
 _PROFILE_RESOURCE = "prelaunched_cdp_playwright_1_60_v1.json"
 ADAPTER_PROFILE_SHA256 = "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
@@ -95,6 +104,7 @@ class BrowserRuntimeError(RuntimeError):
         *,
         browser_identity_substage: str | None = None,
         browser_identity_phase: str | None = None,
+        browser_identity_check: str | None = None,
     ) -> None:
         super().__init__(operation)
         self.operation = operation
@@ -114,6 +124,15 @@ class BrowserRuntimeError(RuntimeError):
                 and self.browser_identity_substage
                 == "private_snapshot_launch_image_identity"
                 and browser_identity_phase in PRIVATE_SNAPSHOT_IDENTITY_PHASES
+            )
+            else None
+        )
+        self.browser_identity_check = (
+            browser_identity_check
+            if (
+                self.browser_identity_phase
+                == "playwright_package_revision_identity"
+                and browser_identity_check in PLAYWRIGHT_PACKAGE_REVISION_CHECKS
             )
             else None
         )
@@ -160,27 +179,38 @@ def _load_profile() -> tuple[dict[str, Any], str]:
 
 
 def _playwright_revision(browser_name: str) -> str:
-    import playwright
-
-    manifest_path = (
-        Path(playwright.__file__).resolve().parent / "driver/package/browsers.json"
-    )
     try:
+        import playwright
+
+        manifest_path = (
+            Path(playwright.__file__).resolve().parent
+            / "driver/package/browsers.json"
+        )
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         matches = [
             item
             for item in manifest["browsers"]
             if item.get("name") == browser_name
         ]
-    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+    except (
+        ImportError,
+        OSError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        RuntimeError,
+        json.JSONDecodeError,
+    ) as exc:
         raise BrowserRuntimeError(
             "browser_identity",
             browser_identity_phase="playwright_package_revision_identity",
+            browser_identity_check="playwright_package_manifest",
         ) from exc
     if len(matches) != 1 or not isinstance(matches[0].get("revision"), str):
         raise BrowserRuntimeError(
             "browser_identity",
             browser_identity_phase="playwright_package_revision_identity",
+            browser_identity_check="browser_manifest_entry",
         )
     return matches[0]["revision"]
 
@@ -291,15 +321,20 @@ def _attest(executable: _PinnedExecutable, profile: dict[str, Any]) -> dict[str,
         raise BrowserRuntimeError(
             "browser_identity",
             browser_identity_phase="playwright_package_revision_identity",
+            browser_identity_check="python_distribution_metadata",
         ) from exc
     revision = _playwright_revision(str(profile["browser"]))
-    if (
-        playwright_version != profile["playwright"]
-        or revision != profile["revision"]
-    ):
+    if playwright_version != profile["playwright"]:
         raise BrowserRuntimeError(
             "browser_identity",
             browser_identity_phase="playwright_package_revision_identity",
+            browser_identity_check="frozen_playwright_version_match",
+        )
+    if revision != profile["revision"]:
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="playwright_package_revision_identity",
+            browser_identity_check="frozen_browser_revision_match",
         )
     try:
         completed = executable.run_version(

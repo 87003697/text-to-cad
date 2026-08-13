@@ -620,7 +620,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                     write_diagnostic(substage="raw-linux-errno")
                 elif mutation == "duplicate":
                     diagnostic_path.write_text(
-                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/2\","
+                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/3\","
                         "\"operation\":\"preview_browser_identity\","
                         "\"substage\":\"live_running_image_identity\","
                         "\"substage\":\"connected_cdp_browser_version_identity\","
@@ -649,6 +649,108 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 with self.assertRaisesRegex(
                     provider_free_runner.ProviderFreeError,
                     "browser identity diagnostic",
+                ):
+                    provider_free_runner._validate_scenario_failure_evidence(
+                        exp_dir,
+                        "issue15-runtime-authority",
+                    )
+
+        failure["browser_identity_substage"] = (
+            "private_snapshot_launch_image_identity"
+        )
+        failure["browser_identity_phase"] = "playwright_package_revision_identity"
+        failure["browser_identity_check"] = "browser_manifest_entry"
+
+        def write_check_diagnostic(
+            *,
+            write_failure: bool = True,
+            **overrides: object,
+        ) -> None:
+            if write_failure:
+                failure_path.write_text(json.dumps(failure), encoding="utf-8")
+            diagnostic = {
+                "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+                "operation": "preview_browser_identity",
+                "substage": "private_snapshot_launch_image_identity",
+                "phase": "playwright_package_revision_identity",
+                "check": failure.get("browser_identity_check"),
+                "scenario_failure": {
+                    "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                    "sha256": hashlib.sha256(failure_path.read_bytes()).hexdigest(),
+                },
+                **overrides,
+            }
+            diagnostic_path.write_text(json.dumps(diagnostic), encoding="utf-8")
+
+        write_check_diagnostic()
+        provider_free_runner._validate_scenario_failure_evidence(
+            exp_dir,
+            "issue15-runtime-authority",
+        )
+        for mutation in (
+            "missing",
+            "duplicate",
+            "unknown",
+            "reordered",
+            "other-phase",
+            "unbound",
+            "recomputed",
+        ):
+            with self.subTest(package_revision_check=mutation):
+                failure["browser_identity_phase"] = (
+                    "playwright_package_revision_identity"
+                )
+                failure["browser_identity_check"] = "browser_manifest_entry"
+                write_check_diagnostic()
+                if mutation == "missing":
+                    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+                    diagnostic.pop("check")
+                    diagnostic_path.write_text(json.dumps(diagnostic), encoding="utf-8")
+                elif mutation == "duplicate":
+                    digest = hashlib.sha256(failure_path.read_bytes()).hexdigest()
+                    diagnostic_path.write_text(
+                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/3\","
+                        "\"operation\":\"preview_browser_identity\","
+                        "\"substage\":\"private_snapshot_launch_image_identity\","
+                        "\"phase\":\"playwright_package_revision_identity\","
+                        "\"check\":\"python_distribution_metadata\","
+                        "\"check\":\"browser_manifest_entry\","
+                        "\"scenario_failure\":{"
+                        "\"path\":\"run/scenario-failure.json\","
+                        f"\"sha256\":\"{digest}\"}}",
+                        encoding="utf-8",
+                    )
+                elif mutation == "unknown":
+                    write_check_diagnostic(check="raw-package-error")
+                elif mutation == "reordered":
+                    write_check_diagnostic(check="python_distribution_metadata")
+                elif mutation == "other-phase":
+                    failure["browser_identity_phase"] = "private_launch_image_identity"
+                    failure.pop("browser_identity_check")
+                    write_check_diagnostic(check="browser_manifest_entry")
+                elif mutation == "unbound":
+                    write_check_diagnostic(
+                        scenario_failure={
+                            "path": protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                            "sha256": "0" * 64,
+                        }
+                    )
+                else:
+                    failure_path.write_text(
+                        "{\"schema\":\"cvm.provider-free-scenario-failure/1\","
+                        "\"scenario_identity\":\"issue15.provider-free.runtime-authority/1\","
+                        "\"stage\":\"native_measurement\","
+                        "\"operation\":\"preview_browser_identity\","
+                        "\"browser_identity_substage\":\"private_snapshot_launch_image_identity\","
+                        "\"browser_identity_phase\":\"playwright_package_revision_identity\","
+                        "\"browser_identity_check\":\"python_distribution_metadata\","
+                        "\"browser_identity_check\":\"browser_manifest_entry\"}",
+                        encoding="utf-8",
+                    )
+                    write_check_diagnostic(write_failure=False)
+                with self.assertRaisesRegex(
+                    provider_free_runner.ProviderFreeError,
+                    "(browser identity diagnostic|scenario failure receipt)",
                 ):
                     provider_free_runner._validate_scenario_failure_evidence(
                         exp_dir,
@@ -836,7 +938,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                     )
                 elif mutation == "duplicate":
                     diagnostic_path.write_text(
-                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/2\","
+                        "{\"schema\":\"cvm.provider-free-browser-identity-diagnostic/3\","
                         "\"operation\":\"preview_browser_identity\","
                         "\"substage\":\"private_snapshot_launch_image_identity\","
                         "\"phase\":\"source_executable_identity\","

@@ -933,6 +933,119 @@ class ResidualRendererTests(unittest.TestCase):
             )
             self.assertEqual(check, raised.exception.browser_identity_check)
 
+    def test_public_render_selects_exact_playwright_package_revision_check(
+        self,
+    ) -> None:
+        from importlib import metadata
+
+        triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
+        sync_playwright = mock.MagicMock()
+        sync_playwright.return_value.__enter__.return_value = mock.MagicMock()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            original_read_text = Path.read_text
+
+            def manifest_text(value: str):
+                def read_text(path: Path, *args: object, **kwargs: object) -> str:
+                    if path.name == "browsers.json":
+                        return value
+                    return original_read_text(path, *args, **kwargs)
+
+                return read_text
+
+            cases = (
+                (
+                    "python_distribution_metadata",
+                    (
+                        mock.patch(
+                            "meshshot.browser_runtime.metadata.version",
+                            side_effect=metadata.PackageNotFoundError("playwright"),
+                        ),
+                    ),
+                ),
+                (
+                    "playwright_package_manifest",
+                    (
+                        mock.patch(
+                            "meshshot.browser_runtime.metadata.version",
+                            return_value="1.60.0",
+                        ),
+                        mock.patch.object(Path, "read_text", manifest_text("{")),
+                    ),
+                ),
+                (
+                    "browser_manifest_entry",
+                    (
+                        mock.patch(
+                            "meshshot.browser_runtime.metadata.version",
+                            return_value="1.60.0",
+                        ),
+                        mock.patch.object(
+                            Path,
+                            "read_text",
+                            manifest_text('{"browsers":[]}'),
+                        ),
+                    ),
+                ),
+                (
+                    "frozen_playwright_version_match",
+                    (
+                        mock.patch(
+                            "meshshot.browser_runtime.metadata.version",
+                            return_value="0.0.0",
+                        ),
+                        mock.patch(
+                            "meshshot.browser_runtime._playwright_revision",
+                            return_value="1223",
+                        ),
+                    ),
+                ),
+                (
+                    "frozen_browser_revision_match",
+                    (
+                        mock.patch(
+                            "meshshot.browser_runtime.metadata.version",
+                            return_value="1.60.0",
+                        ),
+                        mock.patch(
+                            "meshshot.browser_runtime._playwright_revision",
+                            return_value="9999",
+                        ),
+                    ),
+                ),
+            )
+            for check, patchers in cases:
+                with self.subTest(check=check), ExitStack() as stack:
+                    stack.enter_context(
+                        mock.patch.dict(
+                            os.environ,
+                            {"MESHSHOT_BROWSER_EXECUTABLE": os.fspath(executable)},
+                        )
+                    )
+                    stack.enter_context(
+                        mock.patch(
+                            "playwright.sync_api.sync_playwright",
+                            sync_playwright,
+                        )
+                    )
+                    for patcher in patchers:
+                        stack.enter_context(patcher)
+                    with self.assertRaises(MeshshotError) as raised:
+                        render_residual_preview(
+                            _geometry(triangle),
+                            _geometry(triangle),
+                            variant="step",
+                        )
+                self.assertEqual("browser_identity", raised.exception.phase)
+                self.assertEqual(
+                    "playwright_package_revision_identity",
+                    raised.exception.browser_identity_phase,
+                )
+                self.assertEqual(check, raised.exception.browser_identity_check)
+
     def test_public_render_selects_exact_private_snapshot_failure_phase(self) -> None:
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
         sync_playwright = mock.MagicMock()

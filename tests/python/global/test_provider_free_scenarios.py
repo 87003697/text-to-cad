@@ -409,7 +409,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/2",
+                "schema": "cvm.provider-free-browser-identity-diagnostic/3",
                 "operation": "preview_browser_identity",
                 "substage": "loopback_listener_address_ownership",
                 "scenario_failure": {
@@ -454,6 +454,48 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 ),
             )
         )
+        for patcher in patchers:
+            patcher.start()
+        try:
+            with mock.patch("sys.stderr", new_callable=io.StringIO):
+                status = provider_free_scenarios.main(
+                    [
+                        "run",
+                        "issue15-runtime-authority",
+                        "--workspace",
+                        str(workspace),
+                    ]
+                )
+        finally:
+            for patcher in reversed(patchers):
+                patcher.stop()
+
+        self.assertEqual(1, status)
+        failure_path = workspace / protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH
+        failure_bytes = failure_path.read_bytes()
+        failure = json.loads(failure_bytes)
+        self.assertEqual(
+            "private_tree_materialization",
+            failure["browser_identity_phase"],
+        )
+        self.assertEqual(
+            {
+                "schema": "cvm.provider-free-browser-identity-diagnostic/3",
+                "operation": "preview_browser_identity",
+                "substage": "private_snapshot_launch_image_identity",
+                "phase": "private_tree_materialization",
+                "scenario_failure": {
+                    "path": "run/scenario-failure.json",
+                    "sha256": hashlib.sha256(failure_bytes).hexdigest(),
+                },
+            },
+            json.loads(
+                (
+                    workspace
+                    / protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
+                ).read_text(encoding="utf-8")
+            ),
+        )
 
     def test_playwright_package_failure_binds_one_closed_check(self) -> None:
         workspace = self.repo / "outputs/group/package-revision-diagnostic"
@@ -484,6 +526,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 ),
             )
         )
+
         for patcher in patchers:
             patcher.start()
         try:
@@ -523,48 +566,36 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 )
             ),
         )
-        for patcher in patchers:
-            patcher.start()
-        try:
-            with mock.patch("sys.stderr", new_callable=io.StringIO):
-                status = provider_free_scenarios.main(
-                    [
-                        "run",
-                        "issue15-runtime-authority",
-                        "--workspace",
-                        str(workspace),
-                    ]
-                )
-        finally:
-            for patcher in reversed(patchers):
-                patcher.stop()
 
-        self.assertEqual(1, status)
-        failure_path = workspace / protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH
-        failure_bytes = failure_path.read_bytes()
-        failure = json.loads(failure_bytes)
-        self.assertEqual(
-            "private_tree_materialization",
-            failure["browser_identity_phase"],
+    def test_public_command_rejects_duplicate_package_check(self) -> None:
+        payload = (
+            '{"error":{"classification":"preview_browser_identity_failed",'
+            '"diagnostic":{"schema":"meshshot.browser-identity-failure/3",'
+            '"substage":"private_snapshot_launch_image_identity",'
+            '"phase":"playwright_package_revision_identity",'
+            '"check":"python_distribution_metadata",'
+            '"check":"browser_manifest_entry"}}}'
         )
-        self.assertEqual(
-            {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/2",
-                "operation": "preview_browser_identity",
-                "substage": "private_snapshot_launch_image_identity",
-                "phase": "private_tree_materialization",
-                "scenario_failure": {
-                    "path": "run/scenario-failure.json",
-                    "sha256": hashlib.sha256(failure_bytes).hexdigest(),
-                },
-            },
-            json.loads(
-                (
-                    workspace
-                    / protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
-                ).read_text(encoding="utf-8")
-            ),
+        completed = subprocess.CompletedProcess(
+            ["mesh-compare", "preview"],
+            2,
+            stdout=payload,
+            stderr="",
         )
+        with mock.patch.object(
+            provider_free_scenarios.subprocess,
+            "run",
+            return_value=completed,
+        ), self.assertRaises(provider_free_scenarios.ScenarioError) as raised:
+            provider_free_scenarios._run_public(
+                ["mesh-compare", "preview"],
+                cwd=self.repo,
+                command_log=self.repo / "outputs/group/commands.jsonl",
+            )
+        self.assertIsNone(raised.exception.classification)
+        self.assertIsNone(raised.exception.browser_identity_substage)
+        self.assertIsNone(raised.exception.browser_identity_phase)
+        self.assertIsNone(raised.exception.browser_identity_check)
 
     def test_wrapper_publication_root_artifact_is_closed_and_nonrecursive(
         self,

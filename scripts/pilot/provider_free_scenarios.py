@@ -32,6 +32,7 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
+    PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS,
     PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
@@ -114,6 +115,7 @@ class ScenarioError(RuntimeError):
         classification: str | None = None,
         browser_identity_substage: str | None = None,
         browser_identity_phase: str | None = None,
+        browser_identity_check: str | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = stage
@@ -131,6 +133,16 @@ class ScenarioError(RuntimeError):
                 == "private_snapshot_launch_image_identity"
                 and browser_identity_phase
                 in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+            )
+            else None
+        )
+        self.browser_identity_check = (
+            browser_identity_check
+            if (
+                self.browser_identity_phase
+                == "playwright_package_revision_identity"
+                and browser_identity_check
+                in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
             )
             else None
         )
@@ -163,6 +175,11 @@ def _run_stage(
             ),
             browser_identity_phase=(
                 exc.browser_identity_phase
+                if isinstance(exc, ScenarioError)
+                else None
+            ),
+            browser_identity_check=(
+                exc.browser_identity_check
                 if isinstance(exc, ScenarioError)
                 else None
             ),
@@ -215,6 +232,11 @@ def _run_failure_operation(
             ),
             browser_identity_phase=(
                 exc.browser_identity_phase
+                if isinstance(exc, ScenarioError)
+                else None
+            ),
+            browser_identity_check=(
+                exc.browser_identity_check
                 if isinstance(exc, ScenarioError)
                 else None
             ),
@@ -501,10 +523,11 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
         diagnostic = error.get("diagnostic") if isinstance(error, dict) else None
         browser_identity_substage = None
         browser_identity_phase = None
+        browser_identity_check = None
         if (
             classification == "preview_browser_identity_failed"
             and isinstance(diagnostic, dict)
-            and diagnostic.get("schema") == "meshshot.browser-identity-failure/2"
+            and diagnostic.get("schema") == "meshshot.browser-identity-failure/3"
             and diagnostic.get("substage")
             in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
         ):
@@ -512,6 +535,8 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
             expected_keys = {"schema", "substage"}
             if substage == "private_snapshot_launch_image_identity":
                 expected_keys.add("phase")
+            if diagnostic.get("phase") == "playwright_package_revision_identity":
+                expected_keys.add("check")
             if set(diagnostic) == expected_keys and (
                 substage != "private_snapshot_launch_image_identity"
                 or diagnostic.get("phase")
@@ -519,12 +544,22 @@ def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[st
             ):
                 browser_identity_substage = substage
                 browser_identity_phase = diagnostic.get("phase")
+                browser_identity_check = diagnostic.get("check")
+                if (
+                    browser_identity_phase == "playwright_package_revision_identity"
+                    and browser_identity_check
+                    not in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+                ):
+                    browser_identity_substage = None
+                    browser_identity_phase = None
+                    browser_identity_check = None
         detail = " ".join((completed.stderr or completed.stdout).split())[:1000]
         raise ScenarioError(
             f"public command failed ({completed.returncode}): {detail}",
             classification=classification,
             browser_identity_substage=browser_identity_substage,
             browser_identity_phase=browser_identity_phase,
+            browser_identity_check=browser_identity_check,
         )
     try:
         payload = _loads_json_strict(completed.stdout)
@@ -1395,6 +1430,7 @@ def _run_voxblame_preview(
                 operation=operation,
                 browser_identity_substage=exc.browser_identity_substage,
                 browser_identity_phase=exc.browser_identity_phase,
+                browser_identity_check=exc.browser_identity_check,
             ) from exc
         if is_linux:
             try:
@@ -1758,6 +1794,15 @@ def main(argv: list[str] | None = None) -> int:
                     failure["browser_identity_phase"] = (
                         exc.browser_identity_phase
                     )
+                    if (
+                        exc.browser_identity_phase
+                        == "playwright_package_revision_identity"
+                        and exc.browser_identity_check
+                        in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+                    ):
+                        failure["browser_identity_check"] = (
+                            exc.browser_identity_check
+                        )
             _write_json(
                 workspace / PROVIDER_FREE_SCENARIO_FAILURE_PATH,
                 failure,
@@ -1773,6 +1818,14 @@ def main(argv: list[str] | None = None) -> int:
                     or exc.browser_identity_phase
                     in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
                 )
+                if (
+                    exc.browser_identity_phase
+                    == "playwright_package_revision_identity"
+                ):
+                    phase_allowed = (
+                        exc.browser_identity_check
+                        in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+                    )
                 failure_bytes = (
                     workspace / PROVIDER_FREE_SCENARIO_FAILURE_PATH
                 ).read_bytes()
@@ -1790,6 +1843,8 @@ def main(argv: list[str] | None = None) -> int:
                     }
                     if exc.browser_identity_phase is not None:
                         diagnostic["phase"] = exc.browser_identity_phase
+                    if exc.browser_identity_check is not None:
+                        diagnostic["check"] = exc.browser_identity_check
                     _write_json(
                         workspace
                         / PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,

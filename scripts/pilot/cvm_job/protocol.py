@@ -55,7 +55,7 @@ PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH = (
     "run/browser-identity-diagnostic.json"
 )
 PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA = (
-    "cvm.provider-free-browser-identity-diagnostic/2"
+    "cvm.provider-free-browser-identity-diagnostic/3"
 )
 PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES = frozenset(
     {
@@ -74,6 +74,15 @@ PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES = frozenset(
         "playwright_package_revision_identity",
         "private_launch_version_execution",
         "private_launch_version_output_identity",
+    }
+)
+PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS = frozenset(
+    {
+        "python_distribution_metadata",
+        "playwright_package_manifest",
+        "browser_manifest_entry",
+        "frozen_playwright_version_match",
+        "frozen_browser_revision_match",
     }
 )
 PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH = (
@@ -276,6 +285,7 @@ def provider_free_browser_identity_diagnostic_allowed(
     expected_failure_sha256: object,
     expected_substage: object,
     expected_phase: object = None,
+    expected_check: object = None,
 ) -> bool:
     """Validate one closed first-failing identity substage and failure binding."""
 
@@ -290,6 +300,8 @@ def provider_free_browser_identity_diagnostic_allowed(
     }
     if substage == "private_snapshot_launch_image_identity":
         expected_keys.add("phase")
+    if receipt.get("phase") == "playwright_package_revision_identity":
+        expected_keys.add("check")
     if set(receipt) != expected_keys:
         return False
     failure = receipt.get("scenario_failure")
@@ -305,10 +317,25 @@ def provider_free_browser_identity_diagnostic_allowed(
                 and receipt.get("phase")
                 in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
                 and receipt.get("phase") == expected_phase
+                and (
+                    (
+                        receipt.get("phase")
+                        == "playwright_package_revision_identity"
+                        and receipt.get("check")
+                        in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+                        and receipt.get("check") == expected_check
+                    )
+                    or (
+                        receipt.get("phase")
+                        != "playwright_package_revision_identity"
+                        and expected_check is None
+                    )
+                )
             )
             or (
                 substage != "private_snapshot_launch_image_identity"
                 and expected_phase is None
+                and expected_check is None
             )
         )
         and isinstance(failure, dict)
@@ -769,9 +796,12 @@ def _public_provider_free_browser_identity_diagnostic(
         return None
     substage = value.get("substage")
     phase = value.get("phase")
+    check = value.get("check")
     expected_keys = {"schema", "substage"}
     if substage == "private_snapshot_launch_image_identity":
         expected_keys.add("phase")
+    if phase == "playwright_package_revision_identity":
+        expected_keys.add("check")
     if (
         set(value) != expected_keys
         or value.get("schema")
@@ -786,6 +816,17 @@ def _public_provider_free_browser_identity_diagnostic(
             and (
                 phase not in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
                 or scenario_failure.get("browser_identity_phase") != phase
+                or (
+                    phase == "playwright_package_revision_identity"
+                    and (
+                        check not in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+                        or scenario_failure.get("browser_identity_check") != check
+                    )
+                )
+                or (
+                    phase != "playwright_package_revision_identity"
+                    and check is not None
+                )
             )
         )
         or (
@@ -800,6 +841,8 @@ def _public_provider_free_browser_identity_diagnostic(
     }
     if phase is not None:
         result["phase"] = phase
+    if check is not None:
+        result["check"] = check
     return result
 
 
@@ -844,6 +887,7 @@ def _public_provider_free_scenario_failure(
     operation = value.get("operation")
     browser_identity_substage = value.get("browser_identity_substage")
     browser_identity_phase = value.get("browser_identity_phase")
+    browser_identity_check = value.get("browser_identity_check")
     if (
         value.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
         or not isinstance(expected_identity, str)
@@ -870,6 +914,15 @@ def _public_provider_free_scenario_failure(
             browser_identity_substage
             != "private_snapshot_launch_image_identity"
             and browser_identity_phase is not None
+        )
+        or (
+            browser_identity_phase == "playwright_package_revision_identity"
+            and browser_identity_check
+            not in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+        )
+        or (
+            browser_identity_phase != "playwright_package_revision_identity"
+            and browser_identity_check is not None
         )
     ):
         return None

@@ -502,6 +502,9 @@ class CvmJobTests(unittest.TestCase):
                     "private_snapshot_phases": sorted(
                         protocol.PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
                     ),
+                    "playwright_package_revision_checks": sorted(
+                        protocol.PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+                    ),
                     "binding": [
                         protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
                         "artifact_manifest.json",
@@ -899,6 +902,7 @@ class CvmJobTests(unittest.TestCase):
         stripped: list[str] | None = None,
         browser_identity_substage: str | None = None,
         browser_identity_phase: str | None = None,
+        browser_identity_check: str | None = None,
     ) -> None:
         """Publish common authority plus one manifest-bound closed failure."""
 
@@ -923,6 +927,8 @@ class CvmJobTests(unittest.TestCase):
             failure["browser_identity_substage"] = browser_identity_substage
         if browser_identity_phase is not None:
             failure["browser_identity_phase"] = browser_identity_phase
+        if browser_identity_check is not None:
+            failure["browser_identity_check"] = browser_identity_check
         if operation in protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS:
             (
                 exp_dir / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
@@ -975,6 +981,8 @@ class CvmJobTests(unittest.TestCase):
             }
             if browser_identity_phase is not None:
                 identity_diagnostic["phase"] = browser_identity_phase
+            if browser_identity_check is not None:
+                identity_diagnostic["check"] = browser_identity_check
             identity_path = (
                 exp_dir
                 / protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
@@ -1468,6 +1476,49 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(expected, public["browser_identity_diagnostic"])
         self.assertNotIn("sha256", json.dumps(public))
 
+    def test_monitor_projects_manifest_bound_package_revision_check(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **kwargs):
+            raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
+            self.write_provider_free_failure_evidence(
+                handle,
+                stage="native_measurement",
+                operation="preview_browser_identity",
+                browser_identity_substage="private_snapshot_launch_image_identity",
+                browser_identity_phase="playwright_package_revision_identity",
+                browser_identity_check="frozen_playwright_version_match",
+                stripped=raw_stripped.split(",") if raw_stripped else [],
+            )
+            return 1, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        expected = {
+            "schema": protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+            "substage": "private_snapshot_launch_image_identity",
+            "phase": "playwright_package_revision_identity",
+            "check": "frozen_playwright_version_match",
+        }
+        self.assertEqual(expected, state["browser_identity_diagnostic"])
+        public = runtime.status_job(
+            handle,
+            state_root=self.state_root,
+            include_observation=False,
+        )
+        self.assertEqual(expected, public["browser_identity_diagnostic"])
+        self.assertNotIn("sha256", json.dumps(public))
+
     def test_supervisor_rejects_recomputed_duplicate_private_phase(self) -> None:
         handle = runtime.submit_provider_free(
             "issue15-runtime-authority",
@@ -1545,6 +1596,72 @@ class CvmJobTests(unittest.TestCase):
         self.assertNotIn("browser_identity_diagnostic", state)
         self.assertIn(
             "scenario failure evidence is invalid",
+            state["failure_reason"],
+        )
+
+    def test_supervisor_rejects_recomputed_duplicate_package_check(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **kwargs):
+            raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
+            self.write_provider_free_failure_evidence(
+                handle,
+                stage="native_measurement",
+                operation="preview_browser_identity",
+                browser_identity_substage="private_snapshot_launch_image_identity",
+                browser_identity_phase="playwright_package_revision_identity",
+                browser_identity_check="browser_manifest_entry",
+                stripped=raw_stripped.split(",") if raw_stripped else [],
+            )
+            exp_dir = self.repo_root / "outputs" / handle
+            diagnostic_path = (
+                exp_dir / protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
+            )
+            diagnostic = diagnostic_path.read_text(encoding="utf-8")
+            diagnostic_path.write_text(
+                diagnostic.replace(
+                    '"check":"browser_manifest_entry"',
+                    '"check":"python_distribution_metadata",'
+                    '"check":"browser_manifest_entry"',
+                ),
+                encoding="utf-8",
+            )
+            manifest_path = exp_dir / "artifact_manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            data = diagnostic_path.read_bytes()
+            entry = next(
+                item
+                for item in manifest["files"]
+                if item["path"]
+                == protocol.PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH
+            )
+            entry.update(
+                size_bytes=len(data),
+                sha256=hashlib.sha256(data).hexdigest(),
+            )
+            manifest_path.write_text(
+                json.dumps(manifest, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return 1, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        self.assertEqual("failed", state["state"])
+        self.assertNotIn("scenario_failure", state)
+        self.assertNotIn("browser_identity_diagnostic", state)
+        self.assertIn(
+            "browser identity diagnostic evidence is invalid",
             state["failure_reason"],
         )
 

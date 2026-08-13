@@ -420,7 +420,7 @@ class PreviewCliTests(unittest.TestCase):
                     "headless residual browser runtime failed: browser_identity"
                 ),
                 "diagnostic": {
-                    "schema": "meshshot.browser-identity-failure/2",
+                    "schema": "meshshot.browser-identity-failure/3",
                     "substage": "live_running_image_identity",
                 },
             },
@@ -459,7 +459,7 @@ class PreviewCliTests(unittest.TestCase):
                     "headless residual browser runtime failed: browser_identity"
                 ),
                 "diagnostic": {
-                    "schema": "meshshot.browser-identity-failure/2",
+                    "schema": "meshshot.browser-identity-failure/3",
                     "substage": "private_snapshot_launch_image_identity",
                     "phase": "private_tree_materialization",
                 },
@@ -467,6 +467,44 @@ class PreviewCliTests(unittest.TestCase):
             payload["error"],
         )
         self.assertNotIn("private_tree_materialization", stderr)
+
+    def test_package_revision_failure_projects_only_closed_check(self) -> None:
+        with mock.patch.object(
+            cli,
+            "render_residual_preview",
+            side_effect=cli.MeshshotError(
+                "headless residual browser runtime failed: browser_identity",
+                phase="browser_identity",
+                browser_identity_substage="private_snapshot_launch_image_identity",
+                browser_identity_phase="playwright_package_revision_identity",
+                browser_identity_check="frozen_browser_revision_match",
+            ),
+        ):
+            status, payload, stderr = self.invoke(*self.preview_arguments(
+                str(self.candidate),
+                "--reference",
+                str(self.reference),
+                "--output",
+                str(self.root / "package-revision-failure"),
+                "--variant",
+                "step",
+            ))
+
+        self.assertEqual(2, status)
+        self.assertEqual(
+            {
+                "classification": "preview_browser_identity_failed",
+                "detail": "headless residual browser runtime failed: browser_identity",
+                "diagnostic": {
+                    "schema": "meshshot.browser-identity-failure/3",
+                    "substage": "private_snapshot_launch_image_identity",
+                    "phase": "playwright_package_revision_identity",
+                    "check": "frozen_browser_revision_match",
+                },
+            },
+            payload["error"],
+        )
+        self.assertNotIn("frozen_browser_revision_match", stderr)
 
     def test_private_snapshot_failure_without_phase_publishes_no_diagnostic(
         self,

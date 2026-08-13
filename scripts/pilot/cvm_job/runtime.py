@@ -27,6 +27,7 @@ from .protocol import (
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
+    PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS,
     PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
@@ -613,6 +614,9 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             ],
             "private_snapshot_phases": sorted(
                 PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+            ),
+            "playwright_package_revision_checks": sorted(
+                PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
             ),
             "binding": [
                 PROVIDER_FREE_SCENARIO_FAILURE_PATH,
@@ -1432,6 +1436,11 @@ def _provider_free_failure_evidence_result(
         if isinstance(failure, dict)
         else None
     )
+    browser_identity_check = (
+        failure.get("browser_identity_check")
+        if isinstance(failure, dict)
+        else None
+    )
     expected_failure_keys = {"schema", "scenario_identity", "stage"}
     if operation is not None:
         expected_failure_keys.add("operation")
@@ -1439,6 +1448,8 @@ def _provider_free_failure_evidence_result(
         expected_failure_keys.add("browser_identity_substage")
         if browser_identity_substage == "private_snapshot_launch_image_identity":
             expected_failure_keys.add("browser_identity_phase")
+        if browser_identity_phase == "playwright_package_revision_identity":
+            expected_failure_keys.add("browser_identity_check")
     if (
         not isinstance(failure, dict)
         or failure_keys != expected_failure_keys
@@ -1471,6 +1482,15 @@ def _provider_free_failure_evidence_result(
             != "private_snapshot_launch_image_identity"
             and browser_identity_phase is not None
         )
+        or (
+            browser_identity_phase == "playwright_package_revision_identity"
+            and browser_identity_check
+            not in PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS
+        )
+        or (
+            browser_identity_phase != "playwright_package_revision_identity"
+            and browser_identity_check is not None
+        )
     ):
         return None, None, None, "provider-free scenario failure identity conflicts"
     expected_entry = {
@@ -1500,6 +1520,7 @@ def _provider_free_failure_evidence_result(
             expected_failure_sha256=hashlib.sha256(failure_bytes).hexdigest(),
             expected_substage=browser_identity_substage,
             expected_phase=browser_identity_phase,
+            expected_check=browser_identity_check,
         ):
             return (
                 None,
@@ -1525,6 +1546,8 @@ def _provider_free_failure_evidence_result(
         }
         if browser_identity_phase is not None:
             public_identity_diagnostic["phase"] = browser_identity_phase
+        if browser_identity_check is not None:
+            public_identity_diagnostic["check"] = browser_identity_check
     elif (
         os.path.lexists(identity_diagnostic_path)
         or PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH in by_path

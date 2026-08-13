@@ -147,7 +147,7 @@ _SANDBOX_PROFILE = {
         "mount_namespace": "inherit-outer",
         "receipt": "run/preview-sandbox-enforcement.json",
         "browser_identity_diagnostic": {
-            "schema": "cvm.provider-free-browser-identity-diagnostic/2",
+            "schema": "cvm.provider-free-browser-identity-diagnostic/3",
             "receipt": "run/browser-identity-diagnostic.json",
             "operation": "preview_browser_identity",
             "substages": [
@@ -164,6 +164,13 @@ _SANDBOX_PROFILE = {
                 "playwright_package_revision_identity",
                 "private_launch_version_execution",
                 "private_launch_version_output_identity",
+            ],
+            "playwright_package_revision_checks": [
+                "python_distribution_metadata",
+                "playwright_package_manifest",
+                "browser_manifest_entry",
+                "frozen_playwright_version_match",
+                "frozen_browser_revision_match",
             ],
             "binding": [
                 "run/scenario-failure.json",
@@ -575,6 +582,13 @@ def _runtime_authority_failure_verdict(
             "private_launch_version_execution",
             "private_launch_version_output_identity",
         }
+        package_revision_checks = {
+            "python_distribution_metadata",
+            "playwright_package_manifest",
+            "browser_manifest_entry",
+            "frozen_playwright_version_match",
+            "frozen_browser_revision_match",
+        }
         identity_failure_keys = {
             "schema",
             "scenario_identity",
@@ -588,6 +602,11 @@ def _runtime_authority_failure_verdict(
             == "private_snapshot_launch_image_identity"
         ):
             identity_failure_keys.add("browser_identity_phase")
+            if (
+                failure.get("browser_identity_phase")
+                == "playwright_package_revision_identity"
+            ):
+                identity_failure_keys.add("browser_identity_check")
         identity_failure = (
             isinstance(failure, dict)
             and set(failure) == identity_failure_keys
@@ -603,6 +622,19 @@ def _runtime_authority_failure_verdict(
                 != "private_snapshot_launch_image_identity"
                 or failure.get("browser_identity_phase")
                 in private_snapshot_phases
+            )
+            and (
+                (
+                    failure.get("browser_identity_phase")
+                    == "playwright_package_revision_identity"
+                    and failure.get("browser_identity_check")
+                    in package_revision_checks
+                )
+                or (
+                    failure.get("browser_identity_phase")
+                    != "playwright_package_revision_identity"
+                    and failure.get("browser_identity_check") is None
+                )
             )
         )
         if failure != wrapper_publication_failure and not identity_failure:
@@ -688,7 +720,7 @@ def _runtime_authority_failure_verdict(
             identity_bytes = identity_path.read_bytes()
             identity = _read_json(identity_path)
             expected_identity = {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/2",
+                "schema": "cvm.provider-free-browser-identity-diagnostic/3",
                 "operation": "preview_browser_identity",
                 "substage": failure["browser_identity_substage"],
                 "scenario_failure": {
@@ -698,6 +730,8 @@ def _runtime_authority_failure_verdict(
             }
             if failure.get("browser_identity_phase") is not None:
                 expected_identity["phase"] = failure["browser_identity_phase"]
+            if failure.get("browser_identity_check") is not None:
+                expected_identity["check"] = failure["browser_identity_check"]
             if identity != expected_identity:
                 raise ReviewError("browser identity diagnostic conflicts")
             for relative, data in (
@@ -750,6 +784,11 @@ def _runtime_authority_failure_verdict(
                     + (
                         "/" + str(failure["browser_identity_phase"])
                         if failure.get("browser_identity_phase") is not None
+                        else ""
+                    )
+                    + (
+                        "/" + str(failure["browser_identity_check"])
+                        if failure.get("browser_identity_check") is not None
                         else ""
                     )
                     if identity_failure
