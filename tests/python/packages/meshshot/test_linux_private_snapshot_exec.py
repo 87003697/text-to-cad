@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -83,6 +84,54 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
     """Run the Linux proof when a pre-existing local Docker image is available."""
 
     _IMAGE = "node:22-bookworm"
+    _DOCKER_ROUTING_ENVIRONMENT = frozenset(
+        {
+            "DOCKER_CONTEXT",
+            "DOCKER_HOST",
+            "DOCKER_TLS",
+            "DOCKER_TLS_VERIFY",
+            "DOCKER_CERT_PATH",
+            "DOCKER_CONFIG",
+            "DOCKER_API_VERSION",
+        }
+    )
+
+    def _local_docker_socket(self) -> Path:
+        candidates = (
+            Path("/var/run/docker.sock"),
+            Path.home() / ".docker/run/docker.sock",
+            Path.home() / ".colima/docker.sock",
+            Path.home() / ".colima/default/docker.sock",
+        )
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve(strict=True)
+                info = resolved.stat()
+            except OSError:
+                continue
+            if (
+                stat.S_ISSOCK(info.st_mode)
+                and info.st_uid == os.getuid()
+                and stat.S_IMODE(info.st_mode) & 0o077 == 0
+            ):
+                return resolved
+            if (
+                resolved == Path("/var/run/docker.sock")
+                and stat.S_ISSOCK(info.st_mode)
+                and info.st_uid == 0
+                and stat.S_IMODE(info.st_mode) & 0o002 == 0
+            ):
+                return resolved
+        raise unittest.SkipTest("owned local Docker Unix socket is unavailable")
+
+    def _docker_environment(self, endpoint: Path) -> dict[str, str]:
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in self._DOCKER_ROUTING_ENVIRONMENT
+        }
+        environment["DOCKER_HOST"] = f"unix://{endpoint}"
+        return environment
 
     def test_harness_scrubs_hostile_docker_routing_environment(self) -> None:
         calls: list[dict[str, object]] = []
@@ -158,22 +207,26 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
         docker = shutil.which("docker")
         if docker is None:
             self.skipTest("local Docker is unavailable")
-        try:
-            daemon = subprocess.run(
-                [docker, "info"],
+        endpoint = self._local_docker_socket()
+        docker_environment = self._docker_environment(endpoint)
+
+        def run_docker(
+            arguments: list[str], *, timeout: float, quiet: bool = False
+        ) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.run(
+                [docker, *arguments],
                 check=False,
+                env=docker_environment,
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
+                stdout=subprocess.DEVNULL if quiet else subprocess.PIPE,
+                stderr=subprocess.DEVNULL if quiet else subprocess.PIPE,
+                timeout=timeout,
             )
-            image = subprocess.run(
-                [docker, "image", "inspect", self._IMAGE],
-                check=False,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
+
+        try:
+            daemon = run_docker(["info"], timeout=10, quiet=True)
+            image = run_docker(
+                ["image", "inspect", self._IMAGE], timeout=10, quiet=True
             )
         except (OSError, subprocess.SubprocessError):
             self.skipTest("local Docker is unavailable")
@@ -181,11 +234,9 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
             self.skipTest("controlled local Docker image is unavailable")
 
         name = f"meshshot-linux-exec-{os.getpid()}-{secrets.token_hex(6)}"
-        created = False
         try:
-            create = subprocess.run(
+            create = run_docker(
                 [
-                    docker,
                     "create",
                     "--pull=never",
                     "--name",
@@ -212,15 +263,10 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
                     "python3",
                     "/test_linux_private_snapshot_exec.py",
                 ],
-                check=False,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
                 timeout=15,
             )
             if create.returncode != 0:
                 self.skipTest("controlled local Docker container is unavailable")
-            created = True
             for source, target in (
                 (
                     REPO_ROOT / "packages/meshshot/src/meshshot/browser_runtime.py",
@@ -228,35 +274,32 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
                 ),
                 (Path(__file__), "/test_linux_private_snapshot_exec.py"),
             ):
-                copied = subprocess.run(
-                    [docker, "cp", os.fspath(source), f"{name}:{target}"],
-                    check=False,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                copied = run_docker(
+                    ["cp", os.fspath(source), f"{name}:{target}"],
                     timeout=15,
                 )
                 self.assertEqual(0, copied.returncode, "Linux harness copy failed")
-            completed = subprocess.run(
-                [docker, "start", "--attach", name],
-                check=False,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            completed = run_docker(
+                ["start", "--attach", name],
                 timeout=30,
             )
             self.assertEqual(0, completed.returncode, "Linux harness failed closed")
         finally:
-            if created:
-                removed = subprocess.run(
-                    [docker, "rm", "--force", name],
-                    check=False,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=15,
+            try:
+                removed = run_docker(
+                    ["rm", "--force", name], timeout=15, quiet=True
                 )
-                self.assertEqual(0, removed.returncode, "Linux harness cleanup failed")
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise AssertionError("Linux harness cleanup failed") from exc
+            if removed.returncode != 0:
+                inspected = run_docker(
+                    ["container", "inspect", name], timeout=10, quiet=True
+                )
+                self.assertNotEqual(
+                    0,
+                    inspected.returncode,
+                    "Linux harness cleanup failed",
+                )
 
 
 if __name__ == "__main__":
