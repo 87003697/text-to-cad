@@ -622,6 +622,10 @@ class ResidualRendererTests(unittest.TestCase):
             "private_snapshot_launch_image_identity",
             raised.exception.browser_identity_substage,
         )
+        self.assertEqual(
+            "private_launch_version_output_identity",
+            raised.exception.browser_identity_phase,
+        )
         popen.assert_not_called()
 
     def test_prelaunched_runtime_rejects_malformed_readiness_and_removes_profile(
