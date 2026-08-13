@@ -47,8 +47,12 @@ def execute(runner, *, repo_root: Path = REPO_ROOT) -> int:
         before = _probe(runner, repo_root)
         before_status = "matched" if before.matched else "mismatched"
         if before.matched:
-            after_status = "matched"
-            status = 0
+            after = _probe(runner, repo_root)
+            after_status = "matched" if (
+                after.matched
+                and after.browser_sha256 == before.browser_sha256
+            ) else "mismatched"
+            status = 0 if after_status == "matched" else 1
         elif before.browser_sha256 is not None:
             installed = runner.remote(
                 INSTALL_COMMAND,

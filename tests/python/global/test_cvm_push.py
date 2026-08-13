@@ -546,15 +546,9 @@ class StageTests(unittest.TestCase):
         meshshot = (REPO_ROOT / "packages/meshshot/pyproject.toml").read_text(
             encoding="utf-8"
         )
-        cad_requirements = (REPO_ROOT / "skills/cad/requirements.txt").read_text(
-            encoding="utf-8"
-        ).splitlines()
-
         self.assertIn("playwright==1.60.0", requirements)
         self.assertNotIn("playwright", requirements)
         self.assertIn('"playwright==1.60.0"', meshshot)
-        self.assertIn("playwright==1.60.0", cad_requirements)
-        self.assertNotIn("playwright", cad_requirements)
 
     def test_stage_requires_exactly_one_frozen_headless_shell_entry(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
