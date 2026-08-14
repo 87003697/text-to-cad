@@ -1539,6 +1539,18 @@ class _PinnedExecutable:
                 raise subprocess.TimeoutExpired([_FD_EXEC_HANDOFF_SCHEMA], 0)
             if image_pid is None and process.poll() is not None:
                 raise BrowserRuntimeError("browser_identity")
+            if image_pid is not None:
+                try:
+                    raw = Path(f"/proc/{target_pid}/stat").read_text(
+                        encoding="utf-8"
+                    )
+                    tail = raw[raw.rfind(")") + 2 :].split()
+                    if not tail or tail[0] == "Z":
+                        raise BrowserRuntimeError("browser_identity")
+                except (FileNotFoundError, ProcessLookupError) as exc:
+                    raise BrowserRuntimeError("browser_identity") from exc
+                except (OSError, ValueError, IndexError) as exc:
+                    raise BrowserRuntimeError("browser_identity") from exc
             try:
                 self._verify_running_image_until(target_pid, deadline)
                 return
