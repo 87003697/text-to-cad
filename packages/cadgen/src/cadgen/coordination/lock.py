@@ -60,7 +60,12 @@ except ImportError:  # pragma: no cover - not reachable on darwin/linux CI
     msvcrt = None  # type: ignore[assignment]
 
 
-_BUSY_ERRNOS = (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES)
+# errnos that mean "a peer holds the lock right now", per backend. POSIX flock raises
+# EWOULDBLOCK/EAGAIN for a contended LOCK_NB; Windows msvcrt raises EACCES instead. Folding
+# EACCES into the POSIX set would misread one of flock's "the filesystem refused this"
+# errors as contention, so the sets stay separate.
+_FCNTL_BUSY_ERRNOS = (errno.EWOULDBLOCK, errno.EAGAIN)
+_MSVCRT_BUSY_ERRNOS = (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES)
 
 
 _HELD = threading.local()
@@ -112,7 +117,7 @@ def _pad_sentinel(handle) -> None:
     Sentinels are never unlinked, so this pad happens at most once in the file's life and
     writes nothing visible to ``read_run_id`` (which strips whitespace)."""
     if handle.seek(0, os.SEEK_END) == 0:
-        handle.write(b"\x00")
+        handle.write(b" ")
         handle.flush()
     handle.seek(0)
 
@@ -143,7 +148,7 @@ def probe(lock_path: Path | str) -> ProbeResult:
             try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
             except OSError as exc:
-                if exc.errno in _BUSY_ERRNOS:
+                if exc.errno in _FCNTL_BUSY_ERRNOS:
                     return ProbeResult(held=True, degraded=False)
                 # ENOLCK / EOPNOTSUPP -- the filesystem does not do advisory locks (NFS,
                 # SMB, some bind mounts). Report degraded rather than inventing a state.
@@ -160,7 +165,7 @@ def probe(lock_path: Path | str) -> ProbeResult:
         try:
             msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
         except OSError as exc:
-            if exc.errno in _BUSY_ERRNOS:
+            if exc.errno in _MSVCRT_BUSY_ERRNOS:
                 return ProbeResult(held=True, degraded=False)
             return ProbeResult(held=False, degraded=True)
         else:
@@ -280,7 +285,10 @@ def _acquire(
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         return
 
-    _pad_sentinel(handle)
+    if fcntl is None:
+        # Windows region locks need a byte to lock; pad once (sentinels are never unlinked,
+        # so this runs at most once in the file's life).
+        _pad_sentinel(handle)
     started = time.monotonic()
     deadline = None if deadline_ms is None else started + (max(0.0, deadline_ms) / 1000.0)
     next_notice_at = _WAIT_NOTICE_GRACE_S
@@ -293,7 +301,8 @@ def _acquire(
                 msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
             return
         except OSError as exc:
-            if exc.errno not in _BUSY_ERRNOS:
+            busy = _FCNTL_BUSY_ERRNOS if fcntl is not None else _MSVCRT_BUSY_ERRNOS
+            if exc.errno not in busy:
                 raise
         now = time.monotonic()
         if deadline is not None and now >= deadline:
