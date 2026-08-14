@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import ctypes
 from dataclasses import dataclass
 import errno
 import fcntl
@@ -773,6 +774,7 @@ class _PinnedExecutable:
             sys.platform.startswith("linux")
             and os.environ.get(_BROWSER_TREE_MANIFEST_ENV)
         )
+        self._detached_filesystem_mounted = False
         self.tree_manifest_sha256: str | None = None
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -1183,6 +1185,8 @@ class _PinnedExecutable:
         descriptor: int | None = None
         phase = "private_tree_materialization"
         try:
+            self._mount_private_filesystem(root)
+            self._detached_filesystem_mounted = True
             if self._tree_manifest_sha256(source_root) != expected:
                 raise BrowserRuntimeError("browser_identity")
             self._snapshot_tree_exact(source_root, target_root)
@@ -1221,11 +1225,16 @@ class _PinnedExecutable:
                     os.close(descriptor)
                 except OSError:
                     cleanup_failed = True
+            if self._detached_filesystem_mounted:
+                try:
+                    self._unmount_private_filesystem(root)
+                    self._detached_filesystem_mounted = False
+                except BrowserRuntimeError:
+                    cleanup_failed = True
             try:
                 if os.path.lexists(root):
-                    self._thaw_directories(root)
-                    shutil.rmtree(root)
-            except (BrowserRuntimeError, OSError):
+                    root.rmdir()
+            except OSError:
                 cleanup_failed = True
             if os.path.lexists(root):
                 cleanup_failed = True
@@ -1240,6 +1249,34 @@ class _PinnedExecutable:
             raise BrowserRuntimeError(
                 "browser_identity", browser_identity_phase=phase
             ) from exc
+
+    @staticmethod
+    def _mount_private_filesystem(root: Path) -> None:
+        libc = ctypes.CDLL(None, use_errno=True)
+        mount = libc.mount
+        mount.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_ulong,
+            ctypes.c_char_p,
+        ]
+        mount.restype = ctypes.c_int
+        target = os.fsencode(root)
+        if mount(b"tmpfs", target, b"tmpfs", 0x2 | 0x4, b"mode=0700") != 0:
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            )
+
+    @staticmethod
+    def _unmount_private_filesystem(root: Path) -> None:
+        libc = ctypes.CDLL(None, use_errno=True)
+        unmount = libc.umount2
+        unmount.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        unmount.restype = ctypes.c_int
+        if unmount(os.fsencode(root), 0x2) != 0:
+            raise BrowserRuntimeError("browser_cleanup")
 
     @staticmethod
     def _sha256_fd_from_path(path: Path) -> str:
@@ -1613,12 +1650,13 @@ class _PinnedExecutable:
             raise BrowserRuntimeError("browser_identity") from exc
 
     def _remove_detached_source(self) -> None:
-        if self.launch_root is None:
+        if self.launch_root is None or not self._detached_filesystem_mounted:
             raise BrowserRuntimeError("browser_cleanup")
         root = self.launch_root
         try:
-            self._thaw_directories(root)
-            shutil.rmtree(root)
+            self._unmount_private_filesystem(root)
+            self._detached_filesystem_mounted = False
+            root.rmdir()
         except (BrowserRuntimeError, OSError) as exc:
             raise BrowserRuntimeError("browser_cleanup") from exc
         if os.path.lexists(root):
@@ -2201,11 +2239,19 @@ class _PinnedExecutable:
                 failure = True
             self.fd = None
         if self.launch_root is not None:
-            try:
-                self._thaw_directories(self.launch_root)
-                shutil.rmtree(self.launch_root)
-            except (BrowserRuntimeError, OSError):
-                failure = True
+            if getattr(self, "_detached_filesystem_mounted", False):
+                try:
+                    self._unmount_private_filesystem(self.launch_root)
+                    self._detached_filesystem_mounted = False
+                    self.launch_root.rmdir()
+                except (BrowserRuntimeError, OSError):
+                    failure = True
+            else:
+                try:
+                    self._thaw_directories(self.launch_root)
+                    shutil.rmtree(self.launch_root)
+                except (BrowserRuntimeError, OSError):
+                    failure = True
             if os.path.lexists(self.launch_root):
                 failure = True
             self.launch_root = None
