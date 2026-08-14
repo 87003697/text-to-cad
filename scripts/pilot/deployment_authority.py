@@ -98,6 +98,212 @@ def _physical_absolute(path: Path) -> Path:
     return current
 
 
+def _browser_tree_manifest_from_fd(
+    root_fd: int,
+    *,
+    readonly_projection: bool,
+) -> dict[str, tuple[str, int, str | None]]:
+    """Measure one already-open browser tree without following pathnames."""
+
+    manifest: dict[str, tuple[str, int, str | None]] = {}
+    folded: set[str] = set()
+
+    def visit(directory_fd: int, relative: str) -> None:
+        directory_info = os.fstat(directory_fd)
+        if not stat.S_ISDIR(directory_info.st_mode):
+            raise DeploymentAuthorityError("Chromium browser tree root is invalid")
+        mode = stat.S_IMODE(directory_info.st_mode)
+        if readonly_projection:
+            mode &= ~0o222
+        collision = relative.casefold()
+        if collision in folded:
+            raise DeploymentAuthorityError("Chromium browser tree has colliding entries")
+        folded.add(collision)
+        manifest[relative] = ("directory", mode, None)
+        try:
+            names = sorted(os.listdir(directory_fd))
+        except OSError as exc:
+            raise DeploymentAuthorityError("Chromium browser tree cannot be listed") from exc
+        for name in names:
+            if not name or name in {".", ".."} or "/" in name:
+                raise DeploymentAuthorityError("Chromium browser tree entry is invalid")
+            child_relative = name if relative == "." else f"{relative}/{name}"
+            try:
+                entry_info = os.stat(
+                    name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+            except OSError as exc:
+                raise DeploymentAuthorityError("Chromium browser tree changed") from exc
+            if stat.S_ISLNK(entry_info.st_mode):
+                raise DeploymentAuthorityError("Chromium browser tree contains a link")
+            if stat.S_ISDIR(entry_info.st_mode):
+                flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                child_fd: int | None = None
+                try:
+                    child_fd = os.open(name, flags, dir_fd=directory_fd)
+                    opened = os.fstat(child_fd)
+                    if (opened.st_dev, opened.st_ino, opened.st_mode) != (
+                        entry_info.st_dev,
+                        entry_info.st_ino,
+                        entry_info.st_mode,
+                    ):
+                        raise DeploymentAuthorityError("Chromium browser tree changed")
+                    visit(child_fd, child_relative)
+                    current = os.stat(
+                        name,
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                    after = os.fstat(child_fd)
+                    if (current.st_dev, current.st_ino, current.st_mode) != (
+                        opened.st_dev,
+                        opened.st_ino,
+                        opened.st_mode,
+                    ) or (after.st_dev, after.st_ino, after.st_mode) != (
+                        opened.st_dev,
+                        opened.st_ino,
+                        opened.st_mode,
+                    ):
+                        raise DeploymentAuthorityError("Chromium browser tree changed")
+                except OSError as exc:
+                    raise DeploymentAuthorityError("Chromium browser tree changed") from exc
+                finally:
+                    if child_fd is not None:
+                        try:
+                            os.close(child_fd)
+                        except OSError as exc:
+                            raise DeploymentAuthorityError(
+                                "Chromium browser tree descriptor cleanup failed"
+                            ) from exc
+                continue
+            if not stat.S_ISREG(entry_info.st_mode):
+                raise DeploymentAuthorityError("Chromium browser tree contains a special entry")
+            flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            file_fd: int | None = None
+            try:
+                file_fd = os.open(name, flags, dir_fd=directory_fd)
+                opened = os.fstat(file_fd)
+                if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mode) != (
+                    entry_info.st_dev,
+                    entry_info.st_ino,
+                    entry_info.st_size,
+                    entry_info.st_mode,
+                ):
+                    raise DeploymentAuthorityError("Chromium browser tree changed")
+                digest = hashlib.sha256()
+                while True:
+                    chunk = os.read(file_fd, 4 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                current = os.stat(
+                    name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+                after = os.fstat(file_fd)
+                if (current.st_dev, current.st_ino, current.st_size, current.st_mode) != (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_size,
+                    opened.st_mode,
+                ) or (after.st_dev, after.st_ino, after.st_size, after.st_mode) != (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_size,
+                    opened.st_mode,
+                ):
+                    raise DeploymentAuthorityError("Chromium browser tree changed")
+            except OSError as exc:
+                raise DeploymentAuthorityError("Chromium browser tree changed") from exc
+            finally:
+                if file_fd is not None:
+                    try:
+                        os.close(file_fd)
+                    except OSError as exc:
+                        raise DeploymentAuthorityError(
+                            "Chromium browser tree descriptor cleanup failed"
+                        ) from exc
+            mode = stat.S_IMODE(entry_info.st_mode)
+            if readonly_projection:
+                mode &= ~0o222
+            collision = child_relative.casefold()
+            if collision in folded:
+                raise DeploymentAuthorityError("Chromium browser tree has colliding entries")
+            folded.add(collision)
+            manifest[child_relative] = ("file", mode, digest.hexdigest())
+
+    visit(root_fd, ".")
+    return manifest
+
+
+def browser_tree_manifest(
+    root: str | Path,
+    *,
+    readonly_projection: bool = True,
+) -> dict[str, tuple[str, int, str | None]]:
+    """Measure the deployment-authoritative full Chromium revision tree."""
+
+    path = Path(root)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        current = path.lstat()
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or stat.S_ISLNK(current.st_mode)
+            or (opened.st_dev, opened.st_ino, opened.st_mode)
+            != (current.st_dev, current.st_ino, current.st_mode)
+        ):
+            raise DeploymentAuthorityError("Chromium browser tree root changed")
+        return _browser_tree_manifest_from_fd(
+            descriptor,
+            readonly_projection=readonly_projection,
+        )
+    except OSError as exc:
+        raise DeploymentAuthorityError("Chromium browser tree cannot be opened") from exc
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError as exc:
+                raise DeploymentAuthorityError(
+                    "Chromium browser tree descriptor cleanup failed"
+                ) from exc
+
+
+def browser_tree_manifest_sha256(
+    manifest: dict[str, tuple[str, int, str | None]],
+) -> str:
+    entries: list[dict[str, object]] = []
+    for relative in sorted(manifest):
+        kind, mode, digest = manifest[relative]
+        entry: dict[str, object] = {
+            "path": relative,
+            "kind": kind,
+            "mode": mode,
+        }
+        if kind == "file":
+            if digest is None:
+                raise DeploymentAuthorityError("Chromium browser tree manifest is incomplete")
+            entry["sha256"] = digest
+        elif kind != "directory" or digest is not None:
+            raise DeploymentAuthorityError("Chromium browser tree manifest is invalid")
+        entries.append(entry)
+    encoded = json.dumps(
+        {"schema": "meshshot.browser-tree-manifest/1", "entries": entries},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def probe_runtime_identity(
     root: str | Path,
     *,
@@ -133,6 +339,17 @@ def probe_runtime_identity(
         / f"chromium_headless_shell-{chromium_revision}"
         / "chrome-headless-shell-linux64/chrome-headless-shell"
     )
+    browser_revision = browser.parents[1]
+    browser_manifest = browser_tree_manifest(browser_revision)
+    browser_relative = "chrome-headless-shell-linux64/chrome-headless-shell"
+    browser_entry = browser_manifest.get(browser_relative)
+    if (
+        browser_entry is None
+        or browser_entry[0] != "file"
+        or browser_entry[1] & 0o111 == 0
+        or browser_entry[2] is None
+    ):
+        raise DeploymentAuthorityError("Chromium executable tree entry is invalid")
     cadpy = _physical_path(source_root, _safe_relative(CADPY_RUNTIME_PATH))
     return {
         "schema": "cvm.provider-free-runtime-identity/1",
@@ -146,7 +363,10 @@ def probe_runtime_identity(
             "host_cache_path": os.fspath(host_cache),
             "sandbox_cache_path": SANDBOX_BROWSER_CACHE,
             "executable_path": os.fspath(browser),
-            "sha256": hashlib.sha256(browser.read_bytes()).hexdigest(),
+            "sha256": browser_entry[2],
+            "tree_manifest_sha256": browser_tree_manifest_sha256(
+                browser_manifest
+            ),
         },
         "cadpy": {
             "path": CADPY_RUNTIME_PATH,
@@ -199,6 +419,7 @@ def validate_runtime_identity(
             "sandbox_cache_path",
             "executable_path",
             "sha256",
+            "tree_manifest_sha256",
         }
         or not str(chromium.get("revision", "")).isdigit()
         or chromium.get("sandbox_cache_path") != SANDBOX_BROWSER_CACHE
@@ -212,6 +433,7 @@ def validate_runtime_identity(
             / "chrome-headless-shell-linux64/chrome-headless-shell"
         )
         or not valid_sha256(chromium.get("sha256"))
+        or not valid_sha256(chromium.get("tree_manifest_sha256"))
         or not isinstance(cadpy, dict)
         or set(cadpy) != {"path", "sha256"}
         or cadpy.get("path") != CADPY_RUNTIME_PATH
@@ -244,7 +466,19 @@ def validate_runtime_identity(
             raise DeploymentAuthorityError("trusted bwrap version probe failed") from exc
         if " ".join(measured_version.stdout.split()) != bwrap.get("version"):
             raise DeploymentAuthorityError("trusted bwrap version conflicts")
-        if hashlib.sha256(browser_path.read_bytes()).hexdigest() != chromium.get("sha256"):
+        measured_manifest = browser_tree_manifest(browser_path.parents[1])
+        measured_tree = browser_tree_manifest_sha256(measured_manifest)
+        if measured_tree != chromium.get("tree_manifest_sha256"):
+            raise DeploymentAuthorityError("Chromium browser tree conflicts")
+        executable_entry = measured_manifest.get(
+            "chrome-headless-shell-linux64/chrome-headless-shell"
+        )
+        if (
+            executable_entry is None
+            or executable_entry[0] != "file"
+            or executable_entry[1] & 0o111 == 0
+            or executable_entry[2] != chromium.get("sha256")
+        ):
             raise DeploymentAuthorityError("Chromium digest conflicts")
     return identity
 

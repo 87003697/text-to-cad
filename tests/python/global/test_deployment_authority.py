@@ -108,19 +108,27 @@ class DeploymentAuthorityTests(unittest.TestCase):
                         "chrome-headless-shell-linux64/chrome-headless-shell"
                     ),
                     "sha256": "b" * 64,
+                    "tree_manifest_sha256": "c" * 64,
                 },
                 "cadpy": {
                     "path": deployment_authority.CADPY_RUNTIME_PATH,
                     "sha256": hashlib.sha256(cadpy.read_bytes()).hexdigest(),
                 },
             }
-            for mutation in ("bwrap", "revision", "browser-path"):
+            for mutation in (
+                "bwrap",
+                "revision",
+                "browser-path",
+                "tree-manifest",
+            ):
                 with self.subTest(mutation=mutation):
                     candidate = json.loads(json.dumps(identity))
                     if mutation == "bwrap":
                         candidate["bwrap"]["path"] = "/tmp/bwrap"
                     elif mutation == "revision":
                         candidate["chromium"]["revision"] = "9999"
+                    elif mutation == "tree-manifest":
+                        del candidate["chromium"]["tree_manifest_sha256"]
                     else:
                         candidate["chromium"]["executable_path"] = "/tmp/chromium"
                     with self.assertRaises(

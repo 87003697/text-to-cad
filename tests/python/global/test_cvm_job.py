@@ -62,6 +62,9 @@ class CvmJobTests(unittest.TestCase):
         browser.parent.mkdir(parents=True)
         browser.write_bytes(b"trusted chromium")
         browser.chmod(0o755)
+        browser_tree_sha256 = deployment_authority.browser_tree_manifest_sha256(
+            deployment_authority.browser_tree_manifest(browser.parents[1])
+        )
         runtime_identity = {
             "schema": "cvm.provider-free-runtime-identity/1",
             "bwrap": {
@@ -75,6 +78,7 @@ class CvmJobTests(unittest.TestCase):
                 "sandbox_cache_path": deployment_authority.SANDBOX_BROWSER_CACHE,
                 "executable_path": os.fspath(browser),
                 "sha256": hashlib.sha256(browser.read_bytes()).hexdigest(),
+                "tree_manifest_sha256": browser_tree_sha256,
             },
             "cadpy": {
                 "path": deployment_authority.CADPY_RUNTIME_PATH,
@@ -104,6 +108,9 @@ class CvmJobTests(unittest.TestCase):
         executable.write_bytes(b"deployment-attested chromium")
         executable.chmod(0o755)
         (executable.parents[1] / "resources.pak").write_bytes(b"resource")
+        tree_manifest_sha256 = deployment_authority.browser_tree_manifest_sha256(
+            deployment_authority.browser_tree_manifest(executable.parents[1])
+        )
         return (
             {
                 "revision": "1234",
@@ -111,6 +118,7 @@ class CvmJobTests(unittest.TestCase):
                 "sandbox_cache_path": deployment_authority.SANDBOX_BROWSER_CACHE,
                 "executable_path": os.fspath(executable),
                 "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+                "tree_manifest_sha256": tree_manifest_sha256,
             },
             executable,
         )
@@ -147,7 +155,7 @@ class CvmJobTests(unittest.TestCase):
                 mount.host_revision.stat().st_dev,
             )
             self.assertEqual(
-                "102e2cd9ceb42e2eb9fa01bc9cb6333969c0ba5971fdfc45b23b3de87fa95835",
+                chromium["tree_manifest_sha256"],
                 mount.tree_manifest_sha256,
             )
             self.assertEqual("1234", mount.revision)
@@ -458,21 +466,12 @@ class CvmJobTests(unittest.TestCase):
     def test_attested_browser_stage_removes_partial_copy(self) -> None:
         chromium, _executable = self._browser_identity()
         handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
-        real_copy = shutil.copy2
-        copied = 0
-
-        def fail_after_one_file(source, destination, *args, **kwargs):
-            nonlocal copied
-            copied += 1
-            if copied > 1:
-                raise OSError("injected partial copy")
-            return real_copy(source, destination, *args, **kwargs)
 
         with (
             mock.patch.object(
-                runtime.shutil,
-                "copy2",
-                side_effect=fail_after_one_file,
+                runtime,
+                "_copy_browser_tree_fd",
+                side_effect=runtime.BrowserStageError("injected partial copy"),
             ),
             self.assertRaises(runtime.BrowserStageError),
         ):
@@ -492,18 +491,24 @@ class CvmJobTests(unittest.TestCase):
     def test_attested_browser_stage_rejects_incomplete_or_changed_copy(self) -> None:
         chromium, _executable = self._browser_identity()
         handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
-        real_copy = shutil.copy2
+        real_copy = runtime._copy_browser_tree_fd
 
-        def corrupt_resource(source, destination, *args, **kwargs):
-            result = real_copy(source, destination, *args, **kwargs)
-            if Path(source).name == "resources.pak":
-                Path(destination).write_bytes(b"corrupted")
-            return result
+        def corrupt_resource(source_fd: int, target_fd: int) -> None:
+            real_copy(source_fd, target_fd)
+            resource_fd = os.open(
+                "resources.pak",
+                os.O_WRONLY | os.O_TRUNC,
+                dir_fd=target_fd,
+            )
+            try:
+                os.write(resource_fd, b"corrupted")
+            finally:
+                os.close(resource_fd)
 
         with (
             mock.patch.object(
-                runtime.shutil,
-                "copy2",
+                runtime,
+                "_copy_browser_tree_fd",
                 side_effect=corrupt_resource,
             ),
             self.assertRaises(runtime.BrowserStageError),
@@ -583,6 +588,47 @@ class CvmJobTests(unittest.TestCase):
                 shutil.rmtree(stage_root)
 
         self.assertFalse(stage_root.exists())
+
+    def test_attested_browser_stage_cleanup_rejects_open_race_without_deleting_replacement(
+        self,
+    ) -> None:
+        parent = self.workspace / "cleanup-race"
+        parent.mkdir()
+        owned = parent / "owned"
+        owned.mkdir()
+        (owned / "resource").write_bytes(b"owned")
+        retained = parent / "retained-owned"
+        replacement = parent / "replacement"
+        parent_fd = os.open(
+            parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        identity_info = owned.lstat()
+        identity = (identity_info.st_dev, identity_info.st_ino)
+        real_open = os.open
+        swapped = False
+
+        def replace_before_open(path, flags, *args, **kwargs):
+            nonlocal swapped
+            if path == "owned" and kwargs.get("dir_fd") == parent_fd and not swapped:
+                swapped = True
+                os.replace(owned, retained)
+                replacement.mkdir()
+                (replacement / "foreign").write_bytes(b"foreign")
+                os.replace(replacement, owned)
+            return real_open(path, flags, *args, **kwargs)
+
+        try:
+            with (
+                mock.patch.object(runtime.os, "open", side_effect=replace_before_open),
+                self.assertRaises(runtime.BrowserStageError),
+            ):
+                runtime._remove_browser_tree_owned(parent_fd, "owned", identity)
+        finally:
+            os.close(parent_fd)
+
+        self.assertEqual(b"foreign", (owned / "foreign").read_bytes())
+        self.assertEqual(b"owned", (retained / "resource").read_bytes())
 
     def test_provider_free_sandbox_preserves_only_nested_bwrap_setup_capabilities(
         self,
@@ -934,12 +980,9 @@ class CvmJobTests(unittest.TestCase):
                 deployed_receipt_path.read_bytes()
             )
             runtime_identity = deployed_receipt["runtime_identity"]
-            browser_root = Path(
-                runtime_identity["chromium"]["executable_path"]
-            ).parents[1]
-            tree_manifest_sha256 = runtime._browser_tree_manifest_sha256(
-                runtime._browser_tree_manifest(browser_root)
-            )
+            tree_manifest_sha256 = runtime_identity["chromium"][
+                "tree_manifest_sha256"
+            ]
             sandbox_argv = runtime.provider_free_sandbox_argv(
                 state["scenario"]["name"],
                 exp_dir,

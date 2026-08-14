@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import fcntl
 import hashlib
 import json
@@ -320,61 +321,239 @@ def _browser_mount(
 
 def _browser_tree_manifest(root: Path) -> dict[str, tuple[str, int, str | None]]:
     """Return the closed regular-file tree identity used around one copy."""
-
-    manifest: dict[str, tuple[str, int, str | None]] = {}
-    for path in (root, *sorted(root.rglob("*"))):
-        mode = path.lstat().st_mode
-        if stat.S_ISLNK(mode) or not (
-            stat.S_ISDIR(mode) or stat.S_ISREG(mode)
-        ):
-            raise BrowserStageError(
-                "browser revision contains a link or special entry"
-            )
-        relative = "." if path == root else path.relative_to(root).as_posix()
-        manifest[relative] = (
-            "directory" if stat.S_ISDIR(mode) else "file",
-            stat.S_IMODE(mode),
-            (
-                None
-                if stat.S_ISDIR(mode)
-                else hashlib.sha256(path.read_bytes()).hexdigest()
-            ),
+    try:
+        return deployment_authority.browser_tree_manifest(
+            root,
+            readonly_projection=False,
         )
-    return manifest
+    except deployment_authority.DeploymentAuthorityError as exc:
+        raise BrowserStageError("browser revision tree is invalid") from exc
 
 
 def _browser_tree_manifest_sha256(
     manifest: dict[str, tuple[str, int, str | None]],
 ) -> str:
-    entries: list[dict[str, object]] = []
-    folded: set[str] = set()
-    for relative in sorted(manifest):
-        collision_key = relative.casefold()
-        if collision_key in folded:
-            raise BrowserStageError("browser revision contains a colliding entry")
-        folded.add(collision_key)
-        kind, mode, digest = manifest[relative]
-        entry: dict[str, object] = {
-            "path": relative,
-            "kind": kind,
-            "mode": mode,
-        }
-        if kind == "file":
-            if digest is None:
-                raise BrowserStageError("browser revision manifest is incomplete")
-            entry["sha256"] = digest
-        elif digest is not None:
-            raise BrowserStageError("browser revision manifest is invalid")
-        entries.append(entry)
-    encoded = json.dumps(
-        {
-            "schema": "meshshot.browser-tree-manifest/1",
-            "entries": entries,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    try:
+        return deployment_authority.browser_tree_manifest_sha256(manifest)
+    except deployment_authority.DeploymentAuthorityError as exc:
+        raise BrowserStageError("browser revision manifest is invalid") from exc
+
+
+def _copy_browser_tree_fd(
+    source_fd: int,
+    target_fd: int,
+) -> None:
+    """Copy and freeze a browser tree using only already-authorized dirfds."""
+
+    source_root = os.fstat(source_fd)
+    if not stat.S_ISDIR(source_root.st_mode):
+        raise BrowserStageError("browser revision root is invalid")
+
+    def copy_directory(open_source: int, open_target: int) -> None:
+        for name in sorted(os.listdir(open_source)):
+            if not name or name in {".", ".."} or "/" in name:
+                raise BrowserStageError("browser revision entry is invalid")
+            info = os.stat(name, dir_fd=open_source, follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                raise BrowserStageError("browser revision contains a link")
+            if stat.S_ISDIR(info.st_mode):
+                os.mkdir(name, mode=0o700, dir_fd=open_target)
+                flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                source_child: int | None = None
+                target_child: int | None = None
+                try:
+                    source_child = os.open(name, flags, dir_fd=open_source)
+                    target_child = os.open(name, flags, dir_fd=open_target)
+                    opened = os.fstat(source_child)
+                    if (opened.st_dev, opened.st_ino, opened.st_mode) != (
+                        info.st_dev,
+                        info.st_ino,
+                        info.st_mode,
+                    ):
+                        raise BrowserStageError("browser revision changed")
+                    copy_directory(source_child, target_child)
+                    current = os.stat(
+                        name,
+                        dir_fd=open_source,
+                        follow_symlinks=False,
+                    )
+                    after = os.fstat(source_child)
+                    if (current.st_dev, current.st_ino, current.st_mode) != (
+                        opened.st_dev,
+                        opened.st_ino,
+                        opened.st_mode,
+                    ) or (after.st_dev, after.st_ino, after.st_mode) != (
+                        opened.st_dev,
+                        opened.st_ino,
+                        opened.st_mode,
+                    ):
+                        raise BrowserStageError("browser revision changed")
+                    os.fchmod(target_child, stat.S_IMODE(info.st_mode) & ~0o222)
+                    try:
+                        os.fsync(target_child)
+                    except OSError as exc:
+                        if exc.errno not in {errno.EINVAL, errno.ENOTSUP, errno.EBADF}:
+                            raise
+                finally:
+                    close_failed = False
+                    if target_child is not None:
+                        try:
+                            os.close(target_child)
+                        except OSError:
+                            close_failed = True
+                    if source_child is not None:
+                        try:
+                            os.close(source_child)
+                        except OSError:
+                            close_failed = True
+                    if close_failed:
+                        raise BrowserStageError(
+                            "browser stage descriptor cleanup failed"
+                        )
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                raise BrowserStageError("browser revision contains a special entry")
+            source_file: int | None = None
+            target_file: int | None = None
+            try:
+                source_file = os.open(
+                    name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=open_source,
+                )
+                opened = os.fstat(source_file)
+                if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mode) != (
+                    info.st_dev,
+                    info.st_ino,
+                    info.st_size,
+                    info.st_mode,
+                ):
+                    raise BrowserStageError("browser revision changed")
+                target_file = os.open(
+                    name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                    0o600,
+                    dir_fd=open_target,
+                )
+                while True:
+                    chunk = os.read(source_file, 4 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    view = memoryview(chunk)
+                    while view:
+                        view = view[os.write(target_file, view) :]
+                os.fchmod(target_file, stat.S_IMODE(info.st_mode) & ~0o222)
+                os.fsync(target_file)
+                current = os.stat(
+                    name,
+                    dir_fd=open_source,
+                    follow_symlinks=False,
+                )
+                after = os.fstat(source_file)
+                if (current.st_dev, current.st_ino, current.st_size, current.st_mode) != (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_size,
+                    opened.st_mode,
+                ) or (after.st_dev, after.st_ino, after.st_size, after.st_mode) != (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_size,
+                    opened.st_mode,
+                ):
+                    raise BrowserStageError("browser revision changed")
+            finally:
+                close_failed = False
+                if target_file is not None:
+                    try:
+                        os.close(target_file)
+                    except OSError:
+                        close_failed = True
+                if source_file is not None:
+                    try:
+                        os.close(source_file)
+                    except OSError:
+                        close_failed = True
+                if close_failed:
+                    raise BrowserStageError(
+                        "browser stage descriptor cleanup failed"
+                    )
+
+    copy_directory(source_fd, target_fd)
+    os.fchmod(target_fd, stat.S_IMODE(source_root.st_mode) & ~0o222)
+
+
+def _remove_browser_tree_owned(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int],
+) -> None:
+    """Remove exactly one owned tree without following replacement paths."""
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    root_fd: int | None = None
+    try:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or stat.S_ISLNK(current.st_mode)
+            or (current.st_dev, current.st_ino) != identity
+        ):
+            raise BrowserStageError("browser stage identity changed before cleanup")
+        root_fd = os.open(name, flags, dir_fd=parent_fd)
+        opened = os.fstat(root_fd)
+        if (opened.st_dev, opened.st_ino) != identity:
+            raise BrowserStageError("browser stage identity changed before cleanup")
+
+        def remove_contents(directory_fd: int) -> None:
+            os.fchmod(directory_fd, 0o700)
+            for child in sorted(os.listdir(directory_fd)):
+                info = os.stat(child, dir_fd=directory_fd, follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
+                    raise BrowserStageError("browser stage contains a link")
+                if stat.S_ISDIR(info.st_mode):
+                    child_fd = os.open(child, flags, dir_fd=directory_fd)
+                    try:
+                        child_opened = os.fstat(child_fd)
+                        if (child_opened.st_dev, child_opened.st_ino) != (
+                            info.st_dev,
+                            info.st_ino,
+                        ):
+                            raise BrowserStageError("browser stage changed during cleanup")
+                        remove_contents(child_fd)
+                    finally:
+                        os.close(child_fd)
+                    current_child = os.stat(
+                        child,
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                    if (current_child.st_dev, current_child.st_ino) != (
+                        info.st_dev,
+                        info.st_ino,
+                    ):
+                        raise BrowserStageError("browser stage changed during cleanup")
+                    os.rmdir(child, dir_fd=directory_fd)
+                elif stat.S_ISREG(info.st_mode):
+                    os.unlink(child, dir_fd=directory_fd)
+                else:
+                    raise BrowserStageError("browser stage contains a special entry")
+
+        remove_contents(root_fd)
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != identity:
+            raise BrowserStageError("browser stage identity changed during cleanup")
+        os.rmdir(name, dir_fd=parent_fd)
+    except OSError as exc:
+        raise BrowserStageError("browser stage cleanup failed") from exc
+    finally:
+        if root_fd is not None:
+            try:
+                os.close(root_fd)
+            except OSError as exc:
+                raise BrowserStageError("browser stage cleanup failed") from exc
 
 
 @contextmanager
@@ -404,6 +583,10 @@ def _staged_attested_browser(
 ) -> Iterator[AttestedBrowserMount]:
     """Implement browser staging behind the signal-safe public interface."""
 
+    source_fd: int | None = None
+    stage_parent_fd: int | None = None
+    stage_root_fd: int | None = None
+    staged_revision_fd: int | None = None
     try:
         parse_handle(handle)
         source_cache = Path(str(chromium["host_cache_path"])).resolve(strict=True)
@@ -419,8 +602,33 @@ def _staged_attested_browser(
             raise BrowserStageError(
                 "browser revision escapes its attested cache"
             ) from exc
-        source_manifest = _browser_tree_manifest(source_revision)
+        trusted_tree_manifest = chromium.get("tree_manifest_sha256")
+        if (
+            not isinstance(trusted_tree_manifest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", trusted_tree_manifest) is None
+        ):
+            raise BrowserStageError("deployment browser tree identity is invalid")
+        source_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        source_flags |= getattr(os, "O_NOFOLLOW", 0)
+        source_fd = os.open(source_revision, source_flags)
+        source_opened = os.fstat(source_fd)
+        source_current = source_revision.lstat()
+        if (
+            not stat.S_ISDIR(source_opened.st_mode)
+            or stat.S_ISLNK(source_current.st_mode)
+            or (source_opened.st_dev, source_opened.st_ino, source_opened.st_mode)
+            != (source_current.st_dev, source_current.st_ino, source_current.st_mode)
+        ):
+            raise BrowserStageError("deployment browser tree root changed")
+        source_manifest = deployment_authority._browser_tree_manifest_from_fd(
+            source_fd,
+            readonly_projection=True,
+        )
         tree_manifest_sha256 = _browser_tree_manifest_sha256(source_manifest)
+        if tree_manifest_sha256 != trusted_tree_manifest:
+            raise BrowserStageError(
+                "browser revision conflicts with deployment tree identity"
+            )
         executable_relative = Path(
             "chrome-headless-shell-linux64/chrome-headless-shell"
         )
@@ -451,10 +659,30 @@ def _staged_attested_browser(
             pass
         else:
             raise BrowserStageError("browser stage must be outside the repository")
-    except BrowserStageError:
-        raise
-    except (KeyError, OSError, ProtocolError, ValueError) as exc:
-        raise BrowserStageError("deployment browser identity is invalid") from exc
+    except BaseException as exc:
+        failure: BaseException = exc
+        if isinstance(
+            exc,
+            (
+                KeyError,
+                OSError,
+                ProtocolError,
+                ValueError,
+                deployment_authority.DeploymentAuthorityError,
+            ),
+        ):
+            failure = BrowserStageError("deployment browser identity is invalid")
+            failure.__cause__ = exc
+        if source_fd is not None:
+            descriptor = source_fd
+            source_fd = None
+            try:
+                os.close(descriptor)
+            except OSError as close_error:
+                raise BrowserStageError(
+                    "browser stage descriptor cleanup failed"
+                ) from close_error
+        raise failure
     created = False
     try:
         try:
@@ -472,21 +700,38 @@ def _staged_attested_browser(
                 raise BrowserStageError(
                     "browser stage is not on the deployment browser filesystem"
                 )
-            stage_root.mkdir(mode=0o700)
+            stage_parent_fd = os.open(stage_parent, source_flags)
+            opened_parent = os.fstat(stage_parent_fd)
+            current_parent = stage_parent.lstat()
+            if (opened_parent.st_dev, opened_parent.st_ino) != (
+                current_parent.st_dev,
+                current_parent.st_ino,
+            ):
+                raise BrowserStageError("browser stage parent identity changed")
+            os.mkdir(stage_root.name, mode=0o700, dir_fd=stage_parent_fd)
             created = True
-            stage_identity = (
-                stage_root.lstat().st_dev,
-                stage_root.lstat().st_ino,
-            )
+            stage_root_fd = os.open(stage_root.name, source_flags, dir_fd=stage_parent_fd)
+            stage_info = os.fstat(stage_root_fd)
+            stage_identity = (stage_info.st_dev, stage_info.st_ino)
             staged_revision = stage_root / "attested"
-            shutil.copytree(
-                source_revision,
-                staged_revision,
-                copy_function=shutil.copy2,
+            os.mkdir("attested", mode=0o700, dir_fd=stage_root_fd)
+            staged_revision_fd = os.open(
+                "attested",
+                source_flags,
+                dir_fd=stage_root_fd,
             )
+            _copy_browser_tree_fd(source_fd, staged_revision_fd)
             if (
-                _browser_tree_manifest(source_revision) != source_manifest
-                or _browser_tree_manifest(staged_revision) != source_manifest
+                deployment_authority._browser_tree_manifest_from_fd(
+                    source_fd,
+                    readonly_projection=True,
+                )
+                != source_manifest
+                or deployment_authority._browser_tree_manifest_from_fd(
+                    staged_revision_fd,
+                    readonly_projection=False,
+                )
+                != source_manifest
             ):
                 raise BrowserStageError(
                     "staged browser tree conflicts with deployment revision"
@@ -507,42 +752,59 @@ def _staged_attested_browser(
             raise BrowserStageError("browser stage setup failed") from exc
         yield mount
     finally:
+        cleanup_failed = False
+        if staged_revision_fd is not None:
+            descriptor = staged_revision_fd
+            staged_revision_fd = None
+            try:
+                os.close(descriptor)
+            except OSError:
+                cleanup_failed = True
+        if stage_root_fd is not None:
+            descriptor = stage_root_fd
+            stage_root_fd = None
+            try:
+                os.close(descriptor)
+            except OSError:
+                cleanup_failed = True
         if created:
             try:
-                stage_mode = stage_root.lstat().st_mode
-                if (
-                    stat.S_ISLNK(stage_mode)
-                    or not stat.S_ISDIR(stage_mode)
-                    or (
-                        stage_root.lstat().st_dev,
-                        stage_root.lstat().st_ino,
-                    )
-                    != stage_identity
-                ):
-                    raise BrowserStageError(
-                        "browser stage identity changed before cleanup"
-                    )
-                _browser_tree_manifest(stage_root)
-                for directory in (
-                    stage_root,
-                    *(
-                        path
-                        for path in stage_root.rglob("*")
-                        if stat.S_ISDIR(path.lstat().st_mode)
-                    ),
-                ):
-                    directory.chmod(
-                        stat.S_IMODE(directory.lstat().st_mode) | 0o700
-                    )
-                shutil.rmtree(stage_root)
-            except BrowserStageError:
-                raise
-            except OSError as exc:
-                raise BrowserStageError("browser stage cleanup failed") from exc
+                if stage_parent_fd is None:
+                    raise BrowserStageError("browser stage cleanup authority missing")
+                _remove_browser_tree_owned(
+                    stage_parent_fd,
+                    stage_root.name,
+                    stage_identity,
+                )
+            except (BrowserStageError, OSError):
+                cleanup_failed = True
+            if stage_parent_fd is not None:
+                descriptor = stage_parent_fd
+                stage_parent_fd = None
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    cleanup_failed = True
             try:
                 stage_parent.rmdir()
             except OSError:
                 pass
+        if stage_parent_fd is not None:
+            descriptor = stage_parent_fd
+            stage_parent_fd = None
+            try:
+                os.close(descriptor)
+            except OSError:
+                cleanup_failed = True
+        if source_fd is not None:
+            descriptor = source_fd
+            source_fd = None
+            try:
+                os.close(descriptor)
+            except OSError:
+                cleanup_failed = True
+        if cleanup_failed:
+            raise BrowserStageError("browser stage cleanup failed")
 
 
 @dataclass(frozen=True)
@@ -824,6 +1086,8 @@ def provider_free_sandbox_argv(
                 != "chrome-headless-shell-linux64/chrome-headless-shell"
                 or mount.executable_sha256
                 != runtime_identity["chromium"]["sha256"]
+                or mount.tree_manifest_sha256
+                != runtime_identity["chromium"]["tree_manifest_sha256"]
             )
         )
     ):
@@ -1387,7 +1651,11 @@ def _provider_free_common_evidence_result(
         exp_dir,
         runtime_identity,
     )
-    if re.fullmatch(r"[0-9a-f]{64}", tree_manifest_sha256 or "") is None:
+    if (
+        re.fullmatch(r"[0-9a-f]{64}", tree_manifest_sha256 or "") is None
+        or tree_manifest_sha256
+        != runtime_identity["chromium"]["tree_manifest_sha256"]
+    ):
         expected_argv = []
     else:
         staged_target = f"{PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested"

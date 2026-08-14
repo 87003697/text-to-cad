@@ -797,6 +797,11 @@ class _PinnedExecutable:
             and os.environ.get(_BROWSER_TREE_MANIFEST_ENV)
         )
         self._detached_filesystem_mounted = False
+        self._detached_mount_parent_fd: int | None = None
+        self._detached_mount_fd: int | None = None
+        self._detached_mount_name: str | None = None
+        self._detached_underlying_identity: tuple[int, int] | None = None
+        self._detached_mounted_identity: tuple[int, int] | None = None
         self.tree_manifest_sha256: str | None = None
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -847,60 +852,152 @@ class _PinnedExecutable:
     def _tree_manifest_sha256(root: Path) -> str:
         entries: list[dict[str, object]] = []
         folded: set[str] = set()
-        try:
-            paths = (root, *sorted(root.rglob("*")))
-            for path in paths:
-                info = path.lstat()
-                if stat.S_ISLNK(info.st_mode) or not (
-                    stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)
-                ):
+        root_fd: int | None = None
+
+        def visit(directory_fd: int, relative: str) -> None:
+            info = os.fstat(directory_fd)
+            collision = relative.casefold()
+            if collision in folded or not stat.S_ISDIR(info.st_mode):
+                raise OSError("browser tree contains a colliding entry")
+            folded.add(collision)
+            entries.append(
+                {
+                    "path": relative,
+                    "kind": "directory",
+                    "mode": stat.S_IMODE(info.st_mode),
+                }
+            )
+            for name in sorted(os.listdir(directory_fd)):
+                if not name or name in {".", ".."} or "/" in name:
+                    raise OSError("browser tree contains an invalid entry")
+                child_relative = name if relative == "." else f"{relative}/{name}"
+                child_info = os.stat(
+                    name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+                if stat.S_ISLNK(child_info.st_mode):
+                    raise OSError("browser tree contains a symbolic link")
+                if stat.S_ISDIR(child_info.st_mode):
+                    child_fd = os.open(
+                        name,
+                        os.O_RDONLY
+                        | getattr(os, "O_DIRECTORY", 0)
+                        | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=directory_fd,
+                    )
+                    try:
+                        opened = os.fstat(child_fd)
+                        if (opened.st_dev, opened.st_ino, opened.st_mode) != (
+                            child_info.st_dev,
+                            child_info.st_ino,
+                            child_info.st_mode,
+                        ):
+                            raise OSError("browser tree identity changed")
+                        visit(child_fd, child_relative)
+                        current = os.stat(
+                            name,
+                            dir_fd=directory_fd,
+                            follow_symlinks=False,
+                        )
+                        after = os.fstat(child_fd)
+                        if (current.st_dev, current.st_ino, current.st_mode) != (
+                            opened.st_dev,
+                            opened.st_ino,
+                            opened.st_mode,
+                        ) or (after.st_dev, after.st_ino, after.st_mode) != (
+                            opened.st_dev,
+                            opened.st_ino,
+                            opened.st_mode,
+                        ):
+                            raise OSError("browser tree changed while hashing")
+                    finally:
+                        os.close(child_fd)
+                    continue
+                if not stat.S_ISREG(child_info.st_mode):
                     raise OSError("browser tree contains an unsupported entry")
-                relative = "." if path == root else path.relative_to(root).as_posix()
-                collision = relative.casefold()
+                descriptor = os.open(
+                    name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=directory_fd,
+                )
+                try:
+                    opened = os.fstat(descriptor)
+                    if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mode) != (
+                        child_info.st_dev,
+                        child_info.st_ino,
+                        child_info.st_size,
+                        child_info.st_mode,
+                    ):
+                        raise OSError("browser tree identity changed")
+                    digest = hashlib.sha256()
+                    while True:
+                        chunk = os.read(descriptor, 1024 * 1024)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                    after = os.fstat(descriptor)
+                    current = os.stat(
+                        name,
+                        dir_fd=directory_fd,
+                        follow_symlinks=False,
+                    )
+                    if (after.st_dev, after.st_ino, after.st_size, after.st_mode) != (
+                        opened.st_dev,
+                        opened.st_ino,
+                        opened.st_size,
+                        opened.st_mode,
+                    ) or (current.st_dev, current.st_ino, current.st_size, current.st_mode) != (
+                        opened.st_dev,
+                        opened.st_ino,
+                        opened.st_size,
+                        opened.st_mode,
+                    ):
+                        raise OSError("browser tree changed while hashing")
+                finally:
+                    os.close(descriptor)
+                collision = child_relative.casefold()
                 if collision in folded:
                     raise OSError("browser tree contains a colliding entry")
                 folded.add(collision)
-                entry: dict[str, object] = {
-                    "path": relative,
-                    "kind": "directory" if stat.S_ISDIR(info.st_mode) else "file",
-                    "mode": stat.S_IMODE(info.st_mode),
-                }
-                if stat.S_ISREG(info.st_mode):
-                    descriptor = os.open(
-                        path,
-                        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                    )
-                    try:
-                        opened = os.fstat(descriptor)
-                        if (
-                            (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mode)
-                            != (info.st_dev, info.st_ino, info.st_size, info.st_mode)
-                        ):
-                            raise OSError("browser tree identity changed")
-                        digest = hashlib.sha256()
-                        while True:
-                            chunk = os.read(descriptor, 1024 * 1024)
-                            if not chunk:
-                                break
-                            digest.update(chunk)
-                        after = os.fstat(descriptor)
-                    finally:
-                        os.close(descriptor)
-                    current = path.lstat()
-                    if (
-                        (after.st_dev, after.st_ino, after.st_size, after.st_mode)
-                        != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mode)
-                        or (current.st_dev, current.st_ino, current.st_size, current.st_mode)
-                        != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mode)
-                    ):
-                        raise OSError("browser tree changed while hashing")
-                    entry["sha256"] = digest.hexdigest()
-                entries.append(entry)
+                entries.append(
+                    {
+                        "path": child_relative,
+                        "kind": "file",
+                        "mode": stat.S_IMODE(child_info.st_mode),
+                        "sha256": digest.hexdigest(),
+                    }
+                )
+
+        try:
+            root_info = root.lstat()
+            if stat.S_ISLNK(root_info.st_mode):
+                raise OSError("browser tree contains a symbolic link")
+            root_fd = os.open(
+                root,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            opened_root = os.fstat(root_fd)
+            if (opened_root.st_dev, opened_root.st_ino, opened_root.st_mode) != (
+                root_info.st_dev,
+                root_info.st_ino,
+                root_info.st_mode,
+            ):
+                raise OSError("browser tree root changed")
+            visit(root_fd, ".")
         except (OSError, ValueError) as exc:
             raise BrowserRuntimeError(
                 "browser_identity",
                 browser_identity_phase="private_tree_materialization",
             ) from exc
+        finally:
+            if root_fd is not None:
+                try:
+                    os.close(root_fd)
+                except OSError as exc:
+                    raise BrowserRuntimeError("browser_cleanup") from exc
         raw = json.dumps(
             {"schema": _BROWSER_TREE_MANIFEST_SCHEMA, "entries": entries},
             sort_keys=True,
@@ -947,85 +1044,159 @@ class _PinnedExecutable:
 
     @staticmethod
     def _snapshot_tree_exact(source: Path, target: Path) -> None:
+        source_fd: int | None = None
+        target_parent_fd: int | None = None
+        target_fd: int | None = None
+
+        def copy_directory(open_source: int, open_target: int) -> None:
+            for name in sorted(os.listdir(open_source)):
+                info = os.stat(name, dir_fd=open_source, follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
+                    raise OSError("browser tree contains a symbolic link")
+                if stat.S_ISDIR(info.st_mode):
+                    os.mkdir(name, mode=0o700, dir_fd=open_target)
+                    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                    flags |= getattr(os, "O_NOFOLLOW", 0)
+                    source_child = os.open(name, flags, dir_fd=open_source)
+                    target_child = os.open(name, flags, dir_fd=open_target)
+                    try:
+                        opened = os.fstat(source_child)
+                        if (opened.st_dev, opened.st_ino, opened.st_mode) != (
+                            info.st_dev,
+                            info.st_ino,
+                            info.st_mode,
+                        ):
+                            raise OSError("browser tree identity changed")
+                        copy_directory(source_child, target_child)
+                        current = os.stat(
+                            name,
+                            dir_fd=open_source,
+                            follow_symlinks=False,
+                        )
+                        after = os.fstat(source_child)
+                        if (current.st_dev, current.st_ino, current.st_mode) != (
+                            opened.st_dev,
+                            opened.st_ino,
+                            opened.st_mode,
+                        ) or (after.st_dev, after.st_ino, after.st_mode) != (
+                            opened.st_dev,
+                            opened.st_ino,
+                            opened.st_mode,
+                        ):
+                            raise OSError("browser tree changed while copying")
+                        os.fchmod(target_child, stat.S_IMODE(info.st_mode))
+                    finally:
+                        close_failed = False
+                        try:
+                            os.close(target_child)
+                        except OSError:
+                            close_failed = True
+                        try:
+                            os.close(source_child)
+                        except OSError:
+                            close_failed = True
+                        if close_failed:
+                            raise BrowserRuntimeError("browser_cleanup")
+                    continue
+                if not stat.S_ISREG(info.st_mode):
+                    raise OSError("browser tree contains an unsupported entry")
+                source_file = os.open(
+                    name,
+                    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=open_source,
+                )
+                target_file: int | None = None
+                try:
+                    opened = os.fstat(source_file)
+                    if (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mode) != (
+                        info.st_dev,
+                        info.st_ino,
+                        info.st_size,
+                        info.st_mode,
+                    ):
+                        raise OSError("browser tree identity changed")
+                    target_file = os.open(
+                        name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                        | getattr(os, "O_NOFOLLOW", 0),
+                        0o600,
+                        dir_fd=open_target,
+                    )
+                    while True:
+                        chunk = os.read(source_file, 4 * 1024 * 1024)
+                        if not chunk:
+                            break
+                        view = memoryview(chunk)
+                        while view:
+                            view = view[os.write(target_file, view) :]
+                    os.fchmod(target_file, stat.S_IMODE(info.st_mode))
+                    os.fsync(target_file)
+                    current = os.stat(
+                        name,
+                        dir_fd=open_source,
+                        follow_symlinks=False,
+                    )
+                    after = os.fstat(source_file)
+                    if (current.st_dev, current.st_ino, current.st_size, current.st_mode) != (
+                        opened.st_dev,
+                        opened.st_ino,
+                        opened.st_size,
+                        opened.st_mode,
+                    ) or (after.st_dev, after.st_ino, after.st_size, after.st_mode) != (
+                        opened.st_dev,
+                        opened.st_ino,
+                        opened.st_size,
+                        opened.st_mode,
+                    ):
+                        raise OSError("browser tree changed while copying")
+                finally:
+                    close_failed = False
+                    if target_file is not None:
+                        try:
+                            os.close(target_file)
+                        except OSError:
+                            close_failed = True
+                    try:
+                        os.close(source_file)
+                    except OSError:
+                        close_failed = True
+                    if close_failed:
+                        raise BrowserRuntimeError("browser_cleanup")
+
         try:
             source_info = source.lstat()
-            if stat.S_ISLNK(source_info.st_mode):
+            if stat.S_ISLNK(source_info.st_mode) or not stat.S_ISDIR(source_info.st_mode):
                 raise OSError("browser tree contains a symbolic link")
-            if stat.S_ISDIR(source_info.st_mode):
-                target.mkdir(mode=0o700)
-                for child in sorted(source.iterdir(), key=lambda item: item.name):
-                    _PinnedExecutable._snapshot_tree_exact(
-                        child, target / child.name
-                    )
-                os.chmod(target, stat.S_IMODE(source_info.st_mode))
-                return
-            if not stat.S_ISREG(source_info.st_mode):
-                raise OSError("browser tree contains an unsupported entry")
-            source_fd = os.open(
-                source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-            )
-            target_fd: int | None = None
-            try:
-                opened = os.fstat(source_fd)
-                if (
-                    opened.st_dev,
-                    opened.st_ino,
-                    opened.st_size,
-                    opened.st_mode,
-                ) != (
-                    source_info.st_dev,
-                    source_info.st_ino,
-                    source_info.st_size,
-                    source_info.st_mode,
-                ):
-                    raise OSError("browser tree identity changed")
-                target_fd = os.open(
-                    target,
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    0o600,
-                )
-                while True:
-                    chunk = os.read(source_fd, 4 * 1024 * 1024)
-                    if not chunk:
-                        break
-                    view = memoryview(chunk)
-                    while view:
-                        view = view[os.write(target_fd, view) :]
-                os.fchmod(target_fd, stat.S_IMODE(source_info.st_mode))
-                os.fsync(target_fd)
-                after = os.fstat(source_fd)
-                current = source.lstat()
-                if (
-                    after.st_dev,
-                    after.st_ino,
-                    after.st_size,
-                    after.st_mode,
-                ) != (
-                    opened.st_dev,
-                    opened.st_ino,
-                    opened.st_size,
-                    opened.st_mode,
-                ) or (
-                    current.st_dev,
-                    current.st_ino,
-                    current.st_size,
-                    current.st_mode,
-                ) != (
-                    opened.st_dev,
-                    opened.st_ino,
-                    opened.st_size,
-                    opened.st_mode,
-                ):
-                    raise OSError("browser tree changed while copying")
-            finally:
-                if target_fd is not None:
-                    os.close(target_fd)
-                os.close(source_fd)
+            flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            source_fd = os.open(source, flags)
+            opened = os.fstat(source_fd)
+            if (opened.st_dev, opened.st_ino, opened.st_mode) != (
+                source_info.st_dev,
+                source_info.st_ino,
+                source_info.st_mode,
+            ):
+                raise OSError("browser tree identity changed")
+            target_parent_fd = os.open(target.parent, flags)
+            os.mkdir(target.name, mode=0o700, dir_fd=target_parent_fd)
+            target_fd = os.open(target.name, flags, dir_fd=target_parent_fd)
+            copy_directory(source_fd, target_fd)
+            os.fchmod(target_fd, stat.S_IMODE(source_info.st_mode))
         except OSError as exc:
             raise BrowserRuntimeError(
                 "browser_identity",
                 browser_identity_phase="private_tree_materialization",
             ) from exc
+        finally:
+            close_failed = False
+            for descriptor in (target_fd, target_parent_fd, source_fd):
+                if descriptor is not None:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        close_failed = True
+            if close_failed:
+                raise BrowserRuntimeError("browser_cleanup")
 
     @staticmethod
     def _fsync_directory(path: Path) -> None:
@@ -1042,19 +1213,58 @@ class _PinnedExecutable:
 
     @staticmethod
     def _freeze_directories(root: Path) -> None:
-        for current, _directories, _files in os.walk(
-            root,
-            topdown=False,
-            followlinks=False,
-        ):
-            directory = Path(current)
-            info = directory.lstat()
-            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-                raise BrowserRuntimeError(
-                    "browser_identity",
-                    browser_identity_phase="private_tree_materialization",
-                )
-            os.chmod(directory, 0o555)
+        root_fd: int | None = None
+
+        def freeze(directory_fd: int) -> None:
+            for name in sorted(os.listdir(directory_fd)):
+                info = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
+                    raise OSError("browser tree contains a symbolic link")
+                if stat.S_ISDIR(info.st_mode):
+                    child_fd = os.open(
+                        name,
+                        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                        | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=directory_fd,
+                    )
+                    try:
+                        freeze(child_fd)
+                        os.fchmod(child_fd, stat.S_IMODE(info.st_mode) & ~0o222)
+                    finally:
+                        os.close(child_fd)
+                elif stat.S_ISREG(info.st_mode):
+                    file_fd = os.open(
+                        name,
+                        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=directory_fd,
+                    )
+                    try:
+                        os.fchmod(file_fd, stat.S_IMODE(info.st_mode) & ~0o222)
+                    finally:
+                        os.close(file_fd)
+                else:
+                    raise OSError("browser tree contains an unsupported entry")
+
+        try:
+            root_fd = os.open(
+                root,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            root_info = os.fstat(root_fd)
+            freeze(root_fd)
+            os.fchmod(root_fd, stat.S_IMODE(root_info.st_mode) & ~0o222)
+        except OSError as exc:
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            ) from exc
+        finally:
+            if root_fd is not None:
+                try:
+                    os.close(root_fd)
+                except OSError as exc:
+                    raise BrowserRuntimeError("browser_cleanup") from exc
 
     @staticmethod
     def _thaw_directories(root: Path) -> None:
@@ -1207,15 +1417,14 @@ class _PinnedExecutable:
         descriptor: int | None = None
         phase = "private_tree_materialization"
         try:
-            self._mount_private_filesystem(root)
-            self._detached_filesystem_mounted = True
+            self._prepare_detached_mount(root)
             if self._tree_manifest_sha256(source_root) != expected:
                 raise BrowserRuntimeError("browser_identity")
             self._snapshot_tree_exact(source_root, target_root)
-            if self._tree_manifest_sha256(target_root) != expected:
-                raise BrowserRuntimeError("browser_identity")
             self._fsync_directory(root)
             self._freeze_directories(root)
+            if self._tree_manifest_sha256(target_root) != expected:
+                raise BrowserRuntimeError("browser_identity")
             phase = "private_launch_image_identity"
             descriptor = os.open(
                 target,
@@ -1249,16 +1458,10 @@ class _PinnedExecutable:
                     cleanup_failed = True
             if self._detached_filesystem_mounted:
                 try:
-                    self._unmount_private_filesystem(root)
-                    self._detached_filesystem_mounted = False
+                    self._release_detached_mount(remove_underlying=True)
                 except BrowserRuntimeError:
                     cleanup_failed = True
-            try:
-                if os.path.lexists(root):
-                    root.rmdir()
-            except OSError:
-                cleanup_failed = True
-            if os.path.lexists(root):
+            elif os.path.lexists(root):
                 cleanup_failed = True
             if cleanup_failed:
                 raise BrowserRuntimeError("browser_cleanup") from exc
@@ -1271,6 +1474,152 @@ class _PinnedExecutable:
             raise BrowserRuntimeError(
                 "browser_identity", browser_identity_phase=phase
             ) from exc
+
+    def _prepare_detached_mount(self, root: Path) -> None:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        parent_fd: int | None = None
+        mounted_fd: int | None = None
+        try:
+            parent_fd = os.open(root.parent, flags)
+            underlying = os.stat(
+                root.name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            if not stat.S_ISDIR(underlying.st_mode) or stat.S_ISLNK(
+                underlying.st_mode
+            ):
+                raise OSError("private mountpoint is invalid")
+            self._detached_mount_parent_fd = parent_fd
+            parent_fd = None
+            self._detached_mount_name = root.name
+            self._detached_underlying_identity = (
+                underlying.st_dev,
+                underlying.st_ino,
+            )
+            mount_target = Path(
+                f"/proc/self/fd/{self._detached_mount_parent_fd}/{root.name}"
+            )
+            self._mount_private_filesystem(mount_target)
+            self._detached_filesystem_mounted = True
+            mounted_fd = os.open(
+                root.name,
+                flags,
+                dir_fd=self._detached_mount_parent_fd,
+            )
+            mounted = os.fstat(mounted_fd)
+            current = os.stat(
+                root.name,
+                dir_fd=self._detached_mount_parent_fd,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(mounted.st_mode)
+                or (mounted.st_dev, mounted.st_ino)
+                != (current.st_dev, current.st_ino)
+                or (mounted.st_dev, mounted.st_ino)
+                == self._detached_underlying_identity
+            ):
+                raise OSError("private mounted filesystem identity is invalid")
+            self._detached_mount_fd = mounted_fd
+            mounted_fd = None
+            self._detached_mounted_identity = (mounted.st_dev, mounted.st_ino)
+        except (BrowserRuntimeError, OSError) as exc:
+            cleanup_failed = False
+            if mounted_fd is not None:
+                try:
+                    os.close(mounted_fd)
+                except OSError:
+                    cleanup_failed = True
+            if parent_fd is not None:
+                try:
+                    os.close(parent_fd)
+                except OSError:
+                    cleanup_failed = True
+            if self._detached_filesystem_mounted:
+                try:
+                    self._release_detached_mount(remove_underlying=True)
+                except BrowserRuntimeError:
+                    cleanup_failed = True
+            elif self._detached_mount_parent_fd is not None:
+                try:
+                    os.close(self._detached_mount_parent_fd)
+                except OSError:
+                    cleanup_failed = True
+                self._detached_mount_parent_fd = None
+            if cleanup_failed:
+                raise BrowserRuntimeError("browser_cleanup") from exc
+            if isinstance(exc, BrowserRuntimeError):
+                raise
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            ) from exc
+
+    def _release_detached_mount(self, *, remove_underlying: bool) -> None:
+        parent_fd = getattr(self, "_detached_mount_parent_fd", None)
+        mounted_fd = getattr(self, "_detached_mount_fd", None)
+        name = getattr(self, "_detached_mount_name", None)
+        underlying_identity = getattr(self, "_detached_underlying_identity", None)
+        mounted_identity = getattr(self, "_detached_mounted_identity", None)
+        if (
+            parent_fd is None
+            or name is None
+            or underlying_identity is None
+            or not self._detached_filesystem_mounted
+        ):
+            raise BrowserRuntimeError("browser_cleanup")
+        cleanup_failed = False
+        try:
+            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                mounted_identity is None
+                or not stat.S_ISDIR(current.st_mode)
+                or (current.st_dev, current.st_ino) != mounted_identity
+            ):
+                raise BrowserRuntimeError("browser_cleanup")
+            target = (
+                Path(f"/proc/self/fd/{mounted_fd}")
+                if mounted_fd is not None
+                else Path(f"/proc/self/fd/{parent_fd}/{name}")
+            )
+            self._unmount_private_filesystem(target)
+            self._detached_filesystem_mounted = False
+            exposed = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(exposed.st_mode)
+                or stat.S_ISLNK(exposed.st_mode)
+                or (exposed.st_dev, exposed.st_ino) != underlying_identity
+            ):
+                raise BrowserRuntimeError("browser_cleanup")
+            if remove_underlying:
+                os.rmdir(name, dir_fd=parent_fd)
+                try:
+                    os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+                else:
+                    raise BrowserRuntimeError("browser_cleanup")
+        except (BrowserRuntimeError, OSError):
+            cleanup_failed = True
+        finally:
+            if mounted_fd is not None:
+                try:
+                    os.close(mounted_fd)
+                except OSError:
+                    cleanup_failed = True
+                self._detached_mount_fd = None
+            try:
+                os.close(parent_fd)
+            except OSError:
+                cleanup_failed = True
+            self._detached_mount_parent_fd = None
+            self._detached_mount_name = None
+            self._detached_underlying_identity = None
+            self._detached_mounted_identity = None
+        if cleanup_failed:
+            raise BrowserRuntimeError("browser_cleanup")
 
     @staticmethod
     def _mount_private_filesystem(root: Path) -> None:
@@ -1711,15 +2060,10 @@ class _PinnedExecutable:
     def _remove_detached_source(self) -> None:
         if self.launch_root is None or not self._detached_filesystem_mounted:
             raise BrowserRuntimeError("browser_cleanup")
-        root = self.launch_root
         try:
-            self._unmount_private_filesystem(root)
-            self._detached_filesystem_mounted = False
-            root.rmdir()
-        except (BrowserRuntimeError, OSError) as exc:
+            self._release_detached_mount(remove_underlying=True)
+        except BrowserRuntimeError as exc:
             raise BrowserRuntimeError("browser_cleanup") from exc
-        if os.path.lexists(root):
-            raise BrowserRuntimeError("browser_cleanup")
         self.launch_root = None
         self.launch_path = _BROWSER_MOUNT_EXECUTABLE
 
@@ -2390,18 +2734,23 @@ class _PinnedExecutable:
         if self.launch_root is not None:
             if getattr(self, "_detached_filesystem_mounted", False):
                 try:
-                    self._unmount_private_filesystem(self.launch_root)
-                    self._detached_filesystem_mounted = False
-                    self.launch_root.rmdir()
-                except (BrowserRuntimeError, OSError):
+                    self._release_detached_mount(remove_underlying=True)
+                except BrowserRuntimeError:
                     failure = True
+            elif getattr(self, "_detached_mount_mode", False):
+                # Detached-tree cleanup is descriptor/inode-authorized only.
+                # Never fall through to pathname traversal after authority loss.
+                failure = True
             else:
                 try:
                     self._thaw_directories(self.launch_root)
                     shutil.rmtree(self.launch_root)
                 except (BrowserRuntimeError, OSError):
                     failure = True
-            if os.path.lexists(self.launch_root):
+            if (
+                getattr(self, "_detached_filesystem_mounted", False)
+                or os.path.lexists(self.launch_root)
+            ):
                 failure = True
             self.launch_root = None
         if failure:

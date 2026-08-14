@@ -2375,6 +2375,35 @@ class ResidualRendererTests(unittest.TestCase):
             self.assertEqual("browser_cleanup", raised.exception.operation)
             self.assertTrue(replacement.is_dir())
 
+    def test_detached_cleanup_authority_loss_never_falls_back_to_path_removal(
+        self,
+    ) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            replacement = Path(directory) / "replacement"
+            replacement.mkdir()
+            marker = replacement / "foreign"
+            marker.write_bytes(b"foreign")
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.fd = None
+            pinned.launch_root = replacement
+            pinned.launch_path = replacement / "attested/chrome"
+            pinned._detached_mount_mode = True
+            pinned._detached_filesystem_mounted = False
+
+            with (
+                mock.patch.object(pinned, "_thaw_directories") as thaw,
+                mock.patch("meshshot.browser_runtime.shutil.rmtree") as remove,
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned.close()
+
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+            thaw.assert_not_called()
+            remove.assert_not_called()
+            self.assertEqual(b"foreign", marker.read_bytes())
+
     def test_running_process_image_rejects_swap_exec_restore(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
 

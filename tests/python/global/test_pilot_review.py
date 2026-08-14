@@ -633,6 +633,7 @@ class PilotReviewTests(unittest.TestCase):
                     "chrome-headless-shell-linux64/chrome-headless-shell"
                 ),
                 "sha256": "c" * 64,
+                "tree_manifest_sha256": "d" * 64,
             },
             "cadpy": {
                 "path": deployment_authority.CADPY_RUNTIME_PATH,
@@ -1025,6 +1026,7 @@ class PilotReviewTests(unittest.TestCase):
             "limit",
             "cleanup",
             "chromium",
+            "browser-tree",
             "extra-bind",
             "browser-bind",
             "environment",
@@ -1039,6 +1041,11 @@ class PilotReviewTests(unittest.TestCase):
                     candidate["sandbox_profile"]["cleanup"]["failed_output_retained"] = False
                 elif mutation == "chromium":
                     candidate["runtime_identity"]["chromium"]["revision"] = "9999"
+                elif mutation == "browser-tree":
+                    marker = candidate["argv"].index(
+                        "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"
+                    )
+                    candidate["argv"][marker + 1] = "e" * 64
                 elif mutation == "extra-bind":
                     candidate["argv"][1:1] = ["--bind", "/", "/workspace/repo"]
                 elif mutation == "browser-bind":

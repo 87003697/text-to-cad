@@ -57,8 +57,12 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         self.browser.chmod(0o755)
         self.browser = self.browser.resolve(strict=True)
         self.browser_cache = self.browser_cache.resolve(strict=True)
-        self.tree_manifest_sha256 = cvm_runtime._browser_tree_manifest_sha256(
-            cvm_runtime._browser_tree_manifest(self.browser.parents[1])
+        self.tree_manifest_sha256 = (
+            deployment_authority.browser_tree_manifest_sha256(
+                deployment_authority.browser_tree_manifest(
+                    self.browser.parents[1]
+                )
+            )
         )
         self.trusted_bwrap_patch = mock.patch.object(
             deployment_authority,
@@ -80,6 +84,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 "sandbox_cache_path": deployment_authority.SANDBOX_BROWSER_CACHE,
                 "executable_path": os.fspath(self.browser),
                 "sha256": hashlib.sha256(self.browser.read_bytes()).hexdigest(),
+                "tree_manifest_sha256": self.tree_manifest_sha256,
             },
             "cadpy": {
                 "path": deployment_authority.CADPY_RUNTIME_PATH,

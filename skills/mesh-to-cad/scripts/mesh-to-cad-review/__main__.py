@@ -411,6 +411,7 @@ def _validate_provider_free_sandbox_argv(
     if (
         len(tree_manifest_values) != 1
         or re.fullmatch(r"[0-9a-f]{64}", tree_manifest_values[0]) is None
+        or tree_manifest_values[0] != chromium["tree_manifest_sha256"]
     ):
         raise ReviewError("provider-free browser tree authority conflicts")
     fixed_mounts = [
@@ -970,6 +971,7 @@ def _runtime_authority_verdict(
                 "sandbox_cache_path",
                 "executable_path",
                 "sha256",
+                "tree_manifest_sha256",
             }
             or not str(chromium_identity.get("revision", "")).isdigit()
             or chromium_identity.get("sandbox_cache_path")
@@ -993,6 +995,7 @@ def _runtime_authority_verdict(
                 not valid_sha256(identity.get("sha256"))
                 for identity in (bwrap_identity, chromium_identity, cadpy_identity)
             )
+            or not valid_sha256(chromium_identity.get("tree_manifest_sha256"))
         ):
             raise ReviewError("trusted deployed runtime identity is invalid")
         deployed_files = deployed.get("files")
@@ -1106,6 +1109,8 @@ def _runtime_authority_verdict(
         ):
             raise ReviewError("browser tree authority is incomplete")
         expected_tree_manifest_sha256 = tree_manifest_values[0]
+        if expected_tree_manifest_sha256 != chromium_identity["tree_manifest_sha256"]:
+            raise ReviewError("browser tree authority conflicts with deployment identity")
         required = {
             "schema",
             "scenario_identity",
