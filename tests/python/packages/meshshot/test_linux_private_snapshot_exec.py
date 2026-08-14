@@ -185,6 +185,7 @@ int main(int argc, char **argv) {
         self.assertEqual("passed", result["runtime_staging"])
         self.assertEqual("passed", result["supervised_public_render"])
         self.assertEqual("passed", result["real_cdp_identity"])
+        self.assertEqual("passed", result["supervisor_mount_namespace"])
         self.assertEqual(0, result["nested_browser_popen_count"])
         self.assertEqual("passed", result["completion_shutdown"])
         self.assertEqual("passed", result["supervisor_cleanup"])

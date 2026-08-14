@@ -212,6 +212,7 @@ def _compile_browser() -> None:
 static volatile sig_atomic_t running = 1;
 static void stop(int sig) { (void)sig; running = 0; }
 int main(int argc, char **argv) {
+  if (access("/meshshot-exec/attested", F_OK) == 0) return 18;
   if (argc == 2 && strcmp(argv[1], "--version") == 0) {
     puts("Google Chrome for Testing 148.0.7778.96");
     return 0;
@@ -474,8 +475,27 @@ def _orchestrate() -> int:
         ["/usr/bin/python3", os.fspath(Path(__file__)), "nested-render"],
         cwd=_FIXTURE,
     )
+    namespace_owned = "failed"
     try:
         with scenarios._browser_supervisor() as supervisor:
+            supervisor_pid = json.loads(
+                Path("/meshshot-supervisor/authority.json").read_text(
+                    encoding="utf-8"
+                )
+            )["supervisor_pid"]
+            outer_namespace = os.stat("/proc/self/ns/mnt")
+            supervisor_namespace = os.stat(
+                f"/proc/{supervisor_pid}/ns/mnt"
+            )
+            if (
+                outer_namespace.st_dev,
+                outer_namespace.st_ino,
+            ) == (
+                supervisor_namespace.st_dev,
+                supervisor_namespace.st_ino,
+            ):
+                raise AssertionError("browser supervisor did not own its mount namespace")
+            namespace_owned = "passed"
             try:
                 result = scenarios._run_public(
                     nested,
@@ -552,6 +572,7 @@ def _orchestrate() -> int:
             "runtime_staging": Path("/tmp/r4-runtime-staging").read_text(
                 encoding="ascii"
             ),
+            "supervisor_mount_namespace": namespace_owned,
             "completion_shutdown": "passed",
             "supervisor_cleanup": (
                 "passed"

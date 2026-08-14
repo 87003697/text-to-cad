@@ -268,17 +268,17 @@ def provider_free_browser_runtime_allowed(
             "tree_manifest_sha256",
             "executable_sha256",
             "mount_readonly",
-            "source_detached",
+            "source_hidden",
         }
         and authority.get("schema")
         == PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA
         and authority.get("mode")
-        == "linux-detached-readonly-revision-mount/1"
+        == "linux-supervisor-namespace-readonly-revision-mount/1"
         and authority.get("tree_manifest_sha256")
         == expected_tree_manifest_sha256
         and authority.get("executable_sha256") == expected_browser_sha256
         and authority.get("mount_readonly") == "passed"
-        and authority.get("source_detached") == "passed"
+        and authority.get("source_hidden") == "passed"
     )
 
 

@@ -411,12 +411,15 @@ class PilotReviewTests(unittest.TestCase):
                 },
                 "execution_authority": {
                     "schema": "meshshot.browser-execution-authority/1",
-                    "mode": "linux-detached-readonly-revision-mount/1",
+                    "mode": "linux-supervisor-namespace-readonly-revision-mount/1",
                     "private_filesystem": "job-private-exec-tmpfs",
                     "handoff": (
-                        "authenticated-seqpacket-mounted-detached-exec"
+                        "authenticated-seqpacket-mounted-hidden-relinquished-exec"
                     ),
-                    "writable_source_after_handoff": "absent",
+                    "writable_source_after_handoff": "hidden-from-browser-child",
+                    "cleanup": (
+                        "browser-group-empty-supervisor-exit-kernel-discard"
+                    ),
                     "running_image_proof": "exact-proc-image-fd-identity",
                 },
                 "executable_validation": {
@@ -544,7 +547,7 @@ class PilotReviewTests(unittest.TestCase):
             },
             "sandbox": {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/17",
+                "resource_profile": "issue15.provider-free-bounded/18",
             },
             "provider_environment": {
                 "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],
@@ -850,11 +853,11 @@ class PilotReviewTests(unittest.TestCase):
             },
             "execution_authority": {
                 "schema": "meshshot.browser-execution-authority/1",
-                "mode": "linux-detached-readonly-revision-mount/1",
+                "mode": "linux-supervisor-namespace-readonly-revision-mount/1",
                 "tree_manifest_sha256": tree_manifest_sha256,
                 "executable_sha256": runtime_identity["chromium"]["sha256"],
                 "mount_readonly": "passed",
-                "source_detached": "passed",
+                "source_hidden": "passed",
             },
             "result": "passed",
         }
@@ -932,7 +935,12 @@ class PilotReviewTests(unittest.TestCase):
             ("browser_identity", "sha256", "2" * 64),
             ("execution_authority", "tree_manifest_sha256", "e" * 64),
             ("execution_authority", "executable_sha256", "e" * 64),
-            ("execution_authority", "source_detached", "failed"),
+            ("execution_authority", "source_hidden", "failed"),
+            (
+                "execution_authority",
+                "mode",
+                "linux-detached-readonly-revision-mount/1",
+            ),
         ):
             with self.subTest(browser_runtime_tamper=f"{field}.{key}"):
                 candidate = json.loads(json.dumps(authoritative_preview))

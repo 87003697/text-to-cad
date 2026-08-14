@@ -441,6 +441,93 @@ class ResidualRendererTests(unittest.TestCase):
             calls,
         )
 
+    def test_supervisor_mount_namespace_setup_is_fixed_and_fail_closed(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError
+
+        for failed_step in (None, "unshare", "propagation"):
+            with self.subTest(failed_step=failed_step):
+                libc = mock.MagicMock()
+                libc.unshare.return_value = -1 if failed_step == "unshare" else 0
+                libc.mount.return_value = -1 if failed_step == "propagation" else 0
+                with (
+                    mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                    mock.patch.object(
+                        browser_runtime.ctypes,
+                        "CDLL",
+                        return_value=libc,
+                    ),
+                    mock.patch.object(
+                        browser_runtime,
+                        "_SUPERVISOR_MOUNT_NAMESPACE_ACTIVE",
+                        False,
+                    ),
+                ):
+                    if failed_step is None:
+                        browser_runtime._enter_private_browser_mount_namespace()
+                        self.assertTrue(
+                            browser_runtime._SUPERVISOR_MOUNT_NAMESPACE_ACTIVE
+                        )
+                    else:
+                        with self.assertRaises(BrowserRuntimeError) as raised:
+                            browser_runtime._enter_private_browser_mount_namespace()
+                        self.assertEqual(
+                            "browser_prelaunch",
+                            raised.exception.operation,
+                        )
+                        self.assertNotIn("errno", str(raised.exception).casefold())
+
+                libc.unshare.assert_called_once_with(browser_runtime._CLONE_NEWNS)
+                if failed_step == "unshare":
+                    libc.mount.assert_not_called()
+                else:
+                    libc.mount.assert_called_once_with(
+                        None,
+                        b"/",
+                        None,
+                        browser_runtime._MS_PRIVATE | browser_runtime._MS_REC,
+                        None,
+                    )
+
+        libc = mock.MagicMock()
+        with (
+            mock.patch.object(browser_runtime.sys, "platform", "darwin"),
+            mock.patch.object(browser_runtime.ctypes, "CDLL", return_value=libc),
+        ):
+            browser_runtime._enter_private_browser_mount_namespace()
+        libc.unshare.assert_not_called()
+        libc.mount.assert_not_called()
+
+    def test_supervisor_namespace_failure_publishes_only_closed_operation(self) -> None:
+        from meshshot import browser_supervisor
+        from meshshot.browser_runtime import BrowserRuntimeError
+
+        records: list[dict[str, object]] = []
+        with (
+            mock.patch.object(
+                browser_supervisor,
+                "_enter_private_browser_mount_namespace",
+                side_effect=BrowserRuntimeError("browser_prelaunch"),
+            ),
+            mock.patch.object(browser_supervisor.os.path, "lexists", return_value=False),
+            mock.patch.object(
+                browser_supervisor,
+                "_write_private_record",
+                side_effect=lambda _path, value: records.append(value),
+            ),
+        ):
+            self.assertEqual(1, browser_supervisor.main())
+
+        self.assertEqual(
+            [
+                {
+                    "schema": browser_supervisor.SUPERVISOR_RESULT_SCHEMA,
+                    "operation": "browser_prelaunch",
+                }
+            ],
+            records,
+        )
+
     def test_owned_socket_cleanup_rejects_replacement_without_deleting_it(self) -> None:
         from meshshot import browser_supervisor
         from meshshot.browser_runtime import BrowserRuntimeError
@@ -3237,7 +3324,7 @@ class ResidualRendererTests(unittest.TestCase):
             with (
                 mock.patch.object(
                     pinned,
-                    "_release_detached_mount",
+                    "_relinquish_detached_mount_authority",
                     side_effect=BrowserRuntimeError("browser_cleanup"),
                 ),
                 self.assertRaises(BrowserRuntimeError) as raised,
@@ -3274,7 +3361,7 @@ class ResidualRendererTests(unittest.TestCase):
                 else:
                     cleanup_patch = mock.patch.object(
                         pinned,
-                        "_release_detached_mount",
+                        "_relinquish_detached_mount_authority",
                         side_effect=BrowserRuntimeError("browser_cleanup"),
                     )
                 with cleanup_patch, self.assertRaises(BrowserRuntimeError) as raised:
@@ -3288,7 +3375,10 @@ class ResidualRendererTests(unittest.TestCase):
                     "detached_mount_release",
                     raised.exception.browser_cleanup_check,
                 )
-                self.assertTrue(raised.exception._browser_cleanup_retained)
+                self.assertIs(
+                    retained_kind == "tree",
+                    raised.exception._browser_cleanup_retained,
+                )
 
         with tempfile.TemporaryDirectory() as directory:
             pinned = object.__new__(_PinnedExecutable)
@@ -3646,6 +3736,104 @@ class ResidualRendererTests(unittest.TestCase):
             raised.exception.browser_cleanup_check,
         )
 
+    def test_detached_helper_explicitly_hides_supervisor_source_mount(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        captured: list[str] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.fd = os.open(os.devnull, os.O_RDONLY)
+            pinned.launch_root = root / "browser-image"
+            listener = mock.MagicMock()
+            real_stat = os.stat
+            socket_info = os.stat_result(
+                (
+                    stat.S_IFSOCK | 0o600,
+                    2,
+                    1,
+                    1,
+                    os.geteuid(),
+                    os.getegid(),
+                    0,
+                    0,
+                    0,
+                    0,
+                )
+            )
+
+            def stat_socket(
+                path: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                if path == "authority.sock":
+                    return socket_info
+                return real_stat(path, *args, **kwargs)
+
+            def capture_spawn(
+                argv: list[str],
+                **_kwargs: object,
+            ) -> subprocess.Popen[bytes]:
+                captured.extend(argv)
+                raise OSError("stop after fixed argv capture")
+
+            try:
+                with (
+                    mock.patch.object(
+                        browser_runtime,
+                        "SUPERVISOR_OUTER_ROOT",
+                        root,
+                    ),
+                    mock.patch.object(
+                        browser_runtime,
+                        "_BROWSER_MOUNT_AUTHORITY",
+                        root / "authority.json",
+                    ),
+                    mock.patch.object(
+                        browser_runtime,
+                        "_BROWSER_MOUNT_SOCKET",
+                        root / "authority.sock",
+                    ),
+                    mock.patch.object(
+                        browser_runtime.socket,
+                        "socket",
+                        return_value=listener,
+                    ),
+                    mock.patch.object(
+                        browser_runtime.os,
+                        "stat",
+                        side_effect=stat_socket,
+                    ),
+                    mock.patch.object(browser_runtime.os, "chmod"),
+                    mock.patch.object(
+                        browser_runtime.subprocess,
+                        "Popen",
+                        side_effect=capture_spawn,
+                    ),
+                    mock.patch.object(pinned, "_unlink_owned_handoff_entry"),
+                    self.assertRaises(BrowserRuntimeError),
+                ):
+                    pinned._detached_linux_popen(
+                        ["chrome-headless-shell"],
+                        deadline=time.monotonic() + 1,
+                        options={},
+                        completion="version",
+                    )
+            finally:
+                os.close(pinned.fd)
+
+        source_bind = captured.index("--ro-bind")
+        source_hidden = next(
+            index
+            for index in range(len(captured) - 1)
+            if captured[index : index + 2]
+            == ["--tmpfs", os.fspath(browser_runtime.MESHSHOT_EXECUTABLE_ROOT)]
+        )
+        self.assertLess(source_bind, source_hidden)
+
     def test_detached_handoff_preserves_first_transport_cleanup_before_reap(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
@@ -3727,7 +3915,7 @@ class ResidualRendererTests(unittest.TestCase):
             mounted = browser_runtime._canonical_bytes(
                 {
                     "schema": browser_runtime._BROWSER_MOUNT_SCHEMA,
-                    "type": "mounted",
+                    "type": "mounted-hidden",
                     "nonce": "a" * 64,
                 }
             )
@@ -3833,7 +4021,7 @@ class ResidualRendererTests(unittest.TestCase):
                     mounted = browser_runtime._canonical_bytes(
                         {
                             "schema": browser_runtime._BROWSER_MOUNT_SCHEMA,
-                            "type": "mounted",
+                            "type": "mounted-hidden",
                             "nonce": "a" * 64,
                         }
                     )
@@ -4105,13 +4293,7 @@ class ResidualRendererTests(unittest.TestCase):
             os.replace(mountpoint, retained)
             replacement.mkdir()
 
-            with (
-                mock.patch.object(
-                    pinned,
-                    "_unmount_private_filesystem",
-                ),
-                self.assertRaises(BrowserRuntimeError) as raised,
-            ):
+            with self.assertRaises(BrowserRuntimeError) as raised:
                 pinned._remove_detached_source()
 
             self.assertEqual("browser_cleanup", raised.exception.operation)
@@ -4150,15 +4332,12 @@ class ResidualRendererTests(unittest.TestCase):
                 root_info.st_dev,
                 root_info.st_ino,
             )
+            pinned._namespace_discard_owned = True
 
-            with mock.patch.object(
-                pinned,
-                "_unmount_private_filesystem",
-                side_effect=AssertionError("runtime umount is forbidden"),
-            ) as unmount:
-                pinned._remove_detached_source()
-
-            unmount.assert_not_called()
+            self.assertFalse(
+                hasattr(_PinnedExecutable, "_unmount_private_filesystem")
+            )
+            pinned._remove_detached_source()
             self.assertIsNone(pinned.launch_root)
             self.assertEqual(
                 browser_runtime._BROWSER_MOUNT_EXECUTABLE,
@@ -4166,6 +4345,104 @@ class ResidualRendererTests(unittest.TestCase):
             )
             self.assertFalse(pinned._detached_filesystem_mounted)
             for descriptor in (mounted_fd, underlying_fd):
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+    def test_namespace_image_descriptor_cleanup_is_single_pass_and_closed(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        for failed_slot in range(3):
+            with (
+                self.subTest(failed_slot=failed_slot),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                info = root.stat()
+                descriptors = [
+                    os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                    for _index in range(3)
+                ]
+                pinned = object.__new__(_PinnedExecutable)
+                pinned._detached_filesystem_mounted = True
+                pinned._namespace_discard_owned = True
+                pinned._detached_mount_parent_fd = descriptors[0]
+                pinned._detached_mount_fd = descriptors[1]
+                pinned._detached_underlying_fd = descriptors[2]
+                pinned._detached_mount_name = root.name
+                pinned._detached_underlying_identity = (info.st_dev, info.st_ino)
+                pinned._detached_mounted_identity = (info.st_dev, info.st_ino)
+                real_close = os.close
+                closed: list[int] = []
+
+                def close_then_fail(descriptor: int) -> None:
+                    closed.append(descriptor)
+                    real_close(descriptor)
+                    if descriptor == descriptors[failed_slot]:
+                        raise OSError("single injected descriptor close")
+
+                with (
+                    mock.patch.object(
+                        browser_runtime.os,
+                        "close",
+                        side_effect=close_then_fail,
+                    ),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    pinned._relinquish_detached_mount_authority()
+
+                self.assertCountEqual(descriptors, closed)
+                self.assertEqual(len(descriptors), len(closed))
+                self.assertEqual(
+                    "private_browser_pinned_image",
+                    raised.exception.browser_cleanup_substage,
+                )
+                self.assertEqual(
+                    "detached_mount_release",
+                    raised.exception.browser_cleanup_check,
+                )
+                self.assertFalse(pinned._detached_filesystem_mounted)
+                for descriptor in descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+
+    def test_namespace_image_invalid_authority_still_closes_all_owned_descriptors(
+        self,
+    ) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            descriptors = [
+                os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                for _index in range(3)
+            ]
+            pinned = object.__new__(_PinnedExecutable)
+            pinned._detached_filesystem_mounted = True
+            pinned._namespace_discard_owned = True
+            pinned._detached_mount_parent_fd = descriptors[0]
+            pinned._detached_mount_fd = descriptors[1]
+            pinned._detached_underlying_fd = descriptors[2]
+            pinned._detached_mount_name = root.name
+            pinned._detached_underlying_identity = None
+            pinned._detached_mounted_identity = None
+
+            with self.assertRaises(BrowserRuntimeError) as raised:
+                pinned._relinquish_detached_mount_authority()
+
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+            self.assertEqual(
+                "private_browser_pinned_image",
+                raised.exception.browser_cleanup_substage,
+            )
+            self.assertEqual(
+                "detached_mount_release",
+                raised.exception.browser_cleanup_check,
+            )
+            self.assertFalse(pinned._detached_filesystem_mounted)
+            for descriptor in descriptors:
                 with self.assertRaises(OSError):
                     os.fstat(descriptor)
 
@@ -4219,6 +4496,7 @@ class ResidualRendererTests(unittest.TestCase):
             created_path.mkdir()
             pinned = object.__new__(_PinnedExecutable)
             pinned._detached_filesystem_mounted = False
+            pinned._namespace_discard_owned = True
             pinned._detached_mount_parent_fd = None
             pinned._detached_mount_fd = None
             pinned._detached_mount_name = None
@@ -4296,6 +4574,7 @@ class ResidualRendererTests(unittest.TestCase):
 
             pinned = object.__new__(_PinnedExecutable)
             pinned._detached_filesystem_mounted = False
+            pinned._namespace_discard_owned = True
             pinned._detached_mount_parent_fd = None
             pinned._detached_mount_fd = None
             pinned._detached_underlying_fd = None
@@ -5555,6 +5834,101 @@ class ResidualRendererTests(unittest.TestCase):
         execve.assert_not_called()
         write.assert_called_once_with(74, b"F")
 
+    def test_mount_helper_rejects_old_duplicate_reordered_and_tampered_transition(
+        self,
+    ) -> None:
+        from meshshot import browser_mount_handoff
+
+        nonce = "a" * 64
+        executable_info = mock.Mock(
+            st_mode=stat.S_IFREG | 0o555,
+            st_uid=os.geteuid(),
+        )
+        filesystem = mock.Mock(
+            f_flag=getattr(os, "ST_RDONLY", 1),
+        )
+        invalid_packets = (
+            browser_mount_handoff._packet(
+                {
+                    "schema": browser_mount_handoff.SCHEMA,
+                    "type": "detached",
+                    "nonce": nonce,
+                }
+            ),
+            (
+                b'{"schema":"meshshot.browser-mount-handoff/2",'
+                b'"type":"source-relinquished","type":"exec",'
+                b'"nonce":"' + nonce.encode("ascii") + b'"}'
+            ),
+            browser_mount_handoff._packet(
+                {
+                    "schema": browser_mount_handoff.SCHEMA,
+                    "type": "exec",
+                    "nonce": nonce,
+                }
+            ),
+            browser_mount_handoff._packet(
+                {
+                    "schema": browser_mount_handoff.SCHEMA,
+                    "type": "source-relinquished",
+                    "nonce": "b" * 64,
+                }
+            ),
+            browser_mount_handoff._packet(
+                {
+                    "schema": browser_mount_handoff.SCHEMA,
+                    "type": "source-relinquished",
+                    "nonce": nonce,
+                    "raw": "forbidden",
+                }
+            ),
+        )
+        for packet in invalid_packets:
+            with self.subTest(packet=packet):
+                connection = mock.MagicMock()
+                connection.recv.return_value = packet
+                with (
+                    mock.patch.object(
+                        browser_mount_handoff.sys,
+                        "argv",
+                        [
+                            "browser_mount_handoff.py",
+                            browser_mount_handoff.SCHEMA,
+                            "version",
+                        ],
+                    ),
+                    mock.patch.object(
+                        browser_mount_handoff.Path,
+                        "lstat",
+                        return_value=executable_info,
+                    ),
+                    mock.patch.object(
+                        browser_mount_handoff.os,
+                        "statvfs",
+                        return_value=filesystem,
+                    ),
+                    mock.patch.object(
+                        browser_mount_handoff,
+                        "_source_hidden",
+                        return_value=True,
+                    ),
+                    mock.patch.object(
+                        browser_mount_handoff,
+                        "_authority",
+                        return_value=nonce,
+                    ),
+                    mock.patch.object(
+                        browser_mount_handoff.socket,
+                        "socket",
+                        return_value=connection,
+                    ),
+                    mock.patch.object(browser_mount_handoff.os, "execve") as execve,
+                ):
+                    self.assertEqual(127, browser_mount_handoff.main())
+                execve.assert_not_called()
+                first = json.loads(connection.sendall.call_args_list[0].args[0])
+                self.assertEqual("mounted-hidden", first["type"])
+
     def test_failed_helper_token_write_cannot_publish_version_success(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _attest
@@ -6530,11 +6904,11 @@ class ResidualRendererTests(unittest.TestCase):
         self.assertEqual(
             {
                 "schema": "meshshot.browser-execution-authority/1",
-                "mode": "linux-detached-readonly-revision-mount/1",
+                "mode": "linux-supervisor-namespace-readonly-revision-mount/1",
                 "tree_manifest_sha256": "d" * 64,
                 "executable_sha256": "c" * 64,
                 "mount_readonly": "passed",
-                "source_detached": "passed",
+                "source_hidden": "passed",
             },
             runtime.evidence["execution_authority"],
         )

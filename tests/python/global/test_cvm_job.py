@@ -674,11 +674,11 @@ class CvmJobTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            "issue15.provider-free-bounded/17",
+            "issue15.provider-free-bounded/18",
             runtime.PROVIDER_FREE_EXECUTION_PROFILE["id"],
         )
         self.assertEqual(
-            "cvm.provider-free-linux-sandbox/17",
+            "cvm.provider-free-linux-sandbox/18",
             runtime.PROVIDER_FREE_EXECUTION_PROFILE["sandbox_profile"],
         )
 
@@ -813,12 +813,15 @@ class CvmJobTests(unittest.TestCase):
                 },
                 "execution_authority": {
                     "schema": "meshshot.browser-execution-authority/1",
-                    "mode": "linux-detached-readonly-revision-mount/1",
+                    "mode": "linux-supervisor-namespace-readonly-revision-mount/1",
                     "private_filesystem": "job-private-exec-tmpfs",
                     "handoff": (
-                        "authenticated-seqpacket-mounted-detached-exec"
+                        "authenticated-seqpacket-mounted-hidden-relinquished-exec"
                     ),
-                    "writable_source_after_handoff": "absent",
+                    "writable_source_after_handoff": "hidden-from-browser-child",
+                    "cleanup": (
+                        "browser-group-empty-supervisor-exit-kernel-discard"
+                    ),
                     "running_image_proof": "exact-proc-image-fd-identity",
                 },
                 "executable_validation": {
@@ -1376,9 +1379,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/17",
+                "id": "issue15.provider-free-bounded/18",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/17",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/18",
             },
         )
         self.assertEqual(
@@ -1504,7 +1507,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/17",
+            "issue15.provider-free-bounded/18",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],

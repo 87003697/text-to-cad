@@ -112,11 +112,15 @@ environment values, PID, endpoint, argv, and arbitrary operations are never
 projected by the monitor. A diagnostic operation is rejected unless its `/5`
 receipt has the corresponding exact outcome tuple and manifest binding.
 Historical Node-launch outcomes, operations on another stage, or values outside
-these lists are rejected by sandbox profile `/16`. The `/16` sandbox also
-binds the Python-owned private browser image to the isolated executable tmpfs
-at `/meshshot-exec` and binds the outer `/meshshot-supervisor` tmpfs read-only
-at nested `/run/meshshot-supervisor`. Arbitrary socket paths, endpoints,
-ambient descriptors, and temporary roots remain forbidden.
+these lists are rejected by sandbox profile `/18`. The `/18` sandbox gives the
+fixed outer browser supervisor its own private mount namespace. That supervisor
+owns the exact manifest-validated browser tmpfs at `/meshshot-exec`; the fixed
+browser helper binds the attested tree read-only, hides the original source
+mount, and never performs a runtime unmount or pathname fallback. Browser-group
+termination plus supervisor exit is the sole kernel-discard authority. The
+outer `/meshshot-supervisor` tmpfs remains read-only at nested
+`/run/meshshot-supervisor`. Arbitrary socket paths, endpoints, ambient
+descriptors, and temporary roots remain forbidden.
 The original outer `/meshshot-supervisor` path is hidden inside the nested
 sandbox after the read-only authority bind. Every packet carries a fresh
 attempt nonce and both sides require exact Linux `SO_PEERCRED` process

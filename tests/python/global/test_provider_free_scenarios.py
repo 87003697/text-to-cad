@@ -1973,11 +1973,11 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                                     },
                                     "execution_authority": {
                                         "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
-                                        "mode": "linux-detached-readonly-revision-mount/1",
+                                        "mode": "linux-supervisor-namespace-readonly-revision-mount/1",
                                         "tree_manifest_sha256": "d" * 64,
                                         "executable_sha256": "2" * 64,
                                         "mount_readonly": "passed",
-                                        "source_detached": "passed",
+                                        "source_hidden": "passed",
                                     },
                                     "result": "passed",
                                 }
@@ -2741,11 +2741,11 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                             },
                             "execution_authority": {
                                 "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
-                                "mode": "linux-detached-readonly-revision-mount/1",
+                                "mode": "linux-supervisor-namespace-readonly-revision-mount/1",
                                 "tree_manifest_sha256": "d" * 64,
                                 "executable_sha256": "2" * 64,
                                 "mount_readonly": "passed",
-                                "source_detached": "passed",
+                                "source_hidden": "passed",
                             },
                             "result": "passed",
                         }
@@ -2935,11 +2935,11 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                             },
                             "execution_authority": {
                                 "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
-                                "mode": "linux-detached-readonly-revision-mount/1",
+                                "mode": "linux-supervisor-namespace-readonly-revision-mount/1",
                                 "tree_manifest_sha256": "d" * 64,
                                 "executable_sha256": "2" * 64,
                                 "mount_readonly": "passed",
-                                "source_detached": "passed",
+                                "source_hidden": "passed",
                             },
                             "result": "passed",
                         }
@@ -3002,11 +3002,11 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             },
             "execution_authority": {
                 "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
-                "mode": "linux-detached-readonly-revision-mount/1",
+                "mode": "linux-supervisor-namespace-readonly-revision-mount/1",
                 "tree_manifest_sha256": "d" * 64,
                 "executable_sha256": "3" * 64,
                 "mount_readonly": "passed",
-                "source_detached": "passed",
+                "source_hidden": "passed",
             },
             "result": "passed",
         }
@@ -3359,11 +3359,11 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                             },
                             "execution_authority": {
                                 "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
-                                "mode": "linux-detached-readonly-revision-mount/1",
+                                "mode": "linux-supervisor-namespace-readonly-revision-mount/1",
                                 "tree_manifest_sha256": "d" * 64,
                                 "executable_sha256": "2" * 64,
                                 "mount_readonly": "passed",
-                                "source_detached": "passed",
+                                "source_hidden": "passed",
                             },
                             "result": "passed",
                         }

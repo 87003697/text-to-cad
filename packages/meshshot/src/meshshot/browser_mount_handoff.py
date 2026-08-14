@@ -1,4 +1,4 @@
-"""Fixed detached read-only browser mount handoff for provider-free Linux."""
+"""Fixed namespace-owned read-only browser mount handoff for provider-free Linux."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ import stat
 import sys
 
 
-SCHEMA = "meshshot.browser-mount-handoff/1"
-AUTHORITY_SCHEMA = "meshshot.browser-mount-authority/1"
+SCHEMA = "meshshot.browser-mount-handoff/2"
+AUTHORITY_SCHEMA = "meshshot.browser-mount-authority/2"
 PACKET_LIMIT = 4096
 SUPERVISOR_ROOT = Path("/run/meshshot-supervisor")
 SOCKET_PATH = SUPERVISOR_ROOT / "browser-mount.sock"
@@ -131,6 +131,16 @@ def _live_argv(profile: str) -> list[str]:
     ]
 
 
+def _source_hidden() -> bool:
+    try:
+        os.stat("/meshshot-exec/attested", follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
 def main() -> int:
     connection: socket.socket | None = None
     try:
@@ -151,23 +161,30 @@ def main() -> int:
             or executable_info.st_uid != os.geteuid()
             or executable_info.st_mode & 0o111 == 0
             or not filesystem.f_flag & getattr(os, "ST_RDONLY", 1)
+            or not _source_hidden()
         ):
             raise OSError("browser revision mount is not read-only")
         nonce = _authority()
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         connection.connect(os.fspath(SOCKET_PATH))
         connection.sendall(
-            _packet({"schema": SCHEMA, "type": "mounted", "nonce": nonce})
+            _packet(
+                {
+                    "schema": SCHEMA,
+                    "type": "mounted-hidden",
+                    "nonce": nonce,
+                }
+            )
         )
         response = _loads(connection.recv(PACKET_LIMIT + 1))
         if (
             not isinstance(response, dict)
             or set(response) != {"schema", "type", "nonce"}
             or response.get("schema") != SCHEMA
-            or response.get("type") != "detached"
+            or response.get("type") != "source-relinquished"
             or response.get("nonce") != nonce
         ):
-            raise OSError("browser source was not detached")
+            raise OSError("browser source was not relinquished")
         connection.sendall(
             _packet({"schema": SCHEMA, "type": "exec", "nonce": nonce})
         )

@@ -33,6 +33,7 @@ from meshshot.browser_runtime import (
     _peer_credentials,
     _receive_supervisor_packet,
     _send_supervisor_packet,
+    _enter_private_browser_mount_namespace,
 )
 
 _TIMEOUT_SECONDS = 15.0
@@ -533,6 +534,7 @@ def main() -> int:
         for signum in watched:
             signal.signal(signum, terminate)
         _restore_inherited_runtime_signals()
+        _enter_private_browser_mount_namespace()
         run()
     except _SupervisorSignal:
         return 0

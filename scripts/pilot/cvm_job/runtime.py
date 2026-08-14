@@ -582,12 +582,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/17",
+    "id": "issue15.provider-free-bounded/18",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/17",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/18",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/17",
+    "schema": "cvm.provider-free-linux-sandbox/18",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -600,12 +600,13 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
     "temporary_filesystem": "/tmp",
     "private_browser_image_filesystem": {
         "root": PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
-        "mount": "outer-kernel-created-exec-tmpfs",
+        "mount": "supervisor-private-exec-tmpfs",
         "scope": "single-preview-runtime",
-        "detached_mount_source": "exact-underlying-directory-descriptor",
-        "cleanup": (
-            "descriptor-bound-unmount-then-outer-namespace-kernel-discard"
-        ),
+        "namespace_owner": "fixed-browser-supervisor",
+        "mount_propagation": "private-recursive",
+        "namespace_private_mount_source": "exact-underlying-directory-descriptor",
+        "child_source_visibility": "hidden-after-read-only-bind",
+        "cleanup": "supervisor-process-exit-kernel-discard",
     },
     "browser_supervisor": {
         "schema": "meshshot.browser-supervisor/1",
@@ -645,10 +646,13 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
         },
         "execution_authority": {
             "schema": "meshshot.browser-execution-authority/1",
-            "mode": "linux-detached-readonly-revision-mount/1",
+            "mode": "linux-supervisor-namespace-readonly-revision-mount/1",
             "private_filesystem": "job-private-exec-tmpfs",
-            "handoff": "authenticated-seqpacket-mounted-detached-exec",
-            "writable_source_after_handoff": "absent",
+            "handoff": (
+                "authenticated-seqpacket-mounted-hidden-relinquished-exec"
+            ),
+            "writable_source_after_handoff": "hidden-from-browser-child",
+            "cleanup": "browser-group-empty-supervisor-exit-kernel-discard",
             "running_image_proof": "exact-proc-image-fd-identity",
         },
         "executable_validation": {

@@ -386,11 +386,11 @@ class JobProtocolTests(unittest.TestCase):
             },
             "execution_authority": {
                 "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
-                "mode": "linux-detached-readonly-revision-mount/1",
+                "mode": "linux-supervisor-namespace-readonly-revision-mount/1",
                 "tree_manifest_sha256": "d" * 64,
                 "executable_sha256": "c" * 64,
                 "mount_readonly": "passed",
-                "source_detached": "passed",
+                "source_hidden": "passed",
             },
             "result": "passed",
         }
@@ -462,11 +462,11 @@ class JobProtocolTests(unittest.TestCase):
             },
             "execution_authority": {
                 "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
-                "mode": "linux-detached-readonly-revision-mount/1",
+                "mode": "linux-supervisor-namespace-readonly-revision-mount/1",
                 "tree_manifest_sha256": "3" * 64,
                 "executable_sha256": "2" * 64,
                 "mount_readonly": "passed",
-                "source_detached": "passed",
+                "source_hidden": "passed",
             },
             "result": "passed",
         }
@@ -495,7 +495,21 @@ class JobProtocolTests(unittest.TestCase):
                 **receipt,
                 "execution_authority": {
                     **receipt["execution_authority"],
-                    "source_detached": "failed",
+                    "source_hidden": "failed",
+                },
+            },
+            {
+                **receipt,
+                "execution_authority": {
+                    **receipt["execution_authority"],
+                    "mode": "linux-detached-readonly-revision-mount/1",
+                },
+            },
+            {
+                **receipt,
+                "execution_authority": {
+                    **receipt["execution_authority"],
+                    "source_detached": "passed",
                 },
             },
             {
