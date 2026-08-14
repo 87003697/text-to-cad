@@ -2837,6 +2837,8 @@ class _PinnedExecutable:
                 os.fspath(_BROWSER_MOUNT_TARGET),
                 "--tmpfs",
                 os.fspath(MESHSHOT_EXECUTABLE_ROOT),
+                "--remount-ro",
+                os.fspath(MESHSHOT_EXECUTABLE_ROOT),
                 "--ro-bind",
                 os.fspath(SUPERVISOR_OUTER_ROOT),
                 "/run/meshshot-supervisor",
