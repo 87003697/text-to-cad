@@ -7,6 +7,7 @@ import {
   buildFoldLine,
   buildRegionPlacements,
   clipLoopByHalfPlane,
+  buildFoldAdjacency,
   decomposeFoldRegions,
   foldHingeMatrix,
   foldSignedDistance,
@@ -247,4 +248,96 @@ test("folds that meet end to end are not crossing", () => {
     fold([0, 55], [30, 55], 90)
   ]);
   assert.equal(regions.length, 3);
+});
+
+test("a tab folded about the panel's own edge keeps the panel's edge", () => {
+  // The fold line runs along the bottom edge, spanning only the tab: both its ends are existing
+  // VERTICES sitting exactly on the line. Cutting by a band edge finds no crossing there and
+  // falls back to the infinite line, which took the panel's whole bottom edge with the tab.
+  const blank = [[0, 0], [70, 0], [70, -22], [110, -22], [110, 0], [180, 0], [180, 90], [0, 90]];
+  const line = fold([70, 0], [110, 0], 90);
+  const { regions, adjacency } = decomposeFoldRegions(blank, [line]);
+  assert.equal(regions.length, 2);
+  assert.equal(adjacency.length, 1);
+  const [tab, panel] = regions[0].area < regions[1].area ? regions : [regions[1], regions[0]];
+  // The tab is the material below the band, the full 40 wide.
+  assert.ok(tab.outerLoop.every(([, y]) => y <= -line.halfWidth + 1e-6));
+  // The panel keeps its corners out at x = 0 and x = 180 on y = 0: the band only bit into the
+  // 40 mm the fold spans, leaving a notch, not a full-width step.
+  assert.ok(panel.outerLoop.some(([x, y]) => Math.abs(x) < 1e-6 && Math.abs(y) < 1e-6));
+  assert.ok(panel.outerLoop.some(([x, y]) => Math.abs(x - 180) < 1e-6 && Math.abs(y) < 1e-6));
+  const notchDepth = Math.max(...panel.outerLoop.filter(([x]) => x > 69 && x < 111).map(([, y]) => y));
+  assert.ok(Math.abs(notchDepth - line.halfWidth) < 1e-6, `notch is the band's half, got ${notchDepth}`);
+});
+
+test("a fold hinges the faces it separates, whatever other folds' lines run past them", () => {
+  // tom's link_bracket, reduced to the three faces that matter: a body that reaches both sides of
+  // the wrap bend's line, the wrap flange, and a foot at the bottom whose centroid sits RIGHT of
+  // that line while the body's sits left. Only a LOCAL fold can set this up -- a fold that spans
+  // the whole blank leaves each face wholly on its own side -- so it is built here rather than
+  // decomposed. A rule that hinges the pair "differing in exactly one fold's side" then refuses
+  // the foot, which came out a second root: flat, with its own bend band already taken out.
+  const wrap = fold([16.8, 117], [16.8, 145], 90);
+  const foot = fold([0, 10], [35, 10], 90);
+  const folds = [wrap, foot];
+  const region = (loop) => {
+    const centroid = [
+      loop.reduce((sum, [x]) => sum + x, 0) / loop.length,
+      loop.reduce((sum, [, y]) => sum + y, 0) / loop.length
+    ];
+    return {
+      outerLoop: loop,
+      centroid,
+      sides: folds.map((foldLine, foldIndex) => ({
+        foldIndex,
+        side: foldSignedDistance(foldLine, centroid) >= 0 ? 1 : -1
+      }))
+    };
+  };
+  const body = region([
+    [-17, 10 + foot.halfWidth], [35, 10 + foot.halfWidth], [35, 117],
+    [16.8 - wrap.halfWidth, 117], [16.8 - wrap.halfWidth, 145], [-17, 145]
+  ]);
+  const flange = region([
+    [16.8 + wrap.halfWidth, 117], [27, 117], [27, 145], [16.8 + wrap.halfWidth, 145]
+  ]);
+  const footFace = region([
+    [0, 10 - foot.halfWidth], [35, 10 - foot.halfWidth], [35, -9], [0, -9]
+  ]);
+  // The setup: body and foot are on opposite sides of BOTH folds, though only one hinges them.
+  assert.notEqual(body.sides[0].side, footFace.sides[0].side, "straddling the wrap bend's line");
+  assert.notEqual(body.sides[1].side, footFace.sides[1].side, "and hinged by the foot bend");
+  const adjacency = buildFoldAdjacency([body, flange, footFace], folds);
+  assert.equal(adjacency.length, 2, `one hinge per fold, got ${JSON.stringify(adjacency)}`);
+  assert.deepEqual(adjacency.map((edge) => edge.foldIndex), [0, 1]);
+  assert.deepEqual(adjacency.map((edge) => edge.regions), [[0, 1], [0, 2]]);
+});
+
+test("four folds in three orientations fold a panel into five faces", () => {
+  // The multi_bend_test_panel fixture: two parallel verticals, a tab chord perpendicular to
+  // them, and a 45-degree corner. Four folds, five faces, four hinges, and a tree.
+  const blank = [[0, 0], [70, 0], [70, -22], [110, -22], [110, 0], [180, 0], [180, 56], [146, 90], [0, 90]];
+  const folds = [
+    fold([45, 0], [45, 90], 90),
+    fold([70, 0], [110, 0], 90),
+    fold([120, 0], [120, 90], 90),
+    fold([180, 35], [125, 90], 90)
+  ];
+  const { regions, adjacency } = decomposeFoldRegions(blank, folds);
+  assert.equal(regions.length, 5);
+  assert.equal(adjacency.length, 4);
+  const { placements, parents } = buildRegionPlacements(regions, folds, adjacency);
+  assert.equal(parents.filter((parent) => !parent).length, 1, "one root");
+  // Rigid: the folds move faces without stretching them.
+  regions.forEach((region, index) => {
+    const [a, b] = [region.outerLoop[0], region.outerLoop[1]];
+    const flat = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    const placedA = place(placements[index], a);
+    const placedB = place(placements[index], b);
+    const folded = Math.hypot(placedA[0] - placedB[0], placedA[1] - placedB[1], placedA[2] - placedB[2]);
+    assert.ok(Math.abs(folded - flat) < 1e-6, `face ${index} stretched ${flat} -> ${folded}`);
+  });
+  // Every face except the anchor leaves the sheet.
+  const lifted = placements.map((matrix, index) => place(matrix, regions[index].centroid)[1]);
+  assert.equal(lifted.filter((height) => Math.abs(height) < 1e-6).length, 1);
 });

@@ -69,8 +69,36 @@ export function foldSignedDistance(foldLine, point) {
  * exact -- the classic Sutherland-Hodgman caveat is convex CLIP REGIONS with several edges,
  * where concave subjects can gain degenerate bridges. One half-plane cannot do that.
  */
-export function clipLoopByHalfPlane(loop, foldLine, limit, keepPositiveSide) {
+export function foldAlongCoordinate(foldLine, point) {
+  return ((point[0] - foldLine.origin[0]) * foldLine.direction[0])
+    + ((point[1] - foldLine.origin[1]) * foldLine.direction[1]);
+}
+
+/** The part of ``loop`` on one side of a fold's band, cut ONLY along the fold's own span.
+ *
+ * The window is what makes a local fold local. A bend line separates the material it actually
+ * crosses; the same infinite line, continued, runs through the rest of the part, and cutting
+ * there invents a division no brake makes. tom's link_bracket is the case that showed it: its
+ * wrap bend sits in the top 27mm of a 154mm bracket, and clipping by the infinite line sliced
+ * the whole height in two -- after which the foot bend straddled both halves and could not be
+ * folded at all.
+ *
+ * So a point outside the window is always kept, and a crossing is only cut where it falls
+ * inside the window. Where the window covers the whole face this is the plain half-plane clip
+ * it started as.
+ */
+export function clipLoopByHalfPlane(loop, foldLine, limit, keepPositiveSide, window = null) {
+  const withinWindow = (point) => {
+    if (!window) {
+      return true;
+    }
+    const along = foldAlongCoordinate(foldLine, point);
+    return along >= window.min - BAND_TOLERANCE_MM && along <= window.max + BAND_TOLERANCE_MM;
+  };
   const inside = (point) => {
+    if (!withinWindow(point)) {
+      return true;
+    }
     const distance = foldSignedDistance(foldLine, point);
     return keepPositiveSide ? distance >= limit - BAND_TOLERANCE_MM : distance <= limit + BAND_TOLERANCE_MM;
   };
@@ -93,10 +121,16 @@ export function clipLoopByHalfPlane(loop, foldLine, limit, keepPositiveSide) {
       continue;
     }
     const t = currentDistance / denominator;
-    clipped.push([
+    const crossing = [
       current[0] + (t * (next[0] - current[0])),
       current[1] + (t * (next[1] - current[1]))
-    ]);
+    ];
+    // A crossing outside the fold's own span is not this fold's business: the edge simply
+    // continues, and inserting a vertex there would cut the part where no bend runs.
+    if (!withinWindow(crossing)) {
+      continue;
+    }
+    clipped.push(crossing);
   }
   return dropRepeatedPoints(clipped);
 }
@@ -182,6 +216,166 @@ export function foldSegmentCrossesRegion(foldLine, region, tolerance = 0.05) {
   };
 }
 
+
+/** Where on a loop's boundary a point sits: which edge, and how far along it. */
+function projectPointOntoLoop(loop, point) {
+  let best = null;
+  for (let index = 0; index < loop.length; index += 1) {
+    const start = loop[index];
+    const end = loop[(index + 1) % loop.length];
+    const dx = end[0] - start[0];
+    const dy = end[1] - start[1];
+    const lengthSq = (dx * dx) + (dy * dy);
+    if (lengthSq <= EPSILON_MM) {
+      continue;
+    }
+    const t = Math.max(0, Math.min(1, (((point[0] - start[0]) * dx) + ((point[1] - start[1]) * dy)) / lengthSq));
+    const projected = [start[0] + (t * dx), start[1] + (t * dy)];
+    const distance = Math.hypot(point[0] - projected[0], point[1] - projected[1]);
+    if (!best || distance < best.distance) {
+      best = { edgeIndex: index, t, point: projected, distance };
+    }
+  }
+  return best;
+}
+
+/** Cut a face in two along the bend's own segment.
+ *
+ * The chord is the BEND LINE, not a band edge and not the fold's infinite line. Cutting by an
+ * infinite line divides faces the fold never touches; cutting by a band edge only works when
+ * that edge happens to cross the boundary twice, which it does not when the boundary runs ALONG
+ * the fold -- a tab folded about the panel's own bottom edge, where both chord ends are existing
+ * vertices sitting exactly on the line. Projecting the bend's two endpoints onto the boundary
+ * sidesteps every one of those degeneracies: the gate has already checked they reach it.
+ */
+function splitLoopAtSegment(loop, start, end) {
+  const from = projectPointOntoLoop(loop, start);
+  const to = projectPointOntoLoop(loop, end);
+  if (!from || !to) {
+    return null;
+  }
+  const [first, second] = (from.edgeIndex + from.t) <= (to.edgeIndex + to.t) ? [from, to] : [to, from];
+  if (first.edgeIndex === second.edgeIndex && Math.abs(first.t - second.t) <= EPSILON_MM) {
+    return null;
+  }
+  const between = [first.point];
+  for (let index = first.edgeIndex + 1; index <= second.edgeIndex; index += 1) {
+    between.push(loop[index % loop.length]);
+  }
+  between.push(second.point);
+  const rest = [second.point];
+  for (let index = second.edgeIndex + 1; index <= first.edgeIndex + loop.length; index += 1) {
+    rest.push(loop[index % loop.length]);
+  }
+  rest.push(first.point);
+  return [dropRepeatedPoints(between), dropRepeatedPoints(rest)];
+}
+
+/** Take this fold's half-band off one of the two faces it cut.
+ *
+ * ``path`` runs from one chord end, round the face, to the other, so the band only ever has to
+ * come off its two ends. Walking out from a chord end, the boundary does one of two things:
+ *
+ *  - it RISES clear of the band, and the face starts where it crosses the band edge -- the
+ *    ordinary case, and the same answer the plain half-plane clip gives;
+ *  - it leaves the fold's SPAN first, running on along the fold, as a panel's bottom edge does
+ *    under a folded tab. Then the corner stays and the face gains a jog: straight out to the
+ *    band edge at the span's end. Trimming to the band edge anyway would take the panel's whole
+ *    bottom edge with the tab.
+ */
+function trimBandFromFace(path, foldLine, side, window) {
+  const limit = side * foldLine.halfWidth;
+  const clearOfBand = (point) => (
+    side * foldSignedDistance(foldLine, point) >= foldLine.halfWidth - BAND_TOLERANCE_MM
+  );
+  const withinSpan = (point) => {
+    const along = foldAlongCoordinate(foldLine, point);
+    return along >= window.min - BAND_TOLERANCE_MM && along <= window.max + BAND_TOLERANCE_MM;
+  };
+  const bandEdgePoint = (along) => [
+    foldLine.origin[0] + (along * foldLine.direction[0]) + (limit * foldLine.normal[0]),
+    foldLine.origin[1] + (along * foldLine.direction[1]) + (limit * foldLine.normal[1])
+  ];
+  const crossingToBandEdge = (inside, outside) => {
+    const insideDistance = (side * foldSignedDistance(foldLine, inside)) - foldLine.halfWidth;
+    const outsideDistance = (side * foldSignedDistance(foldLine, outside)) - foldLine.halfWidth;
+    const denominator = outsideDistance - insideDistance;
+    if (Math.abs(denominator) <= EPSILON_MM) {
+      return null;
+    }
+    const t = -insideDistance / denominator;
+    return [inside[0] + (t * (outside[0] - inside[0])), inside[1] + (t * (outside[1] - inside[1]))];
+  };
+  // Where a boundary edge leaves the fold's span, which is where the band's end sits.
+  const crossingAtAlong = (from, to, along) => {
+    const fromAlong = foldAlongCoordinate(foldLine, from);
+    const toAlong = foldAlongCoordinate(foldLine, to);
+    const denominator = toAlong - fromAlong;
+    if (Math.abs(denominator) <= EPSILON_MM) {
+      return null;
+    }
+    const t = (along - fromAlong) / denominator;
+    if (t < -BAND_TOLERANCE_MM || t > 1 + BAND_TOLERANCE_MM) {
+      return null;
+    }
+    return [from[0] + (t * (to[0] - from[0])), from[1] + (t * (to[1] - from[1]))];
+  };
+  // How far in from each end the band reaches, and what replaces the material taken off.
+  const lead = (indices) => {
+    let cursor = 0;
+    while (cursor < indices.length) {
+      const point = path[indices[cursor]];
+      if (clearOfBand(point) || !withinSpan(point)) {
+        break;
+      }
+      cursor += 1;
+    }
+    if (cursor >= indices.length) {
+      return null;
+    }
+    const stop = path[indices[cursor]];
+    if (clearOfBand(stop)) {
+      const previous = cursor > 0 ? path[indices[cursor - 1]] : null;
+      const crossing = previous ? crossingToBandEdge(previous, stop) : null;
+      return { drop: cursor, insert: crossing ? [crossing] : [] };
+    }
+    // Left the span still inside the band. The face keeps the corner where its boundary leaves
+    // the fold's span, and reaches it from the band edge: out along the span's end, then on.
+    const along = foldAlongCoordinate(foldLine, stop);
+    const spanEnd = along > window.max ? window.max : window.min;
+    const previous = cursor > 0 ? path[indices[cursor - 1]] : null;
+    const exit = previous ? crossingAtAlong(previous, stop, spanEnd) : null;
+    return { drop: cursor, insert: exit ? [bandEdgePoint(spanEnd), exit] : [bandEdgePoint(spanEnd)] };
+  };
+  const forward = path.map((_, index) => index);
+  const head = lead(forward);
+  const tail = lead([...forward].reverse());
+  if (!head || !tail) {
+    return [];
+  }
+  const kept = path.slice(head.drop, path.length - tail.drop);
+  return dropRepeatedPoints([...head.insert, ...kept, ...[...tail.insert].reverse()]);
+}
+
+/** The two faces a fold leaves behind, each with its half of the bend band removed. */
+function splitFaceAtFold(loop, foldLine, window) {
+  const split = splitLoopAtSegment(loop, foldLine.bendLine.start, foldLine.bendLine.end);
+  if (!split) {
+    return null;
+  }
+  const sides = split.map((candidate) => (
+    candidate.length >= 3 && foldSignedDistance(foldLine, loopCentroid(candidate)) >= 0 ? 1 : -1
+  ));
+  if (sides[0] === sides[1]) {
+    return null;
+  }
+  const positiveIndex = sides[0] === 1 ? 0 : 1;
+  return {
+    positive: trimBandFromFace(split[positiveIndex], foldLine, 1, window),
+    negative: trimBandFromFace(split[1 - positiveIndex], foldLine, -1, window)
+  };
+}
+
 /** Cut the blank into the faces the folds leave behind.
  *
  * Each fold splits ONE face into two, along its own segment, and removes its band -- the
@@ -242,8 +436,12 @@ export function decomposeFoldRegions(outerLoop, foldLines, { tolerance = 0.05 } 
       );
     }
     const region = regions[target];
-    const negative = clipLoopByHalfPlane(region.loop, foldLine, -foldLine.halfWidth, false);
-    const positive = clipLoopByHalfPlane(region.loop, foldLine, foldLine.halfWidth, true);
+    // The fold cuts along ITS OWN segment, not along its infinite line -- see splitFaceAtFold.
+    const span = foldLineSpan(foldLine);
+    const window = { min: span.min, max: span.max };
+    const split = splitFaceAtFold(region.loop, foldLine, window);
+    const negative = split?.negative || [];
+    const positive = split?.positive || [];
     if (negative.length < 3 || positive.length < 3) {
       throw new Error(
         `DXF 3D bend preview could not split the blank at bend ${foldIndex + 1}: its bend radius `
@@ -286,31 +484,43 @@ function sideOf(region, foldIndex) {
   return region.sides.find((entry) => entry.foldIndex === foldIndex)?.side || 0;
 }
 
-/** Which folds hinge which regions: a pair differing in exactly one fold's side. */
+/** Which two faces each fold hinges: the pair that meets along the most of it.
+ *
+ * ONE edge per fold, which is what makes the graph a tree: each fold cut exactly one face in
+ * two, so N folds over N+1 faces need N hinges, no more.
+ *
+ * The pair is chosen by CONTACT along the fold, not by comparing which side of every fold each
+ * face lies on. That comparison reads a fold's infinite line as dividing the whole blank, so two
+ * faces a fold genuinely hinges lose their hinge whenever they also happen to straddle an
+ * unrelated fold's line somewhere else on the part. tom's link_bracket is exactly that: its foot
+ * sits right of the wrap bend's line and the body's centroid sits left of it, so the foot came
+ * out hinged to nothing -- a second root, folded flat, with its bend band already taken out.
+ */
 export function buildFoldAdjacency(regions, foldLines) {
   const edges = [];
-  for (let a = 0; a < regions.length; a += 1) {
-    for (let b = a + 1; b < regions.length; b += 1) {
-      const differing = [];
-      for (let foldIndex = 0; foldIndex < foldLines.length; foldIndex += 1) {
-        if (sideOf(regions[a], foldIndex) !== sideOf(regions[b], foldIndex)) {
-          differing.push(foldIndex);
+  foldLines.forEach((foldLine, foldIndex) => {
+    let best = null;
+    for (let a = 0; a < regions.length; a += 1) {
+      for (let b = a + 1; b < regions.length; b += 1) {
+        // Opposite sides of THIS fold, and meeting along it. Two faces on the same side of a
+        // fold are not hinged by it, and faces that merely line up across it -- an L blank whose
+        // arms are cut apart -- never touch its band.
+        if (sideOf(regions[a], foldIndex) === sideOf(regions[b], foldIndex)) {
+          continue;
+        }
+        const overlap = foldContactLength(regions[a], regions[b], foldLine);
+        if (overlap <= BAND_TOLERANCE_MM) {
+          continue;
+        }
+        if (!best || overlap > best.contactLength) {
+          best = { foldIndex, regions: [a, b], contactLength: overlap };
         }
       }
-      if (differing.length !== 1) {
-        continue;
-      }
-      const foldIndex = differing[0];
-      // Differing in one fold is necessary, not sufficient: the two faces also have to MEET
-      // along that fold, or a bend would hinge two faces that merely happen to be on opposite
-      // sides of it (an L-shaped blank whose arms are cut apart, for instance).
-      const overlap = foldContactLength(regions[a], regions[b], foldLines[foldIndex]);
-      if (overlap <= BAND_TOLERANCE_MM) {
-        continue;
-      }
-      edges.push({ foldIndex, regions: [a, b], contactLength: overlap });
     }
-  }
+    if (best) {
+      edges.push(best);
+    }
+  });
   return edges;
 }
 
@@ -570,6 +780,16 @@ export function assignHolesToRegions(regions, holeLoops, foldLines) {
     for (let foldIndex = 0; foldIndex < foldLines.length; foldIndex += 1) {
       const foldLine = foldLines[foldIndex];
       if (foldLine.halfWidth <= EPSILON_MM) {
+        continue;
+      }
+      // Only where the bend actually RUNS. Measured against the infinite line, a cutout tens of
+      // millimetres away from a short bend counted as crossing it -- which is how tom's
+      // link_bracket came to be rejected for a web cutout 30mm below its wrap bend.
+      const span = foldLineSpan(foldLine);
+      const alongs = holeLoop.map((point) => foldAlongCoordinate(foldLine, point));
+      const beside = Math.min(...alongs) > span.max + foldLine.halfWidth
+        || Math.max(...alongs) < span.min - foldLine.halfWidth;
+      if (beside) {
         continue;
       }
       const distances = holeLoop.map((point) => foldSignedDistance(foldLine, point));
