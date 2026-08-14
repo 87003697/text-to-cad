@@ -940,6 +940,9 @@ def _private_directory(prefix: str) -> _OwnedPrivateDirectory:
             root_info.st_dev,
             root_info.st_ino,
             root_info.st_mode,
+        ) or (
+            configured_root is not None
+            and _linux_filesystem_type(parent_fd) != _LINUX_TMPFS_MAGIC
         ):
             raise OSError("private root identity changed")
     except OSError as exc:
@@ -1923,6 +1926,10 @@ class _PinnedExecutable:
                 ) from exc
             raise
 
+    @staticmethod
+    def _private_image_mount_authority() -> _OwnedPrivateDirectory:
+        return _private_directory("meshshot-browser-")
+
     def _materialize_detached_tree(self, source_info: os.stat_result) -> None:
         expected = os.environ.get(_BROWSER_TREE_MANIFEST_ENV)
         if (
@@ -1937,7 +1944,7 @@ class _PinnedExecutable:
             )
         source_root = self.path.parents[1]
         relative = self.path.relative_to(source_root)
-        owned_root = _private_mount_root()
+        owned_root = self._private_image_mount_authority()
         root = owned_root.path
         target_root = root / "attested"
         target = target_root / relative

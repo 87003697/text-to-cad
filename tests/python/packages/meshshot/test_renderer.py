@@ -1188,6 +1188,11 @@ class ResidualRendererTests(unittest.TestCase):
                 ),
                 mock.patch.object(browser_runtime.sys, "platform", "linux"),
                 mock.patch.object(
+                    browser_runtime,
+                    "_linux_filesystem_type",
+                    return_value=browser_runtime._LINUX_TMPFS_MAGIC,
+                ),
+                mock.patch.object(
                     _PinnedExecutable,
                     "_sealed_snapshot_fd",
                     side_effect=lambda launch, _source_info: os.open(
