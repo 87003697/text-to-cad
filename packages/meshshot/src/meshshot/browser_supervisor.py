@@ -65,7 +65,11 @@ def _validate_root() -> tuple[int, tuple[int, int]]:
             try:
                 os.close(descriptor)
             except OSError as cleanup_exc:
-                raise BrowserRuntimeError("browser_cleanup") from cleanup_exc
+                raise BrowserRuntimeError(
+                    "browser_cleanup",
+                    browser_cleanup_substage="private_supervisor_state",
+                    browser_cleanup_check="root_descriptor_close",
+                ) from cleanup_exc
         raise BrowserRuntimeError("browser_profile") from exc
     if (
         not SUPERVISOR_OUTER_ROOT.is_absolute()
@@ -75,8 +79,12 @@ def _validate_root() -> tuple[int, tuple[int, int]]:
     ):
         try:
             os.close(descriptor)
-        except OSError:
-            raise BrowserRuntimeError("browser_cleanup")
+        except OSError as exc:
+            raise BrowserRuntimeError(
+                "browser_cleanup",
+                browser_cleanup_substage="private_supervisor_state",
+                browser_cleanup_check="root_descriptor_close",
+            ) from exc
         raise BrowserRuntimeError("browser_profile")
     return descriptor, (info.st_dev, info.st_ino)
 
@@ -122,7 +130,15 @@ def _write_private_record(path: Path, value: dict[str, Any]) -> None:
             try:
                 os.close(descriptor)
             except OSError as exc:
-                raise BrowserRuntimeError("browser_cleanup") from exc
+                raise BrowserRuntimeError(
+                    "browser_cleanup",
+                    browser_cleanup_substage="private_supervisor_state",
+                    browser_cleanup_check=(
+                        "authority_record_unlink"
+                        if path == SUPERVISOR_OUTER_AUTHORITY
+                        else "client_record_unlink"
+                    ),
+                ) from exc
 
 
 def _load_expected_client(*, nonce: str, deadline: float) -> int:
@@ -147,7 +163,11 @@ def _load_expected_client(*, nonce: str, deadline: float) -> int:
                 try:
                     os.close(descriptor)
                 except OSError as exc:
-                    raise BrowserRuntimeError("browser_cleanup") from exc
+                    raise BrowserRuntimeError(
+                        "browser_cleanup",
+                        browser_cleanup_substage="private_supervisor_state",
+                        browser_cleanup_check="client_record_unlink",
+                    ) from exc
         value = _loads_json_strict(raw)
         client_pid = value.get("client_pid") if isinstance(value, dict) else None
         if (
@@ -198,8 +218,12 @@ def _accept_authenticated_client(
             if not accepted:
                 try:
                     connection.close()
-                except OSError:
-                    raise BrowserRuntimeError("browser_cleanup")
+                except OSError as exc:
+                    raise BrowserRuntimeError(
+                        "browser_cleanup",
+                        browser_cleanup_substage="private_supervisor_state",
+                        browser_cleanup_check="client_transport_close",
+                    ) from exc
     raise BrowserRuntimeError("browser_connect")
 
 
@@ -211,16 +235,28 @@ def _unlink_owned_socket(root_fd: int, identity: tuple[int, int]) -> None:
             follow_symlinks=False,
         )
     except OSError as exc:
-        raise BrowserRuntimeError("browser_cleanup") from exc
+        raise BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_supervisor_state",
+            browser_cleanup_check="socket_unlink",
+        ) from exc
     if (
         not stat.S_ISSOCK(current.st_mode)
         or (current.st_dev, current.st_ino) != identity
     ):
-        raise BrowserRuntimeError("browser_cleanup")
+        raise BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_supervisor_state",
+            browser_cleanup_check="socket_unlink",
+        )
     try:
         os.unlink(SUPERVISOR_OUTER_SOCKET.name, dir_fd=root_fd)
     except OSError as exc:
-        raise BrowserRuntimeError("browser_cleanup") from exc
+        raise BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_supervisor_state",
+            browser_cleanup_check="socket_unlink",
+        ) from exc
     try:
         os.stat(
             SUPERVISOR_OUTER_SOCKET.name,
@@ -230,8 +266,16 @@ def _unlink_owned_socket(root_fd: int, identity: tuple[int, int]) -> None:
     except FileNotFoundError:
         return
     except OSError as exc:
-        raise BrowserRuntimeError("browser_cleanup") from exc
-    raise BrowserRuntimeError("browser_cleanup")
+        raise BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_supervisor_state",
+            browser_cleanup_check="socket_unlink",
+        ) from exc
+    raise BrowserRuntimeError(
+        "browser_cleanup",
+        browser_cleanup_substage="private_supervisor_state",
+        browser_cleanup_check="socket_unlink",
+    )
 
 
 def _closed_result(exc: BrowserRuntimeError) -> dict[str, str]:
@@ -249,6 +293,75 @@ def _closed_result(exc: BrowserRuntimeError) -> dict[str, str]:
     return value
 
 
+def _cleanup_private_supervisor_state(
+    *,
+    root_fd: int,
+    root_identity: tuple[int, int],
+    server: socket.socket | None,
+    connection: socket.socket | None,
+    socket_identity: tuple[int, int] | None,
+    socket_unlinked: bool,
+    initial_check: str | None = None,
+) -> None:
+    cleanup_check = initial_check
+
+    def record(check: str, *, retained: bool = False) -> None:
+        nonlocal cleanup_check
+        if cleanup_check is None or retained:
+            cleanup_check = check
+
+    if connection is not None:
+        try:
+            connection.close()
+        except OSError:
+            record("client_transport_close")
+    if server is not None:
+        try:
+            server.close()
+        except OSError:
+            record("listener_close")
+    if socket_identity is not None and not socket_unlinked:
+        try:
+            _unlink_owned_socket(root_fd, socket_identity)
+        except BrowserRuntimeError:
+            record("socket_unlink")
+    try:
+        current = os.fstat(root_fd)
+        if (current.st_dev, current.st_ino) != root_identity:
+            record("root_identity", retained=True)
+    except OSError:
+        record("root_identity")
+    try:
+        os.chmod(SUPERVISOR_OUTER_ROOT, 0o700)
+    except OSError:
+        record("root_identity")
+    else:
+        for path, check in (
+            (SUPERVISOR_OUTER_AUTHORITY, "authority_record_unlink"),
+            (SUPERVISOR_OUTER_CLIENT, "client_record_unlink"),
+        ):
+            try:
+                os.unlink(path.name, dir_fd=root_fd)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                record(check)
+            if os.path.lexists(path):
+                record(check, retained=True)
+    if os.path.lexists(SUPERVISOR_OUTER_SOCKET):
+        record("socket_unlink", retained=True)
+    try:
+        os.close(root_fd)
+    except OSError:
+        record("root_descriptor_close")
+    if cleanup_check is not None:
+        raise BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_supervisor_state",
+            browser_cleanup_check=cleanup_check,
+        )
+
+
 def run() -> None:
     """Own exactly one browser and one authenticated, one-shot exchange."""
 
@@ -258,14 +371,8 @@ def run() -> None:
     socket_identity: tuple[int, int] | None = None
     socket_unlinked = False
     nonce = os.urandom(32).hex()
-    failure = False
-    cleanup_check: str | None = None
-
-    def record_cleanup(check: str) -> None:
-        nonlocal failure, cleanup_check
-        failure = True
-        if cleanup_check is None:
-            cleanup_check = check
+    body_error: BaseException | None = None
+    body_cleanup_check: str | None = None
     try:
         for path in (SUPERVISOR_OUTER_SOCKET, SUPERVISOR_OUTER_AUTHORITY, SUPERVISOR_OUTER_CLIENT):
             if os.path.lexists(path):
@@ -311,16 +418,20 @@ def run() -> None:
                     deadline=deadline,
                 )
                 try:
-                    server.close()
+                    closing_server = server
+                    server = None
+                    closing_server.close()
                 except OSError as exc:
                     raise BrowserRuntimeError(
                         "browser_cleanup",
                         browser_cleanup_substage="private_supervisor_state",
                         browser_cleanup_check="listener_close",
                     ) from exc
-                server = None
                 try:
-                    _unlink_owned_socket(root_fd, socket_identity)
+                    unlink_identity = socket_identity
+                    socket_identity = None
+                    assert unlink_identity is not None
+                    _unlink_owned_socket(root_fd, unlink_identity)
                 except BrowserRuntimeError as exc:
                     raise BrowserRuntimeError(
                         "browser_cleanup",
@@ -349,62 +460,39 @@ def run() -> None:
                     },
                 )
                 try:
-                    connection.close()
+                    closing_connection = connection
+                    connection = None
+                    closing_connection.close()
                 except OSError as exc:
                     raise BrowserRuntimeError(
                         "browser_cleanup",
                         browser_cleanup_substage="private_supervisor_state",
                         browser_cleanup_check="client_transport_close",
                     ) from exc
-                connection = None
+    except BaseException as exc:
+        body_error = exc
+        if (
+            isinstance(exc, BrowserRuntimeError)
+            and exc.operation == "browser_cleanup"
+            and exc.browser_cleanup_substage == "private_supervisor_state"
+            and exc.browser_cleanup_check is not None
+        ):
+            body_cleanup_check = exc.browser_cleanup_check
     finally:
-        if connection is not None:
-            try:
-                connection.close()
-            except OSError:
-                record_cleanup("client_transport_close")
         try:
-            if server is not None:
-                server.close()
-        except OSError:
-            record_cleanup("listener_close")
-        if socket_identity is not None and not socket_unlinked:
-            try:
-                _unlink_owned_socket(root_fd, socket_identity)
-            except BrowserRuntimeError:
-                record_cleanup("socket_unlink")
-        try:
-            current = os.fstat(root_fd)
-            if (current.st_dev, current.st_ino) != root_identity:
-                record_cleanup("root_identity")
-        except OSError:
-            record_cleanup("root_identity")
-        try:
-            os.chmod(SUPERVISOR_OUTER_ROOT, 0o700)
-        except OSError:
-            record_cleanup("root_identity")
-        else:
-            for path in (SUPERVISOR_OUTER_AUTHORITY, SUPERVISOR_OUTER_CLIENT):
-                try:
-                    os.unlink(path.name, dir_fd=root_fd)
-                except FileNotFoundError:
-                    pass
-                except OSError:
-                    record_cleanup(
-                        "authority_record_unlink"
-                        if path == SUPERVISOR_OUTER_AUTHORITY
-                        else "client_record_unlink"
-                    )
-        try:
-            os.close(root_fd)
-        except OSError:
-            record_cleanup("root_descriptor_close")
-        if failure:
-            raise BrowserRuntimeError(
-                "browser_cleanup",
-                browser_cleanup_substage="private_supervisor_state",
-                browser_cleanup_check=cleanup_check,
+            _cleanup_private_supervisor_state(
+                root_fd=root_fd,
+                root_identity=root_identity,
+                server=server,
+                connection=connection,
+                socket_identity=socket_identity,
+                socket_unlinked=socket_unlinked,
+                initial_check=body_cleanup_check,
             )
+        except BrowserRuntimeError as cleanup_error:
+            raise cleanup_error from body_error
+    if body_error is not None:
+        raise body_error
 
 
 def main() -> int:

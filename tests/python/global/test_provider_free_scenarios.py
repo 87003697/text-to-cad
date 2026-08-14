@@ -947,6 +947,132 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 pass
         cleanup.assert_called_once_with(process)
 
+    def test_outer_supervisor_process_group_cleanup_boundaries_are_typed(self) -> None:
+        def run_case(expected_check: str) -> provider_free_scenarios.ScenarioError:
+            process = mock.MagicMock()
+            process.pid = 4242
+            process.wait.return_value = 0
+            kill_side_effect: list[BaseException | None] = [None]
+            group_side_effect: list[object] | object = True
+            if expected_check == "term_signal":
+                kill_side_effect = [OSError("term")]
+            elif expected_check == "leader_term_wait":
+                process.wait.side_effect = OSError("term wait")
+            elif expected_check == "term_group_empty":
+                group_side_effect = [OSError("proof"), True, True]
+            elif expected_check == "kill_signal":
+                kill_side_effect = [None, OSError("kill")]
+                group_side_effect = [False, False, True, True]
+            elif expected_check == "leader_kill_wait":
+                kill_side_effect = [None, None]
+                process.wait.side_effect = [subprocess.TimeoutExpired(["supervisor"], 1), OSError("kill wait")]
+                group_side_effect = [False, False, True, True]
+            else:
+                kill_side_effect = [None, None]
+                group_side_effect = False
+
+            monotonic_value = -2.0
+
+            def monotonic() -> float:
+                nonlocal monotonic_value
+                monotonic_value += 2.0
+                return monotonic_value
+
+            with (
+                mock.patch.object(provider_free_scenarios.os, "killpg", side_effect=kill_side_effect),
+                mock.patch.object(
+                    provider_free_scenarios,
+                    "_browser_supervisor_group_empty",
+                    side_effect=group_side_effect if isinstance(group_side_effect, list) else None,
+                    return_value=group_side_effect if isinstance(group_side_effect, bool) else mock.DEFAULT,
+                ),
+                mock.patch.object(provider_free_scenarios.time, "monotonic", side_effect=monotonic),
+                mock.patch.object(provider_free_scenarios.time, "sleep"),
+                self.assertRaises(provider_free_scenarios.ScenarioError) as raised,
+            ):
+                provider_free_scenarios._cleanup_browser_supervisor(process)
+            return raised.exception
+
+        for check in (
+            "term_signal",
+            "leader_term_wait",
+            "term_group_empty",
+            "kill_signal",
+            "leader_kill_wait",
+            "kill_group_empty",
+        ):
+            with self.subTest(check=check):
+                error = run_case(check)
+                self.assertEqual("preview_browser_cleanup", error.operation)
+                self.assertEqual("outer_supervisor_process_group", error.browser_cleanup_substage)
+                self.assertEqual(check, error.browser_cleanup_check)
+
+    def test_outer_supervisor_wait_and_private_state_boundaries_are_typed(self) -> None:
+        def invoke(expected_substage: str, expected_check: str) -> provider_free_scenarios.ScenarioError:
+            endpoint = self.repo / f"{expected_check}.sock"
+            authority_path = self.repo / f"{expected_check}.authority"
+            client_path = self.repo / f"{expected_check}.client"
+            result_path = self.repo / f"{expected_check}.result"
+            process = mock.MagicMock()
+            process.pid = 4242
+            process.poll.return_value = None
+
+            def wait(*, timeout: float) -> int:
+                if expected_check != "socket_absence" and endpoint.exists():
+                    endpoint.unlink()
+                if expected_check == "supervisor_wait":
+                    raise OSError("wait")
+                if expected_check == "supervisor_exit_status":
+                    process.returncode = 1
+                    return 1
+                process.returncode = 0
+                residue = {
+                    "socket_absence": endpoint,
+                    "authority_absence": authority_path,
+                    "client_absence": client_path,
+                }.get(expected_check)
+                if residue is not None and not residue.exists():
+                    residue.touch()
+                return 0
+
+            process.wait.side_effect = wait
+
+            def spawn(*_args: object, **_kwargs: object) -> mock.MagicMock:
+                endpoint.touch()
+                endpoint.chmod(0o600)
+                return process
+
+            with (
+                mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_SOCKET", endpoint),
+                mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_AUTHORITY", authority_path),
+                mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_CLIENT", client_path),
+                mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_RESULT", result_path),
+                mock.patch.object(provider_free_scenarios.subprocess, "Popen", side_effect=spawn),
+                mock.patch.object(provider_free_scenarios.stat, "S_ISSOCK", return_value=True),
+                mock.patch.object(provider_free_scenarios, "_load_supervisor_authority", return_value={"nonce": "a" * 64}),
+                mock.patch.object(provider_free_scenarios, "_probe_supervisor_peer"),
+                mock.patch.object(provider_free_scenarios, "_browser_supervisor_group_empty", return_value=True),
+                mock.patch.object(provider_free_scenarios, "_cleanup_browser_supervisor"),
+                self.assertRaises(provider_free_scenarios.ScenarioError) as raised,
+            ):
+                with self.browser_supervisor():
+                    pass
+            return raised.exception
+
+        cases = {
+            "supervisor_wait": "outer_supervisor_wait",
+            "supervisor_exit_status": "outer_supervisor_wait",
+            "socket_absence": "outer_supervisor_private_state",
+            "authority_absence": "outer_supervisor_private_state",
+            "client_absence": "outer_supervisor_private_state",
+        }
+        for check, substage in cases.items():
+            with self.subTest(check=check):
+                error = invoke(substage, check)
+                self.assertEqual("preview_browser_cleanup", error.operation)
+                self.assertEqual(substage, error.browser_cleanup_substage)
+                self.assertEqual(check, error.browser_cleanup_check)
+
     def test_deployed_viewer_receipt_proves_source_bundle_and_deployed_digests(self) -> None:
         receipt = provider_free_scenarios.deployed_viewer_receipt(self.repo)
 

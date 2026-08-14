@@ -1407,6 +1407,83 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             ).exists()
         )
 
+    def test_runner_accepts_manifest_bound_cleanup_diagnostic_end_to_end(self) -> None:
+        exp_dir = self.repo / "outputs" / self.handle
+
+        def fake_run(argv, **_kwargs):
+            if list(argv) == [os.fspath(self.bwrap), "--version"]:
+                return subprocess.CompletedProcess(argv, 0, stdout="bubblewrap 1.2.3\n")
+            run_dir = exp_dir / "run"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            diagnostic_path = run_dir / "browser-cleanup-diagnostic.json"
+            diagnostic_path.write_text(
+                json.dumps(
+                    {
+                        "schema": protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA,
+                        "substage": "private_supervisor_state",
+                        "check": "socket_unlink",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "scenario-failure.json").write_text(
+                json.dumps(
+                    {
+                        "schema": protocol.PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+                        "scenario_identity": "issue15.provider-free.runtime-authority/1",
+                        "stage": "native_measurement",
+                        "operation": "preview_browser_cleanup",
+                        "browser_cleanup_diagnostic": {
+                            "path": protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+                            "sha256": hashlib.sha256(
+                                diagnostic_path.read_bytes()
+                            ).hexdigest(),
+                        },
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (run_dir / "preview-public-wrapper-diagnostic.json").write_text(
+                json.dumps(
+                    {
+                        "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+                        "operation": "preview_browser_cleanup",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return subprocess.CompletedProcess(argv, 1)
+
+        with (
+            mock.patch.object(provider_free_runner, "REPO_ROOT", self.repo),
+            mock.patch.object(provider_free_runner.shutil, "which", return_value=os.fspath(self.bwrap)),
+            mock.patch.object(provider_free_runner.subprocess, "run", side_effect=fake_run),
+        ):
+            status = provider_free_runner.main(
+                ["run", "issue15-runtime-authority", self.group, self.exp],
+                environ=self.environment,
+            )
+
+        self.assertEqual(1, status)
+        manifest = json.loads(
+            (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(
+            {
+                protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+            }.issubset({entry["path"] for entry in manifest["files"]})
+        )
+
     def test_workload_launch_exception_cleans_host_browser_stage(self) -> None:
         def fail_workload(argv, **_kwargs):
             if list(argv) == [os.fspath(self.bwrap), "--version"]:

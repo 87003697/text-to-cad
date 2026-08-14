@@ -227,6 +227,8 @@ def _materialize_outer_browser_stage() -> None:
         raise ScenarioError(
             "private browser staging cleanup failed",
             operation="preview_browser_cleanup",
+            browser_cleanup_substage="private_browser_pinned_image",
+            browser_cleanup_check="executable_descriptor_close",
         ) from exc
     except cvm_runtime.BrowserStageError as exc:
         raise ScenarioError(
@@ -254,6 +256,8 @@ def _materialize_outer_browser_stage() -> None:
             raise ScenarioError(
                 "private browser staging cleanup failed",
                 operation="preview_browser_cleanup",
+                browser_cleanup_substage="private_browser_pinned_image",
+                browser_cleanup_check="executable_descriptor_close",
             )
 BROWSER_EXEC_PROBE_ENVIRONMENT = {
     "HOME": "/nonexistent",
@@ -719,11 +723,21 @@ def _run_public(
             except BaseException:
                 try:
                     process.kill()
+                except BaseException as cleanup_exc:
+                    raise ScenarioError(
+                        "public command cleanup failed",
+                        operation="preview_browser_cleanup",
+                        browser_cleanup_substage="outer_supervisor_process_group",
+                        browser_cleanup_check="kill_signal",
+                    ) from cleanup_exc
+                try:
                     process.communicate(timeout=5.0)
                 except BaseException as cleanup_exc:
                     raise ScenarioError(
                         "public command cleanup failed",
                         operation="preview_browser_cleanup",
+                        browser_cleanup_substage="outer_supervisor_process_group",
+                        browser_cleanup_check="leader_kill_wait",
                     ) from cleanup_exc
                 raise
             completed = subprocess.CompletedProcess(
@@ -1089,6 +1103,8 @@ class _BrowserSupervisorSession:
                     raise ScenarioError(
                         "provider-free browser supervisor client cleanup failed",
                         operation="preview_browser_cleanup",
+                        browser_cleanup_substage="private_supervisor_state",
+                        browser_cleanup_check="client_record_unlink",
                     ) from exc
         self._registered = True
 
@@ -2183,10 +2199,20 @@ def _run_voxblame_preview(
                     process_started=process_started,
                 )
         except ScenarioError as exc:
-            renderer_operation = operations.get(exc.classification)
-            public_operation = public_failure_operations.get(exc.classification)
-            if renderer_operation is None and public_operation is None:
-                public_operation = "preview_public_unclassified_exit"
+            if (
+                exc.operation == "preview_browser_cleanup"
+                and provider_free_browser_cleanup_pair_allowed(
+                    exc.browser_cleanup_substage,
+                    exc.browser_cleanup_check,
+                )
+            ):
+                renderer_operation = "preview_browser_cleanup"
+                public_operation = None
+            else:
+                renderer_operation = operations.get(exc.classification)
+                public_operation = public_failure_operations.get(exc.classification)
+                if renderer_operation is None and public_operation is None:
+                    public_operation = "preview_public_unclassified_exit"
             if is_linux:
                 try:
                     _publish_browser_exec_diagnostic(

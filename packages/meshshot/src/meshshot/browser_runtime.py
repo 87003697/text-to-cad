@@ -3589,13 +3589,13 @@ class PrelaunchedCdpRuntime:
                     retained=True,
                 )
         if self._profile_dir is not None:
+            quarantine: Path | None = None
             if getattr(self, "_profile_cleanup_forbidden", False):
                 record_cleanup(
                     "private_browser_profile",
                     "authority_validation",
                 )
             else:
-                quarantine: Path | None = None
                 quarantine_fd: int | None = None
                 profile_stage = "authority_validation"
                 try:
@@ -3678,7 +3678,10 @@ class PrelaunchedCdpRuntime:
                         )
                     setattr(self, attribute, None)
             if not getattr(self, "_profile_cleanup_forbidden", False):
-                if os.path.lexists(self._profile_dir):
+                retained_paths = [self._profile_dir]
+                if quarantine is not None:
+                    retained_paths.extend((quarantine, quarantine / "profile"))
+                if any(os.path.lexists(path) for path in retained_paths):
                     record_cleanup(
                         "private_browser_profile",
                         "absence",

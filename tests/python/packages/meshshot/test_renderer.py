@@ -348,6 +348,104 @@ class ResidualRendererTests(unittest.TestCase):
         self.assertEqual("private_supervisor_state", raised.exception.browser_cleanup_substage)
         self.assertEqual("authority_record_unlink", raised.exception.browser_cleanup_check)
 
+    def test_private_supervisor_state_cleanup_seven_boundaries_and_dominance(self) -> None:
+        from meshshot import browser_supervisor
+        from meshshot.browser_runtime import BrowserRuntimeError
+
+        for expected_check in (
+            "client_transport_close",
+            "listener_close",
+            "socket_unlink",
+            "root_identity",
+            "authority_record_unlink",
+            "client_record_unlink",
+            "root_descriptor_close",
+        ):
+            with self.subTest(check=expected_check), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                authority = root / "authority.json"
+                client = root / "client.json"
+                endpoint = root / "authority.sock"
+                root_fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                info = os.fstat(root_fd)
+                connection = mock.MagicMock() if expected_check == "client_transport_close" else None
+                server = mock.MagicMock() if expected_check == "listener_close" else None
+                socket_identity = (1, 2) if expected_check == "socket_unlink" else None
+                stack = ExitStack()
+                self.addCleanup(stack.close)
+                stack.enter_context(
+                    mock.patch.object(browser_supervisor, "SUPERVISOR_OUTER_ROOT", root)
+                )
+                stack.enter_context(
+                    mock.patch.object(browser_supervisor, "SUPERVISOR_OUTER_AUTHORITY", authority)
+                )
+                stack.enter_context(
+                    mock.patch.object(browser_supervisor, "SUPERVISOR_OUTER_CLIENT", client)
+                )
+                stack.enter_context(
+                    mock.patch.object(browser_supervisor, "SUPERVISOR_OUTER_SOCKET", endpoint)
+                )
+                if connection is not None:
+                    connection.close.side_effect = OSError("connection close")
+                if server is not None:
+                    server.close.side_effect = OSError("listener close")
+                if expected_check == "socket_unlink":
+                    endpoint.touch()
+                    stack.enter_context(
+                        mock.patch.object(
+                            browser_supervisor,
+                            "_unlink_owned_socket",
+                            side_effect=BrowserRuntimeError("browser_cleanup"),
+                        )
+                    )
+                if expected_check == "root_identity":
+                    stack.enter_context(
+                        mock.patch.object(
+                            browser_supervisor.os,
+                            "fstat",
+                            return_value=mock.Mock(st_dev=info.st_dev, st_ino=info.st_ino + 1),
+                        )
+                    )
+                if expected_check in {"authority_record_unlink", "client_record_unlink"}:
+                    target = authority if expected_check.startswith("authority") else client
+                    target.touch()
+                    real_unlink = os.unlink
+
+                    def fail_target(path: object, *, dir_fd: int | None = None) -> None:
+                        if path == target.name:
+                            raise OSError("record unlink")
+                        real_unlink(path, dir_fd=dir_fd)
+
+                    stack.enter_context(
+                        mock.patch.object(browser_supervisor.os, "unlink", side_effect=fail_target)
+                    )
+                if expected_check == "root_descriptor_close":
+                    real_close = os.close
+
+                    def close_then_fail(value: int) -> None:
+                        real_close(value)
+                        raise OSError("root close")
+
+                    stack.enter_context(
+                        mock.patch.object(browser_supervisor.os, "close", side_effect=close_then_fail)
+                    )
+                with stack, self.assertRaises(BrowserRuntimeError) as raised:
+                    browser_supervisor._cleanup_private_supervisor_state(
+                        root_fd=root_fd,
+                        root_identity=(info.st_dev, info.st_ino),
+                        server=server,
+                        connection=connection,
+                        socket_identity=socket_identity,
+                        socket_unlinked=False,
+                        initial_check=(
+                            "listener_close"
+                            if expected_check == "socket_unlink"
+                            else None
+                        ),
+                    )
+                self.assertEqual("private_supervisor_state", raised.exception.browser_cleanup_substage)
+                self.assertEqual(expected_check, raised.exception.browser_cleanup_check)
+
     def test_supervisor_protocol_rejects_duplicate_unknown_and_oversize_packets(
         self,
     ) -> None:
