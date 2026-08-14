@@ -553,6 +553,66 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             )
             self.assertNotIn(root_text, result.stderr)
 
+    def test_prepare_operation_failure_after_cleanup_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-prepare-operation-") as root_text:
+            root = Path(root_text)
+            repo = root / "repo"
+            wrapper = copy_cli(repo)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            write_image_docker(fake_bin / "docker")
+            (root / "sitecustomize.py").write_text(
+                textwrap.dedent(
+                    """\
+                    import os
+
+                    original_replace = os.replace
+                    failed = False
+
+                    def bounded_replace(source, destination):
+                        global failed
+                        if not failed and os.fspath(destination).endswith("/images.tar"):
+                            failed = True
+                            raise OSError(5, "forbidden raw replace detail", destination)
+                        return original_replace(source, destination)
+
+                    os.replace = bounded_replace
+                    """
+                ),
+                encoding="utf-8",
+            )
+            env = cli_env(fake_bin)
+            env["PYTHONPATH"] = os.fspath(root)
+
+            result = subprocess.run(
+                [
+                    wrapper,
+                    "prepare",
+                    "--source-revision",
+                    SOURCE_REVISION,
+                    "--sidecar-image",
+                    SIDECAR_ID,
+                    "--client-image",
+                    CLIENT_ID,
+                ],
+                cwd=repo,
+                env=env,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(
+                result.stderr,
+                "cvm-sidecar-probe: prepare operation failed\n",
+            )
+            self.assertEqual(result.stdout, "")
+            self.assertNotIn("forbidden raw replace detail", result.stderr)
+            self.assertNotIn(root_text, result.stderr)
+            self.assertFalse((repo / ".cvm-sidecar-probes").exists())
+
     def test_provision_rejects_mutated_local_archive_before_transfer(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-local-tamper-") as root_text:
             root = Path(root_text)
