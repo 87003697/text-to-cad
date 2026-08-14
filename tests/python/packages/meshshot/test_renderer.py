@@ -154,6 +154,38 @@ class ResidualRendererTests(unittest.TestCase):
                 nonce="b" * 64,
             )
 
+    def test_supervisor_entry_unblocks_inherited_runtime_signals_before_run(
+        self,
+    ) -> None:
+        from meshshot import browser_supervisor
+
+        calls: list[object] = []
+        with (
+            mock.patch.object(
+                browser_supervisor.signal,
+                "pthread_sigmask",
+                side_effect=lambda how, mask: calls.append((how, set(mask))),
+                create=True,
+            ),
+            mock.patch.object(
+                browser_supervisor,
+                "run",
+                side_effect=lambda: calls.append("run"),
+            ),
+        ):
+            self.assertEqual(0, browser_supervisor.main())
+
+        self.assertEqual(
+            [
+                (
+                    signal.SIG_UNBLOCK,
+                    {signal.SIGINT, signal.SIGTERM},
+                ),
+                "run",
+            ],
+            calls,
+        )
+
     def test_owned_socket_cleanup_rejects_replacement_without_deleting_it(self) -> None:
         from meshshot import browser_supervisor
 

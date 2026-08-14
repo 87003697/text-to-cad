@@ -32,6 +32,28 @@ except IndexError:
     "requires the controlled Linux noexec-/tmp + exec-root harness",
 )
 class LinuxPrivateSnapshotExecutionTests(unittest.TestCase):
+    def test_production_shaped_double_bwrap_public_render_and_cleanup(self) -> None:
+        from production_shaped_supervised_render import run
+
+        result = run()
+        self.assertEqual("permission", result["old_nested_owner"])
+        self.assertEqual("passed", result["supervised_public_render"])
+        self.assertEqual(0, result["nested_browser_popen_count"])
+        self.assertEqual("passed", result["completion_shutdown"])
+        self.assertEqual("passed", result["supervisor_cleanup"])
+
+    def test_supervisor_term_cleans_separate_browser_group_and_private_state(
+        self,
+    ) -> None:
+        from production_shaped_supervised_render import run_signal_cleanup
+
+        result = run_signal_cleanup()
+        self.assertEqual("passed", result["supervisor_reaped"])
+        self.assertEqual("passed", result["browser_group_empty"])
+        self.assertEqual("passed", result["profile_removed"])
+        self.assertEqual("passed", result["private_tree_removed"])
+        self.assertEqual("passed", result["socket_removed"])
+
     def test_fixed_seqpacket_authority_crosses_read_only_nested_bind(self) -> None:
         if not Path("/usr/bin/bwrap").is_file():
             self.skipTest("controlled Linux image lacks the existing bwrap runtime")
@@ -552,6 +574,12 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
                 (
                     REPO_ROOT / "packages/meshshot/src/meshshot/browser_supervisor.py",
                     "/browser_supervisor.py",
+                ),
+                (
+                    REPO_ROOT
+                    / "tests/python/packages/meshshot/fixtures/"
+                    "production_shaped_supervised_render.py",
+                    "/production_shaped_supervised_render.py",
                 ),
                 (Path(__file__), "/test_linux_private_snapshot_exec.py"),
             ):
