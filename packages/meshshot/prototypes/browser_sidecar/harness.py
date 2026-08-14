@@ -7,6 +7,9 @@ import argparse
 from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
+import secrets
+import signal
 import subprocess
 import time
 from typing import Any
@@ -16,11 +19,28 @@ PREFIX = "meshshot-sidecar-prototype-harness"
 SIDECAR_TAG = "meshshot-sidecar-prototype:final"
 AGENT_TAG = "meshshot-sidecar-agent-client-prototype:final"
 LEGACY_TAG = "meshshot-sidecar-legacy-parity-prototype:final"
-LEGACY_SOURCE_REVISION = "7e9fbbd15a365d5df691a79b0d2352492888d361"
+OWNERSHIP_LABEL = "io.text-to-cad.prototype-harness-owner"
+RESOURCE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
+REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 class HarnessError(RuntimeError):
     pass
+
+
+class HarnessInterrupted(HarnessError):
+    pass
+
+
+@dataclass
+class InterruptState:
+    signal_name: str | None = None
+    cleanup_started: bool = False
+
+    def handle(self, signum: int, _frame: Any) -> None:
+        self.signal_name = signal.Signals(signum).name
+        if not self.cleanup_started:
+            raise HarnessInterrupted(f"received {self.signal_name}")
 
 
 @dataclass
@@ -66,6 +86,9 @@ class Harness:
         self.commands: list[dict[str, Any]] = []
         self.ledger = ExactResourceLedger()
         self.detached_runs: list[DetachedRun] = []
+        self.ownership_token = secrets.token_hex(16)
+        self.pending_container_names: set[str] = set()
+        self.pending_network_names: set[str] = set()
         self.source_revision = subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=repo, text=True
         ).strip()
@@ -113,10 +136,97 @@ class Harness:
             "labels": inspected["Config"].get("Labels") or {},
         }
 
+    def verify_clean_source(self) -> None:
+        completed = subprocess.run(
+            ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+            cwd=self.repo,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+        )
+        if completed.returncode:
+            raise HarnessError(f"git status failed: {completed.stderr.strip()}")
+        if completed.stdout:
+            raise HarnessError(
+                "default build requires a clean tracked and untracked source tree:\n"
+                f"{completed.stdout}"
+            )
+
+    def _inspect_owned_resource(self, kind: str, name: str) -> tuple[str, str | None]:
+        inspected = self.run(kind, "inspect", name, check=False, timeout=30)
+        if inspected.returncode:
+            return "missing", None
+        try:
+            record = json.loads(inspected.stdout)[0]
+            resource_id = record["Id"]
+            actual_name = record["Name"]
+            if kind == "container":
+                labels = record["Config"].get("Labels") or {}
+            else:
+                labels = record.get("Labels") or {}
+        except (IndexError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise HarnessError(f"invalid {kind} identity receipt for {name}: {exc}") from exc
+        expected_name = f"/{name}" if kind == "container" else name
+        if not isinstance(resource_id, str) or not RESOURCE_ID_RE.fullmatch(resource_id):
+            raise HarnessError(f"invalid {kind} ID for {name}: {resource_id!r}")
+        if actual_name != expected_name or labels.get(OWNERSHIP_LABEL) != self.ownership_token:
+            return "foreign", resource_id
+        return "owned", resource_id
+
+    def _create_owned_resource(self, kind: str, name: str, *args: str) -> str:
+        pending = self.pending_container_names if kind == "container" else self.pending_network_names
+        pending.add(name)
+        create_error: Exception | None = None
+        completed: subprocess.CompletedProcess[str] | None = None
+        command = (
+            ("create", "--name", name, "--label", f"{OWNERSHIP_LABEL}={self.ownership_token}", *args)
+            if kind == "container"
+            else ("network", "create", "--label", f"{OWNERSHIP_LABEL}={self.ownership_token}", *args, name)
+        )
+        try:
+            completed = self.run(*command, check=False)
+        except Exception as exc:
+            create_error = exc
+
+        status, resource_id = self._inspect_owned_resource(kind, name)
+        if status == "foreign":
+            pending.discard(name)
+            raise HarnessError(f"refusing to adopt foreign {kind} with deterministic name {name}")
+        if status == "missing" or resource_id is None:
+            pending.discard(name)
+            if create_error is not None:
+                raise HarnessError(f"{kind} create failed before owned identity recovery: {create_error}") from create_error
+            assert completed is not None
+            raise HarnessError(
+                f"{kind} create did not yield an owned resource ({completed.returncode}): "
+                f"{completed.stderr.strip()}"
+            )
+
+        output_id = completed.stdout.strip() if completed is not None else ""
+        if output_id and output_id != resource_id:
+            raise HarnessError(
+                f"{kind} create/inspect identity mismatch for {name}: {output_id!r} != {resource_id!r}"
+            )
+        if kind == "container":
+            self.ledger.register_container(name=name, resource_id=resource_id)
+        else:
+            self.ledger.register_network(name=name, resource_id=resource_id)
+        pending.discard(name)
+        return resource_id
+
+    def create_network(self, name: str, *args: str) -> str:
+        return self._create_owned_resource("network", name, *args)
+
     def cleanup_all(self) -> dict[str, Any]:
         failures: list[dict[str, Any]] = []
 
-        def attempt(kind: str, resource_id: str, *args: str) -> None:
+        def attempt(
+            kind: str,
+            resource_id: str,
+            *args: str,
+            record_nonzero: bool = True,
+        ) -> subprocess.CompletedProcess[str] | None:
             try:
                 completed = self.run(*args, check=False)
             except Exception as exc:
@@ -127,13 +237,63 @@ class Harness:
                     "exitCode": None,
                     "stderr": str(exc),
                 })
-                return
-            if completed.returncode:
+                return None
+            if record_nonzero and completed.returncode:
                 failures.append({"kind": kind, "id": resource_id, "argv": list(args), "exitCode": completed.returncode, "stderr": completed.stderr.strip()})
+            return completed
+
+        def recover_pending(kind: str, names: set[str]) -> None:
+            for name in sorted(tuple(names)):
+                try:
+                    status, resource_id = self._inspect_owned_resource(kind, name)
+                except Exception as exc:
+                    failures.append({
+                        "kind": kind,
+                        "id": name,
+                        "argv": [kind, "inspect", name],
+                        "exitCode": None,
+                        "stderr": str(exc),
+                    })
+                    continue
+                if status == "owned" and resource_id is not None:
+                    try:
+                        if kind == "container":
+                            self.ledger.register_container(name=name, resource_id=resource_id)
+                        else:
+                            self.ledger.register_network(name=name, resource_id=resource_id)
+                    except Exception as exc:
+                        failures.append({
+                            "kind": kind,
+                            "id": resource_id,
+                            "argv": ["ledger", "register", kind, name],
+                            "exitCode": None,
+                            "stderr": str(exc),
+                        })
+                        continue
+                    names.discard(name)
+                elif status == "missing":
+                    names.discard(name)
+                else:
+                    failures.append({
+                        "kind": kind,
+                        "id": resource_id or name,
+                        "argv": [kind, "inspect", name],
+                        "exitCode": None,
+                        "stderr": f"refusing to adopt foreign {kind} named {name}",
+                    })
+                    names.discard(name)
+
+        recover_pending("container", self.pending_container_names)
+        recover_pending("network", self.pending_network_names)
 
         for item in reversed(self.ledger.containers):
-            running = self.run("container", "inspect", item.resource_id, "--format", "{{.State.Running}}", check=False)
-            if running.returncode == 0 and running.stdout.strip() == "true":
+            running = attempt(
+                item.kind,
+                item.resource_id,
+                "container", "inspect", item.resource_id, "--format", "{{.State.Running}}",
+                record_nonzero=False,
+            )
+            if running is not None and running.returncode == 0 and running.stdout.strip() == "true":
                 attempt(item.kind, item.resource_id, "stop", item.resource_id)
             attempt(item.kind, item.resource_id, "rm", item.resource_id)
         for item in reversed(self.ledger.networks):
@@ -151,19 +311,46 @@ class Harness:
 
         absence_proofs: list[dict[str, Any]] = []
         for item in self.ledger.containers:
-            inspected = self.run("container", "inspect", item.resource_id, check=False)
-            absence_proofs.append({"kind": item.kind, "name": item.name, "id": item.resource_id, "absent": inspected.returncode != 0})
+            inspected = attempt(
+                item.kind,
+                item.resource_id,
+                "container", "inspect", item.resource_id,
+                record_nonzero=False,
+            )
+            absence_proofs.append({
+                "kind": item.kind,
+                "name": item.name,
+                "id": item.resource_id,
+                "absent": inspected is not None and inspected.returncode != 0,
+                "inspectionError": inspected is None,
+            })
         for item in self.ledger.networks:
-            inspected = self.run("network", "inspect", item.resource_id, check=False)
-            absence_proofs.append({"kind": item.kind, "name": item.name, "id": item.resource_id, "absent": inspected.returncode != 0})
+            inspected = attempt(
+                item.kind,
+                item.resource_id,
+                "network", "inspect", item.resource_id,
+                record_nonzero=False,
+            )
+            absence_proofs.append({
+                "kind": item.kind,
+                "name": item.name,
+                "id": item.resource_id,
+                "absent": inspected is not None and inspected.returncode != 0,
+                "inspectionError": inspected is None,
+            })
         return {
             "resources": [vars(item) for item in [*self.ledger.containers, *self.ledger.networks]],
             "failures": failures,
             "firstFailure": failures[0] if failures else None,
             "absenceProofs": absence_proofs,
+            "pendingNames": {
+                "containers": sorted(self.pending_container_names),
+                "networks": sorted(self.pending_network_names),
+            },
         }
 
     def build(self) -> dict[str, str]:
+        self.verify_clean_source()
         dockerfile = "packages/meshshot/prototypes/browser_sidecar/Dockerfile"
         agent_dockerfile = "packages/meshshot/prototypes/browser_sidecar/Dockerfile.agent"
         legacy_dockerfile = "packages/meshshot/prototypes/browser_sidecar/Dockerfile.legacy"
@@ -215,10 +402,9 @@ class Harness:
         job_id = suffix.replace("_", "-")
         network = f"{PREFIX}-{suffix}"
         container = f"{network}-sidecar"
-        network_id = self.run("network", "create", "--internal", network).stdout.strip()
-        self.ledger.register_network(name=network, resource_id=network_id)
-        container_id = self.run(
-            "create", "--name", container,
+        network_id = self.create_network(network, "--internal")
+        container_id = self.create_container(
+            container,
             "--network", network, "--network-alias", "sidecar",
             "--pull", "never", "--platform", "linux/amd64",
             "--read-only", "--init", "--cap-drop", "ALL",
@@ -228,8 +414,7 @@ class Harness:
             "--tmpfs", "/tmp:rw,nosuid,nodev,size=128m,mode=1777",
             "--tmpfs", "/home/pwuser:rw,nosuid,nodev,size=64m,uid=1001,gid=1001,mode=700",
             "-e", f"BROWSER_SIDECAR_JOB_ID={job_id}", SIDECAR_TAG,
-        ).stdout.strip()
-        self.ledger.register_container(name=container, resource_id=container_id)
+        )
         self.run("start", container_id)
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
@@ -240,9 +425,7 @@ class Harness:
         raise HarnessError(f"sidecar did not become ready: {container}")
 
     def create_container(self, name: str, *args: str) -> str:
-        container_id = self.run("create", "--name", name, *args).stdout.strip()
-        self.ledger.register_container(name=name, resource_id=container_id)
-        return container_id
+        return self._create_owned_resource("container", name, *args)
 
     def start_attached(self, container_id: str, request: dict[str, Any], *, timeout: int = 600) -> subprocess.CompletedProcess[str]:
         command = [*self.docker, "start", "-a", "-i", container_id]
@@ -269,13 +452,25 @@ class Harness:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        if process.stdin is None:
-            raise HarnessError("detached client stdin was not captured")
-        process.stdin.write(json.dumps(request, sort_keys=True, separators=(",", ":")))
-        process.stdin.close()
-        process.stdin = None
         detached = DetachedRun(name=name, container_id=container_id, command=command, process=process, started=time.monotonic())
         self.detached_runs.append(detached)
+        if process.stdin is None:
+            raise HarnessError("detached client stdin was not captured")
+        write_error: Exception | None = None
+        try:
+            process.stdin.write(json.dumps(request, sort_keys=True, separators=(",", ":")))
+        except Exception as exc:
+            write_error = exc
+        finally:
+            try:
+                process.stdin.close()
+            except Exception:
+                if write_error is None:
+                    raise
+            finally:
+                process.stdin = None
+        if write_error is not None:
+            raise write_error
         return detached
 
     def finish_detached(self, run: DetachedRun, *, timeout: int = 120) -> tuple[str, str]:
@@ -348,6 +543,24 @@ def hold_request(own: str, peer: str, *, two_triangles: bool) -> dict[str, Any]:
     })
 
 
+def validate_image_revisions(
+    images: dict[str, dict[str, Any]],
+    expected_revisions: dict[str, str],
+) -> None:
+    expected_names = {"sidecar", "agent", "legacy"}
+    if set(images) != expected_names or set(expected_revisions) != expected_names:
+        raise HarnessError("image revision validation requires exact sidecar/agent/legacy keys")
+    for name in sorted(expected_names):
+        revision = expected_revisions[name]
+        if not REVISION_RE.fullmatch(revision):
+            raise HarnessError(f"invalid expected {name} source revision: {revision!r}")
+        actual = images[name].get("labels", {}).get("org.opencontainers.image.revision")
+        if actual != revision:
+            raise HarnessError(
+                f"{name} OCI source revision mismatch: expected {revision}, got {actual}"
+            )
+
+
 def predicate_matrix(evidence: dict[str, Any]) -> dict[str, bool]:
     def get(*path: str, default: Any = None) -> Any:
         value: Any = evidence
@@ -358,12 +571,8 @@ def predicate_matrix(evidence: dict[str, Any]) -> dict[str, bool]:
         return value
 
     images = get("p0", "images", default={})
-    expected_revisions = {
-        "sidecar": get("sourceRevision"),
-        "agent": get("sourceRevision"),
-        "legacy": LEGACY_SOURCE_REVISION,
-    }
-    labels_ok = set(images) == set(expected_revisions) and all(
+    expected_revisions = get("p0", "expectedRevisions", default={})
+    labels_ok = bool(images) and set(images) == set(expected_revisions) and all(
         metadata.get("labels", {}).get("org.opencontainers.image.revision") == expected_revisions[name]
         and metadata.get("labels", {}).get("io.text-to-cad.source-base") == get("baseRevision")
         and metadata.get("labels", {}).get("io.text-to-cad.review-parent") == "629eaec232ab2816466dafb5182a1bb4fe66295d"
@@ -485,6 +694,9 @@ def main() -> int:
     parser.add_argument("--expected-sidecar-id")
     parser.add_argument("--expected-agent-id")
     parser.add_argument("--expected-legacy-id")
+    parser.add_argument("--expected-sidecar-revision")
+    parser.add_argument("--expected-agent-revision")
+    parser.add_argument("--expected-legacy-revision")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[4]
     args.evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -497,6 +709,11 @@ def main() -> int:
         "playwrightBaseAmd64Digest": "sha256:83192064c7510f7ee73dd63dc5f22a5e01a92c81a2e6a9c715d9e3fe55471fd9",
     }
     execution_error: dict[str, Any] | None = None
+    interrupt_state = InterruptState()
+    previous_handlers = {
+        signum: signal.signal(signum, interrupt_state.handle)
+        for signum in (signal.SIGINT, signal.SIGTERM)
+    }
     try:
         image_ids = harness.build() if not args.skip_build else {
             "sidecar": harness.image_digest(SIDECAR_TAG),
@@ -510,7 +727,7 @@ def main() -> int:
                 "legacy": args.expected_legacy_id,
             }
             if not all(
-                isinstance(image_id, str) and image_id.startswith("sha256:")
+                isinstance(image_id, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", image_id)
                 for image_id in expected_image_ids.values()
             ):
                 raise HarnessError(
@@ -521,13 +738,34 @@ def main() -> int:
                     "--skip-build image identity mismatch: "
                     f"expected {expected_image_ids}, got {image_ids}"
                 )
+            expected_revisions = {
+                "sidecar": args.expected_sidecar_revision,
+                "agent": args.expected_agent_revision,
+                "legacy": args.expected_legacy_revision,
+            }
+            if not all(
+                isinstance(revision, str) and REVISION_RE.fullmatch(revision)
+                for revision in expected_revisions.values()
+            ):
+                raise HarnessError(
+                    "--skip-build requires all three --expected-*-revision values as 40-hex revisions"
+                )
+        else:
+            expected_revisions = {
+                "sidecar": harness.source_revision,
+                "agent": harness.source_revision,
+                "legacy": harness.source_revision,
+            }
+        images = {name: harness.image_metadata(tag) for name, tag in {
+            "sidecar": SIDECAR_TAG,
+            "agent": AGENT_TAG,
+            "legacy": LEGACY_TAG,
+        }.items()}
+        validate_image_revisions(images, expected_revisions)
         evidence["p0"] = {
             "imageIds": image_ids,
-            "images": {name: harness.image_metadata(tag) for name, tag in {
-                "sidecar": SIDECAR_TAG,
-                "agent": AGENT_TAG,
-                "legacy": LEGACY_TAG,
-            }.items()},
+            "expectedRevisions": expected_revisions,
+            "images": images,
         }
 
         suite_request = render_request("suite", {
@@ -614,19 +852,54 @@ def main() -> int:
         execution_error = {"type": type(exc).__name__, "message": str(exc)}
         evidence["executionError"] = execution_error
     finally:
-        evidence["cleanup"] = harness.cleanup_all()
-        evidence["residue"] = {
-            "containers": harness.run("ps", "-a", "--filter", f"name={PREFIX}", "--format", "{{.Names}}").stdout.splitlines(),
-            "networks": harness.run("network", "ls", "--filter", f"name={PREFIX}", "--format", "{{.Name}}").stdout.splitlines(),
-        }
-        evidence["predicates"] = predicate_matrix(evidence)
-        evidence["predicates"]["execution.completed_without_error"] = execution_error is None
-        evidence["verdict"] = "ADOPT" if all(evidence["predicates"].values()) else "REJECT"
-        evidence["commands"] = harness.commands
-        evidence["finishedAtUnix"] = time.time()
-        output = args.evidence_dir / "evidence.json"
-        output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf8")
-        print(output)
+        interrupt_state.cleanup_started = True
+        try:
+            try:
+                evidence["cleanup"] = harness.cleanup_all()
+            except Exception as exc:
+                evidence["cleanup"] = {
+                    "resources": [vars(item) for item in [*harness.ledger.containers, *harness.ledger.networks]],
+                    "failures": [{
+                        "kind": "cleanup",
+                        "id": "central",
+                        "argv": [],
+                        "exitCode": None,
+                        "stderr": str(exc),
+                    }],
+                    "firstFailure": {"kind": "cleanup", "id": "central", "stderr": str(exc)},
+                    "absenceProofs": [],
+                    "pendingNames": {
+                        "containers": sorted(harness.pending_container_names),
+                        "networks": sorted(harness.pending_network_names),
+                    },
+                }
+            residue: dict[str, list[str]] = {}
+            residue_errors: dict[str, str] = {}
+            for kind, command in {
+                "containers": ("ps", "-a", "--filter", f"name={PREFIX}", "--format", "{{.Names}}"),
+                "networks": ("network", "ls", "--filter", f"name={PREFIX}", "--format", "{{.Name}}"),
+            }.items():
+                try:
+                    residue[kind] = harness.run(*command).stdout.splitlines()
+                except Exception as exc:
+                    residue[kind] = ["<inspection-error>"]
+                    residue_errors[kind] = str(exc)
+            evidence["residue"] = residue
+            if residue_errors:
+                evidence["residueErrors"] = residue_errors
+            if interrupt_state.signal_name is not None:
+                evidence["interruptionSignal"] = interrupt_state.signal_name
+            evidence["predicates"] = predicate_matrix(evidence)
+            evidence["predicates"]["execution.completed_without_error"] = execution_error is None
+            evidence["verdict"] = "ADOPT" if all(evidence["predicates"].values()) else "REJECT"
+            evidence["commands"] = harness.commands
+            evidence["finishedAtUnix"] = time.time()
+            output = args.evidence_dir / "evidence.json"
+            output.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf8")
+            print(output)
+        finally:
+            for signum, previous in previous_handlers.items():
+                signal.signal(signum, previous)
     return 0 if evidence.get("verdict") == "ADOPT" else 1
 
 
