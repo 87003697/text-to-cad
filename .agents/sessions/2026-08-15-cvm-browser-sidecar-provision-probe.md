@@ -64,6 +64,13 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
    engine-dependent `inspect Config` display was non-portable and that archive
    manifests were not bound to the exact config blobs. GREEN
    `3f6274d1090fc53c5023e20b7e61bcc89f2db279` closes only that portability seam.
+9. R5 Standards review rejected its new tar parser as unnecessary attack
+   surface because no public archive input exists. R6 RED
+   `66ad21a1c17b84858d5870d525af1357526ef59e` proved the desired opaque archive
+   boundary and exposed raw prepare-cleanup failure. R6 GREEN
+   `faa23e5c8a482a4ee1c017cca9e92f028c90c677` deletes the parser, preserves the
+   ID-derived config identity, and adds bounded exact prepare cleanup. It did
+   not contact CVM or touch either terminal handle.
 
 ## Session 产出
 
@@ -81,6 +88,8 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
 | `1ee713d0e00e2b0510c7cce577786cccb9801491` R4 GREEN | skill, module, tests | Pre-transfer archive-capacity and fixed Docker gates; bounded persisted failure receipts and strict public receipt/SSH binding. |
 | `0bf90944374941466dbe7ca3a4efea39d652a77b` R5 RED | focused global tests | Same ID produced different config hashes across inspect display shapes; invalid archive config manifests were accepted. |
 | `3f6274d1090fc53c5023e20b7e61bcc89f2db279` R5 GREEN | skill, module, tests | ID-derived immutable config digest; safe read-only docker-save manifest/config-blob binding and fresh-state cleanup. |
+| `66ad21a1c17b84858d5870d525af1357526ef59e` R6 RED | focused global tests | Opaque fixed-save bytes were rejected; cleanup failure leaked an unbounded exception. Local archive mutation already failed before transfer. |
+| `faa23e5c8a482a4ee1c017cca9e92f028c90c677` R6 GREEN | skill, module, tests | Removed tar parser; retained whole-archive attestation and authoritative post-load identity proof; bounded exact prepare cleanup. |
 
 ### 核心行为
 
@@ -95,10 +104,11 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
   client. Receipt stores archive bytes/SHA-256 and each full config SHA-256.
 - `configSha256` means exactly the 64-hex config digest in the immutable image
   ID; it is never recomputed from Docker's version-dependent `inspect Config`
-  display. This clarified semantic retains receipt schema v1. Prepare reads the
-  uncompressed docker-save tar without extraction, rejects unsafe member paths,
-  and requires one bounded manifest plus exactly two unique expected bounded
-  config blobs whose content hashes match their paths and image IDs.
+  display. This clarified semantic retains receipt schema v1. The fixed local
+  Docker save is intentionally opaque: callers cannot supply archive bytes or
+  paths, the whole archive bytes/size/SHA are attested and rechecked locally
+  before transfer, and remote Docker load followed by exact ID/platform/
+  revision verification is the authoritative config proof.
 - `provision` creates a local and remote one-shot claim before transfer. Its
   wrapper performs one explicit no-delete rsync to a computed handle path,
   remote-verifies hash/size before `docker image load`, then re-inspects both
@@ -201,6 +211,17 @@ R5 final validation:
 - `git diff --check` and staged diff check → exit 0.
 - External/CVM operations: **zero**; incremental spend: **$0**.
 
+R6 final validation:
+
+- RED focused seams → **3 tests: 2 expected failures, 1 existing pass**.
+- Focused suite → **33 tests, OK**.
+- Global gate with the project virtualenv and local loopback permission →
+  **184 tests, OK**.
+- `python3 -m py_compile` for the module and focused test → exit 0.
+- `git diff --check` and staged diff check → exit 0.
+- R6 production diff versus its RED commit: **71 insertions, 150 deletions**.
+- External/CVM operations: **zero**; incremental spend: **$0**.
+
 The first restricted global run was not accepted as product evidence: it had
 eight loopback-bind permission errors and two missing-worktree-dependency
 errors. It also exposed one real README compatibility assertion introduced by
@@ -236,6 +257,10 @@ handle remains terminal and untouched.
 
 R5 adds no new external attempt. Its clean implementation review range is
 `e7b881186feadde7d6cb9e8b5df48730f84cb06a..3f6274d1090fc53c5023e20b7e61bcc89f2db279`;
+both previously failed handles remain terminal and untouched.
+
+R6 adds no new external attempt. Its clean implementation review range is
+`1da059f0a4ee95f49644a3deb2d5cba3c4db6498..faa23e5c8a482a4ee1c017cca9e92f028c90c677`;
 both previously failed handles remain terminal and untouched.
 
 ## 下一步
