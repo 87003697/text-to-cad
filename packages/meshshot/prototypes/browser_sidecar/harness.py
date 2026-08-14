@@ -287,14 +287,18 @@ class Harness:
         recover_pending("network", self.pending_network_names)
 
         for item in reversed(self.ledger.containers):
-            running = attempt(
+            attempt(
                 item.kind,
                 item.resource_id,
                 "container", "inspect", item.resource_id, "--format", "{{.State.Running}}",
                 record_nonzero=False,
             )
-            if running is not None and running.returncode == 0 and running.stdout.strip() == "true":
-                attempt(item.kind, item.resource_id, "stop", item.resource_id)
+            attempt(
+                item.kind,
+                item.resource_id,
+                "stop", item.resource_id,
+                record_nonzero=False,
+            )
             attempt(item.kind, item.resource_id, "rm", item.resource_id)
         for item in reversed(self.ledger.networks):
             attempt(item.kind, item.resource_id, "network", "rm", item.resource_id)
@@ -308,6 +312,26 @@ class Harness:
                 self.commands.append({"argv": detached.command, "exitCode": detached.process.returncode, "elapsedSeconds": round(time.monotonic() - detached.started, 3)})
             except Exception as exc:
                 failures.append({"kind": "detached-process", "id": detached.container_id, "argv": detached.command, "exitCode": None, "stderr": str(exc)})
+                try:
+                    detached.process.terminate()
+                except Exception as terminate_exc:
+                    failures.append({"kind": "detached-process", "id": detached.container_id, "argv": [*detached.command, "<terminate>"], "exitCode": None, "stderr": str(terminate_exc)})
+                try:
+                    detached.process.communicate(timeout=5)
+                    detached.finished = True
+                except Exception as terminate_wait_exc:
+                    failures.append({"kind": "detached-process", "id": detached.container_id, "argv": [*detached.command, "<terminate-wait>"], "exitCode": None, "stderr": str(terminate_wait_exc)})
+                    try:
+                        detached.process.kill()
+                    except Exception as kill_exc:
+                        failures.append({"kind": "detached-process", "id": detached.container_id, "argv": [*detached.command, "<kill>"], "exitCode": None, "stderr": str(kill_exc)})
+                    try:
+                        detached.process.communicate(timeout=5)
+                        detached.finished = True
+                    except Exception as reap_exc:
+                        failures.append({"kind": "detached-process", "id": detached.container_id, "argv": [*detached.command, "<kill-wait>"], "exitCode": None, "stderr": str(reap_exc)})
+                if detached.finished:
+                    self.commands.append({"argv": detached.command, "exitCode": detached.process.returncode, "elapsedSeconds": round(time.monotonic() - detached.started, 3)})
 
         absence_proofs: list[dict[str, Any]] = []
         for item in self.ledger.containers:
@@ -678,6 +702,7 @@ def predicate_matrix(evidence: dict[str, Any]) -> dict[str, bool]:
             and get("p3", "terminalB", "state", "ExitCode") == 0
         ),
         "terminal.cleanup_has_no_failures": cleanup.get("failures") == [],
+        "terminal.not_interrupted": get("interruptionSignal") is None,
         "terminal.every_exact_resource_absent": bool(cleanup.get("absenceProofs")) and all(
             proof.get("absent") is True for proof in cleanup.get("absenceProofs", [])
         ),
@@ -715,6 +740,7 @@ def main() -> int:
         for signum in (signal.SIGINT, signal.SIGTERM)
     }
     try:
+        harness.verify_clean_source()
         image_ids = harness.build() if not args.skip_build else {
             "sidecar": harness.image_digest(SIDECAR_TAG),
             "agent": harness.image_digest(AGENT_TAG),
@@ -890,7 +916,9 @@ def main() -> int:
             if interrupt_state.signal_name is not None:
                 evidence["interruptionSignal"] = interrupt_state.signal_name
             evidence["predicates"] = predicate_matrix(evidence)
-            evidence["predicates"]["execution.completed_without_error"] = execution_error is None
+            evidence["predicates"]["execution.completed_without_error"] = (
+                execution_error is None and interrupt_state.signal_name is None
+            )
             evidence["verdict"] = "ADOPT" if all(evidence["predicates"].values()) else "REJECT"
             evidence["commands"] = harness.commands
             evidence["finishedAtUnix"] = time.time()

@@ -147,6 +147,7 @@ class ExactResourceLedgerTests(unittest.TestCase):
         harness.run = fake_run  # type: ignore[method-assign]
         cleanup = harness.cleanup_all()
 
+        self.assertIn(("stop", "container-a-id"), calls)
         self.assertIn(("rm", "container-a-id"), calls)
         self.assertIn(("rm", "container-b-id"), calls)
         self.assertIn(("network", "rm", "network-a-id"), calls)
@@ -156,6 +157,47 @@ class ExactResourceLedgerTests(unittest.TestCase):
         self.assertFalse(proofs["container-b-id"]["absent"])
         self.assertTrue(proofs["container-b-id"]["inspectionError"])
         self.assertTrue(proofs["network-a-id"]["absent"])
+
+    def test_detached_timeout_terminates_then_kills_and_reaps_local_docker_cli(self) -> None:
+        harness = self.make_harness()
+
+        class StuckProcess:
+            def __init__(self) -> None:
+                self.returncode = None
+                self.communicates = 0
+                self.terminated = False
+                self.killed = False
+
+            def communicate(self, timeout: int):
+                self.communicates += 1
+                if self.communicates < 3:
+                    raise subprocess.TimeoutExpired(["docker", "start"], timeout)
+                self.returncode = -9
+                return "", ""
+
+            def terminate(self) -> None:
+                self.terminated = True
+
+            def kill(self) -> None:
+                self.killed = True
+
+        process = StuckProcess()
+        detached = harness_module.DetachedRun(
+            name="stuck",
+            container_id="9" * 64,
+            command=["docker", "start"],
+            process=process,
+            started=0.0,
+        )
+        harness.detached_runs.append(detached)
+
+        cleanup = harness.cleanup_all()
+
+        self.assertTrue(process.terminated)
+        self.assertTrue(process.killed)
+        self.assertEqual(3, process.communicates)
+        self.assertTrue(detached.finished)
+        self.assertEqual("detached-process", cleanup["firstFailure"]["kind"])
 
     def test_create_output_loss_recovers_only_exact_owned_container(self) -> None:
         harness = self.make_harness()
@@ -256,6 +298,9 @@ class ExactResourceLedgerTests(unittest.TestCase):
         state.cleanup_started = True
         state.handle(signal.SIGINT, None)
         self.assertEqual("SIGINT", state.signal_name)
+
+        predicates = harness_module.predicate_matrix({"interruptionSignal": state.signal_name})
+        self.assertFalse(predicates["terminal.not_interrupted"])
 
     def test_default_build_rejects_dirty_tracked_or_untracked_source_before_docker(self) -> None:
         harness = self.make_harness()
