@@ -182,3 +182,69 @@ test("both faces of a two-fold plate keep their flat area", () => {
   const total = regions.reduce((sum, region) => sum + region.area, 0);
   assert.ok(Math.abs(total - ((100 * 60) - bandArea)) < 1e-6, "faces plus bands account for the blank");
 });
+
+test("the face that stays still is the most HINGED one, not the biggest", () => {
+  // Anchoring the largest face made identical bend settings fold different shapes on
+  // different blanks: on a U channel whose flanges are wider than its web, the largest face
+  // is a flange, so "both bends up" folded a Z. The web has two hinges; a flange has one.
+  const wideFlanges = [[0, 0], [120, 0], [120, 60], [0, 60]];
+  const folds = [fold([40, 0], [40, 60], 90), fold([80, 0], [80, 60], 90)];
+  const { regions, adjacency } = decomposeFoldRegions(wideFlanges, folds);
+  const { placements, rootIndex } = buildRegionPlacements(regions, folds, adjacency);
+
+  // The web is the middle face, and it is NOT the largest one here.
+  const largest = regions.reduce((best, region, index) => (region.area > regions[best].area ? index : best), 0);
+  assert.notEqual(rootIndex, largest, "this blank's largest face is a flange, which is the point");
+  const rootCentre = regions[rootIndex].centroid[0];
+  assert.ok(rootCentre > 40 && rootCentre < 80, "the web must be the face that stays still");
+
+  // Both flanges rise, to the same height: a U, not a Z.
+  const heights = regions
+    .map((region, index) => place(placements[index], region.centroid)[1])
+    .filter((_, index) => index !== rootIndex);
+  assert.ok(heights.every((height) => height > 1), `both flanges must rise, got ${heights}`);
+  assert.ok(Math.abs(heights[0] - heights[1]) < 1e-6, "and rise equally");
+  assert.ok(Math.abs(place(placements[rootIndex], regions[rootIndex].centroid)[1]) < 1e-6);
+});
+
+test("opposite bend directions fold a Z, and that still means opposite", () => {
+  const plate = [[0, 0], [120, 0], [120, 60], [0, 60]];
+  const folds = [fold([40, 0], [40, 60], 90), fold([80, 0], [80, 60], -90)];
+  const { regions, adjacency } = decomposeFoldRegions(plate, folds);
+  const { placements, rootIndex } = buildRegionPlacements(regions, folds, adjacency);
+  const heights = regions
+    .map((region, index) => place(placements[index], region.centroid)[1])
+    .filter((_, index) => index !== rootIndex);
+  assert.equal(heights.length, 2);
+  assert.ok(heights[0] * heights[1] < 0, `one flange up and one down, got ${heights}`);
+  assert.ok(Math.abs(Math.abs(heights[0]) - Math.abs(heights[1])) < 1e-6, "by the same amount");
+});
+
+test("crossing bend lines say they cross, rather than blaming a length", () => {
+  // The two failures wear the same symptom -- no single face holds the fold -- and "stops N mm
+  // short" about a fold that is already too long sends the reader the wrong way.
+  const plate = [[0, 0], [120, 0], [120, 60], [0, 60]];
+  assert.throws(
+    () => decomposeFoldRegions(plate, [
+      fold([60, 0], [60, 60], 90),
+      fold([0, 20], [120, 20], 90)
+    ]),
+    (error) => {
+      assert.match(error.message, /cannot fold crossing bend lines/u);
+      assert.match(error.message, /bend 2 crosses bend 1/u);
+      assert.doesNotMatch(error.message, /mm short/u);
+      return true;
+    }
+  );
+});
+
+test("folds that meet end to end are not crossing", () => {
+  // An L blank folded on both arms: the lines touch the same corner region but neither crosses
+  // the other, so this must keep working.
+  const lBlank = [[0, 0], [100, 0], [100, 30], [30, 30], [30, 80], [0, 80]];
+  const { regions } = decomposeFoldRegions(lBlank, [
+    fold([60, 0], [60, 30], 90),
+    fold([0, 55], [30, 55], 90)
+  ]);
+  assert.equal(regions.length, 3);
+});

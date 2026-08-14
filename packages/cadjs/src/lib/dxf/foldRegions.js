@@ -121,6 +121,18 @@ function dropRepeatedPoints(loop) {
   return out;
 }
 
+/** Do two segments properly cross (not merely touch at an end)? */
+export function segmentsCross(first, second) {
+  const cross = (ax, ay, bx, by) => (ax * by) - (ay * bx);
+  const [p1, p2] = [first.start, first.end];
+  const [p3, p4] = [second.start, second.end];
+  const d1 = cross(p4[0] - p3[0], p4[1] - p3[1], p1[0] - p3[0], p1[1] - p3[1]);
+  const d2 = cross(p4[0] - p3[0], p4[1] - p3[1], p2[0] - p3[0], p2[1] - p3[1]);
+  const d3 = cross(p2[0] - p1[0], p2[1] - p1[1], p3[0] - p1[0], p3[1] - p1[1]);
+  const d4 = cross(p2[0] - p1[0], p2[1] - p1[1], p4[0] - p1[0], p4[1] - p1[1]);
+  return ((d1 > 0) !== (d2 > 0)) && ((d3 > 0) !== (d4 > 0));
+}
+
 function pointToSegmentDistance(point, start, end) {
   const dx = end[0] - start[0];
   const dy = end[1] - start[1];
@@ -198,6 +210,27 @@ export function decomposeFoldRegions(outerLoop, foldLines, { tolerance = 0.05 } 
       }
     }
     if (target < 0) {
+      // Two different failures wear the same symptom -- no single face holds this fold -- and
+      // saying "it stops N mm short" about a fold that actually CROSSES another one sends the
+      // reader off to lengthen a line that is already too long.
+      const crossed = regions.filter(
+        (region) => foldSegmentCrossesRegion(foldLine, { outerLoop: region.loop }, tolerance)
+          .interiorFraction > 0
+      ).length;
+      if (crossed > 1) {
+        const crossing = foldLines
+          .slice(0, foldIndex)
+          .map((other, otherIndex) => ({ other, otherIndex }))
+          .filter(({ other }) => segmentsCross(foldLine.bendLine, other.bendLine))
+          .map(({ otherIndex }) => `bend ${otherIndex + 1}`);
+        throw new Error(
+          `DXF 3D bend preview cannot fold crossing bend lines: bend ${foldIndex + 1} crosses `
+          + `${crossing.length ? crossing.join(" and ") : "another bend"} inside the material. `
+          + "One blank cannot be folded along both -- a brake needs each fold to separate two "
+          + "faces, and at the crossing all four quarters would have to move at once. Add a "
+          + "relief cut at the crossing, or shorten one line so the folds meet end to end."
+        );
+      }
       const shortBy = Math.max(bestReport?.startGap || 0, bestReport?.endGap || 0);
       throw new Error(
         `DXF 3D bend preview requires a fold line that runs edge to edge: bend ${foldIndex + 1}, `
@@ -373,10 +406,24 @@ export function buildRegionPlacements(regions, foldLines, adjacency) {
   if (!regions.length) {
     return { placements, rootIndex: -1, parents: [] };
   }
-  const rootIndex = regions.reduce(
-    (best, region, index) => (region.area > regions[best].area ? index : best),
-    0
-  );
+  // Which face stays still. The MOST HINGED face, area breaking ties -- not simply the
+  // largest, which is what made identical bend settings produce different shapes on different
+  // blanks: on a U channel whose flanges are wider than its web, the largest face is a flange,
+  // so anchoring it made "both bends up" fold a Z (flange, then web, then the far flange
+  // carrying on in the same rotational sense) instead of a U. The web has two hinges and every
+  // flange has one, so counting hinges anchors the part on the face a person would hold, and
+  // "up" then means up relative to it.
+  const hingeCounts = regions.map(() => 0);
+  for (const edge of adjacency) {
+    hingeCounts[edge.regions[0]] += 1;
+    hingeCounts[edge.regions[1]] += 1;
+  }
+  const rootIndex = regions.reduce((best, region, index) => {
+    if (hingeCounts[index] !== hingeCounts[best]) {
+      return hingeCounts[index] > hingeCounts[best] ? index : best;
+    }
+    return region.area > regions[best].area ? index : best;
+  }, 0);
   const neighbours = regions.map(() => []);
   for (const edge of adjacency) {
     const [a, b] = edge.regions;
