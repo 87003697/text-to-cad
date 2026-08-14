@@ -265,7 +265,7 @@ class ResidualRendererTests(unittest.TestCase):
                 )
             self.assertEqual(substage, raised.exception.browser_identity_substage)
 
-    def test_attachment_uses_authenticated_outer_listener_ownership(self) -> None:
+    def test_attachment_independently_revalidates_exact_listener_ownership(self) -> None:
         from meshshot import browser_runtime
 
         attachment = object.__new__(
@@ -295,7 +295,29 @@ class ResidualRendererTests(unittest.TestCase):
                     expected_nonce="a" * 64,
                 ),
             )
-        verify.assert_not_called()
+        verify.assert_called_once_with(42, 9222, 0.1)
+
+        for label in ("foreign-owner", "dead-owner", "replaced-port"):
+            with (
+                self.subTest(label=label),
+                mock.patch.object(
+                    browser_runtime,
+                    "_verify_listener_owner",
+                    side_effect=browser_runtime.BrowserRuntimeError(
+                        "browser_identity"
+                    ),
+                ),
+                self.assertRaises(browser_runtime.BrowserRuntimeError) as raised,
+            ):
+                attachment._validate_authority(
+                    authority,
+                    expected_nonce="a" * 64,
+                )
+            self.assertEqual("browser_identity", raised.exception.operation)
+            self.assertEqual(
+                "loopback_listener_address_ownership",
+                raised.exception.browser_identity_substage,
+            )
 
     def test_attachment_reports_failed_completion_before_closed_connect_error(
         self,
@@ -2530,6 +2552,43 @@ class ResidualRendererTests(unittest.TestCase):
         self.assertEqual("browser_cleanup", raised.exception.operation)
         self.assertEqual([mock.call(101), mock.call(102)], close.mock_calls)
         runtime._pinned_executable.close.assert_called_once_with()
+
+    def test_private_snapshot_owns_one_root_and_collision_exhaustion_is_closed(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            executable = source / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            launches = root / "launches"
+            launches.mkdir()
+            with (
+                mock.patch.object(browser_runtime.tempfile, "gettempdir", return_value=launches),
+                mock.patch.object(browser_runtime.sys, "platform", "darwin"),
+            ):
+                pinned = _PinnedExecutable(executable)
+                self.assertEqual([pinned.launch_root], list(launches.iterdir()))
+                pinned.close()
+            self.assertEqual([], list(launches.iterdir()))
+
+            with (
+                mock.patch.object(browser_runtime.tempfile, "gettempdir", return_value=launches),
+                mock.patch.object(Path, "mkdir", side_effect=FileExistsError),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                browser_runtime._private_directory("meshshot-image-")
+            self.assertEqual("browser_identity", raised.exception.operation)
+            self.assertEqual(
+                "private_tree_materialization",
+                raised.exception.browser_identity_phase,
+            )
+            self.assertEqual([], list(launches.iterdir()))
 
     def test_connected_browser_identity_failure_preserves_identity_classification(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime

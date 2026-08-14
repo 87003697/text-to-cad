@@ -40,6 +40,7 @@ class LinuxPrivateSnapshotExecutionTests(unittest.TestCase):
         result = run()
         self.assertEqual("permission", result["old_nested_owner"])
         self.assertEqual("passed", result["supervised_public_render"])
+        self.assertEqual("passed", result["real_cdp_identity"])
         self.assertEqual(0, result["nested_browser_popen_count"])
         self.assertEqual("passed", result["completion_shutdown"])
         self.assertEqual("passed", result["supervisor_cleanup"])
