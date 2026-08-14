@@ -236,7 +236,7 @@ def _open_endpoints(entity) -> tuple[tuple[float, float], tuple[float, float]] |
             if len(control_points) < 2:
                 return None
             return (_point_key(control_points[0]), _point_key(control_points[-1]))
-        except AttributeError:  # SPLINE may lack the closed/control_points attributes
+        except (AttributeError, TypeError, IndexError):  # a malformed SPLINE has no usable endpoints
             return None
     return None
 
