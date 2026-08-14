@@ -71,6 +71,13 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
    `faa23e5c8a482a4ee1c017cca9e92f028c90c677` deletes the parser, preserves the
    ID-derived config identity, and adds bounded exact prepare cleanup. It did
    not contact CVM or touch either terminal handle.
+10. R6 Standards review found one remaining prepare escape: after successful
+    cleanup, a non-`ProbeError` was bare-rethrown. R7 RED
+    `7ab9c5878605aaa9ae9e58441a7c73fafd8eab5b` injected a post-save filesystem
+    failure and captured its raw rc1 traceback boundary. R7 GREEN
+    `ce3143e4bc30c222b400aa5637edc8df48619169` preserves existing bounded
+    `ProbeError` checks but replaces every other successfully-cleaned exception
+    with fixed `prepare-operation`. No external operation occurred.
 
 ## Session 产出
 
@@ -90,6 +97,8 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
 | `3f6274d1090fc53c5023e20b7e61bcc89f2db279` R5 GREEN | skill, module, tests | ID-derived immutable config digest; safe read-only docker-save manifest/config-blob binding and fresh-state cleanup. |
 | `66ad21a1c17b84858d5870d525af1357526ef59e` R6 RED | focused global tests | Opaque fixed-save bytes were rejected; cleanup failure leaked an unbounded exception. Local archive mutation already failed before transfer. |
 | `faa23e5c8a482a4ee1c017cca9e92f028c90c677` R6 GREEN | skill, module, tests | Removed tar parser; retained whole-archive attestation and authoritative post-load identity proof; bounded exact prepare cleanup. |
+| `7ab9c5878605aaa9ae9e58441a7c73fafd8eab5b` R7 RED | public CLI test | Injected post-save `os.replace` failure escaped as rc1/raw traceback despite successful cleanup. |
+| `ce3143e4bc30c222b400aa5637edc8df48619169` R7 GREEN | skill, module | Preserve fixed `ProbeError`; map every other successfully-cleaned prepare exception to fixed `prepare-operation`. |
 
 ### 核心行为
 
@@ -159,6 +168,10 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
   cleanup, or deployed workflow hash. Public provision accepts such a failure
   only with SSH exit 1, preserves its exact classification, performs the same
   nonce-scoped abort, and never publishes raw stderr/path/errno as evidence.
+- Prepare cleanup failure still dominates as `prepare-cleanup-absence`. When
+  cleanup proves absence, existing fixed checks remain unchanged and every
+  non-`ProbeError` becomes `prepare-operation`; no traceback/path/errno/message
+  crosses the public CLI boundary.
 
 ### 验证结果
 
@@ -222,6 +235,16 @@ R6 final validation:
 - R6 production diff versus its RED commit: **71 insertions, 150 deletions**.
 - External/CVM operations: **zero**; incremental spend: **$0**.
 
+R7 final validation:
+
+- RED public CLI seam → **1 expected failure**.
+- Focused suite → **34 tests, OK**.
+- Global gate with the project virtualenv and local loopback permission →
+  **185 tests, OK**.
+- `python3 -m py_compile` for the module and focused test → exit 0.
+- `git diff --check` and staged diff check → exit 0.
+- External/CVM operations: **zero**; incremental spend: **$0**.
+
 The first restricted global run was not accepted as product evidence: it had
 eight loopback-bind permission errors and two missing-worktree-dependency
 errors. It also exposed one real README compatibility assertion introduced by
@@ -261,6 +284,10 @@ both previously failed handles remain terminal and untouched.
 
 R6 adds no new external attempt. Its clean implementation review range is
 `1da059f0a4ee95f49644a3deb2d5cba3c4db6498..faa23e5c8a482a4ee1c017cca9e92f028c90c677`;
+both previously failed handles remain terminal and untouched.
+
+R7 adds no new external attempt. Its clean implementation review range is
+`367681a5cb5cb98376f0b5d388c076ee54d61c6b..ce3143e4bc30c222b400aa5637edc8df48619169`;
 both previously failed handles remain terminal and untouched.
 
 ## 下一步
