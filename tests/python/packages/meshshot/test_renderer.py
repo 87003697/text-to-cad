@@ -1776,6 +1776,53 @@ class ResidualRendererTests(unittest.TestCase):
         )
         self.assertEqual("tree_descriptor_close", raised.exception.browser_cleanup_check)
 
+    def test_runtime_constructor_retained_pinned_proof_overrides_attestation_cleanup(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        body_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_private_tree",
+            browser_cleanup_check="tree_descriptor_close",
+        )
+        retained_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_pinned_image",
+            browser_cleanup_check="detached_mount_release",
+            _browser_cleanup_retained=True,
+        )
+        pinned = mock.MagicMock()
+        pinned.close.side_effect = retained_cleanup
+        with (
+            mock.patch.object(
+                browser_runtime,
+                "_load_profile",
+                return_value=({"name": "frozen"}, "a" * 64),
+            ),
+            mock.patch.object(
+                browser_runtime,
+                "_PinnedExecutable",
+                return_value=pinned,
+            ),
+            mock.patch.object(
+                browser_runtime,
+                "_attest",
+                side_effect=body_cleanup,
+            ),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            PrelaunchedCdpRuntime(Path("/private/browser"))
+
+        self.assertEqual(
+            "private_browser_pinned_image",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "detached_mount_release",
+            raised.exception.browser_cleanup_check,
+        )
+        self.assertTrue(raised.exception._browser_cleanup_retained)
+
     def test_prelaunch_preserves_body_cleanup_before_runtime_cleanup(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
@@ -1875,6 +1922,70 @@ class ResidualRendererTests(unittest.TestCase):
             raised.exception.browser_cleanup_substage,
         )
         self.assertEqual("absence", raised.exception.browser_cleanup_check)
+
+    def test_prelaunch_actual_retained_pinned_tree_overrides_body_cleanup(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import (
+            BrowserRuntimeError,
+            PrelaunchedCdpRuntime,
+            _PinnedExecutable,
+        )
+
+        body_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_handoff",
+            browser_cleanup_check="transport_close",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            launch_root = Path(directory) / "private-image"
+            launch_root.mkdir()
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.fd = None
+            pinned.launch_root = launch_root
+            pinned._detached_mount_mode = False
+            pinned._detached_filesystem_mounted = False
+            runtime = object.__new__(PrelaunchedCdpRuntime)
+            runtime._profile = {
+                "arguments": [],
+                "startup_timeout_ms": 100,
+                "cleanup_term_ms": 10,
+                "cleanup_kill_ms": 10,
+            }
+            runtime._executable = Path("/private/browser")
+            runtime._pinned_executable = pinned
+            runtime._profile_dir = None
+            runtime._profile_identity = None
+            runtime._profile_cleanup_forbidden = False
+            runtime._profile_fd = None
+            runtime._profile_parent_fd = None
+            runtime._process = None
+            runtime._process_group = None
+            runtime._endpoint = None
+            with (
+                mock.patch.object(
+                    browser_runtime.tempfile,
+                    "mkdtemp",
+                    side_effect=body_cleanup,
+                ),
+                mock.patch.object(
+                    browser_runtime.shutil,
+                    "rmtree",
+                    side_effect=OSError("retained private image"),
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                runtime._prelaunch()
+
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_pinned_image",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "detached_mount_release",
+            raised.exception.browser_cleanup_check,
+        )
+        self.assertTrue(raised.exception._browser_cleanup_retained)
 
     def test_runtime_context_preserves_body_cleanup_unless_cleanup_proves_retained(self) -> None:
         from meshshot import browser_runtime
