@@ -1537,7 +1537,7 @@ class _PinnedExecutable:
         while True:
             if time.monotonic() >= deadline:
                 raise subprocess.TimeoutExpired([_FD_EXEC_HANDOFF_SCHEMA], 0)
-            if process.poll() is not None:
+            if image_pid is None and process.poll() is not None:
                 raise BrowserRuntimeError("browser_identity")
             try:
                 self._verify_running_image_until(target_pid, deadline)
@@ -1742,6 +1742,7 @@ class _PinnedExecutable:
                 )
             else:
                 setattr(process, "_meshshot_version_handoff_eof", True)
+            setattr(process, "_meshshot_browser_image_pid", peer_pid)
             return process
         except BaseException as exc:
             failure = exc
@@ -2184,6 +2185,25 @@ def _group_empty(process_group: int) -> bool:
     return False
 
 
+def _owned_process_exited(process: subprocess.Popen[bytes]) -> bool:
+    image_pid = getattr(process, "_meshshot_browser_image_pid", None)
+    if type(image_pid) is not int or image_pid <= 1:
+        return process.poll() is not None
+    try:
+        raw = Path(f"/proc/{image_pid}/stat").read_text(encoding="utf-8")
+        tail = raw[raw.rfind(")") + 2 :].split()
+        return (
+            len(tail) < 4
+            or tail[0] == "Z"
+            or int(tail[2]) != process.pid
+            or int(tail[3]) != process.pid
+        )
+    except (FileNotFoundError, ProcessLookupError):
+        return True
+    except (OSError, ValueError, IndexError):
+        return True
+
+
 def _wait_group_empty(process_group: int, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while True:
@@ -2590,7 +2610,7 @@ class PrelaunchedCdpRuntime:
             ) / 1000
             readiness = profile / "DevToolsActivePort"
             while time.monotonic() < deadline:
-                if self._process.poll() is not None:
+                if _owned_process_exited(self._process):
                     raise BrowserRuntimeError("browser_prelaunch")
                 try:
                     lines = readiness.read_text(encoding="utf-8").splitlines()
