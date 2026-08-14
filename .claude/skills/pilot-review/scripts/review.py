@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
+import re
 import stat
 import subprocess
 import sys
@@ -62,7 +63,7 @@ _SANDBOX_SETUP_CAPABILITIES = (
     "CAP_SETFCAP",
 )
 _SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/16",
+    "schema": "cvm.provider-free-linux-sandbox/17",
     "namespaces": [name for name, _flag in _SANDBOX_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -110,6 +111,19 @@ _SANDBOX_PROFILE = {
         ),
         "destination_filesystem": "read-only-bind-of-exec-permitted-host-stage",
         "tree_validation": "regular-files-only-no-links-or-special",
+        "tree_manifest": {
+            "schema": "meshshot.browser-tree-manifest/1",
+            "coverage": "complete-attested-revision-tree",
+            "binding": "canonical-sha256",
+        },
+        "execution_authority": {
+            "schema": "meshshot.browser-execution-authority/1",
+            "mode": "linux-detached-readonly-revision-mount/1",
+            "private_filesystem": "job-private-exec-tmpfs",
+            "handoff": "authenticated-seqpacket-mounted-detached-exec",
+            "writable_source_after_handoff": "absent",
+            "running_image_proof": "exact-proc-image-fd-identity",
+        },
         "executable_validation": {
             "sha256": "deployment-runtime-identity",
             "execute_bits": "required",
@@ -388,6 +402,17 @@ def _validate_provider_free_sandbox_argv(
         f"{chromium['host_cache_path']}/.cvm-provider-free-browser-stages/"
         f"{group}.{exp}/attested"
     )
+    tree_manifest_values = [
+        argv[index + 2]
+        for index in range(len(argv) - 2)
+        if argv[index : index + 2]
+        == ["--setenv", "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"]
+    ]
+    if (
+        len(tree_manifest_values) != 1
+        or re.fullmatch(r"[0-9a-f]{64}", tree_manifest_values[0]) is None
+    ):
+        raise ReviewError("provider-free browser tree authority conflicts")
     fixed_mounts = [
         host_root,
         "/workspace/repo",
@@ -405,6 +430,9 @@ def _validate_provider_free_sandbox_argv(
         "--ro-bind",
         host_stage,
         "/tmp/provider-free-playwright/attested",
+        "--setenv",
+        "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256",
+        tree_manifest_values[0],
         "--symlink",
         "usr/bin",
         "/bin",
@@ -1064,6 +1092,20 @@ def _runtime_authority_verdict(
             )
         ):
             raise ReviewError("retained sandbox/egress enforcement is incomplete")
+        sandbox_argv = sandbox["argv"]
+        tree_manifest_values = [
+            sandbox_argv[index + 2]
+            for index in range(len(sandbox_argv) - 2)
+            if sandbox_argv[index : index + 2]
+            == ["--setenv", "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"]
+        ]
+        if (
+            len(tree_manifest_values) != 1
+            or not isinstance(tree_manifest_values[0], str)
+            or re.fullmatch(r"[0-9a-f]{64}", tree_manifest_values[0]) is None
+        ):
+            raise ReviewError("browser tree authority is incomplete")
+        expected_tree_manifest_sha256 = tree_manifest_values[0]
         required = {
             "schema",
             "scenario_identity",
@@ -1209,14 +1251,14 @@ def _runtime_authority_verdict(
             or proof.get("execution_profile")
             != {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/16",
+                "id": "issue15.provider-free-bounded/17",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/16",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/17",
             }
             or proof.get("sandbox")
             != {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/16",
+                "resource_profile": "issue15.provider-free-bounded/17",
             }
             or proof.get("provider_environment", {}).get("credential_values_recorded")
             is not False
@@ -1498,10 +1540,21 @@ def _runtime_authority_verdict(
                 runtime = preview.get("browser_runtime") if isinstance(preview, dict) else None
                 adapter = runtime.get("adapter_profile") if isinstance(runtime, dict) else None
                 browser = runtime.get("browser_identity") if isinstance(runtime, dict) else None
+                execution = (
+                    runtime.get("execution_authority")
+                    if isinstance(runtime, dict)
+                    else None
+                )
                 if (
                     not isinstance(runtime, dict)
                     or set(runtime)
-                    != {"schema", "adapter_profile", "browser_identity", "result"}
+                    != {
+                        "schema",
+                        "adapter_profile",
+                        "browser_identity",
+                        "execution_authority",
+                        "result",
+                    }
                     or runtime.get("schema") != "meshshot.prelaunched-cdp-runtime/1"
                     or runtime.get("result") != "passed"
                     or adapter
@@ -1518,6 +1571,15 @@ def _runtime_authority_verdict(
                     or browser.get("version")
                     != "Google Chrome for Testing 148.0.7778.96"
                     or browser.get("sha256") != chromium_identity["sha256"]
+                    or execution
+                    != {
+                        "schema": "meshshot.browser-execution-authority/1",
+                        "mode": "linux-detached-readonly-revision-mount/1",
+                        "tree_manifest_sha256": expected_tree_manifest_sha256,
+                        "executable_sha256": chromium_identity["sha256"],
+                        "mount_readonly": "passed",
+                        "source_detached": "passed",
+                    }
                 ):
                     raise ReviewError(
                         "preview browser identity conflicts with deployed runtime authority"

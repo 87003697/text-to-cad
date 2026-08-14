@@ -442,6 +442,7 @@ def _validate_scenario_evidence(
     scenario_name: str,
     *,
     expected_browser_sha256: str,
+    expected_tree_manifest_sha256: str,
 ) -> None:
     """Require every Issue #37 runtime-authority evidence layer before success."""
 
@@ -597,6 +598,7 @@ def _validate_scenario_evidence(
         if not provider_free_browser_runtime_allowed(
             preview.get("browser_runtime") if isinstance(preview, dict) else None,
             expected_browser_sha256=expected_browser_sha256,
+            expected_tree_manifest_sha256=expected_tree_manifest_sha256,
         ):
             raise ProviderFreeError(
                 "runtime-authority browser runtime evidence conflicts"
@@ -824,12 +826,14 @@ def run_scenario(
         return contract_status
     child_environment = _sandbox_environment(environ)
     workload_status = 1
+    expected_tree_manifest_sha256: str | None = None
     try:
         with staged_attested_browser(
             runtime_identity["chromium"],
             handle,
             repo_root=REPO_ROOT,
         ) as browser_mount:
+            expected_tree_manifest_sha256 = browser_mount.tree_manifest_sha256
             bwrap = runtime_identity["bwrap"]["path"]
             argv = _sandbox_argv(
                 scenario_name,
@@ -870,6 +874,11 @@ def run_scenario(
                 exp_dir,
                 scenario_name,
                 expected_browser_sha256=runtime_identity["chromium"]["sha256"],
+                expected_tree_manifest_sha256=(
+                    expected_tree_manifest_sha256
+                    if expected_tree_manifest_sha256 is not None
+                    else ""
+                ),
             )
         except (pilot_runner.PilotError, ProviderFreeError) as exc:
             print(f"provider-free-runner: {exc}", file=sys.stderr)

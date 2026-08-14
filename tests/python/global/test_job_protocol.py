@@ -315,12 +315,21 @@ class JobProtocolTests(unittest.TestCase):
                 "version": "Google Chrome for Testing 148.0.7778.96",
                 "sha256": "c" * 64,
             },
+            "execution_authority": {
+                "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
+                "mode": "linux-detached-readonly-revision-mount/1",
+                "tree_manifest_sha256": "d" * 64,
+                "executable_sha256": "c" * 64,
+                "mount_readonly": "passed",
+                "source_detached": "passed",
+            },
             "result": "passed",
         }
         self.assertTrue(
             protocol.provider_free_browser_runtime_allowed(
                 receipt,
                 expected_browser_sha256="c" * 64,
+                expected_tree_manifest_sha256="d" * 64,
             )
         )
         for mutation, expected in (
@@ -338,12 +347,33 @@ class JobProtocolTests(unittest.TestCase):
                 },
                 "c" * 64,
             ),
+            (
+                {
+                    **receipt,
+                    "execution_authority": {
+                        **receipt["execution_authority"],
+                        "tree_manifest_sha256": "e" * 64,
+                    },
+                },
+                "c" * 64,
+            ),
+            (
+                {
+                    **receipt,
+                    "execution_authority": {
+                        **receipt["execution_authority"],
+                        "executable_sha256": "e" * 64,
+                    },
+                },
+                "c" * 64,
+            ),
         ):
             with self.subTest(mutation=mutation):
                 self.assertFalse(
                     protocol.provider_free_browser_runtime_allowed(
                         mutation,
                         expected_browser_sha256=expected,
+                        expected_tree_manifest_sha256="d" * 64,
                     )
                 )
 
@@ -361,12 +391,21 @@ class JobProtocolTests(unittest.TestCase):
                 "version": "Google Chrome for Testing 148.0.7778.96",
                 "sha256": "2" * 64,
             },
+            "execution_authority": {
+                "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
+                "mode": "linux-detached-readonly-revision-mount/1",
+                "tree_manifest_sha256": "3" * 64,
+                "executable_sha256": "2" * 64,
+                "mount_readonly": "passed",
+                "source_detached": "passed",
+            },
             "result": "passed",
         }
         self.assertTrue(
             protocol.provider_free_browser_runtime_allowed(
                 receipt,
                 expected_browser_sha256="2" * 64,
+                expected_tree_manifest_sha256="3" * 64,
             )
         )
         for mutation in (
@@ -382,12 +421,28 @@ class JobProtocolTests(unittest.TestCase):
                 **receipt,
                 "browser_identity": {**receipt["browser_identity"], "revision": "1222"},
             },
+            {key: value for key, value in receipt.items() if key != "execution_authority"},
+            {
+                **receipt,
+                "execution_authority": {
+                    **receipt["execution_authority"],
+                    "source_detached": "failed",
+                },
+            },
+            {
+                **receipt,
+                "execution_authority": {
+                    **receipt["execution_authority"],
+                    "raw_path": "/private/browser",
+                },
+            },
         ):
             with self.subTest(mutation=mutation):
                 self.assertFalse(
                     protocol.provider_free_browser_runtime_allowed(
                         mutation,
                         expected_browser_sha256="2" * 64,
+                        expected_tree_manifest_sha256="3" * 64,
                     )
                 )
 

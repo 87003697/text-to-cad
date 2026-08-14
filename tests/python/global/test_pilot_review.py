@@ -401,6 +401,21 @@ class PilotReviewTests(unittest.TestCase):
                     "read-only-bind-of-exec-permitted-host-stage"
                 ),
                 "tree_validation": "regular-files-only-no-links-or-special",
+                "tree_manifest": {
+                    "schema": "meshshot.browser-tree-manifest/1",
+                    "coverage": "complete-attested-revision-tree",
+                    "binding": "canonical-sha256",
+                },
+                "execution_authority": {
+                    "schema": "meshshot.browser-execution-authority/1",
+                    "mode": "linux-detached-readonly-revision-mount/1",
+                    "private_filesystem": "job-private-exec-tmpfs",
+                    "handoff": (
+                        "authenticated-seqpacket-mounted-detached-exec"
+                    ),
+                    "writable_source_after_handoff": "absent",
+                    "running_image_proof": "exact-proc-image-fd-identity",
+                },
                 "executable_validation": {
                     "sha256": "deployment-runtime-identity",
                     "execute_bits": "required",
@@ -530,7 +545,7 @@ class PilotReviewTests(unittest.TestCase):
             },
             "sandbox": {
                 "network": "isolated-loopback",
-                "resource_profile": "issue15.provider-free-bounded/16",
+                "resource_profile": "issue15.provider-free-bounded/17",
             },
             "provider_environment": {
                 "allowlist": ["HOME", "LANG", "PATH", "PYTHONDONTWRITEBYTECODE", "TZ"],
@@ -738,17 +753,31 @@ class PilotReviewTests(unittest.TestCase):
         runtime_repo = (self.root / "runtime-repo").resolve()
         runtime_exp = runtime_repo / immutable_request["exp_dir"]
         runtime_exp.mkdir(parents=True)
+        tree_manifest_sha256 = "d" * 64
+        sandbox_argv = runtime.provider_free_sandbox_argv(
+            "issue15-runtime-authority",
+            runtime_exp,
+            runtime_identity,
+            repo_root=runtime_repo,
+        )
+        staged_target = f"{protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested"
+        staged_index = next(
+            index
+            for index in range(len(sandbox_argv) - 2)
+            if sandbox_argv[index] == "--ro-bind"
+            and sandbox_argv[index + 2] == staged_target
+        )
+        sandbox_argv[staged_index + 3 : staged_index + 3] = [
+            "--setenv",
+            "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256",
+            tree_manifest_sha256,
+        ]
         write_json(
             self.exp / "run/sandbox-enforcement.json",
             {
                 "schema": "cvm.provider-free-sandbox-enforcement/1",
                 "network": "isolated-loopback",
-                "argv": runtime.provider_free_sandbox_argv(
-                    "issue15-runtime-authority",
-                    runtime_exp,
-                    runtime_identity,
-                    repo_root=runtime_repo,
-                ),
+                "argv": sandbox_argv,
                 "environment_names": [
                     "HOME",
                     "LANG",
@@ -818,6 +847,14 @@ class PilotReviewTests(unittest.TestCase):
                 "revision": "1223",
                 "version": "Google Chrome for Testing 148.0.7778.96",
                 "sha256": runtime_identity["chromium"]["sha256"],
+            },
+            "execution_authority": {
+                "schema": "meshshot.browser-execution-authority/1",
+                "mode": "linux-detached-readonly-revision-mount/1",
+                "tree_manifest_sha256": tree_manifest_sha256,
+                "executable_sha256": runtime_identity["chromium"]["sha256"],
+                "mount_readonly": "passed",
+                "source_detached": "passed",
             },
             "result": "passed",
         }

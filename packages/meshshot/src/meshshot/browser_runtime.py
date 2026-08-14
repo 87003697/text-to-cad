@@ -128,6 +128,7 @@ _BROWSER_MOUNT_EXECUTABLE = _BROWSER_MOUNT_TARGET / (
 )
 _BROWSER_TREE_MANIFEST_ENV = "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"
 _BROWSER_TREE_MANIFEST_SCHEMA = "meshshot.browser-tree-manifest/1"
+_BROWSER_EXECUTION_AUTHORITY_SCHEMA = "meshshot.browser-execution-authority/1"
 _TRUSTED_BWRAP = Path("/usr/bin/bwrap")
 _FD_EXEC_ENVIRONMENT = frozenset(
     {"HOME", "LANG", "LC_ALL", "PATH", "TMPDIR", "TZ"}
@@ -142,6 +143,27 @@ _VERSION_OUTPUT = re.compile(
     r"^(?:Google Chrome for Testing|Chromium|Chrome|HeadlessChrome) "
     r"[0-9]+(?:\.[0-9]+){3}$"
 )
+
+
+def _browser_execution_authority(
+    tree_manifest_sha256: str, executable_sha256: str
+) -> dict[str, str]:
+    if (
+        re.fullmatch(r"[0-9a-f]{64}", tree_manifest_sha256) is None
+        or re.fullmatch(r"[0-9a-f]{64}", executable_sha256) is None
+    ):
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_substage="runtime_evidence_cross_binding",
+        )
+    return {
+        "schema": _BROWSER_EXECUTION_AUTHORITY_SCHEMA,
+        "mode": "linux-detached-readonly-revision-mount/1",
+        "tree_manifest_sha256": tree_manifest_sha256,
+        "executable_sha256": executable_sha256,
+        "mount_readonly": "passed",
+        "source_detached": "passed",
+    }
 
 
 def _prelaunch_operation(exc: OSError) -> str:
@@ -1649,6 +1671,43 @@ class _PinnedExecutable:
         except OSError as exc:
             raise BrowserRuntimeError("browser_identity") from exc
 
+    @staticmethod
+    def _unlink_owned_handoff_entry(
+        root_fd: int,
+        name: str,
+        identity: tuple[int, int],
+        *,
+        socket_entry: bool,
+    ) -> None:
+        """Remove only the exact private handoff inode created by this launch."""
+
+        try:
+            current = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise BrowserRuntimeError("browser_cleanup") from exc
+        expected_type = (
+            stat.S_ISSOCK(current.st_mode)
+            if socket_entry
+            else stat.S_ISREG(current.st_mode)
+        )
+        if (
+            not expected_type
+            or current.st_uid != os.geteuid()
+            or (current.st_dev, current.st_ino) != identity
+        ):
+            raise BrowserRuntimeError("browser_cleanup")
+        try:
+            os.unlink(name, dir_fd=root_fd)
+        except OSError as exc:
+            raise BrowserRuntimeError("browser_cleanup") from exc
+        try:
+            os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise BrowserRuntimeError("browser_cleanup") from exc
+        raise BrowserRuntimeError("browser_cleanup")
+
     def _remove_detached_source(self) -> None:
         if self.launch_root is None or not self._detached_filesystem_mounted:
             raise BrowserRuntimeError("browser_cleanup")
@@ -1678,7 +1737,12 @@ class _PinnedExecutable:
         listener: socket.socket | None = None
         connection: socket.socket | None = None
         process: subprocess.Popen[bytes] | None = None
+        root_fd: int | None = None
         authority_fd: int | None = None
+        authority_identity: tuple[int, int] | None = None
+        authority_unlinked = False
+        socket_identity: tuple[int, int] | None = None
+        socket_unlinked = False
         failure: BaseException | None = None
         cleanup_failed = False
         try:
@@ -1692,10 +1756,38 @@ class _PinnedExecutable:
                 or os.path.lexists(_BROWSER_MOUNT_AUTHORITY)
             ):
                 raise BrowserRuntimeError("browser_identity")
+            root_fd = os.open(
+                SUPERVISOR_OUTER_ROOT,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0),
+            )
+            opened_root = os.fstat(root_fd)
+            if (
+                not stat.S_ISDIR(opened_root.st_mode)
+                or (opened_root.st_dev, opened_root.st_ino)
+                != (root_info.st_dev, root_info.st_ino)
+            ):
+                raise BrowserRuntimeError("browser_identity")
             authority_fd = os.open(
-                _BROWSER_MOUNT_AUTHORITY,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                _BROWSER_MOUNT_AUTHORITY.name,
+                os.O_WRONLY
+                | os.O_CREAT
+                | os.O_EXCL
+                | getattr(os, "O_NOFOLLOW", 0),
                 0o400,
+                dir_fd=root_fd,
+            )
+            authority_info = os.fstat(authority_fd)
+            if (
+                not stat.S_ISREG(authority_info.st_mode)
+                or authority_info.st_uid != os.geteuid()
+                or stat.S_IMODE(authority_info.st_mode) != 0o400
+            ):
+                raise BrowserRuntimeError("browser_identity")
+            authority_identity = (
+                authority_info.st_dev,
+                authority_info.st_ino,
             )
             authority = _canonical_bytes(
                 {"schema": _BROWSER_MOUNT_AUTHORITY_SCHEMA, "nonce": nonce}
@@ -1703,11 +1795,33 @@ class _PinnedExecutable:
             if os.write(authority_fd, authority) != len(authority):
                 raise OSError("short browser mount authority write")
             os.fsync(authority_fd)
-            os.close(authority_fd)
+            closing_authority_fd = authority_fd
             authority_fd = None
+            os.close(closing_authority_fd)
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             listener.bind(os.fspath(_BROWSER_MOUNT_SOCKET))
+            socket_info = os.stat(
+                _BROWSER_MOUNT_SOCKET.name,
+                dir_fd=root_fd,
+                follow_symlinks=False,
+            )
+            if not stat.S_ISSOCK(socket_info.st_mode):
+                raise BrowserRuntimeError("browser_identity")
+            socket_identity = (socket_info.st_dev, socket_info.st_ino)
             os.chmod(_BROWSER_MOUNT_SOCKET, 0o600)
+            socket_info = os.stat(
+                _BROWSER_MOUNT_SOCKET.name,
+                dir_fd=root_fd,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISSOCK(socket_info.st_mode)
+                or socket_info.st_uid != os.geteuid()
+                or stat.S_IMODE(socket_info.st_mode) != 0o600
+                or (socket_info.st_dev, socket_info.st_ino)
+                != socket_identity
+            ):
+                raise BrowserRuntimeError("browser_identity")
             listener.listen(1)
             listener.settimeout(max(0.001, deadline - time.monotonic()))
             helper_argv = [
@@ -1766,7 +1880,13 @@ class _PinnedExecutable:
                 raise BrowserRuntimeError("browser_identity")
             listener.close()
             listener = None
-            _BROWSER_MOUNT_SOCKET.unlink()
+            self._unlink_owned_handoff_entry(
+                root_fd,
+                _BROWSER_MOUNT_SOCKET.name,
+                socket_identity,
+                socket_entry=True,
+            )
+            socket_unlinked = True
             self._remove_detached_source()
             self._send_mount_packet(
                 connection,
@@ -1811,7 +1931,13 @@ class _PinnedExecutable:
                 )
             connection.close()
             connection = None
-            _BROWSER_MOUNT_AUTHORITY.unlink()
+            self._unlink_owned_handoff_entry(
+                root_fd,
+                _BROWSER_MOUNT_AUTHORITY.name,
+                authority_identity,
+                socket_entry=False,
+            )
+            authority_unlinked = True
             if completion == "live":
                 self._wait_for_exec_replacement(
                     process, deadline, image_pid=peer_pid
@@ -1834,12 +1960,35 @@ class _PinnedExecutable:
                         endpoint.close()
                     except OSError:
                         cleanup_failed = True
-            for path in (_BROWSER_MOUNT_SOCKET, _BROWSER_MOUNT_AUTHORITY):
-                if os.path.lexists(path):
+            for name, identity, socket_entry, already_unlinked in (
+                (
+                    _BROWSER_MOUNT_SOCKET.name,
+                    socket_identity,
+                    True,
+                    socket_unlinked,
+                ),
+                (
+                    _BROWSER_MOUNT_AUTHORITY.name,
+                    authority_identity,
+                    False,
+                    authority_unlinked,
+                ),
+            ):
+                if identity is not None and not already_unlinked:
                     try:
-                        path.unlink()
-                    except OSError:
+                        self._unlink_owned_handoff_entry(
+                            root_fd,
+                            name,
+                            identity,
+                            socket_entry=socket_entry,
+                        )
+                    except BrowserRuntimeError:
                         cleanup_failed = True
+            if root_fd is not None:
+                try:
+                    os.close(root_fd)
+                except OSError:
+                    cleanup_failed = True
             if failure is not None and process is not None:
                 cleanup_failed = self._reap_failed_handoff(
                     process,
@@ -2567,6 +2716,11 @@ class PrelaunchedCdpRuntime:
             "browser_identity": browser_identity,
             "result": "passed",
         }
+        if self._pinned_executable.tree_manifest_sha256 is not None:
+            self.evidence["execution_authority"] = _browser_execution_authority(
+                self._pinned_executable.tree_manifest_sha256,
+                browser_identity["sha256"],
+            )
         self._profile_dir: Path | None = None
         self._profile_identity: tuple[int, int] | None = None
         self._profile_cleanup_forbidden = False
@@ -2967,6 +3121,12 @@ class SupervisedCdpAttachmentRuntime:
             "browser_identity": browser_identity,
             "result": "passed",
         }
+        tree_manifest_sha256 = os.environ.get(_BROWSER_TREE_MANIFEST_ENV)
+        if tree_manifest_sha256 is not None:
+            self.evidence["execution_authority"] = _browser_execution_authority(
+                tree_manifest_sha256,
+                browser_identity["sha256"],
+            )
 
     @staticmethod
     def _validate_socket_path() -> None:

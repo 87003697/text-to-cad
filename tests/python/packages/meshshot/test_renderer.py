@@ -4312,6 +4312,90 @@ class ResidualRendererTests(unittest.TestCase):
         self.assertEqual("browser_cleanup", raised.exception.operation)
         self.assertEqual([74], closes)
 
+    def test_linux_mount_handoff_cleanup_is_inode_bound_and_no_follow(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root_fd = os.open(
+                root,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            try:
+                authority = root / "browser-mount-authority.json"
+                authority.write_bytes(b"owned")
+                owned = authority.lstat()
+                identity = (owned.st_dev, owned.st_ino)
+                _PinnedExecutable._unlink_owned_handoff_entry(
+                    root_fd,
+                    authority.name,
+                    identity,
+                    socket_entry=False,
+                )
+                self.assertFalse(authority.exists())
+
+                authority.write_bytes(b"owned-again")
+                owned = authority.lstat()
+                identity = (owned.st_dev, owned.st_ino)
+                replacement = root / "replacement"
+                replacement.write_bytes(b"foreign-replacement")
+                os.replace(replacement, authority)
+                with self.assertRaises(BrowserRuntimeError) as raised:
+                    _PinnedExecutable._unlink_owned_handoff_entry(
+                        root_fd,
+                        authority.name,
+                        identity,
+                        socket_entry=False,
+                    )
+                self.assertEqual("browser_cleanup", raised.exception.operation)
+                self.assertEqual(b"foreign-replacement", authority.read_bytes())
+            finally:
+                os.close(root_fd)
+
+    def test_linux_runtime_evidence_binds_detached_tree_and_executable(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import PrelaunchedCdpRuntime
+
+        pinned = mock.MagicMock()
+        pinned.tree_manifest_sha256 = "d" * 64
+        browser_identity = {
+            "playwright": "1.60.0",
+            "browser": "chromium-headless-shell",
+            "revision": "1223",
+            "version": "Google Chrome for Testing 148.0.7778.96",
+            "sha256": "c" * 64,
+        }
+        profile = {"name": "frozen-adapter"}
+        with (
+            mock.patch.object(
+                browser_runtime,
+                "_load_profile",
+                return_value=(profile, "a" * 64),
+            ),
+            mock.patch.object(
+                browser_runtime,
+                "_PinnedExecutable",
+                return_value=pinned,
+            ),
+            mock.patch.object(
+                browser_runtime,
+                "_attest",
+                return_value=browser_identity,
+            ),
+        ):
+            runtime = PrelaunchedCdpRuntime(Path("/private/browser"))
+        self.assertEqual(
+            {
+                "schema": "meshshot.browser-execution-authority/1",
+                "mode": "linux-detached-readonly-revision-mount/1",
+                "tree_manifest_sha256": "d" * 64,
+                "executable_sha256": "c" * 64,
+                "mount_readonly": "passed",
+                "source_detached": "passed",
+            },
+            runtime.evidence["execution_authority"],
+        )
+
     def test_macos_readiness_deadline_starts_after_live_image_verification(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
@@ -4962,6 +5046,7 @@ class ResidualRendererTests(unittest.TestCase):
                 sync_playwright = mock.MagicMock()
                 sync_playwright.return_value.__enter__.return_value = playwright
                 pinned = mock.MagicMock()
+                pinned.tree_manifest_sha256 = None
                 pinned.popen.side_effect = OSError(detail)
 
                 with (
@@ -5001,6 +5086,7 @@ class ResidualRendererTests(unittest.TestCase):
         sync_playwright = mock.MagicMock()
         sync_playwright.return_value.__enter__.return_value = playwright
         pinned = mock.MagicMock()
+        pinned.tree_manifest_sha256 = None
         pinned.popen.side_effect = OSError("sensitive launch detail")
         triangle = ((-0.2, -0.2, 0.0), (0.2, -0.2, 0.0), (0.0, 0.2, 0.0))
 

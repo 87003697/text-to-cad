@@ -13,6 +13,7 @@ from unittest import mock
 from scripts.pilot import deployment_authority
 from scripts.pilot import provider_free_runner
 from scripts.pilot.cvm_job import protocol
+from scripts.pilot.cvm_job import runtime as cvm_runtime
 
 
 class ProviderFreeRunnerTests(unittest.TestCase):
@@ -56,6 +57,9 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         self.browser.chmod(0o755)
         self.browser = self.browser.resolve(strict=True)
         self.browser_cache = self.browser_cache.resolve(strict=True)
+        self.tree_manifest_sha256 = cvm_runtime._browser_tree_manifest_sha256(
+            cvm_runtime._browser_tree_manifest(self.browser.parents[1])
+        )
         self.trusted_bwrap_patch = mock.patch.object(
             deployment_authority,
             "TRUSTED_BWRAP_PATH",
@@ -105,7 +109,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             },
             "execution_profile": {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/16",
+                "id": "issue15.provider-free-bounded/17",
                 "provider_access": "forbidden",
             },
             "request_authority": {
@@ -130,7 +134,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
             "LANG": "C.UTF-8",
             "LC_ALL": "C.UTF-8",
             "PYTHONDONTWRITEBYTECODE": "1",
-            "CVM_PROVIDER_FREE_PROFILE": "issue15.provider-free-bounded/16",
+            "CVM_PROVIDER_FREE_PROFILE": "issue15.provider-free-bounded/17",
             "CVM_PROVIDER_FREE_STRIPPED_NAMES": (
                 "ANTHROPIC_API_KEY,HTTPS_PROXY,OPENAI_API_KEY,VENUS_TOKEN"
             ),
@@ -338,6 +342,14 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                             "version": "Google Chrome for Testing 148.0.7778.96",
                             "sha256": self.runtime_identity["chromium"]["sha256"],
                         },
+                        "execution_authority": {
+                            "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
+                            "mode": "linux-detached-readonly-revision-mount/1",
+                            "tree_manifest_sha256": self.tree_manifest_sha256,
+                            "executable_sha256": self.runtime_identity["chromium"]["sha256"],
+                            "mount_readonly": "passed",
+                            "source_detached": "passed",
+                        },
                         "result": "passed",
                     }
                 }
@@ -419,6 +431,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 exp_dir,
                 "issue15-runtime-authority",
                 expected_browser_sha256=self.runtime_identity["chromium"]["sha256"],
+                expected_tree_manifest_sha256=self.tree_manifest_sha256,
             )
 
     def test_success_rejects_tampered_browser_exec_diagnostic(self) -> None:
@@ -438,6 +451,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 exp_dir,
                 "issue15-runtime-authority",
                 expected_browser_sha256=self.runtime_identity["chromium"]["sha256"],
+                expected_tree_manifest_sha256=self.tree_manifest_sha256,
             )
 
     def test_success_rejects_preview_browser_digest_outside_deployment_authority(self) -> None:
@@ -460,6 +474,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 exp_dir,
                 "issue15-runtime-authority",
                 expected_browser_sha256=self.runtime_identity["chromium"]["sha256"],
+                expected_tree_manifest_sha256=self.tree_manifest_sha256,
             )
 
     def test_retired_nested_exec_failure_is_rejected(

@@ -21,6 +21,12 @@ from scripts.pilot.cvm_job import protocol
 
 class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.environment_patch = mock.patch.dict(
+            os.environ,
+            {"MESHSHOT_BROWSER_TREE_MANIFEST_SHA256": "d" * 64},
+        )
+        self.environment_patch.start()
+        self.addCleanup(self.environment_patch.stop)
         self.temporary = tempfile.TemporaryDirectory(prefix="provider-free-scenario-")
         self.addCleanup(self.temporary.cleanup)
         self.browser_supervisor = provider_free_scenarios._browser_supervisor
@@ -136,6 +142,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 "PLAYWRIGHT_BROWSERS_PATH",
                 "MESHSHOT_BROWSER_EXECUTABLE",
                 "MESHSHOT_EXECUTABLE_ROOT",
+                "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256",
                 "PYTHONDONTWRITEBYTECODE",
             },
             set(popen.call_args.kwargs["env"]),
@@ -972,6 +979,14 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                                         "version": "Google Chrome for Testing 148.0.7778.96",
                                         "sha256": "2" * 64,
                                     },
+                                    "execution_authority": {
+                                        "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
+                                        "mode": "linux-detached-readonly-revision-mount/1",
+                                        "tree_manifest_sha256": "d" * 64,
+                                        "executable_sha256": "2" * 64,
+                                        "mount_readonly": "passed",
+                                        "source_detached": "passed",
+                                    },
                                     "result": "passed",
                                 }
                             },
@@ -1687,6 +1702,14 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                                 "version": "Google Chrome for Testing 148.0.7778.96",
                                 "sha256": "2" * 64,
                             },
+                            "execution_authority": {
+                                "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
+                                "mode": "linux-detached-readonly-revision-mount/1",
+                                "tree_manifest_sha256": "d" * 64,
+                                "executable_sha256": "2" * 64,
+                                "mount_readonly": "passed",
+                                "source_detached": "passed",
+                            },
                             "result": "passed",
                         }
                     },
@@ -1873,6 +1896,14 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                                 "version": "Google Chrome for Testing 148.0.7778.96",
                                 "sha256": "2" * 64,
                             },
+                            "execution_authority": {
+                                "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
+                                "mode": "linux-detached-readonly-revision-mount/1",
+                                "tree_manifest_sha256": "d" * 64,
+                                "executable_sha256": "2" * 64,
+                                "mount_readonly": "passed",
+                                "source_detached": "passed",
+                            },
                             "result": "passed",
                         }
                     },
@@ -1931,6 +1962,14 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 "revision": "1223",
                 "version": "Google Chrome for Testing 148.0.7778.96",
                 "sha256": "3" * 64,
+            },
+            "execution_authority": {
+                "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
+                "mode": "linux-detached-readonly-revision-mount/1",
+                "tree_manifest_sha256": "d" * 64,
+                "executable_sha256": "3" * 64,
+                "mount_readonly": "passed",
+                "source_detached": "passed",
             },
             "result": "passed",
         }
@@ -2281,6 +2320,14 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                                 "version": "Google Chrome for Testing 148.0.7778.96",
                                 "sha256": "2" * 64,
                             },
+                            "execution_authority": {
+                                "schema": protocol.PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA,
+                                "mode": "linux-detached-readonly-revision-mount/1",
+                                "tree_manifest_sha256": "d" * 64,
+                                "executable_sha256": "2" * 64,
+                                "mount_readonly": "passed",
+                                "source_detached": "passed",
+                            },
                             "result": "passed",
                         }
                     },
@@ -2365,6 +2412,9 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 "--setenv",
                 "MESHSHOT_BROWSER_RUNTIME_MODE",
                 "provider-free-supervised-cdp/1",
+                "--setenv",
+                "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256",
+                "d" * 64,
                 "--chdir",
                 "/workspace/repo",
                 "--",

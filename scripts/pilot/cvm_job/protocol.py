@@ -143,6 +143,9 @@ PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE = (
     "chrome-headless-shell-linux64/chrome-headless-shell"
 )
 PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA = "meshshot.prelaunched-cdp-runtime/1"
+PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA = (
+    "meshshot.browser-execution-authority/1"
+)
 PROVIDER_FREE_BROWSER_ADAPTER_PROFILE = "playwright-1.60-chromium-1223-loopback-cdp/1"
 PROVIDER_FREE_BROWSER_ADAPTER_PROFILE_SHA256 = (
     "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
@@ -153,6 +156,7 @@ def provider_free_browser_runtime_allowed(
     receipt: object,
     *,
     expected_browser_sha256: object,
+    expected_tree_manifest_sha256: object,
 ) -> bool:
     """Validate the closed production browser result without lifecycle internals."""
 
@@ -160,11 +164,13 @@ def provider_free_browser_runtime_allowed(
         "schema",
         "adapter_profile",
         "browser_identity",
+        "execution_authority",
         "result",
     }:
         return False
     adapter = receipt.get("adapter_profile")
     browser = receipt.get("browser_identity")
+    authority = receipt.get("execution_authority")
     return (
         receipt.get("schema") == PROVIDER_FREE_BROWSER_RUNTIME_SCHEMA
         and receipt.get("result") == "passed"
@@ -182,6 +188,28 @@ def provider_free_browser_runtime_allowed(
         and isinstance(expected_browser_sha256, str)
         and re.fullmatch(r"[0-9a-f]{64}", expected_browser_sha256) is not None
         and browser.get("sha256") == expected_browser_sha256
+        and isinstance(expected_tree_manifest_sha256, str)
+        and re.fullmatch(r"[0-9a-f]{64}", expected_tree_manifest_sha256)
+        is not None
+        and isinstance(authority, dict)
+        and set(authority)
+        == {
+            "schema",
+            "mode",
+            "tree_manifest_sha256",
+            "executable_sha256",
+            "mount_readonly",
+            "source_detached",
+        }
+        and authority.get("schema")
+        == PROVIDER_FREE_BROWSER_EXECUTION_AUTHORITY_SCHEMA
+        and authority.get("mode")
+        == "linux-detached-readonly-revision-mount/1"
+        and authority.get("tree_manifest_sha256")
+        == expected_tree_manifest_sha256
+        and authority.get("executable_sha256") == expected_browser_sha256
+        and authority.get("mount_readonly") == "passed"
+        and authority.get("source_detached") == "passed"
     )
 
 

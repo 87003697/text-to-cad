@@ -621,6 +621,19 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
         "staged_executable": PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
         "destination_filesystem": "read-only-bind-of-exec-permitted-host-stage",
         "tree_validation": "regular-files-only-no-links-or-special",
+        "tree_manifest": {
+            "schema": "meshshot.browser-tree-manifest/1",
+            "coverage": "complete-attested-revision-tree",
+            "binding": "canonical-sha256",
+        },
+        "execution_authority": {
+            "schema": "meshshot.browser-execution-authority/1",
+            "mode": "linux-detached-readonly-revision-mount/1",
+            "private_filesystem": "job-private-exec-tmpfs",
+            "handoff": "authenticated-seqpacket-mounted-detached-exec",
+            "writable_source_after_handoff": "absent",
+            "running_image_proof": "exact-proc-image-fd-identity",
+        },
         "executable_validation": {
             "sha256": "deployment-runtime-identity",
             "execute_bits": "required",
@@ -1355,11 +1368,44 @@ def _provider_free_common_evidence_result(
     environment_names = (
         sandbox.get("environment_names") if isinstance(sandbox, dict) else None
     )
+    tree_manifest_values = (
+        [
+            argv[index + 2]
+            for index in range(len(argv) - 2)
+            if argv[index : index + 2]
+            == ["--setenv", "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"]
+        ]
+        if isinstance(argv, list)
+        else []
+    )
+    tree_manifest_sha256 = (
+        tree_manifest_values[0] if len(tree_manifest_values) == 1 else None
+    )
+    runtime_identity = record["request_authority"]["runtime_identity"]
     expected_argv = provider_free_sandbox_argv(
         record["scenario"]["name"],
         exp_dir,
-        record["request_authority"]["runtime_identity"],
+        runtime_identity,
     )
+    if re.fullmatch(r"[0-9a-f]{64}", tree_manifest_sha256 or "") is None:
+        expected_argv = []
+    else:
+        staged_target = f"{PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested"
+        try:
+            staged_index = next(
+                index
+                for index in range(len(expected_argv) - 2)
+                if expected_argv[index] == "--ro-bind"
+                and expected_argv[index + 2] == staged_target
+            )
+        except StopIteration:
+            expected_argv = []
+        else:
+            expected_argv[staged_index + 3 : staged_index + 3] = [
+                "--setenv",
+                "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256",
+                tree_manifest_sha256,
+            ]
     if (
         not isinstance(sandbox, dict)
         or sandbox.get("schema") != "cvm.provider-free-sandbox-enforcement/1"

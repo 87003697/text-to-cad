@@ -626,6 +626,21 @@ class CvmJobTests(unittest.TestCase):
                     "read-only-bind-of-exec-permitted-host-stage"
                 ),
                 "tree_validation": "regular-files-only-no-links-or-special",
+                "tree_manifest": {
+                    "schema": "meshshot.browser-tree-manifest/1",
+                    "coverage": "complete-attested-revision-tree",
+                    "binding": "canonical-sha256",
+                },
+                "execution_authority": {
+                    "schema": "meshshot.browser-execution-authority/1",
+                    "mode": "linux-detached-readonly-revision-mount/1",
+                    "private_filesystem": "job-private-exec-tmpfs",
+                    "handoff": (
+                        "authenticated-seqpacket-mounted-detached-exec"
+                    ),
+                    "writable_source_after_handoff": "absent",
+                    "running_image_proof": "exact-proc-image-fd-identity",
+                },
                 "executable_validation": {
                     "sha256": "deployment-runtime-identity",
                     "execute_bits": "required",
@@ -831,16 +846,37 @@ class CvmJobTests(unittest.TestCase):
                 deployed_receipt_path.read_bytes()
             )
             runtime_identity = deployed_receipt["runtime_identity"]
+            browser_root = Path(
+                runtime_identity["chromium"]["executable_path"]
+            ).parents[1]
+            tree_manifest_sha256 = runtime._browser_tree_manifest_sha256(
+                runtime._browser_tree_manifest(browser_root)
+            )
+            sandbox_argv = runtime.provider_free_sandbox_argv(
+                state["scenario"]["name"],
+                exp_dir,
+                runtime_identity,
+            )
+            staged_target = (
+                f"{protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested"
+            )
+            staged_index = next(
+                index
+                for index in range(len(sandbox_argv) - 2)
+                if sandbox_argv[index] == "--ro-bind"
+                and sandbox_argv[index + 2] == staged_target
+            )
+            sandbox_argv[staged_index + 3 : staged_index + 3] = [
+                "--setenv",
+                "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256",
+                tree_manifest_sha256,
+            ]
             (exp_dir / "run/sandbox-enforcement.json").write_text(
                 json.dumps(
                     {
                         "schema": "cvm.provider-free-sandbox-enforcement/1",
                         "network": "isolated-loopback",
-                        "argv": runtime.provider_free_sandbox_argv(
-                            state["scenario"]["name"],
-                            exp_dir,
-                            runtime_identity,
-                        ),
+                        "argv": sandbox_argv,
                         "environment_names": [
                             "HOME",
                             "LANG",
@@ -1146,9 +1182,9 @@ class CvmJobTests(unittest.TestCase):
             state["execution_profile"],
             {
                 "schema": "cvm.provider-free-execution-profile/1",
-                "id": "issue15.provider-free-bounded/16",
+                "id": "issue15.provider-free-bounded/17",
                 "provider_access": "forbidden",
-                "sandbox_profile": "cvm.provider-free-linux-sandbox/16",
+                "sandbox_profile": "cvm.provider-free-linux-sandbox/17",
             },
         )
         self.assertEqual(
@@ -1274,7 +1310,7 @@ class CvmJobTests(unittest.TestCase):
         child_environment = captured["env"]
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_PROFILE"],
-            "issue15.provider-free-bounded/16",
+            "issue15.provider-free-bounded/17",
         )
         self.assertEqual(
             child_environment["CVM_PROVIDER_FREE_STRIPPED_NAMES"],

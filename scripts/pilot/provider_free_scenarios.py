@@ -643,6 +643,14 @@ def _preview_sandbox_argv(argv: Sequence[str], *, cwd: Path) -> list[str]:
         raise ScenarioError("trusted preview sandbox runtime unavailable") from exc
     if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
         raise ScenarioError("trusted preview sandbox runtime invalid")
+    tree_manifest_sha256 = os.environ.get(
+        "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"
+    )
+    if (
+        not isinstance(tree_manifest_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", tree_manifest_sha256) is None
+    ):
+        raise ScenarioError("provider-free browser tree authority unavailable")
     return [
         os.fspath(TRUSTED_BWRAP_PATH),
         "--die-with-parent",
@@ -672,6 +680,9 @@ def _preview_sandbox_argv(argv: Sequence[str], *, cwd: Path) -> list[str]:
         "--setenv",
         "MESHSHOT_BROWSER_RUNTIME_MODE",
         PROVIDER_FREE_BROWSER_RUNTIME_MODE,
+        "--setenv",
+        "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256",
+        tree_manifest_sha256,
         "--chdir",
         os.fspath(cwd),
         "--",
@@ -991,6 +1002,18 @@ def _closed_supervisor_failure(value: Any) -> ScenarioError:
 def _browser_supervisor() -> Any:
     """Start one fixed outer owner and require terminal socket/process cleanup."""
 
+    tree_manifest_sha256 = os.environ.get(
+        "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"
+    )
+    if (
+        not isinstance(tree_manifest_sha256, str)
+        or re.fullmatch(r"[0-9a-f]{64}", tree_manifest_sha256) is None
+    ):
+        raise ScenarioError(
+            "provider-free browser tree authority unavailable",
+            operation="preview_browser_identity",
+            browser_identity_substage="runtime_evidence_cross_binding",
+        )
     environment = {
         "HOME": "/home/provider-free",
         "LANG": "C.UTF-8",
@@ -999,6 +1022,7 @@ def _browser_supervisor() -> Any:
         "PLAYWRIGHT_BROWSERS_PATH": PROVIDER_FREE_STAGED_BROWSER_CACHE,
         "MESHSHOT_BROWSER_EXECUTABLE": PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
         "MESHSHOT_EXECUTABLE_ROOT": PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
+        "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256": tree_manifest_sha256,
         "PYTHONDONTWRITEBYTECODE": "1",
     }
     process: subprocess.Popen[bytes] | None = None
@@ -1854,6 +1878,9 @@ def _run_voxblame_preview(
     }
     is_linux = platform.system() == "Linux"
     expected_browser_sha256: str | None = None
+    expected_tree_manifest_sha256 = os.environ.get(
+        "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"
+    )
     try:
         if is_linux:
             expected_browser_sha256 = _validate_attested_browser_runtime()
@@ -1982,6 +2009,7 @@ def _run_voxblame_preview(
             or not provider_free_browser_runtime_allowed(
                 browser_runtime,
                 expected_browser_sha256=expected_browser_sha256,
+                expected_tree_manifest_sha256=expected_tree_manifest_sha256,
             )
         ):
             operation = "preview_browser_identity"
