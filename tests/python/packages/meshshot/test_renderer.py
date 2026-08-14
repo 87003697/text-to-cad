@@ -5062,7 +5062,8 @@ class ResidualRendererTests(unittest.TestCase):
                 return_value=Path(directory),
             ):
                 owned = browser_runtime._private_directory("meshshot-tree-")
-            known = {owned.parent_fd, owned.directory_fd}
+            mounted_fd = 91
+            underlying_info = os.fstat(owned.directory_fd)
             pinned = object.__new__(_PinnedExecutable)
             pinned._detached_filesystem_mounted = False
             pinned._namespace_discard_owned = True
@@ -5073,14 +5074,34 @@ class ResidualRendererTests(unittest.TestCase):
             pinned._detached_underlying_identity = None
             pinned._detached_mounted_identity = None
             real_close = os.close
+            injected_close_failure = False
 
             def close_then_fail(descriptor: int) -> None:
-                real_close(descriptor)
-                if descriptor not in known:
+                nonlocal injected_close_failure
+                if descriptor == mounted_fd:
+                    injected_close_failure = True
                     raise OSError("earlier mounted descriptor close")
+                real_close(descriptor)
+
+            real_fstat = os.fstat
+
+            def fstat(descriptor: int) -> os.stat_result:
+                if descriptor == mounted_fd:
+                    return underlying_info
+                return real_fstat(descriptor)
 
             with (
                 mock.patch.object(pinned, "_mount_private_filesystem"),
+                mock.patch.object(
+                    browser_runtime.os,
+                    "open",
+                    return_value=mounted_fd,
+                ),
+                mock.patch.object(
+                    browser_runtime.os,
+                    "fstat",
+                    side_effect=fstat,
+                ),
                 mock.patch.object(
                     pinned,
                     "_relinquish_detached_mount_authority",
@@ -5099,6 +5120,7 @@ class ResidualRendererTests(unittest.TestCase):
                 "detached_mount_retained",
                 raised.exception.browser_cleanup_check,
             )
+            self.assertTrue(injected_close_failure)
             self.assertTrue(raised.exception._browser_cleanup_retained)
 
     def test_detached_materialization_preserves_body_before_release_cleanup(

@@ -1999,22 +1999,33 @@ class _PinnedExecutable:
             self.launch_root = root
             self.launch_path = target
         except BaseException as exc:
-            cleanup_error: BrowserRuntimeError | None = None
+            cleanup_error: BrowserRuntimeError | None = (
+                exc if _is_typed_browser_cleanup(exc) else None
+            )
+
+            def record_cleanup(error: BrowserRuntimeError) -> None:
+                nonlocal cleanup_error
+                if cleanup_error is None or _is_retained_browser_cleanup(error):
+                    cleanup_error = error
+
             if descriptor is not None:
                 try:
                     os.close(descriptor)
                 except OSError:
-                    cleanup_error = BrowserRuntimeError(
-                        "browser_cleanup",
-                        browser_cleanup_substage="private_browser_pinned_image",
-                        browser_cleanup_check="executable_descriptor_close",
+                    record_cleanup(
+                        BrowserRuntimeError(
+                            "browser_cleanup",
+                            browser_cleanup_substage=(
+                                "private_browser_pinned_image"
+                            ),
+                            browser_cleanup_check="executable_descriptor_close",
+                        )
                     )
             if self._detached_filesystem_mounted:
                 try:
                     self._relinquish_detached_mount_authority()
                 except BrowserRuntimeError as release_error:
-                    if cleanup_error is None:
-                        cleanup_error = release_error
+                    record_cleanup(release_error)
             try:
                 owned_root.close_authority()
             except BrowserRuntimeError:
@@ -2106,22 +2117,35 @@ class _PinnedExecutable:
             mounted_fd = None
             self._detached_mounted_identity = (mounted.st_dev, mounted.st_ino)
         except (BrowserRuntimeError, OSError) as exc:
-            cleanup_error: BrowserRuntimeError | None = None
+            cleanup_error: BrowserRuntimeError | None = (
+                exc if _is_typed_browser_cleanup(exc) else None
+            )
+
+            def record_cleanup(error: BrowserRuntimeError) -> None:
+                nonlocal cleanup_error
+                if cleanup_error is None or _is_retained_browser_cleanup(error):
+                    cleanup_error = error
+
             if mounted_fd is not None:
                 try:
                     os.close(mounted_fd)
                 except OSError:
-                    cleanup_error = BrowserRuntimeError(
-                        "browser_cleanup",
-                        browser_cleanup_substage="private_browser_pinned_image",
-                        browser_cleanup_check="detached_mounted_descriptor_close",
+                    record_cleanup(
+                        BrowserRuntimeError(
+                            "browser_cleanup",
+                            browser_cleanup_substage=(
+                                "private_browser_pinned_image"
+                            ),
+                            browser_cleanup_check=(
+                                "detached_mounted_descriptor_close"
+                            ),
+                        )
                     )
             if self._detached_filesystem_mounted:
                 try:
                     self._relinquish_detached_mount_authority()
                 except BrowserRuntimeError as release_error:
-                    if cleanup_error is None:
-                        cleanup_error = release_error
+                    record_cleanup(release_error)
             elif self._detached_underlying_fd is not None:
                 underlying_fd = self._detached_underlying_fd
                 parent_fd = self._detached_mount_parent_fd
@@ -2137,15 +2161,21 @@ class _PinnedExecutable:
                         and (opened_underlying.st_dev, opened_underlying.st_ino)
                         == identity
                     )
-                    if not valid and cleanup_error is None:
-                        cleanup_error = BrowserRuntimeError(
-                            "browser_cleanup",
-                            browser_cleanup_substage="private_browser_pinned_image",
-                            browser_cleanup_check="detached_underlying_identity",
+                    if not valid:
+                        record_cleanup(
+                            BrowserRuntimeError(
+                                "browser_cleanup",
+                                browser_cleanup_substage=(
+                                    "private_browser_pinned_image"
+                                ),
+                                browser_cleanup_check=(
+                                    "detached_underlying_identity"
+                                ),
+                            )
                         )
                 except OSError:
-                    if cleanup_error is None:
-                        cleanup_error = BrowserRuntimeError(
+                    record_cleanup(
+                        BrowserRuntimeError(
                             "browser_cleanup",
                             browser_cleanup_substage=(
                                 "private_browser_pinned_image"
@@ -2154,43 +2184,47 @@ class _PinnedExecutable:
                                 "detached_underlying_identity"
                             ),
                         )
+                    )
                 if underlying_fd is not None:
                     try:
                         os.close(underlying_fd)
                     except OSError:
-                        if cleanup_error is None:
-                            cleanup_error = BrowserRuntimeError(
+                        record_cleanup(
+                            BrowserRuntimeError(
                                 "browser_cleanup",
                                 browser_cleanup_substage="private_browser_pinned_image",
                                 browser_cleanup_check=(
                                     "detached_underlying_descriptor_close"
                                 ),
                             )
+                        )
                     self._detached_underlying_fd = None
                 if parent_fd is not None:
                     try:
                         os.close(parent_fd)
                     except OSError:
-                        if cleanup_error is None:
-                            cleanup_error = BrowserRuntimeError(
+                        record_cleanup(
+                            BrowserRuntimeError(
                                 "browser_cleanup",
                                 browser_cleanup_substage="private_browser_pinned_image",
                                 browser_cleanup_check=(
                                     "detached_parent_descriptor_close"
                                 ),
                             )
+                        )
                 self._detached_mount_parent_fd = None
                 self._detached_mount_name = None
                 self._detached_underlying_identity = None
             try:
                 owned_root.close_authority()
             except BrowserRuntimeError:
-                if cleanup_error is None:
-                    cleanup_error = BrowserRuntimeError(
+                record_cleanup(
+                    BrowserRuntimeError(
                         "browser_cleanup",
                         browser_cleanup_substage="private_browser_pinned_image",
                         browser_cleanup_check="detached_mount_authority",
                     )
+                )
             if cleanup_error is not None:
                 raise cleanup_error from exc
             if isinstance(exc, BrowserRuntimeError):
