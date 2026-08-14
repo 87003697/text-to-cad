@@ -1757,7 +1757,15 @@ class _PinnedExecutable:
                     or set(failed) != {"schema", "type", "cause"}
                     or failed.get("schema") != _BROWSER_MOUNT_SCHEMA
                     or failed.get("type") != "failed"
-                    or cause not in {"setup", "permission", "missing", "format", "other"}
+                    or cause
+                    not in {
+                        "setup",
+                        "permission",
+                        "missing",
+                        "target_missing",
+                        "format",
+                        "other",
+                    }
                 ):
                     raise BrowserRuntimeError("browser_identity")
                 raise BrowserRuntimeError("browser_identity") from OSError(

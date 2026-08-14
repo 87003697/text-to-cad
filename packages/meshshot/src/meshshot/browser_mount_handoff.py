@@ -172,6 +172,25 @@ def main() -> int:
             _packet({"schema": SCHEMA, "type": "exec", "nonce": nonce})
         )
         connection.set_inheritable(False)
+        try:
+            detached_info = EXECUTABLE.lstat()
+            if (
+                not stat.S_ISREG(detached_info.st_mode)
+                or (detached_info.st_dev, detached_info.st_ino)
+                != (executable_info.st_dev, executable_info.st_ino)
+            ):
+                raise OSError("detached browser identity changed")
+        except OSError:
+            connection.sendall(
+                _packet(
+                    {
+                        "schema": SCHEMA,
+                        "type": "failed",
+                        "cause": "target_missing",
+                    }
+                )
+            )
+            return 127
         environment = {
             name: os.environ[name]
             for name in sorted(_ENVIRONMENT)
