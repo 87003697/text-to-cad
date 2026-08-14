@@ -432,6 +432,67 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             raised.exception.browser_cleanup_check,
         )
 
+    def test_outer_browser_stage_preserves_body_cleanup_before_later_close(self) -> None:
+        source, destination, manifest_sha256 = self._browser_stage_roots()
+        manifest = deployment_authority.browser_tree_manifest(
+            source,
+            readonly_projection=True,
+        )
+        libc = mock.MagicMock()
+        libc.prctl.return_value = 0
+        real_close = os.close
+        close_calls = 0
+
+        def close_copy_and_outer_then_fail(descriptor: int) -> None:
+            nonlocal close_calls
+            close_calls += 1
+            real_close(descriptor)
+            raise OSError("ordered descriptor cleanup failure")
+
+        with (
+            mock.patch.object(provider_free_scenarios.platform, "system", return_value="Linux"),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_BROWSER_SOURCE_REVISION",
+                os.fspath(source),
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_STAGED_BROWSER_CACHE",
+                os.fspath(destination),
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_TREE_MANIFEST_SHA256": manifest_sha256},
+            ),
+            mock.patch.object(provider_free_scenarios.ctypes, "CDLL", return_value=libc),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_linux_filesystem_type",
+                return_value=provider_free_scenarios._LINUX_TMPFS_MAGIC,
+            ),
+            mock.patch.object(
+                provider_free_scenarios.deployment_authority,
+                "_browser_tree_manifest_from_fd",
+                return_value=manifest,
+            ),
+            mock.patch.object(
+                provider_free_scenarios.os,
+                "close",
+                side_effect=close_copy_and_outer_then_fail,
+            ),
+            self.assertRaises(provider_free_scenarios.ScenarioError) as raised,
+        ):
+            provider_free_scenarios._materialize_outer_browser_stage()
+
+        self.assertGreaterEqual(close_calls, 4)
+        self.assertEqual("preview_browser_cleanup", raised.exception.operation)
+        self.assertEqual("outer_browser_stage", raised.exception.browser_cleanup_substage)
+        self.assertEqual(
+            "tree_copy_descriptor_close",
+            raised.exception.browser_cleanup_check,
+        )
+
     def test_outer_browser_stage_rejects_dumpable_isolation_failure(self) -> None:
         source, destination, manifest_sha256 = self._browser_stage_roots()
         libc = mock.MagicMock()

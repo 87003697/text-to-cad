@@ -2738,6 +2738,172 @@ class ResidualRendererTests(unittest.TestCase):
                 raised.exception.browser_cleanup_check,
             )
 
+    def test_pinned_source_descriptor_close_failure_is_cleanup(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+            executable.chmod(0o755)
+            real_close = os.close
+            closed = False
+
+            def close_source_then_fail(descriptor: int) -> None:
+                nonlocal closed
+                real_close(descriptor)
+                if not closed:
+                    closed = True
+                    raise OSError("source descriptor close")
+
+            with (
+                mock.patch.object(
+                    _PinnedExecutable,
+                    "_materialize_private_image",
+                    autospec=True,
+                ),
+                mock.patch.object(
+                    browser_runtime.os,
+                    "close",
+                    side_effect=close_source_then_fail,
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable(executable)
+
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_pinned_image",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "executable_descriptor_close",
+            raised.exception.browser_cleanup_check,
+        )
+
+    def test_private_image_output_close_and_body_failure_keep_first_cleanup(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+            executable.chmod(0o755)
+            source_fd = os.open(executable, os.O_RDONLY)
+            source_info = os.fstat(source_fd)
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.path = executable
+            pinned._detached_mount_mode = False
+            pinned.fd = None
+            pinned.launch_root = None
+            real_open = os.open
+            real_close = os.close
+            output_fd: int | None = None
+
+            def remember_output(path: object, flags: int, *args: object, **kwargs: object) -> int:
+                nonlocal output_fd
+                descriptor = real_open(path, flags, *args, **kwargs)
+                if flags & os.O_WRONLY:
+                    output_fd = descriptor
+                return descriptor
+
+            def close_output_then_fail(descriptor: int) -> None:
+                real_close(descriptor)
+                if descriptor == output_fd:
+                    raise OSError("output descriptor close")
+
+            try:
+                with (
+                    mock.patch.object(browser_runtime.os, "open", side_effect=remember_output),
+                    mock.patch.object(browser_runtime.os, "close", side_effect=close_output_then_fail),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    pinned._materialize_private_image(source_fd, source_info)
+            finally:
+                os.close(source_fd)
+
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_private_tree",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual("tree_descriptor_close", raised.exception.browser_cleanup_check)
+
+        cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_private_tree",
+            browser_cleanup_check="tree_descriptor_close",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+            executable.chmod(0o755)
+            source_fd = os.open(executable, os.O_RDONLY)
+            source_info = os.fstat(source_fd)
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.path = executable
+            pinned._detached_mount_mode = False
+            pinned.fd = None
+            pinned.launch_root = None
+            try:
+                with (
+                    mock.patch.object(pinned, "_freeze_directories", side_effect=cleanup),
+                    mock.patch.object(
+                        pinned,
+                        "_thaw_directories",
+                        side_effect=OSError("later thaw cleanup"),
+                    ),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    pinned._materialize_private_image(source_fd, source_info)
+            finally:
+                os.close(source_fd)
+        self.assertEqual("tree_descriptor_close", raised.exception.browser_cleanup_check)
+
+    def test_detached_materialization_old_descriptor_close_is_cleanup(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+            executable.chmod(0o755)
+            source_info = executable.stat()
+            old_fd = os.open(os.devnull, os.O_RDONLY)
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.path = executable
+            pinned.fd = old_fd
+            pinned.launch_root = None
+            pinned._detached_mount_mode = True
+            pinned._source_identity = (
+                source_info.st_dev,
+                source_info.st_ino,
+                source_info.st_size,
+                source_info.st_mode,
+            )
+            real_close = os.close
+
+            def close_old_then_fail(descriptor: int) -> None:
+                real_close(descriptor)
+                if descriptor == old_fd:
+                    raise OSError("old pinned descriptor close")
+
+            with (
+                mock.patch.object(browser_runtime.os, "close", side_effect=close_old_then_fail),
+                mock.patch.object(pinned, "_materialize_detached_tree"),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned._ensure_detached_materialized()
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_pinned_image",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "executable_descriptor_close",
+            raised.exception.browser_cleanup_check,
+        )
+
         with tempfile.TemporaryDirectory() as directory:
             pinned = object.__new__(_PinnedExecutable)
             pinned.fd = None
@@ -3962,6 +4128,14 @@ class ResidualRendererTests(unittest.TestCase):
                 _handoff_completion="version",
             )
         self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_handoff",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "pipe_descriptor_close",
+            raised.exception.browser_cleanup_check,
+        )
         self.assertIsNone(raised.exception.browser_identity_check)
         self.assertNotIn("private", str(raised.exception))
 
@@ -4024,15 +4198,15 @@ class ResidualRendererTests(unittest.TestCase):
                     browser_runtime._FD_EXEC_CLEANUP_KILL_SECONDS
                 ),
             )
-            if remaining_close_failed:
-                self.assertEqual("browser_cleanup", raised.exception.operation)
-                self.assertIsNone(raised.exception.browser_identity_check)
-            else:
-                self.assertEqual("browser_identity", raised.exception.operation)
-                self.assertEqual(
-                    "private_version_handoff_setup",
-                    raised.exception.browser_identity_check,
-                )
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+            self.assertEqual(
+                "private_browser_handoff",
+                raised.exception.browser_cleanup_substage,
+            )
+            self.assertEqual(
+                "pipe_descriptor_close",
+                raised.exception.browser_cleanup_check,
+            )
 
     def test_linux_failed_group_handoff_gets_bounded_kill_and_reap(self) -> None:
         from meshshot import browser_runtime
@@ -4230,14 +4404,15 @@ class ResidualRendererTests(unittest.TestCase):
                     close_fds=True,
                     _handoff_completion="version",
                 )
-            if failed_fd == 101:
-                self.assertEqual("browser_cleanup", raised.exception.operation)
-            else:
-                self.assertEqual("browser_identity", raised.exception.operation)
-                self.assertEqual(
-                    "private_version_handoff_setup",
-                    raised.exception.browser_identity_check,
-                )
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+            self.assertEqual(
+                "private_browser_handoff",
+                raised.exception.browser_cleanup_substage,
+            )
+            self.assertEqual(
+                "pipe_descriptor_close",
+                raised.exception.browser_cleanup_check,
+            )
             self.assertEqual({101, 102}, closed)
             reap.assert_called_once()
 
