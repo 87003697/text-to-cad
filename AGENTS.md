@@ -11,9 +11,10 @@ don't need this file.
 ## Landmines — do not step on these
 
 - **Branches.** Work on `develop`. Do not use `main` for dev work.
-- **CVM operations.** Push code, pull pilot outputs, and batch code
-  snapshots go through skills — `/cvm-push`, `/cvm-pull`, `/snapshot-batch`
-  — not raw `rsync`/`scp`/`aws s3 cp`. See
+- **CVM operations.** Push code, pull pilot outputs, batch code snapshots, and
+  Browser Sidecar image provisioning/probes go through skills — `/cvm-push`,
+  `/cvm-pull`, `/snapshot-batch`, `/cvm-sidecar-probe` — not raw
+  `rsync`/`scp`/`aws s3 cp`. See
   `.claude/skills/cvm-*/SKILL.md`.
 - **Skill isolation.** Skills are self-contained at runtime. No imports
   between skills or from `skills/` root. Shared helpers live in
