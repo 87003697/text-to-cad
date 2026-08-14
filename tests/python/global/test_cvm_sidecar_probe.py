@@ -717,6 +717,77 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             )
             self.assertFalse(any("--delete" in call["argv"] for call in calls))
 
+    def test_name_collision_never_removes_unowned_resources(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-foreign-collision-") as root_text:
+            root = Path(root_text)
+            repo = root / "repo"
+            copy_cli(repo)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            docker_log = root / "docker.jsonl"
+            docker = fake_bin / "docker"
+            docker.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json, os, pathlib, sys
+                    log = pathlib.Path(os.environ["FAKE_DOCKER_LOG"])
+                    argv = sys.argv[1:]
+                    with log.open("a") as stream:
+                        stream.write(json.dumps(argv) + "\\n")
+                    if argv[:2] == ["network", "create"]:
+                        raise SystemExit(1)  # deterministic foreign-name collision
+                    if argv[:3] == ["container", "ls", "-a"] or argv[:2] == ["network", "ls"]:
+                        raise SystemExit(0)
+                    if argv[0] == "rm" or argv[:2] == ["network", "rm"]:
+                        raise SystemExit(0)
+                    raise SystemExit(f"unexpected docker argv: {argv}")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            docker.chmod(0o755)
+            env = cli_env(fake_bin)
+            env["FAKE_DOCKER_LOG"] = os.fspath(docker_log)
+            handle = "cvmsp-" + "5" * 24
+            state = repo / ".cvm-sidecar-probes" / handle
+            state.mkdir(parents=True)
+            (state / "provision.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "cvm-sidecar.provision-receipt/1",
+                        "status": "provisioned",
+                        "handle": handle,
+                        "sourceRevision": SOURCE_REVISION,
+                        "images": [
+                            {"role": "sidecar", "id": SIDECAR_ID, "platform": "linux/amd64", "configSha256": "s"},
+                            {"role": "client", "id": CLIENT_ID, "platform": "linux/amd64", "configSha256": "c"},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [sys.executable, internal_remote_cli(repo), "remote-probe", handle],
+                cwd=repo,
+                env=env,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stderr)
+            calls = [json.loads(line) for line in docker_log.read_text().splitlines()]
+            self.assertFalse(
+                any(
+                    argv[0] == "rm" or argv[:2] == ["network", "rm"]
+                    for argv in calls
+                ),
+                "a failed create must not delete predictable foreign names",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
