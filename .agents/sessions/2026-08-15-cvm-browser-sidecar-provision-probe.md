@@ -56,6 +56,14 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
    reproduced the missing pre-transfer capacity/Docker gates and missing bounded
    remote failure receipt. GREEN
    `1ee713d0e00e2b0510c7cce577786cccb9801491` closes only those seams.
+8. A later authorized handle reached every preflight and transfer-cleanup gate
+   but terminated with the bounded `errorCheck=image-attestation`; its abort
+   also proved transfer absence. R5 used only those structured facts and did
+   not inspect raw logs, contact CVM, or touch either terminal handle. RED
+   `0bf90944374941466dbe7ca3a4efea39d652a77b` proved that hashing Docker's
+   engine-dependent `inspect Config` display was non-portable and that archive
+   manifests were not bound to the exact config blobs. GREEN
+   `3f6274d1090fc53c5023e20b7e61bcc89f2db279` closes only that portability seam.
 
 ## Session 产出
 
@@ -71,6 +79,8 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
 | `343a412e` R3 GREEN | skill, module, tests | Strict public probe receipt binding, pre-claim remote gates, and locally durable begin nonce. |
 | `ec90dbee723b6f6d94728f5484ed6b8e1756c98b` R4 RED | focused global tests | Missing archive-aware capacity gate, Docker server gate, bounded remote failure receipt, and preserved public failure classification. |
 | `1ee713d0e00e2b0510c7cce577786cccb9801491` R4 GREEN | skill, module, tests | Pre-transfer archive-capacity and fixed Docker gates; bounded persisted failure receipts and strict public receipt/SSH binding. |
+| `0bf90944374941466dbe7ca3a4efea39d652a77b` R5 RED | focused global tests | Same ID produced different config hashes across inspect display shapes; invalid archive config manifests were accepted. |
+| `3f6274d1090fc53c5023e20b7e61bcc89f2db279` R5 GREEN | skill, module, tests | ID-derived immutable config digest; safe read-only docker-save manifest/config-blob binding and fresh-state cleanup. |
 
 ### 核心行为
 
@@ -83,6 +93,12 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
   intentionally different identities.
 - The archive is a fixed `docker image save` of exactly Sidecar then sealed
   client. Receipt stores archive bytes/SHA-256 and each full config SHA-256.
+- `configSha256` means exactly the 64-hex config digest in the immutable image
+  ID; it is never recomputed from Docker's version-dependent `inspect Config`
+  display. This clarified semantic retains receipt schema v1. Prepare reads the
+  uncompressed docker-save tar without extraction, rejects unsafe member paths,
+  and requires one bounded manifest plus exactly two unique expected bounded
+  config blobs whose content hashes match their paths and image IDs.
 - `provision` creates a local and remote one-shot claim before transfer. Its
   wrapper performs one explicit no-delete rsync to a computed handle path,
   remote-verifies hash/size before `docker image load`, then re-inspects both
@@ -175,6 +191,16 @@ R4 final validation:
 - `git diff --check` and staged diff check → exit 0.
 - External/CVM operations: **zero**; incremental spend: **$0**.
 
+R5 final validation:
+
+- RED differential/manifest suite → **2 tests with 5 expected failures**.
+- Focused suite → **30 tests, OK**.
+- Global gate with the project virtualenv and local loopback permission →
+  **181 tests, OK**.
+- `python3 -m py_compile` for the module and focused test → exit 0.
+- `git diff --check` and staged diff check → exit 0.
+- External/CVM operations: **zero**; incremental spend: **$0**.
+
 The first restricted global run was not accepted as product evidence: it had
 eight loopback-bind permission errors and two missing-worktree-dependency
 errors. It also exposed one real README compatibility assertion introduced by
@@ -207,6 +233,10 @@ this branch; that wording was fixed before the clean 162-test rerun.
 R4 adds no new external attempt. Its clean review range is
 `97aef65d..1ee713d0e00e2b0510c7cce577786cccb9801491`; the previously failed
 handle remains terminal and untouched.
+
+R5 adds no new external attempt. Its clean implementation review range is
+`e7b881186feadde7d6cb9e8b5df48730f84cb06a..3f6274d1090fc53c5023e20b7e61bcc89f2db279`;
+both previously failed handles remain terminal and untouched.
 
 ## 下一步
 
