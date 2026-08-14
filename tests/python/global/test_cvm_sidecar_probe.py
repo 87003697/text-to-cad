@@ -457,6 +457,78 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             self.assertEqual(load_gate.exception.check, "remote-disk-gate")
             run.assert_not_called()
 
+    def test_remote_begin_requires_archive_capacity_before_state(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-capacity-gate-") as root_text:
+            state_root = Path(root_text) / "state"
+            handle = "cvmsp-" + "e" * 24
+            owner = "a" * 32
+            workflow = {"module": "1" * 64, "wrapper": "2" * 64}
+            archive_bytes = 700 * 1024 * 1024
+            archive_sha256 = "3" * 64
+            required = 3 * 1024 * 1024 * 1024 + archive_bytes
+            low = type("Usage", (), {"free": required - 1})()
+            with (
+                mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
+                mock.patch.object(
+                    cvm_sidecar_probe, "_workflow_file_hashes", return_value=workflow
+                ),
+                mock.patch.object(cvm_sidecar_probe.shutil, "disk_usage", return_value=low),
+                mock.patch.object(cvm_sidecar_probe, "_run") as run,
+            ):
+                with self.assertRaises(cvm_sidecar_probe.ProbeError) as error:
+                    cvm_sidecar_probe.remote_begin(
+                        handle,
+                        owner,
+                        workflow["module"],
+                        workflow["wrapper"],
+                        archive_bytes,
+                        archive_sha256,
+                    )
+
+            self.assertEqual(error.exception.check, "remote-capacity-gate")
+            self.assertFalse(state_root.exists())
+            run.assert_not_called()
+
+    def test_remote_begin_requires_linux_amd64_docker_server_before_state(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-docker-gate-") as root_text:
+            state_root = Path(root_text) / "state"
+            handle = "cvmsp-" + "f" * 24
+            workflow = {"module": "1" * 64, "wrapper": "2" * 64}
+            archive_bytes = 17
+            enough = type(
+                "Usage",
+                (),
+                {"free": 3 * 1024 * 1024 * 1024 + archive_bytes},
+            )()
+            docker = subprocess.CompletedProcess(
+                ["docker", "version"],
+                0,
+                '{"Os":"darwin","Arch":"arm64"}\n',
+                "",
+            )
+            with (
+                mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
+                mock.patch.object(
+                    cvm_sidecar_probe, "_workflow_file_hashes", return_value=workflow
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe.shutil, "disk_usage", return_value=enough
+                ),
+                mock.patch.object(cvm_sidecar_probe, "_run", return_value=docker),
+            ):
+                with self.assertRaises(cvm_sidecar_probe.ProbeError) as error:
+                    cvm_sidecar_probe.remote_begin(
+                        handle,
+                        "a" * 32,
+                        workflow["module"],
+                        workflow["wrapper"],
+                        archive_bytes,
+                        "3" * 64,
+                    )
+
+            self.assertEqual(error.exception.check, "docker-server-platform")
+            self.assertFalse(state_root.exists())
+
     def test_remote_probe_rechecks_workflow_and_disk_before_claim(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-probe-gates-") as root_text:
             repo = Path(root_text) / "repo"
@@ -739,6 +811,102 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             self.assertEqual(terminal["status"], "failed")
             self.assertFalse(terminal["retryAllowed"])
 
+    def test_public_provision_preserves_bounded_remote_failure_check(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-public-failure-") as root_text:
+            root = Path(root_text)
+            repo = root / "repo"
+            wrapper = copy_cli(repo)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            write_image_docker(fake_bin / "docker")
+            ssh = fake_bin / "ssh"
+            ssh.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json, sys
+                    command = sys.argv[-1]
+                    parts = command.split()
+                    if "remote-begin" in parts:
+                        index = parts.index("remote-begin")
+                        handle, owner, module_hash, wrapper_hash = parts[index + 1:index + 5]
+                        print(json.dumps({
+                            "schema": "cvm-sidecar.remote-begin-receipt/1",
+                            "status": "ready-for-fixed-archive",
+                            "handle": handle,
+                            "ownerNonce": owner,
+                            "workflowFilesVerified": {"module": module_hash, "wrapper": wrapper_hash},
+                            "freeBytes": 4 * 1024 * 1024 * 1024,
+                        }))
+                        raise SystemExit(0)
+                    if "remote-provision" in parts:
+                        index = parts.index("remote-provision")
+                        handle, owner = parts[index + 1:index + 3]
+                        print(json.dumps({
+                            "schema": "cvm-sidecar.provision-receipt/1",
+                            "status": "failed",
+                            "handle": handle,
+                            "ownerNonce": owner,
+                            "errorOperation": "remote-provision",
+                            "errorCheck": "image-load",
+                            "transferCleanup": {"archiveAbsent": True, "prepareReceiptAbsent": True, "incomingDirectoryAbsent": True, "errors": []},
+                            "retryAllowed": False,
+                            "terminalOperation": {"operation": "provision", "handle": handle, "retryAllowed": False},
+                        }))
+                        raise SystemExit(1)
+                    if "remote-abort" in parts:
+                        index = parts.index("remote-abort")
+                        handle, owner = parts[index + 1:index + 3]
+                        print(json.dumps({"schema": "cvm-sidecar.abort-receipt/1", "status": "aborted", "handle": handle, "ownerNonce": owner, "transferAbsenceProved": True, "errors": [], "retryAllowed": False}))
+                        raise SystemExit(0)
+                    raise SystemExit("unexpected operation")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            ssh.chmod(0o755)
+            rsync = fake_bin / "rsync"
+            rsync.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            rsync.chmod(0o755)
+            env = cli_env(fake_bin)
+            prepared = subprocess.run(
+                [
+                    wrapper,
+                    "prepare",
+                    "--source-revision",
+                    SOURCE_REVISION,
+                    "--sidecar-image",
+                    SIDECAR_ID,
+                    "--client-image",
+                    CLIENT_ID,
+                ],
+                cwd=repo,
+                env=env,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            )
+            handle = json.loads(prepared.stdout)["handle"]
+
+            result = subprocess.run(
+                [wrapper, "provision", handle],
+                cwd=repo,
+                env=env,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            receipt = json.loads(
+                (repo / ".cvm-sidecar-probes" / handle / "provision.json").read_text()
+            )
+            self.assertEqual(receipt["status"], "failed")
+            self.assertEqual(receipt["errorCheck"], "image-load")
+            self.assertEqual(receipt["abort"]["status"], "aborted")
+            self.assertFalse(receipt["retryAllowed"])
+
     def test_remote_provision_verifies_loaded_identity_and_removes_transfer(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-remote-provision-") as root_text:
             root = Path(root_text)
@@ -810,6 +978,82 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 },
             )
             self.assertFalse(incoming.exists())
+
+    def test_remote_provision_persists_bounded_archive_failure_receipt(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-remote-failure-") as root_text:
+            root = Path(root_text)
+            repo = root / "repo"
+            wrapper = copy_cli(repo)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            write_image_docker(fake_bin / "docker")
+            env = cli_env(fake_bin)
+            prepared = subprocess.run(
+                [
+                    wrapper,
+                    "prepare",
+                    "--source-revision",
+                    SOURCE_REVISION,
+                    "--sidecar-image",
+                    SIDECAR_ID,
+                    "--client-image",
+                    CLIENT_ID,
+                ],
+                cwd=repo,
+                env=env,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            )
+            prepare_receipt = json.loads(prepared.stdout)
+            handle = prepare_receipt["handle"]
+            state = repo / ".cvm-sidecar-probes" / handle
+            incoming = state / "incoming"
+            incoming.mkdir()
+            shutil.move(state / "images.tar", incoming / "images.tar")
+            shutil.move(state / "prepare.json", incoming / "prepare.json")
+            (incoming / "images.tar").write_bytes(b"corrupt")
+            owner = "a" * 32
+            (state / "provision-attempt.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "cvm-sidecar.remote-provision-attempt/1",
+                        "handle": handle,
+                        "ownerNonce": owner,
+                        "workflowFilesVerified": prepare_receipt["workflowFiles"],
+                        "freeBytes": 4 * 1024 * 1024 * 1024,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    internal_remote_cli(repo),
+                    "remote-provision",
+                    handle,
+                    owner,
+                ],
+                cwd=repo,
+                env=env,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 1, result.stderr)
+            receipt = json.loads(result.stdout)
+            self.assertEqual(receipt["status"], "failed")
+            self.assertEqual(receipt["errorCheck"], "archive-hash-size")
+            self.assertEqual(receipt["errorOperation"], "remote-provision")
+            self.assertFalse(receipt["retryAllowed"])
+            self.assertEqual(receipt["transferCleanup"]["errors"], [])
+            self.assertEqual(
+                json.loads((state / "provision.json").read_text()), receipt
+            )
+            self.assertEqual(result.stderr, "")
 
     def test_remote_provision_cleanup_failure_dominates_hash_failure(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-cleanup-dominates-") as root_text:
