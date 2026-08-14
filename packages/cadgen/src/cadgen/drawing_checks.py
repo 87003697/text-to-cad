@@ -22,6 +22,11 @@ from pathlib import Path
 # This is the single classifier: drawing_render (and the viewer's parseDxf)
 # follow the same token rule so validation, snapshots, and rendering agree.
 _LAYER_INTENT_BY_TOKEN = {
+    # An explicit cut token WINS: a layer called CUT_SECTION is a cut path whose name happens
+    # to mention a view, and classifying it as annotation would skip the closure check on the
+    # one layer that most needs it.
+    "cut": "cut",
+    "profile": "cut",
     "bend": "bend",
     "fold": "bend",
     "engrave": "engrave",
@@ -32,6 +37,33 @@ _LAYER_INTENT_BY_TOKEN = {
     "notes": "reference",
     "annotation": "reference",
     "construction": "reference",
+    # A dimensioned drawing's furniture. None of it is a cut path, and every one of these was
+    # previously classified as one, so a plan-and-sections drawing could not generate at all
+    # (issue #246). Whole tokens still, so PREFORM does not match ref and SECTIONAL does not
+    # match section.
+    "dim": "reference",
+    "dims": "reference",
+    "dimension": "reference",
+    "dimensions": "reference",
+    "section": "reference",
+    "sections": "reference",
+    "hidden": "reference",
+    "center": "reference",
+    "centre": "reference",
+    "centerline": "reference",
+    "centreline": "reference",
+    "phantom": "reference",
+    "title": "reference",
+    "titleblock": "reference",
+    "border": "reference",
+    "frame": "reference",
+    "viewport": "reference",
+    "hatch": "reference",
+    "text": "reference",
+    "label": "reference",
+    "labels": "reference",
+    "leader": "reference",
+    "axis": "reference",
 }
 _LAYER_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 _ANNOTATION_ENTITY_TYPES = frozenset({"TEXT", "MTEXT", "DIMENSION", "LEADER", "MULTILEADER", "HATCH"})
@@ -59,7 +91,7 @@ class DrawingValidationError(ValueError):
 def layer_intent(layer_name: str) -> str:
     """Classify a layer name into ``cut`` | ``bend`` | ``engrave`` | ``reference``."""
     tokens = [t for t in _LAYER_TOKEN_SPLIT.split(str(layer_name or "").strip().lower()) if t]
-    for intent in ("bend", "engrave", "reference"):
+    for intent in ("cut", "bend", "engrave", "reference"):
         if any(_LAYER_INTENT_BY_TOKEN.get(token) == intent for token in tokens):
             return intent
     return "cut"

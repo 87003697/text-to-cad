@@ -1,5 +1,6 @@
 """Tests for the generation-time DXF drawing checks."""
 
+import re
 import unittest
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from cadgen.drawing_checks import (
     validate_drawing_document,
     validate_dxf_file,
 )
+from tests.python.support.paths import REPO_ROOT
 from tests.python.support.tmp_root import temporary_directory
 
 
@@ -125,6 +127,53 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class LayerIntentTokenTest(unittest.TestCase):
+    """The classifier decides which layers must hold CLOSED contours.
+
+    A dimensioned drawing's furniture -- sections, hidden lines, centre lines, a title block,
+    dimensions -- is not a cut path, and every one of those layer names used to be classified as
+    one, so a plan-and-sections drawing could not generate at all (issue #246).
+    """
+
+    def test_drawing_furniture_is_not_a_cut_layer(self) -> None:
+        for name in (
+            "SECTION", "SECTIONS", "HIDDEN", "CENTER", "CENTRELINE", "PHANTOM",
+            "TITLEBLOCK", "TITLE", "BORDER", "FRAME", "VIEWPORT", "HATCH",
+            "DIM", "DIMS", "DIMENSION_100", "TEXT", "LABELS", "LEADER", "AXIS",
+        ):
+            with self.subTest(layer=name):
+                self.assertEqual("reference", layer_intent(name))
+                self.assertTrue(layer_allows_open_geometry(name))
+
+    def test_an_explicit_cut_token_wins_over_a_view_token(self) -> None:
+        # A layer called CUT_SECTION is a cut path whose name mentions a view. Classifying it as
+        # annotation would skip the closure check on the layer that most needs it.
+        for name in ("CUT_SECTION", "SECTION_CUT", "PROFILE_HIDDEN", "cut-dim"):
+            with self.subTest(layer=name):
+                self.assertEqual("cut", layer_intent(name))
+                self.assertFalse(layer_allows_open_geometry(name))
+
+    def test_matching_is_still_on_whole_tokens(self) -> None:
+        # The rule that keeps this safe: PREFORM is not "ref", SECTIONAL is not "section".
+        for name in ("PREFORM", "SECTIONAL", "DIMPLE", "CENTERED", "NOTED", "FRAMEWORK"):
+            with self.subTest(layer=name):
+                self.assertEqual("cut", layer_intent(name))
+
+    def test_the_python_and_js_classifiers_agree(self) -> None:
+        # Two hand-copied tables with a comment saying they mirror each other, and nothing
+        # pinning them: validation would accept a drawing the viewer then renders as cut paths.
+        source = (
+            REPO_ROOT / "packages" / "cadjs" / "src" / "lib" / "dxf" / "parseDxf.js"
+        ).read_text(encoding="utf-8")
+        block = re.search(r"LAYER_INTENT_BY_TOKEN = new Map\(\[(.*?)\]\);", source, re.DOTALL)
+        self.assertIsNotNone(block, "cadjs must declare LAYER_INTENT_BY_TOKEN")
+        js_pairs = dict(re.findall(r'\["([a-z0-9]+)",\s*"([a-z]+)"\]', block.group(1)))
+        self.assertEqual(
+            drawing_checks._LAYER_INTENT_BY_TOKEN,
+            js_pairs,
+            "cadgen and cadjs disagree on layer intent; validation and rendering would classify "
+            "the same drawing differently",
+        )
 def _drawing_with_dimensions():
     """The reporter's shape: open views, annotation layers with local names, dimensions."""
     document = ezdxf.new("R2010", setup=True)
