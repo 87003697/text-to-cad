@@ -2986,11 +2986,13 @@ class _PinnedExecutable:
 
     def close(self) -> None:
         failure = False
+        cleanup_check: str | None = None
         if self.fd is not None:
             try:
                 os.close(self.fd)
             except OSError:
                 failure = True
+                cleanup_check = "executable_descriptor_close"
             self.fd = None
         if self.launch_root is not None:
             if getattr(self, "_detached_filesystem_mounted", False):
@@ -2998,24 +3000,36 @@ class _PinnedExecutable:
                     self._release_detached_mount(remove_underlying=True)
                 except BrowserRuntimeError:
                     failure = True
+                    if cleanup_check is None:
+                        cleanup_check = "detached_mount_release"
             elif getattr(self, "_detached_mount_mode", False):
                 # Detached-tree cleanup is descriptor/inode-authorized only.
                 # Never fall through to pathname traversal after authority loss.
                 failure = True
+                if cleanup_check is None:
+                    cleanup_check = "detached_mount_release"
             else:
                 try:
                     self._thaw_directories(self.launch_root)
                     shutil.rmtree(self.launch_root)
                 except (BrowserRuntimeError, OSError):
                     failure = True
+                    if cleanup_check is None:
+                        cleanup_check = "detached_mount_release"
             if (
                 getattr(self, "_detached_filesystem_mounted", False)
                 or os.path.lexists(self.launch_root)
             ):
                 failure = True
+                if cleanup_check is None:
+                    cleanup_check = "detached_mount_release"
             self.launch_root = None
         if failure:
-            raise BrowserRuntimeError("browser_cleanup")
+            raise BrowserRuntimeError(
+                "browser_cleanup",
+                browser_cleanup_substage="private_browser_pinned_image",
+                browser_cleanup_check=cleanup_check,
+            )
 
 
 def _group_empty(process_group: int) -> bool:
@@ -3497,11 +3511,16 @@ class PrelaunchedCdpRuntime:
         cleanup_substage: str | None = None
         cleanup_check: str | None = None
 
-        def record_cleanup(check: str, *, retained: bool = False) -> None:
+        def record_cleanup(
+            substage: str,
+            check: str,
+            *,
+            retained: bool = False,
+        ) -> None:
             nonlocal failure, cleanup_substage, cleanup_check
             failure = True
             if cleanup_check is None or retained:
-                cleanup_substage = "private_browser_process_group"
+                cleanup_substage = substage
                 cleanup_check = check
 
         process = self._process
@@ -3512,7 +3531,7 @@ class PrelaunchedCdpRuntime:
             except ProcessLookupError:
                 pass
             except OSError:
-                record_cleanup("term_signal")
+                record_cleanup("private_browser_process_group", "term_signal")
         leader_timed_out = False
         if process is not None:
             try:
@@ -3520,38 +3539,65 @@ class PrelaunchedCdpRuntime:
             except subprocess.TimeoutExpired:
                 leader_timed_out = True
             except OSError:
-                record_cleanup("leader_term_wait")
+                record_cleanup("private_browser_process_group", "leader_term_wait")
         if process_group is not None:
-            group_empty = False if leader_timed_out else _wait_group_empty(
-                process_group,
-                float(self._profile["cleanup_term_ms"]) / 1000,
-            )
+            group_empty = False
+            if not leader_timed_out:
+                try:
+                    group_empty = _wait_group_empty(
+                        process_group,
+                        float(self._profile["cleanup_term_ms"]) / 1000,
+                    )
+                except (BrowserRuntimeError, OSError):
+                    record_cleanup(
+                        "private_browser_process_group",
+                        "term_group_empty",
+                    )
             if leader_timed_out or not group_empty:
                 try:
                     os.killpg(process_group, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
                 except (BrowserRuntimeError, OSError):
-                    record_cleanup("kill_signal")
+                    record_cleanup("private_browser_process_group", "kill_signal")
                 if process is not None and leader_timed_out:
                     try:
                         process.wait(
                             timeout=float(self._profile["cleanup_kill_ms"]) / 1000
                         )
                     except (OSError, subprocess.TimeoutExpired):
-                        record_cleanup("leader_kill_wait")
-                group_empty = _wait_group_empty(
-                    process_group,
-                    float(self._profile["cleanup_kill_ms"]) / 1000,
-                )
+                        record_cleanup(
+                            "private_browser_process_group",
+                            "leader_kill_wait",
+                        )
+                try:
+                    group_empty = _wait_group_empty(
+                        process_group,
+                        float(self._profile["cleanup_kill_ms"]) / 1000,
+                    )
+                except (BrowserRuntimeError, OSError):
+                    group_empty = False
+                    record_cleanup(
+                        "private_browser_process_group",
+                        "kill_group_empty",
+                        retained=True,
+                    )
             if not group_empty:
-                record_cleanup("kill_group_empty", retained=True)
+                record_cleanup(
+                    "private_browser_process_group",
+                    "kill_group_empty",
+                    retained=True,
+                )
         if self._profile_dir is not None:
             if getattr(self, "_profile_cleanup_forbidden", False):
-                failure = True
+                record_cleanup(
+                    "private_browser_profile",
+                    "authority_validation",
+                )
             else:
                 quarantine: Path | None = None
                 quarantine_fd: int | None = None
+                profile_stage = "authority_validation"
                 try:
                     profile_fd = getattr(self, "_profile_fd", None)
                     parent_fd = getattr(self, "_profile_parent_fd", None)
@@ -3564,6 +3610,7 @@ class PrelaunchedCdpRuntime:
                         != self._profile_identity
                     ):
                         raise OSError("profile identity changed")
+                    profile_stage = "quarantine_create"
                     quarantine = _private_child_directory(
                         self._profile_dir.parent,
                         parent_fd,
@@ -3573,6 +3620,7 @@ class PrelaunchedCdpRuntime:
                         quarantine,
                         os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
                     )
+                    profile_stage = "quarantine_move"
                     os.rename(
                         self._profile_dir.name,
                         "profile",
@@ -3597,37 +3645,60 @@ class PrelaunchedCdpRuntime:
                             dst_dir_fd=parent_fd,
                         )
                         raise OSError("profile identity changed")
+                    profile_stage = "recursive_remove"
                     shutil.rmtree(quarantine / "profile")
                 except (BrowserRuntimeError, OSError):
-                    failure = True
+                    record_cleanup("private_browser_profile", profile_stage)
                 finally:
                     if quarantine_fd is not None:
                         try:
                             os.close(quarantine_fd)
                         except OSError:
-                            failure = True
+                            record_cleanup(
+                                "private_browser_profile",
+                                "authority_close",
+                            )
                     if quarantine is not None:
                         try:
                             quarantine.rmdir()
                         except OSError:
-                            failure = True
+                            record_cleanup(
+                                "private_browser_profile",
+                                "recursive_remove",
+                            )
             for attribute in ("_profile_fd", "_profile_parent_fd"):
                 descriptor = getattr(self, attribute, None)
                 if descriptor is not None:
                     try:
                         os.close(descriptor)
                     except OSError:
-                        failure = True
+                        record_cleanup(
+                            "private_browser_profile",
+                            "authority_close",
+                        )
                     setattr(self, attribute, None)
             if not getattr(self, "_profile_cleanup_forbidden", False):
                 if os.path.lexists(self._profile_dir):
-                    failure = True
+                    record_cleanup(
+                        "private_browser_profile",
+                        "absence",
+                        retained=True,
+                    )
         pinned = getattr(self, "_pinned_executable", None)
         if pinned is not None:
             try:
                 pinned.close()
-            except BrowserRuntimeError:
-                failure = True
+            except BrowserRuntimeError as exc:
+                if (
+                    exc.browser_cleanup_substage is not None
+                    and exc.browser_cleanup_check is not None
+                ):
+                    record_cleanup(
+                        exc.browser_cleanup_substage,
+                        exc.browser_cleanup_check,
+                    )
+                else:
+                    failure = True
         if failure:
             raise BrowserRuntimeError(
                 "browser_cleanup",
@@ -3895,6 +3966,10 @@ class SupervisedCdpAttachmentRuntime:
         supervisor_pid, nonce = self._client_authority()
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         browser = None
+        failure: BaseException | None = None
+        cleanup_check: str | None = None
+        completion_ready = False
+        completion_result = "failed"
         try:
             connection.settimeout(
                 float(self._profile["startup_timeout_ms"]) / 1000
@@ -3920,39 +3995,46 @@ class SupervisedCdpAttachmentRuntime:
                 authority,
                 expected_nonce=nonce,
             )
+            completion_ready = True
             try:
-                completion_result = "failed"
-                yielded = False
-                try:
-                    browser = chromium.connect_over_cdp(
-                        endpoint,
-                        timeout=int(self._profile["startup_timeout_ms"]),
-                        is_local=True,
-                    )
-                except BaseException as exc:
-                    raise BrowserRuntimeError("browser_connect") from exc
+                browser = chromium.connect_over_cdp(
+                    endpoint,
+                    timeout=int(self._profile["startup_timeout_ms"]),
+                    is_local=True,
+                )
+            except BaseException as exc:
+                failure = BrowserRuntimeError("browser_connect")
+                failure.__cause__ = exc
+            if failure is None:
                 try:
                     _verify_connected_browser_version(
                         browser,
                         str(self._profile["browser_version"]),
                     )
                 except BrowserRuntimeError as exc:
-                    raise BrowserRuntimeError(
+                    failure = BrowserRuntimeError(
                         "browser_identity",
                         browser_identity_substage=(
                             "connected_cdp_browser_version_identity"
                         ),
-                    ) from exc
-                yielded = True
-                yield browser
-                completion_result = "passed"
-            finally:
-                cleanup_failed = False
+                    )
+                    failure.__cause__ = exc
+            if failure is None:
                 try:
-                    if not yielded and browser is not None:
-                        browser.close()
+                    assert browser is not None
+                    yield browser
+                    completion_result = "passed"
+                except BaseException as exc:
+                    failure = exc
+        except BaseException as exc:
+            failure = exc
+        finally:
+            if browser is not None:
+                try:
+                    browser.close()
                 except BaseException:
-                    cleanup_failed = True
+                    cleanup_check = "browser_session_close"
+            if completion_ready:
                 try:
                     _send_supervisor_packet(
                         connection,
@@ -3963,22 +4045,34 @@ class SupervisedCdpAttachmentRuntime:
                             "result": completion_result,
                         },
                     )
-                    shutdown = _receive_supervisor_packet(connection)
-                    if shutdown != {
-                        "schema": SUPERVISOR_PROTOCOL_SCHEMA,
-                        "type": "shutdown",
-                        "nonce": nonce,
-                    }:
-                        raise BrowserRuntimeError("browser_cleanup")
-                except BrowserRuntimeError:
-                    cleanup_failed = True
-                if cleanup_failed:
-                    raise BrowserRuntimeError("browser_cleanup")
-        finally:
+                except BaseException:
+                    if cleanup_check is None:
+                        cleanup_check = "completion_send"
+                else:
+                    try:
+                        shutdown = _receive_supervisor_packet(connection)
+                        if shutdown != {
+                            "schema": SUPERVISOR_PROTOCOL_SCHEMA,
+                            "type": "shutdown",
+                            "nonce": nonce,
+                        }:
+                            raise BrowserRuntimeError("browser_cleanup")
+                    except BaseException:
+                        if cleanup_check is None:
+                            cleanup_check = "shutdown_receive"
             try:
                 connection.close()
-            except OSError as exc:
-                raise BrowserRuntimeError("browser_cleanup") from exc
+            except OSError:
+                if cleanup_check is None:
+                    cleanup_check = "transport_close"
+        if cleanup_check is not None:
+            raise BrowserRuntimeError(
+                "browser_cleanup",
+                browser_cleanup_substage="nested_attachment_close",
+                browser_cleanup_check=cleanup_check,
+            ) from failure
+        if failure is not None:
+            raise failure
 
 
 class _RuntimeSignal(BaseException):

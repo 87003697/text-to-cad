@@ -99,6 +99,18 @@ def provider_free_browser_cleanup_pair_allowed(substage: object, check: object) 
             frozenset(),
         )
     )
+
+
+def provider_free_browser_cleanup_diagnostic_allowed(receipt: object) -> bool:
+    return (
+        isinstance(receipt, dict)
+        and set(receipt) == {"schema", "substage", "check"}
+        and receipt.get("schema") == PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA
+        and provider_free_browser_cleanup_pair_allowed(
+            receipt.get("substage"),
+            receipt.get("check"),
+        )
+    )
 PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES = frozenset(
     {
         "private_snapshot_launch_image_identity",
@@ -878,6 +890,15 @@ def public_state(state: dict[str, Any], stale_after: float) -> dict[str, Any]:
             and browser_identity_diagnostic is not None
         ):
             result["browser_identity_diagnostic"] = browser_identity_diagnostic
+        browser_cleanup_diagnostic = _public_provider_free_browser_cleanup_diagnostic(
+            state.get("browser_cleanup_diagnostic"),
+            scenario_failure=state.get("scenario_failure"),
+        )
+        if (
+            state.get("job_kind") == "provider-free"
+            and browser_cleanup_diagnostic is not None
+        ):
+            result["browser_cleanup_diagnostic"] = browser_cleanup_diagnostic
     return result
 
 
@@ -941,6 +962,47 @@ def _public_provider_free_browser_identity_diagnostic(
     return result
 
 
+def _public_provider_free_browser_cleanup_diagnostic(
+    value: object,
+    *,
+    scenario_failure: object,
+) -> dict[str, str] | None:
+    if not isinstance(value, dict) or set(value) != {
+        "schema",
+        "substage",
+        "check",
+        "sha256",
+    }:
+        return None
+    receipt = {
+        "schema": value.get("schema"),
+        "substage": value.get("substage"),
+        "check": value.get("check"),
+    }
+    reference = (
+        scenario_failure.get("browser_cleanup_diagnostic")
+        if isinstance(scenario_failure, dict)
+        else None
+    )
+    if (
+        not provider_free_browser_cleanup_diagnostic_allowed(receipt)
+        or not isinstance(reference, dict)
+        or reference
+        != {
+            "path": PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+            "sha256": value.get("sha256"),
+        }
+        or re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256"))) is None
+    ):
+        return None
+    return {
+        "schema": str(value["schema"]),
+        "substage": str(value["substage"]),
+        "check": str(value["check"]),
+        "sha256": str(value["sha256"]),
+    }
+
+
 def _public_provider_free_bootstrap_diagnostic(
     value: object,
 ) -> dict[str, object] | None:
@@ -983,6 +1045,7 @@ def _public_provider_free_scenario_failure(
     browser_identity_substage = value.get("browser_identity_substage")
     browser_identity_phase = value.get("browser_identity_phase")
     browser_identity_check = value.get("browser_identity_check")
+    browser_cleanup_diagnostic = value.get("browser_cleanup_diagnostic")
     if (
         value.get("schema") != PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA
         or not isinstance(expected_identity, str)
@@ -1018,6 +1081,26 @@ def _public_provider_free_scenario_failure(
         or (
             not provider_free_browser_identity_checks(browser_identity_phase)
             and browser_identity_check is not None
+        )
+        or (
+            operation == "preview_browser_cleanup"
+            and (
+                not isinstance(browser_cleanup_diagnostic, dict)
+                or browser_cleanup_diagnostic
+                != {
+                    "path": PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+                    "sha256": browser_cleanup_diagnostic.get("sha256"),
+                }
+                or re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    str(browser_cleanup_diagnostic.get("sha256")),
+                )
+                is None
+            )
+        )
+        or (
+            operation != "preview_browser_cleanup"
+            and browser_cleanup_diagnostic is not None
         )
     ):
         return None

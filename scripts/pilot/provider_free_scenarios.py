@@ -904,44 +904,61 @@ def _browser_supervisor_group_empty(process_group: int) -> bool:
 
 def _cleanup_browser_supervisor(process: subprocess.Popen[bytes]) -> None:
     failure = False
+    cleanup_check: str | None = None
+
+    def record(check: str, *, retained: bool = False) -> None:
+        nonlocal failure, cleanup_check
+        failure = True
+        if cleanup_check is None or retained:
+            cleanup_check = check
+
+    def group_empty(check: str, *, retained: bool = False) -> bool:
+        try:
+            return _browser_supervisor_group_empty(process.pid)
+        except (ScenarioError, OSError):
+            record(check, retained=retained)
+            return False
+
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
     except OSError:
-        failure = True
+        record("term_signal")
     try:
         process.wait(timeout=1.0)
     except subprocess.TimeoutExpired:
         pass
     except OSError:
-        failure = True
+        record("leader_term_wait")
     deadline = time.monotonic() + 1.0
-    while not _browser_supervisor_group_empty(process.pid) and time.monotonic() < deadline:
+    while not group_empty("term_group_empty") and time.monotonic() < deadline:
         time.sleep(0.02)
-    if not _browser_supervisor_group_empty(process.pid):
+    if not group_empty("term_group_empty"):
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         except OSError:
-            failure = True
+            record("kill_signal")
         try:
             process.wait(timeout=1.0)
         except (OSError, subprocess.TimeoutExpired):
-            failure = True
+            record("leader_kill_wait")
         deadline = time.monotonic() + 1.0
         while (
-            not _browser_supervisor_group_empty(process.pid)
+            not group_empty("kill_group_empty", retained=True)
             and time.monotonic() < deadline
         ):
             time.sleep(0.02)
-    if not _browser_supervisor_group_empty(process.pid):
-        failure = True
+    if not group_empty("kill_group_empty", retained=True):
+        record("kill_group_empty", retained=True)
     if failure:
         raise ScenarioError(
             "provider-free browser supervisor cleanup failed",
             operation="preview_browser_cleanup",
+            browser_cleanup_substage="outer_supervisor_process_group",
+            browser_cleanup_check=cleanup_check,
         )
 
 
@@ -1337,6 +1354,8 @@ def _browser_supervisor() -> Any:
             raise ScenarioError(
                 "provider-free browser supervisor did not terminate",
                 operation="preview_browser_cleanup",
+                browser_cleanup_substage="outer_supervisor_wait",
+                browser_cleanup_check="supervisor_wait",
             ) from exc
         if process.returncode != 0:
             try:
@@ -1350,11 +1369,15 @@ def _browser_supervisor() -> Any:
             raise ScenarioError(
                 "provider-free browser supervisor failed",
                 operation="preview_browser_cleanup",
+                browser_cleanup_substage="outer_supervisor_wait",
+                browser_cleanup_check="supervisor_exit_status",
             )
         if not _browser_supervisor_group_empty(process.pid):
             raise ScenarioError(
                 "provider-free browser supervisor failed",
                 operation="preview_browser_cleanup",
+                browser_cleanup_substage="outer_supervisor_process_group",
+                browser_cleanup_check="term_group_empty",
             )
         process = None
         if body_error is not None:
@@ -1366,18 +1389,19 @@ def _browser_supervisor() -> Any:
                 _cleanup_browser_supervisor(process)
             except ScenarioError as exc:
                 cleanup_error = exc
-        if any(
-            os.path.lexists(path)
-            for path in (
-                _BROWSER_SUPERVISOR_SOCKET,
-                _BROWSER_SUPERVISOR_AUTHORITY,
-                _BROWSER_SUPERVISOR_CLIENT,
-            )
+        for path, check in (
+            (_BROWSER_SUPERVISOR_SOCKET, "socket_absence"),
+            (_BROWSER_SUPERVISOR_AUTHORITY, "authority_absence"),
+            (_BROWSER_SUPERVISOR_CLIENT, "client_absence"),
         ):
-            cleanup_error = ScenarioError(
-                "provider-free browser supervisor private state remained",
-                operation="preview_browser_cleanup",
-            )
+            if os.path.lexists(path):
+                cleanup_error = ScenarioError(
+                    "provider-free browser supervisor private state remained",
+                    operation="preview_browser_cleanup",
+                    browser_cleanup_substage="outer_supervisor_private_state",
+                    browser_cleanup_check=check,
+                )
+                break
         if cleanup_error is not None:
             raise cleanup_error
 

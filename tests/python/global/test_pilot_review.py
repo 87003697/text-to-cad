@@ -1292,6 +1292,91 @@ class PilotReviewTests(unittest.TestCase):
         self.assertEqual("observability-gap", issues[0]["classification"])
         self.assertTrue(gaps)
 
+        identity_diagnostic_path.unlink()
+        browser_exec["prelaunched_cdp"] = "passed"
+        write_json(browser_exec_path, browser_exec)
+        cleanup_path = self.exp / "run/browser-cleanup-diagnostic.json"
+        cleanup = {
+            "schema": "meshshot.browser-cleanup-diagnostic/1",
+            "substage": "private_browser_process_group",
+            "check": "kill_group_empty",
+        }
+        write_json(cleanup_path, cleanup)
+        cleanup_bytes = cleanup_path.read_bytes()
+        cleanup_failure = {
+            "schema": "cvm.provider-free-scenario-failure/1",
+            "scenario_identity": "issue15.provider-free.runtime-authority/1",
+            "stage": "native_measurement",
+            "operation": "preview_browser_cleanup",
+            "browser_cleanup_diagnostic": {
+                "path": "run/browser-cleanup-diagnostic.json",
+                "sha256": hashlib.sha256(cleanup_bytes).hexdigest(),
+            },
+        }
+        write_json(self.exp / "run/scenario-failure.json", cleanup_failure)
+        write_json(
+            self.exp / "run/preview-public-wrapper-diagnostic.json",
+            {
+                "schema": "cvm.provider-free-preview-public-wrapper/1",
+                "operation": "preview_browser_cleanup",
+            },
+        )
+        write_terminal_manifest(status=1)
+        verdict, provenance, issues, gaps = self.reviewer._runtime_authority_verdict(
+            self.exp, workspace_payload
+        )
+        self.assertEqual("fail", verdict, issues)
+        self.assertEqual(
+            "run/browser-cleanup-diagnostic.json",
+            provenance["browser_cleanup_diagnostic"],
+        )
+        self.assertIn("private_browser_process_group/kill_group_empty", issues[0]["detail"])
+        self.assertEqual([], gaps)
+
+        for mutation in ("missing", "unknown", "unbound", "tampered", "duplicate"):
+            with self.subTest(cleanup_diagnostic_mutation=mutation):
+                write_json(cleanup_path, cleanup)
+                write_json(self.exp / "run/scenario-failure.json", cleanup_failure)
+                if mutation == "missing":
+                    cleanup_path.unlink()
+                elif mutation == "unknown":
+                    write_json(cleanup_path, {**cleanup, "check": "raw-cleanup"})
+                elif mutation == "unbound":
+                    changed = json.loads(json.dumps(cleanup_failure))
+                    changed["browser_cleanup_diagnostic"]["sha256"] = "0" * 64
+                    write_json(self.exp / "run/scenario-failure.json", changed)
+                elif mutation == "tampered":
+                    write_json(cleanup_path, {**cleanup, "check": "kill_signal"})
+                else:
+                    cleanup_path.write_text(
+                        json.dumps(cleanup).replace(
+                            '"check": "kill_group_empty"',
+                            '"check": "kill_signal", "check": "kill_group_empty"',
+                        ),
+                        encoding="utf-8",
+                    )
+                write_terminal_manifest(status=1)
+                verdict, provenance, issues, gaps = (
+                    self.reviewer._runtime_authority_verdict(
+                        self.exp, workspace_payload
+                    )
+                )
+                self.assertEqual("not_auditable", verdict)
+                self.assertEqual({}, provenance)
+                self.assertEqual("observability-gap", issues[0]["classification"])
+                self.assertTrue(gaps)
+
+        if cleanup_path.exists():
+            cleanup_path.unlink()
+        browser_exec["prelaunched_cdp"] = "failed"
+        write_json(browser_exec_path, browser_exec)
+        write_json(
+            self.exp / "run/preview-public-wrapper-diagnostic.json",
+            {
+                "schema": "cvm.provider-free-preview-public-wrapper/1",
+                "operation": "preview_browser_identity",
+            },
+        )
         private_phases = (
             "source_executable_identity",
             "private_tree_materialization",

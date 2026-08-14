@@ -26,6 +26,33 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 
 
 class JobProtocolTests(unittest.TestCase):
+    def test_browser_cleanup_diagnostic_is_closed_and_failure_bound(self) -> None:
+        for substage, checks in sorted(
+            protocol.PROVIDER_FREE_BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE.items()
+        ):
+            for check in sorted(checks):
+                receipt = {
+                    "schema": protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA,
+                    "substage": substage,
+                    "check": check,
+                }
+                with self.subTest(substage=substage, check=check):
+                    self.assertTrue(
+                        protocol.provider_free_browser_cleanup_diagnostic_allowed(
+                            receipt
+                        )
+                    )
+                    for mutation in (
+                        {key: value for key, value in receipt.items() if key != "check"},
+                        {**receipt, "check": "raw-cleanup-error"},
+                        {**receipt, "detail": "permission denied"},
+                    ):
+                        self.assertFalse(
+                            protocol.provider_free_browser_cleanup_diagnostic_allowed(
+                                mutation
+                            )
+                        )
+
     def test_version_execution_diagnostic_requires_one_exact_check(self) -> None:
         self.assertEqual(
             "cvm.provider-free-browser-identity-diagnostic/6",

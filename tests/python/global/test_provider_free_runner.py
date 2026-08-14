@@ -867,6 +867,89 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 "issue15-runtime-authority",
             )
 
+    def test_cleanup_failure_requires_exact_hash_bound_diagnostic(self) -> None:
+        exp_dir = self.repo / "outputs" / self.handle
+        (exp_dir / "run").mkdir(parents=True)
+        diagnostic_path = exp_dir / protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH
+        diagnostic = {
+            "schema": protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA,
+            "substage": "private_browser_process_group",
+            "check": "kill_group_empty",
+        }
+        diagnostic_bytes = (
+            json.dumps(diagnostic, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        diagnostic_path.write_bytes(diagnostic_bytes)
+        operation = "preview_browser_cleanup"
+        (exp_dir / protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH).write_text(
+            json.dumps(
+                {
+                    "schema": protocol.PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+                    "scenario_identity": "issue15.provider-free.runtime-authority/1",
+                    "stage": "native_measurement",
+                    "operation": operation,
+                    "browser_cleanup_diagnostic": {
+                        "path": protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+                        "sha256": hashlib.sha256(diagnostic_bytes).hexdigest(),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        (exp_dir / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH).write_text(
+            json.dumps(
+                {
+                    "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
+                    "operation": operation,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        provider_free_runner._validate_scenario_failure_evidence(
+            exp_dir,
+            "issue15-runtime-authority",
+        )
+
+        diagnostic_path.write_text(
+            '{"schema":"meshshot.browser-cleanup-diagnostic/1",'
+            '"substage":"private_browser_process_group",'
+            '"check":"term_signal","check":"kill_group_empty"}',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            provider_free_runner.ProviderFreeError,
+            "cleanup diagnostic",
+        ):
+            provider_free_runner._validate_scenario_failure_evidence(
+                exp_dir,
+                "issue15-runtime-authority",
+            )
+
+        unknown_bytes = (
+            json.dumps(
+                {**diagnostic, "detail": "must-not-cross-public-boundary"},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
+        diagnostic_path.write_bytes(unknown_bytes)
+        failure_path = exp_dir / protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH
+        failure = json.loads(failure_path.read_text(encoding="utf-8"))
+        failure["browser_cleanup_diagnostic"]["sha256"] = hashlib.sha256(
+            unknown_bytes
+        ).hexdigest()
+        failure_path.write_text(json.dumps(failure), encoding="utf-8")
+        with self.assertRaisesRegex(
+            provider_free_runner.ProviderFreeError,
+            "cleanup diagnostic",
+        ):
+            provider_free_runner._validate_scenario_failure_evidence(
+                exp_dir,
+                "issue15-runtime-authority",
+            )
+
     def test_private_snapshot_failure_requires_phase_bound_diagnostic(self) -> None:
         exp_dir = self.repo / "outputs" / self.handle
         run_dir = exp_dir / "run"

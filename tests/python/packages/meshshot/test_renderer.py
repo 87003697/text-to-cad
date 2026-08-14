@@ -112,6 +112,72 @@ class ResidualRendererTests(unittest.TestCase):
                     expected_nonce="b" * 64,
                 )
 
+    def test_attachment_classifies_each_nested_cleanup_boundary(self) -> None:
+        from meshshot import browser_runtime
+
+        for expected_check in (
+            "browser_session_close",
+            "completion_send",
+            "shutdown_receive",
+            "transport_close",
+        ):
+            with self.subTest(check=expected_check):
+                attachment = object.__new__(
+                    browser_runtime.SupervisedCdpAttachmentRuntime
+                )
+                attachment._profile = {
+                    "startup_timeout_ms": 100,
+                    "browser_version": "148.0.7778.96",
+                }
+                attachment.evidence = {"schema": browser_runtime.RUNTIME_SCHEMA}
+                nonce = "a" * 64
+                connection = mock.MagicMock()
+                browser = _attested_connected_browser()
+                chromium = mock.MagicMock()
+                chromium.connect_over_cdp.return_value = browser
+                receive = mock.Mock(
+                    side_effect=[
+                        {"type": "authority"},
+                        {
+                            "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
+                            "type": "shutdown",
+                            "nonce": nonce,
+                        },
+                    ]
+                )
+                send = mock.Mock()
+                if expected_check == "browser_session_close":
+                    browser.close.side_effect = OSError("browser close")
+                elif expected_check == "completion_send":
+                    send.side_effect = [None, OSError("completion send")]
+                elif expected_check == "shutdown_receive":
+                    receive.side_effect = [{"type": "authority"}, OSError("shutdown receive")]
+                elif expected_check == "transport_close":
+                    connection.close.side_effect = OSError("transport close")
+
+                with (
+                    mock.patch.object(attachment, "_validate_socket_path"),
+                    mock.patch.object(attachment, "_client_authority", return_value=(4242, nonce)),
+                    mock.patch.object(attachment, "_validate_supervisor_peer"),
+                    mock.patch.object(
+                        attachment,
+                        "_validate_authority",
+                        return_value=("http://127.0.0.1:9222", 43210),
+                    ),
+                    mock.patch.object(browser_runtime.socket, "socket", return_value=connection),
+                    mock.patch.object(browser_runtime, "_send_supervisor_packet", send),
+                    mock.patch.object(browser_runtime, "_receive_supervisor_packet", receive),
+                    self.assertRaises(browser_runtime.BrowserRuntimeError) as raised,
+                ):
+                    with attachment.open(chromium):
+                        pass
+
+                self.assertEqual(
+                    "nested_attachment_close",
+                    raised.exception.browser_cleanup_substage,
+                )
+                self.assertEqual(expected_check, raised.exception.browser_cleanup_check)
+
     def test_supervisor_rejects_same_uid_foreign_first_client_and_replay(self) -> None:
         from meshshot import browser_supervisor
 
@@ -2231,6 +2297,237 @@ class ResidualRendererTests(unittest.TestCase):
             mock.call(43210, __import__("signal").SIGKILL),
             killpg.mock_calls,
         )
+
+    def test_prelaunched_runtime_classifies_each_process_group_cleanup_boundary(
+        self,
+    ) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        cases = {
+            "term_signal": {
+                "wait": [0],
+                "group": [True],
+                "term_error": True,
+            },
+            "leader_term_wait": {
+                "wait": [OSError("term wait")],
+                "group": [True],
+            },
+            "term_group_empty": {
+                "wait": [0],
+                "group": [OSError("term proof"), True],
+            },
+            "kill_signal": {
+                "wait": [0],
+                "group": [False, True],
+                "kill_error": True,
+            },
+            "leader_kill_wait": {
+                "wait": [subprocess.TimeoutExpired([], 0), OSError("kill wait")],
+                "group": [True],
+            },
+            "kill_group_empty": {
+                "wait": [0],
+                "group": [False, False],
+            },
+        }
+        for expected_check, case in cases.items():
+            process = mock.MagicMock(spec=subprocess.Popen)
+            process.pid = 43210
+            process.wait.side_effect = case["wait"]
+            runtime = object.__new__(PrelaunchedCdpRuntime)
+            runtime._profile = {"cleanup_term_ms": 0, "cleanup_kill_ms": 0}
+            runtime._profile_dir = None
+            runtime._process = process
+            runtime._process_group = 43210
+
+            group_values = iter(case["group"])
+
+            def group_proof(*_args: object) -> bool:
+                value = next(group_values)
+                if isinstance(value, BaseException):
+                    raise value
+                return value
+
+            def signal_group(_group: int, signum: int) -> None:
+                if signum == signal.SIGTERM and case.get("term_error"):
+                    raise OSError("term signal")
+                if signum == signal.SIGKILL and case.get("kill_error"):
+                    raise OSError("kill signal")
+
+            with self.subTest(check=expected_check):
+                with (
+                    mock.patch("meshshot.browser_runtime._wait_group_empty", side_effect=group_proof),
+                    mock.patch("os.killpg", side_effect=signal_group),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    runtime._cleanup()
+
+                self.assertEqual("browser_cleanup", raised.exception.operation)
+                self.assertEqual(
+                    "private_browser_process_group",
+                    raised.exception.browser_cleanup_substage,
+                )
+                self.assertEqual(expected_check, raised.exception.browser_cleanup_check)
+
+    def test_prelaunched_runtime_classifies_each_profile_cleanup_boundary(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        for expected_check in (
+            "authority_validation",
+            "quarantine_create",
+            "quarantine_move",
+            "recursive_remove",
+            "authority_close",
+            "absence",
+        ):
+            with self.subTest(check=expected_check), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                profile = root / "profile"
+                profile.mkdir()
+                (profile / "state").write_bytes(b"owned")
+                parent_fd = os.open(root, os.O_RDONLY)
+                profile_fd = os.open(profile, os.O_RDONLY)
+                info = os.fstat(profile_fd)
+                runtime = object.__new__(PrelaunchedCdpRuntime)
+                runtime._profile = {"cleanup_term_ms": 0, "cleanup_kill_ms": 0}
+                runtime._profile_dir = profile
+                runtime._profile_identity = (info.st_dev, info.st_ino)
+                runtime._profile_cleanup_forbidden = False
+                runtime._profile_fd = profile_fd
+                runtime._profile_parent_fd = parent_fd
+                runtime._process = None
+                runtime._process_group = None
+                runtime._pinned_executable = None
+                real_close = os.close
+                real_rmtree = shutil.rmtree
+
+                with ExitStack() as stack:
+                    if expected_check == "authority_validation":
+                        runtime._profile_cleanup_forbidden = True
+                    elif expected_check == "quarantine_create":
+                        def fail_create(*_args: object, **_kwargs: object) -> Path:
+                            real_rmtree(profile)
+                            raise OSError("quarantine create")
+                        stack.enter_context(
+                            mock.patch.object(
+                                browser_runtime,
+                                "_private_child_directory",
+                                side_effect=fail_create,
+                            )
+                        )
+                    elif expected_check == "quarantine_move":
+                        def fail_move(*_args: object, **_kwargs: object) -> None:
+                            real_rmtree(profile)
+                            raise OSError("quarantine move")
+                        stack.enter_context(
+                            mock.patch.object(browser_runtime.os, "rename", side_effect=fail_move)
+                        )
+                    elif expected_check == "recursive_remove":
+                        def fail_remove(path: Path) -> None:
+                            real_rmtree(path)
+                            raise OSError("recursive remove")
+                        stack.enter_context(
+                            mock.patch.object(browser_runtime.shutil, "rmtree", side_effect=fail_remove)
+                        )
+                    elif expected_check == "authority_close":
+                        def fail_authority_close(fd: int) -> None:
+                            real_close(fd)
+                            if fd == profile_fd:
+                                raise OSError("authority close")
+                        stack.enter_context(
+                            mock.patch.object(browser_runtime.os, "close", side_effect=fail_authority_close)
+                        )
+                    elif expected_check == "absence":
+                        stack.enter_context(
+                            mock.patch.object(browser_runtime.os.path, "lexists", return_value=True)
+                        )
+                    with self.assertRaises(BrowserRuntimeError) as raised:
+                        runtime._cleanup()
+
+                self.assertEqual(
+                    "private_browser_profile",
+                    raised.exception.browser_cleanup_substage,
+                )
+                self.assertEqual(expected_check, raised.exception.browser_cleanup_check)
+
+    def test_pinned_image_cleanup_classifies_descriptor_and_detached_mount(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        descriptor = os.open(os.devnull, os.O_RDONLY)
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.fd = descriptor
+        pinned.launch_root = None
+        real_close = os.close
+
+        def close_then_fail(fd: int) -> None:
+            real_close(fd)
+            raise OSError("descriptor close")
+
+        with (
+            mock.patch.object(browser_runtime.os, "close", side_effect=close_then_fail),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            pinned.close()
+        self.assertEqual(
+            "private_browser_pinned_image",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "executable_descriptor_close",
+            raised.exception.browser_cleanup_check,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.fd = None
+            pinned.launch_root = Path(directory)
+            pinned._detached_filesystem_mounted = True
+            pinned._detached_mount_mode = True
+            with (
+                mock.patch.object(
+                    pinned,
+                    "_release_detached_mount",
+                    side_effect=BrowserRuntimeError("browser_cleanup"),
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned.close()
+            self.assertEqual(
+                "private_browser_pinned_image",
+                raised.exception.browser_cleanup_substage,
+            )
+            self.assertEqual(
+                "detached_mount_release",
+                raised.exception.browser_cleanup_check,
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.fd = None
+            pinned.launch_root = Path(directory) / "private-image"
+            pinned.launch_root.mkdir()
+            pinned._detached_filesystem_mounted = False
+            pinned._detached_mount_mode = False
+            with (
+                mock.patch.object(
+                    browser_runtime.shutil,
+                    "rmtree",
+                    side_effect=OSError("tree release"),
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned.close()
+            self.assertEqual(
+                "private_browser_pinned_image",
+                raised.exception.browser_cleanup_substage,
+            )
+            self.assertEqual(
+                "detached_mount_release",
+                raised.exception.browser_cleanup_check,
+            )
 
     def test_runtime_executes_pinned_image_during_swap_then_restore(self) -> None:
         from meshshot.browser_runtime import _PinnedExecutable

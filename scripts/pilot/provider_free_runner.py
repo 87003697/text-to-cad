@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import resource
 import shutil
 import stat
@@ -34,6 +35,7 @@ from scripts.pilot.cvm_job.runtime import (
 from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
+    PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
     PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
@@ -49,6 +51,7 @@ from scripts.pilot.cvm_job.protocol import (
     provider_free_browser_exec_diagnostic_allowed,
     provider_free_browser_exec_diagnostic_matches_operation,
     provider_free_browser_identity_diagnostic_allowed,
+    provider_free_browser_cleanup_diagnostic_allowed,
     provider_free_preview_public_wrapper_allowed,
     provider_free_preview_public_wrapper_matches_operation,
     provider_free_preview_sandbox_receipt_allowed,
@@ -636,6 +639,11 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
         if isinstance(receipt, dict)
         else None
     )
+    browser_cleanup_reference = (
+        receipt.get("browser_cleanup_diagnostic")
+        if isinstance(receipt, dict)
+        else None
+    )
     expected_receipt_keys = {"schema", "scenario_identity", "stage"}
     if operation is not None:
         expected_receipt_keys.add("operation")
@@ -648,6 +656,8 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
         )
         if allowed_checks:
             expected_receipt_keys.add("browser_identity_check")
+    if operation == "preview_browser_cleanup":
+        expected_receipt_keys.add("browser_cleanup_diagnostic")
     if (
         not isinstance(receipt, dict)
         or receipt_keys != expected_receipt_keys
@@ -689,6 +699,24 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
             not provider_free_browser_identity_checks(browser_identity_phase)
             and browser_identity_check is not None
         )
+        or (
+            operation == "preview_browser_cleanup"
+            and (
+                not isinstance(browser_cleanup_reference, dict)
+                or set(browser_cleanup_reference) != {"path", "sha256"}
+                or browser_cleanup_reference.get("path")
+                != PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH
+                or re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    str(browser_cleanup_reference.get("sha256")),
+                )
+                is None
+            )
+        )
+        or (
+            operation != "preview_browser_cleanup"
+            and browser_cleanup_reference is not None
+        )
     ):
         raise ProviderFreeError(
             "provider-free scenario failure receipt conflicts with request"
@@ -719,6 +747,27 @@ def _validate_scenario_failure_evidence(exp_dir: Path, scenario_name: str) -> No
     elif os.path.lexists(identity_diagnostic_path):
         raise ProviderFreeError(
             "provider-free browser identity diagnostic is inconsistent"
+        )
+    cleanup_diagnostic_path = exp_dir / PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH
+    if operation == "preview_browser_cleanup":
+        try:
+            cleanup_bytes = cleanup_diagnostic_path.read_bytes()
+            cleanup_diagnostic = _loads_json_strict(cleanup_bytes)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            raise ProviderFreeError(
+                "provider-free browser cleanup diagnostic is missing or invalid"
+            ) from exc
+        if (
+            not provider_free_browser_cleanup_diagnostic_allowed(cleanup_diagnostic)
+            or hashlib.sha256(cleanup_bytes).hexdigest()
+            != browser_cleanup_reference.get("sha256")
+        ):
+            raise ProviderFreeError(
+                "provider-free browser cleanup diagnostic conflicts"
+            )
+    elif os.path.lexists(cleanup_diagnostic_path):
+        raise ProviderFreeError(
+            "provider-free browser cleanup diagnostic is inconsistent"
         )
     diagnostic_operations = {
         "preview_browser_outer_exec_probe",

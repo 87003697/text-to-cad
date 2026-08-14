@@ -754,6 +754,22 @@ class CvmJobTests(unittest.TestCase):
                     ],
                     "published": "first-failing-closed-substage-only",
                 },
+                "browser_cleanup_diagnostic": {
+                    "schema": protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA,
+                    "receipt": protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+                    "operation": "preview_browser_cleanup",
+                    "checks_by_substage": {
+                        substage: sorted(checks)
+                        for substage, checks in sorted(
+                            protocol.PROVIDER_FREE_BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE.items()
+                        )
+                    },
+                    "binding": [
+                        protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                        "artifact_manifest.json",
+                    ],
+                    "published": "first-failing-cleanup-predicate-only",
+                },
                 "public_wrapper": {
                     "schema": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
                     "receipt": protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
@@ -1175,6 +1191,8 @@ class CvmJobTests(unittest.TestCase):
         browser_identity_substage: str | None = None,
         browser_identity_phase: str | None = None,
         browser_identity_check: str | None = None,
+        browser_cleanup_substage: str | None = None,
+        browser_cleanup_check: str | None = None,
     ) -> None:
         """Publish common authority plus one manifest-bound closed failure."""
 
@@ -1201,6 +1219,29 @@ class CvmJobTests(unittest.TestCase):
             failure["browser_identity_phase"] = browser_identity_phase
         if browser_identity_check is not None:
             failure["browser_identity_check"] = browser_identity_check
+        if browser_cleanup_substage is not None:
+            cleanup_path = (
+                exp_dir / protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH
+            )
+            cleanup_path.write_text(
+                json.dumps(
+                    {
+                        "schema": (
+                            protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA
+                        ),
+                        "substage": browser_cleanup_substage,
+                        "check": browser_cleanup_check,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            failure["browser_cleanup_diagnostic"] = {
+                "path": protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+                "sha256": hashlib.sha256(cleanup_path.read_bytes()).hexdigest(),
+            }
         if operation in protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS:
             (
                 exp_dir / protocol.PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH
@@ -1704,6 +1745,51 @@ class CvmJobTests(unittest.TestCase):
         )
         self.assertEqual(expected, public["browser_identity_diagnostic"])
         self.assertNotIn("sha256", json.dumps(public))
+
+    def test_monitor_projects_manifest_bound_browser_cleanup_predicate(self) -> None:
+        handle = runtime.submit_provider_free(
+            "issue15-runtime-authority",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1234,
+        )["job"]
+
+        def fake_run(*_args, **kwargs):
+            raw_stripped = kwargs["env"]["CVM_PROVIDER_FREE_STRIPPED_NAMES"]
+            self.write_provider_free_failure_evidence(
+                handle,
+                stage="native_measurement",
+                operation="preview_browser_cleanup",
+                browser_cleanup_substage="private_browser_process_group",
+                browser_cleanup_check="kill_group_empty",
+                stripped=raw_stripped.split(",") if raw_stripped else [],
+            )
+            return 1, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_provider_free(
+                handle,
+                state_root=self.state_root,
+                environ={"PATH": os.environ["PATH"]},
+            )
+
+        diagnostic = state["browser_cleanup_diagnostic"]
+        self.assertEqual(
+            {
+                "schema": protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA,
+                "substage": "private_browser_process_group",
+                "check": "kill_group_empty",
+            },
+            {key: diagnostic[key] for key in ("schema", "substage", "check")},
+        )
+        self.assertRegex(diagnostic["sha256"], r"^[0-9a-f]{64}$")
+        public = runtime.status_job(
+            handle,
+            state_root=self.state_root,
+            include_observation=False,
+        )
+        self.assertEqual(diagnostic, public["browser_cleanup_diagnostic"])
+        self.assertNotIn("pid", json.dumps(public))
 
     def test_monitor_projects_manifest_bound_private_snapshot_phase(self) -> None:
         handle = runtime.submit_provider_free(

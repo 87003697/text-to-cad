@@ -28,6 +28,9 @@ from .protocol import (
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
+    PROVIDER_FREE_BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE,
+    PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+    PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_PRIVATE_VERSION_EXECUTION_CHECKS,
     PROVIDER_FREE_PLAYWRIGHT_PACKAGE_REVISION_CHECKS,
     PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
@@ -55,6 +58,7 @@ from .protocol import (
     provider_free_browser_exec_diagnostic_allowed,
     provider_free_browser_exec_diagnostic_matches_operation,
     provider_free_browser_identity_diagnostic_allowed,
+    provider_free_browser_cleanup_diagnostic_allowed,
     provider_free_preview_public_wrapper_allowed,
     provider_free_preview_public_wrapper_matches_operation,
     provider_free_preview_sandbox_receipt_allowed,
@@ -723,6 +727,22 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
                 "artifact_manifest.json",
             ],
             "published": "first-failing-closed-substage-only",
+        },
+        "browser_cleanup_diagnostic": {
+            "schema": PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA,
+            "receipt": PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+            "operation": "preview_browser_cleanup",
+            "checks_by_substage": {
+                substage: sorted(checks)
+                for substage, checks in sorted(
+                    PROVIDER_FREE_BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE.items()
+                )
+            },
+            "binding": [
+                PROVIDER_FREE_SCENARIO_FAILURE_PATH,
+                "artifact_manifest.json",
+            ],
+            "published": "first-failing-cleanup-predicate-only",
         },
         "public_wrapper": {
             "schema": PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_SCHEMA,
@@ -1608,7 +1628,7 @@ def _provider_free_failure_evidence_result(
 ) -> tuple[
     str | None,
     dict[str, str] | None,
-    dict[str, str] | None,
+    dict[str, dict[str, str]] | None,
     str | None,
 ]:
     """Validate the failure-only evidence path without requiring success files."""
@@ -1637,6 +1657,11 @@ def _provider_free_failure_evidence_result(
         if isinstance(failure, dict)
         else None
     )
+    browser_cleanup_reference = (
+        failure.get("browser_cleanup_diagnostic")
+        if isinstance(failure, dict)
+        else None
+    )
     expected_failure_keys = {"schema", "scenario_identity", "stage"}
     if operation is not None:
         expected_failure_keys.add("operation")
@@ -1646,6 +1671,8 @@ def _provider_free_failure_evidence_result(
             expected_failure_keys.add("browser_identity_phase")
         if provider_free_browser_identity_checks(browser_identity_phase):
             expected_failure_keys.add("browser_identity_check")
+    if operation == "preview_browser_cleanup":
+        expected_failure_keys.add("browser_cleanup_diagnostic")
     if (
         not isinstance(failure, dict)
         or failure_keys != expected_failure_keys
@@ -1686,6 +1713,24 @@ def _provider_free_failure_evidence_result(
         or (
             not provider_free_browser_identity_checks(browser_identity_phase)
             and browser_identity_check is not None
+        )
+        or (
+            operation == "preview_browser_cleanup"
+            and (
+                not isinstance(browser_cleanup_reference, dict)
+                or set(browser_cleanup_reference) != {"path", "sha256"}
+                or browser_cleanup_reference.get("path")
+                != PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH
+                or re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    str(browser_cleanup_reference.get("sha256")),
+                )
+                is None
+            )
+        )
+        or (
+            operation != "preview_browser_cleanup"
+            and browser_cleanup_reference is not None
         )
     ):
         return None, None, None, "provider-free scenario failure identity conflicts"
@@ -1753,6 +1798,58 @@ def _provider_free_failure_evidence_result(
             None,
             None,
             "provider-free browser identity diagnostic evidence is inconsistent",
+        )
+    public_cleanup_diagnostic: dict[str, str] | None = None
+    cleanup_diagnostic_path = exp_dir / PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH
+    if operation == "preview_browser_cleanup":
+        try:
+            cleanup_diagnostic_bytes = cleanup_diagnostic_path.read_bytes()
+            cleanup_diagnostic = _loads_json_strict(cleanup_diagnostic_bytes)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return (
+                None,
+                None,
+                None,
+                "provider-free browser cleanup diagnostic evidence is invalid",
+            )
+        cleanup_sha256 = hashlib.sha256(cleanup_diagnostic_bytes).hexdigest()
+        if (
+            not provider_free_browser_cleanup_diagnostic_allowed(cleanup_diagnostic)
+            or cleanup_sha256 != browser_cleanup_reference.get("sha256")
+        ):
+            return (
+                None,
+                None,
+                None,
+                "provider-free browser cleanup diagnostic evidence conflicts",
+            )
+        cleanup_entry = {
+            "path": PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+            "size_bytes": len(cleanup_diagnostic_bytes),
+            "sha256": cleanup_sha256,
+        }
+        if by_path.get(PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH) != cleanup_entry:
+            return (
+                None,
+                None,
+                None,
+                "provider-free browser cleanup diagnostic evidence is not bound",
+            )
+        public_cleanup_diagnostic = {
+            "schema": cleanup_diagnostic["schema"],
+            "substage": cleanup_diagnostic["substage"],
+            "check": cleanup_diagnostic["check"],
+            "sha256": cleanup_sha256,
+        }
+    elif (
+        os.path.lexists(cleanup_diagnostic_path)
+        or PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH in by_path
+    ):
+        return (
+            None,
+            None,
+            None,
+            "provider-free browser cleanup diagnostic evidence is inconsistent",
         )
     diagnostic_operations = {
         "preview_browser_outer_exec_probe",
@@ -1847,7 +1944,12 @@ def _provider_free_failure_evidence_result(
     )
     if error is not None:
         return None, None, None, error
-    return proof_path, failure, public_identity_diagnostic, None
+    public_diagnostics: dict[str, dict[str, str]] = {}
+    if public_identity_diagnostic is not None:
+        public_diagnostics["browser_identity_diagnostic"] = public_identity_diagnostic
+    if public_cleanup_diagnostic is not None:
+        public_diagnostics["browser_cleanup_diagnostic"] = public_cleanup_diagnostic
+    return proof_path, failure, public_diagnostics or None, None
 
 
 def supervise_provider_free(
@@ -2001,7 +2103,7 @@ def supervise_provider_free(
                 (
                     proof_path,
                     scenario_failure,
-                    browser_identity_diagnostic,
+                    public_diagnostics,
                     failure_error,
                 ) = (
                     _provider_free_failure_evidence_result(
@@ -2022,10 +2124,8 @@ def supervise_provider_free(
                         **updates,
                     )
                 updates["scenario_failure"] = scenario_failure
-                if browser_identity_diagnostic is not None:
-                    updates["browser_identity_diagnostic"] = (
-                        browser_identity_diagnostic
-                    )
+                if public_diagnostics is not None:
+                    updates.update(public_diagnostics)
                 if runner_status != workload_status:
                     reason = "provider-free scenario final status conflicts"
                 elif process_status != runner_status:

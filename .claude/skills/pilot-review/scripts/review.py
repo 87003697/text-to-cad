@@ -234,6 +234,23 @@ _SANDBOX_PROFILE = {
             ],
             "published": "first-failing-closed-substage-only",
         },
+        "browser_cleanup_diagnostic": {
+            "schema": "meshshot.browser-cleanup-diagnostic/1",
+            "receipt": "run/browser-cleanup-diagnostic.json",
+            "operation": "preview_browser_cleanup",
+            "checks_by_substage": {
+                "nested_attachment_close": ["browser_session_close", "completion_send", "shutdown_receive", "transport_close"],
+                "outer_supervisor_private_state": ["authority_absence", "client_absence", "socket_absence"],
+                "outer_supervisor_process_group": ["kill_group_empty", "kill_signal", "leader_kill_wait", "leader_term_wait", "term_group_empty", "term_signal"],
+                "outer_supervisor_wait": ["supervisor_exit_status", "supervisor_wait"],
+                "private_browser_pinned_image": ["detached_mount_release", "executable_descriptor_close"],
+                "private_browser_process_group": ["kill_group_empty", "kill_signal", "leader_kill_wait", "leader_term_wait", "term_group_empty", "term_signal"],
+                "private_browser_profile": ["absence", "authority_close", "authority_validation", "quarantine_create", "quarantine_move", "recursive_remove"],
+                "private_supervisor_state": ["authority_record_unlink", "client_record_unlink", "client_transport_close", "listener_close", "root_descriptor_close", "root_identity", "socket_unlink"],
+            },
+            "binding": ["run/scenario-failure.json", "artifact_manifest.json"],
+            "published": "first-failing-cleanup-predicate-only",
+        },
         "public_wrapper": {
             "schema": "cvm.provider-free-preview-public-wrapper/1",
             "receipt": "run/preview-public-wrapper-diagnostic.json",
@@ -634,6 +651,7 @@ def _runtime_authority_failure_verdict(
     failure_relative = "run/scenario-failure.json"
     wrapper_relative = "run/preview-public-wrapper-diagnostic.json"
     identity_relative = "run/browser-identity-diagnostic.json"
+    cleanup_relative = "run/browser-cleanup-diagnostic.json"
     failure_path = workspace / failure_relative
     if not failure_path.is_file():
         return None
@@ -687,6 +705,16 @@ def _runtime_authority_failure_verdict(
             "playwright_package_revision_identity": package_revision_checks,
             "private_launch_version_execution": private_version_execution_checks,
         }
+        cleanup_checks_by_substage = {
+            "nested_attachment_close": {"browser_session_close", "completion_send", "shutdown_receive", "transport_close"},
+            "private_browser_process_group": {"term_signal", "leader_term_wait", "term_group_empty", "kill_signal", "leader_kill_wait", "kill_group_empty"},
+            "private_browser_profile": {"authority_validation", "quarantine_create", "quarantine_move", "recursive_remove", "authority_close", "absence"},
+            "private_browser_pinned_image": {"executable_descriptor_close", "detached_mount_release"},
+            "private_supervisor_state": {"client_transport_close", "listener_close", "socket_unlink", "root_identity", "authority_record_unlink", "client_record_unlink", "root_descriptor_close"},
+            "outer_supervisor_wait": {"supervisor_wait", "supervisor_exit_status"},
+            "outer_supervisor_process_group": {"term_signal", "leader_term_wait", "term_group_empty", "kill_signal", "leader_kill_wait", "kill_group_empty"},
+            "outer_supervisor_private_state": {"socket_absence", "authority_absence", "client_absence"},
+        }
         identity_failure_keys = {
             "schema",
             "scenario_identity",
@@ -726,7 +754,22 @@ def _runtime_authority_failure_verdict(
                     and failure.get("browser_identity_check") is None)
             )
         )
-        if failure != wrapper_publication_failure and not identity_failure:
+        cleanup_reference = failure.get("browser_cleanup_diagnostic") if isinstance(failure, dict) else None
+        cleanup_failure = (
+            isinstance(failure, dict)
+            and set(failure) == {"schema", "scenario_identity", "stage", "operation", "browser_cleanup_diagnostic"}
+            and failure.get("schema") == "cvm.provider-free-scenario-failure/1"
+            and failure.get("scenario_identity") == "issue15.provider-free.runtime-authority/1"
+            and failure.get("stage") == "native_measurement"
+            and failure.get("operation") == "preview_browser_cleanup"
+            and isinstance(cleanup_reference, dict)
+            and set(cleanup_reference) == {"path", "sha256"}
+            and cleanup_reference.get("path") == cleanup_relative
+            and isinstance(cleanup_reference.get("sha256"), str)
+            and len(cleanup_reference["sha256"]) == 64
+            and all(character in "0123456789abcdef" for character in cleanup_reference["sha256"])
+        )
+        if failure != wrapper_publication_failure and not identity_failure and not cleanup_failure:
             raise ReviewError("runtime identity failure is not closed")
         if (
             not isinstance(manifest, dict)
@@ -781,6 +824,7 @@ def _runtime_authority_failure_verdict(
             )
         wrapper_path = workspace / wrapper_relative
         identity_path = workspace / identity_relative
+        cleanup_path = workspace / cleanup_relative
         if failure == wrapper_publication_failure:
             if (
                 wrapper_path.exists()
@@ -798,35 +842,50 @@ def _runtime_authority_failure_verdict(
                 raise ReviewError(
                     "browser identity diagnostic must be absent for wrapper publication failure"
                 )
+            if cleanup_path.exists() or cleanup_path.is_symlink() or cleanup_relative in manifest_by_path:
+                raise ReviewError("browser cleanup diagnostic must be absent for wrapper publication failure")
         else:
             wrapper_bytes = wrapper_path.read_bytes()
             wrapper = _read_json(wrapper_path)
             if wrapper != {
                 "schema": "cvm.provider-free-preview-public-wrapper/1",
-                "operation": "preview_browser_identity",
+                "operation": failure["operation"],
             }:
-                raise ReviewError("browser identity wrapper failure is not closed")
-            identity_bytes = identity_path.read_bytes()
-            identity = _read_json(identity_path)
-            expected_identity = {
-                "schema": "cvm.provider-free-browser-identity-diagnostic/6",
-                "operation": "preview_browser_identity",
-                "substage": failure["browser_identity_substage"],
-                "scenario_failure": {
-                    "path": failure_relative,
-                    "sha256": hashlib.sha256(failure_bytes).hexdigest(),
-                },
-            }
-            if failure.get("browser_identity_phase") is not None:
-                expected_identity["phase"] = failure["browser_identity_phase"]
-            if failure.get("browser_identity_check") is not None:
-                expected_identity["check"] = failure["browser_identity_check"]
-            if identity != expected_identity:
-                raise ReviewError("browser identity diagnostic conflicts")
-            for relative, data in (
-                (wrapper_relative, wrapper_bytes),
-                (identity_relative, identity_bytes),
-            ):
+                raise ReviewError("browser wrapper failure is not closed")
+            bound_receipts = [(wrapper_relative, wrapper_bytes)]
+            if identity_failure:
+                identity_bytes = identity_path.read_bytes()
+                identity = _read_json(identity_path)
+                expected_identity = {
+                    "schema": "cvm.provider-free-browser-identity-diagnostic/6",
+                    "operation": "preview_browser_identity",
+                    "substage": failure["browser_identity_substage"],
+                    "scenario_failure": {"path": failure_relative, "sha256": hashlib.sha256(failure_bytes).hexdigest()},
+                }
+                if failure.get("browser_identity_phase") is not None:
+                    expected_identity["phase"] = failure["browser_identity_phase"]
+                if failure.get("browser_identity_check") is not None:
+                    expected_identity["check"] = failure["browser_identity_check"]
+                if identity != expected_identity:
+                    raise ReviewError("browser identity diagnostic conflicts")
+                bound_receipts.append((identity_relative, identity_bytes))
+                if cleanup_path.exists() or cleanup_path.is_symlink() or cleanup_relative in manifest_by_path:
+                    raise ReviewError("browser cleanup diagnostic is inconsistent")
+            else:
+                cleanup_bytes = cleanup_path.read_bytes()
+                cleanup = _read_json(cleanup_path)
+                if (
+                    not isinstance(cleanup, dict)
+                    or set(cleanup) != {"schema", "substage", "check"}
+                    or cleanup.get("schema") != "meshshot.browser-cleanup-diagnostic/1"
+                    or cleanup.get("check") not in cleanup_checks_by_substage.get(cleanup.get("substage"), set())
+                    or hashlib.sha256(cleanup_bytes).hexdigest() != cleanup_reference["sha256"]
+                ):
+                    raise ReviewError("browser cleanup diagnostic conflicts")
+                bound_receipts.append((cleanup_relative, cleanup_bytes))
+                if identity_path.exists() or identity_path.is_symlink() or identity_relative in manifest_by_path:
+                    raise ReviewError("browser identity diagnostic is inconsistent")
+            for relative, data in bound_receipts:
                 if manifest_by_path.get(relative) != {
                     "path": relative,
                     "size_bytes": len(data),
@@ -863,6 +922,7 @@ def _runtime_authority_failure_verdict(
                 if identity_failure
                 else {}
             ),
+            **({"browser_cleanup_diagnostic": cleanup_relative} if cleanup_failure else {}),
         },
         [
             {
@@ -881,7 +941,11 @@ def _runtime_authority_failure_verdict(
                         else ""
                     )
                     if identity_failure
-                    else "preview_public_wrapper_evidence_publication"
+                    else (
+                        "preview_browser_cleanup/" + str(cleanup["substage"]) + "/" + str(cleanup["check"])
+                        if cleanup_failure
+                        else "preview_public_wrapper_evidence_publication"
+                    )
                 ),
                 "evidence": failure_relative,
             }
