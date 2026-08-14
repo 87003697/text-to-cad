@@ -927,10 +927,16 @@ class PilotReviewTests(unittest.TestCase):
         authoritative_preview = json.loads(
             (self.exp / preview_relatives[0]).read_text(encoding="utf-8")
         )
-        for field, value in (("adapter_profile", "1" * 64), ("browser_identity", "2" * 64)):
-            with self.subTest(browser_runtime_tamper=field):
+        for field, key, value in (
+            ("adapter_profile", "sha256", "1" * 64),
+            ("browser_identity", "sha256", "2" * 64),
+            ("execution_authority", "tree_manifest_sha256", "e" * 64),
+            ("execution_authority", "executable_sha256", "e" * 64),
+            ("execution_authority", "source_detached", "failed"),
+        ):
+            with self.subTest(browser_runtime_tamper=f"{field}.{key}"):
                 candidate = json.loads(json.dumps(authoritative_preview))
-                candidate["browser_runtime"][field]["sha256"] = value
+                candidate["browser_runtime"][field][key] = value
                 source = dict(candidate)
                 source.pop("preview_identity_sha256")
                 candidate["preview_identity_sha256"] = hashlib.sha256(
