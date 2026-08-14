@@ -2329,6 +2329,24 @@ class ResidualRendererTests(unittest.TestCase):
                 (target / "nested/resource.pak").read_bytes(),
             )
 
+    def test_browser_tree_manifest_uses_global_canonical_path_order(self) -> None:
+        from meshshot.browser_runtime import _PinnedExecutable
+        from scripts.pilot import deployment_authority
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tree"
+            (root / "a").mkdir(parents=True)
+            (root / "a/a-child").write_bytes(b"child")
+            (root / "a.txt").write_bytes(b"sibling")
+            expected = deployment_authority.browser_tree_manifest_sha256(
+                deployment_authority.browser_tree_manifest(
+                    root,
+                    readonly_projection=False,
+                )
+            )
+
+            self.assertEqual(expected, _PinnedExecutable._tree_manifest_sha256(root))
+
     def test_browser_tree_freeze_removes_write_bits_from_files_and_directories(
         self,
     ) -> None:
@@ -2403,6 +2421,90 @@ class ResidualRendererTests(unittest.TestCase):
             thaw.assert_not_called()
             remove.assert_not_called()
             self.assertEqual(b"foreign", marker.read_bytes())
+
+    def test_private_directory_carries_created_identity_into_mount_validation(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            launches = Path(directory)
+            with mock.patch.object(
+                browser_runtime.tempfile,
+                "gettempdir",
+                return_value=launches,
+            ):
+                owned = browser_runtime._private_directory("meshshot-tree-")
+            created_path = getattr(owned, "path", owned)
+            retained = launches / "retained-created"
+            os.replace(created_path, retained)
+            created_path.mkdir()
+            pinned = object.__new__(_PinnedExecutable)
+            pinned._detached_filesystem_mounted = False
+            pinned._detached_mount_parent_fd = None
+            pinned._detached_mount_fd = None
+            pinned._detached_mount_name = None
+            pinned._detached_underlying_identity = None
+            pinned._detached_mounted_identity = None
+
+            with (
+                mock.patch.object(pinned, "_mount_private_filesystem") as mount,
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned._prepare_detached_mount(owned)
+
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+            mount.assert_not_called()
+            self.assertTrue(created_path.is_dir())
+
+    def test_tree_manifest_descriptor_close_failure_is_cleanup(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "resource").write_bytes(b"resource")
+            real_close = os.close
+            injected = False
+
+            def close_then_fail(descriptor: int) -> None:
+                nonlocal injected
+                real_close(descriptor)
+                if not injected:
+                    injected = True
+                    raise OSError("injected descriptor close failure")
+
+            with (
+                mock.patch("meshshot.browser_runtime.os.close", side_effect=close_then_fail),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable._tree_manifest_sha256(root)
+
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+
+    def test_tree_freeze_descriptor_close_failure_is_cleanup(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "resource").write_bytes(b"resource")
+            real_close = os.close
+            injected = False
+
+            def close_then_fail(descriptor: int) -> None:
+                nonlocal injected
+                real_close(descriptor)
+                if not injected:
+                    injected = True
+                    raise OSError("injected descriptor close failure")
+
+            with (
+                mock.patch("meshshot.browser_runtime.os.close", side_effect=close_then_fail),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable._freeze_directories(root)
+
+            self.assertEqual("browser_cleanup", raised.exception.operation)
 
     def test_running_process_image_rejects_swap_exec_restore(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable

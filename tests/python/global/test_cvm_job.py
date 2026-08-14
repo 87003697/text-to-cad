@@ -630,6 +630,94 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(b"foreign", (owned / "foreign").read_bytes())
         self.assertEqual(b"owned", (retained / "resource").read_bytes())
 
+    def test_attested_browser_stage_rejects_mkdir_open_replacement(self) -> None:
+        chromium, _executable = self._browser_identity()
+        handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
+        stage_root = runtime._browser_mount(chromium, handle).host_revision.parent
+        retained = stage_root.parent / "retained-created-stage"
+        real_open = os.open
+        swapped = False
+
+        def replace_before_open(path, flags, *args, **kwargs):
+            nonlocal swapped
+            if (
+                path == stage_root.name
+                and kwargs.get("dir_fd") is not None
+                and not swapped
+            ):
+                swapped = True
+                os.replace(stage_root, retained)
+                stage_root.mkdir()
+                (stage_root / "foreign").write_bytes(b"foreign")
+            return real_open(path, flags, *args, **kwargs)
+
+        with (
+            mock.patch.object(runtime.os, "open", side_effect=replace_before_open),
+            self.assertRaises(runtime.BrowserStageError),
+        ):
+            with runtime.staged_attested_browser(
+                chromium,
+                handle,
+                repo_root=self.repo_root,
+            ):
+                pass
+
+        self.assertEqual(b"foreign", (stage_root / "foreign").read_bytes())
+        self.assertTrue(retained.is_dir())
+
+    def test_attested_browser_stage_leaf_cleanup_rejects_unlink_replacement(
+        self,
+    ) -> None:
+        parent = self.workspace / "leaf-cleanup-race"
+        parent.mkdir()
+        owned = parent / "owned"
+        (owned / "nested").mkdir(parents=True)
+        leaf = owned / "nested/resource"
+        leaf.write_bytes(b"owned")
+        retained = owned / "nested/retained-resource"
+        parent_fd = os.open(
+            parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+        )
+        identity_info = owned.lstat()
+        identity = (identity_info.st_dev, identity_info.st_ino)
+        real_unlink = os.unlink
+        swapped = False
+
+        def replace_before_unlink(path, *args, **kwargs):
+            nonlocal swapped
+            if path == "resource" and not swapped:
+                swapped = True
+                nested_fd = kwargs["dir_fd"]
+                os.rename(
+                    "resource",
+                    "retained-resource",
+                    src_dir_fd=nested_fd,
+                    dst_dir_fd=nested_fd,
+                )
+                replacement_fd = os.open(
+                    "resource",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=nested_fd,
+                )
+                os.write(replacement_fd, b"foreign")
+                os.close(replacement_fd)
+            return real_unlink(path, *args, **kwargs)
+
+        try:
+            with (
+                mock.patch.object(runtime.os, "unlink", side_effect=replace_before_unlink),
+                self.assertRaises(runtime.BrowserStageError),
+            ):
+                runtime._remove_browser_tree_owned(parent_fd, "owned", identity)
+        finally:
+            os.close(parent_fd)
+
+        self.assertTrue(leaf.is_file())
+        self.assertEqual(b"foreign", leaf.read_bytes())
+        self.assertEqual(b"owned", retained.read_bytes())
+
     def test_provider_free_sandbox_preserves_only_nested_bwrap_setup_capabilities(
         self,
     ) -> None:
