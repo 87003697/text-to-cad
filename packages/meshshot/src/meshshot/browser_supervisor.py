@@ -27,6 +27,7 @@ from meshshot.browser_runtime import (
     SUPERVISOR_OUTER_SOCKET,
     SUPERVISOR_PROTOCOL_SCHEMA,
     SUPERVISOR_RESULT_SCHEMA,
+    SUPERVISOR_RESULT_RECORD_CLEANUP_EXIT,
     _SUPERVISOR_PACKET_LIMIT,
     _loads_json_strict,
     _peer_credentials,
@@ -132,11 +133,17 @@ def _write_private_record(path: Path, value: dict[str, Any]) -> None:
             except OSError as exc:
                 raise BrowserRuntimeError(
                     "browser_cleanup",
-                    browser_cleanup_substage="private_supervisor_state",
+                    browser_cleanup_substage=(
+                        "private_supervisor_record_descriptors"
+                    ),
                     browser_cleanup_check=(
-                        "authority_record_unlink"
+                        "authority_record_descriptor_close"
                         if path == SUPERVISOR_OUTER_AUTHORITY
-                        else "client_record_unlink"
+                        else (
+                            "result_record_descriptor_close"
+                            if path == SUPERVISOR_OUTER_RESULT
+                            else "client_record_descriptor_close"
+                        )
                     ),
                 ) from exc
 
@@ -165,8 +172,10 @@ def _load_expected_client(*, nonce: str, deadline: float) -> int:
                 except OSError as exc:
                     raise BrowserRuntimeError(
                         "browser_cleanup",
-                        browser_cleanup_substage="private_supervisor_state",
-                        browser_cleanup_check="client_record_unlink",
+                        browser_cleanup_substage=(
+                            "private_supervisor_record_descriptors"
+                        ),
+                        browser_cleanup_check="client_record_descriptor_close",
                     ) from exc
         value = _loads_json_strict(raw)
         client_pid = value.get("client_pid") if isinstance(value, dict) else None
@@ -279,6 +288,14 @@ def _unlink_owned_socket(root_fd: int, identity: tuple[int, int]) -> None:
 
 
 def _closed_result(exc: BrowserRuntimeError) -> dict[str, str]:
+    if (
+        exc.operation == "browser_cleanup"
+        and (
+            exc.browser_cleanup_substage is None
+            or exc.browser_cleanup_check is None
+        )
+    ):
+        raise ValueError("untyped browser cleanup failure")
     value = {"schema": SUPERVISOR_RESULT_SCHEMA, "operation": exc.operation}
     if exc.browser_identity_substage is not None:
         value["browser_identity_substage"] = exc.browser_identity_substage
@@ -513,7 +530,16 @@ def main() -> int:
         try:
             if not os.path.lexists(SUPERVISOR_OUTER_RESULT):
                 _write_private_record(SUPERVISOR_OUTER_RESULT, _closed_result(exc))
-        except BrowserRuntimeError:
+        except BrowserRuntimeError as cleanup_exc:
+            if (
+                cleanup_exc.browser_cleanup_substage
+                == "private_supervisor_record_descriptors"
+                and cleanup_exc.browser_cleanup_check
+                == "result_record_descriptor_close"
+            ):
+                return SUPERVISOR_RESULT_RECORD_CLEANUP_EXIT
+            raise cleanup_exc from exc
+        except ValueError:
             pass
         return 1
     except (OSError, RuntimeError):

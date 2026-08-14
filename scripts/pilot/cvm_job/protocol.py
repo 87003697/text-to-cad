@@ -63,6 +63,7 @@ PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH = (
 PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA = (
     "meshshot.browser-cleanup-diagnostic/1"
 )
+PROVIDER_FREE_BROWSER_SUPERVISOR_RESULT_CLEANUP_EXIT = 78
 PROVIDER_FREE_BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE = {
     "nested_attachment_close": frozenset(
         {"browser_session_close", "completion_send", "shutdown_receive", "transport_close"}
@@ -76,9 +77,22 @@ PROVIDER_FREE_BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE = {
     "private_browser_pinned_image": frozenset(
         {"executable_descriptor_close", "detached_mount_release"}
     ),
+    "private_browser_private_tree": frozenset(
+        {"tree_descriptor_close", "directory_thaw", "recursive_remove", "authority_descriptor_close", "absence"}
+    ),
+    "private_browser_handoff": frozenset(
+        {"socket_unlink", "authority_record_unlink", "root_descriptor_close", "transport_close", "pipe_descriptor_close", "process_group_cleanup"}
+    ),
     "private_supervisor_state": frozenset(
         {"client_transport_close", "listener_close", "socket_unlink", "root_identity", "authority_record_unlink", "client_record_unlink", "root_descriptor_close"}
     ),
+    "private_supervisor_record_descriptors": frozenset(
+        {"authority_record_descriptor_close", "client_record_descriptor_close", "result_record_descriptor_close"}
+    ),
+    "outer_browser_stage": frozenset(
+        {"tree_copy_descriptor_close", "revision_descriptor_close", "destination_descriptor_close", "source_descriptor_close"}
+    ),
+    "nested_public_child": frozenset({"termination_signal", "completion_reap"}),
     "outer_supervisor_wait": frozenset({"supervisor_wait", "supervisor_exit_status"}),
     "outer_supervisor_process_group": frozenset(
         {"term_signal", "leader_term_wait", "term_group_empty", "kill_signal", "leader_kill_wait", "kill_group_empty"}

@@ -527,6 +527,60 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             raised.exception.browser_cleanup_check,
         )
 
+    def test_outer_browser_stage_names_each_root_descriptor_owner(self) -> None:
+        for fail_at, expected_check in enumerate(
+            (
+                "revision_descriptor_close",
+                "destination_descriptor_close",
+                "source_descriptor_close",
+            ),
+            start=1,
+        ):
+            with self.subTest(check=expected_check), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "source"
+                executable = source / "chrome-headless-shell-linux64/chrome-headless-shell"
+                executable.parent.mkdir(parents=True)
+                executable.write_bytes(b"trusted browser")
+                executable.chmod(0o755)
+                destination = root / "destination"
+                destination.mkdir()
+                manifest = deployment_authority.browser_tree_manifest(
+                    source,
+                    readonly_projection=True,
+                )
+                manifest_sha256 = (
+                    deployment_authority.browser_tree_manifest_sha256(manifest)
+                )
+                libc = mock.MagicMock()
+                libc.prctl.return_value = 0
+                real_close = os.close
+                close_calls = 0
+
+                def close_selected_then_fail(descriptor: int) -> None:
+                    nonlocal close_calls
+                    close_calls += 1
+                    real_close(descriptor)
+                    if close_calls == fail_at:
+                        raise OSError("selected descriptor close")
+
+                with (
+                    mock.patch.object(provider_free_scenarios.platform, "system", return_value="Linux"),
+                    mock.patch.object(provider_free_scenarios, "PROVIDER_FREE_BROWSER_SOURCE_REVISION", os.fspath(source)),
+                    mock.patch.object(provider_free_scenarios, "PROVIDER_FREE_STAGED_BROWSER_CACHE", os.fspath(destination)),
+                    mock.patch.dict(os.environ, {"MESHSHOT_BROWSER_TREE_MANIFEST_SHA256": manifest_sha256}),
+                    mock.patch.object(provider_free_scenarios.ctypes, "CDLL", return_value=libc),
+                    mock.patch.object(provider_free_scenarios, "_linux_filesystem_type", return_value=provider_free_scenarios._LINUX_TMPFS_MAGIC),
+                    mock.patch.object(provider_free_scenarios.deployment_authority, "_browser_tree_manifest_from_fd", return_value=manifest),
+                    mock.patch("scripts.pilot.cvm_job.runtime._copy_browser_tree_fd"),
+                    mock.patch.object(provider_free_scenarios.os, "close", side_effect=close_selected_then_fail),
+                    self.assertRaises(provider_free_scenarios.ScenarioError) as raised,
+                ):
+                    provider_free_scenarios._materialize_outer_browser_stage()
+                self.assertEqual(3, close_calls)
+                self.assertEqual("outer_browser_stage", raised.exception.browser_cleanup_substage)
+                self.assertEqual(expected_check, raised.exception.browser_cleanup_check)
+
     def test_public_child_cleanup_classifies_kill_and_reap_boundaries(self) -> None:
         for expected_check, kill_error, communicate_error in (
             ("kill_signal", OSError("kill"), None),
@@ -1048,6 +1102,11 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 if expected_check == "supervisor_exit_status":
                     process.returncode = 1
                     return 1
+                if expected_check == "result_record_descriptor_close":
+                    process.returncode = (
+                        protocol.PROVIDER_FREE_BROWSER_SUPERVISOR_RESULT_CLEANUP_EXIT
+                    )
+                    return process.returncode
                 process.returncode = 0
                 residue = {
                     "socket_absence": endpoint,
@@ -1088,6 +1147,9 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             "socket_absence": "outer_supervisor_private_state",
             "authority_absence": "outer_supervisor_private_state",
             "client_absence": "outer_supervisor_private_state",
+            "result_record_descriptor_close": (
+                "private_supervisor_record_descriptors"
+            ),
         }
         for check, substage in cases.items():
             with self.subTest(check=check):
@@ -1104,7 +1166,11 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         process = mock.MagicMock()
         process.pid = 4242
         process.poll.return_value = None
-        process.wait.side_effect = OSError("first wait failure")
+        def fail_wait(*, timeout: float) -> int:
+            endpoint.unlink()
+            raise OSError("first wait failure")
+
+        process.wait.side_effect = fail_wait
 
         def spawn(*_args: object, **_kwargs: object) -> mock.MagicMock:
             endpoint.touch()

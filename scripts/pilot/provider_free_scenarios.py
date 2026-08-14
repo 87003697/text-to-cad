@@ -40,6 +40,7 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
     PROVIDER_FREE_BROWSER_RUNTIME_MODE,
+    PROVIDER_FREE_BROWSER_SUPERVISOR_RESULT_CLEANUP_EXIT,
     PROVIDER_FREE_BROWSER_SOURCE_REVISION,
     PROVIDER_FREE_BROWSER_SUPERVISOR_NESTED_ROOT,
     PROVIDER_FREE_BROWSER_SUPERVISOR_OUTER_ROOT,
@@ -168,7 +169,7 @@ def _materialize_outer_browser_stage() -> None:
     source_fd: int | None = None
     destination_fd: int | None = None
     revision_fd: int | None = None
-    cleanup_failed = False
+    cleanup_check: str | None = None
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     flags |= getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -227,8 +228,8 @@ def _materialize_outer_browser_stage() -> None:
         raise ScenarioError(
             "private browser staging cleanup failed",
             operation="preview_browser_cleanup",
-            browser_cleanup_substage="private_browser_pinned_image",
-            browser_cleanup_check="executable_descriptor_close",
+            browser_cleanup_substage="outer_browser_stage",
+            browser_cleanup_check="tree_copy_descriptor_close",
         ) from exc
     except cvm_runtime.BrowserStageError as exc:
         raise ScenarioError(
@@ -246,18 +247,23 @@ def _materialize_outer_browser_stage() -> None:
             operation="preview_browser_runtime_staging",
         ) from exc
     finally:
-        for descriptor in (revision_fd, destination_fd, source_fd):
+        for descriptor, check in (
+            (revision_fd, "revision_descriptor_close"),
+            (destination_fd, "destination_descriptor_close"),
+            (source_fd, "source_descriptor_close"),
+        ):
             if descriptor is not None:
                 try:
                     os.close(descriptor)
                 except OSError:
-                    cleanup_failed = True
-        if cleanup_failed:
+                    if cleanup_check is None:
+                        cleanup_check = check
+        if cleanup_check is not None:
             raise ScenarioError(
                 "private browser staging cleanup failed",
                 operation="preview_browser_cleanup",
-                browser_cleanup_substage="private_browser_pinned_image",
-                browser_cleanup_check="executable_descriptor_close",
+                browser_cleanup_substage="outer_browser_stage",
+                browser_cleanup_check=cleanup_check,
             )
 BROWSER_EXEC_PROBE_ENVIRONMENT = {
     "HOME": "/nonexistent",
@@ -727,8 +733,8 @@ def _run_public(
                     raise ScenarioError(
                         "public command cleanup failed",
                         operation="preview_browser_cleanup",
-                        browser_cleanup_substage="outer_supervisor_process_group",
-                        browser_cleanup_check="kill_signal",
+                        browser_cleanup_substage="nested_public_child",
+                        browser_cleanup_check="termination_signal",
                     ) from cleanup_exc
                 try:
                     process.communicate(timeout=5.0)
@@ -736,8 +742,8 @@ def _run_public(
                     raise ScenarioError(
                         "public command cleanup failed",
                         operation="preview_browser_cleanup",
-                        browser_cleanup_substage="outer_supervisor_process_group",
-                        browser_cleanup_check="leader_kill_wait",
+                        browser_cleanup_substage="nested_public_child",
+                        browser_cleanup_check="completion_reap",
                     ) from cleanup_exc
                 raise
             completed = subprocess.CompletedProcess(
@@ -1103,8 +1109,10 @@ class _BrowserSupervisorSession:
                     raise ScenarioError(
                         "provider-free browser supervisor client cleanup failed",
                         operation="preview_browser_cleanup",
-                        browser_cleanup_substage="private_supervisor_state",
-                        browser_cleanup_check="client_record_unlink",
+                        browser_cleanup_substage=(
+                            "private_supervisor_record_descriptors"
+                        ),
+                        browser_cleanup_check="client_record_descriptor_close",
                     ) from exc
         self._registered = True
 
@@ -1237,7 +1245,6 @@ def _closed_supervisor_failure(value: Any) -> ScenarioError:
             "browser_readiness",
             "browser_readiness_timeout",
             "browser_connect",
-            "browser_cleanup",
             "browser_signal",
             "browser_render",
             "browser_result",
@@ -1374,6 +1381,18 @@ def _browser_supervisor() -> Any:
                 browser_cleanup_check="supervisor_wait",
             ) from exc
         if process.returncode != 0:
+            if (
+                process.returncode
+                == PROVIDER_FREE_BROWSER_SUPERVISOR_RESULT_CLEANUP_EXIT
+            ):
+                raise ScenarioError(
+                    "provider-free browser supervisor result cleanup failed",
+                    operation="preview_browser_cleanup",
+                    browser_cleanup_substage=(
+                        "private_supervisor_record_descriptors"
+                    ),
+                    browser_cleanup_check="result_record_descriptor_close",
+                )
             try:
                 result = _loads_json_strict(
                     _BROWSER_SUPERVISOR_RESULT.read_text(encoding="utf-8")
@@ -1399,18 +1418,33 @@ def _browser_supervisor() -> Any:
         if body_error is not None:
             raise body_error
     finally:
-        cleanup_error: ScenarioError | None = None
+        pending = sys.exc_info()[1]
+        cleanup_error = (
+            pending
+            if (
+                isinstance(pending, ScenarioError)
+                and pending.operation == "preview_browser_cleanup"
+                and provider_free_browser_cleanup_pair_allowed(
+                    pending.browser_cleanup_substage,
+                    pending.browser_cleanup_check,
+                )
+            )
+            else None
+        )
         if process is not None:
             try:
                 _cleanup_browser_supervisor(process)
             except ScenarioError as exc:
-                cleanup_error = exc
+                if cleanup_error is None:
+                    cleanup_error = exc
         for path, check in (
             (_BROWSER_SUPERVISOR_SOCKET, "socket_absence"),
             (_BROWSER_SUPERVISOR_AUTHORITY, "authority_absence"),
             (_BROWSER_SUPERVISOR_CLIENT, "client_absence"),
         ):
             if os.path.lexists(path):
+                # A positive retained-resource proof overrides an earlier
+                # failure from the same outer supervisor lifecycle.
                 cleanup_error = ScenarioError(
                     "provider-free browser supervisor private state remained",
                     operation="preview_browser_cleanup",
@@ -1418,7 +1452,7 @@ def _browser_supervisor() -> Any:
                     browser_cleanup_check=check,
                 )
                 break
-        if cleanup_error is not None:
+        if cleanup_error is not None and cleanup_error is not pending:
             raise cleanup_error
 
 

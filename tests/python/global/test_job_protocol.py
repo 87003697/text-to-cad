@@ -47,6 +47,14 @@ class JobProtocolTests(unittest.TestCase):
                 "authority_descriptor_close",
                 "absence",
             },
+            "private_browser_handoff": {
+                "socket_unlink",
+                "authority_record_unlink",
+                "root_descriptor_close",
+                "transport_close",
+                "pipe_descriptor_close",
+                "process_group_cleanup",
+            },
         }
         for substage, checks in expected.items():
             with self.subTest(substage=substage):

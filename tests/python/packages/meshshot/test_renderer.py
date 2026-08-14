@@ -375,10 +375,12 @@ class ResidualRendererTests(unittest.TestCase):
                 "_write_private_record",
                 side_effect=cleanup,
             ),
-            self.assertRaises(BrowserRuntimeError) as raised,
         ):
-            browser_supervisor.main()
-        self.assertIs(cleanup, raised.exception)
+            status = browser_supervisor.main()
+        self.assertEqual(
+            browser_supervisor.SUPERVISOR_RESULT_RECORD_CLEANUP_EXIT,
+            status,
+        )
 
     def test_private_tree_descriptor_cleanup_has_exact_owner(self) -> None:
         from meshshot import browser_runtime
