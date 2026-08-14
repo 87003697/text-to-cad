@@ -133,6 +133,7 @@ int main(int argc, char **argv) {
         )
         os.environ["MESHSHOT_EXECUTABLE_ROOT"] = "/meshshot-exec"
         os.environ["MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"] = manifest_sha256
+        Path("/meshshot-supervisor").chmod(0o700)
         pinned = runtime._PinnedExecutable(source)
         browser = object.__new__(runtime.PrelaunchedCdpRuntime)
         browser._executable = source
