@@ -8,7 +8,9 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -21,7 +23,10 @@ LOCAL_STATE_ROOT = REPO_ROOT / ".cvm-sidecar-probes"
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 SOURCE_REVISION = re.compile(r"[0-9a-f]{40}\Z")
 HANDLE = re.compile(r"cvmsp-[0-9a-f]{24}\Z")
+RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
+OWNER_NONCE = re.compile(r"[0-9a-f]{32}\Z")
 REMOTE_ROOT = "~/text-to-cad"
+MIN_REMOTE_FREE_BYTES = 3 * 1024 * 1024 * 1024
 REQUEST = {
     "schema": "meshshot.browser-sidecar.render-request/2",
     "program": "probe",
@@ -71,6 +76,45 @@ def _sha256_file(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _workflow_file_hashes() -> Mapping[str, str]:
+    return {
+        "module": _sha256_file(Path(__file__).resolve()),
+        "wrapper": _sha256_file(Path(__file__).resolve().with_name("cvm-sidecar-probe.sh")),
+    }
+
+
+def _validate_workflow_files(payload: object) -> Mapping[str, str]:
+    if not isinstance(payload, dict) or set(payload) != {"module", "wrapper"}:
+        raise ProbeError("workflow file attestation is incomplete")
+    if not all(
+        isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value)
+        for value in payload.values()
+    ):
+        raise ProbeError("workflow file attestation is not exact SHA-256")
+    return payload
+
+
+def _verify_deployed_workflow(expected: object) -> Mapping[str, str]:
+    validated = _validate_workflow_files(expected)
+    actual = _workflow_file_hashes()
+    if actual != validated:
+        raise ProbeError(
+            "deployed workflow file hash mismatch",
+            check="deployed-workflow-hash",
+        )
+    return actual
+
+
+def _remote_disk_gate() -> int:
+    free_bytes = shutil.disk_usage(REPO_ROOT).free
+    if free_bytes < MIN_REMOTE_FREE_BYTES:
+        raise ProbeError(
+            "CVM disk below mandatory 3 GiB gate",
+            check="remote-disk-gate",
+        )
+    return free_bytes
 
 
 def _run(
@@ -215,7 +259,12 @@ def _validate_handle(handle: str) -> None:
 
 
 def _remote(
-    operation: str, handle: str, *, check: bool = True
+    operation: str,
+    handle: str,
+    *,
+    check: bool = True,
+    owner_nonce: str | None = None,
+    workflow_files: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     _validate_handle(handle)
     if operation not in {
@@ -225,9 +274,16 @@ def _remote(
         "remote-probe",
     }:
         raise ProbeError("remote operation is not registered")
-    command = (
-        f"cd {REMOTE_ROOT} && python3 -m scripts.pilot.cvm_sidecar_probe "
-        f"{operation} {shlex.quote(handle)}"
+    arguments = [operation, handle]
+    if operation == "remote-begin":
+        validated_files = _validate_workflow_files(workflow_files)
+        arguments.extend([validated_files["module"], validated_files["wrapper"]])
+    elif operation in {"remote-provision", "remote-abort"}:
+        if owner_nonce is None or OWNER_NONCE.fullmatch(owner_nonce) is None:
+            raise ProbeError("remote ownership nonce is invalid")
+        arguments.append(owner_nonce)
+    command = f"cd {REMOTE_ROOT} && python3 -m scripts.pilot.cvm_sidecar_probe " + " ".join(
+        shlex.quote(argument) for argument in arguments
     )
     timeouts = {
         "remote-begin": 60,
@@ -250,16 +306,126 @@ def _parse_stdout_receipt(
     try:
         payload = _strict_json_loads(lines[-1], "remote receipt")
     except (IndexError, ProbeError) as exc:
-        raise ProbeError("remote operation returned no structured receipt") from exc
+        raise ProbeError(
+            "remote operation returned no structured receipt",
+            check="remote-receipt-missing",
+        ) from exc
     if not isinstance(payload, dict) or payload.get("schema") != schema:
-        raise ProbeError("remote operation returned the wrong receipt schema")
+        raise ProbeError(
+            "remote operation returned the wrong receipt schema",
+            check="remote-receipt-schema",
+        )
     return payload
+
+
+def _validate_provision_success(
+    remote: Mapping[str, Any],
+    prepare_receipt: Mapping[str, Any],
+    *,
+    handle: str,
+    owner_nonce: str,
+    workflow_files: Mapping[str, str],
+) -> Mapping[str, Any]:
+    expected_keys = {
+        "schema",
+        "status",
+        "handle",
+        "ownerNonce",
+        "sourceRevision",
+        "imageSourceRevision",
+        "workflowSourceRevision",
+        "workflowFilesVerified",
+        "freeBytesAtLoad",
+        "archive",
+        "images",
+        "retainedImageIds",
+        "transferCleanup",
+        "retryAllowed",
+        "terminalOperation",
+    }
+    images = prepare_receipt.get("images")
+    archive = prepare_receipt.get("archive")
+    if not isinstance(images, list) or not isinstance(archive, dict):
+        raise ProbeError("prepare receipt is incomplete")
+    expected_archive = {
+        "sha256": archive.get("sha256"),
+        "bytes": archive.get("bytes"),
+        "remoteVerified": True,
+    }
+    expected_cleanup = {
+        "archiveAbsent": True,
+        "prepareReceiptAbsent": True,
+        "incomingDirectoryAbsent": True,
+        "errors": [],
+    }
+    expected_terminal = {
+        "operation": "provision",
+        "handle": handle,
+        "retryAllowed": False,
+    }
+    expected_retained = [image.get("id") for image in images if isinstance(image, dict)]
+    if (
+        set(remote) != expected_keys
+        or remote.get("schema") != "cvm-sidecar.provision-receipt/1"
+        or remote.get("status") != "provisioned"
+        or remote.get("handle") != handle
+        or remote.get("ownerNonce") != owner_nonce
+        or remote.get("sourceRevision") != prepare_receipt.get("sourceRevision")
+        or remote.get("imageSourceRevision")
+        != prepare_receipt.get("imageSourceRevision")
+        or remote.get("workflowSourceRevision")
+        != prepare_receipt.get("workflowSourceRevision")
+        or remote.get("workflowFilesVerified") != workflow_files
+        or not isinstance(remote.get("freeBytesAtLoad"), int)
+        or int(remote["freeBytesAtLoad"]) < MIN_REMOTE_FREE_BYTES
+        or remote.get("archive") != expected_archive
+        or remote.get("images") != images
+        or remote.get("retainedImageIds") != expected_retained
+        or remote.get("transferCleanup") != expected_cleanup
+        or remote.get("retryAllowed") is not False
+        or remote.get("terminalOperation") != expected_terminal
+    ):
+        raise ProbeError(
+            "remote provision receipt did not bind the prepared artifact",
+            check="remote-provision-receipt-binding",
+        )
+    return remote
+
+
+def _validate_abort_receipt(
+    remote: Mapping[str, Any], *, handle: str, owner_nonce: str
+) -> Mapping[str, Any]:
+    if (
+        set(remote)
+        != {
+            "schema",
+            "status",
+            "handle",
+            "ownerNonce",
+            "transferAbsenceProved",
+            "errors",
+            "retryAllowed",
+        }
+        or remote.get("schema") != "cvm-sidecar.abort-receipt/1"
+        or remote.get("status") not in {"aborted", "absent"}
+        or remote.get("handle") != handle
+        or remote.get("ownerNonce") != owner_nonce
+        or remote.get("transferAbsenceProved") is not True
+        or remote.get("errors") != []
+        or remote.get("retryAllowed") is not False
+    ):
+        raise ProbeError(
+            "remote abort receipt did not prove owned transfer absence",
+            check="remote-abort-receipt-binding",
+        )
+    return remote
 
 
 def prepare(args: argparse.Namespace) -> Mapping[str, object]:
     if SOURCE_REVISION.fullmatch(args.source_revision) is None:
         raise ProbeError("source revision must be an exact 40-hex Git SHA")
     workflow_source_revision = _inspect_workflow_source()
+    workflow_files = _workflow_file_hashes()
     images = [
         _inspect_image("sidecar", args.sidecar_image),
         _inspect_image("client", args.client_image),
@@ -272,6 +438,7 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
     identity = {
         "imageSourceRevision": args.source_revision,
         "workflowSourceRevision": workflow_source_revision,
+        "workflowFiles": workflow_files,
         "images": [image["id"] for image in images],
     }
     handle = f"cvmsp-{_sha256_bytes(_canonical_json(identity))[:24]}"
@@ -307,6 +474,7 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
             "sourceRevision": args.source_revision,
             "imageSourceRevision": args.source_revision,
             "workflowSourceRevision": workflow_source_revision,
+            "workflowFiles": workflow_files,
             "images": images,
             "archive": {
                 "relativePath": archive.relative_to(REPO_ROOT).as_posix(),
@@ -328,6 +496,7 @@ def provision(handle: str) -> Mapping[str, object]:
     archive_payload = receipt.get("archive")
     if not isinstance(archive_payload, dict):
         raise ProbeError("prepare receipt has no archive attestation")
+    workflow_files = _validate_workflow_files(receipt.get("workflowFiles"))
     archive = LOCAL_STATE_ROOT / handle / "images.tar"
     if (
         not archive.is_file()
@@ -341,10 +510,38 @@ def provision(handle: str) -> Mapping[str, object]:
         attempt,
         {"schema": "cvm-sidecar.provision-attempt/1", "handle": handle},
     )
-    begin_attempted = False
+    begin_owned = False
+    owner_nonce: str | None = None
     try:
-        begin_attempted = True
-        _remote("remote-begin", handle)
+        begin = _parse_stdout_receipt(
+            _remote(
+                "remote-begin",
+                handle,
+                workflow_files=workflow_files,
+            ),
+            "cvm-sidecar.remote-begin-receipt/1",
+        )
+        expected_begin_keys = {
+            "schema",
+            "status",
+            "handle",
+            "ownerNonce",
+            "workflowFilesVerified",
+            "freeBytes",
+        }
+        if (
+            set(begin) != expected_begin_keys
+            or begin.get("status") != "ready-for-fixed-archive"
+            or begin.get("handle") != handle
+            or not isinstance(begin.get("ownerNonce"), str)
+            or OWNER_NONCE.fullmatch(str(begin["ownerNonce"])) is None
+            or begin.get("workflowFilesVerified") != workflow_files
+            or not isinstance(begin.get("freeBytes"), int)
+            or int(begin["freeBytes"]) < MIN_REMOTE_FREE_BYTES
+        ):
+            raise ProbeError("remote begin receipt did not prove fresh ownership")
+        owner_nonce = str(begin["ownerNonce"])
+        begin_owned = True
         destination = (
             f"cvm:{REMOTE_ROOT}/.cvm-sidecar-probes/{handle}/incoming/"
         )
@@ -361,23 +558,36 @@ def provision(handle: str) -> Mapping[str, object]:
             timeout=1800,
         )
         remote = _parse_stdout_receipt(
-            _remote("remote-provision", handle),
+            _remote("remote-provision", handle, owner_nonce=owner_nonce),
             "cvm-sidecar.provision-receipt/1",
         )
-        if remote.get("status") != "provisioned":
-            raise ProbeError("remote provision did not reach provisioned")
+        remote = _validate_provision_success(
+            remote,
+            receipt,
+            handle=handle,
+            owner_nonce=owner_nonce,
+            workflow_files=workflow_files,
+        )
         _write_json_atomic(LOCAL_STATE_ROOT / handle / "provision.json", remote)
         return remote
     except BaseException as exc:
         abort: Mapping[str, Any] | None = None
-        if begin_attempted:
-            abort_completed = _remote("remote-abort", handle, check=False)
+        if begin_owned and owner_nonce is not None:
             try:
-                abort = _parse_stdout_receipt(
-                    abort_completed,
-                    "cvm-sidecar.abort-receipt/1",
+                abort = _validate_abort_receipt(
+                    _parse_stdout_receipt(
+                        _remote(
+                            "remote-abort",
+                            handle,
+                            check=False,
+                            owner_nonce=owner_nonce,
+                        ),
+                        "cvm-sidecar.abort-receipt/1",
+                    ),
+                    handle=handle,
+                    owner_nonce=owner_nonce,
                 )
-            except ProbeError:
+            except BaseException:
                 abort = None
         failure = {
             "schema": "cvm-sidecar.provision-receipt/1",
@@ -392,27 +602,74 @@ def provision(handle: str) -> Mapping[str, object]:
         raise
 
 
-def remote_begin(handle: str) -> Mapping[str, object]:
+def remote_begin(
+    handle: str, module_sha256: str, wrapper_sha256: str
+) -> Mapping[str, object]:
     _validate_handle(handle)
+    expected_files = _validate_workflow_files(
+        {"module": module_sha256, "wrapper": wrapper_sha256}
+    )
+    verified_files = _verify_deployed_workflow(expected_files)
+    free_bytes = _remote_disk_gate()
     LOCAL_STATE_ROOT.mkdir(parents=True, exist_ok=True)
     state = LOCAL_STATE_ROOT / handle
     try:
         state.mkdir(mode=0o700)
     except FileExistsError as exc:
         raise ProbeError("remote handle already exists; adoption is forbidden") from exc
-    _claim_once(
-        state / "provision-attempt.json",
-        {"schema": "cvm-sidecar.remote-provision-attempt/1", "handle": handle},
-    )
-    (state / "incoming").mkdir(mode=0o700)
-    return {
-        "schema": "cvm-sidecar.remote-begin-receipt/1",
-        "status": "ready-for-fixed-archive",
-        "handle": handle,
-    }
+    owner_nonce = secrets.token_hex(16)
+    try:
+        _claim_once(
+            state / "provision-attempt.json",
+            {
+                "schema": "cvm-sidecar.remote-provision-attempt/1",
+                "handle": handle,
+                "ownerNonce": owner_nonce,
+                "workflowFilesVerified": verified_files,
+                "freeBytes": free_bytes,
+            },
+        )
+        (state / "incoming").mkdir(mode=0o700)
+        return {
+            "schema": "cvm-sidecar.remote-begin-receipt/1",
+            "status": "ready-for-fixed-archive",
+            "handle": handle,
+            "ownerNonce": owner_nonce,
+            "workflowFilesVerified": verified_files,
+            "freeBytes": free_bytes,
+        }
+    except BaseException:
+        try:
+            (state / "provision-attempt.json").unlink(missing_ok=True)
+            state.rmdir()
+        except OSError:
+            pass
+        raise
 
 
-def remote_abort(handle: str) -> Mapping[str, object]:
+def _load_remote_provision_owner(handle: str, owner_nonce: str) -> Mapping[str, Any]:
+    _validate_handle(handle)
+    if OWNER_NONCE.fullmatch(owner_nonce) is None:
+        raise ProbeError("remote ownership nonce is invalid")
+    attempt_path = LOCAL_STATE_ROOT / handle / "provision-attempt.json"
+    try:
+        attempt = _strict_json_loads(
+            attempt_path.read_text(encoding="utf-8"),
+            "remote provision ownership receipt",
+        )
+    except (OSError, ProbeError) as exc:
+        raise ProbeError("remote provision ownership is unavailable") from exc
+    if (
+        not isinstance(attempt, dict)
+        or attempt.get("schema") != "cvm-sidecar.remote-provision-attempt/1"
+        or attempt.get("handle") != handle
+        or attempt.get("ownerNonce") != owner_nonce
+    ):
+        raise ProbeError("remote provision ownership mismatch")
+    return attempt
+
+
+def remote_abort(handle: str, owner_nonce: str) -> Mapping[str, object]:
     _validate_handle(handle)
     state = LOCAL_STATE_ROOT / handle
     incoming = state / "incoming"
@@ -422,10 +679,18 @@ def remote_abort(handle: str) -> Mapping[str, object]:
             "status": "absent",
             "handle": handle,
             "transferAbsenceProved": True,
+            "ownerNonce": owner_nonce,
+            "errors": [],
+            "retryAllowed": False,
         }
+    _load_remote_provision_owner(handle, owner_nonce)
     _claim_once(
         state / "abort-attempt.json",
-        {"schema": "cvm-sidecar.abort-attempt/1", "handle": handle},
+        {
+            "schema": "cvm-sidecar.abort-attempt/1",
+            "handle": handle,
+            "ownerNonce": owner_nonce,
+        },
     )
     errors: list[str] = []
     for path in (incoming / "images.tar", incoming / "prepare.json"):
@@ -448,6 +713,7 @@ def remote_abort(handle: str) -> Mapping[str, object]:
         "schema": "cvm-sidecar.abort-receipt/1",
         "status": "aborted" if absence and not errors else "cleanup-failed",
         "handle": handle,
+        "ownerNonce": owner_nonce,
         "transferAbsenceProved": absence,
         "errors": errors,
         "retryAllowed": False,
@@ -467,8 +733,13 @@ def _verify_image_receipt(image: Mapping[str, Any]) -> Mapping[str, object]:
     return inspected
 
 
-def remote_provision(handle: str) -> Mapping[str, object]:
+def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
     _validate_handle(handle)
+    ownership = _load_remote_provision_owner(handle, owner_nonce)
+    verified_files = _verify_deployed_workflow(
+        ownership.get("workflowFilesVerified")
+    )
+    free_bytes = _remote_disk_gate()
     state = LOCAL_STATE_ROOT / handle
     incoming = state / "incoming"
     prepare_path = incoming / "prepare.json"
@@ -517,9 +788,12 @@ def remote_provision(handle: str) -> Mapping[str, object]:
             "schema": "cvm-sidecar.provision-receipt/1",
             "status": "provisioned",
             "handle": handle,
+            "ownerNonce": owner_nonce,
             "sourceRevision": prepare_receipt.get("sourceRevision"),
             "imageSourceRevision": prepare_receipt.get("imageSourceRevision"),
             "workflowSourceRevision": prepare_receipt.get("workflowSourceRevision"),
+            "workflowFilesVerified": verified_files,
+            "freeBytesAtLoad": free_bytes,
             "archive": {
                 "sha256": archive_payload.get("sha256"),
                 "bytes": archive_payload.get("bytes"),
@@ -527,6 +801,12 @@ def remote_provision(handle: str) -> Mapping[str, object]:
             },
             "images": images,
             "retainedImageIds": [image["id"] for image in images],
+            "retryAllowed": False,
+            "terminalOperation": {
+                "operation": "provision",
+                "handle": handle,
+                "retryAllowed": False,
+            },
         }
     except BaseException as exc:
         operation_error = exc
@@ -593,6 +873,66 @@ def _last_json_line(output: str, label: str) -> Mapping[str, Any]:
     raise ProbeError(f"{label} returned no JSON result")
 
 
+def _created_resource_id(output: str, kind: str) -> str:
+    resource_id = output.strip()
+    if RESOURCE_ID.fullmatch(resource_id) is None:
+        raise ProbeError(
+            f"{kind} create returned no exact resource ID",
+            check=f"{kind}-create-identity",
+        )
+    return resource_id
+
+
+def _owned_resource_inspection(
+    resource: Mapping[str, Any],
+    *,
+    handle: str,
+    owner_nonce: str,
+) -> Mapping[str, Any] | None:
+    kind = resource.get("kind")
+    target = resource.get("id") or resource.get("name")
+    if kind not in {"container", "network"} or not isinstance(target, str):
+        return None
+    command = (
+        ("container", "inspect", target)
+        if kind == "container"
+        else ("network", "inspect", target)
+    )
+    try:
+        completed = _docker(*command, check=False, timeout=30)
+    except BaseException:
+        return None
+    if completed.returncode:
+        return None
+    try:
+        inspected = _strict_json_loads(
+            completed.stdout, f"owned {kind} inspection"
+        )
+    except ProbeError:
+        return None
+    if not isinstance(inspected, list) or len(inspected) != 1:
+        return None
+    payload = inspected[0]
+    if not isinstance(payload, dict):
+        return None
+    resource_id = payload.get("Id")
+    if not isinstance(resource_id, str) or RESOURCE_ID.fullmatch(resource_id) is None:
+        return None
+    labels = (
+        payload.get("Config", {}).get("Labels")
+        if kind == "container" and isinstance(payload.get("Config"), dict)
+        else payload.get("Labels")
+    )
+    if not isinstance(labels, dict):
+        return None
+    if (
+        labels.get("io.text-to-cad.cvm-sidecar-handle") != handle
+        or labels.get("io.text-to-cad.cvm-sidecar-owner") != owner_nonce
+    ):
+        return None
+    return payload
+
+
 def _wait_sidecar_ready(name: str, job_id: str) -> Mapping[str, Any]:
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
@@ -626,30 +966,49 @@ def _wait_sidecar_ready(name: str, job_id: str) -> Mapping[str, Any]:
     raise ProbeError("sidecar readiness deadline exceeded")
 
 
-def _resource_absence(label: str, handle: str) -> Mapping[str, object]:
-    containers = _docker(
-        "container",
-        "ls",
-        "-a",
-        "--filter",
-        f"label=io.text-to-cad.cvm-sidecar-handle={handle}",
-        "--format",
-        "{{.ID}}",
-        check=False,
-    )
-    networks = _docker(
-        "network",
-        "ls",
-        "--filter",
-        f"label=io.text-to-cad.cvm-sidecar-handle={handle}",
-        "--format",
-        "{{.ID}}",
-        check=False,
-    )
+def _resource_absence(
+    label: str, handle: str, owner_nonce: str
+) -> Mapping[str, object]:
+    errors: list[str] = []
+    try:
+        containers = _docker(
+            "container",
+            "ls",
+            "-a",
+            "--filter",
+            f"label=io.text-to-cad.cvm-sidecar-handle={handle}",
+            "--filter",
+            f"label=io.text-to-cad.cvm-sidecar-owner={owner_nonce}",
+            "--format",
+            "{{.ID}}",
+            check=False,
+            timeout=30,
+        )
+    except BaseException:
+        containers = subprocess.CompletedProcess([], 1, "", "")
+        errors.append("container absence proof failed")
+    try:
+        networks = _docker(
+            "network",
+            "ls",
+            "--filter",
+            f"label=io.text-to-cad.cvm-sidecar-handle={handle}",
+            "--filter",
+            f"label=io.text-to-cad.cvm-sidecar-owner={owner_nonce}",
+            "--format",
+            "{{.ID}}",
+            check=False,
+            timeout=30,
+        )
+    except BaseException:
+        networks = subprocess.CompletedProcess([], 1, "", "")
+        errors.append("network absence proof failed")
     return {
         "label": label,
+        "ownerNonce": owner_nonce,
         "containers": containers.stdout.split(),
         "networks": networks.stdout.split(),
+        "errors": errors,
         "proved": (
             containers.returncode == 0
             and networks.returncode == 0
@@ -659,10 +1018,11 @@ def _resource_absence(label: str, handle: str) -> Mapping[str, object]:
     }
 
 
-def remote_probe(handle: str) -> Mapping[str, object]:
-    provision_receipt = _load_receipt(
-        handle, "provision.json", "cvm-sidecar.provision-receipt/1"
-    )
+def _run_remote_probe(
+    handle: str,
+    provision_receipt: Mapping[str, Any],
+    owner_nonce: str,
+) -> Mapping[str, object]:
     images = provision_receipt.get("images")
     if not isinstance(images, list) or len(images) != 2:
         raise ProbeError("provision receipt does not name two fixed images")
@@ -677,10 +1037,6 @@ def remote_probe(handle: str) -> Mapping[str, object]:
         raise ProbeError("provisioned image roles are incomplete")
 
     state = LOCAL_STATE_ROOT / handle
-    _claim_once(
-        state / "probe-attempt.json",
-        {"schema": "cvm-sidecar.remote-probe-attempt/1", "handle": handle},
-    )
     suffix = handle.removeprefix("cvmsp-")
     job_id = f"cvm-probe-{suffix[:12]}"
     prefix = f"ttc-cvmsp-{suffix[:16]}"
@@ -688,10 +1044,11 @@ def remote_probe(handle: str) -> Mapping[str, object]:
     sidecar = f"{prefix}-sidecar"
     client = f"{prefix}-client"
     label = f"io.text-to-cad.cvm-sidecar-handle={handle}"
+    owner_label = f"io.text-to-cad.cvm-sidecar-owner={owner_nonce}"
     ledger = [
-        {"kind": "network", "name": network, "state": "planned"},
-        {"kind": "container", "name": sidecar, "state": "planned"},
-        {"kind": "container", "name": client, "state": "planned"},
+        {"kind": "network", "name": network, "state": "planned", "ownerNonce": owner_nonce},
+        {"kind": "container", "name": sidecar, "state": "planned", "ownerNonce": owner_nonce},
+        {"kind": "container", "name": client, "state": "planned", "ownerNonce": owner_nonce},
     ]
     result: Mapping[str, Any] | None = None
     config: Mapping[str, Any] | None = None
@@ -701,14 +1058,18 @@ def remote_probe(handle: str) -> Mapping[str, object]:
     cleanup_errors: list[str] = []
     try:
         network_created = _docker(
-            "network", "create", "--internal", "--label", label, network
+            "network", "create", "--internal", "--label", label,
+            "--label", owner_label, network
         )
         ledger[0].update(
-            {"state": "created", "id": network_created.stdout.strip()}
+            {
+                "state": "created",
+                "id": _created_resource_id(network_created.stdout, "network"),
+            }
         )
         sidecar_created = _docker(
             "run", "-d", "--name", sidecar,
-            "--label", label,
+            "--label", label, "--label", owner_label,
             "--network", network, "--network-alias", "sidecar",
             "--pull=never", "--platform", "linux/amd64",
             "--read-only", "--init", "--cap-drop", "ALL",
@@ -721,10 +1082,13 @@ def remote_probe(handle: str) -> Mapping[str, object]:
             "-e", f"BROWSER_SIDECAR_JOB_ID={job_id}", sidecar_id,
         )
         ledger[1].update(
-            {"state": "created", "id": sidecar_created.stdout.strip()}
+            {
+                "state": "created",
+                "id": _created_resource_id(sidecar_created.stdout, "sidecar"),
+            }
         )
-        readiness = _wait_sidecar_ready(sidecar, job_id)
-        inspected = _docker("container", "inspect", sidecar)
+        readiness = _wait_sidecar_ready(str(ledger[1]["id"]), job_id)
+        inspected = _docker("container", "inspect", str(ledger[1]["id"]))
         try:
             inspected_payload = _strict_json_loads(
                 inspected.stdout, "sidecar runtime inspection"
@@ -746,7 +1110,7 @@ def remote_probe(handle: str) -> Mapping[str, object]:
         request_text = _canonical_json(REQUEST).decode("ascii") + "\n"
         client_created = _docker(
             "container", "create", "--name", client,
-            "--label", label,
+            "--label", label, "--label", owner_label,
             "--network", network,
             "--pull=never", "--platform", "linux/amd64",
             "--read-only", "--cap-drop", "ALL",
@@ -760,10 +1124,13 @@ def remote_probe(handle: str) -> Mapping[str, object]:
             "-i", client_id,
         )
         ledger[2].update(
-            {"state": "created", "id": client_created.stdout.strip()}
+            {
+                "state": "created",
+                "id": _created_resource_id(client_created.stdout, "client"),
+            }
         )
         client_completed = _docker(
-            "container", "start", "--attach", "--interactive", client,
+            "container", "start", "--attach", "--interactive", str(ledger[2]["id"]),
             input_text=request_text,
         )
         result = _last_json_line(client_completed.stdout, "sealed client")
@@ -798,17 +1165,43 @@ def remote_probe(handle: str) -> Mapping[str, object]:
         )
     finally:
         for resource in reversed(ledger[1:]):
-            name = str(resource["name"])
             if resource["kind"] != "container":
                 continue
-            if name == sidecar and resource["state"] == "created":
-                stopped = _docker("stop", "--time", "15", name, check=False)
-                if stopped.returncode:
+            inspection = _owned_resource_inspection(
+                resource, handle=handle, owner_nonce=owner_nonce
+            )
+            if inspection is None:
+                if resource["state"] == "created":
+                    cleanup_errors.append("container ownership proof failed")
+                continue
+            resource_id = str(inspection["Id"])
+            resource.update({"state": "created", "id": resource_id})
+            if resource["name"] == sidecar:
+                try:
+                    stopped = _docker(
+                        "stop", "--time", "15", resource_id,
+                        check=False, timeout=30,
+                    )
+                    if stopped.returncode:
+                        cleanup_errors.append("sidecar stop failed")
+                except BaseException:
                     cleanup_errors.append("sidecar stop failed")
-                logs = _docker("logs", "--tail", "50", name, check=False)
-                terminal = _docker(
-                    "container", "inspect", name, "--format", "{{json .State}}", check=False
-                )
+                try:
+                    logs = _docker(
+                        "logs", "--tail", "50", resource_id,
+                        check=False, timeout=30,
+                    )
+                except BaseException:
+                    logs = subprocess.CompletedProcess([], 1, "", "")
+                    cleanup_errors.append("sidecar logs failed")
+                try:
+                    terminal = _docker(
+                        "container", "inspect", resource_id,
+                        "--format", "{{json .State}}", check=False, timeout=30,
+                    )
+                except BaseException:
+                    terminal = subprocess.CompletedProcess([], 1, "", "")
+                    cleanup_errors.append("sidecar terminal inspect failed")
                 try:
                     sidecar_terminal = {
                         "state": _strict_json_loads(
@@ -828,18 +1221,36 @@ def remote_probe(handle: str) -> Mapping[str, object]:
                     }
                 except (ProbeError, TypeError):
                     sidecar_terminal = {"state": None, "closingObserved": False}
-            removed = _docker("rm", "-f", name, check=False)
+            try:
+                removed = _docker(
+                    "rm", "-f", resource_id, check=False, timeout=30
+                )
+            except BaseException:
+                removed = subprocess.CompletedProcess([], 1, "", "")
             if removed.returncode:
                 cleanup_errors.append(f"{resource['kind']} cleanup failed")
             else:
                 resource["state"] = "removed"
-        removed_network = _docker("network", "rm", network, check=False)
-        if removed_network.returncode:
-            cleanup_errors.append("network cleanup failed")
-        else:
-            ledger[0]["state"] = "removed"
+        network_inspection = _owned_resource_inspection(
+            ledger[0], handle=handle, owner_nonce=owner_nonce
+        )
+        if network_inspection is not None:
+            network_id = str(network_inspection["Id"])
+            ledger[0].update({"state": "created", "id": network_id})
+            try:
+                removed_network = _docker(
+                    "network", "rm", network_id, check=False, timeout=30
+                )
+            except BaseException:
+                removed_network = subprocess.CompletedProcess([], 1, "", "")
+            if removed_network.returncode:
+                cleanup_errors.append("network cleanup failed")
+            else:
+                ledger[0]["state"] = "removed"
+        elif ledger[0]["state"] == "created":
+            cleanup_errors.append("network ownership proof failed")
 
-    absence = _resource_absence(label, handle)
+    absence = _resource_absence(label, handle, owner_nonce)
     terminal_ok = bool(
         sidecar_terminal
         and sidecar_terminal.get("closingObserved") is True
@@ -865,6 +1276,7 @@ def remote_probe(handle: str) -> Mapping[str, object]:
         "result": result,
         "outerConfig": config,
         "resourceLedger": ledger,
+        "ownerNonce": owner_nonce,
         "terminal": sidecar_terminal,
         "absenceProof": absence,
         "retainedImageIds": [sidecar_id, client_id],
@@ -881,6 +1293,51 @@ def remote_probe(handle: str) -> Mapping[str, object]:
     return receipt
 
 
+def remote_probe(handle: str) -> Mapping[str, object]:
+    _validate_handle(handle)
+    state = LOCAL_STATE_ROOT / handle
+    owner_nonce = secrets.token_hex(16)
+    _claim_once(
+        state / "probe-attempt.json",
+        {
+            "schema": "cvm-sidecar.remote-probe-attempt/1",
+            "handle": handle,
+            "ownerNonce": owner_nonce,
+        },
+    )
+    try:
+        provision_receipt = _load_receipt(
+            handle, "provision.json", "cvm-sidecar.provision-receipt/1"
+        )
+        return _run_remote_probe(handle, provision_receipt, owner_nonce)
+    except BaseException as exc:
+        check = exc.check if isinstance(exc, ProbeError) else "unexpected"
+        failure = {
+            "schema": "cvm-sidecar.probe-receipt/1",
+            "status": "failed",
+            "handle": handle,
+            "ownerNonce": owner_nonce,
+            "resourceLedger": [],
+            "terminal": None,
+            "absenceProof": {
+                "proved": False,
+                "containers": [],
+                "networks": [],
+                "errors": ["probe operation escaped before full cleanup proof"],
+            },
+            "terminalOperation": {
+                "operation": "probe",
+                "handle": handle,
+                "retryAllowed": False,
+            },
+            "errorOperation": "probe",
+            "errorCheck": check,
+            "cleanupErrors": ["terminal cleanup proof incomplete"],
+        }
+        _write_json_atomic(state / "probe.json", failure)
+        return failure
+
+
 def probe(handle: str) -> Mapping[str, object]:
     provision_receipt = _load_receipt(
         handle, "provision.json", "cvm-sidecar.provision-receipt/1"
@@ -891,10 +1348,31 @@ def probe(handle: str) -> Mapping[str, object]:
         LOCAL_STATE_ROOT / handle / "probe-attempt.json",
         {"schema": "cvm-sidecar.probe-attempt/1", "handle": handle},
     )
-    remote = _parse_stdout_receipt(
-        _remote("remote-probe", handle, check=False),
-        "cvm-sidecar.probe-receipt/1",
-    )
+    try:
+        remote = _parse_stdout_receipt(
+            _remote("remote-probe", handle, check=False),
+            "cvm-sidecar.probe-receipt/1",
+        )
+    except BaseException as exc:
+        check = exc.check if isinstance(exc, ProbeError) else "unexpected"
+        failure = {
+            "schema": "cvm-sidecar.probe-receipt/1",
+            "status": "failed",
+            "handle": handle,
+            "terminalOperation": {
+                "operation": "probe",
+                "handle": handle,
+                "retryAllowed": False,
+            },
+            "errorOperation": "probe",
+            "errorCheck": check,
+            "remoteReceiptVerified": False,
+        }
+        _write_json_atomic(LOCAL_STATE_ROOT / handle / "probe.json", failure)
+        raise ProbeError(
+            "the one-shot remote probe produced no verified receipt",
+            check=check,
+        ) from exc
     _write_json_atomic(LOCAL_STATE_ROOT / handle / "probe.json", remote)
     if remote.get("status") != "succeeded":
         raise ProbeError("the one-shot remote probe failed; retry is forbidden")
@@ -914,10 +1392,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     probe_parser.add_argument("handle")
     remote_begin_parser = subparsers.add_parser("remote-begin")
     remote_begin_parser.add_argument("handle")
+    remote_begin_parser.add_argument("module_sha256")
+    remote_begin_parser.add_argument("wrapper_sha256")
     remote_provision_parser = subparsers.add_parser("remote-provision")
     remote_provision_parser.add_argument("handle")
+    remote_provision_parser.add_argument("owner_nonce")
     remote_abort_parser = subparsers.add_parser("remote-abort")
     remote_abort_parser.add_argument("handle")
+    remote_abort_parser.add_argument("owner_nonce")
     remote_probe_parser = subparsers.add_parser("remote-probe")
     remote_probe_parser.add_argument("handle")
     return parser.parse_args(argv)
@@ -933,11 +1415,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.operation == "probe":
             receipt = probe(args.handle)
         elif args.operation == "remote-begin":
-            receipt = remote_begin(args.handle)
+            receipt = remote_begin(
+                args.handle, args.module_sha256, args.wrapper_sha256
+            )
         elif args.operation == "remote-provision":
-            receipt = remote_provision(args.handle)
+            receipt = remote_provision(args.handle, args.owner_nonce)
         elif args.operation == "remote-abort":
-            receipt = remote_abort(args.handle)
+            receipt = remote_abort(args.handle, args.owner_nonce)
         elif args.operation == "remote-probe":
             receipt = remote_probe(args.handle)
             print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
