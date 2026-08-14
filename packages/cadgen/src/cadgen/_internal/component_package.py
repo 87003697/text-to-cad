@@ -197,7 +197,7 @@ def _bbox_from_shape(shape: Any) -> dict[str, list[float]] | None:
             "min": [float(xmin), float(ymin), float(zmin)],
             "max": [float(xmax), float(ymax), float(zmax)],
         }
-    except Exception:
+    except Exception:  # noqa: BLE001 - OCP bounds reads can raise on odd shapes; a component without bounds is None
         return None
 
 

@@ -186,7 +186,7 @@ def _deterministic_dxf_output(document: object):
             # same document (e.g. a --dxf export) keep real provenance.
             try:
                 previous_created = metadata[ezdxf_document.CREATED_BY_EZDXF]
-            except Exception:
+            except Exception:  # noqa: BLE001 - ezdxf metadata API drift; a missing created-by marker degrades gracefully
                 previous_created = None
             metadata[ezdxf_document.CREATED_BY_EZDXF] = fixed_marker
         yield

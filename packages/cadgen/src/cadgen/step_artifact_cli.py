@@ -72,7 +72,7 @@ def infer_entry_kind(step_path: Path, scene: LoadedStepScene) -> str:
     metadata_kind = None
     try:
         metadata_kind = read_text_to_cad_step_metadata(step_path).get("entryKind")
-    except Exception:
+    except Exception:  # noqa: BLE001 - a STEP whose embedded metadata cannot be read has no entryKind to honor
         metadata_kind = None
     if metadata_kind in {"part", "assembly"}:
         return metadata_kind
@@ -115,7 +115,7 @@ def _entries_by_step_path_for_repo(repo_root: Path, spec: EntrySpec) -> dict[Pat
             entry_spec = _entry_spec_from_source(source)
             if entry_spec.step_path is not None:
                 entries[entry_spec.step_path.resolve()] = entry_spec
-    except Exception:
+    except Exception:  # noqa: BLE001 - a repo scan failure degrades to only the requested spec
         entries = {}
     if spec.step_path is not None:
         entries[spec.step_path.resolve()] = spec
