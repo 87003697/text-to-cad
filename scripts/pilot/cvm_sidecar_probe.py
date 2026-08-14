@@ -276,8 +276,12 @@ def _remote(
         raise ProbeError("remote operation is not registered")
     arguments = [operation, handle]
     if operation == "remote-begin":
+        if owner_nonce is None or OWNER_NONCE.fullmatch(owner_nonce) is None:
+            raise ProbeError("remote ownership nonce is invalid")
         validated_files = _validate_workflow_files(workflow_files)
-        arguments.extend([validated_files["module"], validated_files["wrapper"]])
+        arguments.extend(
+            [owner_nonce, validated_files["module"], validated_files["wrapper"]]
+        )
     elif operation in {"remote-provision", "remote-abort"}:
         if owner_nonce is None or OWNER_NONCE.fullmatch(owner_nonce) is None:
             raise ProbeError("remote ownership nonce is invalid")
@@ -421,6 +425,197 @@ def _validate_abort_receipt(
     return remote
 
 
+def _load_verified_local_provision(handle: str) -> Mapping[str, Any]:
+    prepare_receipt = _load_receipt(
+        handle, "prepare.json", "cvm-sidecar.prepare-receipt/1"
+    )
+    provision_receipt = _load_receipt(
+        handle, "provision.json", "cvm-sidecar.provision-receipt/1"
+    )
+    workflow_files = _validate_workflow_files(prepare_receipt.get("workflowFiles"))
+    owner_nonce = provision_receipt.get("ownerNonce")
+    if not isinstance(owner_nonce, str) or OWNER_NONCE.fullmatch(owner_nonce) is None:
+        raise ProbeError("local provision receipt has no exact owner")
+    return _validate_provision_success(
+        provision_receipt,
+        prepare_receipt,
+        handle=handle,
+        owner_nonce=owner_nonce,
+        workflow_files=workflow_files,
+    )
+
+
+def _validate_probe_success(
+    remote: Mapping[str, Any],
+    provision_receipt: Mapping[str, Any],
+    *,
+    handle: str,
+    ssh_returncode: int,
+) -> Mapping[str, Any]:
+    expected_keys = {
+        "schema",
+        "status",
+        "handle",
+        "sourceRevision",
+        "imageSourceRevision",
+        "workflowSourceRevision",
+        "workflowFilesVerified",
+        "freeBytesAtProbe",
+        "images",
+        "requestSha256",
+        "readiness",
+        "result",
+        "outerConfig",
+        "resourceLedger",
+        "ownerNonce",
+        "terminal",
+        "absenceProof",
+        "retainedImageIds",
+        "terminalOperation",
+        "errorOperation",
+        "errorCheck",
+        "cleanupErrors",
+        "retryAllowed",
+    }
+    images = provision_receipt.get("images")
+    workflow_files = provision_receipt.get("workflowFilesVerified")
+    if not isinstance(images, list) or len(images) != 2:
+        raise ProbeError("local provision receipt has no exact images")
+    owner_nonce = remote.get("ownerNonce")
+    suffix = handle.removeprefix("cvmsp-")
+    job_id = f"cvm-probe-{suffix[:12]}"
+    prefix = f"ttc-cvmsp-{suffix[:16]}"
+    expected_resources = [
+        ("network", f"{prefix}-net"),
+        ("container", f"{prefix}-sidecar"),
+        ("container", f"{prefix}-client"),
+    ]
+    ledger = remote.get("resourceLedger")
+    ledger_ok = isinstance(ledger, list) and len(ledger) == 3
+    if ledger_ok:
+        for resource, (kind, name) in zip(ledger, expected_resources, strict=True):
+            ledger_ok = bool(
+                isinstance(resource, dict)
+                and set(resource) == {"kind", "name", "state", "ownerNonce", "id"}
+                and resource.get("kind") == kind
+                and resource.get("name") == name
+                and resource.get("state") == "removed"
+                and resource.get("ownerNonce") == owner_nonce
+                and isinstance(resource.get("id"), str)
+                and RESOURCE_ID.fullmatch(str(resource["id"])) is not None
+            )
+            if not ledger_ok:
+                break
+    readiness = remote.get("readiness")
+    readiness_ok = bool(
+        isinstance(readiness, dict)
+        and set(readiness) == {"event", "jobId", "endpointPath", "programs"}
+        and readiness.get("event") == "ready"
+        and readiness.get("jobId") == job_id
+        and isinstance(readiness.get("endpointPath"), str)
+        and isinstance(readiness.get("programs"), dict)
+        and set(readiness["programs"]) == {"viewer", "residual"}
+        and all(isinstance(value, str) for value in readiness["programs"].values())
+    )
+    request_sha256 = _sha256_bytes(_canonical_json(REQUEST))
+    result = remote.get("result")
+    expected_result = {
+        "connected": True,
+        "browserExecutablesVisible": [],
+        "contextCount": 1,
+        "pageCount": 1,
+        "sourceAliasesVisible": [],
+        "externalEgressBlocked": True,
+    }
+    result_ok = bool(
+        isinstance(result, dict)
+        and set(result) == {
+            "ok",
+            "schema",
+            "requestSha256",
+            "program",
+            "jobId",
+            "result",
+        }
+        and result.get("ok") is True
+        and result.get("schema") == REQUEST["schema"]
+        and result.get("requestSha256") == request_sha256
+        and result.get("program") == "probe"
+        and result.get("jobId") == job_id
+        and result.get("result") == expected_result
+    )
+    expected_outer = {
+        "readonlyRootfs": True,
+        "mounts": [],
+        "memory": 1610612736,
+        "memorySwap": 1610612736,
+        "nanoCpus": 1500000000,
+        "pidsLimit": 256,
+        "shmSize": 268435456,
+    }
+    terminal = remote.get("terminal")
+    terminal_state = terminal.get("state") if isinstance(terminal, dict) else None
+    terminal_ok = bool(
+        isinstance(terminal, dict)
+        and set(terminal) == {"state", "closingObserved"}
+        and terminal.get("closingObserved") is True
+        and isinstance(terminal_state, dict)
+        and terminal_state.get("ExitCode") == 0
+        and terminal_state.get("Running") is False
+    )
+    absence = remote.get("absenceProof")
+    absence_ok = bool(
+        isinstance(absence, dict)
+        and set(absence)
+        == {"label", "ownerNonce", "containers", "networks", "errors", "proved"}
+        and absence.get("label")
+        == f"io.text-to-cad.cvm-sidecar-handle={handle}"
+        and absence.get("ownerNonce") == owner_nonce
+        and absence.get("containers") == []
+        and absence.get("networks") == []
+        and absence.get("errors") == []
+        and absence.get("proved") is True
+    )
+    if (
+        set(remote) != expected_keys
+        or ssh_returncode != 0
+        or remote.get("schema") != "cvm-sidecar.probe-receipt/1"
+        or remote.get("status") != "succeeded"
+        or remote.get("handle") != handle
+        or remote.get("sourceRevision") != provision_receipt.get("sourceRevision")
+        or remote.get("imageSourceRevision")
+        != provision_receipt.get("imageSourceRevision")
+        or remote.get("workflowSourceRevision")
+        != provision_receipt.get("workflowSourceRevision")
+        or remote.get("workflowFilesVerified") != workflow_files
+        or not isinstance(remote.get("freeBytesAtProbe"), int)
+        or int(remote["freeBytesAtProbe"]) < MIN_REMOTE_FREE_BYTES
+        or remote.get("images") != images
+        or remote.get("requestSha256") != request_sha256
+        or not readiness_ok
+        or not result_ok
+        or remote.get("outerConfig") != expected_outer
+        or not ledger_ok
+        or not isinstance(owner_nonce, str)
+        or OWNER_NONCE.fullmatch(owner_nonce) is None
+        or not terminal_ok
+        or not absence_ok
+        or remote.get("retainedImageIds")
+        != [image.get("id") for image in images if isinstance(image, dict)]
+        or remote.get("terminalOperation")
+        != {"operation": "probe", "handle": handle, "retryAllowed": False}
+        or remote.get("errorOperation") is not None
+        or remote.get("errorCheck") is not None
+        or remote.get("cleanupErrors") != []
+        or remote.get("retryAllowed") is not False
+    ):
+        raise ProbeError(
+            "remote probe receipt did not prove the fixed capability run",
+            check="remote-probe-receipt-binding",
+        )
+    return remote
+
+
 def prepare(args: argparse.Namespace) -> Mapping[str, object]:
     if SOURCE_REVISION.fullmatch(args.source_revision) is None:
         raise ProbeError("source revision must be an exact 40-hex Git SHA")
@@ -505,18 +700,24 @@ def provision(handle: str) -> Mapping[str, object]:
     ):
         raise ProbeError("local image archive does not match its attestation")
 
+    owner_nonce = secrets.token_hex(16)
     attempt = LOCAL_STATE_ROOT / handle / "provision-attempt.json"
     _claim_once(
         attempt,
-        {"schema": "cvm-sidecar.provision-attempt/1", "handle": handle},
+        {
+            "schema": "cvm-sidecar.provision-attempt/1",
+            "handle": handle,
+            "ownerNonce": owner_nonce,
+        },
     )
-    begin_owned = False
-    owner_nonce: str | None = None
+    begin_attempted = False
     try:
+        begin_attempted = True
         begin = _parse_stdout_receipt(
             _remote(
                 "remote-begin",
                 handle,
+                owner_nonce=owner_nonce,
                 workflow_files=workflow_files,
             ),
             "cvm-sidecar.remote-begin-receipt/1",
@@ -533,15 +734,12 @@ def provision(handle: str) -> Mapping[str, object]:
             set(begin) != expected_begin_keys
             or begin.get("status") != "ready-for-fixed-archive"
             or begin.get("handle") != handle
-            or not isinstance(begin.get("ownerNonce"), str)
-            or OWNER_NONCE.fullmatch(str(begin["ownerNonce"])) is None
+            or begin.get("ownerNonce") != owner_nonce
             or begin.get("workflowFilesVerified") != workflow_files
             or not isinstance(begin.get("freeBytes"), int)
             or int(begin["freeBytes"]) < MIN_REMOTE_FREE_BYTES
         ):
             raise ProbeError("remote begin receipt did not prove fresh ownership")
-        owner_nonce = str(begin["ownerNonce"])
-        begin_owned = True
         destination = (
             f"cvm:{REMOTE_ROOT}/.cvm-sidecar-probes/{handle}/incoming/"
         )
@@ -572,7 +770,7 @@ def provision(handle: str) -> Mapping[str, object]:
         return remote
     except BaseException as exc:
         abort: Mapping[str, Any] | None = None
-        if begin_owned and owner_nonce is not None:
+        if begin_attempted:
             try:
                 abort = _validate_abort_receipt(
                     _parse_stdout_receipt(
@@ -603,9 +801,11 @@ def provision(handle: str) -> Mapping[str, object]:
 
 
 def remote_begin(
-    handle: str, module_sha256: str, wrapper_sha256: str
+    handle: str, owner_nonce: str, module_sha256: str, wrapper_sha256: str
 ) -> Mapping[str, object]:
     _validate_handle(handle)
+    if OWNER_NONCE.fullmatch(owner_nonce) is None:
+        raise ProbeError("remote ownership nonce is invalid")
     expected_files = _validate_workflow_files(
         {"module": module_sha256, "wrapper": wrapper_sha256}
     )
@@ -617,7 +817,6 @@ def remote_begin(
         state.mkdir(mode=0o700)
     except FileExistsError as exc:
         raise ProbeError("remote handle already exists; adoption is forbidden") from exc
-    owner_nonce = secrets.token_hex(16)
     try:
         _claim_once(
             state / "provision-attempt.json",
@@ -1022,6 +1221,8 @@ def _run_remote_probe(
     handle: str,
     provision_receipt: Mapping[str, Any],
     owner_nonce: str,
+    workflow_files: Mapping[str, str],
+    free_bytes: int,
 ) -> Mapping[str, object]:
     images = provision_receipt.get("images")
     if not isinstance(images, list) or len(images) != 2:
@@ -1138,6 +1339,8 @@ def _run_remote_probe(
         if not (
             result.get("ok") is True
             and result.get("schema") == REQUEST["schema"]
+            and result.get("requestSha256")
+            == _sha256_bytes(_canonical_json(REQUEST))
             and result.get("program") == "probe"
             and result.get("jobId") == job_id
             and isinstance(nested, dict)
@@ -1270,6 +1473,8 @@ def _run_remote_probe(
         "sourceRevision": provision_receipt.get("sourceRevision"),
         "imageSourceRevision": provision_receipt.get("imageSourceRevision"),
         "workflowSourceRevision": provision_receipt.get("workflowSourceRevision"),
+        "workflowFilesVerified": workflow_files,
+        "freeBytesAtProbe": free_bytes,
         "images": images,
         "requestSha256": _sha256_bytes(_canonical_json(REQUEST)),
         "readiness": readiness,
@@ -1288,6 +1493,7 @@ def _run_remote_probe(
         "errorOperation": "probe" if first_error is not None else None,
         "errorCheck": first_error,
         "cleanupErrors": cleanup_errors,
+        "retryAllowed": False,
     }
     _write_json_atomic(state / "probe.json", receipt)
     return receipt
@@ -1296,6 +1502,13 @@ def _run_remote_probe(
 def remote_probe(handle: str) -> Mapping[str, object]:
     _validate_handle(handle)
     state = LOCAL_STATE_ROOT / handle
+    provision_receipt = _load_receipt(
+        handle, "provision.json", "cvm-sidecar.provision-receipt/1"
+    )
+    verified_files = _verify_deployed_workflow(
+        provision_receipt.get("workflowFilesVerified")
+    )
+    free_bytes = _remote_disk_gate()
     owner_nonce = secrets.token_hex(16)
     _claim_once(
         state / "probe-attempt.json",
@@ -1306,10 +1519,13 @@ def remote_probe(handle: str) -> Mapping[str, object]:
         },
     )
     try:
-        provision_receipt = _load_receipt(
-            handle, "provision.json", "cvm-sidecar.provision-receipt/1"
+        return _run_remote_probe(
+            handle,
+            provision_receipt,
+            owner_nonce,
+            verified_files,
+            free_bytes,
         )
-        return _run_remote_probe(handle, provision_receipt, owner_nonce)
     except BaseException as exc:
         check = exc.check if isinstance(exc, ProbeError) else "unexpected"
         failure = {
@@ -1339,20 +1555,29 @@ def remote_probe(handle: str) -> Mapping[str, object]:
 
 
 def probe(handle: str) -> Mapping[str, object]:
-    provision_receipt = _load_receipt(
-        handle, "provision.json", "cvm-sidecar.provision-receipt/1"
-    )
-    if provision_receipt.get("status") != "provisioned":
-        raise ProbeError("fixed handle was not successfully provisioned")
+    provision_receipt = _load_verified_local_provision(handle)
     _claim_once(
         LOCAL_STATE_ROOT / handle / "probe-attempt.json",
         {"schema": "cvm-sidecar.probe-attempt/1", "handle": handle},
     )
     try:
+        completed = _remote("remote-probe", handle, check=False)
         remote = _parse_stdout_receipt(
-            _remote("remote-probe", handle, check=False),
+            completed,
             "cvm-sidecar.probe-receipt/1",
         )
+        if remote.get("status") == "succeeded":
+            remote = _validate_probe_success(
+                remote,
+                provision_receipt,
+                handle=handle,
+                ssh_returncode=completed.returncode,
+            )
+        elif remote.get("status") != "failed" or completed.returncode == 0:
+            raise ProbeError(
+                "remote probe status disagreed with SSH exit",
+                check="remote-probe-receipt-binding",
+            )
     except BaseException as exc:
         check = exc.check if isinstance(exc, ProbeError) else "unexpected"
         failure = {
@@ -1392,6 +1617,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     probe_parser.add_argument("handle")
     remote_begin_parser = subparsers.add_parser("remote-begin")
     remote_begin_parser.add_argument("handle")
+    remote_begin_parser.add_argument("owner_nonce")
     remote_begin_parser.add_argument("module_sha256")
     remote_begin_parser.add_argument("wrapper_sha256")
     remote_provision_parser = subparsers.add_parser("remote-provision")
@@ -1416,7 +1642,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             receipt = probe(args.handle)
         elif args.operation == "remote-begin":
             receipt = remote_begin(
-                args.handle, args.module_sha256, args.wrapper_sha256
+                args.handle,
+                args.owner_nonce,
+                args.module_sha256,
+                args.wrapper_sha256,
             )
         elif args.operation == "remote-provision":
             receipt = remote_provision(args.handle, args.owner_nonce)

@@ -45,7 +45,9 @@ The workflow has three separate public operations:
 - A failed/interrupted provision or probe is terminal for that handle. The
   wrapper records `retryAllowed:false`; do not resubmit it.
 - Remote ownership is established only by the fresh random nonce in the exact
-  `remote-begin` receipt. A begin failure never adopts or aborts a predictable
+  `remote-begin` receipt. The nonce is generated and durably claimed locally,
+  then passed into begin; a lost begin receipt can therefore invoke only an
+  exact nonce-scoped abort. It never adopts or deletes a predictable
   pre-existing handle.
 
 ## Commands
@@ -91,6 +93,13 @@ Provision success is accepted only when the remote receipt exactly matches the
 prepared handle, archive hash/size, both ordered image roles/IDs/platform/config
 hashes/revisions, deployed workflow hashes, transfer absence, and terminal
 no-retry operation.
+
+Before the remote probe claims its one shot or creates Docker resources, it
+re-verifies the deployed module/wrapper SHA-256 values and the current 3 GiB
+free-disk gate. Public probe success is accepted only when SSH exits zero and
+the receipt exactly binds the local verified provision, both images and
+revisions, workflow hashes, fixed request/result predicates, owned resource
+ledger, terminal state, absence proof, retained IDs, and no-retry operation.
 
 The two images in `retainedImageIds` remain provisioned by design. The archive,
 client container, Sidecar container, and internal network are owned temporary
