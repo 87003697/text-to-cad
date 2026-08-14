@@ -131,6 +131,13 @@ int main(int argc, char **argv) {
         previous_manifest = os.environ.get(
             "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"
         )
+        previous_devnull = os.devnull
+        harness_devnull = Path(
+            f"/tmp/meshshot-issue64-devnull-{secrets.token_hex(8)}"
+        )
+        harness_devnull.write_bytes(b"")
+        harness_devnull.chmod(0o600)
+        os.devnull = os.fspath(harness_devnull)
         os.environ["MESHSHOT_EXECUTABLE_ROOT"] = "/meshshot-exec"
         os.environ["MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"] = manifest_sha256
         Path("/meshshot-supervisor").chmod(0o700)
@@ -155,6 +162,8 @@ int main(int argc, char **argv) {
         finally:
             if pinned.fd is not None:
                 browser._cleanup()
+            os.devnull = previous_devnull
+            harness_devnull.unlink(missing_ok=True)
             if previous_root is None:
                 os.environ.pop("MESHSHOT_EXECUTABLE_ROOT", None)
             else:
