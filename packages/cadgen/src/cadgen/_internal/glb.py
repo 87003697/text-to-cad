@@ -142,7 +142,16 @@ def _atomic_write_bytes(target_path: Path, payload: bytes) -> None:
     temp_path = target_path.with_name(f"{target_path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     try:
         temp_path.write_bytes(payload)
-        temp_path.replace(target_path)
+        # Windows SMB servers can briefly retain the freshly closed temp file.
+        # Retry only that sharing violation; every other replace error is final.
+        for delay in (0.05, 0.1, 0.2, None):
+            try:
+                temp_path.replace(target_path)
+                break
+            except OSError as exc:
+                if getattr(exc, "winerror", None) != 32 or delay is None:
+                    raise
+                time.sleep(delay)
     finally:
         temp_path.unlink(missing_ok=True)
 
