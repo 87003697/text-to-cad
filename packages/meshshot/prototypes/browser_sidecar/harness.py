@@ -16,11 +16,7 @@ PREFIX = "meshshot-sidecar-prototype-harness"
 SIDECAR_TAG = "meshshot-sidecar-prototype:final"
 AGENT_TAG = "meshshot-sidecar-agent-client-prototype:final"
 LEGACY_TAG = "meshshot-sidecar-legacy-parity-prototype:final"
-EXPECTED_SKIP_BUILD_IMAGES = {
-    "sidecar": "sha256:c61318789e67cbac0ef1d4b0b91b25b158070cee5c516e296d9661097fa980fb",
-    "agent": "sha256:d6af75274aebcdac805a3247af557a84740cf0a053c2575bca9faf8ebbafcd77",
-    "legacy": "sha256:10335f887a051749c3074e7ec28628e9278d309e0a09cbf9f2d72efc78c14d95",
-}
+LEGACY_SOURCE_REVISION = "7e9fbbd15a365d5df691a79b0d2352492888d361"
 
 
 class HarnessError(RuntimeError):
@@ -362,11 +358,16 @@ def predicate_matrix(evidence: dict[str, Any]) -> dict[str, bool]:
         return value
 
     images = get("p0", "images", default={})
-    labels_ok = bool(images) and all(
-        metadata.get("labels", {}).get("org.opencontainers.image.revision") == get("sourceRevision")
+    expected_revisions = {
+        "sidecar": get("sourceRevision"),
+        "agent": get("sourceRevision"),
+        "legacy": LEGACY_SOURCE_REVISION,
+    }
+    labels_ok = set(images) == set(expected_revisions) and all(
+        metadata.get("labels", {}).get("org.opencontainers.image.revision") == expected_revisions[name]
         and metadata.get("labels", {}).get("io.text-to-cad.source-base") == get("baseRevision")
         and metadata.get("labels", {}).get("io.text-to-cad.review-parent") == "629eaec232ab2816466dafb5182a1bb4fe66295d"
-        for metadata in images.values()
+        for name, metadata in images.items()
     )
     p1_terminal = get("p1", "terminal", default={})
     viewer = get("p2", "nodeSuite", "result", "viewer", default={})
@@ -432,6 +433,7 @@ def predicate_matrix(evidence: dict[str, Any]) -> dict[str, bool]:
         "p2.viewer_fixture_and_inspection_control": (
             viewer.get("title") == "CAD Viewer | browser_sidecar_inspection.step"
             and viewer.get("bodyMentionsFixture") is True
+            and viewer.get("bodyHasArtifactError") is False
             and viewer.get("modelKey") == "inspection-step"
             and viewer.get("inspection", {}).get("changed") is True
         ),
@@ -480,6 +482,9 @@ def main() -> int:
     parser.add_argument("--docker-host", required=True)
     parser.add_argument("--evidence-dir", type=Path, required=True)
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--expected-sidecar-id")
+    parser.add_argument("--expected-agent-id")
+    parser.add_argument("--expected-legacy-id")
     args = parser.parse_args()
     repo = Path(__file__).resolve().parents[4]
     args.evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -498,11 +503,24 @@ def main() -> int:
             "agent": harness.image_digest(AGENT_TAG),
             "legacy": harness.image_digest(LEGACY_TAG),
         }
-        if args.skip_build and image_ids != EXPECTED_SKIP_BUILD_IMAGES:
-            raise HarnessError(
-                "--skip-build requires the exact reviewed image IDs: "
-                f"expected {EXPECTED_SKIP_BUILD_IMAGES}, got {image_ids}"
-            )
+        if args.skip_build:
+            expected_image_ids = {
+                "sidecar": args.expected_sidecar_id,
+                "agent": args.expected_agent_id,
+                "legacy": args.expected_legacy_id,
+            }
+            if not all(
+                isinstance(image_id, str) and image_id.startswith("sha256:")
+                for image_id in expected_image_ids.values()
+            ):
+                raise HarnessError(
+                    "--skip-build requires all three --expected-*-id values as sha256 digests"
+                )
+            if image_ids != expected_image_ids:
+                raise HarnessError(
+                    "--skip-build image identity mismatch: "
+                    f"expected {expected_image_ids}, got {image_ids}"
+                )
         evidence["p0"] = {
             "imageIds": image_ids,
             "images": {name: harness.image_metadata(tag) for name, tag in {
