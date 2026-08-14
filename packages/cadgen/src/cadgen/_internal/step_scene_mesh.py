@@ -177,7 +177,7 @@ def import_step(step_path: Path, *, label: str | None = None) -> Any:
         # name, and deriving it from the path would make identical STEP content
         # produce different trees depending on where the file happens to live.
         return scene_to_build123d_compound(scene, label=label)
-    except Exception:
+    except Exception:  # noqa: BLE001 - if the topology-aware load fails for any reason, fall back to build123d's import
         return build123d.import_step(resolved)
 
 
@@ -227,7 +227,7 @@ def _scene_mesh_resolution_hints(scene: LoadedStepScene) -> dict[str, Any]:
                 surface = BRepAdaptor_Surface(TopoDS.Face_s(face_map.FindKey(face_index)))
                 if _enum_name(surface.GetType(), "GeomAbs_") != "plane":
                     curved_faces += 1
-            except Exception:
+            except Exception:  # noqa: BLE001 - OCP surface reads can raise on odd faces; count them as curved
                 curved_faces += 1
         curved_edges = 0
         for edge_index in range(1, edge_map.Extent() + 1):
@@ -235,7 +235,7 @@ def _scene_mesh_resolution_hints(scene: LoadedStepScene) -> dict[str, Any]:
                 curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge_map.FindKey(edge_index)))
                 if _enum_name(curve.GetType(), "GeomAbs_") != "line":
                     curved_edges += 1
-            except Exception:
+            except Exception:  # noqa: BLE001 - OCP curve reads can raise on odd edges; count them as curved
                 curved_edges += 1
         prototype_curved_face_counts[key] = curved_faces
         prototype_curved_edge_counts[key] = curved_edges

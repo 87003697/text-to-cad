@@ -213,7 +213,7 @@ def _read_step_scene_cache(step_path: Path, *, step_hash: str) -> LoadedStepScen
             load_elapsed=time.perf_counter() - started,
             step_hash=step_hash,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 - any load failure returns None; callers fall back to a direct load
         return None
 
 
@@ -274,7 +274,7 @@ def _write_step_scene_cache(scene: LoadedStepScene, *, step_hash: str) -> None:
             _prune_step_scene_cache_siblings(cache_dir)
         except FileExistsError:
             shutil.rmtree(temp_dir, ignore_errors=True)
-    except Exception:
+    except Exception:  # noqa: BLE001 - a failed cache write must not fail the load; drop the temp dir
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -286,7 +286,7 @@ def _prune_step_scene_cache_siblings(cache_dir: Path) -> None:
             if sibling.name == cache_dir.name or sibling.name.endswith(".tmp"):
                 continue
             shutil.rmtree(sibling, ignore_errors=True)
-    except Exception:
+    except Exception:  # noqa: BLE001 - cache pruning is best-effort housekeeping
         pass
 
 

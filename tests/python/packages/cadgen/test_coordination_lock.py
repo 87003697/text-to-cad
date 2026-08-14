@@ -8,6 +8,7 @@ scheme passed unit tests while failing every one of these.
 
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
@@ -17,6 +18,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tests.python.support.paths import add_repo_path
 
@@ -24,6 +26,8 @@ add_repo_path("packages/cadgen/src")
 
 from cadgen.coordination.lock import exclusive  # noqa: E402
 from cadgen.coordination.paths import WRITE_LOCK_SUFFIX, write_lock_path  # noqa: E402
+
+import cadgen.coordination.lock as lock  # noqa: E402
 
 # Each child takes the lock, marks entry, holds briefly, marks exit, releases.
 # If mutual exclusion holds, the marks can never interleave.
@@ -273,6 +277,167 @@ class GenerationLockBehaviourTest(unittest.TestCase):
             self.assertEqual("S", enter, f"interleaved critical sections: {marks!r}")
             self.assertEqual("E", leave, f"interleaved critical sections: {marks!r}")
             self.assertEqual(tag, leave_tag, f"interleaved critical sections: {marks!r}")
+
+
+class _FakeMsvcrt:
+    """In-process stand-in for ``msvcrt.locking``: a 1-byte region lock keyed by file
+    identity (dev+inode), non-blocking acquire raising ``EACCES`` when another handle
+    holds the region -- the exact contract the Windows backend relies on."""
+
+    LK_NBLCK = 1
+    LK_UNLCK = 2
+    LK_LOCK = 3
+
+    def __init__(self) -> None:
+        self._held: set[tuple[int, int]] = set()
+
+    def locking(self, fd, mode, nbytes: int = 1) -> None:
+        info = os.fstat(fd)
+        key = (info.st_dev, info.st_ino)
+        if mode == self.LK_NBLCK:
+            if key in self._held:
+                raise OSError(errno.EACCES, "file being used by another process")
+            self._held.add(key)
+        elif mode == self.LK_UNLCK:
+            self._held.discard(key)
+        else:
+            raise AssertionError(f"unexpected msvcrt mode {mode}")
+
+
+class WindowsLockBackendTests(unittest.TestCase):
+    """The Windows backend is not importable here, so it is driven with a faithful fake:
+    ``fcntl=None`` + a fake ``msvcrt``. These pin the backend contract -- region locking,
+    no shared mode, empty-sentinel degradation, waiting semantics -- which is exactly what
+    the two production modules diverge on."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.lock_path = write_lock_path(self.root / "__cadgen__" / "models" / "part.step.py")
+        self._fcntl = mock.patch.object(lock, "fcntl", None)
+        self._msvcrt = mock.patch.object(lock, "msvcrt", _FakeMsvcrt())
+        self._fcntl.start()
+        self._msvcrt.start()
+        self.addCleanup(self._msvcrt.stop)
+        self.addCleanup(self._fcntl.stop)
+
+    def test_locking_available_with_windows_backend(self) -> None:
+        self.assertTrue(lock.locking_available())
+        # A missing sentinel means no run has ever held it: idle, not degraded.
+        self.assertEqual((False, False), lock.probe(self.lock_path))
+
+    def test_probe_reports_free_without_a_holder(self) -> None:
+        with exclusive(self.lock_path):
+            pass
+        result = lock.probe(self.lock_path)
+        self.assertEqual((False, False), result)
+
+    def test_probe_reports_held_while_a_peer_holds(self) -> None:
+        done = threading.Event()
+        release = threading.Event()
+
+        def hold():
+            with exclusive(self.lock_path):
+                done.set()
+                release.wait(10)
+
+        thread = threading.Thread(target=hold, daemon=True)
+        thread.start()
+        self.assertTrue(done.wait(10), "holder never acquired")
+        try:
+            result = lock.probe(self.lock_path)
+            self.assertEqual((True, False), result)
+        finally:
+            release.set()
+            thread.join(10)
+
+    def test_locking_past_eof_is_impossible_so_empty_sentinels_are_unknown(self) -> None:
+        # A 0-byte sentinel cannot carry a Windows region lock at all. It must read as
+        # degraded -- never held -- or a crash before stamping would wedge future builds.
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self.lock_path.write_bytes(b"")
+        result = lock.probe(self.lock_path)
+        self.assertEqual((False, True), result)
+
+    def test_run_id_is_still_stamped(self) -> None:
+        from cadgen.coordination.lock import read_run_id
+
+        with exclusive(self.lock_path) as run_id:
+            self.assertTrue(run_id)
+            self.assertEqual(run_id, read_run_id(self.lock_path))
+
+    def test_waiting_acquire_waits_for_the_peer(self) -> None:
+        release = threading.Event()
+        acquired_second = threading.Event()
+
+        def hold():
+            with exclusive(self.lock_path):
+                release.wait(10)
+
+        def wait_then_acquire():
+            with exclusive(self.lock_path):
+                acquired_second.set()
+
+        thread = threading.Thread(target=hold, daemon=True)
+        thread.start()
+        for _ in range(500):
+            if lock.probe(self.lock_path).held:
+                break
+            time.sleep(0.01)
+        second = threading.Thread(target=wait_then_acquire, daemon=True)
+        second.start()
+        time.sleep(0.1)
+        self.assertFalse(acquired_second.is_set(), "second acquirer did not wait for the peer")
+        release.set()
+        self.assertTrue(acquired_second.wait(10), "second acquirer never got the lock")
+        thread.join(10)
+        second.join(10)
+
+    def test_bounded_wait_raises_contended(self) -> None:
+        from cadgen.coordination.lock import Contended
+
+        done = threading.Event()
+        release = threading.Event()
+
+        def hold():
+            with exclusive(self.lock_path):
+                done.set()
+                release.wait(10)
+
+        thread = threading.Thread(target=hold, daemon=True)
+        thread.start()
+        self.assertTrue(done.wait(10))
+        try:
+            with self.assertRaises(Contended):
+                with exclusive(self.lock_path, deadline_ms=100):
+                    pass
+        finally:
+            release.set()
+            thread.join(10)
+
+
+class NoLockingBackendTests(unittest.TestCase):
+    """Neither backend available: coordination is a transparent no-op everywhere."""
+
+    def setUp(self) -> None:
+        self._fcntl = mock.patch.object(lock, "fcntl", None)
+        self._msvcrt = mock.patch.object(lock, "msvcrt", None)
+        self._fcntl.start()
+        self._msvcrt.start()
+        self.addCleanup(self._msvcrt.stop)
+        self.addCleanup(self._fcntl.stop)
+
+    def test_probe_is_degraded_not_held(self) -> None:
+        from cadgen.coordination.lock import ProbeResult
+
+        result = lock.probe("/nonexistent/.lock")
+        self.assertEqual(ProbeResult(held=False, degraded=True), result)
+
+    def test_locking_unavailable_and_exclusive_is_a_noop(self) -> None:
+        self.assertFalse(lock.locking_available())
+        with exclusive("/tmp/whatever.lock") as run_id:
+            self.assertIsNone(run_id)
 
 
 if __name__ == "__main__":

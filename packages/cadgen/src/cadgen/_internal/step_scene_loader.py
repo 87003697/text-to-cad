@@ -44,7 +44,7 @@ def _shape_location(topods_shape: object) -> object | None:
         return None
     try:
         return location()
-    except Exception:
+    except Exception:  # noqa: BLE001 - OCP Location() can raise; no location is the identity
         return None
 
 
@@ -55,7 +55,7 @@ def _compose_locations(parent_location: object | None, child_location: object | 
         return parent_location
     try:
         return parent_location.Multiplied(child_location)
-    except Exception:
+    except Exception:  # noqa: BLE001 - OCP transform multiply can raise; the child location alone is a safe fallback
         return child_location
 
 
@@ -67,7 +67,7 @@ def _located_shape(topods_shape: object, location: object | None) -> object:
         return topods_shape
     try:
         return located(location)
-    except Exception:
+    except Exception:  # noqa: BLE001 - OCP Located() can raise; keep the shape as-is
         return topods_shape
 
 
@@ -77,7 +77,7 @@ def _unlocated_shape(topods_shape: object) -> object:
         return topods_shape
     try:
         return located(TopLoc_Location())
-    except Exception:
+    except Exception:  # noqa: BLE001 - OCP Located() can raise; keep the shape unlocated
         return topods_shape
 
 
@@ -89,13 +89,13 @@ def _location_transform_matrix(location: object | None) -> tuple[float, ...]:
         return _identity_transform_matrix()
     try:
         trsf = transformation()
-    except Exception:
+    except Exception:  # noqa: BLE001 - OCP Transformation() can raise; identity transform fallback
         return _identity_transform_matrix()
     rows: list[float] = []
     try:
         for row in range(1, 4):
             rows.extend(float(trsf.Value(row, column)) for column in range(1, 5))
-    except Exception:
+    except Exception:  # noqa: BLE001 - OCP matrix reads can raise; identity transform fallback
         return _identity_transform_matrix()
     rows.extend((0.0, 0.0, 0.0, 1.0))
     return tuple(rows)
@@ -123,6 +123,14 @@ def _location_from_transform_matrix(transform: tuple[float, ...]) -> TopLoc_Loca
         transform[11],
     )
     return TopLoc_Location(trsf)
+
+
+def _xcaf_children(shape_tool: Any, label: object) -> list[object]:
+    sequence = TDF_LabelSequence()
+    shape_tool.GetComponents_s(label, sequence)
+    if sequence.Length() > 0:
+        return [sequence.Value(index) for index in range(1, sequence.Length() + 1)]
+    return []
 
 
 def _normalize_label_name(raw_name: object) -> str | None:
@@ -184,7 +192,7 @@ def _color_from_label(color_tool: Any, label: object) -> ColorRGBA | None:
         try:
             if XCAFDoc_ColorTool.GetColor_s(label, color_type, color):
                 return _color_tuple(color)
-        except Exception:
+        except Exception:  # noqa: BLE001 - OCP color reads can raise per color type; try the next type
             continue
     return None
 
@@ -197,12 +205,12 @@ def _color_from_shape(color_tool: Any, shape: object) -> ColorRGBA | None:
         try:
             if color_tool.GetColor(shape, color_type, color):
                 return _color_tuple(color)
-        except Exception:
+        except Exception:  # noqa: BLE001 - OCP color reads can raise per color type; try the next type
             pass
         try:
             if color_tool.GetInstanceColor(shape, color_type, color):
                 return _color_tuple(color)
-        except Exception:
+        except Exception:  # noqa: BLE001 - OCP color reads can raise per color type; try the next type
             pass
     return None
 
@@ -215,7 +223,7 @@ def _face_color_map_from_label(shape_tool: Any, color_tool: Any, label: object) 
         if label_color is not None:
             try:
                 shape = shape_tool.GetShape_s(colored_label)
-            except Exception:
+            except Exception:  # noqa: BLE001 - OCP label-to-shape reads can raise; a missing shape is skipped
                 shape = None
             if shape is not None and not shape.IsNull():
                 explorer = TopExp_Explorer(shape, TopAbs_FACE)

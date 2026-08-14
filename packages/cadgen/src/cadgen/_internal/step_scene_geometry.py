@@ -461,7 +461,7 @@ def _extract_edge_points_from_curve(edge: Any, deflection: float, max_points: in
         )
         if sampler.IsDone():
             points = [_point_from_occ(sampler.Value(index)) for index in range(1, sampler.NbPoints() + 1)]
-    except Exception:
+    except Exception:  # noqa: BLE001 - OCP sampling can raise on degenerate curves; fall back to vertex points
         points = []
 
     if not points:
@@ -507,7 +507,7 @@ def _edge_continuity_name(edge: Any, face_shapes: list[Any]) -> str:
         if not BRep_Tool.HasContinuity_s(edge, face_shapes[0], face_shapes[1]):
             return ""
         return _enum_name(BRep_Tool.Continuity_s(edge, face_shapes[0], face_shapes[1]), "GeomAbs_")
-    except Exception:
+    except Exception:  # noqa: BLE001 - OCP continuity queries can raise on odd edges; unknown continuity is an empty string
         return ""
 
 
@@ -539,7 +539,7 @@ def _sampled_edge_dihedral_deg(edge: Any, face_shapes: list[Any], fallback_norma
         try:
             left_normal = _face_normal_at_edge_fraction(edge, face_shapes[0], fraction)
             right_normal = _face_normal_at_edge_fraction(edge, face_shapes[1], fraction)
-        except Exception:
+        except Exception:  # noqa: BLE001 - OCP normal queries can raise; a skipped sample must not fail the edge read
             left_normal = None
             right_normal = None
         angle = _angle_between_vectors_deg(left_normal, right_normal)

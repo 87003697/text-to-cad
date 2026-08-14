@@ -249,6 +249,72 @@ class DrawingDetectionTest(unittest.TestCase):
         self.assertIn("paper-space", evidence)
 
 
+class MalformedSplineTests(unittest.TestCase):
+    """A SPLINE whose control_points are unusable must degrade to \"skip\", not fail the doc.
+
+    ezdxf yields Vec3, but third-party files and ezdxf API drift (issue #246) can expose a
+    malformed entity; _open_endpoints must survive AttributeError (missing attributes),
+    TypeError (scalars instead of points) and IndexError (too-short tuples) alike.
+    """
+
+    def test_unusable_spline_control_points_skip_the_entity(self) -> None:
+        from cadgen.drawing_checks import _open_endpoints
+
+        _MISSING = object()
+
+        class _FakeSpline:
+            def __init__(self, control_points=_MISSING):
+                self.closed = False
+                self._control_points = control_points
+
+            def dxftype(self) -> str:
+                return "SPLINE"
+
+            @property
+            def control_points(self):
+                if self._control_points is _MISSING:
+                    raise AttributeError("no control_points attribute")
+                return self._control_points
+
+        self.assertIsNone(_open_endpoints(_FakeSpline()))  # AttributeError: missing attribute
+        self.assertIsNone(_open_endpoints(_FakeSpline([1.0, 2.0])))  # TypeError: scalars
+        self.assertIsNone(_open_endpoints(_FakeSpline([(0,), (1,)])))  # IndexError: short tuples
+        self.assertIsNone(_open_endpoints(_FakeSpline([None, None])))  # TypeError: None points
+
+    def test_usable_spline_control_points_give_open_endpoints(self) -> None:
+        from cadgen.drawing_checks import _open_endpoints
+
+        class _PointySpline:
+            closed = False
+
+            def dxftype(self) -> str:
+                return "SPLINE"
+
+            @property
+            def control_points(self):
+                return [(0.0, 0.0, 0.0), (10.0, 20.0, 30.0)]
+
+        self.assertEqual(
+            ((0.0, 0.0), (10.0, 20.0)),
+            _open_endpoints(_PointySpline()),
+        )
+
+    def test_a_closed_spline_has_no_endpoints(self) -> None:
+        from cadgen.drawing_checks import _open_endpoints
+
+        class _ClosedSpline:
+            closed = True
+
+            def dxftype(self) -> str:
+                return "SPLINE"
+
+            @property
+            def control_points(self):
+                return [(0.0, 0.0), (1.0, 1.0)]
+
+        self.assertIsNone(_open_endpoints(_ClosedSpline()))
+
+
 class LayerTableIntentTest(unittest.TestCase):
     """Two standard layer properties say "not a cut path" without naming the layer so."""
 
