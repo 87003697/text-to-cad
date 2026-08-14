@@ -68,17 +68,52 @@ try {
         const viewerPayload = program === "suite" ? request.payload.viewer : request.payload;
         await page.goto("http://127.0.0.1:4173/?file=browser_sidecar_inspection.step", { waitUntil: "networkidle", timeout: 60_000 });
         await page.waitForTimeout(2_000);
-        const projectionControl = page.getByRole("button", { name: /Display and projection:/ });
-        const inspectionBefore = await projectionControl.getAttribute("aria-label");
         if (viewerPayload.inspectionControl !== "toggle-projection") throw new Error("unregistered inspection control");
-        await projectionControl.click();
-        const inspectionTarget = /Perspective/i.test(inspectionBefore || "") ? "Orthographic" : "Perspective";
-        await page.getByRole("menuitem", { name: inspectionTarget, exact: true }).click();
-        await page.waitForFunction(
-          (target) => document.querySelector('button[aria-label^="Display and projection:"]')?.getAttribute("aria-label")?.includes(target),
-          inspectionTarget,
-        );
-        const inspectionAfter = await projectionControl.getAttribute("aria-label");
+        const inspectionBefore = await page.evaluate(async () => {
+          const selector = 'button[aria-label^="Display and projection:"]';
+          const deadline = Date.now() + 25_000;
+          let control = null;
+          while (Date.now() < deadline) {
+            control = document.querySelector(selector);
+            if (control) break;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          const ariaLabel = control?.getAttribute("aria-label") || null;
+          if (!(control instanceof HTMLButtonElement) || ariaLabel !== "Display and projection: Solid, Orthographic") {
+            throw new Error(`unexpected projection control: ${ariaLabel}`);
+          }
+          control.focus();
+          if (document.activeElement !== control) throw new Error("projection control did not accept focus");
+          return ariaLabel;
+        });
+        const inspectionTarget = "Perspective";
+        await page.keyboard.press("Enter");
+        await page.evaluate(async (target) => {
+          const deadline = Date.now() + 5_000;
+          let menuItem = null;
+          while (Date.now() < deadline) {
+            menuItem = [...document.querySelectorAll('[role="menuitem"]')]
+              .find((element) => element.textContent?.trim().startsWith(target));
+            if (menuItem) break;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          if (!(menuItem instanceof HTMLElement)) throw new Error(`${target} menu item did not appear`);
+          menuItem.focus();
+          if (document.activeElement !== menuItem) throw new Error(`${target} menu item did not accept focus`);
+        }, inspectionTarget);
+        await page.keyboard.press("Enter");
+        const inspectionAfter = await page.evaluate(async (target) => {
+          const selector = 'button[aria-label^="Display and projection:"]';
+          const expected = `Display and projection: Solid, ${target}`;
+          const deadline = Date.now() + 5_000;
+          let ariaLabel = null;
+          while (Date.now() < deadline) {
+            ariaLabel = document.querySelector(selector)?.getAttribute("aria-label") || null;
+            if (ariaLabel === expected) return ariaLabel;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          throw new Error(`projection control did not reach ${expected}: ${ariaLabel}`);
+        }, inspectionTarget);
         const screenshot = await page.screenshot({ type: "png", timeout: 120_000 });
         const body = await page.locator("body").innerText();
         results[requestedProgram] = {
