@@ -189,6 +189,7 @@ int main(int argc, char **argv) {
         self.assertEqual("passed", result["supervisor_mount_propagation"])
         self.assertEqual("passed", result["shared_supervisor_records"])
         self.assertEqual("passed", result["same_uid_mount_boundaries"])
+        self.assertEqual("passed", result["version_live_child_mounts"])
         self.assertEqual(0, result["nested_browser_popen_count"])
         self.assertEqual("passed", result["completion_shutdown"])
         self.assertEqual("passed", result["supervisor_cleanup"])

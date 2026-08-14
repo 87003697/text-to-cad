@@ -545,6 +545,38 @@ class ResidualRendererTests(unittest.TestCase):
                     None,
                 )
 
+    def test_version_and_live_use_distinct_private_child_mount_authorities(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import _OwnedPrivateDirectory, _PinnedExecutable
+
+        authorities = [
+            _OwnedPrivateDirectory(
+                path=Path(f"/meshshot-exec/meshshot-browser-{index}"),
+                parent_fd=10 + index,
+                directory_fd=20 + index,
+                identity=(30, 40 + index),
+            )
+            for index in range(2)
+        ]
+        with mock.patch.object(
+            browser_runtime,
+            "_private_directory",
+            side_effect=authorities,
+        ) as private_directory:
+            version = _PinnedExecutable._private_image_mount_authority()
+            live = _PinnedExecutable._private_image_mount_authority()
+
+        self.assertIs(authorities[0], version)
+        self.assertIs(authorities[1], live)
+        self.assertNotEqual(version.path, live.path)
+        self.assertNotEqual(version.identity, live.identity)
+        self.assertEqual(
+            [mock.call("meshshot-browser-"), mock.call("meshshot-browser-")],
+            private_directory.mock_calls,
+        )
+
     def test_supervisor_namespace_failure_publishes_only_closed_operation(self) -> None:
         from meshshot import browser_supervisor
         from meshshot.browser_runtime import BrowserRuntimeError

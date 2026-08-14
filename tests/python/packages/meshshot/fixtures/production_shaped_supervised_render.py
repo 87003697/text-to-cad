@@ -242,41 +242,52 @@ static pid_t authority_supervisor_pid(void) {
   if (!end || pid <= 1) return 0;
   return (pid_t)pid;
 }
+static int probe_source(const char *attested) {
+  char image[2048];
+  char sentinel[2048];
+  snprintf(
+    image, sizeof(image),
+    "%s/chrome-headless-shell-linux64/chrome-headless-shell", attested
+  );
+  snprintf(sentinel, sizeof(sentinel), "%s/ancestor-write-sentinel", attested);
+  struct stat image_info;
+  struct stat sentinel_info;
+  struct statvfs filesystem;
+  if (stat(image, &image_info) != 0 || stat(sentinel, &sentinel_info) != 0) return 0;
+  if (!S_ISREG(image_info.st_mode) || !S_ISREG(sentinel_info.st_mode) ||
+      sentinel_info.st_size != 16 || statvfs(image, &filesystem) != 0) return -2;
+  if (!(filesystem.f_flag & ST_RDONLY)) return -1;
+  if (chmod(image, image_info.st_mode & 0777) == 0) return -1;
+  if (chmod(sentinel, sentinel_info.st_mode & 0777) == 0) return -1;
+  int image_fd = open(image, O_WRONLY);
+  if (image_fd >= 0) { close(image_fd); return -1; }
+  int sentinel_fd = open(sentinel, O_WRONLY);
+  if (sentinel_fd >= 0) { close(sentinel_fd); return -1; }
+  return 1;
+}
 static int probe_ancestor_browser_sources(void) {
   pid_t current = authority_supervisor_pid();
   int found = 0;
-  int writable = 0;
+  int direct_found = 0;
+  int child_found = 0;
   for (int depth = 0; depth < 32 && current > 1; ++depth) {
     char root[256];
     snprintf(root, sizeof(root), "/proc/%d/root/meshshot-exec", (int)current);
+    char direct[512];
+    snprintf(direct, sizeof(direct), "%s/attested", root);
+    int direct_result = probe_source(direct);
+    if (direct_result < 0) return direct_result;
+    if (direct_result > 0) { ++found; ++direct_found; }
     DIR *directory = opendir(root);
     if (directory) {
       struct dirent *entry;
       while ((entry = readdir(directory))) {
         if (entry->d_name[0] == '.') continue;
         char attested[1024];
-        char image[2048];
-        char sentinel[2048];
         snprintf(attested, sizeof(attested), "%s/%s/attested", root, entry->d_name);
-        snprintf(
-          image, sizeof(image),
-          "%s/chrome-headless-shell-linux64/chrome-headless-shell", attested
-        );
-        snprintf(sentinel, sizeof(sentinel), "%s/ancestor-write-sentinel", attested);
-        struct stat image_info;
-        struct stat sentinel_info;
-        struct statvfs filesystem;
-        if (stat(image, &image_info) != 0 || stat(sentinel, &sentinel_info) != 0) continue;
-        if (!S_ISREG(image_info.st_mode) || !S_ISREG(sentinel_info.st_mode) ||
-            sentinel_info.st_size != 16 || statvfs(image, &filesystem) != 0) return 32;
-        ++found;
-        if (!(filesystem.f_flag & ST_RDONLY)) writable = 1;
-        if (chmod(image, image_info.st_mode & 0777) == 0) writable = 1;
-        if (chmod(sentinel, sentinel_info.st_mode & 0777) == 0) writable = 1;
-        int image_fd = open(image, O_WRONLY);
-        if (image_fd >= 0) { writable = 1; close(image_fd); }
-        int sentinel_fd = open(sentinel, O_WRONLY);
-        if (sentinel_fd >= 0) { writable = 1; close(sentinel_fd); }
+        int child_result = probe_source(attested);
+        if (child_result < 0) return child_result;
+        if (child_result > 0) { ++found; ++child_found; }
       }
       closedir(directory);
     }
@@ -285,7 +296,8 @@ static int probe_ancestor_browser_sources(void) {
     current = parent;
   }
   if (found == 0) return -1;
-  return writable;
+  if (direct_found != 0 || child_found == 0) return -1;
+  return 0;
 }
 int main(int argc, char **argv) {
   int image_fd = open(argv[0], O_WRONLY | O_APPEND);
@@ -295,7 +307,7 @@ int main(int argc, char **argv) {
   if (mkdir("/meshshot-exec/attested", 0700) == 0) return 19;
   int ancestor_source = probe_ancestor_browser_sources();
   if (ancestor_source < 0) return 33;
-  if (ancestor_source > 0) return 34;
+  if (ancestor_source != 0) return 34;
   if (argc == 2 && strcmp(argv[1], "--version") == 0) {
     puts("Google Chrome for Testing 148.0.7778.96");
     return 0;
@@ -564,6 +576,7 @@ def _orchestrate() -> int:
     namespace_owned = "failed"
     propagation_private = "failed"
     shared_records_visible = "failed"
+    version_live_child_mounts = "failed"
     try:
         with scenarios._browser_supervisor() as supervisor:
             supervisor_pid = json.loads(
@@ -616,6 +629,16 @@ def _orchestrate() -> int:
                         expected_executable=Path("/usr/bin/python3"),
                     ),
                 )
+                child_mounts = [
+                    entry.name
+                    for entry in Path("/meshshot-exec").iterdir()
+                    if entry.name.startswith("meshshot-browser-")
+                ]
+                if len(child_mounts) != 2 or len(set(child_mounts)) != 2:
+                    raise AssertionError(
+                        "version and live browser images did not use distinct child mounts"
+                    )
+                version_live_child_mounts = "passed"
             except scenarios.ScenarioError as nested_exc:
                 print(
                     json.dumps(
@@ -686,6 +709,7 @@ def _orchestrate() -> int:
             "supervisor_mount_propagation": propagation_private,
             "shared_supervisor_records": shared_records_visible,
             "same_uid_mount_boundaries": "passed",
+            "version_live_child_mounts": version_live_child_mounts,
             "completion_shutdown": "passed",
             "supervisor_cleanup": (
                 "passed"
