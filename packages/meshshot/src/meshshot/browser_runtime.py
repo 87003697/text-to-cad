@@ -1745,6 +1745,12 @@ class _PinnedExecutable:
                 "nonce": nonce,
             }:
                 raise BrowserRuntimeError("browser_identity")
+            try:
+                transition = connection.recv(_SUPERVISOR_PACKET_LIMIT + 1)
+            except (OSError, socket.timeout) as exc:
+                raise BrowserRuntimeError("browser_identity") from exc
+            if transition != b"":
+                raise BrowserRuntimeError("browser_identity")
             connection.close()
             connection = None
             _BROWSER_MOUNT_AUTHORITY.unlink()

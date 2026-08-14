@@ -160,8 +160,7 @@ def main() -> int:
         connection.sendall(
             _packet({"schema": SCHEMA, "type": "exec", "nonce": nonce})
         )
-        connection.close()
-        connection = None
+        connection.set_inheritable(False)
         environment = {
             name: os.environ[name]
             for name in sorted(_ENVIRONMENT)
