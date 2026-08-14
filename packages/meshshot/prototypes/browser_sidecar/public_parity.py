@@ -16,8 +16,7 @@ from urllib.request import urlopen
 from PIL import Image
 import playwright.sync_api as playwright_api
 
-sys.path.insert(0, "/opt/browser-sidecar/meshshot-src")
-from meshshot import MeshGeometry, render_residual_preview  # noqa: E402
+from meshshot import MeshGeometry, render_residual_preview
 
 
 SCHEMA = "meshshot.browser-sidecar.render-request/2"

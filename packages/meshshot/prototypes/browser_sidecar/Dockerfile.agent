@@ -11,6 +11,7 @@ LABEL org.opencontainers.image.title="meshshot-browser-sidecar-agent-client-prot
       io.text-to-cad.chromium-revision="none"
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     NODE_ENV=production \
+    PYTHONPATH=/opt/browser-sidecar/meshshot-src \
     HOME=/home/pwuser
 WORKDIR /opt/browser-sidecar
 RUN apt-get update \
