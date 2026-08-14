@@ -102,19 +102,32 @@ class _LinuxStatFs(ctypes.Structure):
     ]
 
 
+class _BrowserStageMaterializationError(RuntimeError):
+    """A local outer-stage primitive failed before descriptor cleanup."""
+
+
 def _linux_filesystem_type(descriptor: int) -> int:
-    libc = ctypes.CDLL(None, use_errno=True)
-    fstatfs = libc.fstatfs
-    fstatfs.argtypes = [ctypes.c_int, ctypes.POINTER(_LinuxStatFs)]
-    fstatfs.restype = ctypes.c_int
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        fstatfs = libc.fstatfs
+        fstatfs.argtypes = [ctypes.c_int, ctypes.POINTER(_LinuxStatFs)]
+        fstatfs.restype = ctypes.c_int
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        raise _BrowserStageMaterializationError(
+            "private browser staging filesystem unavailable"
+        ) from exc
     result = _LinuxStatFs()
     if fstatfs(descriptor, ctypes.byref(result)) != 0:
-        raise ScenarioError("private browser staging filesystem unavailable")
+        raise _BrowserStageMaterializationError(
+            "private browser staging filesystem unavailable"
+        )
     return int(result.f_type)
 
 
 def _materialize_outer_browser_stage() -> None:
     """Copy the attested revision into the outer namespace-owned tmpfs."""
+
+    from scripts.pilot.cvm_job import runtime as cvm_runtime
 
     if platform.system() != "Linux":
         raise ScenarioError(
@@ -182,9 +195,7 @@ def _materialize_outer_browser_stage() -> None:
             )
         os.mkdir("attested", mode=0o700, dir_fd=destination_fd)
         revision_fd = os.open("attested", flags, dir_fd=destination_fd)
-        from scripts.pilot.cvm_job.runtime import _copy_browser_tree_fd
-
-        _copy_browser_tree_fd(source_fd, revision_fd)
+        cvm_runtime._copy_browser_tree_fd(source_fd, revision_fd)
         if (
             deployment_authority._browser_tree_manifest_from_fd(
                 source_fd,
@@ -209,7 +220,18 @@ def _materialize_outer_browser_stage() -> None:
                 raise
     except ScenarioError:
         raise
+    except cvm_runtime.BrowserStageCleanupError as exc:
+        raise ScenarioError(
+            "private browser staging cleanup failed",
+            operation="preview_browser_cleanup",
+        ) from exc
+    except cvm_runtime.BrowserStageError as exc:
+        raise ScenarioError(
+            "private browser staging failed",
+            operation="preview_browser_runtime_staging",
+        ) from exc
     except (
+        _BrowserStageMaterializationError,
         OSError,
         ValueError,
         deployment_authority.DeploymentAuthorityError,

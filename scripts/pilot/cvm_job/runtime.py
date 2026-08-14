@@ -171,6 +171,10 @@ class BrowserStageError(RuntimeError):
     """The deployment-attested browser could not be staged safely."""
 
 
+class BrowserStageCleanupError(BrowserStageError):
+    """An owned descriptor could not be closed during browser staging."""
+
+
 class _BrowserStageSignal(BaseException):
     """One catchable process signal that must unwind browser staging."""
 
@@ -321,7 +325,7 @@ def _copy_browser_tree_fd(
                         except OSError:
                             close_failed = True
                     if close_failed:
-                        raise BrowserStageError(
+                        raise BrowserStageCleanupError(
                             "browser stage descriptor cleanup failed"
                         )
                 continue
@@ -389,7 +393,7 @@ def _copy_browser_tree_fd(
                     except OSError:
                         close_failed = True
                 if close_failed:
-                    raise BrowserStageError(
+                    raise BrowserStageCleanupError(
                         "browser stage descriptor cleanup failed"
                     )
 
