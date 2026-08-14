@@ -247,7 +247,7 @@ def _current_artifact_for_spec(spec: EntrySpec) -> StepTopologyArtifact | None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="python -m cadgen.step_artifact",
+        prog="python -m cadgen.step_artifact_cli",
         description="Build the CAD Viewer render package for one STEP/STP file or gen_step() generator.",
     )
     parser.add_argument("--repo-root", required=True, help="Repository/workspace root for relative STEP metadata.")

@@ -27,7 +27,7 @@ from cadgen._internal.generation import (
 from cadgen.metadata import DEFAULT_MESH_ANGULAR_TOLERANCE, DEFAULT_MESH_TOLERANCE
 from cadgen.catalog import render_package_dir
 from cadgen._internal.step_scene import LoadedStepScene, load_step_scene_cached
-from cadgen.step_artifact import infer_entry_kind
+from cadgen.step_artifact_cli import infer_entry_kind
 from cadgen.step_targets import (
     REGENERATE_STEP_COMMAND,
     REGENERATE_STEP_PROMPT,

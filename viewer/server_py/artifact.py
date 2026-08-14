@@ -19,7 +19,7 @@ DXF drawing package and the implicit-CAD render package).
   STEP and generated-DXF packages run the SAME validator and the SAME content digest
   cadgen's CLI gate uses, so the two never disagree about staleness. State machine:
   ready | needs-build | generating | error.
-- The build (POST) shells out to `cadgen.step_artifact`, keeping OCP out of the
+- The build (POST) shells out to `cadgen.step_artifact_cli`, keeping OCP out of the
   server process (crash/memory isolation).
 """
 
