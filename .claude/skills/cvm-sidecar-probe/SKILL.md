@@ -19,7 +19,12 @@ The workflow has three separate public operations:
 1. `prepare` is local-only. It saves exactly two supplied Docker image IDs,
    verifies both are `linux/amd64`, binds both immutable
    `org.opencontainers.image.revision` labels to the reviewed clean SHA, and
-   records their config and archive SHA-256 attestations. It separately records
+   records their config and archive SHA-256 attestations. `configSha256` is the
+   immutable Docker/OCI image-config digest: exactly the 64-hex digest portion
+   of the image ID, never a hash of Docker's version-dependent `inspect Config`
+   display. The docker-save tar is read without extraction; its single bounded
+   manifest must name exactly the two expected config paths and each bounded
+   config blob content must hash to that path/ID digest. It separately records
    the clean Git HEAD of this provisioning workflow; the two revisions are not
    required to be the same commit.
 2. `provision` is an external CVM write. It transfers the fixed archive through
@@ -28,8 +33,9 @@ The workflow has three separate public operations:
    free space of at least `3 GiB + archive bytes`, and verifies an accessible
    `linux/amd64` Docker server. It retains the 3 GiB post-transfer gate,
    verifies the archive hash before `docker image load`, re-inspects the loaded
-   IDs/platform/config, removes the transfer archive, and intentionally retains
-   the two provisioned images.
+   exact IDs/platform/revision labels, derives the same config digests from the
+   IDs, removes the transfer archive, and intentionally retains the two
+   provisioned images.
 3. `probe` is a second external CVM write and the only execution dispatch. It
    runs exactly one sealed probe with `--pull=never`, an internal network,
    fixed resource bounds, read-only filesystems, and exact runtime cleanup.
@@ -111,6 +117,9 @@ different destructive operation and requires a separate authorization.
 ## Failure handling
 
 - Image revision/platform/ID/config mismatch: stop before transfer.
+- Missing, duplicate, mismatched, unsafe, oversized, or unreadable docker-save
+  manifest/config members: remove the fresh local prepare state and stop before
+  any transfer.
 - Remote begin followed by transfer/finalize failure: the wrapper invokes its
   one fixed abort operation, proves transfer absence when possible, writes a
   terminal failed receipt, and forbids retry.

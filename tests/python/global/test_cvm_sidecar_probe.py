@@ -19,12 +19,14 @@ from tests.python.support.paths import REPO_ROOT
 WRAPPER = REPO_ROOT / "scripts" / "pilot" / "cvm-sidecar-probe.sh"
 MODULE = REPO_ROOT / "scripts" / "pilot" / "cvm_sidecar_probe.py"
 SOURCE_REVISION = "a" * 40
-SIDECAR_ID = f"sha256:{'1' * 64}"
-CLIENT_ID = f"sha256:{'2' * 64}"
-PORTABLE_SIDECAR_CONFIG = b'{"kind":"sidecar","schema":1}'
-PORTABLE_CLIENT_CONFIG = b'{"kind":"client","schema":1}'
-PORTABLE_SIDECAR_ID = "sha256:" + hashlib.sha256(PORTABLE_SIDECAR_CONFIG).hexdigest()
-PORTABLE_CLIENT_ID = "sha256:" + hashlib.sha256(PORTABLE_CLIENT_CONFIG).hexdigest()
+SIDECAR_CONFIG_BLOB = b'{"kind":"sidecar","schema":1}'
+CLIENT_CONFIG_BLOB = b'{"kind":"client","schema":1}'
+SIDECAR_ID = "sha256:" + hashlib.sha256(SIDECAR_CONFIG_BLOB).hexdigest()
+CLIENT_ID = "sha256:" + hashlib.sha256(CLIENT_CONFIG_BLOB).hexdigest()
+PORTABLE_SIDECAR_CONFIG = SIDECAR_CONFIG_BLOB
+PORTABLE_CLIENT_CONFIG = CLIENT_CONFIG_BLOB
+PORTABLE_SIDECAR_ID = SIDECAR_ID
+PORTABLE_CLIENT_ID = CLIENT_ID
 
 
 def copy_cli(repo: Path) -> Path:
@@ -58,41 +60,7 @@ def internal_remote_cli(repo: Path) -> Path:
 
 
 def write_image_docker(path: Path) -> None:
-    path.write_text(
-        textwrap.dedent(
-            f"""\
-            #!/usr/bin/env python3
-            import json
-            import pathlib
-            import sys
-
-            sidecar = {SIDECAR_ID!r}
-            client = {CLIENT_ID!r}
-            if sys.argv[1:3] == ["image", "inspect"]:
-                image = sys.argv[3]
-                entrypoint = ["node", "/opt/browser-sidecar/prototype/server.mjs"] if image == sidecar else ["node", "/opt/browser-sidecar/prototype/client.mjs"]
-                print(json.dumps([{{
-                    "Id": image,
-                    "Architecture": "amd64",
-                    "Os": "linux",
-                    "Config": {{"Entrypoint": entrypoint, "Cmd": None, "Env": ["NODE_ENV=production"], "Labels": {{"org.opencontainers.image.revision": {SOURCE_REVISION!r}}}}},
-                }}]))
-            elif sys.argv[1:3] == ["image", "save"]:
-                output = pathlib.Path(sys.argv[4])
-                assert sys.argv[5:] == [sidecar, client]
-                output.write_bytes(b"exact fake docker archive\\n")
-            elif sys.argv[1:3] == ["image", "load"]:
-                assert pathlib.Path(sys.argv[4]).read_bytes() == b"exact fake docker archive\\n"
-                print("Loaded exact images")
-            elif sys.argv[1:3] == ["version", "--format"]:
-                print(json.dumps({{"Os": "linux", "Arch": "amd64"}}))
-            else:
-                raise SystemExit(f"unexpected docker argv: {{sys.argv[1:]}}")
-            """
-        ),
-        encoding="utf-8",
-    )
-    path.chmod(0o755)
+    write_portable_archive_docker(path)
 
 
 def write_portable_archive_docker(path: Path) -> None:
@@ -161,6 +129,12 @@ def write_portable_archive_docker(path: Path) -> None:
                     add_bytes(archive, "manifest.json", json.dumps(manifest).encode())
                     for name, payload in blobs.items():
                         add_bytes(archive, name, payload)
+            elif sys.argv[1:3] == ["image", "load"]:
+                with tarfile.open(pathlib.Path(sys.argv[4]), "r") as archive:
+                    assert archive.getmember("manifest.json").isfile()
+                print("Loaded exact images")
+            elif sys.argv[1:3] == ["version", "--format"]:
+                print(json.dumps({{"Os": "linux", "Arch": "amd64"}}))
             else:
                 raise SystemExit(f"unexpected docker argv: {{sys.argv[1:]}}")
             """
@@ -188,14 +162,14 @@ def write_verified_local_provision(repo: Path, handle: str) -> dict[str, object]
             "role": "sidecar",
             "id": SIDECAR_ID,
             "platform": "linux/amd64",
-            "configSha256": "3" * 64,
+            "configSha256": SIDECAR_ID.removeprefix("sha256:"),
             "sourceRevision": SOURCE_REVISION,
         },
         {
             "role": "client",
             "id": CLIENT_ID,
             "platform": "linux/amd64",
-            "configSha256": "4" * 64,
+            "configSha256": CLIENT_ID.removeprefix("sha256:"),
             "sourceRevision": SOURCE_REVISION,
         },
     ]
@@ -356,36 +330,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             fake_bin = root / "bin"
             fake_bin.mkdir()
             docker = fake_bin / "docker"
-            docker.write_text(
-                textwrap.dedent(
-                    f"""\
-                    #!/usr/bin/env python3
-                    import json
-                    import pathlib
-                    import sys
-
-                    sidecar = {SIDECAR_ID!r}
-                    client = {CLIENT_ID!r}
-                    if sys.argv[1:3] == ["image", "inspect"]:
-                        image = sys.argv[3]
-                        entrypoint = ["node", "/opt/browser-sidecar/prototype/server.mjs"] if image == sidecar else ["node", "/opt/browser-sidecar/prototype/client.mjs"]
-                        print(json.dumps([{{
-                            "Id": image,
-                            "Architecture": "amd64",
-                            "Os": "linux",
-                            "Config": {{"Entrypoint": entrypoint, "Cmd": None, "Env": ["NODE_ENV=production"], "Labels": {{"org.opencontainers.image.revision": {SOURCE_REVISION!r}}}}},
-                        }}]))
-                    elif sys.argv[1:3] == ["image", "save"]:
-                        output = pathlib.Path(sys.argv[4])
-                        assert sys.argv[5:] == [sidecar, client]
-                        output.write_bytes(b"exact fake docker archive\\n")
-                    else:
-                        raise SystemExit(f"unexpected docker argv: {{sys.argv[1:]}}")
-                    """
-                ),
-                encoding="utf-8",
-            )
-            docker.chmod(0o755)
+            write_image_docker(docker)
             env = dict(os.environ)
             env["PATH"] = f"{fake_bin}{os.pathsep}{env['PATH']}"
 
@@ -421,13 +366,19 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 ],
             )
             archive = repo / receipt["archive"]["relativePath"]
-            self.assertEqual(archive.read_bytes(), b"exact fake docker archive\n")
+            self.assertTrue(archive.is_file())
             self.assertEqual(
                 receipt["archive"]["sha256"],
                 hashlib.sha256(archive.read_bytes()).hexdigest(),
             )
             self.assertEqual(receipt["archive"]["bytes"], archive.stat().st_size)
-            self.assertTrue(all(image["configSha256"] for image in receipt["images"]))
+            self.assertEqual(
+                [image["configSha256"] for image in receipt["images"]],
+                [
+                    SIDECAR_ID.removeprefix("sha256:"),
+                    CLIENT_ID.removeprefix("sha256:"),
+                ],
+            )
 
     def test_prepare_rejects_revision_not_bound_by_both_image_configs(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-source-bind-") as root_text:
@@ -1887,8 +1838,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         "sourceRevision": SOURCE_REVISION,
                         "workflowFilesVerified": workflow_files,
                         "images": [
-                            {"role": "sidecar", "id": SIDECAR_ID, "platform": "linux/amd64", "configSha256": "s"},
-                            {"role": "client", "id": CLIENT_ID, "platform": "linux/amd64", "configSha256": "c"},
+                            {"role": "sidecar", "id": SIDECAR_ID, "platform": "linux/amd64", "configSha256": SIDECAR_ID.removeprefix("sha256:")},
+                            {"role": "client", "id": CLIENT_ID, "platform": "linux/amd64", "configSha256": CLIENT_ID.removeprefix("sha256:")},
                         ],
                     }
                 ),
@@ -2290,8 +2241,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         "sourceRevision": SOURCE_REVISION,
                         "workflowFilesVerified": workflow_files,
                         "images": [
-                            {"role": "sidecar", "id": SIDECAR_ID, "platform": "linux/amd64", "configSha256": "s"},
-                            {"role": "client", "id": CLIENT_ID, "platform": "linux/amd64", "configSha256": "c"},
+                            {"role": "sidecar", "id": SIDECAR_ID, "platform": "linux/amd64", "configSha256": SIDECAR_ID.removeprefix("sha256:")},
+                            {"role": "client", "id": CLIENT_ID, "platform": "linux/amd64", "configSha256": CLIENT_ID.removeprefix("sha256:")},
                         ],
                     }
                 ),
