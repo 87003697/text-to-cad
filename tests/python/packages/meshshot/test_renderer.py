@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import base64
-from contextlib import contextmanager, ExitStack
+from contextlib import contextmanager, ExitStack, nullcontext
 import errno
 from io import BytesIO
 import json
@@ -178,6 +178,88 @@ class ResidualRendererTests(unittest.TestCase):
                 )
                 self.assertEqual(expected_check, raised.exception.browser_cleanup_check)
 
+    def test_attachment_context_preserves_body_cleanup_unless_close_proves_retained(self) -> None:
+        from meshshot import browser_runtime
+
+        body_cleanup = browser_runtime.BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_handoff",
+            browser_cleanup_check="transport_close",
+        )
+        retained_cleanup = browser_runtime.BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_profile",
+            browser_cleanup_check="absence",
+            _browser_cleanup_retained=True,
+        )
+        for later, expected in (
+            (OSError("ordinary browser close"), body_cleanup),
+            (retained_cleanup, retained_cleanup),
+        ):
+            with self.subTest(retained=later is retained_cleanup):
+                attachment = object.__new__(
+                    browser_runtime.SupervisedCdpAttachmentRuntime
+                )
+                attachment._profile = {
+                    "startup_timeout_ms": 100,
+                    "browser_version": "148.0.7778.96",
+                }
+                attachment.evidence = {"schema": browser_runtime.RUNTIME_SCHEMA}
+                nonce = "a" * 64
+                connection = mock.MagicMock()
+                browser = _attested_connected_browser()
+                browser.close.side_effect = later
+                chromium = mock.MagicMock()
+                chromium.connect_over_cdp.return_value = browser
+                receive = mock.Mock(
+                    side_effect=[
+                        {"type": "authority"},
+                        {
+                            "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
+                            "type": "shutdown",
+                            "nonce": nonce,
+                        },
+                    ]
+                )
+                with (
+                    mock.patch.object(attachment, "_validate_socket_path"),
+                    mock.patch.object(
+                        attachment,
+                        "_client_authority",
+                        return_value=(4242, nonce),
+                    ),
+                    mock.patch.object(attachment, "_validate_supervisor_peer"),
+                    mock.patch.object(
+                        attachment,
+                        "_validate_authority",
+                        return_value=("http://127.0.0.1:9222", 43210),
+                    ),
+                    mock.patch.object(
+                        browser_runtime.socket,
+                        "socket",
+                        return_value=connection,
+                    ),
+                    mock.patch.object(browser_runtime, "_send_supervisor_packet"),
+                    mock.patch.object(
+                        browser_runtime,
+                        "_receive_supervisor_packet",
+                        receive,
+                    ),
+                    self.assertRaises(browser_runtime.BrowserRuntimeError) as raised,
+                ):
+                    with attachment.open(chromium):
+                        raise body_cleanup
+
+                self.assertEqual(expected.operation, raised.exception.operation)
+                self.assertEqual(
+                    expected.browser_cleanup_substage,
+                    raised.exception.browser_cleanup_substage,
+                )
+                self.assertEqual(
+                    expected.browser_cleanup_check,
+                    raised.exception.browser_cleanup_check,
+                )
+
     def test_profile_quarantine_residue_overrides_recursive_remove_failure(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
@@ -207,6 +289,51 @@ class ResidualRendererTests(unittest.TestCase):
                 runtime._cleanup()
             self.assertEqual("private_browser_profile", raised.exception.browser_cleanup_substage)
             self.assertEqual("absence", raised.exception.browser_cleanup_check)
+
+    def test_process_group_retained_marker_requires_positive_nonempty_proof(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        for proof, expected_check, retained in (
+            (OSError("group proof unavailable"), "term_group_empty", False),
+            (False, "kill_group_empty", True),
+        ):
+            with self.subTest(retained=retained):
+                runtime = object.__new__(PrelaunchedCdpRuntime)
+                runtime._profile = {
+                    "cleanup_term_ms": 0,
+                    "cleanup_kill_ms": 0,
+                }
+                runtime._profile_dir = None
+                runtime._profile_identity = None
+                runtime._profile_cleanup_forbidden = False
+                runtime._profile_fd = None
+                runtime._profile_parent_fd = None
+                runtime._process = mock.MagicMock()
+                runtime._process.wait.return_value = 0
+                runtime._process_group = 4242
+                runtime._pinned_executable = None
+                wait = (
+                    mock.Mock(side_effect=proof)
+                    if isinstance(proof, BaseException)
+                    else mock.Mock(return_value=proof)
+                )
+                with (
+                    mock.patch.object(browser_runtime.os, "killpg"),
+                    mock.patch.object(browser_runtime, "_wait_group_empty", wait),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    runtime._cleanup()
+
+                self.assertEqual(
+                    "private_browser_process_group",
+                    raised.exception.browser_cleanup_substage,
+                )
+                self.assertEqual(expected_check, raised.exception.browser_cleanup_check)
+                self.assertIs(
+                    retained,
+                    raised.exception._browser_cleanup_retained,
+                )
 
     def test_supervisor_rejects_same_uid_foreign_first_client_and_replay(self) -> None:
         from meshshot import browser_supervisor
@@ -1749,6 +1876,58 @@ class ResidualRendererTests(unittest.TestCase):
         )
         self.assertEqual("absence", raised.exception.browser_cleanup_check)
 
+    def test_runtime_context_preserves_body_cleanup_unless_cleanup_proves_retained(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        body_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_handoff",
+            browser_cleanup_check="transport_close",
+        )
+        retained_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_profile",
+            browser_cleanup_check="absence",
+            _browser_cleanup_retained=True,
+        )
+        for later, expected in (
+            (
+                BrowserRuntimeError(
+                    "browser_cleanup",
+                    browser_cleanup_substage="private_browser_profile",
+                    browser_cleanup_check="authority_close",
+                ),
+                body_cleanup,
+            ),
+            (retained_cleanup, retained_cleanup),
+        ):
+            with self.subTest(retained=later is retained_cleanup):
+                runtime = object.__new__(PrelaunchedCdpRuntime)
+                runtime._profile = {"startup_timeout_ms": 100}
+                browser = _attested_connected_browser()
+                chromium = mock.MagicMock()
+                chromium.connect_over_cdp.return_value = browser
+                with (
+                    mock.patch.object(browser_runtime, "_runtime_signal_cleanup", return_value=nullcontext()),
+                    mock.patch.object(runtime, "_prelaunch", return_value="http://127.0.0.1:9222"),
+                    mock.patch.object(runtime, "_verify_connected_browser"),
+                    mock.patch.object(runtime, "_cleanup", side_effect=later),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    with runtime.open(chromium):
+                        raise body_cleanup
+
+                self.assertEqual(expected.operation, raised.exception.operation)
+                self.assertEqual(
+                    expected.browser_cleanup_substage,
+                    raised.exception.browser_cleanup_substage,
+                )
+                self.assertEqual(
+                    expected.browser_cleanup_check,
+                    raised.exception.browser_cleanup_check,
+                )
+
     def test_spawned_session_uses_pid_as_group_before_readiness_failure(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
 
@@ -2931,6 +3110,44 @@ class ResidualRendererTests(unittest.TestCase):
                 "detached_mount_release",
                 raised.exception.browser_cleanup_check,
             )
+
+    def test_pinned_close_marks_only_positive_retained_tree_or_mount(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        for retained_kind in ("tree", "mount"):
+            with self.subTest(kind=retained_kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "private-image"
+                root.mkdir()
+                pinned = object.__new__(_PinnedExecutable)
+                pinned.fd = None
+                pinned.launch_root = root
+                pinned._detached_mount_mode = retained_kind == "mount"
+                pinned._detached_filesystem_mounted = retained_kind == "mount"
+                if retained_kind == "tree":
+                    cleanup_patch = mock.patch.object(
+                        browser_runtime.shutil,
+                        "rmtree",
+                        side_effect=OSError("tree retained"),
+                    )
+                else:
+                    cleanup_patch = mock.patch.object(
+                        pinned,
+                        "_release_detached_mount",
+                        side_effect=BrowserRuntimeError("browser_cleanup"),
+                    )
+                with cleanup_patch, self.assertRaises(BrowserRuntimeError) as raised:
+                    pinned.close()
+
+                self.assertEqual(
+                    "private_browser_pinned_image",
+                    raised.exception.browser_cleanup_substage,
+                )
+                self.assertEqual(
+                    "detached_mount_release",
+                    raised.exception.browser_cleanup_check,
+                )
+                self.assertTrue(raised.exception._browser_cleanup_retained)
 
         with tempfile.TemporaryDirectory() as directory:
             pinned = object.__new__(_PinnedExecutable)
