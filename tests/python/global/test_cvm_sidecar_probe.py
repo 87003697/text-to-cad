@@ -496,6 +496,10 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 "05099491da3e4de94093bab6672a0cdeabbb2744089dba3e6a2b6201cb5447ff",
             )
 
+    def test_prepare_archive_contract_exposes_no_parser_surface(self) -> None:
+        self.assertNotIn("tarfile", vars(cvm_sidecar_probe))
+        self.assertNotIn("_verify_saved_archive_configs", vars(cvm_sidecar_probe))
+
     def test_prepare_cleanup_failure_is_bounded_and_dominates(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-prepare-cleanup-") as root_text:
             root = Path(root_text)

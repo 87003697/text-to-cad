@@ -22,11 +22,12 @@ The workflow has three separate public operations:
    records their config and archive SHA-256 attestations. `configSha256` is the
    immutable Docker/OCI image-config digest: exactly the 64-hex digest portion
    of the image ID, never a hash of Docker's version-dependent `inspect Config`
-   display. The docker-save tar is read without extraction; its single bounded
-   manifest must name exactly the two expected config paths and each bounded
-   config blob content must hash to that path/ID digest. It separately records
-   the clean Git HEAD of this provisioning workflow; the two revisions are not
-   required to be the same commit.
+   display. The archive is intentionally opaque to this wrapper: `prepare`
+   invokes fixed local `docker image save` with only the two exact IDs, then
+   binds the resulting bytes and size by SHA-256. There is no public archive
+   input and no tar/manifest parser surface. It separately records the clean
+   Git HEAD of this provisioning workflow; the two revisions are not required
+   to be the same commit.
 2. `provision` is an external CVM write. It transfers the fixed archive through
    this wrapper. Before any remote state write it verifies the deployed module
    and wrapper SHA-256 values, binds the exact archive bytes/SHA-256, requires
@@ -117,9 +118,15 @@ different destructive operation and requires a separate authorization.
 ## Failure handling
 
 - Image revision/platform/ID/config mismatch: stop before transfer.
-- Missing, duplicate, mismatched, unsafe, oversized, or unreadable docker-save
-  manifest/config members: remove the fresh local prepare state and stop before
-  any transfer.
+- A changed local archive fails its receipt hash/size check before the one-shot
+  provision claim or any SSH/rsync transfer. On CVM, Docker load plus exact
+  loaded ID/platform/revision verification is the authoritative image-config
+  proof; malformed bytes produce the bounded archive/load failure receipt.
+- If local prepare fails, cleanup attempts every exact owned temporary archive,
+  final archive, receipt, state directory, and the shared root only when empty.
+  Cleanup continues after individual errors. Any missing absence proof
+  dominates the original failure as fixed `prepare-cleanup-absence`; raw paths,
+  errno, and exception text are not published.
 - Remote begin followed by transfer/finalize failure: the wrapper invokes its
   one fixed abort operation, proves transfer absence when possible, writes a
   terminal failed receipt, and forbids retry.

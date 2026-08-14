@@ -13,7 +13,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import tarfile
 import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -44,8 +43,6 @@ REQUEST = {
     "program": "probe",
     "payload": {},
 }
-MAX_ARCHIVE_MANIFEST_BYTES = 1024 * 1024
-MAX_IMAGE_CONFIG_BYTES = 16 * 1024 * 1024
 
 
 class ProbeError(RuntimeError):
@@ -245,134 +242,6 @@ def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
         "configSha256": image_id.removeprefix("sha256:"),
         "sourceRevision": revision,
     }
-
-
-def _read_archive_member(
-    archive: tarfile.TarFile,
-    member: tarfile.TarInfo,
-    *,
-    label: str,
-    maximum_bytes: int,
-) -> bytes:
-    if not member.isfile() or member.size < 0 or member.size > maximum_bytes:
-        raise ProbeError(f"docker-save {label} is not a bounded regular file")
-    stream = archive.extractfile(member)
-    if stream is None:
-        raise ProbeError(f"docker-save {label} cannot be read")
-    payload = stream.read(maximum_bytes + 1)
-    if len(payload) != member.size:
-        raise ProbeError(f"docker-save {label} size is inconsistent")
-    return payload
-
-
-def _safe_archive_member_name(name: str) -> bool:
-    trimmed = name[:-1] if name.endswith("/") else name
-    parts = trimmed.split("/")
-    return bool(
-        trimmed
-        and not name.startswith("/")
-        and "\\" not in name
-        and all(part not in {"", ".", ".."} for part in parts)
-    )
-
-
-def _config_digest_from_archive_path(path: str) -> str:
-    legacy = re.fullmatch(r"([0-9a-f]{64})\.json", path)
-    if legacy is not None:
-        return legacy.group(1)
-    oci = re.fullmatch(r"blobs/sha256/([0-9a-f]{64})", path)
-    if oci is not None:
-        return oci.group(1)
-    raise ProbeError(
-        "docker-save manifest config path is not a fixed digest path",
-        check="archive-image-config",
-    )
-
-
-def _verify_saved_archive_configs(
-    archive_path: Path, images: Sequence[Mapping[str, object]]
-) -> None:
-    expected = [str(image["id"]).removeprefix("sha256:") for image in images]
-    if len(expected) != 2 or len(set(expected)) != 2:
-        raise ProbeError(
-            "docker-save requires two distinct exact image IDs",
-            check="archive-image-config",
-        )
-    try:
-        with tarfile.open(archive_path, mode="r:") as archive:
-            members = archive.getmembers()
-            if not all(_safe_archive_member_name(member.name) for member in members):
-                raise ProbeError(
-                    "docker-save archive contains an unsafe member path",
-                    check="archive-image-config",
-                )
-            manifest_members = [
-                member for member in members if member.name == "manifest.json"
-            ]
-            if len(manifest_members) != 1:
-                raise ProbeError(
-                    "docker-save archive must contain one manifest",
-                    check="archive-image-config",
-                )
-            manifest_bytes = _read_archive_member(
-                archive,
-                manifest_members[0],
-                label="manifest",
-                maximum_bytes=MAX_ARCHIVE_MANIFEST_BYTES,
-            )
-            try:
-                manifest = _strict_json_loads(
-                    manifest_bytes.decode("utf-8"), "docker-save manifest"
-                )
-            except (UnicodeDecodeError, ProbeError) as exc:
-                raise ProbeError(
-                    "docker-save manifest is malformed",
-                    check="archive-image-config",
-                ) from exc
-            if (
-                not isinstance(manifest, list)
-                or len(manifest) != 2
-                or not all(isinstance(entry, dict) for entry in manifest)
-            ):
-                raise ProbeError(
-                    "docker-save manifest must describe exactly two images",
-                    check="archive-image-config",
-                )
-            config_paths = [entry.get("Config") for entry in manifest]
-            if not all(isinstance(path, str) for path in config_paths):
-                raise ProbeError(
-                    "docker-save manifest has no exact config paths",
-                    check="archive-image-config",
-                )
-            digests = [_config_digest_from_archive_path(path) for path in config_paths]
-            if len(set(config_paths)) != 2 or sorted(digests) != sorted(expected):
-                raise ProbeError(
-                    "docker-save manifest does not bind both exact image configs",
-                    check="archive-image-config",
-                )
-            for path, digest in zip(config_paths, digests, strict=True):
-                config_members = [member for member in members if member.name == path]
-                if len(config_members) != 1:
-                    raise ProbeError(
-                        "docker-save config blob is missing or duplicated",
-                        check="archive-image-config",
-                    )
-                config_bytes = _read_archive_member(
-                    archive,
-                    config_members[0],
-                    label="image config",
-                    maximum_bytes=MAX_IMAGE_CONFIG_BYTES,
-                )
-                if _sha256_bytes(config_bytes) != digest:
-                    raise ProbeError(
-                        "docker-save config blob digest mismatch",
-                        check="archive-image-config",
-                    )
-    except (OSError, tarfile.TarError) as exc:
-        raise ProbeError(
-            "docker-save archive is not a readable fixed tar",
-            check="archive-image-config",
-        ) from exc
 
 
 def _write_json_atomic(path: Path, payload: object) -> None:
@@ -874,6 +743,52 @@ def _validate_probe_success(
     return remote
 
 
+def _path_absence(path: Path) -> bool:
+    try:
+        return not path.exists() and not path.is_symlink()
+    except OSError:
+        return False
+
+
+def _cleanup_failed_prepare(
+    state: Path, temporary_archive: Path, archive: Path
+) -> bool:
+    cleanup_ok = True
+    exact_paths = (
+        temporary_archive,
+        archive,
+        state / "prepare.json.tmp",
+        state / "prepare.json",
+    )
+    for path in exact_paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            cleanup_ok = False
+    try:
+        state.rmdir()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        cleanup_ok = False
+
+    try:
+        LOCAL_STATE_ROOT.rmdir()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        try:
+            root_has_entries = any(LOCAL_STATE_ROOT.iterdir())
+        except OSError:
+            cleanup_ok = False
+        else:
+            cleanup_ok = cleanup_ok and root_has_entries
+
+    return cleanup_ok and all(
+        _path_absence(path) for path in (*exact_paths, state)
+    )
+
+
 def prepare(args: argparse.Namespace) -> Mapping[str, object]:
     if SOURCE_REVISION.fullmatch(args.source_revision) is None:
         raise ProbeError("source revision must be an exact 40-hex Git SHA")
@@ -919,7 +834,6 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
         )
         if not temporary_archive.is_file() or temporary_archive.stat().st_size == 0:
             raise ProbeError("docker save did not produce a non-empty archive")
-        _verify_saved_archive_configs(temporary_archive, images)
         os.replace(temporary_archive, archive)
         receipt: Mapping[str, object] = {
             "schema": "cvm-sidecar.prepare-receipt/1",
@@ -938,16 +852,12 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
         }
         _write_json_atomic(state / "prepare.json", receipt)
         return receipt
-    except BaseException:
-        temporary_archive.unlink(missing_ok=True)
-        try:
-            state.rmdir()
-        except OSError:
-            pass
-        try:
-            LOCAL_STATE_ROOT.rmdir()
-        except OSError:
-            pass
+    except BaseException as operation_error:
+        if not _cleanup_failed_prepare(state, temporary_archive, archive):
+            raise ProbeError(
+                "prepare cleanup could not prove absence",
+                check="prepare-cleanup-absence",
+            ) from operation_error
         raise
 
 
