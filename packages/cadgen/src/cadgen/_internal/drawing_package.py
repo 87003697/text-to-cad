@@ -38,6 +38,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cadgen._internal.atomic_replace import replace_atomic
 from cadgen._internal.file_metadata import text_to_cad_identity_metadata, write_dxf_text_to_cad_metadata
 from cadgen._internal.node_runtime import node_builder_script, run_node_builder
 from cadgen._internal.package_freshness import (
@@ -278,7 +279,7 @@ def _write_descriptor(package_dir: Path, descriptor: dict[str, object]) -> dict[
     with temp_path.open("w", encoding="utf-8") as handle:
         json.dump(descriptor, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    os.replace(temp_path, descriptor_path)
+    replace_atomic(temp_path, descriptor_path)
     return descriptor
 
 
