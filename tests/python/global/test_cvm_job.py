@@ -7,6 +7,7 @@ import os
 import signal
 import shutil
 import subprocess
+import stat
 import sys
 import threading
 import time
@@ -157,6 +158,62 @@ class CvmJobTests(unittest.TestCase):
             self.assertEqual(chromium["sha256"], mount.executable_sha256)
 
         self.assertFalse(stage_root.exists())
+
+    def test_attested_browser_stage_freezes_and_revalidates_trusted_full_tree(
+        self,
+    ) -> None:
+        chromium, executable = self._browser_identity()
+        source_revision = executable.parents[1]
+        projected = {
+            relative: (kind, mode & ~0o222, digest)
+            for relative, (kind, mode, digest) in runtime._browser_tree_manifest(
+                source_revision
+            ).items()
+        }
+        trusted = runtime._browser_tree_manifest_sha256(projected)
+        chromium["tree_manifest_sha256"] = trusted
+        handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
+
+        with runtime.staged_attested_browser(
+            chromium,
+            handle,
+            repo_root=self.repo_root,
+        ) as mount:
+            self.assertEqual(trusted, mount.tree_manifest_sha256)
+            for path in (mount.host_revision, *mount.host_revision.rglob("*")):
+                self.assertEqual(
+                    0,
+                    stat.S_IMODE(path.lstat().st_mode) & 0o222,
+                    path.relative_to(mount.host_revision),
+                )
+            self.assertEqual(
+                trusted,
+                runtime._browser_tree_manifest_sha256(
+                    runtime._browser_tree_manifest(mount.host_revision)
+                ),
+            )
+
+    def test_attested_browser_stage_rejects_sibling_mutated_after_deployment(self) -> None:
+        chromium, executable = self._browser_identity()
+        source_revision = executable.parents[1]
+        projected = {
+            relative: (kind, mode & ~0o222, digest)
+            for relative, (kind, mode, digest) in runtime._browser_tree_manifest(
+                source_revision
+            ).items()
+        }
+        chromium["tree_manifest_sha256"] = (
+            runtime._browser_tree_manifest_sha256(projected)
+        )
+        (source_revision / "resources.pak").write_bytes(b"substituted resource")
+
+        with self.assertRaises(runtime.BrowserStageError):
+            with runtime.staged_attested_browser(
+                chromium,
+                f"{self.group}/20260812-100000-issue15-runtime-authority",
+                repo_root=self.repo_root,
+            ):
+                pass
 
     def test_attested_browser_stage_rejects_kernel_noexec_probe(self) -> None:
         chromium, _executable = self._browser_identity()
@@ -493,6 +550,37 @@ class CvmJobTests(unittest.TestCase):
             repo_root=self.repo_root,
         ) as mount:
             stage_root = mount.host_revision.parent
+
+        self.assertFalse(stage_root.exists())
+
+    def test_attested_browser_stage_cleanup_is_descriptor_relative(self) -> None:
+        chromium, _executable = self._browser_identity()
+        handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
+        manager = runtime.staged_attested_browser(
+            chromium,
+            handle,
+            repo_root=self.repo_root,
+        )
+        mount = manager.__enter__()
+        stage_root = mount.host_revision.parent
+        original_rglob = Path.rglob
+
+        def reject_stage_path_traversal(path: Path, pattern: str):
+            if path == stage_root or stage_root in path.parents:
+                raise AssertionError("browser stage cleanup used pathname traversal")
+            return original_rglob(path, pattern)
+
+        try:
+            with mock.patch.object(
+                Path,
+                "rglob",
+                autospec=True,
+                side_effect=reject_stage_path_traversal,
+            ):
+                manager.__exit__(None, None, None)
+        finally:
+            if stage_root.exists():
+                shutil.rmtree(stage_root)
 
         self.assertFalse(stage_root.exists())
 

@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import signal
 import socket
+import stat
 import statistics
 import struct
 import subprocess
@@ -2298,6 +2299,81 @@ class ResidualRendererTests(unittest.TestCase):
                 self.assertEqual(expected_sha256, pinned.sha256())
             finally:
                 pinned.close()
+
+    def test_browser_tree_snapshot_uses_descriptor_relative_traversal(self) -> None:
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            target = root / "target"
+            (source / "nested").mkdir(parents=True)
+            (source / "nested/resource.pak").write_bytes(b"resource")
+            original_iterdir = Path.iterdir
+
+            def reject_source_path_traversal(path: Path):
+                if path == source or source in path.parents:
+                    raise AssertionError("browser tree used pathname traversal")
+                return original_iterdir(path)
+
+            with mock.patch.object(
+                Path,
+                "iterdir",
+                autospec=True,
+                side_effect=reject_source_path_traversal,
+            ):
+                _PinnedExecutable._snapshot_tree_exact(source, target)
+
+            self.assertEqual(
+                b"resource",
+                (target / "nested/resource.pak").read_bytes(),
+            )
+
+    def test_browser_tree_freeze_removes_write_bits_from_files_and_directories(
+        self,
+    ) -> None:
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "tree"
+            (root / "nested").mkdir(parents=True)
+            resource = root / "nested/resource.pak"
+            resource.write_bytes(b"resource")
+            resource.chmod(0o764)
+            _PinnedExecutable._freeze_directories(root)
+
+            for path in (root, *root.rglob("*")):
+                self.assertEqual(0, stat.S_IMODE(path.lstat().st_mode) & 0o222)
+
+    def test_detached_mount_cleanup_rejects_replacement_without_deleting_it(
+        self,
+    ) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            mountpoint = parent / "owned"
+            retained = parent / "retained-owned"
+            replacement = parent / "owned"
+            mountpoint.mkdir()
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.launch_root = mountpoint
+            pinned.launch_path = mountpoint / "attested/chrome"
+            pinned._detached_filesystem_mounted = True
+            os.replace(mountpoint, retained)
+            replacement.mkdir()
+
+            with (
+                mock.patch.object(
+                    pinned,
+                    "_unmount_private_filesystem",
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned._remove_detached_source()
+
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+            self.assertTrue(replacement.is_dir())
 
     def test_running_process_image_rejects_swap_exec_restore(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable

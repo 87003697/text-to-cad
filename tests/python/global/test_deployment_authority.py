@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts.pilot import deployment_authority
 
@@ -13,7 +14,7 @@ from scripts.pilot import deployment_authority
 class DeploymentAuthorityTests(unittest.TestCase):
     def test_complete_receipt_materializes_and_reverifies_actual_retained_files(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
-            root = Path(root_text)
+            root = Path(root_text).resolve()
             (root / "scripts").mkdir()
             (root / "scripts/runner.py").write_text("runner\n", encoding="utf-8")
             (root / "native").mkdir()
@@ -130,6 +131,54 @@ class DeploymentAuthorityTests(unittest.TestCase):
                             candidate,
                             verify_external=False,
                         )
+
+    def test_runtime_identity_binds_every_browser_revision_resource(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            cadpy = root / deployment_authority.CADPY_RUNTIME_PATH
+            cadpy.parent.mkdir(parents=True)
+            cadpy.write_bytes(b"cadpy")
+            home = root / "home"
+            revision = home / (
+                ".cache/ms-playwright/chromium_headless_shell-1234"
+            )
+            executable = revision / (
+                "chrome-headless-shell-linux64/chrome-headless-shell"
+            )
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"browser")
+            executable.chmod(0o755)
+            resource = revision / "resources.pak"
+            resource.write_bytes(b"trusted resource")
+            bwrap = (root / "bwrap").resolve()
+            bwrap.write_text(
+                "#!/bin/sh\nprintf 'bubblewrap 1.2.3\\n'\n",
+                encoding="utf-8",
+            )
+            bwrap.chmod(0o755)
+
+            with mock.patch.object(
+                deployment_authority, "TRUSTED_BWRAP_PATH", bwrap
+            ):
+                identity = deployment_authority.probe_runtime_identity(
+                    root,
+                    chromium_revision="1234",
+                    home=home,
+                )
+                self.assertRegex(
+                    identity["chromium"]["tree_manifest_sha256"],
+                    r"^[0-9a-f]{64}$",
+                )
+                resource.write_bytes(b"same-uid substituted resource")
+                with self.assertRaisesRegex(
+                    deployment_authority.DeploymentAuthorityError,
+                    "browser tree|Chromium",
+                ):
+                    deployment_authority.validate_runtime_identity(
+                        root,
+                        identity,
+                        verify_external=True,
+                    )
 
 
 if __name__ == "__main__":
