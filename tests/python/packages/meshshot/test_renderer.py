@@ -3568,6 +3568,59 @@ class ResidualRendererTests(unittest.TestCase):
                 runtime._cleanup()
             self.assertFalse(profile.exists())
 
+    def test_linux_live_launch_rejects_spoofed_completion_and_reaps_group(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime, _LiveBrowserLaunch
+
+        for proof in (None, False, "passed", object()):
+            with self.subTest(proof=type(proof).__name__), tempfile.TemporaryDirectory() as directory:
+                profile = Path(directory) / "profile"
+                process = mock.MagicMock(spec=subprocess.Popen)
+                process.pid = 43210
+                process.poll.return_value = None
+                process.wait.return_value = 0
+                pinned = mock.MagicMock()
+                pinned.launch_live.return_value = _LiveBrowserLaunch(process, proof)
+                runtime = object.__new__(PrelaunchedCdpRuntime)
+                runtime._executable = Path("/private/image/chrome-headless-shell")
+                runtime._profile = {
+                    "arguments": [],
+                    "startup_timeout_ms": 1000,
+                    "cleanup_term_ms": 100,
+                    "cleanup_kill_ms": 100,
+                }
+                runtime._pinned_executable = pinned
+                runtime._profile_dir = None
+                runtime._profile_identity = None
+                runtime._profile_cleanup_forbidden = False
+                runtime._profile_fd = None
+                runtime._profile_parent_fd = None
+                runtime._process = None
+                runtime._process_group = None
+                with (
+                    mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                    mock.patch(
+                        "meshshot.browser_runtime.tempfile.mkdtemp",
+                        side_effect=lambda **_kwargs: (
+                            profile.mkdir() or os.fspath(profile)
+                        ),
+                    ),
+                    mock.patch(
+                        "meshshot.browser_runtime.os.killpg",
+                        side_effect=ProcessLookupError,
+                    ) as killpg,
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    runtime._prelaunch()
+                self.assertEqual("browser_identity", raised.exception.operation)
+                self.assertEqual(
+                    "live_running_image_identity",
+                    raised.exception.browser_identity_substage,
+                )
+                self.assertIn(mock.call(43210, signal.SIGTERM), killpg.mock_calls)
+                pinned.close.assert_called_once_with()
+                self.assertFalse(profile.exists())
+
     def test_linux_handoff_rejects_actual_helper_death_eof_before_return(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable

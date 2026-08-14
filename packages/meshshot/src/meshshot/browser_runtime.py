@@ -367,6 +367,15 @@ class _SelectedExecutable:
     source_identity: _SourceIdentity
 
 
+_LINUX_LIVE_IMAGE_PROOF = object()
+
+
+@dataclass(frozen=True)
+class _LiveBrowserLaunch:
+    process: subprocess.Popen[bytes]
+    _proof: object
+
+
 def default_executable(chromium_executable: str) -> _SelectedExecutable:
     """Resolve the exact headless-shell sibling installed by Playwright."""
 
@@ -1364,6 +1373,22 @@ class _PinnedExecutable:
         launch_argv = [os.fspath(self.launch_path), *argv[1:]]
         return subprocess.Popen(launch_argv, **options)
 
+    def launch_live(
+        self,
+        argv: list[str],
+        **kwargs: Any,
+    ) -> _LiveBrowserLaunch:
+        """Launch one live browser with an internal authenticated-image proof."""
+
+        if not sys.platform.startswith("linux"):
+            raise BrowserRuntimeError("browser_identity")
+        process = self.popen(
+            argv,
+            _handoff_completion="live",
+            **kwargs,
+        )
+        return _LiveBrowserLaunch(process, _LINUX_LIVE_IMAGE_PROOF)
+
     def verify_running_image(self, pid: int, timeout: float) -> None:
         self._verify_running_image_until(pid, time.monotonic() + timeout)
 
@@ -1968,20 +1993,36 @@ class PrelaunchedCdpRuntime:
                         + float(self._profile["startup_timeout_ms"]) / 1000
                     )
                 with _blocked_runtime_signals():
-                    self._process = self._pinned_executable.popen(
-                        argv,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True,
-                        close_fds=True,
-                        **launch_options,
-                    )
-                    self._process_group = self._process.pid
-                self._pinned_executable.verify_running_image(
-                    self._process.pid,
-                    float(self._profile["startup_timeout_ms"]) / 1000,
-                )
+                    if sys.platform.startswith("linux"):
+                        launch = self._pinned_executable.launch_live(
+                            argv,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            start_new_session=True,
+                            close_fds=True,
+                            **launch_options,
+                        )
+                        if not isinstance(launch, _LiveBrowserLaunch):
+                            raise BrowserRuntimeError("browser_identity")
+                        self._process = launch.process
+                        self._process_group = self._process.pid
+                        if launch._proof is not _LINUX_LIVE_IMAGE_PROOF:
+                            raise BrowserRuntimeError("browser_identity")
+                    else:
+                        self._process = self._pinned_executable.popen(
+                            argv,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            start_new_session=True,
+                            close_fds=True,
+                        )
+                        self._process_group = self._process.pid
+                        self._pinned_executable.verify_running_image(
+                            self._process.pid,
+                            float(self._profile["startup_timeout_ms"]) / 1000,
+                        )
             except BrowserRuntimeError as exc:
                 if exc.operation != "browser_identity":
                     raise
