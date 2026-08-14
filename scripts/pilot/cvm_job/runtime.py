@@ -159,6 +159,10 @@ class AttestedBrowserMount:
 
     host_revision: Path
     sandbox_cache: str
+    tree_manifest_sha256: str = ""
+    revision: str = ""
+    executable_relative: str = ""
+    executable_sha256: str = ""
 
 
 class BrowserStageError(RuntimeError):
@@ -339,6 +343,40 @@ def _browser_tree_manifest(root: Path) -> dict[str, tuple[str, int, str | None]]
     return manifest
 
 
+def _browser_tree_manifest_sha256(
+    manifest: dict[str, tuple[str, int, str | None]],
+) -> str:
+    entries: list[dict[str, object]] = []
+    folded: set[str] = set()
+    for relative in sorted(manifest):
+        collision_key = relative.casefold()
+        if collision_key in folded:
+            raise BrowserStageError("browser revision contains a colliding entry")
+        folded.add(collision_key)
+        kind, mode, digest = manifest[relative]
+        entry: dict[str, object] = {
+            "path": relative,
+            "kind": kind,
+            "mode": mode,
+        }
+        if kind == "file":
+            if digest is None:
+                raise BrowserStageError("browser revision manifest is incomplete")
+            entry["sha256"] = digest
+        elif digest is not None:
+            raise BrowserStageError("browser revision manifest is invalid")
+        entries.append(entry)
+    encoded = json.dumps(
+        {
+            "schema": "meshshot.browser-tree-manifest/1",
+            "entries": entries,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 @contextmanager
 def staged_attested_browser(
     chromium: dict[str, Any],
@@ -382,6 +420,7 @@ def _staged_attested_browser(
                 "browser revision escapes its attested cache"
             ) from exc
         source_manifest = _browser_tree_manifest(source_revision)
+        tree_manifest_sha256 = _browser_tree_manifest_sha256(source_manifest)
         executable_relative = Path(
             "chrome-headless-shell-linux64/chrome-headless-shell"
         )
@@ -396,7 +435,15 @@ def _staged_attested_browser(
         requested_root = REPO_ROOT if repo_root is None else Path(repo_root)
         repository = requested_root.resolve(strict=True)
         stage_parent = source_cache / ".cvm-provider-free-browser-stages"
-        mount = _browser_mount(chromium, handle)
+        mount_path = _browser_mount(chromium, handle)
+        mount = AttestedBrowserMount(
+            host_revision=mount_path.host_revision,
+            sandbox_cache=mount_path.sandbox_cache,
+            tree_manifest_sha256=tree_manifest_sha256,
+            revision=str(chromium["revision"]),
+            executable_relative=executable_relative.as_posix(),
+            executable_sha256=str(chromium["sha256"]),
+        )
         stage_root = mount.host_revision.parent
         try:
             stage_parent.resolve(strict=False).relative_to(repository)
@@ -524,12 +571,12 @@ PROVIDER_FREE_SETUP_CAPABILITIES = (
 )
 PROVIDER_FREE_EXECUTION_PROFILE = {
     "schema": "cvm.provider-free-execution-profile/1",
-    "id": "issue15.provider-free-bounded/16",
+    "id": "issue15.provider-free-bounded/17",
     "provider_access": "forbidden",
-    "sandbox_profile": "cvm.provider-free-linux-sandbox/16",
+    "sandbox_profile": "cvm.provider-free-linux-sandbox/17",
 }
 PROVIDER_FREE_SANDBOX_PROFILE = {
-    "schema": "cvm.provider-free-linux-sandbox/16",
+    "schema": "cvm.provider-free-linux-sandbox/17",
     "namespaces": [name for name, _flag in PROVIDER_FREE_NAMESPACES],
     "capabilities": {
         "baseline": "drop-all",
@@ -750,7 +797,23 @@ def provider_free_sandbox_argv(
     handle = f"{relative_exp.parts[1]}/{relative_exp.parts[2]}"
     expected_mount = _browser_mount(runtime_identity["chromium"], handle)
     mount = expected_mount if browser_mount is None else browser_mount
-    if mount != expected_mount:
+    if (
+        mount.host_revision != expected_mount.host_revision
+        or mount.sandbox_cache != expected_mount.sandbox_cache
+        or (
+            browser_mount is not None
+            and (
+                re.fullmatch(r"[0-9a-f]{64}", mount.tree_manifest_sha256)
+                is None
+                or mount.revision
+                != str(runtime_identity["chromium"]["revision"])
+                or mount.executable_relative
+                != "chrome-headless-shell-linux64/chrome-headless-shell"
+                or mount.executable_sha256
+                != runtime_identity["chromium"]["sha256"]
+            )
+        )
+    ):
         raise ProtocolError("provider-free browser mount conflicts with job authority")
     sandbox_exp = PROVIDER_FREE_SANDBOX_REPO_ROOT / relative_exp
     bwrap = runtime_identity["bwrap"]["path"]
