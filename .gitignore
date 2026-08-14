@@ -1,5 +1,6 @@
 # macOS
 .DS_Store
+/.cvm-sidecar-probes/
 .vscode
 
 # Python

@@ -18,3 +18,4 @@ docs/
 worktrees/
 tmp/
 .cvm-jobs/
+/.cvm-sidecar-probes/
