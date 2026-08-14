@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Iterator
 
+from cadgen._internal.atomic_replace import replace_atomic
 from cadgen.catalog import source_from_path
 from cadgen.cli_logging import CliLogger
 from cadgen.coordination import (
@@ -440,7 +441,7 @@ def _write_topology_sidecar(
             angular_deflection=options.angular_deflection,
             selector_bundle=bundle,
         )
-        os.replace(temp_path, target)
+        replace_atomic(temp_path, target)
     except Exception as exc:  # noqa: BLE001 - cache write is advisory
         if logger is not None:
             logger.debug(f"topology.glb cache write skipped for {spec.cad_ref}: {exc}")
