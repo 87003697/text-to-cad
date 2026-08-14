@@ -1530,14 +1530,17 @@ class _PinnedExecutable:
         self,
         process: subprocess.Popen[bytes],
         deadline: float,
+        *,
+        image_pid: int | None = None,
     ) -> None:
+        target_pid = process.pid if image_pid is None else image_pid
         while True:
             if time.monotonic() >= deadline:
                 raise subprocess.TimeoutExpired([_FD_EXEC_HANDOFF_SCHEMA], 0)
             if process.poll() is not None:
                 raise BrowserRuntimeError("browser_identity")
             try:
-                self._verify_running_image_until(process.pid, deadline)
+                self._verify_running_image_until(target_pid, deadline)
                 return
             except subprocess.TimeoutExpired:
                 raise
@@ -1549,6 +1552,39 @@ class _PinnedExecutable:
                         [_FD_EXEC_HANDOFF_SCHEMA], 0
                     ) from exc
                 time.sleep(0.002)
+
+    @staticmethod
+    def _bwrap_helper_pid(
+        process: subprocess.Popen[bytes], deadline: float
+    ) -> int:
+        children_path = Path(
+            f"/proc/{process.pid}/task/{process.pid}/children"
+        )
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise BrowserRuntimeError("browser_identity")
+            try:
+                children = children_path.read_text(encoding="utf-8").split()
+                if len(children) != 1 or not children[0].isdigit():
+                    time.sleep(0.002)
+                    continue
+                child = int(children[0])
+                raw = Path(f"/proc/{child}/stat").read_text(encoding="utf-8")
+                tail = raw[raw.rfind(")") + 2 :].split()
+                if (
+                    child <= 1
+                    or len(tail) < 4
+                    or int(tail[1]) != process.pid
+                    or int(tail[2]) != process.pid
+                    or int(tail[3]) != process.pid
+                ):
+                    raise BrowserRuntimeError("browser_identity")
+                return child
+            except (FileNotFoundError, ProcessLookupError):
+                time.sleep(0.002)
+            except (OSError, ValueError, IndexError) as exc:
+                raise BrowserRuntimeError("browser_identity") from exc
+        raise subprocess.TimeoutExpired([_BROWSER_MOUNT_SCHEMA], 0)
 
     @staticmethod
     def _mount_packet(connection: socket.socket) -> Any:
@@ -1672,10 +1708,11 @@ class _PinnedExecutable:
                 if name in os.environ
             }
             process = subprocess.Popen(helper_argv, **options)
+            expected_helper_pid = self._bwrap_helper_pid(process, deadline)
             connection, _address = listener.accept()
             connection.settimeout(max(0.001, deadline - time.monotonic()))
             peer_pid, peer_uid, _peer_gid = _peer_credentials(connection)
-            if peer_pid != process.pid or peer_uid != os.geteuid():
+            if peer_pid != expected_helper_pid or peer_uid != os.geteuid():
                 raise BrowserRuntimeError("browser_identity")
             mounted = self._mount_packet(connection)
             if mounted != {
@@ -1707,7 +1744,9 @@ class _PinnedExecutable:
             connection = None
             _BROWSER_MOUNT_AUTHORITY.unlink()
             if completion == "live":
-                self._wait_for_exec_replacement(process, deadline)
+                self._wait_for_exec_replacement(
+                    process, deadline, image_pid=expected_helper_pid
+                )
             else:
                 setattr(process, "_meshshot_version_handoff_eof", True)
             return process
