@@ -45,6 +45,10 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
    nonces, exact-ID plus dual-label cleanup authority, strict receipt binding,
    durable probe failure receipts, deployed wrapper/module SHA-256 gates, and
    the mandatory 3 GiB remote disk gate. It did not contact CVM.
+6. R2 re-review narrowed three remaining probe-boundary failures. R3 RED
+   `a531b507` proved cross-handle probe success spoofing, probe claims before
+   deployment/disk gates, and ambiguous begin ownership after lost stdout. R3
+   GREEN `343a412e` closes only those three seams; it did not contact CVM.
 
 ## Session 产出
 
@@ -56,6 +60,8 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
 | `a1d04d8514a62670e79c995f58d5fb2de7b1aa3d` GREEN | skill, wrapper/module, tests, ignores, AGENTS/README | Fixed archive attestation, named transfer/load, one-shot sealed probe, terminal ledger/absence evidence. |
 | `f546470c` R2 RED | `tests/python/global/test_cvm_sidecar_probe.py` | Proved a failed predictable-name create could authorize cleanup of a foreign resource. |
 | `92e228c0` R2 GREEN | skill, module, tests | Fresh ownership proof; exact receipt/deployment/disk gates; collision-safe best-effort terminal cleanup. |
+| `a531b507` R3 RED | focused global tests | Spoofed probe success, pre-gate claim, and lost-begin ownership regressions. |
+| `343a412e` R3 GREEN | skill, module, tests | Strict public probe receipt binding, pre-claim remote gates, and locally durable begin nonce. |
 
 ### 核心行为
 
@@ -99,6 +105,16 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
 - Public provision accepts success only when every prepared image/archive and
   terminal/no-retry field matches exactly. Probe SSH/malformed/lost-output and
   cleanup-timeout paths persist terminal failure and continue all safe cleanup.
+- Public probe first revalidates the local provision against prepare, then
+  accepts remote success only with SSH exit 0 and exact handle, image roles/
+  IDs/platform/config/revisions, workflow file hashes, request/result,
+  resource ledger, terminal state, absence proof, retained IDs, and no-retry
+  operation. Missing, mismatched, cross-handle, or spoofed success is terminal.
+- Remote probe re-runs deployed module/wrapper hashes and the current 3 GiB
+  disk gate before its one-shot claim or any Docker resource creation.
+- Provision generates and records the ownership nonce locally before begin,
+  passes it into begin, and uses that same nonce for an exact abort if stdout is
+  lost. A foreign predictable handle cannot satisfy the nonce receipt.
 - The exact two loaded image IDs are intentionally retained as provisioned
   artifacts. Removing them is a separate destructive authorization boundary.
 
@@ -122,6 +138,14 @@ R2 final validation:
 - Focused suite → **17 tests, OK**.
 - Global gate with the project virtualenv and local loopback permission →
   **168 tests, OK**.
+- `python3 -m py_compile` for the module and focused test → exit 0.
+- `git diff --check` and staged diff check → exit 0.
+
+R3 final validation:
+
+- Focused suite → **22 tests, OK**.
+- Global gate with the project virtualenv and local loopback permission →
+  **173 tests, OK**.
 - `python3 -m py_compile` for the module and focused test → exit 0.
 - `git diff --check` and staged diff check → exit 0.
 
