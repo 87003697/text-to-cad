@@ -273,3 +273,119 @@ test("the baked artifact preview never folds, so it never reaches the strip deco
   assert.ok(buildDxfPreviewMeshData(dxfData, 2, null).triangle_count > 0);
   assert.throws(() => buildDxfPreviewMeshData(dxfData, 2, FOLDING), /holes crossing bend/);
 });
+
+
+// -- a fold line has to run edge to edge -------------------------------------------------
+
+function bentPlate(bends, { width = 100, height = 60, holeRect = null } = {}) {
+  return {
+    geometry: {
+      lines: [
+        ...rectangle(0, 0, width, height),
+        ...bends.map((bend) => ({ kind: "bend", start: [bend.x, bend.y0], end: [bend.x, bend.y1] })),
+        ...(holeRect ? rectangle(...holeRect) : [])
+      ],
+      arcs: [],
+      circles: []
+    },
+    defaultThicknessMm: 2
+  };
+}
+
+const UP_90 = { direction: "up", angleDeg: 90 };
+
+test("a bend line that stops short of the edge is refused, not folded anyway", () => {
+  // The reported failure: with several bends the preview came out twisted into spikes. The
+  // X-slab decomposition folds a whole slab about the bend's midpoint X, so a line spanning
+  // the top third stood the ENTIRE right half up -- material the bend does not separate.
+  const dxfData = bentPlate([{ x: 60, y0: 40, y1: 60 }]);
+  assert.throws(
+    () => buildDxfPreviewMeshData(dxfData, 2, [UP_90]),
+    (error) => {
+      assert.match(error.message, /runs edge to edge/u);
+      assert.match(error.message, /bend 1 at x=60\.000/u, "the message must name the offending bend");
+      assert.match(error.message, /spans y 40\.000\.\.60\.000/u);
+      assert.match(error.message, /material there spans y 0\.000\.\.60\.000/u);
+      assert.match(error.message, /40\.000 mm short/u);
+      return true;
+    }
+  );
+});
+
+test("the offending bend is named even when an earlier bend is fine", () => {
+  const dxfData = bentPlate([{ x: 40, y0: 0, y1: 60 }, { x: 80, y0: 30, y1: 60 }]);
+  assert.throws(
+    () => buildDxfPreviewMeshData(dxfData, 2, [UP_90, UP_90]),
+    /bend 2 at x=80\.000/u
+  );
+});
+
+test("full-span bends still fold, one or several", () => {
+  for (const bends of [
+    [{ x: 50, y0: 0, y1: 60 }],
+    [{ x: 30, y0: 0, y1: 60 }, { x: 70, y0: 0, y1: 60 }],
+    [{ x: 25, y0: 0, y1: 60 }, { x: 50, y0: 0, y1: 60 }, { x: 75, y0: 0, y1: 60 }]
+  ]) {
+    const meshData = buildDxfPreviewMeshData(
+      bentPlate(bends),
+      2,
+      bends.map(() => UP_90)
+    );
+    assert.ok(meshData.triangle_count > 0, `${bends.length} bend(s) must fold`);
+  }
+});
+
+test("span is measured on the OUTER contour, so a cutout elsewhere is irrelevant", () => {
+  // The span rule asks whether the line reaches both outer edges. A cutout that does not
+  // touch the line must not enter into it -- measuring material run by run would reject this.
+  const dxfData = bentPlate([{ x: 50, y0: 0, y1: 60 }], { holeRect: [20, 20, 40, 40] });
+  const meshData = buildDxfPreviewMeshData(dxfData, 2, [UP_90]);
+  assert.ok(meshData.triangle_count > 0);
+});
+
+test("a hole ON the fold line is still refused, by the bend-band rule", () => {
+  // Two distinct rules, and this one is not the span rule: material inside the bend radius
+  // cannot be folded whatever the line's length, so the band message is the right one.
+  const dxfData = bentPlate([{ x: 50, y0: 0, y1: 60 }], { holeRect: [45, 20, 55, 40] });
+  assert.throws(
+    () => buildDxfPreviewMeshData(dxfData, 2, [UP_90]),
+    /holes crossing bend radius bands/u
+  );
+});
+
+test("a fold line a few hundredths short is authoring noise, not a short bend", () => {
+  const dxfData = bentPlate([{ x: 50, y0: 0.02, y1: 59.98 }]);
+  const meshData = buildDxfPreviewMeshData(dxfData, 2, [UP_90]);
+  assert.ok(meshData.triangle_count > 0);
+});
+
+test("a partial bend left at 0 degrees is still just a crease mark", () => {
+  // The edge-to-edge rule is about FOLDING. A short bend line nobody folds keeps drawing as a
+  // guide over the flat plate, as it did before.
+  const dxfData = bentPlate([{ x: 60, y0: 40, y1: 60 }]);
+  const meshData = buildDxfPreviewMeshData(dxfData, 2, [{ direction: "up", angleDeg: 0 }]);
+  assert.ok(meshData.triangle_count > 0);
+  assert.equal(meshData.guide_line_segments.length, 6);
+});
+
+test("the vertical-bend requirement names the bend and its endpoints", () => {
+  const dxfData = {
+    geometry: {
+      lines: [
+        ...rectangle(0, 0, 100, 60),
+        { kind: "bend", start: [10, 30], end: [90, 30] }
+      ],
+      arcs: [],
+      circles: []
+    },
+    defaultThicknessMm: 2
+  };
+  assert.throws(
+    () => buildDxfPreviewMeshData(dxfData, 2, [UP_90]),
+    (error) => {
+      assert.match(error.message, /requires vertical bend lines/u);
+      assert.match(error.message, /bend 1 runs from \(10\.000, 30\.000\) to \(90\.000, 30\.000\)/u);
+      return true;
+    }
+  );
+});

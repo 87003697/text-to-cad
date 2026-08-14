@@ -18,6 +18,11 @@ const MAX_ARC_SEGMENTS = 160;
 const BEND_LINE_ELEVATION_MM = 0.04;
 const GEOMETRY_EPSILON_MM = 1e-3;
 const BEND_LINE_AXIS_EPSILON_MM = 1e-2;
+// How far short of the material's edge a fold line may stop. Generous next to the axis epsilon
+// on purpose: a bend line is authored to a rounded coordinate while the contour it has to reach
+// may end on a fillet tangent, so a few hundredths of a millimetre is authoring noise, not a
+// bend line that fails to separate the part.
+const BEND_LINE_FULL_SPAN_TOLERANCE_MM = 0.05;
 const MIN_BEND_BRIDGE_SEGMENTS = 6;
 const MAX_BEND_BRIDGE_SEGMENTS = 48;
 const VISUAL_BEND_INSIDE_RADIUS_RATIO = 0.6;
@@ -409,21 +414,77 @@ export function extractOrderedDxfBendLines(dxfData) {
   return sortBendLines(bendLines);
 }
 
+/** The span of MATERIAL the outer contour covers at ``boundaryX``, or null off the part.
+ *
+ * Measured from where the contour CROSSES that X rather than from segments lying on it, so it
+ * answers the question for any X through the part and not just at a straight edge. */
+function outerMaterialSpanAtX(outerLoop, boundaryX) {
+  const crossings = [];
+  for (let index = 0; index < outerLoop.length; index += 1) {
+    const start = outerLoop[index];
+    const end = outerLoop[(index + 1) % outerLoop.length];
+    const spansX = (start[0] - boundaryX) * (end[0] - boundaryX) <= 0;
+    if (!spansX) {
+      continue;
+    }
+    if (approxEqual(start[0], end[0], GEOMETRY_EPSILON_MM)) {
+      crossings.push(start[1], end[1]);
+      continue;
+    }
+    const t = (boundaryX - start[0]) / (end[0] - start[0]);
+    crossings.push(start[1] + (t * (end[1] - start[1])));
+  }
+  if (!crossings.length) {
+    return null;
+  }
+  return { minY: Math.min(...crossings), maxY: Math.max(...crossings) };
+}
+
 /** Only bends that are actually FOLDING need the banded strip decomposition, and that
- *  decomposition is X-slab based — so the vertical-line requirement applies to active
- *  bends, never to a flat pattern whose angled bend lines are just crease marks. (The
- *  viewer's boxed fold handles any orientation; it catches this error and falls back.) */
-function validateActiveBendLines(bendLines, bendSettings) {
+ *  decomposition is X-slab based — so these requirements apply to active bends, never to a
+ *  flat pattern whose angled bend lines are just crease marks. (The viewer's boxed fold
+ *  handles any orientation; it catches this error and falls back.)
+ *
+ *  Both requirements exist because the decomposition folds a whole X-slab about the bend's
+ *  midpoint X. A bend line that does not run edge to edge therefore rotates material it does
+ *  not separate: a fold line spanning the top 20mm of a 60mm plate stood the ENTIRE right half
+ *  up, and a part with several such bends came out twisted into spikes. That is also not a
+ *  physical fold -- a brake needs the line to reach both edges, which is what relief cuts at
+ *  the bend ends are for -- so this is refused rather than approximated, and the message says
+ *  which bend and by how much rather than leaving a mangled preview to be interpreted. */
+function validateActiveBendLines(bendLines, bendSettings, outerLoop = null) {
   bendLines.forEach((bendLine, index) => {
     const angleDeg = normalizeDxfBendAngleDeg(bendSettings?.[index]?.angleDeg, 0);
     if (angleDeg === 0) {
       return;
     }
+    const label = `bend ${index + 1}`;
     if (Math.abs(bendLine.start[0] - bendLine.end[0]) > BEND_LINE_AXIS_EPSILON_MM) {
-      throw new Error("DXF 3D bend preview currently requires vertical bend lines");
+      throw new Error(
+        `DXF 3D bend preview currently requires vertical bend lines: ${label} runs from `
+        + `(${bendLine.start[0].toFixed(3)}, ${bendLine.start[1].toFixed(3)}) to `
+        + `(${bendLine.end[0].toFixed(3)}, ${bendLine.end[1].toFixed(3)})`
+      );
     }
     if (Math.abs(bendLine.end[1] - bendLine.start[1]) <= GEOMETRY_EPSILON_MM) {
       throw new Error("DXF bend line length is too small for preview bending");
+    }
+    if (!Array.isArray(outerLoop) || outerLoop.length < 3) {
+      return;
+    }
+    const span = outerMaterialSpanAtX(outerLoop, bendLine.x);
+    if (!span) {
+      return;
+    }
+    const shortBy = Math.max(bendLine.yMin - span.minY, span.maxY - bendLine.yMax);
+    if (shortBy > BEND_LINE_FULL_SPAN_TOLERANCE_MM) {
+      throw new Error(
+        `DXF 3D bend preview requires a fold line that runs edge to edge: ${label} at `
+        + `x=${bendLine.x.toFixed(3)} spans y ${bendLine.yMin.toFixed(3)}..${bendLine.yMax.toFixed(3)}, `
+        + `but the material there spans y ${span.minY.toFixed(3)}..${span.maxY.toFixed(3)} `
+        + `(${shortBy.toFixed(3)} mm short). Extend the bend line, or add relief cuts at its ends `
+        + "so the fold really does separate the two faces."
+      );
     }
   });
 }
@@ -1297,7 +1358,7 @@ export function buildDxfPreviewMeshData(dxfData, thicknessMm, bendSettings = nul
     toFiniteNumber(dxfData?.defaultThicknessMm, DEFAULT_DXF_PREVIEW_THICKNESS_MM)
   );
   const normalizedBendSettings = normalizeDxfBendSettings(dxfData, bendSettings);
-  validateActiveBendLines(bendLines, normalizedBendSettings);
+  validateActiveBendLines(bendLines, normalizedBendSettings, outerLoop);
   const halfThickness = normalizedThicknessMm / 2;
   let strips;
   let bendTransforms;
