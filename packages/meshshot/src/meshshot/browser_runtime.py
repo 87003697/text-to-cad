@@ -89,6 +89,43 @@ PRIVATE_VERSION_EXECUTION_CHECKS = frozenset(
         "private_version_probe_timeout",
     }
 )
+BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE = {
+    "nested_attachment_close": frozenset(
+        {"browser_session_close", "completion_send", "shutdown_receive", "transport_close"}
+    ),
+    "private_browser_process_group": frozenset(
+        {
+            "term_signal", "leader_term_wait", "term_group_empty",
+            "kill_signal", "leader_kill_wait", "kill_group_empty",
+        }
+    ),
+    "private_browser_profile": frozenset(
+        {
+            "authority_validation", "quarantine_create", "quarantine_move",
+            "recursive_remove", "authority_close", "absence",
+        }
+    ),
+    "private_browser_pinned_image": frozenset(
+        {"executable_descriptor_close", "detached_mount_release"}
+    ),
+    "private_supervisor_state": frozenset(
+        {
+            "client_transport_close", "listener_close", "socket_unlink",
+            "root_identity", "authority_record_unlink", "client_record_unlink",
+            "root_descriptor_close",
+        }
+    ),
+    "outer_supervisor_wait": frozenset({"supervisor_wait", "supervisor_exit_status"}),
+    "outer_supervisor_process_group": frozenset(
+        {
+            "term_signal", "leader_term_wait", "term_group_empty",
+            "kill_signal", "leader_kill_wait", "kill_group_empty",
+        }
+    ),
+    "outer_supervisor_private_state": frozenset(
+        {"socket_absence", "authority_absence", "client_absence"}
+    ),
+}
 
 
 def _private_version_execution_error(check: str) -> BrowserRuntimeError:
@@ -228,6 +265,8 @@ class BrowserRuntimeError(RuntimeError):
         browser_identity_substage: str | None = None,
         browser_identity_phase: str | None = None,
         browser_identity_check: str | None = None,
+        browser_cleanup_substage: str | None = None,
+        browser_cleanup_check: str | None = None,
     ) -> None:
         super().__init__(operation)
         self.operation = operation
@@ -265,6 +304,20 @@ class BrowserRuntimeError(RuntimeError):
                     and browser_identity_check in PRIVATE_VERSION_EXECUTION_CHECKS
                 )
             )
+            else None
+        )
+        cleanup_checks = BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE.get(
+            browser_cleanup_substage,
+            frozenset(),
+        )
+        self.browser_cleanup_substage = (
+            browser_cleanup_substage
+            if operation == "browser_cleanup" and browser_cleanup_check in cleanup_checks
+            else None
+        )
+        self.browser_cleanup_check = (
+            browser_cleanup_check
+            if self.browser_cleanup_substage is not None
             else None
         )
 
@@ -3441,6 +3494,16 @@ class PrelaunchedCdpRuntime:
 
     def _cleanup(self) -> None:
         failure = False
+        cleanup_substage: str | None = None
+        cleanup_check: str | None = None
+
+        def record_cleanup(check: str, *, retained: bool = False) -> None:
+            nonlocal failure, cleanup_substage, cleanup_check
+            failure = True
+            if cleanup_check is None or retained:
+                cleanup_substage = "private_browser_process_group"
+                cleanup_check = check
+
         process = self._process
         process_group = self._process_group
         if process_group is not None:
@@ -3449,7 +3512,7 @@ class PrelaunchedCdpRuntime:
             except ProcessLookupError:
                 pass
             except OSError:
-                failure = True
+                record_cleanup("term_signal")
         leader_timed_out = False
         if process is not None:
             try:
@@ -3457,7 +3520,7 @@ class PrelaunchedCdpRuntime:
             except subprocess.TimeoutExpired:
                 leader_timed_out = True
             except OSError:
-                failure = True
+                record_cleanup("leader_term_wait")
         if process_group is not None:
             group_empty = False if leader_timed_out else _wait_group_empty(
                 process_group,
@@ -3469,20 +3532,20 @@ class PrelaunchedCdpRuntime:
                 except ProcessLookupError:
                     pass
                 except (BrowserRuntimeError, OSError):
-                    failure = True
+                    record_cleanup("kill_signal")
                 if process is not None and leader_timed_out:
                     try:
                         process.wait(
                             timeout=float(self._profile["cleanup_kill_ms"]) / 1000
                         )
                     except (OSError, subprocess.TimeoutExpired):
-                        failure = True
+                        record_cleanup("leader_kill_wait")
                 group_empty = _wait_group_empty(
                     process_group,
                     float(self._profile["cleanup_kill_ms"]) / 1000,
                 )
             if not group_empty:
-                failure = True
+                record_cleanup("kill_group_empty", retained=True)
         if self._profile_dir is not None:
             if getattr(self, "_profile_cleanup_forbidden", False):
                 failure = True
@@ -3566,7 +3629,11 @@ class PrelaunchedCdpRuntime:
             except BrowserRuntimeError:
                 failure = True
         if failure:
-            raise BrowserRuntimeError("browser_cleanup")
+            raise BrowserRuntimeError(
+                "browser_cleanup",
+                browser_cleanup_substage=cleanup_substage,
+                browser_cleanup_check=cleanup_check,
+            )
 
     def _verify_connected_browser(self, browser: Any) -> None:
         _verify_connected_browser_version(

@@ -576,6 +576,52 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             )["operation"],
         )
 
+    def test_run_staged_binds_exact_cleanup_diagnostic(self) -> None:
+        workspace = self.repo / "outputs/group/typed-cleanup-exp"
+        workspace.mkdir(parents=True)
+        with mock.patch.object(
+            provider_free_scenarios,
+            "_materialize_outer_browser_stage",
+            side_effect=provider_free_scenarios.ScenarioError(
+                "closed cleanup failure",
+                operation="preview_browser_cleanup",
+                browser_cleanup_substage="private_browser_process_group",
+                browser_cleanup_check="kill_group_empty",
+            ),
+        ):
+            status = provider_free_scenarios.main(
+                [
+                    "run-staged",
+                    "issue15-runtime-authority",
+                    "--workspace",
+                    os.fspath(workspace),
+                ]
+            )
+
+        self.assertEqual(1, status)
+        diagnostic_path = workspace / protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH
+        diagnostic_bytes = diagnostic_path.read_bytes()
+        self.assertEqual(
+            {
+                "schema": "meshshot.browser-cleanup-diagnostic/1",
+                "substage": "private_browser_process_group",
+                "check": "kill_group_empty",
+            },
+            json.loads(diagnostic_bytes),
+        )
+        failure = json.loads(
+            (workspace / protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            {
+                "path": protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+                "sha256": hashlib.sha256(diagnostic_bytes).hexdigest(),
+            },
+            failure["browser_cleanup_diagnostic"],
+        )
+
     def test_fixed_supervisor_process_has_no_ambient_descriptors_and_reaps(self) -> None:
         endpoint = self.repo / "authority.sock"
         process = mock.MagicMock()

@@ -36,6 +36,8 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH,
     PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA,
+    PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+    PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA,
     PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES,
     PROVIDER_FREE_BROWSER_RUNTIME_MODE,
     PROVIDER_FREE_BROWSER_SOURCE_REVISION,
@@ -55,6 +57,7 @@ from scripts.pilot.cvm_job.protocol import (
     PROVIDER_FREE_SCENARIO_FAILURE_STAGES,
     provider_free_scenario_failure_operation_allowed,
     provider_free_browser_identity_checks,
+    provider_free_browser_cleanup_pair_allowed,
     provider_free_browser_runtime_allowed,
 )
 
@@ -302,6 +305,8 @@ class ScenarioError(RuntimeError):
         browser_identity_substage: str | None = None,
         browser_identity_phase: str | None = None,
         browser_identity_check: str | None = None,
+        browser_cleanup_substage: str | None = None,
+        browser_cleanup_check: str | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = stage
@@ -330,6 +335,19 @@ class ScenarioError(RuntimeError):
                     self.browser_identity_phase
                 )
             )
+            else None
+        )
+        self.browser_cleanup_substage = (
+            browser_cleanup_substage
+            if provider_free_browser_cleanup_pair_allowed(
+                browser_cleanup_substage,
+                browser_cleanup_check,
+            )
+            else None
+        )
+        self.browser_cleanup_check = (
+            browser_cleanup_check
+            if self.browser_cleanup_substage is not None
             else None
         )
 
@@ -366,6 +384,16 @@ def _run_stage(
             ),
             browser_identity_check=(
                 exc.browser_identity_check
+                if isinstance(exc, ScenarioError)
+                else None
+            ),
+            browser_cleanup_substage=(
+                exc.browser_cleanup_substage
+                if isinstance(exc, ScenarioError)
+                else None
+            ),
+            browser_cleanup_check=(
+                exc.browser_cleanup_check
                 if isinstance(exc, ScenarioError)
                 else None
             ),
@@ -423,6 +451,16 @@ def _run_failure_operation(
             ),
             browser_identity_check=(
                 exc.browser_identity_check
+                if isinstance(exc, ScenarioError)
+                else None
+            ),
+            browser_cleanup_substage=(
+                exc.browser_cleanup_substage
+                if isinstance(exc, ScenarioError)
+                else None
+            ),
+            browser_cleanup_check=(
+                exc.browser_cleanup_check
                 if isinstance(exc, ScenarioError)
                 else None
             ),
@@ -1124,6 +1162,26 @@ def _closed_supervisor_failure(value: Any) -> ScenarioError:
                 browser_identity_substage=substage,
                 browser_identity_phase=phase,
                 browser_identity_check=check,
+            )
+    if operation == "browser_cleanup":
+        substage = value.get("browser_cleanup_substage")
+        check = value.get("browser_cleanup_check")
+        if (
+            value.get("schema") == _BROWSER_SUPERVISOR_RESULT_SCHEMA
+            and set(value)
+            == {
+                "schema",
+                "operation",
+                "browser_cleanup_substage",
+                "browser_cleanup_check",
+            }
+            and provider_free_browser_cleanup_pair_allowed(substage, check)
+        ):
+            return ScenarioError(
+                "provider-free browser supervisor cleanup failed",
+                classification="preview_browser_cleanup_failed",
+                browser_cleanup_substage=substage,
+                browser_cleanup_check=check,
             )
     if (
         value.get("schema") == _BROWSER_SUPERVISOR_RESULT_SCHEMA
@@ -2137,6 +2195,8 @@ def _run_voxblame_preview(
                 browser_identity_substage=exc.browser_identity_substage,
                 browser_identity_phase=exc.browser_identity_phase,
                 browser_identity_check=exc.browser_identity_check,
+                browser_cleanup_substage=exc.browser_cleanup_substage,
+                browser_cleanup_check=exc.browser_cleanup_check,
             ) from exc
         if is_linux:
             try:
@@ -2518,6 +2578,28 @@ def main(argv: list[str] | None = None) -> int:
                         failure["browser_identity_check"] = (
                             exc.browser_identity_check
                         )
+            if (
+                exc.operation == "preview_browser_cleanup"
+                and provider_free_browser_cleanup_pair_allowed(
+                    exc.browser_cleanup_substage,
+                    exc.browser_cleanup_check,
+                )
+            ):
+                diagnostic = {
+                    "schema": PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA,
+                    "substage": exc.browser_cleanup_substage,
+                    "check": exc.browser_cleanup_check,
+                }
+                diagnostic_path = (
+                    workspace / PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH
+                )
+                _write_json(diagnostic_path, diagnostic)
+                failure["browser_cleanup_diagnostic"] = {
+                    "path": PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH,
+                    "sha256": hashlib.sha256(
+                        diagnostic_path.read_bytes()
+                    ).hexdigest(),
+                }
             _write_json(
                 workspace / PROVIDER_FREE_SCENARIO_FAILURE_PATH,
                 failure,

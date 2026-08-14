@@ -242,6 +242,10 @@ def _closed_result(exc: BrowserRuntimeError) -> dict[str, str]:
         value["browser_identity_phase"] = exc.browser_identity_phase
     if exc.browser_identity_check is not None:
         value["browser_identity_check"] = exc.browser_identity_check
+    if exc.browser_cleanup_substage is not None:
+        value["browser_cleanup_substage"] = exc.browser_cleanup_substage
+    if exc.browser_cleanup_check is not None:
+        value["browser_cleanup_check"] = exc.browser_cleanup_check
     return value
 
 

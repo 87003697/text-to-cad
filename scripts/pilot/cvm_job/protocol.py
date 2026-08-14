@@ -57,6 +57,48 @@ PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_PATH = (
 PROVIDER_FREE_BROWSER_IDENTITY_DIAGNOSTIC_SCHEMA = (
     "cvm.provider-free-browser-identity-diagnostic/6"
 )
+PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH = (
+    "run/browser-cleanup-diagnostic.json"
+)
+PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA = (
+    "meshshot.browser-cleanup-diagnostic/1"
+)
+PROVIDER_FREE_BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE = {
+    "nested_attachment_close": frozenset(
+        {"browser_session_close", "completion_send", "shutdown_receive", "transport_close"}
+    ),
+    "private_browser_process_group": frozenset(
+        {"term_signal", "leader_term_wait", "term_group_empty", "kill_signal", "leader_kill_wait", "kill_group_empty"}
+    ),
+    "private_browser_profile": frozenset(
+        {"authority_validation", "quarantine_create", "quarantine_move", "recursive_remove", "authority_close", "absence"}
+    ),
+    "private_browser_pinned_image": frozenset(
+        {"executable_descriptor_close", "detached_mount_release"}
+    ),
+    "private_supervisor_state": frozenset(
+        {"client_transport_close", "listener_close", "socket_unlink", "root_identity", "authority_record_unlink", "client_record_unlink", "root_descriptor_close"}
+    ),
+    "outer_supervisor_wait": frozenset({"supervisor_wait", "supervisor_exit_status"}),
+    "outer_supervisor_process_group": frozenset(
+        {"term_signal", "leader_term_wait", "term_group_empty", "kill_signal", "leader_kill_wait", "kill_group_empty"}
+    ),
+    "outer_supervisor_private_state": frozenset(
+        {"socket_absence", "authority_absence", "client_absence"}
+    ),
+}
+
+
+def provider_free_browser_cleanup_pair_allowed(substage: object, check: object) -> bool:
+    return (
+        isinstance(substage, str)
+        and isinstance(check, str)
+        and check
+        in PROVIDER_FREE_BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE.get(
+            substage,
+            frozenset(),
+        )
+    )
 PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES = frozenset(
     {
         "private_snapshot_launch_image_identity",
