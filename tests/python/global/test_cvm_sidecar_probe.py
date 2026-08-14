@@ -110,6 +110,9 @@ def write_portable_archive_docker(path: Path) -> None:
             elif sys.argv[1:3] == ["image", "save"]:
                 output = pathlib.Path(sys.argv[4])
                 assert sys.argv[5:] == [sidecar, client]
+                if os.environ.get("FAKE_MANIFEST_VARIANT") == "opaque":
+                    output.write_bytes(b"opaque fixed docker-save output" + bytes([10]))
+                    raise SystemExit(0)
                 sidecar_path, client_path = list(blobs)
                 variant = os.environ.get("FAKE_MANIFEST_VARIANT", "valid")
                 configs = [sidecar_path, client_path]
@@ -454,40 +457,158 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
         )
         self.assertEqual(receipts[0]["images"], receipts[1]["images"])
 
-    def test_prepare_rejects_unbound_archive_manifest_without_state(self) -> None:
-        for variant in ("mismatch", "duplicate", "missing", "traversal"):
-            with self.subTest(variant=variant), tempfile.TemporaryDirectory(
-                prefix=f"cvm-sidecar-manifest-{variant}-"
-            ) as root_text:
-                root = Path(root_text)
-                repo = root / "repo"
-                wrapper = copy_cli(repo)
-                fake_bin = root / "bin"
-                fake_bin.mkdir()
-                write_portable_archive_docker(fake_bin / "docker")
-                env = cli_env(fake_bin)
-                env["FAKE_MANIFEST_VARIANT"] = variant
-                result = subprocess.run(
-                    [
-                        wrapper,
-                        "prepare",
-                        "--source-revision",
-                        SOURCE_REVISION,
-                        "--sidecar-image",
-                        PORTABLE_SIDECAR_ID,
-                        "--client-image",
-                        PORTABLE_CLIENT_ID,
-                    ],
-                    cwd=repo,
-                    env=env,
-                    check=False,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
+    def test_prepare_attests_fixed_docker_save_as_opaque_bytes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-opaque-save-") as root_text:
+            root = Path(root_text)
+            repo = root / "repo"
+            wrapper = copy_cli(repo)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            write_portable_archive_docker(fake_bin / "docker")
+            env = cli_env(fake_bin)
+            env["FAKE_MANIFEST_VARIANT"] = "opaque"
 
-                self.assertNotEqual(result.returncode, 0)
-                self.assertFalse((repo / ".cvm-sidecar-probes").exists())
+            result = subprocess.run(
+                [
+                    wrapper,
+                    "prepare",
+                    "--source-revision",
+                    SOURCE_REVISION,
+                    "--sidecar-image",
+                    SIDECAR_ID,
+                    "--client-image",
+                    CLIENT_ID,
+                ],
+                cwd=repo,
+                env=env,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            receipt = json.loads(result.stdout)
+            archive = repo / receipt["archive"]["relativePath"]
+            self.assertEqual(archive.read_bytes(), b"opaque fixed docker-save output\n")
+            self.assertEqual(
+                receipt["archive"]["sha256"],
+                "05099491da3e4de94093bab6672a0cdeabbb2744089dba3e6a2b6201cb5447ff",
+            )
+
+    def test_prepare_cleanup_failure_is_bounded_and_dominates(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-prepare-cleanup-") as root_text:
+            root = Path(root_text)
+            repo = root / "repo"
+            wrapper = copy_cli(repo)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            docker = fake_bin / "docker"
+            docker.write_text(
+                textwrap.dedent(
+                    f"""\
+                    #!/usr/bin/env python3
+                    import json, pathlib, sys
+                    if sys.argv[1:3] == ["image", "inspect"]:
+                        image = sys.argv[3]
+                        print(json.dumps([{{"Id": image, "Architecture": "amd64", "Os": "linux", "Config": {{"Labels": {{"org.opencontainers.image.revision": {SOURCE_REVISION!r}}}}}}}]))
+                    elif sys.argv[1:3] == ["image", "save"]:
+                        pathlib.Path(sys.argv[4]).mkdir()
+                        raise SystemExit(7)
+                    else:
+                        raise SystemExit("unexpected fixed docker operation")
+                    """
+                ),
+                encoding="utf-8",
+            )
+            docker.chmod(0o755)
+
+            result = subprocess.run(
+                [
+                    wrapper,
+                    "prepare",
+                    "--source-revision",
+                    SOURCE_REVISION,
+                    "--sidecar-image",
+                    SIDECAR_ID,
+                    "--client-image",
+                    CLIENT_ID,
+                ],
+                cwd=repo,
+                env=cli_env(fake_bin),
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertEqual(
+                result.stderr,
+                "cvm-sidecar-probe: prepare cleanup could not prove absence\n",
+            )
+            self.assertNotIn(root_text, result.stderr)
+
+    def test_provision_rejects_mutated_local_archive_before_transfer(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-local-tamper-") as root_text:
+            root = Path(root_text)
+            repo = root / "repo"
+            wrapper = copy_cli(repo)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            write_image_docker(fake_bin / "docker")
+            marker = root / "transport-called"
+            for tool in ("ssh", "rsync"):
+                boundary = fake_bin / tool
+                boundary.write_text(
+                    '#!/bin/sh\n: > "$FAKE_TRANSPORT_MARKER"\nexit 99\n',
+                    encoding="utf-8",
+                )
+                boundary.chmod(0o755)
+            env = cli_env(fake_bin)
+            env["FAKE_TRANSPORT_MARKER"] = os.fspath(marker)
+            prepared = subprocess.run(
+                [
+                    wrapper,
+                    "prepare",
+                    "--source-revision",
+                    SOURCE_REVISION,
+                    "--sidecar-image",
+                    SIDECAR_ID,
+                    "--client-image",
+                    CLIENT_ID,
+                ],
+                cwd=repo,
+                env=env,
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+            )
+            receipt = json.loads(prepared.stdout)
+            archive = repo / receipt["archive"]["relativePath"]
+            archive.write_bytes(archive.read_bytes() + b"tampered")
+
+            result = subprocess.run(
+                [wrapper, "provision", receipt["handle"]],
+                cwd=repo,
+                env=env,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("archive does not match", result.stderr)
+            self.assertFalse(marker.exists())
+            self.assertFalse(
+                (
+                    repo
+                    / ".cvm-sidecar-probes"
+                    / receipt["handle"]
+                    / "provision-attempt.json"
+                ).exists()
+            )
 
     def test_external_command_timeout_is_closed_and_classified(self) -> None:
         with mock.patch.object(
