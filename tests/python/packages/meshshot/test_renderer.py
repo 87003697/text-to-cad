@@ -411,6 +411,36 @@ class ResidualRendererTests(unittest.TestCase):
             calls,
         )
 
+    def test_supervisor_entry_owns_private_mount_namespace_before_run(self) -> None:
+        from meshshot import browser_supervisor
+
+        calls: list[str] = []
+        with (
+            mock.patch.object(
+                browser_supervisor,
+                "_restore_inherited_runtime_signals",
+                side_effect=lambda: calls.append("signals-restored"),
+            ),
+            mock.patch.object(
+                browser_supervisor,
+                "_enter_private_browser_mount_namespace",
+                side_effect=lambda: calls.append("namespace-owned"),
+                create=True,
+            ) as enter_namespace,
+            mock.patch.object(
+                browser_supervisor,
+                "run",
+                side_effect=lambda: calls.append("run"),
+            ),
+        ):
+            self.assertEqual(0, browser_supervisor.main())
+
+        enter_namespace.assert_called_once_with()
+        self.assertEqual(
+            ["signals-restored", "namespace-owned", "run"],
+            calls,
+        )
+
     def test_owned_socket_cleanup_rejects_replacement_without_deleting_it(self) -> None:
         from meshshot import browser_supervisor
         from meshshot.browser_runtime import BrowserRuntimeError
@@ -4086,6 +4116,58 @@ class ResidualRendererTests(unittest.TestCase):
 
             self.assertEqual("browser_cleanup", raised.exception.operation)
             self.assertTrue(replacement.is_dir())
+
+    def test_namespace_owned_image_relinquish_never_calls_runtime_unmount(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root_info = root.stat()
+            underlying_fd = os.open(
+                root,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            mounted_fd = os.open(
+                root,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.launch_root = root
+            pinned.launch_path = root / "attested/chrome"
+            pinned._detached_filesystem_mounted = True
+            pinned._detached_mount_parent_fd = None
+            pinned._detached_mount_fd = mounted_fd
+            pinned._detached_underlying_fd = underlying_fd
+            pinned._detached_mount_name = root.name
+            pinned._detached_underlying_identity = (
+                root_info.st_dev,
+                root_info.st_ino,
+            )
+            pinned._detached_mounted_identity = (
+                root_info.st_dev,
+                root_info.st_ino,
+            )
+
+            with mock.patch.object(
+                pinned,
+                "_unmount_private_filesystem",
+                side_effect=AssertionError("runtime umount is forbidden"),
+            ) as unmount:
+                pinned._remove_detached_source()
+
+            unmount.assert_not_called()
+            self.assertIsNone(pinned.launch_root)
+            self.assertEqual(
+                browser_runtime._BROWSER_MOUNT_EXECUTABLE,
+                pinned.launch_path,
+            )
+            self.assertFalse(pinned._detached_filesystem_mounted)
+            for descriptor in (mounted_fd, underlying_fd):
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
 
     def test_detached_cleanup_authority_loss_never_falls_back_to_path_removal(
         self,
