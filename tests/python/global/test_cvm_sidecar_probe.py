@@ -1515,6 +1515,164 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     json.loads((state / "provision.json").read_text()), receipt
                 )
 
+    def test_remote_provision_splits_portable_image_attestation_checks(self) -> None:
+        inspect_format = (
+            '[{{json .Id}},{{json .Os}},{{json .Architecture}},'
+            '{{json (index .Config.Labels "org.opencontainers.image.revision")}}]'
+        )
+        cases = (
+            ("inspect-access", "inspect-access"),
+            ("inspect-format", "inspect-format"),
+            ("id", "id"),
+            ("platform", "platform"),
+            ("revision", "revision"),
+            ("receipt", "receipt"),
+        )
+        for role, image_id in (("sidecar", SIDECAR_ID), ("client", CLIENT_ID)):
+            for variant, check_suffix in cases:
+                with self.subTest(role=role, variant=variant), tempfile.TemporaryDirectory(
+                    prefix=f"cvm-sidecar-{role}-{variant}-"
+                ) as root_text:
+                    state_root = Path(root_text) / "state"
+                    handle = "cvmsp-" + "6" * 24
+                    owner = "a" * 32
+                    workflow = {"module": "1" * 64, "wrapper": "2" * 64}
+                    archive_bytes = b"x"
+                    archive_sha = hashlib.sha256(archive_bytes).hexdigest()
+                    state = state_root / handle
+                    incoming = state / "incoming"
+                    incoming.mkdir(parents=True)
+                    images = [
+                        {
+                            "role": "sidecar",
+                            "id": SIDECAR_ID,
+                            "platform": "linux/amd64",
+                            "configSha256": SIDECAR_ID.removeprefix("sha256:"),
+                            "sourceRevision": SOURCE_REVISION,
+                        },
+                        {
+                            "role": "client",
+                            "id": CLIENT_ID,
+                            "platform": "linux/amd64",
+                            "configSha256": CLIENT_ID.removeprefix("sha256:"),
+                            "sourceRevision": SOURCE_REVISION,
+                        },
+                    ]
+                    if variant == "receipt":
+                        target = 0 if role == "sidecar" else 1
+                        images[target]["configSha256"] = "f" * 64
+                    (state / "provision-attempt.json").write_text(
+                        json.dumps(
+                            {
+                                "schema": "cvm-sidecar.remote-provision-attempt/1",
+                                "handle": handle,
+                                "ownerNonce": owner,
+                                "workflowFilesVerified": workflow,
+                                "freeBytes": 4 * 1024 * 1024 * 1024,
+                                "archive": {"bytes": 1, "sha256": archive_sha},
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    (incoming / "prepare.json").write_text(
+                        json.dumps(
+                            {
+                                "schema": "cvm-sidecar.prepare-receipt/1",
+                                "handle": handle,
+                                "sourceRevision": SOURCE_REVISION,
+                                "imageSourceRevision": SOURCE_REVISION,
+                                "workflowSourceRevision": "b" * 40,
+                                "workflowFiles": workflow,
+                                "archive": {"bytes": 1, "sha256": archive_sha},
+                                "images": images,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    (incoming / "images.tar").write_bytes(archive_bytes)
+                    inspect_calls: list[list[str]] = []
+
+                    def fixed_run(
+                        argv: object, **kwargs: object
+                    ) -> subprocess.CompletedProcess[str]:
+                        del kwargs
+                        arguments = list(argv)
+                        if arguments[1:3] == ["image", "load"]:
+                            return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
+                        if arguments[1:3] != ["image", "inspect"]:
+                            raise AssertionError(f"unexpected command: {arguments}")
+                        inspect_calls.append(arguments)
+                        inspected_id = arguments[-1]
+                        inspected_role = (
+                            "sidecar" if inspected_id == SIDECAR_ID else "client"
+                        )
+                        if inspected_role == role and variant == "inspect-access":
+                            raise cvm_sidecar_probe.ProbeError("opaque inspect failure")
+                        if inspected_role == role and variant == "inspect-format":
+                            output: object = [
+                                {
+                                    "Id": inspected_id,
+                                    "Os": "linux",
+                                    "Architecture": "amd64",
+                                    "Config": {
+                                        "Labels": {
+                                            "org.opencontainers.image.revision": SOURCE_REVISION
+                                        },
+                                        "EngineVersionSpecific": None,
+                                    },
+                                }
+                            ]
+                        else:
+                            output = [
+                                "sha256:" + "9" * 64
+                                if inspected_role == role and variant == "id"
+                                else inspected_id,
+                                "windows"
+                                if inspected_role == role and variant == "platform"
+                                else "linux",
+                                "amd64",
+                                "b" * 40
+                                if inspected_role == role and variant == "revision"
+                                else SOURCE_REVISION,
+                            ]
+                        return subprocess.CompletedProcess(
+                            arguments, 0, json.dumps(output) + "\n", ""
+                        )
+
+                    enough = type(
+                        "Usage", (), {"free": 4 * 1024 * 1024 * 1024}
+                    )()
+                    with (
+                        mock.patch.object(
+                            cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root
+                        ),
+                        mock.patch.object(
+                            cvm_sidecar_probe,
+                            "_workflow_file_hashes",
+                            return_value=workflow,
+                        ),
+                        mock.patch.object(
+                            cvm_sidecar_probe.shutil,
+                            "disk_usage",
+                            return_value=enough,
+                        ),
+                        mock.patch.object(
+                            cvm_sidecar_probe, "_run", side_effect=fixed_run
+                        ),
+                    ):
+                        receipt = cvm_sidecar_probe.remote_provision(handle, owner)
+
+                    self.assertEqual(receipt["status"], "failed")
+                    self.assertEqual(
+                        receipt["errorCheck"], f"{role}-{check_suffix}"
+                    )
+                    self.assertTrue(inspect_calls or variant == "receipt")
+                    for arguments in inspect_calls:
+                        self.assertEqual(
+                            arguments[1:],
+                            ["image", "inspect", "--format", inspect_format, arguments[-1]],
+                        )
+
     def test_remote_provision_cleanup_failure_dominates_hash_failure(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-cleanup-dominates-") as root_text:
             root = Path(root_text)
