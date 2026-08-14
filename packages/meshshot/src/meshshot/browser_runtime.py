@@ -413,6 +413,13 @@ class _LiveBrowserLaunch:
     _proof: object
 
 
+def _close_browser_descriptor(descriptor: int) -> None:
+    try:
+        os.close(descriptor)
+    except OSError as exc:
+        raise BrowserRuntimeError("browser_cleanup") from exc
+
+
 def default_executable(chromium_executable: str) -> _SelectedExecutable:
     """Resolve the exact headless-shell sibling installed by Playwright."""
 
@@ -681,7 +688,28 @@ def _attest_attachment(executable: Path, profile: dict[str, Any]) -> dict[str, s
     }
 
 
-def _private_directory(prefix: str) -> Path:
+@dataclass
+class _OwnedPrivateDirectory:
+    path: Path
+    parent_fd: int | None
+    directory_fd: int | None
+    identity: tuple[int, int]
+
+    def close_authority(self) -> None:
+        cleanup_failed = False
+        for attribute in ("directory_fd", "parent_fd"):
+            descriptor = getattr(self, attribute)
+            setattr(self, attribute, None)
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    cleanup_failed = True
+        if cleanup_failed:
+            raise BrowserRuntimeError("browser_cleanup")
+
+
+def _private_directory(prefix: str) -> _OwnedPrivateDirectory:
     configured_root = os.environ.get(_MESHSHOT_EXECUTABLE_ROOT_ENV)
     if configured_root is not None:
         if (
@@ -713,36 +741,134 @@ def _private_directory(prefix: str) -> Path:
             )
     else:
         root = Path(tempfile.gettempdir())
-    for _attempt in range(16):
-        path = root / f"{prefix}{secrets.token_hex(16)}"
         try:
-            path.mkdir(mode=0o700)
-        except FileExistsError:
-            continue
+            root_info = root.lstat()
         except OSError as exc:
             raise BrowserRuntimeError(
                 "browser_identity",
                 browser_identity_phase="private_tree_materialization",
             ) from exc
+        if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            )
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    parent_fd: int | None = None
+    try:
+        parent_fd = os.open(root, flags)
+        opened_root = os.fstat(parent_fd)
+        if (opened_root.st_dev, opened_root.st_ino, opened_root.st_mode) != (
+            root_info.st_dev,
+            root_info.st_ino,
+            root_info.st_mode,
+        ):
+            raise OSError("private root identity changed")
+    except OSError as exc:
+        if parent_fd is not None:
+            try:
+                os.close(parent_fd)
+            except OSError as close_error:
+                raise BrowserRuntimeError("browser_cleanup") from close_error
+        raise BrowserRuntimeError(
+            "browser_identity",
+            browser_identity_phase="private_tree_materialization",
+        ) from exc
+    for _attempt in range(16):
+        name = f"{prefix}{secrets.token_hex(16)}"
+        path = root / name
+        directory_fd: int | None = None
+        created_identity: tuple[int, int] | None = None
         try:
-            os.chmod(path, 0o700)
-            info = path.lstat()
+            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
         except OSError as exc:
-            shutil.rmtree(path, ignore_errors=True)
+            try:
+                os.close(parent_fd)
+            except OSError as close_error:
+                raise BrowserRuntimeError("browser_cleanup") from close_error
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            ) from exc
+        try:
+            created = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            created_identity = (created.st_dev, created.st_ino)
+            directory_fd = os.open(name, flags, dir_fd=parent_fd)
+            opened = os.fstat(directory_fd)
+            current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            os.fchmod(directory_fd, 0o700)
+            after = os.fstat(directory_fd)
+        except OSError as exc:
+            cleanup_failed = False
+            if directory_fd is not None:
+                try:
+                    os.close(directory_fd)
+                except OSError:
+                    cleanup_failed = True
+            try:
+                current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                if created_identity is not None and (
+                    current.st_dev,
+                    current.st_ino,
+                ) == created_identity:
+                    os.rmdir(name, dir_fd=parent_fd)
+                else:
+                    cleanup_failed = True
+            except OSError:
+                cleanup_failed = True
+            try:
+                os.close(parent_fd)
+            except OSError:
+                cleanup_failed = True
+            if cleanup_failed:
+                raise BrowserRuntimeError("browser_cleanup") from exc
             raise BrowserRuntimeError(
                 "browser_identity",
                 browser_identity_phase="private_tree_materialization",
             ) from exc
         if (
-            not stat.S_ISDIR(info.st_mode)
-            or stat.S_IMODE(info.st_mode) != 0o700
+            not stat.S_ISDIR(created.st_mode)
+            or stat.S_ISLNK(created.st_mode)
+                or (opened.st_dev, opened.st_ino) != created_identity
+                or (current.st_dev, current.st_ino) != created_identity
+                or (after.st_dev, after.st_ino) != created_identity
+                or opened.st_uid != os.geteuid()
+                or current.st_uid != os.geteuid()
+                or after.st_uid != os.geteuid()
+                or stat.S_IMODE(current.st_mode) != 0o700
+                or stat.S_IMODE(after.st_mode) != 0o700
         ):
-            shutil.rmtree(path, ignore_errors=True)
-            raise BrowserRuntimeError(
-                "browser_identity",
-                browser_identity_phase="private_tree_materialization",
-            )
-        return path
+            cleanup_failed = False
+            try:
+                os.close(directory_fd)
+            except OSError:
+                cleanup_failed = True
+            try:
+                current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) == created_identity:
+                    os.rmdir(name, dir_fd=parent_fd)
+            except OSError:
+                cleanup_failed = True
+            try:
+                os.close(parent_fd)
+            except OSError:
+                cleanup_failed = True
+            if cleanup_failed:
+                raise BrowserRuntimeError("browser_cleanup")
+            raise BrowserRuntimeError("browser_cleanup")
+        return _OwnedPrivateDirectory(
+            path=path,
+            parent_fd=parent_fd,
+            directory_fd=directory_fd,
+            identity=created_identity,
+        )
+    try:
+        os.close(parent_fd)
+    except OSError as exc:
+        raise BrowserRuntimeError("browser_cleanup") from exc
     raise BrowserRuntimeError(
         "browser_identity",
         browser_identity_phase="private_tree_materialization",
@@ -799,6 +925,7 @@ class _PinnedExecutable:
         self._detached_filesystem_mounted = False
         self._detached_mount_parent_fd: int | None = None
         self._detached_mount_fd: int | None = None
+        self._detached_underlying_fd: int | None = None
         self._detached_mount_name: str | None = None
         self._detached_underlying_identity: tuple[int, int] | None = None
         self._detached_mounted_identity: tuple[int, int] | None = None
@@ -912,7 +1039,7 @@ class _PinnedExecutable:
                         ):
                             raise OSError("browser tree changed while hashing")
                     finally:
-                        os.close(child_fd)
+                        _close_browser_descriptor(child_fd)
                     continue
                 if not stat.S_ISREG(child_info.st_mode):
                     raise OSError("browser tree contains an unsupported entry")
@@ -955,7 +1082,7 @@ class _PinnedExecutable:
                     ):
                         raise OSError("browser tree changed while hashing")
                 finally:
-                    os.close(descriptor)
+                    _close_browser_descriptor(descriptor)
                 collision = child_relative.casefold()
                 if collision in folded:
                     raise OSError("browser tree contains a colliding entry")
@@ -998,6 +1125,7 @@ class _PinnedExecutable:
                     os.close(root_fd)
                 except OSError as exc:
                     raise BrowserRuntimeError("browser_cleanup") from exc
+        entries.sort(key=lambda entry: str(entry["path"]))
         raw = json.dumps(
             {"schema": _BROWSER_TREE_MANIFEST_SCHEMA, "entries": entries},
             sort_keys=True,
@@ -1231,7 +1359,7 @@ class _PinnedExecutable:
                         freeze(child_fd)
                         os.fchmod(child_fd, stat.S_IMODE(info.st_mode) & ~0o222)
                     finally:
-                        os.close(child_fd)
+                        _close_browser_descriptor(child_fd)
                 elif stat.S_ISREG(info.st_mode):
                     file_fd = os.open(
                         name,
@@ -1241,7 +1369,7 @@ class _PinnedExecutable:
                     try:
                         os.fchmod(file_fd, stat.S_IMODE(info.st_mode) & ~0o222)
                     finally:
-                        os.close(file_fd)
+                        _close_browser_descriptor(file_fd)
                 else:
                     raise OSError("browser tree contains an unsupported entry")
 
@@ -1298,7 +1426,8 @@ class _PinnedExecutable:
         if self._detached_mount_mode:
             self._materialize_detached_tree(source_info)
             return
-        root = _private_directory("meshshot-image-")
+        owned_root = _private_directory("meshshot-image-")
+        root = owned_root.path
         launch = root / self.path.name
         snapshot_fd: int | None = None
         phase = "private_tree_materialization"
@@ -1352,14 +1481,16 @@ class _PinnedExecutable:
                 or self._sha256_fd(snapshot_fd) != digest.hexdigest()
             ):
                 raise BrowserRuntimeError("browser_identity")
-            self.fd = snapshot_fd
-            snapshot_fd = None
-            self.identity = (
+            identity = (
                 launch_info.st_dev,
                 launch_info.st_ino,
                 launch_info.st_size,
                 stat.S_IMODE(launch_info.st_mode),
             )
+            owned_root.close_authority()
+            self.fd = snapshot_fd
+            snapshot_fd = None
+            self.identity = identity
             self.launch_root = root
             self.launch_path = launch
         except BaseException as exc:
@@ -1378,6 +1509,10 @@ class _PinnedExecutable:
             except OSError:
                 cleanup_failed = True
             if os.path.lexists(root):
+                cleanup_failed = True
+            try:
+                owned_root.close_authority()
+            except BrowserRuntimeError:
                 cleanup_failed = True
             if cleanup_failed:
                 raise BrowserRuntimeError("browser_cleanup") from exc
@@ -1411,13 +1546,14 @@ class _PinnedExecutable:
             )
         source_root = self.path.parents[1]
         relative = self.path.relative_to(source_root)
-        root = _private_directory("meshshot-browser-tree-")
+        owned_root = _private_directory("meshshot-browser-tree-")
+        root = owned_root.path
         target_root = root / "attested"
         target = target_root / relative
         descriptor: int | None = None
         phase = "private_tree_materialization"
         try:
-            self._prepare_detached_mount(root)
+            self._prepare_detached_mount(owned_root)
             if self._tree_manifest_sha256(source_root) != expected:
                 raise BrowserRuntimeError("browser_identity")
             self._snapshot_tree_exact(source_root, target_root)
@@ -1475,29 +1611,38 @@ class _PinnedExecutable:
                 "browser_identity", browser_identity_phase=phase
             ) from exc
 
-    def _prepare_detached_mount(self, root: Path) -> None:
+    def _prepare_detached_mount(self, owned_root: _OwnedPrivateDirectory) -> None:
+        root = owned_root.path
         flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
-        parent_fd: int | None = None
         mounted_fd: int | None = None
         try:
-            parent_fd = os.open(root.parent, flags)
-            underlying = os.stat(
+            if owned_root.parent_fd is None or owned_root.directory_fd is None:
+                raise BrowserRuntimeError("browser_cleanup")
+            underlying = os.fstat(owned_root.directory_fd)
+            current_underlying = os.stat(
                 root.name,
-                dir_fd=parent_fd,
+                dir_fd=owned_root.parent_fd,
                 follow_symlinks=False,
             )
-            if not stat.S_ISDIR(underlying.st_mode) or stat.S_ISLNK(
-                underlying.st_mode
+            if (
+                not stat.S_ISDIR(underlying.st_mode)
+                or stat.S_ISLNK(underlying.st_mode)
+                or (underlying.st_dev, underlying.st_ino) != owned_root.identity
+                or (current_underlying.st_dev, current_underlying.st_ino)
+                != owned_root.identity
+                or underlying.st_uid != os.geteuid()
+                or current_underlying.st_uid != os.geteuid()
+                or stat.S_IMODE(underlying.st_mode) != 0o700
+                or stat.S_IMODE(current_underlying.st_mode) != 0o700
             ):
-                raise OSError("private mountpoint is invalid")
-            self._detached_mount_parent_fd = parent_fd
-            parent_fd = None
+                raise BrowserRuntimeError("browser_cleanup")
+            self._detached_mount_parent_fd = owned_root.parent_fd
+            owned_root.parent_fd = None
+            self._detached_underlying_fd = owned_root.directory_fd
+            owned_root.directory_fd = None
             self._detached_mount_name = root.name
-            self._detached_underlying_identity = (
-                underlying.st_dev,
-                underlying.st_ino,
-            )
+            self._detached_underlying_identity = owned_root.identity
             mount_target = Path(
                 f"/proc/self/fd/{self._detached_mount_parent_fd}/{root.name}"
             )
@@ -1532,22 +1677,59 @@ class _PinnedExecutable:
                     os.close(mounted_fd)
                 except OSError:
                     cleanup_failed = True
-            if parent_fd is not None:
-                try:
-                    os.close(parent_fd)
-                except OSError:
-                    cleanup_failed = True
             if self._detached_filesystem_mounted:
                 try:
                     self._release_detached_mount(remove_underlying=True)
                 except BrowserRuntimeError:
                     cleanup_failed = True
             elif self._detached_mount_parent_fd is not None:
+                underlying_fd = self._detached_underlying_fd
+                parent_fd = self._detached_mount_parent_fd
+                name = self._detached_mount_name
+                identity = self._detached_underlying_identity
+                removable = False
                 try:
-                    os.close(self._detached_mount_parent_fd)
+                    current = os.stat(
+                        name,
+                        dir_fd=parent_fd,
+                        follow_symlinks=False,
+                    )
+                    opened_underlying = (
+                        os.fstat(underlying_fd)
+                        if underlying_fd is not None
+                        else None
+                    )
+                    removable = (
+                        stat.S_ISDIR(current.st_mode)
+                        and (current.st_dev, current.st_ino) == identity
+                        and opened_underlying is not None
+                        and (opened_underlying.st_dev, opened_underlying.st_ino)
+                        == identity
+                    )
+                except OSError:
+                    cleanup_failed = True
+                if underlying_fd is not None:
+                    try:
+                        os.close(underlying_fd)
+                    except OSError:
+                        cleanup_failed = True
+                    self._detached_underlying_fd = None
+                if removable:
+                    try:
+                        os.rmdir(name, dir_fd=parent_fd)
+                    except OSError:
+                        cleanup_failed = True
+                try:
+                    os.close(parent_fd)
                 except OSError:
                     cleanup_failed = True
                 self._detached_mount_parent_fd = None
+                self._detached_mount_name = None
+                self._detached_underlying_identity = None
+            try:
+                owned_root.close_authority()
+            except BrowserRuntimeError:
+                cleanup_failed = True
             if cleanup_failed:
                 raise BrowserRuntimeError("browser_cleanup") from exc
             if isinstance(exc, BrowserRuntimeError):
@@ -1560,11 +1742,13 @@ class _PinnedExecutable:
     def _release_detached_mount(self, *, remove_underlying: bool) -> None:
         parent_fd = getattr(self, "_detached_mount_parent_fd", None)
         mounted_fd = getattr(self, "_detached_mount_fd", None)
+        underlying_fd = getattr(self, "_detached_underlying_fd", None)
         name = getattr(self, "_detached_mount_name", None)
         underlying_identity = getattr(self, "_detached_underlying_identity", None)
         mounted_identity = getattr(self, "_detached_mounted_identity", None)
         if (
             parent_fd is None
+            or underlying_fd is None
             or name is None
             or underlying_identity is None
             or not self._detached_filesystem_mounted
@@ -1587,10 +1771,12 @@ class _PinnedExecutable:
             self._unmount_private_filesystem(target)
             self._detached_filesystem_mounted = False
             exposed = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            underlying = os.fstat(underlying_fd)
             if (
                 not stat.S_ISDIR(exposed.st_mode)
                 or stat.S_ISLNK(exposed.st_mode)
                 or (exposed.st_dev, exposed.st_ino) != underlying_identity
+                or (underlying.st_dev, underlying.st_ino) != underlying_identity
             ):
                 raise BrowserRuntimeError("browser_cleanup")
             if remove_underlying:
@@ -1610,6 +1796,11 @@ class _PinnedExecutable:
                 except OSError:
                     cleanup_failed = True
                 self._detached_mount_fd = None
+            try:
+                os.close(underlying_fd)
+            except OSError:
+                cleanup_failed = True
+            self._detached_underlying_fd = None
             try:
                 os.close(parent_fd)
             except OSError:

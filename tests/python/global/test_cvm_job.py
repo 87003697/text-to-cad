@@ -682,14 +682,15 @@ class CvmJobTests(unittest.TestCase):
         identity_info = owned.lstat()
         identity = (identity_info.st_dev, identity_info.st_ino)
         real_unlink = os.unlink
+        real_rename = os.rename
         swapped = False
 
-        def replace_before_unlink(path, *args, **kwargs):
+        def inject_replacement(path, *args, **kwargs):
             nonlocal swapped
             if path == "resource" and not swapped:
                 swapped = True
                 nested_fd = kwargs["dir_fd"]
-                os.rename(
+                real_rename(
                     "resource",
                     "retained-resource",
                     src_dir_fd=nested_fd,
@@ -703,11 +704,20 @@ class CvmJobTests(unittest.TestCase):
                 )
                 os.write(replacement_fd, b"foreign")
                 os.close(replacement_fd)
+
+        def replace_before_unlink(path, *args, **kwargs):
+            inject_replacement(path, *args, **kwargs)
             return real_unlink(path, *args, **kwargs)
+
+        def replace_before_rename(path, target, *args, **kwargs):
+            translated = {"dir_fd": kwargs.get("src_dir_fd")}
+            inject_replacement(path, **translated)
+            return real_rename(path, target, *args, **kwargs)
 
         try:
             with (
                 mock.patch.object(runtime.os, "unlink", side_effect=replace_before_unlink),
+                mock.patch.object(runtime.os, "rename", side_effect=replace_before_rename),
                 self.assertRaises(runtime.BrowserStageError),
             ):
                 runtime._remove_browser_tree_owned(parent_fd, "owned", identity)

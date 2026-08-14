@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import stat
@@ -537,7 +538,104 @@ def _remove_browser_tree_owned(
                         raise BrowserStageError("browser stage changed during cleanup")
                     os.rmdir(child, dir_fd=directory_fd)
                 elif stat.S_ISREG(info.st_mode):
-                    os.unlink(child, dir_fd=directory_fd)
+                    leaf_fd: int | None = None
+                    quarantine: str | None = None
+                    try:
+                        leaf_fd = os.open(
+                            child,
+                            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                            dir_fd=directory_fd,
+                        )
+                        opened_leaf = os.fstat(leaf_fd)
+                        if (
+                            opened_leaf.st_dev,
+                            opened_leaf.st_ino,
+                            opened_leaf.st_size,
+                            opened_leaf.st_mode,
+                        ) != (
+                            info.st_dev,
+                            info.st_ino,
+                            info.st_size,
+                            info.st_mode,
+                        ):
+                            raise BrowserStageError(
+                                "browser stage leaf changed during cleanup"
+                            )
+                        for _attempt in range(16):
+                            candidate = f".browser-cleanup-{secrets.token_hex(16)}"
+                            try:
+                                os.stat(
+                                    candidate,
+                                    dir_fd=directory_fd,
+                                    follow_symlinks=False,
+                                )
+                            except FileNotFoundError:
+                                quarantine = candidate
+                                break
+                            except OSError as exc:
+                                raise BrowserStageError(
+                                    "browser stage cleanup failed"
+                                ) from exc
+                        if quarantine is None:
+                            raise BrowserStageError(
+                                "browser stage cleanup quarantine exhausted"
+                            )
+                        os.rename(
+                            child,
+                            quarantine,
+                            src_dir_fd=directory_fd,
+                            dst_dir_fd=directory_fd,
+                        )
+                        moved = os.stat(
+                            quarantine,
+                            dir_fd=directory_fd,
+                            follow_symlinks=False,
+                        )
+                        after_open = os.fstat(leaf_fd)
+                        expected_leaf = (
+                            info.st_dev,
+                            info.st_ino,
+                            info.st_size,
+                            info.st_mode,
+                        )
+                        if (
+                            moved.st_dev,
+                            moved.st_ino,
+                            moved.st_size,
+                            moved.st_mode,
+                        ) != expected_leaf or (
+                            after_open.st_dev,
+                            after_open.st_ino,
+                            after_open.st_size,
+                            after_open.st_mode,
+                        ) != expected_leaf:
+                            try:
+                                os.stat(
+                                    child,
+                                    dir_fd=directory_fd,
+                                    follow_symlinks=False,
+                                )
+                            except FileNotFoundError:
+                                os.rename(
+                                    quarantine,
+                                    child,
+                                    src_dir_fd=directory_fd,
+                                    dst_dir_fd=directory_fd,
+                                )
+                                quarantine = None
+                            raise BrowserStageError(
+                                "browser stage leaf changed during cleanup"
+                            )
+                        os.unlink(quarantine, dir_fd=directory_fd)
+                        quarantine = None
+                    finally:
+                        if leaf_fd is not None:
+                            try:
+                                os.close(leaf_fd)
+                            except OSError as exc:
+                                raise BrowserStageError(
+                                    "browser stage descriptor cleanup failed"
+                                ) from exc
                 else:
                     raise BrowserStageError("browser stage contains a special entry")
 
@@ -684,6 +782,7 @@ def _staged_attested_browser(
                 ) from close_error
         raise failure
     created = False
+    stage_identity: tuple[int, int] | None = None
     try:
         try:
             stage_parent.mkdir(mode=0o700, parents=False, exist_ok=True)
@@ -710,9 +809,31 @@ def _staged_attested_browser(
                 raise BrowserStageError("browser stage parent identity changed")
             os.mkdir(stage_root.name, mode=0o700, dir_fd=stage_parent_fd)
             created = True
+            created_stage = os.stat(
+                stage_root.name,
+                dir_fd=stage_parent_fd,
+                follow_symlinks=False,
+            )
+            if (
+                not stat.S_ISDIR(created_stage.st_mode)
+                or stat.S_ISLNK(created_stage.st_mode)
+                or created_stage.st_uid != os.getuid()
+                or stat.S_IMODE(created_stage.st_mode) != 0o700
+            ):
+                raise BrowserStageError("created browser stage identity is invalid")
+            stage_identity = (created_stage.st_dev, created_stage.st_ino)
             stage_root_fd = os.open(stage_root.name, source_flags, dir_fd=stage_parent_fd)
             stage_info = os.fstat(stage_root_fd)
-            stage_identity = (stage_info.st_dev, stage_info.st_ino)
+            current_stage = os.stat(
+                stage_root.name,
+                dir_fd=stage_parent_fd,
+                follow_symlinks=False,
+            )
+            if (
+                (stage_info.st_dev, stage_info.st_ino) != stage_identity
+                or (current_stage.st_dev, current_stage.st_ino) != stage_identity
+            ):
+                raise BrowserStageError("created browser stage identity changed")
             staged_revision = stage_root / "attested"
             os.mkdir("attested", mode=0o700, dir_fd=stage_root_fd)
             staged_revision_fd = os.open(
@@ -771,6 +892,8 @@ def _staged_attested_browser(
             try:
                 if stage_parent_fd is None:
                     raise BrowserStageError("browser stage cleanup authority missing")
+                if stage_identity is None:
+                    raise BrowserStageError("browser stage cleanup identity missing")
                 _remove_browser_tree_owned(
                     stage_parent_fd,
                     stage_root.name,

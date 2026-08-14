@@ -2819,7 +2819,10 @@ class ResidualRendererTests(unittest.TestCase):
 
             with (
                 mock.patch.object(browser_runtime.tempfile, "gettempdir", return_value=launches),
-                mock.patch.object(Path, "mkdir", side_effect=FileExistsError),
+                mock.patch(
+                    "meshshot.browser_runtime.os.mkdir",
+                    side_effect=FileExistsError,
+                ),
                 self.assertRaises(BrowserRuntimeError) as raised,
             ):
                 browser_runtime._private_directory("meshshot-image-")
@@ -4735,11 +4738,10 @@ class ResidualRendererTests(unittest.TestCase):
                 with (
                     self.subTest(boundary=boundary),
                     mock.patch.object(browser_runtime.sys, "platform", "linux"),
-                    mock.patch(
-                        "meshshot.browser_runtime._private_directory",
-                        side_effect=lambda _prefix: Path(
-                            tempfile.mkdtemp(dir=launch_parent)
-                        ),
+                    mock.patch.object(
+                        browser_runtime.tempfile,
+                        "gettempdir",
+                        return_value=launch_parent,
                     ),
                     ExitStack() as stack,
                 ):
@@ -4783,11 +4785,10 @@ class ResidualRendererTests(unittest.TestCase):
                     kernel,
                     create=True,
                 ),
-                mock.patch(
-                    "meshshot.browser_runtime._private_directory",
-                    side_effect=lambda _prefix: Path(
-                        tempfile.mkdtemp(dir=launches)
-                    ),
+                mock.patch.object(
+                    browser_runtime.tempfile,
+                    "gettempdir",
+                    return_value=launches,
                 ),
                 self.assertRaises(BrowserRuntimeError) as raised,
             ):
@@ -4907,11 +4908,10 @@ class ResidualRendererTests(unittest.TestCase):
 
             with (
                 mock.patch.object(browser_runtime.sys, "platform", "linux"),
-                mock.patch(
-                    "meshshot.browser_runtime._private_directory",
-                    side_effect=lambda _prefix: Path(
-                        tempfile.mkdtemp(dir=launch_parent)
-                    ),
+                mock.patch.object(
+                    browser_runtime.tempfile,
+                    "gettempdir",
+                    return_value=launch_parent,
                 ),
                 mock.patch.object(
                     _PinnedExecutable,
