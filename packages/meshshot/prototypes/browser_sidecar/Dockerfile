@@ -33,6 +33,7 @@ COPY --from=runtime-deps /opt/browser-sidecar/prototype/node_modules ./prototype
 COPY packages/meshshot/prototypes/browser_sidecar/server.mjs ./prototype/server.mjs
 COPY models/prototypes/browser_sidecar_cube.stl ./fixtures/cube.stl
 COPY models/prototypes/browser_sidecar_inspection.step ./fixtures/browser_sidecar_inspection.step
+COPY models/prototypes/.browser_sidecar_inspection.step.glb ./fixtures/.browser_sidecar_inspection.step.glb
 COPY packages/meshshot/src/meshshot/runtime ./residual
 COPY packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json ./profile.json
 COPY --from=viewer-build /build/viewer/dist ./viewer/dist
