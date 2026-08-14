@@ -430,9 +430,9 @@ def predicate_matrix(evidence: dict[str, Any]) -> dict[str, bool]:
             and isinstance(get("p2", "nodeSuite", "requestSha256"), str)
         ),
         "p2.viewer_fixture_and_inspection_control": (
-            viewer.get("title") == "CAD Viewer | cube.stl"
+            viewer.get("title") == "CAD Viewer | browser_sidecar_inspection.step"
             and viewer.get("bodyMentionsFixture") is True
-            and viewer.get("modelKey") == "cube-stl"
+            and viewer.get("modelKey") == "inspection-step"
             and viewer.get("inspection", {}).get("changed") is True
         ),
         "p2.residual_fixed_geometry_variant_options": (
@@ -513,7 +513,7 @@ def main() -> int:
         }
 
         suite_request = render_request("suite", {
-            "viewer": {"modelKey": "cube-stl", "inspectionControl": "toggle-projection"},
+            "viewer": {"modelKey": "inspection-step", "inspectionControl": "toggle-projection"},
             "residual": residual_payload(),
         })
         suite = harness.start_job("suite")
