@@ -3114,6 +3114,13 @@ const CadViewer = forwardRef(function CadViewer({
           curved.material = targets[0].child.material;
           curved.geometry.setAttribute("position", new THREE.BufferAttribute(mapped, 3));
           curved.geometry.setIndex(new THREE.BufferAttribute(curvedData.indices, 1));
+          // Drop the old normals first: computeVertexNormals REUSES an existing normal
+          // attribute, so on this reused geometry they stay at the vertex count of the FIRST
+          // curved build while every remesh changes it -- each bend's band adds vertices. The
+          // draw is then rejected outright ("vertex buffer is not big enough"), silently, the
+          // first time an index runs past that stale buffer. A four-bend panel goes blank on
+          // the fourth bend; three bends stay under the count and look fine.
+          curved.geometry.deleteAttribute("normal");
           curved.geometry.computeVertexNormals();
           curved.geometry.computeBoundingBox?.();
           curved.geometry.computeBoundingSphere?.();
