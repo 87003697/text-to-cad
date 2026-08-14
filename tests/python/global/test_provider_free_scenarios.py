@@ -423,6 +423,14 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
 
         self.assertGreater(close_calls, 3)
         self.assertEqual("preview_browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_pinned_image",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "executable_descriptor_close",
+            raised.exception.browser_cleanup_check,
+        )
 
     def test_outer_browser_stage_rejects_dumpable_isolation_failure(self) -> None:
         source, destination, manifest_sha256 = self._browser_stage_roots()
@@ -510,6 +518,72 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
 
         self.assertEqual(3, len(closed))
         self.assertEqual("preview_browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_pinned_image",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "executable_descriptor_close",
+            raised.exception.browser_cleanup_check,
+        )
+
+    def test_public_child_cleanup_classifies_kill_and_reap_boundaries(self) -> None:
+        for expected_check, kill_error, communicate_error in (
+            ("kill_signal", OSError("kill"), None),
+            ("leader_kill_wait", None, OSError("reap")),
+        ):
+            with self.subTest(expected_check=expected_check):
+                process = mock.MagicMock()
+                process.kill.side_effect = kill_error
+                process.communicate.side_effect = communicate_error
+                with (
+                    mock.patch.object(
+                        provider_free_scenarios.subprocess,
+                        "Popen",
+                        return_value=process,
+                    ),
+                    self.assertRaises(provider_free_scenarios.ScenarioError) as raised,
+                ):
+                    provider_free_scenarios._run_public(
+                        ["fixed-public-child"],
+                        cwd=self.repo,
+                        command_log=self.repo / "commands.jsonl",
+                        process_started=lambda _process: (_ for _ in ()).throw(
+                            RuntimeError("body")
+                        ),
+                    )
+                self.assertEqual("preview_browser_cleanup", raised.exception.operation)
+                self.assertEqual(
+                    "outer_supervisor_process_group",
+                    raised.exception.browser_cleanup_substage,
+                )
+                self.assertEqual(expected_check, raised.exception.browser_cleanup_check)
+
+    def test_client_publication_descriptor_cleanup_is_typed(self) -> None:
+        session = provider_free_scenarios._BrowserSupervisorSession("a" * 64)
+        descriptor = os.open(os.devnull, os.O_RDONLY)
+        real_close = os.close
+
+        def close_then_fail(value: int) -> None:
+            real_close(value)
+            raise OSError("client record close")
+
+        with (
+            mock.patch.object(
+                provider_free_scenarios,
+                "_resolve_nested_client_pid",
+                return_value=4321,
+            ),
+            mock.patch.object(provider_free_scenarios.os, "open", return_value=descriptor),
+            mock.patch.object(provider_free_scenarios.os, "write", return_value=128),
+            mock.patch.object(provider_free_scenarios.os, "fsync"),
+            mock.patch.object(provider_free_scenarios.os, "close", side_effect=close_then_fail),
+            self.assertRaises(provider_free_scenarios.ScenarioError) as raised,
+        ):
+            session.register_client(mock.MagicMock(), expected_executable=Path("/python"))
+        self.assertEqual("preview_browser_cleanup", raised.exception.operation)
+        self.assertEqual("private_supervisor_state", raised.exception.browser_cleanup_substage)
+        self.assertEqual("client_record_unlink", raised.exception.browser_cleanup_check)
 
     def test_run_staged_publishes_closed_runtime_staging_failure(self) -> None:
         workspace = self.repo / "outputs/group/exp"
@@ -1725,6 +1799,51 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                         )
 
                 self.assertEqual(operation, raised.exception.operation)
+
+    def test_preview_preserves_local_supervisor_cleanup_pair(self) -> None:
+        @contextmanager
+        def failing_supervisor():
+            yield mock.MagicMock()
+            raise provider_free_scenarios.ScenarioError(
+                "private supervisor residue",
+                operation="preview_browser_cleanup",
+                browser_cleanup_substage="private_supervisor_state",
+                browser_cleanup_check="socket_unlink",
+            )
+
+        with (
+            mock.patch.object(provider_free_scenarios.platform, "system", return_value="Linux"),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_validate_attested_browser_runtime",
+                return_value="a" * 64,
+            ),
+            mock.patch.object(provider_free_scenarios, "_run_exact_browser_version_probe"),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_preview_sandbox_argv",
+                return_value=["bwrap", "--", "/python"],
+            ),
+            mock.patch.object(provider_free_scenarios, "_publish_preview_sandbox_enforcement"),
+            mock.patch.object(provider_free_scenarios, "_browser_supervisor", failing_supervisor),
+            mock.patch.object(provider_free_scenarios, "_run_public", return_value={"ok": True}),
+            mock.patch.object(provider_free_scenarios, "_publish_browser_exec_diagnostic"),
+            mock.patch.object(provider_free_scenarios, "_require_preview_public_wrapper") as wrapper,
+            self.assertRaises(provider_free_scenarios.ScenarioError) as raised,
+        ):
+            provider_free_scenarios._run_voxblame_preview(
+                ["mesh-compare", "voxblame-preview"],
+                cwd=self.repo,
+                command_log=self.repo / "commands.jsonl",
+            )
+
+        self.assertEqual("preview_browser_cleanup", raised.exception.operation)
+        self.assertEqual("private_supervisor_state", raised.exception.browser_cleanup_substage)
+        self.assertEqual("socket_unlink", raised.exception.browser_cleanup_check)
+        wrapper.assert_called_once_with(
+            self.repo / "commands.jsonl",
+            operation="preview_browser_cleanup",
+        )
 
     def test_preview_generic_fallback_is_split_into_eight_closed_operations(
         self,

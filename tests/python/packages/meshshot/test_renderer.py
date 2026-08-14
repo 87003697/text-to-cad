@@ -178,6 +178,36 @@ class ResidualRendererTests(unittest.TestCase):
                 )
                 self.assertEqual(expected_check, raised.exception.browser_cleanup_check)
 
+    def test_profile_quarantine_residue_overrides_recursive_remove_failure(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile"
+            profile.mkdir()
+            (profile / "state").write_bytes(b"owned")
+            parent_fd = os.open(root, os.O_RDONLY)
+            profile_fd = os.open(profile, os.O_RDONLY)
+            info = os.fstat(profile_fd)
+            runtime = object.__new__(PrelaunchedCdpRuntime)
+            runtime._profile = {"cleanup_term_ms": 0, "cleanup_kill_ms": 0}
+            runtime._profile_dir = profile
+            runtime._profile_identity = (info.st_dev, info.st_ino)
+            runtime._profile_cleanup_forbidden = False
+            runtime._profile_fd = profile_fd
+            runtime._profile_parent_fd = parent_fd
+            runtime._process = None
+            runtime._process_group = None
+            runtime._pinned_executable = None
+            with (
+                mock.patch.object(browser_runtime.shutil, "rmtree"),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                runtime._cleanup()
+            self.assertEqual("private_browser_profile", raised.exception.browser_cleanup_substage)
+            self.assertEqual("absence", raised.exception.browser_cleanup_check)
+
     def test_supervisor_rejects_same_uid_foreign_first_client_and_replay(self) -> None:
         from meshshot import browser_supervisor
 
@@ -256,6 +286,7 @@ class ResidualRendererTests(unittest.TestCase):
 
     def test_owned_socket_cleanup_rejects_replacement_without_deleting_it(self) -> None:
         from meshshot import browser_supervisor
+        from meshshot.browser_runtime import BrowserRuntimeError
 
         unlink_owned_socket = browser_supervisor._unlink_owned_socket
         with tempfile.TemporaryDirectory() as directory:
@@ -267,7 +298,7 @@ class ResidualRendererTests(unittest.TestCase):
             endpoint.write_text("replacement", encoding="utf-8")
             descriptor = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
-                with self.assertRaises(Exception):
+                with self.assertRaises(BrowserRuntimeError) as raised:
                     unlink_owned_socket(
                         descriptor,
                         (original.st_dev, original.st_ino),
@@ -275,6 +306,47 @@ class ResidualRendererTests(unittest.TestCase):
             finally:
                 os.close(descriptor)
             self.assertEqual("replacement", endpoint.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "private_supervisor_state",
+                raised.exception.browser_cleanup_substage,
+            )
+            self.assertEqual("socket_unlink", raised.exception.browser_cleanup_check)
+
+    def test_private_supervisor_helper_cleanup_boundaries_are_typed(self) -> None:
+        from meshshot import browser_supervisor
+        from meshshot.browser_runtime import BrowserRuntimeError
+
+        descriptor = os.open(os.devnull, os.O_RDONLY)
+        real_close = os.close
+
+        def close_then_fail(value: int) -> None:
+            real_close(value)
+            raise OSError("descriptor close")
+
+        with (
+            mock.patch.object(browser_supervisor.os, "open", return_value=descriptor),
+            mock.patch.object(browser_supervisor.os, "fstat", side_effect=OSError("fstat")),
+            mock.patch.object(browser_supervisor.os, "close", side_effect=close_then_fail),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            browser_supervisor._validate_root()
+        self.assertEqual("private_supervisor_state", raised.exception.browser_cleanup_substage)
+        self.assertEqual("root_descriptor_close", raised.exception.browser_cleanup_check)
+
+        descriptor = os.open(os.devnull, os.O_RDONLY)
+        with (
+            mock.patch.object(browser_supervisor.os, "open", return_value=descriptor),
+            mock.patch.object(browser_supervisor.os, "write", return_value=2),
+            mock.patch.object(browser_supervisor.os, "fsync"),
+            mock.patch.object(browser_supervisor.os, "close", side_effect=close_then_fail),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            browser_supervisor._write_private_record(
+                browser_supervisor.SUPERVISOR_OUTER_AUTHORITY,
+                {},
+            )
+        self.assertEqual("private_supervisor_state", raised.exception.browser_cleanup_substage)
+        self.assertEqual("authority_record_unlink", raised.exception.browser_cleanup_check)
 
     def test_supervisor_protocol_rejects_duplicate_unknown_and_oversize_packets(
         self,
