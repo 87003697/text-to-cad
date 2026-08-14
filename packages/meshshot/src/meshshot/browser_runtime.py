@@ -696,7 +696,37 @@ def _private_directory(prefix: str) -> Path:
                 "browser_identity",
                 browser_identity_phase="private_tree_materialization",
             )
-        return path
+    return path
+
+
+def _private_child_directory(
+    parent: Path,
+    parent_fd: int,
+    prefix: str,
+) -> Path:
+    """Create an owned private directory on an already-authorized filesystem."""
+
+    for _attempt in range(16):
+        name = f"{prefix}{secrets.token_hex(16)}"
+        try:
+            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise BrowserRuntimeError("browser_cleanup") from exc
+        try:
+            info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise BrowserRuntimeError("browser_cleanup") from exc
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or stat.S_ISLNK(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o700
+        ):
+            raise BrowserRuntimeError("browser_cleanup")
+        return parent / name
+    raise BrowserRuntimeError("browser_cleanup")
     raise BrowserRuntimeError(
         "browser_identity",
         browser_identity_phase="private_tree_materialization",
@@ -1773,7 +1803,13 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
                 tail = stat_line[stat_line.rfind(")") + 2 :].split()
                 group = int(tail[2])
                 for descriptor in (process_path / "fd").iterdir():
-                    target = os.readlink(descriptor)
+                    try:
+                        target = os.readlink(descriptor)
+                    except FileNotFoundError:
+                        # Unrelated descriptors may disappear while /proc is
+                        # enumerated. A vanished listener still fails closed
+                        # below because its socket inode has no exact owner.
+                        continue
                     if target.startswith("socket:["):
                         inode = target[8:-1]
                         if inode in owners:
@@ -2052,7 +2088,11 @@ class PrelaunchedCdpRuntime:
                         != self._profile_identity
                     ):
                         raise OSError("profile identity changed")
-                    quarantine = _private_directory("meshshot-profile-cleanup-")
+                    quarantine = _private_child_directory(
+                        self._profile_dir.parent,
+                        parent_fd,
+                        "meshshot-profile-cleanup-",
+                    )
                     quarantine_fd = os.open(
                         quarantine,
                         os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
@@ -2340,17 +2380,11 @@ class SupervisedCdpAttachmentRuntime:
                 "browser_identity",
                 browser_identity_substage="loopback_listener_address_ownership",
             )
-        try:
-            _verify_listener_owner(
-                process_group,
-                port,
-                float(self._profile["startup_timeout_ms"]) / 1000,
-            )
-        except BrowserRuntimeError as exc:
-            raise BrowserRuntimeError(
-                "browser_identity",
-                browser_identity_substage="loopback_listener_address_ownership",
-            ) from exc
+        # The authenticated outer PrelaunchedCdpRuntime already proved exact
+        # listener ownership before publishing this authority. Repeating the
+        # /proc proof here is both redundant and impossible after the nested
+        # sandbox drops all capabilities; SO_PEERCRED + nonce binds this exact
+        # authority to that outer proof.
         return endpoint, process_group
 
     @contextmanager

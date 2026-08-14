@@ -512,7 +512,7 @@ def _run_public(
                 stderr=subprocess.PIPE,
             )
             try:
-                process_started(process.pid)
+                process_started(process)
                 stdout, stderr = process.communicate(timeout=COMMAND_TIMEOUT_SECONDS)
             except BaseException:
                 try:
@@ -811,7 +811,17 @@ class _BrowserSupervisorSession:
         self._nonce = nonce
         self._registered = False
 
-    def register_client(self, client_pid: int) -> None:
+    def register_client(
+        self,
+        process: subprocess.Popen[str],
+        *,
+        expected_executable: Path,
+    ) -> None:
+        client_pid = _resolve_nested_client_pid(
+            process,
+            expected_executable=expected_executable,
+            timeout=_BROWSER_SUPERVISOR_TIMEOUT_SECONDS,
+        )
         if self._registered or client_pid <= 1:
             raise ScenarioError(
                 "provider-free browser supervisor client invalid",
@@ -851,6 +861,57 @@ class _BrowserSupervisorSession:
                         operation="preview_browser_cleanup",
                     ) from exc
         self._registered = True
+
+
+def _resolve_nested_client_pid(
+    process: subprocess.Popen[str],
+    *,
+    expected_executable: Path,
+    timeout: float,
+) -> int:
+    """Bind bwrap's one exact final Python child to its outer process owner."""
+
+    try:
+        expected = expected_executable.resolve(strict=True).stat()
+    except OSError as exc:
+        raise ScenarioError(
+            "provider-free nested client executable unavailable",
+            operation="preview_browser_connect",
+        ) from exc
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pending = [process.pid]
+        seen: set[int] = set()
+        candidates: list[int] = []
+        while pending:
+            pid = pending.pop()
+            if pid in seen or pid <= 1:
+                continue
+            seen.add(pid)
+            try:
+                image = (Path("/proc") / str(pid) / "exe").stat()
+                children = (
+                    Path("/proc") / str(pid) / "task" / str(pid) / "children"
+                ).read_text(encoding="ascii").split()
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            except (OSError, ValueError) as exc:
+                raise ScenarioError(
+                    "provider-free nested client identity unavailable",
+                    operation="preview_browser_connect",
+                ) from exc
+            pending.extend(int(value) for value in children)
+            if (image.st_dev, image.st_ino) == (expected.st_dev, expected.st_ino):
+                candidates.append(pid)
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1 or process.poll() is not None:
+            break
+        time.sleep(0.01)
+    raise ScenarioError(
+        "provider-free nested client identity invalid",
+        operation="preview_browser_connect",
+    )
 
 
 def _closed_supervisor_failure(value: Any) -> ScenarioError:
@@ -1059,9 +1120,16 @@ def _browser_supervisor() -> Any:
                 _cleanup_browser_supervisor(process)
             except ScenarioError as exc:
                 cleanup_error = exc
-        if os.path.lexists(_BROWSER_SUPERVISOR_SOCKET):
+        if any(
+            os.path.lexists(path)
+            for path in (
+                _BROWSER_SUPERVISOR_SOCKET,
+                _BROWSER_SUPERVISOR_AUTHORITY,
+                _BROWSER_SUPERVISOR_CLIENT,
+            )
+        ):
             cleanup_error = ScenarioError(
-                "provider-free browser supervisor socket remained",
+                "provider-free browser supervisor private state remained",
                 operation="preview_browser_cleanup",
             )
         if cleanup_error is not None:
@@ -1827,15 +1895,19 @@ def _run_voxblame_preview(
         try:
             supervisor = _browser_supervisor() if is_linux else nullcontext()
             with supervisor as supervisor_session:
+                process_started = None
+                if supervisor_session is not None:
+                    process_started = lambda process: supervisor_session.register_client(
+                        process,
+                        expected_executable=Path(
+                            sandbox_argv[sandbox_argv.index("--") + 1]
+                        ),
+                    )
                 result = _run_public(
                     sandbox_argv,
                     cwd=cwd,
                     command_log=command_log,
-                    process_started=(
-                        supervisor_session.register_client
-                        if supervisor_session is not None
-                        else None
-                    ),
+                    process_started=process_started,
                 )
         except ScenarioError as exc:
             renderer_operation = operations.get(exc.classification)

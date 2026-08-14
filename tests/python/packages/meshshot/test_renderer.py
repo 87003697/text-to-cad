@@ -265,7 +265,7 @@ class ResidualRendererTests(unittest.TestCase):
                 )
             self.assertEqual(substage, raised.exception.browser_identity_substage)
 
-    def test_attachment_requires_independent_exact_listener_ownership(self) -> None:
+    def test_attachment_uses_authenticated_outer_listener_ownership(self) -> None:
         from meshshot import browser_runtime
 
         attachment = object.__new__(
@@ -295,7 +295,7 @@ class ResidualRendererTests(unittest.TestCase):
                     expected_nonce="a" * 64,
                 ),
             )
-        verify.assert_called_once_with(42, 9222, 0.1)
+        verify.assert_not_called()
 
     def test_attachment_reports_failed_completion_before_closed_connect_error(
         self,
@@ -2520,7 +2520,7 @@ class ResidualRendererTests(unittest.TestCase):
         with (
             mock.patch("os.fstat", return_value=mock.Mock(st_dev=1, st_ino=2)),
             mock.patch(
-                "meshshot.browser_runtime._private_directory",
+                "meshshot.browser_runtime._private_child_directory",
                 side_effect=BrowserRuntimeError("browser_identity"),
             ),
             mock.patch("os.close") as close,

@@ -33,6 +33,8 @@ except IndexError:
 )
 class LinuxPrivateSnapshotExecutionTests(unittest.TestCase):
     def test_production_shaped_double_bwrap_public_render_and_cleanup(self) -> None:
+        if not Path("/usr/bin/bwrap").is_file():
+            self.skipTest("controlled Linux image lacks the existing bwrap runtime")
         from production_shaped_supervised_render import run
 
         result = run()
@@ -45,6 +47,8 @@ class LinuxPrivateSnapshotExecutionTests(unittest.TestCase):
     def test_supervisor_term_cleans_separate_browser_group_and_private_state(
         self,
     ) -> None:
+        if not Path("/usr/bin/bwrap").is_file():
+            self.skipTest("controlled Linux image lacks the existing bwrap runtime")
         from production_shaped_supervised_render import run_signal_cleanup
 
         result = run_signal_cleanup()
@@ -563,6 +567,11 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
             if create.returncode != 0:
                 self.skipTest("controlled local Docker container is unavailable")
             for source, target in (
+                (
+                    REPO_ROOT / "packages/meshshot/src/meshshot",
+                    "/meshshot",
+                ),
+                (REPO_ROOT / "scripts", "/scripts"),
                 (
                     REPO_ROOT / "packages/meshshot/src/meshshot/browser_runtime.py",
                     "/browser_runtime.py",

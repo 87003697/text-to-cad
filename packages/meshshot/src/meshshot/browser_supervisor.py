@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import signal
 import socket
 import stat
 import sys
@@ -34,6 +35,21 @@ from meshshot.browser_runtime import (
 )
 
 _TIMEOUT_SECONDS = 15.0
+
+
+class _SupervisorSignal(BaseException):
+    pass
+
+
+def _restore_inherited_runtime_signals() -> None:
+    """Unblock only signals atomically blocked by the spawning parent."""
+
+    pthread_sigmask = getattr(signal, "pthread_sigmask", None)
+    if callable(pthread_sigmask):
+        pthread_sigmask(
+            signal.SIG_UNBLOCK,
+            {signal.SIGINT, signal.SIGTERM},
+        )
 
 
 def _validate_root() -> tuple[int, tuple[int, int]]:
@@ -284,6 +300,7 @@ def run() -> None:
                     deadline=deadline,
                 )
                 server.close()
+                server = None
                 _unlink_owned_socket(root_fd, socket_identity)
                 socket_unlinked = True
                 _send_supervisor_packet(
@@ -306,6 +323,8 @@ def run() -> None:
                         "nonce": nonce,
                     },
                 )
+                connection.close()
+                connection = None
     finally:
         if connection is not None:
             try:
@@ -329,6 +348,18 @@ def run() -> None:
         except OSError:
             failure = True
         try:
+            os.chmod(SUPERVISOR_OUTER_ROOT, 0o700)
+        except OSError:
+            failure = True
+        else:
+            for path in (SUPERVISOR_OUTER_AUTHORITY, SUPERVISOR_OUTER_CLIENT):
+                try:
+                    os.unlink(path.name, dir_fd=root_fd)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    failure = True
+        try:
             os.close(root_fd)
         except OSError:
             failure = True
@@ -337,8 +368,19 @@ def run() -> None:
 
 
 def main() -> int:
+    watched = (signal.SIGINT, signal.SIGTERM)
+    previous = {signum: signal.getsignal(signum) for signum in watched}
+
+    def terminate(_signum: int, _frame: object) -> None:
+        raise _SupervisorSignal()
+
     try:
+        for signum in watched:
+            signal.signal(signum, terminate)
+        _restore_inherited_runtime_signals()
         run()
+    except _SupervisorSignal:
+        return 0
     except BrowserRuntimeError as exc:
         try:
             if not os.path.lexists(SUPERVISOR_OUTER_RESULT):
@@ -348,6 +390,9 @@ def main() -> int:
         return 1
     except (OSError, RuntimeError):
         return 1
+    finally:
+        for signum in watched:
+            signal.signal(signum, previous[signum])
     return 0
 
 
