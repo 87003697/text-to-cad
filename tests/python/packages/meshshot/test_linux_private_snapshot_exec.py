@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
         browser = object.__new__(runtime.PrelaunchedCdpRuntime)
         browser._executable = source
         browser._profile = {
-            "arguments": [], "startup_timeout_ms": 2000,
+            "arguments": [], "startup_timeout_ms": 10000,
             "cleanup_term_ms": 1000, "cleanup_kill_ms": 1000,
         }
         browser._pinned_executable = pinned
