@@ -23,9 +23,11 @@ The workflow has three separate public operations:
    the clean Git HEAD of this provisioning workflow; the two revisions are not
    required to be the same commit.
 2. `provision` is an external CVM write. It transfers the fixed archive through
-   this wrapper, verifies its hash before `docker image load`, re-inspects the
-   loaded IDs/platform/config, removes the transfer archive, and intentionally
-   retains the two provisioned images.
+   this wrapper. Before any remote state write it verifies the deployed module
+   and wrapper SHA-256 values and enforces the mandatory 3 GiB CVM free-disk
+   gate. It verifies the archive hash before `docker image load`, re-inspects
+   the loaded IDs/platform/config, removes the transfer archive, and
+   intentionally retains the two provisioned images.
 3. `probe` is a second external CVM write and the only execution dispatch. It
    runs exactly one sealed probe with `--pull=never`, an internal network,
    fixed resource bounds, read-only filesystems, and exact runtime cleanup.
@@ -42,6 +44,9 @@ The workflow has three separate public operations:
   or S3 transfer.
 - A failed/interrupted provision or probe is terminal for that handle. The
   wrapper records `retryAllowed:false`; do not resubmit it.
+- Remote ownership is established only by the fresh random nonce in the exact
+  `remote-begin` receipt. A begin failure never adopts or aborts a predictable
+  pre-existing handle.
 
 ## Commands
 
@@ -82,6 +87,11 @@ Report only the compact JSON receipt fields:
 - exact resource ledger, Sidecar terminal state, and labeled absence proof;
 - `terminalOperation` and `retryAllowed:false`.
 
+Provision success is accepted only when the remote receipt exactly matches the
+prepared handle, archive hash/size, both ordered image roles/IDs/platform/config
+hashes/revisions, deployed workflow hashes, transfer absence, and terminal
+no-retry operation.
+
 The two images in `retainedImageIds` remain provisioned by design. The archive,
 client container, Sidecar container, and internal network are owned temporary
 resources and must be absent in the receipt. Removing retained images is a
@@ -97,6 +107,12 @@ different destructive operation and requires a separate authorization.
   rerun, submit a pilot, inspect raw remote state, or invent a cleanup command.
 - Missing or malformed receipt: report the missing structured evidence and
   stop. Do not infer success from SSH/rsync/Docker exit alone.
+
+Probe cleanup removes only resources whose exact Docker ID and both ownership
+labels (handle plus nonce) are verified. Predictable name collisions are never
+cleanup authority. A stop/log/inspect/remove timeout does not skip the remaining
+cleanup steps; the durable terminal failure receipt records the first operation
+failure, all cleanup errors, and the final absence proof.
 
 ## Validation boundary
 
