@@ -32,6 +32,137 @@ except IndexError:
     "requires the controlled Linux noexec-/tmp + exec-root harness",
 )
 class LinuxPrivateSnapshotExecutionTests(unittest.TestCase):
+    def test_proc_relative_resource_browser_reaches_readiness(self) -> None:
+        runtime_source = Path(os.environ["MESHSHOT_BROWSER_RUNTIME_SOURCE"])
+        package = sys.modules.get("meshshot")
+        if package is None:
+            package = types.ModuleType("meshshot")
+            package.__path__ = [os.fspath(runtime_source.parent)]
+            sys.modules["meshshot"] = package
+        runtime = importlib.import_module("meshshot.browser_runtime")
+        fixture_root = Path("/fixture/proc-resource-browser")
+        source_root = fixture_root / "attested"
+        executable_root = source_root / "chrome-headless-shell-linux64"
+        executable_root.mkdir(parents=True, exist_ok=True)
+        source = executable_root / "chrome-headless-shell"
+        c_source = fixture_root / "fixture.c"
+        (executable_root / "runtime.dat").write_bytes(b"resource")
+        c_source.write_text(
+            r'''
+#include <arpa/inet.h>
+#include <limits.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+  if (argc == 2 && strcmp(argv[1], "--version") == 0) {
+    puts("Google Chrome for Testing 148.0.7778.96"); return 0;
+  }
+  char executable[PATH_MAX] = {0};
+  if (readlink("/proc/self/exe", executable, sizeof(executable)-1) <= 0) return 31;
+  char *name = strrchr(executable, '/'); if (!name) return 32;
+  strcpy(name + 1, "runtime.dat"); if (access(executable, R_OK)) return 33;
+  const char *profile = NULL;
+  for (int i = 1; i < argc; ++i) {
+    if (!strncmp(argv[i], "--user-data-dir=", 16)) profile = argv[i] + 16;
+  }
+  if (!profile) return 34;
+  int listener = socket(AF_INET, SOCK_STREAM, 0);
+  struct sockaddr_in address = {0}; address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK); address.sin_port = 0;
+  if (listener < 0 || bind(listener, (void *)&address, sizeof(address)) || listen(listener, 1)) return 35;
+  socklen_t size = sizeof(address); if (getsockname(listener, (void *)&address, &size)) return 36;
+  char readiness[PATH_MAX]; snprintf(readiness, sizeof(readiness), "%s/DevToolsActivePort", profile);
+  FILE *stream = fopen(readiness, "w"); if (!stream) return 37;
+  fprintf(stream, "%u\n/devtools/browser/proc-resource\n", ntohs(address.sin_port)); fclose(stream);
+  sleep(5); return 0;
+}
+''',
+            encoding="utf-8",
+        )
+        compiled = subprocess.run(
+            ["/usr/bin/gcc", "-O2", os.fspath(c_source), "-o", os.fspath(source)],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=15,
+        )
+        self.assertEqual(0, compiled.returncode)
+        source.chmod(0o755)
+        manifest = {
+            "schema": "meshshot.browser-tree-manifest/1",
+            "entries": [
+                {"path": ".", "kind": "directory", "mode": 0o755},
+                {
+                    "path": "chrome-headless-shell-linux64",
+                    "kind": "directory",
+                    "mode": 0o755,
+                },
+                {
+                    "path": (
+                        "chrome-headless-shell-linux64/"
+                        "chrome-headless-shell"
+                    ),
+                    "kind": "file",
+                    "mode": 0o755,
+                    "sha256": __import__("hashlib").sha256(
+                        source.read_bytes()
+                    ).hexdigest(),
+                },
+                {
+                    "path": "chrome-headless-shell-linux64/runtime.dat",
+                    "kind": "file",
+                    "mode": 0o644,
+                    "sha256": __import__("hashlib").sha256(
+                        b"resource"
+                    ).hexdigest(),
+                },
+            ],
+        }
+        manifest_sha256 = __import__("hashlib").sha256(
+            json.dumps(
+                manifest, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+        previous_root = os.environ.get("MESHSHOT_EXECUTABLE_ROOT")
+        previous_manifest = os.environ.get(
+            "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"
+        )
+        os.environ["MESHSHOT_EXECUTABLE_ROOT"] = "/meshshot-exec"
+        os.environ["MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"] = manifest_sha256
+        pinned = runtime._PinnedExecutable(source)
+        browser = object.__new__(runtime.PrelaunchedCdpRuntime)
+        browser._executable = source
+        browser._profile = {
+            "arguments": [], "startup_timeout_ms": 2000,
+            "cleanup_term_ms": 1000, "cleanup_kill_ms": 1000,
+        }
+        browser._pinned_executable = pinned
+        browser._profile_dir = None
+        browser._profile_identity = None
+        browser._profile_cleanup_forbidden = False
+        browser._profile_fd = None
+        browser._profile_parent_fd = None
+        browser._process = None
+        browser._process_group = None
+        try:
+            with mock.patch.object(runtime, "_verify_listener_owner"):
+                self.assertRegex(browser._prelaunch(), r"^http://127\.0\.0\.1:[0-9]+$")
+        finally:
+            if pinned.fd is not None:
+                browser._cleanup()
+            if previous_root is None:
+                os.environ.pop("MESHSHOT_EXECUTABLE_ROOT", None)
+            else:
+                os.environ["MESHSHOT_EXECUTABLE_ROOT"] = previous_root
+            if previous_manifest is None:
+                os.environ.pop("MESHSHOT_BROWSER_TREE_MANIFEST_SHA256", None)
+            else:
+                os.environ[
+                    "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"
+                ] = previous_manifest
+
     def test_production_shaped_double_bwrap_public_render_and_cleanup(self) -> None:
         if not Path("/usr/bin/bwrap").is_file():
             self.skipTest("controlled Linux image lacks the existing bwrap runtime")
