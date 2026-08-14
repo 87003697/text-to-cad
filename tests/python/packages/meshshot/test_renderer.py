@@ -3501,6 +3501,73 @@ class ResidualRendererTests(unittest.TestCase):
         self.assertIn(mock.call(43210, signal.SIGTERM), killpg.mock_calls)
         pinned.close.assert_called_once_with()
 
+    def test_linux_authenticated_handoff_survives_later_proc_denial(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executable = root / "chrome-headless-shell"
+            executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            executable.chmod(0o755)
+            profile = root / "profile"
+            pinned = _PinnedExecutable(executable)
+            process = mock.MagicMock(spec=subprocess.Popen)
+            process.pid = 43210
+            process.poll.return_value = None
+            process.wait.return_value = 0
+            runtime = object.__new__(PrelaunchedCdpRuntime)
+            runtime._executable = executable
+            runtime._profile = {
+                "arguments": [],
+                "startup_timeout_ms": 1000,
+                "cleanup_term_ms": 100,
+                "cleanup_kill_ms": 100,
+            }
+            runtime._pinned_executable = pinned
+            runtime._profile_dir = None
+            runtime._profile_identity = None
+            runtime._profile_cleanup_forbidden = False
+            runtime._profile_fd = None
+            runtime._profile_parent_fd = None
+            runtime._process = None
+            runtime._process_group = None
+
+            def authenticated_launch(*_args: object, **_kwargs: object) -> object:
+                (profile / "DevToolsActivePort").write_text(
+                    "49152\n/devtools/browser/verified\n",
+                    encoding="utf-8",
+                )
+                return process
+
+            with (
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch.object(pinned, "_linux_popen", side_effect=authenticated_launch),
+                mock.patch.object(
+                    pinned,
+                    "verify_running_image",
+                    side_effect=BrowserRuntimeError("browser_identity"),
+                ) as redundant_proof,
+                mock.patch(
+                    "meshshot.browser_runtime.tempfile.mkdtemp",
+                    side_effect=lambda **_kwargs: (
+                        profile.mkdir() or os.fspath(profile)
+                    ),
+                ),
+                mock.patch(
+                    "meshshot.browser_runtime._verify_listener_owner",
+                ),
+                mock.patch(
+                    "meshshot.browser_runtime.os.killpg",
+                    side_effect=ProcessLookupError,
+                ),
+            ):
+                endpoint = runtime._prelaunch()
+                self.assertEqual("http://127.0.0.1:49152", endpoint)
+                redundant_proof.assert_not_called()
+                runtime._cleanup()
+            self.assertFalse(profile.exists())
+
     def test_linux_handoff_rejects_actual_helper_death_eof_before_return(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
