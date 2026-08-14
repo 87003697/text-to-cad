@@ -27,6 +27,17 @@ RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 OWNER_NONCE = re.compile(r"[0-9a-f]{32}\Z")
 REMOTE_ROOT = "~/text-to-cad"
 MIN_REMOTE_FREE_BYTES = 3 * 1024 * 1024 * 1024
+REMOTE_PROVISION_FAILURE_CHECKS = frozenset(
+    {
+        "prepare-receipt",
+        "archive-hash-size",
+        "remote-disk-gate",
+        "image-load",
+        "image-attestation",
+        "transfer-cleanup",
+        "deployed-workflow-hash",
+    }
+)
 REQUEST = {
     "schema": "meshshot.browser-sidecar.render-request/2",
     "program": "probe",
@@ -115,6 +126,51 @@ def _remote_disk_gate() -> int:
             check="remote-disk-gate",
         )
     return free_bytes
+
+
+def _remote_archive_capacity_gate(archive_bytes: int) -> tuple[int, int]:
+    if archive_bytes <= 0:
+        raise ProbeError("archive byte count is invalid", check="archive-attestation")
+    required_free_bytes = MIN_REMOTE_FREE_BYTES + archive_bytes
+    free_bytes = shutil.disk_usage(REPO_ROOT).free
+    if free_bytes < required_free_bytes:
+        raise ProbeError(
+            "CVM disk cannot retain the fixed archive plus 3 GiB reserve",
+            check="remote-capacity-gate",
+        )
+    return free_bytes, required_free_bytes
+
+
+def _fixed_docker_server_gate() -> Mapping[str, str]:
+    try:
+        completed = _run(
+            ["docker", "version", "--format", "{{json .Server}}"],
+            cwd=REPO_ROOT,
+            timeout=30,
+        )
+    except ProbeError as exc:
+        raise ProbeError(
+            "fixed Docker server is inaccessible",
+            check="docker-server-access",
+        ) from exc
+    try:
+        payload = _strict_json_loads(completed.stdout, "fixed Docker server")
+    except ProbeError as exc:
+        raise ProbeError(
+            "fixed Docker server response is malformed",
+            check="docker-server-access",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ProbeError(
+            "fixed Docker server response is malformed",
+            check="docker-server-access",
+        )
+    if payload.get("Os") != "linux" or payload.get("Arch") != "amd64":
+        raise ProbeError(
+            "fixed Docker server is not linux/amd64",
+            check="docker-server-platform",
+        )
+    return {"os": "linux", "architecture": "amd64"}
 
 
 def _run(
@@ -265,6 +321,7 @@ def _remote(
     check: bool = True,
     owner_nonce: str | None = None,
     workflow_files: Mapping[str, str] | None = None,
+    archive: Mapping[str, Any] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     _validate_handle(handle)
     if operation not in {
@@ -279,8 +336,23 @@ def _remote(
         if owner_nonce is None or OWNER_NONCE.fullmatch(owner_nonce) is None:
             raise ProbeError("remote ownership nonce is invalid")
         validated_files = _validate_workflow_files(workflow_files)
+        if (
+            not isinstance(archive, dict)
+            or set(archive) != {"bytes", "sha256"}
+            or not isinstance(archive.get("bytes"), int)
+            or int(archive["bytes"]) <= 0
+            or not isinstance(archive.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", str(archive["sha256"])) is None
+        ):
+            raise ProbeError("archive attestation is invalid")
         arguments.extend(
-            [owner_nonce, validated_files["module"], validated_files["wrapper"]]
+            [
+                owner_nonce,
+                validated_files["module"],
+                validated_files["wrapper"],
+                str(archive["bytes"]),
+                str(archive["sha256"]),
+            ]
         )
     elif operation in {"remote-provision", "remote-abort"}:
         if owner_nonce is None or OWNER_NONCE.fullmatch(owner_nonce) is None:
@@ -391,6 +463,61 @@ def _validate_provision_success(
     ):
         raise ProbeError(
             "remote provision receipt did not bind the prepared artifact",
+            check="remote-provision-receipt-binding",
+        )
+    return remote
+
+
+def _validate_provision_failure(
+    remote: Mapping[str, Any], *, handle: str, owner_nonce: str
+) -> Mapping[str, Any]:
+    cleanup = remote.get("transferCleanup")
+    if (
+        set(remote)
+        != {
+            "schema",
+            "status",
+            "handle",
+            "ownerNonce",
+            "errorOperation",
+            "errorCheck",
+            "transferCleanup",
+            "retryAllowed",
+            "terminalOperation",
+        }
+        or remote.get("schema") != "cvm-sidecar.provision-receipt/1"
+        or remote.get("status") != "failed"
+        or remote.get("handle") != handle
+        or remote.get("ownerNonce") != owner_nonce
+        or remote.get("errorOperation") != "remote-provision"
+        or remote.get("errorCheck") not in REMOTE_PROVISION_FAILURE_CHECKS
+        or not isinstance(cleanup, dict)
+        or set(cleanup)
+        != {
+            "archiveAbsent",
+            "prepareReceiptAbsent",
+            "incomingDirectoryAbsent",
+            "errors",
+        }
+        or not all(
+            isinstance(cleanup.get(key), bool)
+            for key in (
+                "archiveAbsent",
+                "prepareReceiptAbsent",
+                "incomingDirectoryAbsent",
+            )
+        )
+        or not isinstance(cleanup.get("errors"), list)
+        or not all(
+            error in {"archive-remove", "prepare-receipt-remove", "incoming-remove"}
+            for error in cleanup["errors"]
+        )
+        or remote.get("retryAllowed") is not False
+        or remote.get("terminalOperation")
+        != {"operation": "provision", "handle": handle, "retryAllowed": False}
+    ):
+        raise ProbeError(
+            "remote provision failure receipt was not exact",
             check="remote-provision-receipt-binding",
         )
     return remote
@@ -689,8 +816,18 @@ def provision(handle: str) -> Mapping[str, object]:
         handle, "prepare.json", "cvm-sidecar.prepare-receipt/1"
     )
     archive_payload = receipt.get("archive")
-    if not isinstance(archive_payload, dict):
-        raise ProbeError("prepare receipt has no archive attestation")
+    if (
+        not isinstance(archive_payload, dict)
+        or set(archive_payload) != {"relativePath", "sha256", "bytes"}
+        or not isinstance(archive_payload.get("bytes"), int)
+        or archive_payload["bytes"] <= 0
+        or not isinstance(archive_payload.get("sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", archive_payload["sha256"]) is None
+    ):
+        raise ProbeError(
+            "prepare receipt archive attestation is invalid",
+            check="archive-attestation",
+        )
     workflow_files = _validate_workflow_files(receipt.get("workflowFiles"))
     archive = LOCAL_STATE_ROOT / handle / "images.tar"
     if (
@@ -711,6 +848,7 @@ def provision(handle: str) -> Mapping[str, object]:
         },
     )
     begin_attempted = False
+    remote_failure: Mapping[str, Any] | None = None
     try:
         begin_attempted = True
         begin = _parse_stdout_receipt(
@@ -719,6 +857,10 @@ def provision(handle: str) -> Mapping[str, object]:
                 handle,
                 owner_nonce=owner_nonce,
                 workflow_files=workflow_files,
+                archive={
+                    "bytes": archive_payload.get("bytes"),
+                    "sha256": archive_payload.get("sha256"),
+                },
             ),
             "cvm-sidecar.remote-begin-receipt/1",
         )
@@ -729,6 +871,9 @@ def provision(handle: str) -> Mapping[str, object]:
             "ownerNonce",
             "workflowFilesVerified",
             "freeBytes",
+            "requiredFreeBytes",
+            "archive",
+            "dockerServer",
         }
         if (
             set(begin) != expected_begin_keys
@@ -737,7 +882,16 @@ def provision(handle: str) -> Mapping[str, object]:
             or begin.get("ownerNonce") != owner_nonce
             or begin.get("workflowFilesVerified") != workflow_files
             or not isinstance(begin.get("freeBytes"), int)
-            or int(begin["freeBytes"]) < MIN_REMOTE_FREE_BYTES
+            or begin.get("requiredFreeBytes")
+            != MIN_REMOTE_FREE_BYTES + int(archive_payload["bytes"])
+            or int(begin["freeBytes"]) < int(begin["requiredFreeBytes"])
+            or begin.get("archive")
+            != {
+                "bytes": archive_payload.get("bytes"),
+                "sha256": archive_payload.get("sha256"),
+            }
+            or begin.get("dockerServer")
+            != {"os": "linux", "architecture": "amd64"}
         ):
             raise ProbeError("remote begin receipt did not prove fresh ownership")
         destination = (
@@ -755,10 +909,31 @@ def provision(handle: str) -> Mapping[str, object]:
             cwd=REPO_ROOT,
             timeout=1800,
         )
+        completed = _remote(
+            "remote-provision", handle, check=False, owner_nonce=owner_nonce
+        )
         remote = _parse_stdout_receipt(
-            _remote("remote-provision", handle, owner_nonce=owner_nonce),
+            completed,
             "cvm-sidecar.provision-receipt/1",
         )
+        if remote.get("status") == "failed":
+            if completed.returncode != 1:
+                raise ProbeError(
+                    "remote provision failure disagreed with SSH exit",
+                    check="remote-provision-receipt-binding",
+                )
+            remote_failure = _validate_provision_failure(
+                remote, handle=handle, owner_nonce=owner_nonce
+            )
+            raise ProbeError(
+                "remote provision returned a terminal failure receipt",
+                check=str(remote_failure["errorCheck"]),
+            )
+        if completed.returncode != 0:
+            raise ProbeError(
+                "remote provision success disagreed with SSH exit",
+                check="remote-provision-receipt-binding",
+            )
         remote = _validate_provision_success(
             remote,
             receipt,
@@ -795,13 +970,19 @@ def provision(handle: str) -> Mapping[str, object]:
             "abort": abort,
             "errorOperation": "provision",
             "errorCheck": exc.check if isinstance(exc, ProbeError) else "unexpected",
+            "remoteFailure": remote_failure,
         }
         _write_json_atomic(LOCAL_STATE_ROOT / handle / "provision.json", failure)
         raise
 
 
 def remote_begin(
-    handle: str, owner_nonce: str, module_sha256: str, wrapper_sha256: str
+    handle: str,
+    owner_nonce: str,
+    module_sha256: str,
+    wrapper_sha256: str,
+    archive_bytes: int,
+    archive_sha256: str,
 ) -> Mapping[str, object]:
     _validate_handle(handle)
     if OWNER_NONCE.fullmatch(owner_nonce) is None:
@@ -809,8 +990,11 @@ def remote_begin(
     expected_files = _validate_workflow_files(
         {"module": module_sha256, "wrapper": wrapper_sha256}
     )
+    if re.fullmatch(r"[0-9a-f]{64}", archive_sha256) is None:
+        raise ProbeError("archive SHA-256 is invalid", check="archive-attestation")
     verified_files = _verify_deployed_workflow(expected_files)
-    free_bytes = _remote_disk_gate()
+    free_bytes, required_free_bytes = _remote_archive_capacity_gate(archive_bytes)
+    docker_server = _fixed_docker_server_gate()
     LOCAL_STATE_ROOT.mkdir(parents=True, exist_ok=True)
     state = LOCAL_STATE_ROOT / handle
     try:
@@ -826,6 +1010,9 @@ def remote_begin(
                 "ownerNonce": owner_nonce,
                 "workflowFilesVerified": verified_files,
                 "freeBytes": free_bytes,
+                "requiredFreeBytes": required_free_bytes,
+                "archive": {"bytes": archive_bytes, "sha256": archive_sha256},
+                "dockerServer": docker_server,
             },
         )
         (state / "incoming").mkdir(mode=0o700)
@@ -836,6 +1023,9 @@ def remote_begin(
             "ownerNonce": owner_nonce,
             "workflowFilesVerified": verified_files,
             "freeBytes": free_bytes,
+            "requiredFreeBytes": required_free_bytes,
+            "archive": {"bytes": archive_bytes, "sha256": archive_sha256},
+            "dockerServer": docker_server,
         }
     except BaseException:
         try:
@@ -935,54 +1125,122 @@ def _verify_image_receipt(image: Mapping[str, Any]) -> Mapping[str, object]:
 def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
     _validate_handle(handle)
     ownership = _load_remote_provision_owner(handle, owner_nonce)
-    verified_files = _verify_deployed_workflow(
-        ownership.get("workflowFilesVerified")
-    )
-    free_bytes = _remote_disk_gate()
     state = LOCAL_STATE_ROOT / handle
     incoming = state / "incoming"
     prepare_path = incoming / "prepare.json"
     archive = incoming / "images.tar"
-    operation_error: BaseException | None = None
+    error_check: str | None = None
     receipt_data: dict[str, Any] | None = None
+    free_bytes: int | None = None
+    verified_files: Mapping[str, str] | None = None
+    current_check = "deployed-workflow-hash"
     try:
+        try:
+            verified_files = _verify_deployed_workflow(
+                ownership.get("workflowFilesVerified")
+            )
+        except BaseException as exc:
+            raise ProbeError(
+                "deployed workflow changed before image load",
+                check="deployed-workflow-hash",
+            ) from exc
+        current_check = "archive-hash-size"
+        ownership_archive = ownership.get("archive")
+        if (
+            not isinstance(ownership_archive, dict)
+            or not isinstance(ownership_archive.get("bytes"), int)
+            or int(ownership_archive["bytes"]) <= 0
+            or not isinstance(ownership_archive.get("sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", str(ownership_archive["sha256"]))
+            is None
+        ):
+            raise ProbeError(
+                "remote begin archive binding is invalid",
+                check="archive-hash-size",
+            )
+        current_check = "remote-disk-gate"
+        try:
+            free_bytes = _remote_disk_gate()
+        except BaseException:
+            raise ProbeError(
+                "post-transfer disk reserve gate failed",
+                check="remote-disk-gate",
+            )
+        current_check = "prepare-receipt"
         try:
             prepare_receipt = _strict_json_loads(
                 prepare_path.read_text(encoding="utf-8"),
                 "transferred prepare receipt",
             )
         except (OSError, ProbeError) as exc:
-            raise ProbeError("transferred prepare receipt is unavailable") from exc
+            raise ProbeError(
+                "transferred prepare receipt is unavailable",
+                check="prepare-receipt",
+            ) from exc
         if (
             not isinstance(prepare_receipt, dict)
             or prepare_receipt.get("schema") != "cvm-sidecar.prepare-receipt/1"
             or prepare_receipt.get("handle") != handle
         ):
-            raise ProbeError("transferred prepare receipt identity mismatch")
+            raise ProbeError(
+                "transferred prepare receipt identity mismatch",
+                check="prepare-receipt",
+            )
+        current_check = "archive-hash-size"
         archive_payload = prepare_receipt.get("archive")
-        if not isinstance(archive_payload, dict):
-            raise ProbeError("transferred receipt has no archive attestation")
+        if (
+            not isinstance(archive_payload, dict)
+            or archive_payload.get("bytes")
+            != ownership_archive.get("bytes")
+            or archive_payload.get("sha256")
+            != ownership_archive.get("sha256")
+        ):
+            raise ProbeError(
+                "transferred receipt archive binding mismatch",
+                check="archive-hash-size",
+            )
         if (
             not archive.is_file()
             or archive.stat().st_size != archive_payload.get("bytes")
             or _sha256_file(archive) != archive_payload.get("sha256")
         ):
-            raise ProbeError("remote archive hash or size mismatch")
-        _run(
-            ["docker", "image", "load", "--input", os.fspath(archive)],
-            cwd=REPO_ROOT,
-            timeout=1800,
-        )
+            raise ProbeError(
+                "remote archive hash or size mismatch",
+                check="archive-hash-size",
+            )
+        current_check = "image-load"
+        try:
+            _run(
+                ["docker", "image", "load", "--input", os.fspath(archive)],
+                cwd=REPO_ROOT,
+                timeout=1800,
+            )
+        except BaseException as exc:
+            raise ProbeError("fixed image load failed", check="image-load") from exc
+        current_check = "image-attestation"
         images_payload = prepare_receipt.get("images")
         if not isinstance(images_payload, list) or len(images_payload) != 2:
-            raise ProbeError("prepare receipt does not name exactly two images")
-        images = [
-            _verify_image_receipt(image)
-            for image in images_payload
-            if isinstance(image, dict)
-        ]
+            raise ProbeError(
+                "prepare receipt does not name exactly two images",
+                check="image-attestation",
+            )
+        try:
+            images = [
+                _verify_image_receipt(image)
+                for image in images_payload
+                if isinstance(image, dict)
+            ]
+        except BaseException as exc:
+            raise ProbeError(
+                "loaded image attestation failed",
+                check="image-attestation",
+            ) from exc
         if [image["role"] for image in images] != ["sidecar", "client"]:
-            raise ProbeError("prepare receipt image order is not fixed")
+            raise ProbeError(
+                "prepare receipt image order is not fixed",
+                check="image-attestation",
+            )
+        assert free_bytes is not None and verified_files is not None
         receipt_data = {
             "schema": "cvm-sidecar.provision-receipt/1",
             "status": "provisioned",
@@ -1008,38 +1266,60 @@ def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
             },
         }
     except BaseException as exc:
-        operation_error = exc
+        candidate = exc.check if isinstance(exc, ProbeError) else current_check
+        error_check = (
+            candidate
+            if candidate in REMOTE_PROVISION_FAILURE_CHECKS
+            else current_check
+        )
 
     cleanup_errors: list[str] = []
-    for path in (archive, prepare_path):
+    for path, cleanup_check in (
+        (archive, "archive-remove"),
+        (prepare_path, "prepare-receipt-remove"),
+    ):
         try:
             path.unlink(missing_ok=True)
         except OSError:
-            cleanup_errors.append(f"cannot remove {path.name}")
+            cleanup_errors.append(cleanup_check)
     try:
         incoming.rmdir()
     except OSError:
-        cleanup_errors.append("cannot remove incoming directory")
+        cleanup_errors.append("incoming-remove")
     transfer_cleanup = {
         "archiveAbsent": not archive.exists(),
         "prepareReceiptAbsent": not prepare_path.exists(),
         "incomingDirectoryAbsent": not incoming.exists(),
         "errors": cleanup_errors,
     }
-    if cleanup_errors or not all(
+    cleanup_failed = bool(cleanup_errors) or not all(
         transfer_cleanup[key]
         for key in (
             "archiveAbsent",
             "prepareReceiptAbsent",
             "incomingDirectoryAbsent",
         )
-    ):
-        raise ProbeError(
-            "remote provision transfer cleanup failed",
-            check="transfer-cleanup-absence",
-        )
-    if operation_error is not None:
-        raise operation_error
+    )
+    if cleanup_failed:
+        error_check = "transfer-cleanup"
+    if error_check is not None:
+        failure = {
+            "schema": "cvm-sidecar.provision-receipt/1",
+            "status": "failed",
+            "handle": handle,
+            "ownerNonce": owner_nonce,
+            "errorOperation": "remote-provision",
+            "errorCheck": error_check,
+            "transferCleanup": transfer_cleanup,
+            "retryAllowed": False,
+            "terminalOperation": {
+                "operation": "provision",
+                "handle": handle,
+                "retryAllowed": False,
+            },
+        }
+        _write_json_atomic(state / "provision.json", failure)
+        return failure
     assert receipt_data is not None
     receipt_data["transferCleanup"] = transfer_cleanup
     _write_json_atomic(state / "provision.json", receipt_data)
@@ -1620,6 +1900,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     remote_begin_parser.add_argument("owner_nonce")
     remote_begin_parser.add_argument("module_sha256")
     remote_begin_parser.add_argument("wrapper_sha256")
+    remote_begin_parser.add_argument("archive_bytes", type=int)
+    remote_begin_parser.add_argument("archive_sha256")
     remote_provision_parser = subparsers.add_parser("remote-provision")
     remote_provision_parser.add_argument("handle")
     remote_provision_parser.add_argument("owner_nonce")
@@ -1646,9 +1928,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.owner_nonce,
                 args.module_sha256,
                 args.wrapper_sha256,
+                args.archive_bytes,
+                args.archive_sha256,
             )
         elif args.operation == "remote-provision":
             receipt = remote_provision(args.handle, args.owner_nonce)
+            print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+            return 0 if receipt.get("status") == "provisioned" else 1
         elif args.operation == "remote-abort":
             receipt = remote_abort(args.handle, args.owner_nonce)
         elif args.operation == "remote-probe":

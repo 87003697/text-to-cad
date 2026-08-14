@@ -24,10 +24,12 @@ The workflow has three separate public operations:
    required to be the same commit.
 2. `provision` is an external CVM write. It transfers the fixed archive through
    this wrapper. Before any remote state write it verifies the deployed module
-   and wrapper SHA-256 values and enforces the mandatory 3 GiB CVM free-disk
-   gate. It verifies the archive hash before `docker image load`, re-inspects
-   the loaded IDs/platform/config, removes the transfer archive, and
-   intentionally retains the two provisioned images.
+   and wrapper SHA-256 values, binds the exact archive bytes/SHA-256, requires
+   free space of at least `3 GiB + archive bytes`, and verifies an accessible
+   `linux/amd64` Docker server. It retains the 3 GiB post-transfer gate,
+   verifies the archive hash before `docker image load`, re-inspects the loaded
+   IDs/platform/config, removes the transfer archive, and intentionally retains
+   the two provisioned images.
 3. `probe` is a second external CVM write and the only execution dispatch. It
    runs exactly one sealed probe with `--pull=never`, an internal network,
    fixed resource bounds, read-only filesystems, and exact runtime cleanup.
@@ -112,6 +114,12 @@ different destructive operation and requires a separate authorization.
 - Remote begin followed by transfer/finalize failure: the wrapper invokes its
   one fixed abort operation, proves transfer absence when possible, writes a
   terminal failed receipt, and forbids retry.
+- Remote provision failures emit and persist a fixed receipt whose
+  `errorCheck` is one of `prepare-receipt`, `archive-hash-size`,
+  `remote-disk-gate`, `image-load`, `image-attestation`,
+  `transfer-cleanup`, or `deployed-workflow-hash`. Public provision preserves
+  that exact check and the bounded remote receipt before the nonce-scoped
+  abort. Raw stderr, paths, errno, and Docker output are not durable evidence.
 - Probe failure or cleanup failure: preserve the receipt and handle; do not
   rerun, submit a pilot, inspect raw remote state, or invent a cleanup command.
 - Missing or malformed receipt: report the missing structured evidence and

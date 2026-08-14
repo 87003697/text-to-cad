@@ -80,6 +80,8 @@ def write_image_docker(path: Path) -> None:
             elif sys.argv[1:3] == ["image", "load"]:
                 assert pathlib.Path(sys.argv[4]).read_bytes() == b"exact fake docker archive\\n"
                 print("Loaded exact images")
+            elif sys.argv[1:3] == ["version", "--format"]:
+                print(json.dumps({{"Os": "linux", "Arch": "amd64"}}))
             else:
                 raise SystemExit(f"unexpected docker argv: {{sys.argv[1:]}}")
             """
@@ -406,7 +408,12 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             ):
                 with self.assertRaises(cvm_sidecar_probe.ProbeError) as hash_error:
                     cvm_sidecar_probe.remote_begin(
-                        handle, "a" * 32, "3" * 64, expected["wrapper"]
+                        handle,
+                        "a" * 32,
+                        "3" * 64,
+                        expected["wrapper"],
+                        17,
+                        "4" * 64,
                     )
             self.assertEqual(hash_error.exception.check, "deployed-workflow-hash")
             self.assertFalse(state_root.exists())
@@ -424,14 +431,17 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         "a" * 32,
                         expected["module"],
                         expected["wrapper"],
+                        17,
+                        "4" * 64,
                     )
-            self.assertEqual(disk_error.exception.check, "remote-disk-gate")
+            self.assertEqual(disk_error.exception.check, "remote-capacity-gate")
             self.assertFalse(state_root.exists())
 
             owner = "e" * 32
             provision_handle = "cvmsp-" + "9" * 24
             provision_state = state_root / provision_handle
             provision_state.mkdir(parents=True)
+            (provision_state / "incoming").mkdir()
             (provision_state / "provision-attempt.json").write_text(
                 json.dumps(
                     {
@@ -440,6 +450,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         "ownerNonce": owner,
                         "workflowFilesVerified": expected,
                         "freeBytes": 4 * 1024 * 1024 * 1024,
+                        "archive": {"bytes": 17, "sha256": "4" * 64},
                     }
                 ),
                 encoding="utf-8",
@@ -452,9 +463,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 mock.patch.object(cvm_sidecar_probe.shutil, "disk_usage", return_value=low),
                 mock.patch.object(cvm_sidecar_probe, "_run") as run,
             ):
-                with self.assertRaises(cvm_sidecar_probe.ProbeError) as load_gate:
-                    cvm_sidecar_probe.remote_provision(provision_handle, owner)
-            self.assertEqual(load_gate.exception.check, "remote-disk-gate")
+                load_gate = cvm_sidecar_probe.remote_provision(provision_handle, owner)
+            self.assertEqual(load_gate["errorCheck"], "remote-disk-gate")
             run.assert_not_called()
 
     def test_remote_begin_requires_archive_capacity_before_state(self) -> None:
@@ -529,6 +539,54 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             self.assertEqual(error.exception.check, "docker-server-platform")
             self.assertFalse(state_root.exists())
 
+    def test_remote_begin_receipt_binds_archive_capacity_and_docker_server(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-begin-binding-") as root_text:
+            state_root = Path(root_text) / "state"
+            handle = "cvmsp-" + "6" * 24
+            workflow = {"module": "1" * 64, "wrapper": "2" * 64}
+            archive_bytes = 23
+            required = 3 * 1024 * 1024 * 1024 + archive_bytes
+            enough = type("Usage", (), {"free": required + 4096})()
+            docker = subprocess.CompletedProcess(
+                ["docker", "version"],
+                0,
+                '{"Os":"linux","Arch":"amd64"}\n',
+                "",
+            )
+            with (
+                mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
+                mock.patch.object(
+                    cvm_sidecar_probe, "_workflow_file_hashes", return_value=workflow
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe.shutil, "disk_usage", return_value=enough
+                ),
+                mock.patch.object(cvm_sidecar_probe, "_run", return_value=docker),
+            ):
+                receipt = cvm_sidecar_probe.remote_begin(
+                    handle,
+                    "a" * 32,
+                    workflow["module"],
+                    workflow["wrapper"],
+                    archive_bytes,
+                    "3" * 64,
+                )
+
+            self.assertEqual(receipt["freeBytes"], required + 4096)
+            self.assertEqual(receipt["requiredFreeBytes"], required)
+            self.assertEqual(
+                receipt["archive"], {"bytes": archive_bytes, "sha256": "3" * 64}
+            )
+            self.assertEqual(
+                receipt["dockerServer"],
+                {"os": "linux", "architecture": "amd64"},
+            )
+            attempt = json.loads(
+                (state_root / handle / "provision-attempt.json").read_text()
+            )
+            self.assertEqual(attempt["archive"], receipt["archive"])
+            self.assertEqual(attempt["requiredFreeBytes"], required)
+
     def test_remote_probe_rechecks_workflow_and_disk_before_claim(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-probe-gates-") as root_text:
             repo = Path(root_text) / "repo"
@@ -599,7 +657,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     parts = command.split()
                     if "remote-begin" in parts:
                         index = parts.index("remote-begin")
-                        handle, owner, module_hash, wrapper_hash = parts[index + 1:index + 5]
+                        handle, owner, module_hash, wrapper_hash, archive_bytes, archive_sha = parts[index + 1:index + 7]
+                        archive_bytes = int(archive_bytes)
                         print(json.dumps({
                             "schema": "cvm-sidecar.remote-begin-receipt/1",
                             "status": "ready-for-fixed-archive",
@@ -607,6 +666,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             "ownerNonce": owner,
                             "workflowFilesVerified": {"module": module_hash, "wrapper": wrapper_hash},
                             "freeBytes": 4 * 1024 * 1024 * 1024,
+                            "requiredFreeBytes": 3 * 1024 * 1024 * 1024 + archive_bytes,
+                            "archive": {"bytes": archive_bytes, "sha256": archive_sha},
+                            "dockerServer": {"os": "linux", "architecture": "amd64"},
                         }))
                     elif "remote-provision" in parts:
                         index = parts.index("remote-provision")
@@ -724,7 +786,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     parts = command.split()
                     if "remote-begin" in parts:
                         index = parts.index("remote-begin")
-                        handle, owner, module_hash, wrapper_hash = parts[index + 1:index + 5]
+                        handle, owner, module_hash, wrapper_hash, archive_bytes, archive_sha = parts[index + 1:index + 7]
+                        archive_bytes = int(archive_bytes)
                         print(json.dumps({
                             "schema": "cvm-sidecar.remote-begin-receipt/1",
                             "status": "ready-for-fixed-archive",
@@ -732,6 +795,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             "ownerNonce": owner,
                             "workflowFilesVerified": {"module": module_hash, "wrapper": wrapper_hash},
                             "freeBytes": 4 * 1024 * 1024 * 1024,
+                            "requiredFreeBytes": 3 * 1024 * 1024 * 1024 + archive_bytes,
+                            "archive": {"bytes": archive_bytes, "sha256": archive_sha},
+                            "dockerServer": {"os": "linux", "architecture": "amd64"},
                         }))
                     elif "remote-provision" in parts:
                         index = parts.index("remote-provision")
@@ -829,7 +895,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     parts = command.split()
                     if "remote-begin" in parts:
                         index = parts.index("remote-begin")
-                        handle, owner, module_hash, wrapper_hash = parts[index + 1:index + 5]
+                        handle, owner, module_hash, wrapper_hash, archive_bytes, archive_sha = parts[index + 1:index + 7]
+                        archive_bytes = int(archive_bytes)
                         print(json.dumps({
                             "schema": "cvm-sidecar.remote-begin-receipt/1",
                             "status": "ready-for-fixed-archive",
@@ -837,6 +904,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             "ownerNonce": owner,
                             "workflowFilesVerified": {"module": module_hash, "wrapper": wrapper_hash},
                             "freeBytes": 4 * 1024 * 1024 * 1024,
+                            "requiredFreeBytes": 3 * 1024 * 1024 * 1024 + archive_bytes,
+                            "archive": {"bytes": archive_bytes, "sha256": archive_sha},
+                            "dockerServer": {"os": "linux", "architecture": "amd64"},
                         }))
                         raise SystemExit(0)
                     if "remote-provision" in parts:
@@ -949,6 +1019,10 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         "ownerNonce": owner,
                         "workflowFilesVerified": prepare_receipt["workflowFiles"],
                         "freeBytes": 4 * 1024 * 1024 * 1024,
+                        "archive": {
+                            "bytes": prepare_receipt["archive"]["bytes"],
+                            "sha256": prepare_receipt["archive"]["sha256"],
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -1022,6 +1096,10 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         "ownerNonce": owner,
                         "workflowFilesVerified": prepare_receipt["workflowFiles"],
                         "freeBytes": 4 * 1024 * 1024 * 1024,
+                        "archive": {
+                            "bytes": prepare_receipt["archive"]["bytes"],
+                            "sha256": prepare_receipt["archive"]["sha256"],
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -1054,6 +1132,94 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 json.loads((state / "provision.json").read_text()), receipt
             )
             self.assertEqual(result.stderr, "")
+
+    def test_remote_provision_classifies_image_load_and_attestation(self) -> None:
+        for index, expected_check in enumerate(
+            ("image-load", "image-attestation"), start=1
+        ):
+            with self.subTest(expected_check=expected_check), tempfile.TemporaryDirectory(
+                prefix=f"cvm-sidecar-{expected_check}-"
+            ) as root_text:
+                state_root = Path(root_text) / "state"
+                handle = "cvmsp-" + str(index) * 24
+                owner = "a" * 32
+                workflow = {"module": "1" * 64, "wrapper": "2" * 64}
+                archive_bytes = b"x"
+                archive_sha = hashlib.sha256(archive_bytes).hexdigest()
+                state = state_root / handle
+                incoming = state / "incoming"
+                incoming.mkdir(parents=True)
+                (state / "provision-attempt.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "cvm-sidecar.remote-provision-attempt/1",
+                            "handle": handle,
+                            "ownerNonce": owner,
+                            "workflowFilesVerified": workflow,
+                            "freeBytes": 4 * 1024 * 1024 * 1024,
+                            "archive": {"bytes": 1, "sha256": archive_sha},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (incoming / "prepare.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "cvm-sidecar.prepare-receipt/1",
+                            "handle": handle,
+                            "archive": {"bytes": 1, "sha256": archive_sha},
+                            "images": [
+                                {"role": "sidecar", "id": SIDECAR_ID},
+                                {"role": "client", "id": CLIENT_ID},
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (incoming / "images.tar").write_bytes(archive_bytes)
+
+                def fixed_run(
+                    argv: object, **kwargs: object
+                ) -> subprocess.CompletedProcess[str]:
+                    del kwargs
+                    arguments = list(argv)
+                    if arguments[1:3] == ["image", "load"]:
+                        if expected_check == "image-load":
+                            raise cvm_sidecar_probe.ProbeError("load failed")
+                        return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
+                    if arguments[1:3] == ["image", "inspect"]:
+                        return subprocess.CompletedProcess(arguments, 0, "[]\n", "")
+                    raise AssertionError(f"unexpected command: {arguments}")
+
+                enough = type(
+                    "Usage", (), {"free": 4 * 1024 * 1024 * 1024}
+                )()
+                with (
+                    mock.patch.object(
+                        cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root
+                    ),
+                    mock.patch.object(
+                        cvm_sidecar_probe,
+                        "_workflow_file_hashes",
+                        return_value=workflow,
+                    ),
+                    mock.patch.object(
+                        cvm_sidecar_probe.shutil,
+                        "disk_usage",
+                        return_value=enough,
+                    ),
+                    mock.patch.object(
+                        cvm_sidecar_probe, "_run", side_effect=fixed_run
+                    ),
+                ):
+                    receipt = cvm_sidecar_probe.remote_provision(handle, owner)
+
+                self.assertEqual(receipt["status"], "failed")
+                self.assertEqual(receipt["errorCheck"], expected_check)
+                self.assertEqual(receipt["transferCleanup"]["errors"], [])
+                self.assertEqual(
+                    json.loads((state / "provision.json").read_text()), receipt
+                )
 
     def test_remote_provision_cleanup_failure_dominates_hash_failure(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-cleanup-dominates-") as root_text:
@@ -1097,6 +1263,10 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         "ownerNonce": owner,
                         "workflowFilesVerified": prepare_receipt["workflowFiles"],
                         "freeBytes": 4 * 1024 * 1024 * 1024,
+                        "archive": {
+                            "bytes": prepare_receipt["archive"]["bytes"],
+                            "sha256": prepare_receipt["archive"]["sha256"],
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -1114,9 +1284,14 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 stderr=subprocess.PIPE,
             )
 
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("transfer cleanup failed", result.stderr)
-            self.assertFalse((state / "provision.json").exists())
+            self.assertEqual(result.returncode, 1)
+            receipt = json.loads(result.stdout)
+            self.assertEqual(receipt["errorCheck"], "transfer-cleanup")
+            self.assertIn("incoming-remove", receipt["transferCleanup"]["errors"])
+            self.assertEqual(
+                json.loads((state / "provision.json").read_text()), receipt
+            )
+            self.assertEqual(result.stderr, "")
             self.assertTrue((incoming / "unexpected").is_file())
 
     def test_transfer_failure_invokes_one_fixed_abort_and_records_absence(self) -> None:
@@ -1141,8 +1316,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         stream.write(json.dumps({"tool": "ssh", "command": command}) + "\\n")
                     if "remote-begin" in parts:
                         index = parts.index("remote-begin")
-                        handle, owner, module_hash, wrapper_hash = parts[index + 1:index + 5]
-                        print(json.dumps({"schema": "cvm-sidecar.remote-begin-receipt/1", "status": "ready-for-fixed-archive", "handle": handle, "ownerNonce": owner, "workflowFilesVerified": {"module": module_hash, "wrapper": wrapper_hash}, "freeBytes": 4 * 1024 * 1024 * 1024}))
+                        handle, owner, module_hash, wrapper_hash, archive_bytes, archive_sha = parts[index + 1:index + 7]
+                        archive_bytes = int(archive_bytes)
+                        print(json.dumps({"schema": "cvm-sidecar.remote-begin-receipt/1", "status": "ready-for-fixed-archive", "handle": handle, "ownerNonce": owner, "workflowFilesVerified": {"module": module_hash, "wrapper": wrapper_hash}, "freeBytes": 4 * 1024 * 1024 * 1024, "requiredFreeBytes": 3 * 1024 * 1024 * 1024 + archive_bytes, "archive": {"bytes": archive_bytes, "sha256": archive_sha}, "dockerServer": {"os": "linux", "architecture": "amd64"}}))
                     elif "remote-abort" in parts:
                         index = parts.index("remote-abort")
                         handle, owner = parts[index + 1:index + 3]
@@ -1383,6 +1559,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             root = Path(root_text)
             repo = root / "repo"
             wrapper = copy_cli(repo)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            write_image_docker(fake_bin / "docker")
             handle = "cvmsp-" + "3" * 24
             (repo / ".cvm-sidecar-probes" / handle).mkdir(parents=True)
             module_hash = hashlib.sha256(internal_remote_cli(repo).read_bytes()).hexdigest()
@@ -1397,8 +1576,11 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     "a" * 32,
                     module_hash,
                     wrapper_hash,
+                    "17",
+                    "4" * 64,
                 ],
                 cwd=repo,
+                env=cli_env(fake_bin),
                 check=False,
                 text=True,
                 stdout=subprocess.PIPE,
