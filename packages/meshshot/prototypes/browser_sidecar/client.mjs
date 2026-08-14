@@ -66,7 +66,7 @@ try {
         };
       } else if (requestedProgram === "viewer") {
         const viewerPayload = program === "suite" ? request.payload.viewer : request.payload;
-        await page.goto("http://127.0.0.1:4173/?file=cube.stl", { waitUntil: "networkidle", timeout: 60_000 });
+        await page.goto("http://127.0.0.1:4173/?file=browser_sidecar_inspection.step", { waitUntil: "networkidle", timeout: 60_000 });
         await page.waitForTimeout(2_000);
         const projectionControl = page.getByRole("button", { name: /Display and projection:/ });
         const inspectionBefore = await projectionControl.getAttribute("aria-label");

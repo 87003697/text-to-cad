@@ -72,7 +72,7 @@ const viewer = spawn("node", [
   env: {
     ...process.env,
     VIEWER_ASSET_BACKEND: "local-fs",
-    VIEWER_DEFAULT_FILE: "cube.stl",
+    VIEWER_DEFAULT_FILE: "browser_sidecar_inspection.step",
     VIEWER_GIT: "prototype-baked-assets",
   },
 });

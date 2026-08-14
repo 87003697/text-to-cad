@@ -19,7 +19,7 @@ test("accepts only the registered suite structured payload", () => {
     schema: "meshshot.browser-sidecar.render-request/2",
     program: "suite",
     payload: {
-      viewer: { modelKey: "cube-stl", inspectionControl: "toggle-projection" },
+      viewer: { modelKey: "inspection-step", inspectionControl: "toggle-projection" },
       residual,
     },
   }));

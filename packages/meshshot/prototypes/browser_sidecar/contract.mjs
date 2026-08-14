@@ -57,8 +57,8 @@ function residualPayload(payload) {
 
 function viewerPayload(payload) {
   exactKeys(payload, ["modelKey", "inspectionControl"], "viewer payload");
-  if (payload.modelKey !== "cube-stl" || payload.inspectionControl !== "toggle-projection") {
-    throw new Error("viewer accepts only cube-stl and toggle-projection");
+  if (payload.modelKey !== "inspection-step" || payload.inspectionControl !== "toggle-projection") {
+    throw new Error("viewer accepts only inspection-step and toggle-projection");
   }
 }
 

@@ -7,7 +7,7 @@ COPY packages/cadjs /build/packages/cadjs
 COPY packages/implicitjs /build/packages/implicitjs
 COPY packages/cadpy /build/packages/cadpy
 COPY viewer /build/viewer
-RUN cd /build/viewer && npm ci --ignore-scripts && VIEWER_DEFAULT_FILE=cube.stl npm run build
+RUN cd /build/viewer && npm ci --ignore-scripts && VIEWER_DEFAULT_FILE=browser_sidecar_inspection.step npm run build
 
 FROM ${PLAYWRIGHT_BASE} AS runtime-deps
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
@@ -32,6 +32,7 @@ WORKDIR /opt/browser-sidecar
 COPY --from=runtime-deps /opt/browser-sidecar/prototype/node_modules ./prototype/node_modules
 COPY packages/meshshot/prototypes/browser_sidecar/server.mjs ./prototype/server.mjs
 COPY models/prototypes/browser_sidecar_cube.stl ./fixtures/cube.stl
+COPY models/prototypes/browser_sidecar_inspection.step ./fixtures/browser_sidecar_inspection.step
 COPY packages/meshshot/src/meshshot/runtime ./residual
 COPY packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json ./profile.json
 COPY --from=viewer-build /build/viewer/dist ./viewer/dist
