@@ -16,7 +16,7 @@ from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
 
 from cadgen._internal import source_hash as cad_source_hash
-from cadgen._internal import step_scene
+from cadgen._internal import step_scene, step_scene_cache
 from cadgen._internal.step_scene import LoadedStepScene, OccurrenceNode
 from tests.python.support.tmp_root import temporary_directory
 
@@ -168,7 +168,9 @@ class BinarySceneCacheTests(unittest.TestCase):
             step_scene._write_step_scene_cache(self._scene(step_path), step_hash="hash-xyz")
 
             with mock.patch.object(
-                step_scene, "STEP_SCENE_CACHE_SCHEMA_VERSION", step_scene.STEP_SCENE_CACHE_SCHEMA_VERSION + 1
+                step_scene_cache,
+                "STEP_SCENE_CACHE_SCHEMA_VERSION",
+                step_scene.STEP_SCENE_CACHE_SCHEMA_VERSION + 1,
             ):
                 self.assertIsNone(
                     step_scene._read_step_scene_cache(step_path, step_hash="hash-xyz")
