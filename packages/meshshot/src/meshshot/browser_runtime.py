@@ -1634,7 +1634,6 @@ class _PinnedExecutable:
             helper_argv = [
                 os.fspath(_TRUSTED_BWRAP),
                 "--die-with-parent",
-                "--new-session",
                 "--cap-drop",
                 "ALL",
                 "--bind",
