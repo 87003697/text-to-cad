@@ -49,6 +49,13 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
    `a531b507` proved cross-handle probe success spoofing, probe claims before
    deployment/disk gates, and ambiguous begin ownership after lost stdout. R3
    GREEN `343a412e` closes only those three seams; it did not contact CVM.
+7. The first authorized provision attempt later ended with only the structured
+   classification `errorCheck=workflow`; its nonce-scoped abort proved transfer
+   absence. R4 deliberately did not inspect raw logs, contact CVM, or touch that
+   terminal handle. RED `ec90dbee723b6f6d94728f5484ed6b8e1756c98b`
+   reproduced the missing pre-transfer capacity/Docker gates and missing bounded
+   remote failure receipt. GREEN
+   `1ee713d0e00e2b0510c7cce577786cccb9801491` closes only those seams.
 
 ## Session 产出
 
@@ -62,6 +69,8 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
 | `92e228c0` R2 GREEN | skill, module, tests | Fresh ownership proof; exact receipt/deployment/disk gates; collision-safe best-effort terminal cleanup. |
 | `a531b507` R3 RED | focused global tests | Spoofed probe success, pre-gate claim, and lost-begin ownership regressions. |
 | `343a412e` R3 GREEN | skill, module, tests | Strict public probe receipt binding, pre-claim remote gates, and locally durable begin nonce. |
+| `ec90dbee723b6f6d94728f5484ed6b8e1756c98b` R4 RED | focused global tests | Missing archive-aware capacity gate, Docker server gate, bounded remote failure receipt, and preserved public failure classification. |
+| `1ee713d0e00e2b0510c7cce577786cccb9801491` R4 GREEN | skill, module, tests | Pre-transfer archive-capacity and fixed Docker gates; bounded persisted failure receipts and strict public receipt/SSH binding. |
 
 ### 核心行为
 
@@ -96,8 +105,9 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
 - Docker, SSH, rsync, image save/load, readiness, and probe operations all have
   bounded timeouts.
 - Remote state is created only after exact deployed module/wrapper SHA-256
-  verification and a free-disk result of at least 3 GiB. The same checks run
-  again before image load.
+  verification, a fixed accessible `linux/amd64` Docker server check, and free
+  disk of at least 3 GiB plus the exact attested archive size. The existing
+  3 GiB disk gate runs again after transfer and before image load.
 - A fresh 128-bit nonce in the exact `remote-begin` receipt proves ownership.
   Failed begin cannot abort or adopt an existing predictable handle.
 - Runtime cleanup resolves each exact Docker ID and verifies both handle and
@@ -117,6 +127,12 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
   lost. A foreign predictable handle cannot satisfy the nonce receipt.
 - The exact two loaded image IDs are intentionally retained as provisioned
   artifacts. Removing them is a separate destructive authorization boundary.
+- Remote provision failures after ownership is proven persist and emit a fixed
+  receipt classified as exactly one bounded stage: prepare receipt, archive
+  hash/size, post-transfer disk, image load, image attestation, transfer
+  cleanup, or deployed workflow hash. Public provision accepts such a failure
+  only with SSH exit 1, preserves its exact classification, performs the same
+  nonce-scoped abort, and never publishes raw stderr/path/errno as evidence.
 
 ### 验证结果
 
@@ -149,6 +165,16 @@ R3 final validation:
 - `python3 -m py_compile` for the module and focused test → exit 0.
 - `git diff --check` and staged diff check → exit 0.
 
+R4 final validation:
+
+- Four new RED seams failed independently before implementation.
+- Focused suite → **28 tests, OK**.
+- Global gate with the project virtualenv and local loopback permission →
+  **179 tests, OK**.
+- `python3 -m py_compile` for the module and focused test → exit 0.
+- `git diff --check` and staged diff check → exit 0.
+- External/CVM operations: **zero**; incremental spend: **$0**.
+
 The first restricted global run was not accepted as product evidence: it had
 eight loopback-bind permission errors and two missing-worktree-dependency
 errors. It also exposed one real README compatibility assertion introduced by
@@ -173,9 +199,14 @@ this branch; that wording was fixed before the clean 162-test rerun.
   full clean image-source SHA whose label is present in both configs. The owner
   reported clean runtime commit prefix `e1a68655`; verify the full SHA and final
   rebuild receipt rather than expanding this prefix.
-- No CVM code push, provision, or probe occurred. External handle count is zero
-  and incremental spend is `$0`.
+- R4 performed no CVM code push, provision, or probe and spent `$0`. The prior
+  failed handle remains terminal with structured abort/transfer-absence proof;
+  R4 neither inspected nor mutated it.
 - Independent Standards/Spec review and parent integration remain parent-owned.
+
+R4 adds no new external attempt. Its clean review range is
+`97aef65d..1ee713d0e00e2b0510c7cce577786cccb9801491`; the previously failed
+handle remains terminal and untouched.
 
 ## 下一步
 
