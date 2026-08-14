@@ -202,6 +202,7 @@ def _compile_browser() -> None:
     executable = revision / "chrome-headless-shell"
     source.write_text(
         r'''#include <arpa/inet.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -209,16 +210,92 @@ def _compile_browser() -> None:
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t running = 1;
 static void stop(int sig) { (void)sig; running = 0; }
+static pid_t parent_of(pid_t pid) {
+  char path[128];
+  snprintf(path, sizeof(path), "/proc/%d/status", (int)pid);
+  FILE *stream = fopen(path, "r");
+  if (!stream) return 0;
+  char line[256];
+  pid_t parent = 0;
+  while (fgets(line, sizeof(line), stream)) {
+    if (sscanf(line, "PPid:\t%d", &parent) == 1) break;
+  }
+  fclose(stream);
+  return parent;
+}
+static pid_t authority_supervisor_pid(void) {
+  FILE *stream = fopen("/run/meshshot-supervisor/authority.json", "r");
+  if (!stream) return 0;
+  char value[4096] = {0};
+  size_t count = fread(value, 1, sizeof(value) - 1, stream);
+  fclose(stream);
+  if (count == 0) return 0;
+  char *field = strstr(value, "\"supervisor_pid\"");
+  if (!field || !(field = strchr(field, ':'))) return 0;
+  char *end = NULL;
+  long pid = strtol(field + 1, &end, 10);
+  if (!end || pid <= 1) return 0;
+  return (pid_t)pid;
+}
+static int probe_ancestor_browser_sources(void) {
+  pid_t current = authority_supervisor_pid();
+  int found = 0;
+  int writable = 0;
+  for (int depth = 0; depth < 32 && current > 1; ++depth) {
+    char root[256];
+    snprintf(root, sizeof(root), "/proc/%d/root/meshshot-exec", (int)current);
+    DIR *directory = opendir(root);
+    if (directory) {
+      struct dirent *entry;
+      while ((entry = readdir(directory))) {
+        if (entry->d_name[0] == '.') continue;
+        char attested[1024];
+        char image[2048];
+        char sentinel[2048];
+        snprintf(attested, sizeof(attested), "%s/%s/attested", root, entry->d_name);
+        snprintf(
+          image, sizeof(image),
+          "%s/chrome-headless-shell-linux64/chrome-headless-shell", attested
+        );
+        snprintf(sentinel, sizeof(sentinel), "%s/ancestor-write-sentinel", attested);
+        struct stat image_info;
+        struct stat sentinel_info;
+        struct statvfs filesystem;
+        if (stat(image, &image_info) != 0 || stat(sentinel, &sentinel_info) != 0) continue;
+        if (!S_ISREG(image_info.st_mode) || !S_ISREG(sentinel_info.st_mode) ||
+            sentinel_info.st_size != 16 || statvfs(image, &filesystem) != 0) return 32;
+        ++found;
+        if (!(filesystem.f_flag & ST_RDONLY)) writable = 1;
+        if (chmod(image, image_info.st_mode & 0777) == 0) writable = 1;
+        if (chmod(sentinel, sentinel_info.st_mode & 0777) == 0) writable = 1;
+        int image_fd = open(image, O_WRONLY);
+        if (image_fd >= 0) { writable = 1; close(image_fd); }
+        int sentinel_fd = open(sentinel, O_WRONLY);
+        if (sentinel_fd >= 0) { writable = 1; close(sentinel_fd); }
+      }
+      closedir(directory);
+    }
+    pid_t parent = parent_of(current);
+    if (parent <= 1 || parent == current) break;
+    current = parent;
+  }
+  if (found == 0) return -1;
+  return writable;
+}
 int main(int argc, char **argv) {
   int image_fd = open(argv[0], O_WRONLY | O_APPEND);
   if (image_fd >= 0) { close(image_fd); return 16; }
   if (chmod(argv[0], 0755) == 0) return 17;
   if (access("/meshshot-exec/attested", F_OK) == 0) return 18;
   if (mkdir("/meshshot-exec/attested", 0700) == 0) return 19;
+  int ancestor_source = probe_ancestor_browser_sources();
+  if (ancestor_source < 0) return 33;
+  if (ancestor_source > 0) return 34;
   if (argc == 2 && strcmp(argv[1], "--version") == 0) {
     puts("Google Chrome for Testing 148.0.7778.96");
     return 0;
@@ -300,6 +377,9 @@ int main(int argc, char **argv) {
     if completed.returncode != 0:
         raise AssertionError("controlled browser compilation failed")
     executable.chmod(0o755)
+    sentinel = revision.parent / "ancestor-write-sentinel"
+    sentinel.write_bytes(b"meshshot-r3-safe")
+    sentinel.chmod(0o555)
 
 
 def _wrapper() -> Path:

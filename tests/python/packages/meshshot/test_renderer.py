@@ -498,6 +498,53 @@ class ResidualRendererTests(unittest.TestCase):
         libc.unshare.assert_not_called()
         libc.mount.assert_not_called()
 
+    def test_private_image_remounts_exact_submount_readonly_before_handoff(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        for failed in (False, True):
+            with self.subTest(failed=failed):
+                libc = mock.MagicMock()
+                libc.mount.return_value = -1 if failed else 0
+                filesystem = mock.Mock(
+                    f_flag=(0 if failed else getattr(os, "ST_RDONLY", 1))
+                )
+                with (
+                    mock.patch.object(
+                        browser_runtime.ctypes,
+                        "CDLL",
+                        return_value=libc,
+                    ),
+                    mock.patch.object(
+                        browser_runtime.os,
+                        "statvfs",
+                        return_value=filesystem,
+                    ),
+                ):
+                    if failed:
+                        with self.assertRaises(BrowserRuntimeError) as raised:
+                            _PinnedExecutable._remount_private_filesystem_readonly(47)
+                        self.assertEqual("browser_identity", raised.exception.operation)
+                        self.assertEqual(
+                            "private_tree_materialization",
+                            raised.exception.browser_identity_phase,
+                        )
+                    else:
+                        _PinnedExecutable._remount_private_filesystem_readonly(47)
+
+                libc.mount.assert_called_once_with(
+                    None,
+                    b"/proc/self/fd/47",
+                    None,
+                    browser_runtime._MS_REMOUNT
+                    | browser_runtime._MS_RDONLY
+                    | browser_runtime._MS_NOSUID
+                    | browser_runtime._MS_NODEV,
+                    None,
+                )
+
     def test_supervisor_namespace_failure_publishes_only_closed_operation(self) -> None:
         from meshshot import browser_supervisor
         from meshshot.browser_runtime import BrowserRuntimeError
