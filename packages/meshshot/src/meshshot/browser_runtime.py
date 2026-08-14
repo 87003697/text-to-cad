@@ -114,6 +114,20 @@ _SourceIdentity = tuple[int, int, int, int]
 _PROFILE_RESOURCE = "prelaunched_cdp_playwright_1_60_v1.json"
 _FD_EXEC_HANDOFF = Path(__file__).with_name("fd_exec_handoff.py")
 _FD_EXEC_HANDOFF_SCHEMA = "meshshot.fd-exec-handoff/1"
+_BROWSER_MOUNT_HANDOFF = Path(__file__).with_name("browser_mount_handoff.py")
+_BROWSER_MOUNT_SCHEMA = "meshshot.browser-mount-handoff/1"
+_BROWSER_MOUNT_AUTHORITY_SCHEMA = "meshshot.browser-mount-authority/1"
+_BROWSER_MOUNT_SOCKET = SUPERVISOR_OUTER_ROOT / "browser-mount.sock"
+_BROWSER_MOUNT_AUTHORITY = SUPERVISOR_OUTER_ROOT / (
+    "browser-mount-authority.json"
+)
+_BROWSER_MOUNT_TARGET = Path("/run/meshshot-browser/attested")
+_BROWSER_MOUNT_EXECUTABLE = _BROWSER_MOUNT_TARGET / (
+    "chrome-headless-shell-linux64/chrome-headless-shell"
+)
+_BROWSER_TREE_MANIFEST_ENV = "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256"
+_BROWSER_TREE_MANIFEST_SCHEMA = "meshshot.browser-tree-manifest/1"
+_TRUSTED_BWRAP = Path("/usr/bin/bwrap")
 _FD_EXEC_ENVIRONMENT = frozenset(
     {"HOME", "LANG", "LC_ALL", "PATH", "TMPDIR", "TZ"}
 )
@@ -754,6 +768,12 @@ class _PinnedExecutable:
         self.fd: int | None = None
         self.launch_path: Path | None = None
         self.launch_root: Path | None = None
+        self._source_identity: _SourceIdentity | None = None
+        self._detached_mount_mode = bool(
+            sys.platform.startswith("linux")
+            and os.environ.get(_BROWSER_TREE_MANIFEST_ENV)
+        )
+        self.tree_manifest_sha256: str | None = None
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
             source_fd = os.open(path, flags)
@@ -769,6 +789,7 @@ class _PinnedExecutable:
             source_info.st_size,
             source_info.st_mode,
         )
+        self._source_identity = actual_source_identity
         if (
             not path.is_absolute()
             or not stat.S_ISREG(source_info.st_mode)
@@ -797,6 +818,71 @@ class _PinnedExecutable:
                     "browser_identity",
                     browser_identity_phase="source_executable_identity",
                 ) from exc
+
+    @staticmethod
+    def _tree_manifest_sha256(root: Path) -> str:
+        entries: list[dict[str, object]] = []
+        folded: set[str] = set()
+        try:
+            paths = (root, *sorted(root.rglob("*")))
+            for path in paths:
+                info = path.lstat()
+                if stat.S_ISLNK(info.st_mode) or not (
+                    stat.S_ISDIR(info.st_mode) or stat.S_ISREG(info.st_mode)
+                ):
+                    raise OSError("browser tree contains an unsupported entry")
+                relative = "." if path == root else path.relative_to(root).as_posix()
+                collision = relative.casefold()
+                if collision in folded:
+                    raise OSError("browser tree contains a colliding entry")
+                folded.add(collision)
+                entry: dict[str, object] = {
+                    "path": relative,
+                    "kind": "directory" if stat.S_ISDIR(info.st_mode) else "file",
+                    "mode": stat.S_IMODE(info.st_mode),
+                }
+                if stat.S_ISREG(info.st_mode):
+                    descriptor = os.open(
+                        path,
+                        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+                    )
+                    try:
+                        opened = os.fstat(descriptor)
+                        if (
+                            (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mode)
+                            != (info.st_dev, info.st_ino, info.st_size, info.st_mode)
+                        ):
+                            raise OSError("browser tree identity changed")
+                        digest = hashlib.sha256()
+                        while True:
+                            chunk = os.read(descriptor, 1024 * 1024)
+                            if not chunk:
+                                break
+                            digest.update(chunk)
+                        after = os.fstat(descriptor)
+                    finally:
+                        os.close(descriptor)
+                    current = path.lstat()
+                    if (
+                        (after.st_dev, after.st_ino, after.st_size, after.st_mode)
+                        != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mode)
+                        or (current.st_dev, current.st_ino, current.st_size, current.st_mode)
+                        != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mode)
+                    ):
+                        raise OSError("browser tree changed while hashing")
+                    entry["sha256"] = digest.hexdigest()
+                entries.append(entry)
+        except (OSError, ValueError) as exc:
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            ) from exc
+        raw = json.dumps(
+            {"schema": _BROWSER_TREE_MANIFEST_SCHEMA, "entries": entries},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(raw).hexdigest()
 
     @staticmethod
     def _snapshot_resource(
@@ -829,6 +915,88 @@ class _PinnedExecutable:
                 )
             shutil.copyfile(source, target, follow_symlinks=True)
             os.chmod(target, stat.S_IMODE(info.st_mode) & ~0o222)
+        except OSError as exc:
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            ) from exc
+
+    @staticmethod
+    def _snapshot_tree_exact(source: Path, target: Path) -> None:
+        try:
+            source_info = source.lstat()
+            if stat.S_ISLNK(source_info.st_mode):
+                raise OSError("browser tree contains a symbolic link")
+            if stat.S_ISDIR(source_info.st_mode):
+                target.mkdir(mode=0o700)
+                for child in sorted(source.iterdir(), key=lambda item: item.name):
+                    _PinnedExecutable._snapshot_tree_exact(
+                        child, target / child.name
+                    )
+                os.chmod(target, stat.S_IMODE(source_info.st_mode))
+                return
+            if not stat.S_ISREG(source_info.st_mode):
+                raise OSError("browser tree contains an unsupported entry")
+            source_fd = os.open(
+                source, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+            )
+            target_fd: int | None = None
+            try:
+                opened = os.fstat(source_fd)
+                if (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_size,
+                    opened.st_mode,
+                ) != (
+                    source_info.st_dev,
+                    source_info.st_ino,
+                    source_info.st_size,
+                    source_info.st_mode,
+                ):
+                    raise OSError("browser tree identity changed")
+                target_fd = os.open(
+                    target,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                while True:
+                    chunk = os.read(source_fd, 4 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    view = memoryview(chunk)
+                    while view:
+                        view = view[os.write(target_fd, view) :]
+                os.fchmod(target_fd, stat.S_IMODE(source_info.st_mode))
+                os.fsync(target_fd)
+                after = os.fstat(source_fd)
+                current = source.lstat()
+                if (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mode,
+                ) != (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_size,
+                    opened.st_mode,
+                ) or (
+                    current.st_dev,
+                    current.st_ino,
+                    current.st_size,
+                    current.st_mode,
+                ) != (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_size,
+                    opened.st_mode,
+                ):
+                    raise OSError("browser tree changed while copying")
+            finally:
+                if target_fd is not None:
+                    os.close(target_fd)
+                os.close(source_fd)
         except OSError as exc:
             raise BrowserRuntimeError(
                 "browser_identity",
@@ -893,6 +1061,9 @@ class _PinnedExecutable:
         source_fd: int,
         source_info: os.stat_result,
     ) -> None:
+        if self._detached_mount_mode:
+            self._materialize_detached_tree(source_info)
+            return
         root = _private_directory("meshshot-image-")
         launch = root / self.path.name
         snapshot_fd: int | None = None
@@ -991,6 +1162,135 @@ class _PinnedExecutable:
                     browser_identity_phase=phase,
                 ) from exc
             raise
+
+    def _materialize_detached_tree(self, source_info: os.stat_result) -> None:
+        expected = os.environ.get(_BROWSER_TREE_MANIFEST_ENV)
+        if (
+            expected is None
+            or re.fullmatch(r"[0-9a-f]{64}", expected) is None
+            or self.path.name != "chrome-headless-shell"
+            or not self.path.parent.name.startswith("chrome-headless-shell-")
+        ):
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            )
+        source_root = self.path.parents[1]
+        relative = self.path.relative_to(source_root)
+        root = _private_directory("meshshot-browser-tree-")
+        target_root = root / "attested"
+        target = target_root / relative
+        descriptor: int | None = None
+        phase = "private_tree_materialization"
+        try:
+            if self._tree_manifest_sha256(source_root) != expected:
+                raise BrowserRuntimeError("browser_identity")
+            self._snapshot_tree_exact(source_root, target_root)
+            if self._tree_manifest_sha256(target_root) != expected:
+                raise BrowserRuntimeError("browser_identity")
+            self._fsync_directory(root)
+            self._freeze_directories(root)
+            phase = "private_launch_image_identity"
+            descriptor = os.open(
+                target,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
+            target_info = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(target_info.st_mode)
+                or target_info.st_size != source_info.st_size
+                or target_info.st_mode & 0o111 == 0
+                or self._sha256_fd(descriptor) != self._sha256_fd_from_path(self.path)
+            ):
+                raise BrowserRuntimeError("browser_identity")
+            self.fd = descriptor
+            descriptor = None
+            self.identity = (
+                target_info.st_dev,
+                target_info.st_ino,
+                target_info.st_size,
+                stat.S_IMODE(target_info.st_mode),
+            )
+            self.tree_manifest_sha256 = expected
+            self.launch_root = root
+            self.launch_path = target
+        except BaseException as exc:
+            cleanup_failed = False
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    cleanup_failed = True
+            try:
+                if os.path.lexists(root):
+                    self._thaw_directories(root)
+                    shutil.rmtree(root)
+            except (BrowserRuntimeError, OSError):
+                cleanup_failed = True
+            if os.path.lexists(root):
+                cleanup_failed = True
+            if cleanup_failed:
+                raise BrowserRuntimeError("browser_cleanup") from exc
+            if isinstance(exc, BrowserRuntimeError):
+                if exc.operation == "browser_identity" and exc.browser_identity_phase is None:
+                    raise BrowserRuntimeError(
+                        "browser_identity", browser_identity_phase=phase
+                    ) from exc
+                raise
+            raise BrowserRuntimeError(
+                "browser_identity", browser_identity_phase=phase
+            ) from exc
+
+    @staticmethod
+    def _sha256_fd_from_path(path: Path) -> str:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            return _PinnedExecutable._sha256_fd(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _ensure_detached_materialized(self) -> None:
+        if not getattr(self, "_detached_mount_mode", False) or self.launch_root is not None:
+            return
+        source_fd: int | None = None
+        cleanup_failed = False
+        try:
+            source_fd = os.open(
+                self.path,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
+            source_info = os.fstat(source_fd)
+            actual = (
+                source_info.st_dev,
+                source_info.st_ino,
+                source_info.st_size,
+                source_info.st_mode,
+            )
+            if actual != self._source_identity:
+                raise BrowserRuntimeError(
+                    "browser_identity",
+                    browser_identity_phase="source_executable_identity",
+                )
+            if self.fd is not None:
+                os.close(self.fd)
+                self.fd = None
+            self._materialize_detached_tree(source_info)
+        except BaseException as exc:
+            if source_fd is not None:
+                try:
+                    os.close(source_fd)
+                except OSError:
+                    cleanup_failed = True
+                source_fd = None
+            if cleanup_failed:
+                raise BrowserRuntimeError("browser_cleanup") from exc
+            raise
+        finally:
+            if source_fd is not None:
+                try:
+                    os.close(source_fd)
+                except OSError as exc:
+                    raise BrowserRuntimeError("browser_cleanup") from exc
 
     @staticmethod
     def _sealed_snapshot_fd(
@@ -1250,6 +1550,204 @@ class _PinnedExecutable:
                     ) from exc
                 time.sleep(0.002)
 
+    @staticmethod
+    def _mount_packet(connection: socket.socket) -> Any:
+        try:
+            raw = connection.recv(_SUPERVISOR_PACKET_LIMIT + 1)
+        except (OSError, socket.timeout) as exc:
+            raise BrowserRuntimeError("browser_identity") from exc
+        if not raw or len(raw) > _SUPERVISOR_PACKET_LIMIT:
+            raise BrowserRuntimeError("browser_identity")
+        return _loads_json_strict(raw)
+
+    @staticmethod
+    def _send_mount_packet(connection: socket.socket, value: object) -> None:
+        raw = _canonical_bytes(value)
+        if not raw or len(raw) > _SUPERVISOR_PACKET_LIMIT:
+            raise BrowserRuntimeError("browser_identity")
+        try:
+            if connection.send(raw) != len(raw):
+                raise OSError("short browser mount handoff")
+        except OSError as exc:
+            raise BrowserRuntimeError("browser_identity") from exc
+
+    def _remove_detached_source(self) -> None:
+        if self.launch_root is None:
+            raise BrowserRuntimeError("browser_cleanup")
+        root = self.launch_root
+        try:
+            self._thaw_directories(root)
+            shutil.rmtree(root)
+        except (BrowserRuntimeError, OSError) as exc:
+            raise BrowserRuntimeError("browser_cleanup") from exc
+        if os.path.lexists(root):
+            raise BrowserRuntimeError("browser_cleanup")
+        self.launch_root = None
+        self.launch_path = _BROWSER_MOUNT_EXECUTABLE
+
+    def _detached_linux_popen(
+        self,
+        argv: list[str],
+        *,
+        deadline: float,
+        options: dict[str, Any],
+        completion: str,
+    ) -> subprocess.Popen[bytes]:
+        assert self.fd is not None and self.launch_root is not None
+        source_root = self.launch_root / "attested"
+        nonce = secrets.token_hex(32)
+        listener: socket.socket | None = None
+        connection: socket.socket | None = None
+        process: subprocess.Popen[bytes] | None = None
+        authority_fd: int | None = None
+        failure: BaseException | None = None
+        cleanup_failed = False
+        try:
+            root_info = SUPERVISOR_OUTER_ROOT.lstat()
+            if (
+                stat.S_ISLNK(root_info.st_mode)
+                or not stat.S_ISDIR(root_info.st_mode)
+                or root_info.st_uid != os.geteuid()
+                or stat.S_IMODE(root_info.st_mode) & 0o077
+                or os.path.lexists(_BROWSER_MOUNT_SOCKET)
+                or os.path.lexists(_BROWSER_MOUNT_AUTHORITY)
+            ):
+                raise BrowserRuntimeError("browser_identity")
+            authority_fd = os.open(
+                _BROWSER_MOUNT_AUTHORITY,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o400,
+            )
+            authority = _canonical_bytes(
+                {"schema": _BROWSER_MOUNT_AUTHORITY_SCHEMA, "nonce": nonce}
+            )
+            if os.write(authority_fd, authority) != len(authority):
+                raise OSError("short browser mount authority write")
+            os.fsync(authority_fd)
+            os.close(authority_fd)
+            authority_fd = None
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            listener.bind(os.fspath(_BROWSER_MOUNT_SOCKET))
+            os.chmod(_BROWSER_MOUNT_SOCKET, 0o600)
+            listener.listen(1)
+            listener.settimeout(max(0.001, deadline - time.monotonic()))
+            helper_argv = [
+                os.fspath(_TRUSTED_BWRAP),
+                "--die-with-parent",
+                "--new-session",
+                "--cap-drop",
+                "ALL",
+                "--bind",
+                "/",
+                "/",
+                "--dir",
+                os.fspath(_BROWSER_MOUNT_TARGET.parent),
+                "--ro-bind",
+                os.fspath(source_root),
+                os.fspath(_BROWSER_MOUNT_TARGET),
+                "--ro-bind",
+                os.fspath(SUPERVISOR_OUTER_ROOT),
+                "/run/meshshot-supervisor",
+                "--tmpfs",
+                os.fspath(SUPERVISOR_OUTER_ROOT),
+                "--",
+                sys.executable,
+                "-I",
+                os.fspath(_BROWSER_MOUNT_HANDOFF),
+                _BROWSER_MOUNT_SCHEMA,
+                completion,
+            ]
+            if completion == "live":
+                profile_argument = next(
+                    (item.split("=", 1)[1] for item in argv if item.startswith("--user-data-dir=")),
+                    None,
+                )
+                if profile_argument is None:
+                    raise BrowserRuntimeError("browser_identity")
+                helper_argv.append(profile_argument)
+            options["executable"] = os.fspath(_TRUSTED_BWRAP)
+            options["close_fds"] = True
+            options["env"] = {
+                name: os.environ[name]
+                for name in sorted(_FD_EXEC_ENVIRONMENT | {"PLAYWRIGHT_BROWSERS_PATH"})
+                if name in os.environ
+            }
+            process = subprocess.Popen(helper_argv, **options)
+            connection, _address = listener.accept()
+            connection.settimeout(max(0.001, deadline - time.monotonic()))
+            peer_pid, peer_uid, _peer_gid = _peer_credentials(connection)
+            if peer_pid != process.pid or peer_uid != os.geteuid():
+                raise BrowserRuntimeError("browser_identity")
+            mounted = self._mount_packet(connection)
+            if mounted != {
+                "schema": _BROWSER_MOUNT_SCHEMA,
+                "type": "mounted",
+                "nonce": nonce,
+            }:
+                raise BrowserRuntimeError("browser_identity")
+            listener.close()
+            listener = None
+            _BROWSER_MOUNT_SOCKET.unlink()
+            self._remove_detached_source()
+            self._send_mount_packet(
+                connection,
+                {
+                    "schema": _BROWSER_MOUNT_SCHEMA,
+                    "type": "detached",
+                    "nonce": nonce,
+                },
+            )
+            executed = self._mount_packet(connection)
+            if executed != {
+                "schema": _BROWSER_MOUNT_SCHEMA,
+                "type": "exec",
+                "nonce": nonce,
+            }:
+                raise BrowserRuntimeError("browser_identity")
+            connection.close()
+            connection = None
+            _BROWSER_MOUNT_AUTHORITY.unlink()
+            if completion == "live":
+                self._wait_for_exec_replacement(process, deadline)
+            else:
+                setattr(process, "_meshshot_version_handoff_eof", True)
+            return process
+        except BaseException as exc:
+            failure = exc
+        finally:
+            if authority_fd is not None:
+                try:
+                    os.close(authority_fd)
+                except OSError:
+                    cleanup_failed = True
+            for endpoint in (connection, listener):
+                if endpoint is not None:
+                    try:
+                        endpoint.close()
+                    except OSError:
+                        cleanup_failed = True
+            for path in (_BROWSER_MOUNT_SOCKET, _BROWSER_MOUNT_AUTHORITY):
+                if os.path.lexists(path):
+                    try:
+                        path.unlink()
+                    except OSError:
+                        cleanup_failed = True
+            if failure is not None and process is not None:
+                cleanup_failed = self._reap_failed_handoff(
+                    process,
+                    process_group=bool(options.get("start_new_session")),
+                ) or cleanup_failed
+        if cleanup_failed:
+            raise BrowserRuntimeError("browser_cleanup") from failure
+        assert failure is not None
+        if completion == "version" and isinstance(
+            failure, (OSError, subprocess.SubprocessError)
+        ):
+            raise _private_version_execution_error(
+                "private_version_helper_spawn_other"
+            ) from failure
+        raise failure
+
     def _linux_popen(
         self,
         argv: list[str],
@@ -1259,6 +1757,13 @@ class _PinnedExecutable:
         completion: str,
     ) -> subprocess.Popen[bytes]:
         assert self.fd is not None and self.launch_path is not None
+        if getattr(self, "_detached_mount_mode", False):
+            return self._detached_linux_popen(
+                argv,
+                deadline=deadline,
+                options=options,
+                completion=completion,
+            )
         read_fd: int | None = None
         write_fd: int | None = None
         process: subprocess.Popen[bytes] | None = None
@@ -1353,6 +1858,7 @@ class _PinnedExecutable:
         return process
 
     def popen(self, argv: list[str], **kwargs: Any) -> subprocess.Popen[bytes]:
+        self._ensure_detached_materialized()
         assert self.fd is not None and self.launch_path is not None
         options = dict(kwargs)
         deadline = options.pop("_handoff_deadline", None)

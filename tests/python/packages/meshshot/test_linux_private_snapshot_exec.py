@@ -33,6 +33,8 @@ except IndexError:
 )
 class LinuxPrivateSnapshotExecutionTests(unittest.TestCase):
     def test_proc_relative_resource_browser_reaches_readiness(self) -> None:
+        if not Path("/usr/bin/bwrap").is_file():
+            self.skipTest("controlled Linux image lacks the existing bwrap runtime")
         runtime_source = Path(os.environ["MESHSHOT_BROWSER_RUNTIME_SOURCE"])
         package = sys.modules.get("meshshot")
         if package is None:
