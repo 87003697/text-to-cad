@@ -247,6 +247,15 @@ def _materialize_outer_browser_stage() -> None:
             operation="preview_browser_runtime_staging",
         ) from exc
     finally:
+        pending = sys.exc_info()[1]
+        pending_cleanup = (
+            isinstance(pending, ScenarioError)
+            and pending.operation == "preview_browser_cleanup"
+            and pending.browser_cleanup_substage == "outer_browser_stage"
+            and pending.browser_cleanup_check is not None
+        )
+        if pending_cleanup:
+            cleanup_check = pending.browser_cleanup_check
         for descriptor, check in (
             (revision_fd, "revision_descriptor_close"),
             (destination_fd, "destination_descriptor_close"),
@@ -258,7 +267,7 @@ def _materialize_outer_browser_stage() -> None:
                 except OSError:
                     if cleanup_check is None:
                         cleanup_check = check
-        if cleanup_check is not None:
+        if cleanup_check is not None and not pending_cleanup:
             raise ScenarioError(
                 "private browser staging cleanup failed",
                 operation="preview_browser_cleanup",

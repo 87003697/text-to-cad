@@ -81,7 +81,7 @@ PROVIDER_FREE_BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE = {
         {"tree_descriptor_close", "directory_thaw", "recursive_remove", "authority_descriptor_close", "absence"}
     ),
     "private_browser_handoff": frozenset(
-        {"socket_unlink", "authority_record_unlink", "root_descriptor_close", "transport_close", "pipe_descriptor_close", "process_group_cleanup"}
+        {"socket_unlink", "authority_record_unlink", "authority_record_descriptor_close", "root_descriptor_close", "transport_close", "pipe_descriptor_close", "process_group_cleanup"}
     ),
     "private_supervisor_state": frozenset(
         {"client_transport_close", "listener_close", "socket_unlink", "root_identity", "authority_record_unlink", "client_record_unlink", "root_descriptor_close"}

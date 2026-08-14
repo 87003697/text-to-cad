@@ -50,6 +50,7 @@ class JobProtocolTests(unittest.TestCase):
             "private_browser_handoff": {
                 "socket_unlink",
                 "authority_record_unlink",
+                "authority_record_descriptor_close",
                 "root_descriptor_close",
                 "transport_close",
                 "pipe_descriptor_close",

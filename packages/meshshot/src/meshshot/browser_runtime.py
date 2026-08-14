@@ -118,6 +118,7 @@ BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE = {
     "private_browser_handoff": frozenset(
         {
             "socket_unlink", "authority_record_unlink",
+            "authority_record_descriptor_close",
             "root_descriptor_close", "transport_close",
             "pipe_descriptor_close", "process_group_cleanup",
         }
@@ -1135,10 +1136,17 @@ class _PinnedExecutable:
         self._detached_mounted_identity: tuple[int, int] | None = None
         self.tree_manifest_sha256: str | None = None
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        source_fd: int | None = None
         try:
             source_fd = os.open(path, flags)
             source_info = os.fstat(source_fd)
         except OSError as exc:
+            if source_fd is not None:
+                _close_browser_descriptor(
+                    source_fd,
+                    cleanup_substage="private_browser_pinned_image",
+                    cleanup_check="executable_descriptor_close",
+                )
             raise BrowserRuntimeError(
                 "browser_identity",
                 browser_identity_phase="source_executable_identity",
@@ -1159,7 +1167,12 @@ class _PinnedExecutable:
                 and actual_source_identity != expected_source_identity
             )
         ):
-            os.close(source_fd)
+            _close_browser_descriptor(
+                source_fd,
+                cleanup_substage="private_browser_pinned_image",
+                cleanup_check="executable_descriptor_close",
+            )
+            source_fd = None
             raise BrowserRuntimeError(
                 "browser_identity",
                 browser_identity_phase="source_executable_identity",
@@ -1170,14 +1183,19 @@ class _PinnedExecutable:
             self.close()
             raise
         finally:
-            try:
-                os.close(source_fd)
-            except OSError as exc:
-                self.close()
-                raise BrowserRuntimeError(
-                    "browser_identity",
-                    browser_identity_phase="source_executable_identity",
-                ) from exc
+            if source_fd is not None:
+                try:
+                    _close_browser_descriptor(
+                        source_fd,
+                        cleanup_substage="private_browser_pinned_image",
+                        cleanup_check="executable_descriptor_close",
+                    )
+                except BrowserRuntimeError as source_cleanup:
+                    try:
+                        self.close()
+                    except BrowserRuntimeError as image_cleanup:
+                        raise image_cleanup from source_cleanup
+                    raise
 
     @staticmethod
     def _tree_manifest_sha256(root: Path) -> str:
@@ -1708,7 +1726,11 @@ class _PinnedExecutable:
                 os.fchmod(output_fd, stat.S_IMODE(source_info.st_mode) & 0o555)
                 os.fsync(output_fd)
             finally:
-                os.close(output_fd)
+                _close_browser_descriptor(
+                    output_fd,
+                    cleanup_substage="private_browser_private_tree",
+                    cleanup_check="tree_descriptor_close",
+                )
             for sibling in self.path.parent.iterdir():
                 if sibling.name != self.path.name:
                     self._snapshot_resource(sibling, root / sibling.name)
@@ -1744,7 +1766,16 @@ class _PinnedExecutable:
             self.launch_root = root
             self.launch_path = launch
         except BaseException as exc:
-            cleanup_error: BrowserRuntimeError | None = None
+            cleanup_error: BrowserRuntimeError | None = (
+                exc
+                if (
+                    isinstance(exc, BrowserRuntimeError)
+                    and exc.operation == "browser_cleanup"
+                    and exc.browser_cleanup_substage is not None
+                    and exc.browser_cleanup_check is not None
+                )
+                else None
+            )
 
             def record_cleanup(check: str, *, retained: bool = False) -> None:
                 nonlocal cleanup_error
@@ -1759,11 +1790,12 @@ class _PinnedExecutable:
                 try:
                     os.close(snapshot_fd)
                 except OSError:
-                    cleanup_error = BrowserRuntimeError(
-                        "browser_cleanup",
-                        browser_cleanup_substage="private_browser_pinned_image",
-                        browser_cleanup_check="executable_descriptor_close",
-                    )
+                    if cleanup_error is None:
+                        cleanup_error = BrowserRuntimeError(
+                            "browser_cleanup",
+                            browser_cleanup_substage="private_browser_pinned_image",
+                            browser_cleanup_check="executable_descriptor_close",
+                        )
             try:
                 self._thaw_directories(root)
             except (BrowserRuntimeError, OSError):
@@ -2173,8 +2205,13 @@ class _PinnedExecutable:
                     browser_identity_phase="source_executable_identity",
                 )
             if self.fd is not None:
-                os.close(self.fd)
+                old_fd = self.fd
                 self.fd = None
+                _close_browser_descriptor(
+                    old_fd,
+                    cleanup_substage="private_browser_pinned_image",
+                    cleanup_check="executable_descriptor_close",
+                )
             self._materialize_detached_tree(source_info)
         except BaseException as exc:
             if source_fd is not None:
@@ -2633,7 +2670,16 @@ class _PinnedExecutable:
         socket_identity: tuple[int, int] | None = None
         socket_unlinked = False
         failure: BaseException | None = None
-        cleanup_failed = False
+        cleanup_error: BrowserRuntimeError | None = None
+
+        def record_cleanup(check: str) -> None:
+            nonlocal cleanup_error
+            if cleanup_error is None:
+                cleanup_error = BrowserRuntimeError(
+                    "browser_cleanup",
+                    browser_cleanup_substage="private_browser_handoff",
+                    browser_cleanup_check=check,
+                )
         try:
             root_info = SUPERVISOR_OUTER_ROOT.lstat()
             if (
@@ -2686,7 +2732,11 @@ class _PinnedExecutable:
             os.fsync(authority_fd)
             closing_authority_fd = authority_fd
             authority_fd = None
-            os.close(closing_authority_fd)
+            _close_browser_descriptor(
+                closing_authority_fd,
+                cleanup_substage="private_browser_handoff",
+                cleanup_check="authority_record_descriptor_close",
+            )
             listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
             listener.bind(os.fspath(_BROWSER_MOUNT_SOCKET))
             socket_info = os.stat(
@@ -2834,21 +2884,27 @@ class _PinnedExecutable:
             else:
                 setattr(process, "_meshshot_version_handoff_eof", True)
             setattr(process, "_meshshot_browser_image_pid", peer_pid)
-            return process
         except BaseException as exc:
             failure = exc
+            if (
+                isinstance(exc, BrowserRuntimeError)
+                and exc.operation == "browser_cleanup"
+                and exc.browser_cleanup_substage == "private_browser_handoff"
+                and exc.browser_cleanup_check is not None
+            ):
+                cleanup_error = exc
         finally:
             if authority_fd is not None:
                 try:
                     os.close(authority_fd)
                 except OSError:
-                    cleanup_failed = True
+                    record_cleanup("authority_record_descriptor_close")
             for endpoint in (connection, listener):
                 if endpoint is not None:
                     try:
                         endpoint.close()
                     except OSError:
-                        cleanup_failed = True
+                        record_cleanup("transport_close")
             for name, identity, socket_entry, already_unlinked in (
                 (
                     _BROWSER_MOUNT_SOCKET.name,
@@ -2871,24 +2927,31 @@ class _PinnedExecutable:
                             identity,
                             socket_entry=socket_entry,
                         )
-                    except BrowserRuntimeError:
-                        cleanup_failed = True
+                    except BrowserRuntimeError as exc:
+                        if exc.browser_cleanup_check is not None:
+                            record_cleanup(exc.browser_cleanup_check)
+                        else:
+                            record_cleanup(
+                                "socket_unlink"
+                                if socket_entry
+                                else "authority_record_unlink"
+                            )
             if root_fd is not None:
                 try:
                     os.close(root_fd)
                 except OSError:
-                    cleanup_failed = True
-            if failure is not None and process is not None:
-                cleanup_failed = self._reap_failed_handoff(
+                    record_cleanup("root_descriptor_close")
+            if (failure is not None or cleanup_error is not None) and process is not None:
+                if self._reap_failed_handoff(
                     process,
                     process_group=bool(options.get("start_new_session")),
-                ) or cleanup_failed
-        if cleanup_failed:
-            raise BrowserRuntimeError(
-                "browser_cleanup",
-                browser_cleanup_substage="private_browser_handoff",
-                browser_cleanup_check="process_group_cleanup",
-            ) from failure
+                ):
+                    record_cleanup("process_group_cleanup")
+        if cleanup_error is not None:
+            raise cleanup_error from failure
+        if failure is None:
+            assert process is not None
+            return process
         assert failure is not None
         if completion == "version" and isinstance(
             failure, (OSError, subprocess.SubprocessError)
@@ -2917,9 +2980,18 @@ class _PinnedExecutable:
         read_fd: int | None = None
         write_fd: int | None = None
         process: subprocess.Popen[bytes] | None = None
-        cleanup_failed = False
+        cleanup_error: BrowserRuntimeError | None = None
         failure: BaseException | None = None
         failure_check = "private_version_handoff_setup"
+
+        def record_cleanup(check: str) -> None:
+            nonlocal cleanup_error
+            if cleanup_error is None:
+                cleanup_error = BrowserRuntimeError(
+                    "browser_cleanup",
+                    browser_cleanup_substage="private_browser_handoff",
+                    browser_cleanup_check=check,
+                )
         try:
             read_fd, write_fd = os.pipe()
             os.set_inheritable(read_fd, False)
@@ -2951,9 +3023,14 @@ class _PinnedExecutable:
             parent_write_fd = write_fd
             write_fd = None
             try:
-                os.close(parent_write_fd)
-            except OSError as exc:
+                _close_browser_descriptor(
+                    parent_write_fd,
+                    cleanup_substage="private_browser_handoff",
+                    cleanup_check="pipe_descriptor_close",
+                )
+            except BrowserRuntimeError as exc:
                 failure = exc
+                cleanup_error = exc
             if failure is None:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -2979,28 +3056,27 @@ class _PinnedExecutable:
                     setattr(process, "_meshshot_version_handoff_eof", True)
         except BaseException as exc:
             failure = exc
+            if (
+                isinstance(exc, BrowserRuntimeError)
+                and exc.operation == "browser_cleanup"
+                and exc.browser_cleanup_substage == "private_browser_handoff"
+                and exc.browser_cleanup_check is not None
+            ):
+                cleanup_error = exc
         finally:
-            cleanup_failed = (
-                self._close_handoff_descriptors(read_fd, write_fd)
-                or cleanup_failed
-            )
-            if failure is not None or cleanup_failed:
+            if self._close_handoff_descriptors(read_fd, write_fd):
+                record_cleanup("pipe_descriptor_close")
+            if failure is not None or cleanup_error is not None:
                 if process is not None:
-                    cleanup_failed = (
-                        self._reap_failed_handoff(
-                            process,
-                            process_group=bool(options.get("start_new_session")),
-                            cleanup_term_timeout=_FD_EXEC_CLEANUP_TERM_SECONDS,
-                            cleanup_kill_timeout=_FD_EXEC_CLEANUP_KILL_SECONDS,
-                        )
-                        or cleanup_failed
-                    )
-        if cleanup_failed:
-            raise BrowserRuntimeError(
-                "browser_cleanup",
-                browser_cleanup_substage="private_browser_handoff",
-                browser_cleanup_check="process_group_cleanup",
-            ) from failure
+                    if self._reap_failed_handoff(
+                        process,
+                        process_group=bool(options.get("start_new_session")),
+                        cleanup_term_timeout=_FD_EXEC_CLEANUP_TERM_SECONDS,
+                        cleanup_kill_timeout=_FD_EXEC_CLEANUP_KILL_SECONDS,
+                    ):
+                        record_cleanup("process_group_cleanup")
+        if cleanup_error is not None:
+            raise cleanup_error from failure
         if failure is not None:
             if (
                 completion == "version"
