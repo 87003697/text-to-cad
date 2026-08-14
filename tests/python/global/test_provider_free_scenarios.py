@@ -704,6 +704,23 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             error.browser_identity_check,
         )
 
+    def test_closed_supervisor_result_preserves_cleanup_fields(self) -> None:
+        result = {
+            "schema": "meshshot.browser-supervisor-result/1",
+            "operation": "browser_cleanup",
+            "browser_cleanup_substage": "private_browser_process_group",
+            "browser_cleanup_check": "kill_group_empty",
+        }
+
+        error = provider_free_scenarios._closed_supervisor_failure(result)
+
+        self.assertEqual("preview_browser_cleanup_failed", error.classification)
+        self.assertEqual(
+            "private_browser_process_group",
+            error.browser_cleanup_substage,
+        )
+        self.assertEqual("kill_group_empty", error.browser_cleanup_check)
+
     def test_private_supervisor_result_overrides_nested_connect_projection(self) -> None:
         endpoint = self.repo / "authority.sock"
         result_path = self.repo / "result.json"

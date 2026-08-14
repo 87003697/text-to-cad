@@ -2219,6 +2219,14 @@ class ResidualRendererTests(unittest.TestCase):
             runtime._cleanup()
 
         self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_process_group",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "kill_group_empty",
+            raised.exception.browser_cleanup_check,
+        )
         self.assertIn(
             mock.call(43210, __import__("signal").SIGKILL),
             killpg.mock_calls,
