@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import socket
@@ -21,6 +22,10 @@ EXECUTABLE = REVISION_ROOT / (
     "chrome-headless-shell-linux64/chrome-headless-shell"
 )
 _PROFILE_NAME = "meshshot-cdp-"
+_PROFILE_RESOURCE = Path(__file__).with_name("profiles") / (
+    "prelaunched_cdp_playwright_1_60_v1.json"
+)
+_PROFILE_SHA256 = "16ef68d9ee9700f10c9e92b6ca88c0430dc98c6808145258f9a6125f3acd5c04"
 _ENVIRONMENT = frozenset(
     {
         "HOME",
@@ -82,8 +87,6 @@ def _authority() -> str:
 
 
 def _live_argv(profile: str) -> list[str]:
-    from meshshot.browser_runtime import _load_profile
-
     path = Path(profile)
     try:
         info = path.lstat()
@@ -98,7 +101,15 @@ def _live_argv(profile: str) -> list[str]:
         or stat.S_IMODE(info.st_mode) != 0o700
     ):
         raise OSError("invalid browser profile")
-    profile_value, _profile_sha256 = _load_profile()
+    raw = _PROFILE_RESOURCE.read_bytes()
+    profile_value = _loads(raw)
+    if (
+        hashlib.sha256(raw).hexdigest() != _PROFILE_SHA256
+        or not isinstance(profile_value, dict)
+        or not isinstance(profile_value.get("arguments"), list)
+        or not all(isinstance(value, str) for value in profile_value["arguments"])
+    ):
+        raise OSError("invalid browser profile authority")
     return [
         os.fspath(EXECUTABLE),
         *profile_value["arguments"],
