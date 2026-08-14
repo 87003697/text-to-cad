@@ -22,10 +22,32 @@ Every test container/network name begins with
 `meshshot-sidecar-prototype-`. The harness removes only those exact resources
 that it creates. It leaves the images and Colima profile for inspection.
 
-Use `--skip-build` to verify already-built exact local images without pulling
-or rebuilding them. The harness writes command-level `evidence.json`; the
-reviewed concise result is `evidence-summary.json`, with the decision and
-limitations in `HANDOFF.md`.
+Use `--skip-build` only with all three explicit `--expected-*-id` digests and
+all three `--expected-*-revision` values. The command must run from a clean
+checkout because the harness and its evidence predicates are part of the
+receipt. The tested R8 images were built from the per-image revisions shown
+below; the later harness/docs commits are not image source revisions:
+
+```sh
+python3 packages/meshshot/prototypes/browser_sidecar/harness.py \
+  --docker-host unix:///Users/zhiyuanma/.colima/browser-sidecar-prototype/docker.sock \
+  --evidence-dir /tmp/browser-sidecar-prototype-evidence-r2-r8-replay \
+  --skip-build \
+  --expected-sidecar-id sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1 \
+  --expected-agent-id sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373 \
+  --expected-legacy-id sha256:7a15df89f7e8f194446ba251cfdb280416e85c46b9a514528d4ab221201ca3af \
+  --expected-sidecar-revision 1abe4c97929906b5c0b28b0f3f38857bd923952f \
+  --expected-agent-revision 1abe4c97929906b5c0b28b0f3f38857bd923952f \
+  --expected-legacy-revision 7e9fbbd15a365d5df691a79b0d2352492888d361
+```
+
+R8's Docker execution used harness/runtime commit `1abe4c97...`. The post-R8
+outer-harness hardening range `960ca3f7...cd17a1af` is unit/contract verified
+only and was **not** rerun against Docker or CVM.
+
+The harness writes command-level `evidence.json`; the reviewed concise R8
+result is `evidence-summary.json`, with the decision, rejected predecessors,
+and limitations in `HANDOFF.md`.
 
 The fixed base is Playwright 1.60.0 noble, resolved before pull to the
 `linux/amd64` child digest
