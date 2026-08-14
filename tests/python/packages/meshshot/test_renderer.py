@@ -1699,6 +1699,56 @@ class ResidualRendererTests(unittest.TestCase):
         )
         self.assertEqual("transport_close", raised.exception.browser_cleanup_check)
 
+    def test_prelaunch_retained_resource_proof_overrides_body_cleanup(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        body_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_handoff",
+            browser_cleanup_check="transport_close",
+        )
+        retained_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_profile",
+            browser_cleanup_check="absence",
+            _browser_cleanup_retained=True,
+        )
+        runtime = object.__new__(PrelaunchedCdpRuntime)
+        runtime._profile = {
+            "arguments": [],
+            "startup_timeout_ms": 100,
+            "cleanup_term_ms": 10,
+            "cleanup_kill_ms": 10,
+        }
+        runtime._executable = Path("/private/browser")
+        runtime._pinned_executable = mock.MagicMock()
+        runtime._profile_dir = None
+        runtime._profile_identity = None
+        runtime._profile_cleanup_forbidden = False
+        runtime._profile_fd = None
+        runtime._profile_parent_fd = None
+        runtime._process = None
+        runtime._process_group = None
+        runtime._endpoint = None
+        with (
+            mock.patch.object(
+                browser_runtime.tempfile,
+                "mkdtemp",
+                side_effect=body_cleanup,
+            ),
+            mock.patch.object(runtime, "_cleanup", side_effect=retained_cleanup),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            runtime._prelaunch()
+
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_profile",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual("absence", raised.exception.browser_cleanup_check)
+
     def test_spawned_session_uses_pid_as_group_before_readiness_failure(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
 

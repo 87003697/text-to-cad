@@ -318,13 +318,20 @@ def _cleanup_private_supervisor_state(
     connection: socket.socket | None,
     socket_identity: tuple[int, int] | None,
     socket_unlinked: bool,
+    initial_substage: str | None = None,
     initial_check: str | None = None,
 ) -> None:
+    cleanup_substage = (
+        initial_substage
+        if initial_substage is not None and initial_check is not None
+        else "private_supervisor_state"
+    )
     cleanup_check = initial_check
 
     def record(check: str, *, retained: bool = False) -> None:
-        nonlocal cleanup_check
+        nonlocal cleanup_substage, cleanup_check
         if cleanup_check is None or retained:
+            cleanup_substage = "private_supervisor_state"
             cleanup_check = check
 
     if connection is not None:
@@ -374,7 +381,7 @@ def _cleanup_private_supervisor_state(
     if cleanup_check is not None:
         raise BrowserRuntimeError(
             "browser_cleanup",
-            browser_cleanup_substage="private_supervisor_state",
+            browser_cleanup_substage=cleanup_substage,
             browser_cleanup_check=cleanup_check,
         )
 
@@ -389,6 +396,7 @@ def run() -> None:
     socket_unlinked = False
     nonce = os.urandom(32).hex()
     body_error: BaseException | None = None
+    body_cleanup_substage: str | None = None
     body_cleanup_check: str | None = None
     try:
         for path in (SUPERVISOR_OUTER_SOCKET, SUPERVISOR_OUTER_AUTHORITY, SUPERVISOR_OUTER_CLIENT):
@@ -491,9 +499,10 @@ def run() -> None:
         if (
             isinstance(exc, BrowserRuntimeError)
             and exc.operation == "browser_cleanup"
-            and exc.browser_cleanup_substage == "private_supervisor_state"
+            and exc.browser_cleanup_substage is not None
             and exc.browser_cleanup_check is not None
         ):
+            body_cleanup_substage = exc.browser_cleanup_substage
             body_cleanup_check = exc.browser_cleanup_check
     finally:
         try:
@@ -504,6 +513,7 @@ def run() -> None:
                 connection=connection,
                 socket_identity=socket_identity,
                 socket_unlinked=socket_unlinked,
+                initial_substage=body_cleanup_substage,
                 initial_check=body_cleanup_check,
             )
         except BrowserRuntimeError as cleanup_error:

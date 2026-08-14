@@ -298,6 +298,7 @@ class BrowserRuntimeError(RuntimeError):
         browser_identity_check: str | None = None,
         browser_cleanup_substage: str | None = None,
         browser_cleanup_check: str | None = None,
+        _browser_cleanup_retained: bool = False,
     ) -> None:
         super().__init__(operation)
         self.operation = operation
@@ -351,6 +352,26 @@ class BrowserRuntimeError(RuntimeError):
             if self.browser_cleanup_substage is not None
             else None
         )
+        self._browser_cleanup_retained = bool(
+            self.browser_cleanup_substage is not None
+            and _browser_cleanup_retained
+        )
+
+
+def _is_typed_browser_cleanup(exc: BaseException) -> bool:
+    return (
+        isinstance(exc, BrowserRuntimeError)
+        and exc.operation == "browser_cleanup"
+        and exc.browser_cleanup_substage is not None
+        and exc.browser_cleanup_check is not None
+    )
+
+
+def _is_retained_browser_cleanup(exc: BaseException) -> bool:
+    return bool(
+        _is_typed_browser_cleanup(exc)
+        and getattr(exc, "_browser_cleanup_retained", False)
+    )
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -3741,8 +3762,15 @@ class PrelaunchedCdpRuntime:
         )
         try:
             browser_identity = _attest(self._pinned_executable, self._profile)
-        except BaseException:
-            self._pinned_executable.close()
+        except BaseException as exc:
+            body_cleanup = exc if _is_typed_browser_cleanup(exc) else None
+            try:
+                self._pinned_executable.close()
+            except BrowserRuntimeError as close_cleanup:
+                if body_cleanup is None:
+                    raise close_cleanup from exc
+            if body_cleanup is not None:
+                raise body_cleanup
             raise
         self.evidence = {
             "schema": RUNTIME_SCHEMA,
@@ -3915,14 +3943,24 @@ class PrelaunchedCdpRuntime:
                 self._endpoint = f"http://127.0.0.1:{int(lines[0])}"
                 return self._endpoint
             raise BrowserRuntimeError("browser_readiness_timeout")
-        except BaseException:
-            self._cleanup()
+        except BaseException as exc:
+            body_cleanup = exc if _is_typed_browser_cleanup(exc) else None
+            try:
+                self._cleanup()
+            except BrowserRuntimeError as cleanup_error:
+                if body_cleanup is None or _is_retained_browser_cleanup(
+                    cleanup_error
+                ):
+                    raise cleanup_error from exc
+            if body_cleanup is not None:
+                raise body_cleanup
             raise
 
     def _cleanup(self) -> None:
         failure = False
         cleanup_substage: str | None = None
         cleanup_check: str | None = None
+        cleanup_retained = False
 
         def record_cleanup(
             substage: str,
@@ -3930,11 +3968,12 @@ class PrelaunchedCdpRuntime:
             *,
             retained: bool = False,
         ) -> None:
-            nonlocal failure, cleanup_substage, cleanup_check
+            nonlocal failure, cleanup_substage, cleanup_check, cleanup_retained
             failure = True
             if cleanup_check is None or retained:
                 cleanup_substage = substage
                 cleanup_check = check
+                cleanup_retained = retained
 
         process = self._process
         process_group = self._process_group
@@ -4120,6 +4159,7 @@ class PrelaunchedCdpRuntime:
                 "browser_cleanup",
                 browser_cleanup_substage=cleanup_substage,
                 browser_cleanup_check=cleanup_check,
+                _browser_cleanup_retained=cleanup_retained,
             )
 
     def _verify_connected_browser(self, browser: Any) -> None:
