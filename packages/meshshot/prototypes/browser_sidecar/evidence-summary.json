@@ -1,0 +1,83 @@
+{
+  "schema": "meshshot.browser-sidecar.prototype-summary/1",
+  "verdict": "ADOPT",
+  "baseRevision": "9c5b7ea39030a013023a2f06c83b9b869a394861",
+  "environment": {
+    "colimaProfile": "browser-sidecar-prototype",
+    "architecture": "linux/amd64",
+    "cpus": 2,
+    "memoryGiB": 4,
+    "diskGiB": 20
+  },
+  "images": {
+    "playwrightBaseAmd64": "sha256:83192064c7510f7ee73dd63dc5f22a5e01a92c81a2e6a9c715d9e3fe55471fd9",
+    "sidecar": "sha256:c61318789e67cbac0ef1d4b0b91b25b158070cee5c516e296d9661097fa980fb",
+    "sealedAgent": "sha256:d6af75274aebcdac805a3247af557a84740cf0a053c2575bca9faf8ebbafcd77",
+    "legacyParityDerivative": "sha256:10335f887a051749c3074e7ec28628e9278d309e0a09cbf9f2d72efc78c14d95"
+  },
+  "p1": {
+    "status": "PASS",
+    "readonlyRootfs": true,
+    "mounts": [],
+    "networkInternal": true,
+    "externalEgressBlocked": true,
+    "agentBrowserExecutablesVisible": [],
+    "sourceAliasesVisible": [],
+    "sidecarMemoryBytes": 1610612736,
+    "sidecarMemorySwapBytes": 1610612736,
+    "sidecarNanoCpus": 1500000000,
+    "sidecarPidsLimit": 256,
+    "sidecarShmBytes": 268435456,
+    "profileTmpfs": "size=128m",
+    "homeTmpfs": "size=64m",
+    "terminalExitCode": 0,
+    "terminalLogEvent": "closing/SIGTERM"
+  },
+  "p2": {
+    "status": "PASS",
+    "singleConnectionFreshContexts": ["probe", "viewer", "residual"],
+    "viewer": {
+      "title": "CAD Viewer | cube.stl",
+      "fixtureVisible": true,
+      "screenshotBytes": 99684,
+      "screenshotSha256": "3fe8923445119281118af8c6e955d22173f0212110f02334aaeae0e60cc2c45d",
+      "programDigest": "a7a0806d7e21a39010f99bf783119e5409717896de9ffc0f2a7fd843c91b24b9"
+    },
+    "residual": {
+      "pngBytes": 44681,
+      "pngSha256": "21323e304f583f783004b7d64a459455da29aa43c8ba99716488d5b1ebd0f9de",
+      "profileSha256": "87da3cc3f625cb9c24f51bed41dcdc70402a4d461b2af29eaa19846b1e8f7241",
+      "programDigest": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
+      "viewOrder": ["+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso"]
+    },
+    "legacyParity": {
+      "pngBytesEqual": true,
+      "pngSha256Equal": true,
+      "profileSha256Equal": true,
+      "viewOrderEqual": true
+    }
+  },
+  "p3": {
+    "status": "PASS",
+    "bothClientsReachedHold": true,
+    "agentATopCommands": ["node client.mjs hold"],
+    "agentBTopCommands": ["node client.mjs hold"],
+    "jobAExitAfterCancellation": 1,
+    "jobAFailure": "page.waitForTimeout: Browser closed",
+    "jobBRunningAfterJobACancellation": true,
+    "jobBExitCode": 0,
+    "jobBCookies": [{"name": "job-job-b", "value": "job-b"}],
+    "terminalExitCodeA": 0,
+    "terminalExitCodeB": 0
+  },
+  "terminalResidue": {
+    "containers": [],
+    "networks": []
+  },
+  "fullEvidence": {
+    "localPath": "/tmp/browser-sidecar-prototype-evidence-final-r4/evidence.json",
+    "sha256": "2045193de556d8db64f579e58ce5f784e132e7817398f6d8b1394e7614e6856e",
+    "terminalOperations": 70
+  },
+  "notRun": ["CVM capability probe", "production integration", "tracker mutation", "push"]
+}

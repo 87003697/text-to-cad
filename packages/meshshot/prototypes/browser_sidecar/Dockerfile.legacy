@@ -1,0 +1,5 @@
+# THROWAWAY parity-only derivative of the fixed Sidecar image.
+ARG SIDECAR_IMAGE=meshshot-sidecar-prototype@sha256:c61318789e67cbac0ef1d4b0b91b25b158070cee5c516e296d9661097fa980fb
+FROM ${SIDECAR_IMAGE}
+COPY --chown=pwuser:pwuser packages/meshshot/prototypes/browser_sidecar/legacy_residual.mjs /opt/browser-sidecar/prototype/legacy_residual.mjs
+ENTRYPOINT ["node", "/opt/browser-sidecar/prototype/legacy_residual.mjs"]
