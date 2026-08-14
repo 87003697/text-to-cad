@@ -1177,11 +1177,24 @@ class _PinnedExecutable:
                 "browser_identity",
                 browser_identity_phase="source_executable_identity",
             )
+        failure: BaseException | None = None
+        cleanup_error: BrowserRuntimeError | None = None
         try:
             self._materialize_private_image(source_fd, source_info)
-        except BaseException:
-            self.close()
-            raise
+        except BaseException as exc:
+            failure = exc
+            if (
+                isinstance(exc, BrowserRuntimeError)
+                and exc.operation == "browser_cleanup"
+                and exc.browser_cleanup_substage is not None
+                and exc.browser_cleanup_check is not None
+            ):
+                cleanup_error = exc
+            try:
+                self.close()
+            except BrowserRuntimeError as image_cleanup:
+                if cleanup_error is None:
+                    cleanup_error = image_cleanup
         finally:
             if source_fd is not None:
                 try:
@@ -1191,11 +1204,18 @@ class _PinnedExecutable:
                         cleanup_check="executable_descriptor_close",
                     )
                 except BrowserRuntimeError as source_cleanup:
-                    try:
-                        self.close()
-                    except BrowserRuntimeError as image_cleanup:
-                        raise image_cleanup from source_cleanup
-                    raise
+                    if cleanup_error is None:
+                        cleanup_error = source_cleanup
+                    if failure is None:
+                        try:
+                            self.close()
+                        except BrowserRuntimeError as image_cleanup:
+                            if cleanup_error is None:
+                                cleanup_error = image_cleanup
+        if cleanup_error is not None:
+            raise cleanup_error from failure
+        if failure is not None:
+            raise failure
 
     @staticmethod
     def _tree_manifest_sha256(root: Path) -> str:
@@ -2186,7 +2206,8 @@ class _PinnedExecutable:
         if not getattr(self, "_detached_mount_mode", False) or self.launch_root is not None:
             return
         source_fd: int | None = None
-        cleanup_failed = False
+        failure: BaseException | None = None
+        cleanup_error: BrowserRuntimeError | None = None
         try:
             source_fd = os.open(
                 self.path,
@@ -2214,29 +2235,31 @@ class _PinnedExecutable:
                 )
             self._materialize_detached_tree(source_info)
         except BaseException as exc:
-            if source_fd is not None:
-                try:
-                    os.close(source_fd)
-                except OSError:
-                    cleanup_failed = True
-                source_fd = None
-            if cleanup_failed:
-                raise BrowserRuntimeError(
-                    "browser_cleanup",
-                    browser_cleanup_substage="private_browser_pinned_image",
-                    browser_cleanup_check="executable_descriptor_close",
-                ) from exc
-            raise
+            failure = exc
+            if (
+                isinstance(exc, BrowserRuntimeError)
+                and exc.operation == "browser_cleanup"
+                and exc.browser_cleanup_substage is not None
+                and exc.browser_cleanup_check is not None
+            ):
+                cleanup_error = exc
         finally:
             if source_fd is not None:
+                closing_source_fd = source_fd
+                source_fd = None
                 try:
-                    os.close(source_fd)
-                except OSError as exc:
-                    raise BrowserRuntimeError(
-                        "browser_cleanup",
-                        browser_cleanup_substage="private_browser_pinned_image",
-                        browser_cleanup_check="executable_descriptor_close",
-                    ) from exc
+                    os.close(closing_source_fd)
+                except OSError:
+                    if cleanup_error is None:
+                        cleanup_error = BrowserRuntimeError(
+                            "browser_cleanup",
+                            browser_cleanup_substage="private_browser_pinned_image",
+                            browser_cleanup_check="executable_descriptor_close",
+                        )
+        if cleanup_error is not None:
+            raise cleanup_error from failure
+        if failure is not None:
+            raise failure
 
     @staticmethod
     def _sealed_snapshot_fd(
@@ -2817,7 +2840,11 @@ class _PinnedExecutable:
                 "nonce": nonce,
             }:
                 raise BrowserRuntimeError("browser_identity")
-            listener.close()
+            try:
+                listener.close()
+            except OSError:
+                record_cleanup("transport_close")
+                raise
             listener = None
             self._unlink_owned_handoff_entry(
                 root_fd,
@@ -2868,7 +2895,11 @@ class _PinnedExecutable:
                 raise BrowserRuntimeError("browser_identity") from OSError(
                     f"closed browser mount exec cause: {cause}"
                 )
-            connection.close()
+            try:
+                connection.close()
+            except OSError:
+                record_cleanup("transport_close")
+                raise
             connection = None
             self._unlink_owned_handoff_entry(
                 root_fd,
