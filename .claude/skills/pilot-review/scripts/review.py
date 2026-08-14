@@ -239,7 +239,7 @@ _SANDBOX_PROFILE = {
             "published": "first-failing-closed-substage-only",
         },
         "browser_cleanup_diagnostic": {
-            "schema": "meshshot.browser-cleanup-diagnostic/1",
+            "schema": "meshshot.browser-cleanup-diagnostic/2",
             "receipt": "run/browser-cleanup-diagnostic.json",
             "operation": "preview_browser_cleanup",
             "checks_by_substage": {
@@ -249,7 +249,17 @@ _SANDBOX_PROFILE = {
                 "outer_supervisor_private_state": ["authority_absence", "client_absence", "socket_absence"],
                 "outer_supervisor_process_group": ["kill_group_empty", "kill_signal", "leader_kill_wait", "leader_term_wait", "term_group_empty", "term_signal"],
                 "outer_supervisor_wait": ["supervisor_exit_status", "supervisor_wait"],
-                "private_browser_pinned_image": ["detached_mount_release", "executable_descriptor_close"],
+                "private_browser_pinned_image": [
+                    "detached_mount_authority",
+                    "detached_mount_create",
+                    "detached_mount_retained",
+                    "detached_mounted_descriptor_close",
+                    "detached_mounted_identity",
+                    "detached_parent_descriptor_close",
+                    "detached_underlying_descriptor_close",
+                    "detached_underlying_identity",
+                    "executable_descriptor_close",
+                ],
                 "private_browser_handoff": ["authority_record_descriptor_close", "authority_record_unlink", "pipe_descriptor_close", "process_group_cleanup", "root_descriptor_close", "socket_unlink", "transport_close"],
                 "private_browser_private_tree": ["absence", "authority_descriptor_close", "directory_thaw", "recursive_remove", "tree_descriptor_close"],
                 "private_browser_process_group": ["kill_group_empty", "kill_signal", "leader_kill_wait", "leader_term_wait", "term_group_empty", "term_signal"],
@@ -720,7 +730,17 @@ def _runtime_authority_failure_verdict(
             "outer_browser_stage": {"tree_copy_descriptor_close", "revision_descriptor_close", "destination_descriptor_close", "source_descriptor_close"},
             "private_browser_process_group": {"term_signal", "leader_term_wait", "term_group_empty", "kill_signal", "leader_kill_wait", "kill_group_empty"},
             "private_browser_profile": {"authority_validation", "quarantine_create", "quarantine_move", "recursive_remove", "authority_close", "absence"},
-            "private_browser_pinned_image": {"executable_descriptor_close", "detached_mount_release"},
+            "private_browser_pinned_image": {
+                "executable_descriptor_close",
+                "detached_mount_create",
+                "detached_mount_authority",
+                "detached_mounted_identity",
+                "detached_underlying_identity",
+                "detached_mounted_descriptor_close",
+                "detached_underlying_descriptor_close",
+                "detached_parent_descriptor_close",
+                "detached_mount_retained",
+            },
             "private_browser_handoff": {"socket_unlink", "authority_record_unlink", "authority_record_descriptor_close", "root_descriptor_close", "transport_close", "pipe_descriptor_close", "process_group_cleanup"},
             "private_browser_private_tree": {"tree_descriptor_close", "directory_thaw", "recursive_remove", "authority_descriptor_close", "absence"},
             "private_supervisor_state": {"client_transport_close", "listener_close", "socket_unlink", "root_identity", "authority_record_unlink", "client_record_unlink", "root_descriptor_close"},
@@ -891,7 +911,7 @@ def _runtime_authority_failure_verdict(
                 if (
                     not isinstance(cleanup, dict)
                     or set(cleanup) != {"schema", "substage", "check"}
-                    or cleanup.get("schema") != "meshshot.browser-cleanup-diagnostic/1"
+                    or cleanup.get("schema") != "meshshot.browser-cleanup-diagnostic/2"
                     or cleanup.get("check") not in cleanup_checks_by_substage.get(cleanup.get("substage"), set())
                     or hashlib.sha256(cleanup_bytes).hexdigest() != cleanup_reference["sha256"]
                 ):

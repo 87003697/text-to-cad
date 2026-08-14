@@ -1989,7 +1989,7 @@ class ResidualRendererTests(unittest.TestCase):
         retained_cleanup = BrowserRuntimeError(
             "browser_cleanup",
             browser_cleanup_substage="private_browser_pinned_image",
-            browser_cleanup_check="detached_mount_release",
+            browser_cleanup_check="detached_mount_retained",
             _browser_cleanup_retained=True,
         )
         pinned = mock.MagicMock()
@@ -2019,7 +2019,7 @@ class ResidualRendererTests(unittest.TestCase):
             raised.exception.browser_cleanup_substage,
         )
         self.assertEqual(
-            "detached_mount_release",
+            "detached_mount_retained",
             raised.exception.browser_cleanup_check,
         )
         self.assertTrue(raised.exception._browser_cleanup_retained)
@@ -2179,11 +2179,11 @@ class ResidualRendererTests(unittest.TestCase):
 
         self.assertEqual("browser_cleanup", raised.exception.operation)
         self.assertEqual(
-            "private_browser_pinned_image",
+            "private_browser_private_tree",
             raised.exception.browser_cleanup_substage,
         )
         self.assertEqual(
-            "detached_mount_release",
+            "absence",
             raised.exception.browser_cleanup_check,
         )
         self.assertTrue(raised.exception._browser_cleanup_retained)
@@ -3419,9 +3419,10 @@ class ResidualRendererTests(unittest.TestCase):
                 raised.exception.browser_cleanup_substage,
             )
             self.assertEqual(
-                "detached_mount_release",
+                "detached_mount_retained",
                 raised.exception.browser_cleanup_check,
             )
+            self.assertTrue(raised.exception._browser_cleanup_retained)
 
     def test_pinned_close_marks_only_positive_retained_tree_or_mount(self) -> None:
         from meshshot import browser_runtime
@@ -3452,17 +3453,22 @@ class ResidualRendererTests(unittest.TestCase):
                     pinned.close()
 
                 self.assertEqual(
-                    "private_browser_pinned_image",
+                    (
+                        "private_browser_private_tree"
+                        if retained_kind == "tree"
+                        else "private_browser_pinned_image"
+                    ),
                     raised.exception.browser_cleanup_substage,
                 )
                 self.assertEqual(
-                    "detached_mount_release",
+                    (
+                        "absence"
+                        if retained_kind == "tree"
+                        else "detached_mount_retained"
+                    ),
                     raised.exception.browser_cleanup_check,
                 )
-                self.assertIs(
-                    retained_kind == "tree",
-                    raised.exception._browser_cleanup_retained,
-                )
+                self.assertTrue(raised.exception._browser_cleanup_retained)
 
         with tempfile.TemporaryDirectory() as directory:
             pinned = object.__new__(_PinnedExecutable)
@@ -3481,13 +3487,14 @@ class ResidualRendererTests(unittest.TestCase):
             ):
                 pinned.close()
             self.assertEqual(
-                "private_browser_pinned_image",
+                "private_browser_private_tree",
                 raised.exception.browser_cleanup_substage,
             )
             self.assertEqual(
-                "detached_mount_release",
+                "absence",
                 raised.exception.browser_cleanup_check,
             )
+            self.assertTrue(raised.exception._browser_cleanup_retained)
 
     def test_pinned_source_descriptor_close_failure_is_cleanup(self) -> None:
         from meshshot import browser_runtime
@@ -3715,7 +3722,7 @@ class ResidualRendererTests(unittest.TestCase):
         cleanup = BrowserRuntimeError(
             "browser_cleanup",
             browser_cleanup_substage="private_browser_pinned_image",
-            browser_cleanup_check="detached_mount_release",
+            browser_cleanup_check="detached_mount_create",
         )
         with tempfile.TemporaryDirectory() as directory:
             executable = Path(directory) / "chrome-headless-shell"
@@ -3759,7 +3766,7 @@ class ResidualRendererTests(unittest.TestCase):
             "private_browser_pinned_image",
             raised.exception.browser_cleanup_substage,
         )
-        self.assertEqual("detached_mount_release", raised.exception.browser_cleanup_check)
+        self.assertEqual("detached_mount_create", raised.exception.browser_cleanup_check)
 
     def test_detached_handoff_authority_descriptor_close_keeps_exact_owner(self) -> None:
         from meshshot import browser_runtime
@@ -4686,6 +4693,95 @@ class ResidualRendererTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     os.fstat(descriptor)
 
+    def test_namespace_image_release_discriminates_each_identity_proof(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        for failed_kind, expected_check in (
+            ("mounted", "detached_mounted_identity"),
+            ("underlying", "detached_underlying_identity"),
+        ):
+            with (
+                self.subTest(failed_kind=failed_kind),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                info = root.stat()
+                descriptors = [
+                    os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                    for _index in range(3)
+                ]
+                parent_fd, mounted_fd, underlying_fd = descriptors
+                pinned = object.__new__(_PinnedExecutable)
+                pinned._detached_filesystem_mounted = True
+                pinned._namespace_discard_owned = True
+                pinned._detached_mount_parent_fd = parent_fd
+                pinned._detached_mount_fd = mounted_fd
+                pinned._detached_underlying_fd = underlying_fd
+                pinned._detached_mount_name = root.name
+                pinned._detached_underlying_identity = (info.st_dev, info.st_ino)
+                pinned._detached_mounted_identity = (info.st_dev, info.st_ino)
+                real_fstat = os.fstat
+
+                def fstat(descriptor: int) -> os.stat_result:
+                    if (
+                        failed_kind == "mounted"
+                        and descriptor == mounted_fd
+                    ) or (
+                        failed_kind == "underlying"
+                        and descriptor == underlying_fd
+                    ):
+                        raise OSError("closed identity proof")
+                    return real_fstat(descriptor)
+
+                with (
+                    mock.patch.object(browser_runtime.os, "fstat", side_effect=fstat),
+                    self.assertRaises(BrowserRuntimeError) as raised,
+                ):
+                    pinned._relinquish_detached_mount_authority()
+
+                self.assertEqual(expected_check, raised.exception.browser_cleanup_check)
+                self.assertFalse(raised.exception._browser_cleanup_retained)
+                for descriptor in descriptors:
+                    with self.assertRaises(OSError):
+                        os.fstat(descriptor)
+
+    def test_namespace_image_release_marks_positive_retained_mount_authority(
+        self,
+    ) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            info = root.stat()
+            parent_fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            underlying_fd = os.open(
+                root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            )
+            pinned = object.__new__(_PinnedExecutable)
+            pinned._detached_filesystem_mounted = True
+            pinned._namespace_discard_owned = True
+            pinned._detached_mount_parent_fd = parent_fd
+            pinned._detached_mount_fd = None
+            pinned._detached_underlying_fd = underlying_fd
+            pinned._detached_mount_name = root.name
+            pinned._detached_underlying_identity = (info.st_dev, info.st_ino)
+            pinned._detached_mounted_identity = (info.st_dev, info.st_ino)
+
+            with self.assertRaises(BrowserRuntimeError) as raised:
+                pinned._relinquish_detached_mount_authority()
+
+            self.assertEqual(
+                "detached_mount_retained",
+                raised.exception.browser_cleanup_check,
+            )
+            self.assertTrue(raised.exception._browser_cleanup_retained)
+            for descriptor in (parent_fd, underlying_fd):
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
     def test_detached_cleanup_authority_loss_never_falls_back_to_path_removal(
         self,
     ) -> None:
@@ -4833,6 +4929,40 @@ class ResidualRendererTests(unittest.TestCase):
 
             self.assertEqual("browser_cleanup", raised.exception.operation)
             self.assertTrue(original.is_dir())
+
+    def test_detached_mount_requires_exact_namespace_authority(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(
+                browser_runtime.tempfile,
+                "gettempdir",
+                return_value=Path(directory),
+            ):
+                owned = browser_runtime._private_directory("meshshot-tree-")
+            pinned = object.__new__(_PinnedExecutable)
+            pinned._detached_filesystem_mounted = False
+            pinned._namespace_discard_owned = False
+            pinned._detached_mount_parent_fd = None
+            pinned._detached_mount_fd = None
+            pinned._detached_underlying_fd = None
+            pinned._detached_mount_name = None
+            pinned._detached_underlying_identity = None
+            pinned._detached_mounted_identity = None
+
+            with (
+                mock.patch.object(pinned, "_mount_private_filesystem") as mount,
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned._prepare_detached_mount(owned)
+
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+            self.assertEqual(
+                "detached_mount_authority",
+                raised.exception.browser_cleanup_check,
+            )
+            mount.assert_not_called()
 
     def test_detached_mount_syscall_failure_is_cleanup(self) -> None:
         from meshshot import browser_runtime

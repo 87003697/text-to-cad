@@ -61,7 +61,7 @@ PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_PATH = (
     "run/browser-cleanup-diagnostic.json"
 )
 PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA = (
-    "meshshot.browser-cleanup-diagnostic/1"
+    "meshshot.browser-cleanup-diagnostic/2"
 )
 PROVIDER_FREE_BROWSER_SUPERVISOR_RESULT_CLEANUP_EXIT = 78
 PROVIDER_FREE_BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE = {
@@ -75,7 +75,17 @@ PROVIDER_FREE_BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE = {
         {"authority_validation", "quarantine_create", "quarantine_move", "recursive_remove", "authority_close", "absence"}
     ),
     "private_browser_pinned_image": frozenset(
-        {"executable_descriptor_close", "detached_mount_release"}
+        {
+            "executable_descriptor_close",
+            "detached_mount_create",
+            "detached_mount_authority",
+            "detached_mounted_identity",
+            "detached_underlying_identity",
+            "detached_mounted_descriptor_close",
+            "detached_underlying_descriptor_close",
+            "detached_parent_descriptor_close",
+            "detached_mount_retained",
+        }
     ),
     "private_browser_private_tree": frozenset(
         {"tree_descriptor_close", "directory_thaw", "recursive_remove", "authority_descriptor_close", "absence"}

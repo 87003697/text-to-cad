@@ -804,7 +804,7 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         diagnostic_bytes = diagnostic_path.read_bytes()
         self.assertEqual(
             {
-                "schema": "meshshot.browser-cleanup-diagnostic/1",
+                "schema": "meshshot.browser-cleanup-diagnostic/2",
                 "substage": "private_browser_process_group",
                 "check": "kill_group_empty",
             },

@@ -107,7 +107,17 @@ BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE = {
         }
     ),
     "private_browser_pinned_image": frozenset(
-        {"executable_descriptor_close", "detached_mount_release"}
+        {
+            "executable_descriptor_close",
+            "detached_mount_create",
+            "detached_mount_authority",
+            "detached_mounted_identity",
+            "detached_underlying_identity",
+            "detached_mounted_descriptor_close",
+            "detached_underlying_descriptor_close",
+            "detached_parent_descriptor_close",
+            "detached_mount_retained",
+        }
     ),
     "private_browser_private_tree": frozenset(
         {
@@ -2002,13 +2012,9 @@ class _PinnedExecutable:
             if self._detached_filesystem_mounted:
                 try:
                     self._relinquish_detached_mount_authority()
-                except BrowserRuntimeError:
+                except BrowserRuntimeError as release_error:
                     if cleanup_error is None:
-                        cleanup_error = BrowserRuntimeError(
-                            "browser_cleanup",
-                            browser_cleanup_substage="private_browser_pinned_image",
-                            browser_cleanup_check="detached_mount_release",
-                        )
+                        cleanup_error = release_error
             try:
                 owned_root.close_authority()
             except BrowserRuntimeError:
@@ -2031,7 +2037,7 @@ class _PinnedExecutable:
                 raise BrowserRuntimeError(
                     "browser_cleanup",
                     browser_cleanup_substage="private_browser_pinned_image",
-                    browser_cleanup_check="detached_mount_release",
+                    browser_cleanup_check="detached_mount_authority",
                 ) from exc
             if isinstance(exc, BrowserRuntimeError):
                 if exc.operation == "browser_identity" and exc.browser_identity_phase is None:
@@ -2050,12 +2056,16 @@ class _PinnedExecutable:
         mounted_fd: int | None = None
         try:
             if not getattr(self, "_namespace_discard_owned", False):
-                raise BrowserRuntimeError("browser_prelaunch")
+                raise BrowserRuntimeError(
+                    "browser_cleanup",
+                    browser_cleanup_substage="private_browser_pinned_image",
+                    browser_cleanup_check="detached_mount_authority",
+                )
             if owned_root.directory_fd is None:
                 raise BrowserRuntimeError(
                     "browser_cleanup",
                     browser_cleanup_substage="private_browser_pinned_image",
-                    browser_cleanup_check="detached_mount_release",
+                    browser_cleanup_check="detached_mount_authority",
                 )
             underlying = os.fstat(owned_root.directory_fd)
             if (
@@ -2068,7 +2078,7 @@ class _PinnedExecutable:
                 raise BrowserRuntimeError(
                     "browser_cleanup",
                     browser_cleanup_substage="private_browser_pinned_image",
-                    browser_cleanup_check="detached_mount_release",
+                    browser_cleanup_check="detached_mount_authority",
                 )
             self._detached_mount_parent_fd = owned_root.parent_fd
             owned_root.parent_fd = None
@@ -2096,17 +2106,22 @@ class _PinnedExecutable:
             mounted_fd = None
             self._detached_mounted_identity = (mounted.st_dev, mounted.st_ino)
         except (BrowserRuntimeError, OSError) as exc:
-            cleanup_failed = False
+            cleanup_error: BrowserRuntimeError | None = None
             if mounted_fd is not None:
                 try:
                     os.close(mounted_fd)
                 except OSError:
-                    cleanup_failed = True
+                    cleanup_error = BrowserRuntimeError(
+                        "browser_cleanup",
+                        browser_cleanup_substage="private_browser_pinned_image",
+                        browser_cleanup_check="detached_mounted_descriptor_close",
+                    )
             if self._detached_filesystem_mounted:
                 try:
                     self._relinquish_detached_mount_authority()
-                except BrowserRuntimeError:
-                    cleanup_failed = True
+                except BrowserRuntimeError as release_error:
+                    if cleanup_error is None:
+                        cleanup_error = release_error
             elif self._detached_underlying_fd is not None:
                 underlying_fd = self._detached_underlying_fd
                 parent_fd = self._detached_mount_parent_fd
@@ -2122,34 +2137,62 @@ class _PinnedExecutable:
                         and (opened_underlying.st_dev, opened_underlying.st_ino)
                         == identity
                     )
-                    if not valid:
-                        cleanup_failed = True
+                    if not valid and cleanup_error is None:
+                        cleanup_error = BrowserRuntimeError(
+                            "browser_cleanup",
+                            browser_cleanup_substage="private_browser_pinned_image",
+                            browser_cleanup_check="detached_underlying_identity",
+                        )
                 except OSError:
-                    cleanup_failed = True
+                    if cleanup_error is None:
+                        cleanup_error = BrowserRuntimeError(
+                            "browser_cleanup",
+                            browser_cleanup_substage=(
+                                "private_browser_pinned_image"
+                            ),
+                            browser_cleanup_check=(
+                                "detached_underlying_identity"
+                            ),
+                        )
                 if underlying_fd is not None:
                     try:
                         os.close(underlying_fd)
                     except OSError:
-                        cleanup_failed = True
+                        if cleanup_error is None:
+                            cleanup_error = BrowserRuntimeError(
+                                "browser_cleanup",
+                                browser_cleanup_substage="private_browser_pinned_image",
+                                browser_cleanup_check=(
+                                    "detached_underlying_descriptor_close"
+                                ),
+                            )
                     self._detached_underlying_fd = None
                 if parent_fd is not None:
                     try:
                         os.close(parent_fd)
                     except OSError:
-                        cleanup_failed = True
+                        if cleanup_error is None:
+                            cleanup_error = BrowserRuntimeError(
+                                "browser_cleanup",
+                                browser_cleanup_substage="private_browser_pinned_image",
+                                browser_cleanup_check=(
+                                    "detached_parent_descriptor_close"
+                                ),
+                            )
                 self._detached_mount_parent_fd = None
                 self._detached_mount_name = None
                 self._detached_underlying_identity = None
             try:
                 owned_root.close_authority()
             except BrowserRuntimeError:
-                cleanup_failed = True
-            if cleanup_failed:
-                raise BrowserRuntimeError(
-                    "browser_cleanup",
-                    browser_cleanup_substage="private_browser_pinned_image",
-                    browser_cleanup_check="detached_mount_release",
-                ) from exc
+                if cleanup_error is None:
+                    cleanup_error = BrowserRuntimeError(
+                        "browser_cleanup",
+                        browser_cleanup_substage="private_browser_pinned_image",
+                        browser_cleanup_check="detached_mount_authority",
+                    )
+            if cleanup_error is not None:
+                raise cleanup_error from exc
             if isinstance(exc, BrowserRuntimeError):
                 raise
             raise BrowserRuntimeError(
@@ -2164,7 +2207,9 @@ class _PinnedExecutable:
         name = getattr(self, "_detached_mount_name", None)
         underlying_identity = getattr(self, "_detached_underlying_identity", None)
         mounted_identity = getattr(self, "_detached_mounted_identity", None)
-        cleanup_failed = (
+        cleanup_check: str | None = None
+        cleanup_retained = False
+        if (
             underlying_fd is None
             or mounted_fd is None
             or name is None
@@ -2172,48 +2217,77 @@ class _PinnedExecutable:
             or mounted_identity is None
             or not self._detached_filesystem_mounted
             or not getattr(self, "_namespace_discard_owned", False)
-        )
+        ):
+            cleanup_check = "detached_mount_authority"
+            if self._detached_filesystem_mounted and mounted_fd is None:
+                cleanup_check = "detached_mount_retained"
+                cleanup_retained = True
+        mounted: os.stat_result | None = None
+        underlying: os.stat_result | None = None
         try:
-            if mounted_fd is not None and underlying_fd is not None:
-                mounted = os.fstat(mounted_fd)
-                underlying = os.fstat(underlying_fd)
+            if mounted_fd is not None:
+                try:
+                    mounted = os.fstat(mounted_fd)
+                except OSError:
+                    if cleanup_check is None:
+                        cleanup_check = "detached_mounted_identity"
                 if (
-                    not stat.S_ISDIR(underlying.st_mode)
-                    or (underlying.st_dev, underlying.st_ino) != underlying_identity
-                    or not stat.S_ISDIR(mounted.st_mode)
-                    or (mounted.st_dev, mounted.st_ino) != mounted_identity
+                    mounted is not None
+                    and (
+                        not stat.S_ISDIR(mounted.st_mode)
+                        or (mounted.st_dev, mounted.st_ino) != mounted_identity
+                    )
+                    and cleanup_check is None
                 ):
-                    cleanup_failed = True
-        except (BrowserRuntimeError, OSError):
-            cleanup_failed = True
+                    cleanup_check = "detached_mounted_identity"
+            if underlying_fd is not None:
+                try:
+                    underlying = os.fstat(underlying_fd)
+                except OSError:
+                    if cleanup_check is None:
+                        cleanup_check = "detached_underlying_identity"
+                if (
+                    underlying is not None
+                    and (
+                        not stat.S_ISDIR(underlying.st_mode)
+                        or (underlying.st_dev, underlying.st_ino)
+                        != underlying_identity
+                    )
+                    and cleanup_check is None
+                ):
+                    cleanup_check = "detached_underlying_identity"
         finally:
             if mounted_fd is not None:
                 try:
                     os.close(mounted_fd)
                 except OSError:
-                    cleanup_failed = True
+                    if cleanup_check is None:
+                        cleanup_check = "detached_mounted_descriptor_close"
                 self._detached_mount_fd = None
             if underlying_fd is not None:
                 try:
                     os.close(underlying_fd)
                 except OSError:
-                    cleanup_failed = True
+                    if cleanup_check is None:
+                        cleanup_check = "detached_underlying_descriptor_close"
             self._detached_underlying_fd = None
             if parent_fd is not None:
                 try:
                     os.close(parent_fd)
                 except OSError:
-                    cleanup_failed = True
+                    if cleanup_check is None:
+                        cleanup_check = "detached_parent_descriptor_close"
             self._detached_mount_parent_fd = None
             self._detached_mount_name = None
             self._detached_underlying_identity = None
             self._detached_mounted_identity = None
             self._detached_filesystem_mounted = False
-        if cleanup_failed:
+        if cleanup_check is not None:
             raise BrowserRuntimeError(
                 "browser_cleanup",
                 browser_cleanup_substage="private_browser_pinned_image",
-                browser_cleanup_check="detached_mount_release",
+                browser_cleanup_check=cleanup_check,
+                _browser_cleanup_retained=cleanup_retained,
             )
 
     @staticmethod
@@ -2239,7 +2313,7 @@ class _PinnedExecutable:
             raise BrowserRuntimeError(
                 "browser_cleanup",
                 browser_cleanup_substage="private_browser_pinned_image",
-                browser_cleanup_check="detached_mount_release",
+                browser_cleanup_check="detached_mount_create",
             )
 
     @staticmethod
@@ -2746,18 +2820,14 @@ class _PinnedExecutable:
             raise BrowserRuntimeError(
                 "browser_cleanup",
                 browser_cleanup_substage="private_browser_pinned_image",
-                browser_cleanup_check="detached_mount_release",
+                browser_cleanup_check="detached_mount_authority",
             )
         try:
             self._relinquish_detached_mount_authority()
         except BrowserRuntimeError as exc:
             self.launch_root = None
             self.launch_path = _BROWSER_MOUNT_EXECUTABLE
-            raise BrowserRuntimeError(
-                "browser_cleanup",
-                browser_cleanup_substage="private_browser_pinned_image",
-                browser_cleanup_check="detached_mount_release",
-            ) from exc
+            raise
         self.launch_root = None
         self.launch_path = _BROWSER_MOUNT_EXECUTABLE
 
@@ -3491,51 +3561,89 @@ class _PinnedExecutable:
         return subprocess.run(**options)
 
     def close(self) -> None:
-        failure = False
+        cleanup_substage: str | None = None
         cleanup_check: str | None = None
         cleanup_retained = False
+
+        def record_cleanup(
+            substage: str,
+            check: str,
+            *,
+            retained: bool = False,
+        ) -> None:
+            nonlocal cleanup_substage, cleanup_check, cleanup_retained
+            if cleanup_check is None or retained:
+                cleanup_substage = substage
+                cleanup_check = check
+                cleanup_retained = retained
+
         if self.fd is not None:
             try:
                 os.close(self.fd)
             except OSError:
-                failure = True
-                cleanup_check = "executable_descriptor_close"
+                record_cleanup(
+                    "private_browser_pinned_image",
+                    "executable_descriptor_close",
+                )
             self.fd = None
         if self.launch_root is not None:
             if getattr(self, "_detached_filesystem_mounted", False):
                 try:
                     self._relinquish_detached_mount_authority()
-                except BrowserRuntimeError:
-                    failure = True
-                    if cleanup_check is None:
-                        cleanup_check = "detached_mount_release"
+                except BrowserRuntimeError as exc:
+                    check = (
+                        exc.browser_cleanup_check
+                        if (
+                            exc.browser_cleanup_substage
+                            == "private_browser_pinned_image"
+                            and exc.browser_cleanup_check is not None
+                        )
+                        else "detached_mount_authority"
+                    )
+                    retained = bool(
+                        _is_retained_browser_cleanup(exc)
+                        or getattr(self, "_detached_filesystem_mounted", False)
+                    )
+                    record_cleanup(
+                        "private_browser_pinned_image",
+                        "detached_mount_retained" if retained else check,
+                        retained=retained,
+                    )
                 self.launch_root = None
             elif getattr(self, "_detached_mount_mode", False):
                 # Detached-tree cleanup is descriptor/inode-authorized only.
                 # Never fall through to pathname traversal after authority loss.
-                failure = True
-                if cleanup_check is None:
-                    cleanup_check = "detached_mount_release"
+                record_cleanup(
+                    "private_browser_pinned_image",
+                    "detached_mount_authority",
+                )
             else:
                 try:
                     self._thaw_directories(self.launch_root)
-                    shutil.rmtree(self.launch_root)
                 except (BrowserRuntimeError, OSError):
-                    failure = True
-                    if cleanup_check is None:
-                        cleanup_check = "detached_mount_release"
-            if self.launch_root is not None and (
-                getattr(self, "_detached_filesystem_mounted", False)
-                or os.path.lexists(self.launch_root)
-            ):
-                failure = True
-                cleanup_check = "detached_mount_release"
-                cleanup_retained = True
+                    record_cleanup(
+                        "private_browser_private_tree",
+                        "directory_thaw",
+                    )
+                try:
+                    shutil.rmtree(self.launch_root)
+                except OSError:
+                    record_cleanup(
+                        "private_browser_private_tree",
+                        "recursive_remove",
+                    )
+                if os.path.lexists(self.launch_root):
+                    record_cleanup(
+                        "private_browser_private_tree",
+                        "absence",
+                        retained=True,
+                    )
             self.launch_root = None
-        if failure:
+        if cleanup_check is not None:
+            assert cleanup_substage is not None
             raise BrowserRuntimeError(
                 "browser_cleanup",
-                browser_cleanup_substage="private_browser_pinned_image",
+                browser_cleanup_substage=cleanup_substage,
                 browser_cleanup_check=cleanup_check,
                 _browser_cleanup_retained=cleanup_retained,
             )

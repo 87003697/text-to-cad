@@ -912,7 +912,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         )
 
         diagnostic_path.write_text(
-            '{"schema":"meshshot.browser-cleanup-diagnostic/1",'
+            '{"schema":"meshshot.browser-cleanup-diagnostic/2",'
             '"substage":"private_browser_process_group",'
             '"check":"term_signal","check":"kill_group_empty"}',
             encoding="utf-8",

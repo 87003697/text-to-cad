@@ -1305,7 +1305,7 @@ class PilotReviewTests(unittest.TestCase):
         write_json(browser_exec_path, browser_exec)
         cleanup_path = self.exp / "run/browser-cleanup-diagnostic.json"
         cleanup = {
-            "schema": "meshshot.browser-cleanup-diagnostic/1",
+            "schema": "meshshot.browser-cleanup-diagnostic/2",
             "substage": "private_browser_process_group",
             "check": "kill_group_empty",
         }
