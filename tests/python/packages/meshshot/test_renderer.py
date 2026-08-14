@@ -4987,6 +4987,264 @@ class ResidualRendererTests(unittest.TestCase):
             raised.exception.browser_cleanup_check,
         )
 
+    def test_detached_mount_construction_preserves_body_before_close_cleanup(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        body_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_pinned_image",
+            browser_cleanup_check="detached_mount_create",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(
+                browser_runtime.tempfile,
+                "gettempdir",
+                return_value=Path(directory),
+            ):
+                owned = browser_runtime._private_directory("meshshot-tree-")
+            underlying_fd = owned.directory_fd
+            assert underlying_fd is not None
+            pinned = object.__new__(_PinnedExecutable)
+            pinned._detached_filesystem_mounted = False
+            pinned._namespace_discard_owned = True
+            pinned._detached_mount_parent_fd = None
+            pinned._detached_mount_fd = None
+            pinned._detached_underlying_fd = None
+            pinned._detached_mount_name = None
+            pinned._detached_underlying_identity = None
+            pinned._detached_mounted_identity = None
+            real_close = os.close
+
+            def close_then_fail(descriptor: int) -> None:
+                real_close(descriptor)
+                if descriptor == underlying_fd:
+                    raise OSError("later construction descriptor close")
+
+            with (
+                mock.patch.object(
+                    pinned,
+                    "_mount_private_filesystem",
+                    side_effect=body_cleanup,
+                ),
+                mock.patch.object(
+                    browser_runtime.os,
+                    "close",
+                    side_effect=close_then_fail,
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned._prepare_detached_mount(owned)
+
+            self.assertEqual(
+                "detached_mount_create",
+                raised.exception.browser_cleanup_check,
+            )
+
+    def test_detached_mount_construction_retained_release_overrides_close(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        retained = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_pinned_image",
+            browser_cleanup_check="detached_mount_retained",
+            _browser_cleanup_retained=True,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(
+                browser_runtime.tempfile,
+                "gettempdir",
+                return_value=Path(directory),
+            ):
+                owned = browser_runtime._private_directory("meshshot-tree-")
+            known = {owned.parent_fd, owned.directory_fd}
+            pinned = object.__new__(_PinnedExecutable)
+            pinned._detached_filesystem_mounted = False
+            pinned._namespace_discard_owned = True
+            pinned._detached_mount_parent_fd = None
+            pinned._detached_mount_fd = None
+            pinned._detached_underlying_fd = None
+            pinned._detached_mount_name = None
+            pinned._detached_underlying_identity = None
+            pinned._detached_mounted_identity = None
+            real_close = os.close
+
+            def close_then_fail(descriptor: int) -> None:
+                real_close(descriptor)
+                if descriptor not in known:
+                    raise OSError("earlier mounted descriptor close")
+
+            with (
+                mock.patch.object(pinned, "_mount_private_filesystem"),
+                mock.patch.object(
+                    pinned,
+                    "_relinquish_detached_mount_authority",
+                    side_effect=retained,
+                ),
+                mock.patch.object(
+                    browser_runtime.os,
+                    "close",
+                    side_effect=close_then_fail,
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned._prepare_detached_mount(owned)
+
+            self.assertEqual(
+                "detached_mount_retained",
+                raised.exception.browser_cleanup_check,
+            )
+            self.assertTrue(raised.exception._browser_cleanup_retained)
+
+    def test_detached_materialization_preserves_body_before_release_cleanup(
+        self,
+    ) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        body_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_pinned_image",
+            browser_cleanup_check="detached_mount_create",
+        )
+        ordinary_release = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_pinned_image",
+            browser_cleanup_check="detached_underlying_descriptor_close",
+        )
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.path = Path(
+            "/private/attested/chrome-headless-shell-1223/chrome-headless-shell"
+        )
+        pinned._detached_filesystem_mounted = False
+        owned = mock.MagicMock()
+        owned.path = Path("/private/mount")
+
+        def prepared(_owned: object) -> None:
+            pinned._detached_filesystem_mounted = True
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_TREE_MANIFEST_SHA256": "a" * 64},
+            ),
+            mock.patch.object(
+                pinned,
+                "_private_image_mount_authority",
+                return_value=owned,
+            ),
+            mock.patch.object(
+                pinned,
+                "_prepare_detached_mount",
+                side_effect=prepared,
+            ),
+            mock.patch.object(
+                pinned,
+                "_tree_manifest_sha256",
+                side_effect=body_cleanup,
+            ),
+            mock.patch.object(
+                pinned,
+                "_relinquish_detached_mount_authority",
+                side_effect=ordinary_release,
+            ),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            pinned._materialize_detached_tree(mock.Mock(st_size=10))
+
+        self.assertEqual(
+            "detached_mount_create",
+            raised.exception.browser_cleanup_check,
+        )
+
+    def test_detached_materialization_retained_release_overrides_close(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        retained = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_pinned_image",
+            browser_cleanup_check="detached_mount_retained",
+            _browser_cleanup_retained=True,
+        )
+        pinned = object.__new__(_PinnedExecutable)
+        pinned.path = Path(
+            "/private/attested/chrome-headless-shell-1223/chrome-headless-shell"
+        )
+        pinned._detached_filesystem_mounted = False
+        pinned._detached_mount_fd = 72
+        owned = mock.MagicMock()
+        owned.path = Path("/private/mount")
+
+        def prepared(_owned: object) -> None:
+            pinned._detached_filesystem_mounted = True
+
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_TREE_MANIFEST_SHA256": "a" * 64},
+            ),
+            mock.patch.object(
+                pinned,
+                "_private_image_mount_authority",
+                return_value=owned,
+            ),
+            mock.patch.object(
+                pinned,
+                "_prepare_detached_mount",
+                side_effect=prepared,
+            ),
+            mock.patch.object(
+                pinned,
+                "_tree_manifest_sha256",
+                return_value="a" * 64,
+            ),
+            mock.patch.object(pinned, "_snapshot_tree_exact"),
+            mock.patch.object(pinned, "_fsync_directory"),
+            mock.patch.object(pinned, "_freeze_directories"),
+            mock.patch.object(pinned, "_remount_private_filesystem_readonly"),
+            mock.patch.object(
+                pinned,
+                "_sha256_fd",
+                side_effect=BrowserRuntimeError("browser_identity"),
+            ),
+            mock.patch.object(browser_runtime.os, "open", return_value=73),
+            mock.patch.object(
+                browser_runtime.os,
+                "fstat",
+                return_value=mock.Mock(
+                    st_mode=stat.S_IFREG | 0o755,
+                    st_size=10,
+                    st_dev=1,
+                    st_ino=2,
+                ),
+            ),
+            mock.patch.object(
+                browser_runtime.os,
+                "close",
+                side_effect=OSError("earlier executable descriptor close"),
+            ),
+            mock.patch.object(
+                pinned,
+                "_relinquish_detached_mount_authority",
+                side_effect=retained,
+            ),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            pinned._materialize_detached_tree(mock.Mock(st_size=10))
+
+        self.assertEqual(
+            "detached_mount_retained",
+            raised.exception.browser_cleanup_check,
+        )
+        self.assertTrue(raised.exception._browser_cleanup_retained)
+
     def test_directory_fsync_descriptor_close_failure_is_cleanup(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
 
