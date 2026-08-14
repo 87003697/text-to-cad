@@ -207,6 +207,10 @@ MESHSHOT_EXECUTABLE_ROOT = Path("/meshshot-exec")
 _MESHSHOT_EXECUTABLE_ROOT_ENV = "MESHSHOT_EXECUTABLE_ROOT"
 _LINUX_TMPFS_MAGIC = 0x01021994
 _CLONE_NEWNS = 0x00020000
+_MS_RDONLY = 1
+_MS_NOSUID = 1 << 1
+_MS_NODEV = 1 << 2
+_MS_REMOUNT = 1 << 5
 _MS_PRIVATE = 1 << 18
 _MS_REC = 1 << 14
 _SUPERVISOR_MOUNT_NAMESPACE_ACTIVE = False
@@ -1948,6 +1952,11 @@ class _PinnedExecutable:
             self._freeze_directories(root)
             if self._tree_manifest_sha256(target_root) != expected:
                 raise BrowserRuntimeError("browser_identity")
+            if self._detached_mount_fd is None:
+                raise BrowserRuntimeError("browser_identity")
+            self._remount_private_filesystem_readonly(
+                self._detached_mount_fd
+            )
             phase = "private_launch_image_identity"
             descriptor = os.open(
                 target,
@@ -2213,12 +2222,49 @@ class _PinnedExecutable:
         ]
         mount.restype = ctypes.c_int
         target = os.fsencode(root)
-        if mount(b"tmpfs", target, b"tmpfs", 0x2 | 0x4, b"mode=0700") != 0:
+        if mount(
+            b"tmpfs",
+            target,
+            b"tmpfs",
+            _MS_NOSUID | _MS_NODEV,
+            b"mode=0700",
+        ) != 0:
             raise BrowserRuntimeError(
                 "browser_cleanup",
                 browser_cleanup_substage="private_browser_pinned_image",
                 browser_cleanup_check="detached_mount_release",
             )
+
+    @staticmethod
+    def _remount_private_filesystem_readonly(descriptor: int) -> None:
+        libc = ctypes.CDLL(None, use_errno=True)
+        mount = libc.mount
+        mount.argtypes = [
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_char_p,
+            ctypes.c_ulong,
+            ctypes.c_char_p,
+        ]
+        mount.restype = ctypes.c_int
+        target = os.fsencode(Path(f"/proc/self/fd/{descriptor}"))
+        try:
+            if mount(
+                None,
+                target,
+                None,
+                _MS_REMOUNT | _MS_RDONLY | _MS_NOSUID | _MS_NODEV,
+                None,
+            ) != 0:
+                raise OSError("private browser image remount failed")
+            filesystem = os.statvfs(Path(f"/proc/self/fd/{descriptor}"))
+            if not filesystem.f_flag & getattr(os, "ST_RDONLY", 1):
+                raise OSError("private browser image is not read-only")
+        except OSError as exc:
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_phase="private_tree_materialization",
+            ) from exc
 
     @staticmethod
     def _sha256_fd_from_path(path: Path) -> str:
