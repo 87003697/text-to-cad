@@ -205,6 +205,8 @@ def provider_free_preview_sandbox_argv(group: str, exp: str) -> list[str]:
         "--ro-bind",
         PROVIDER_FREE_BROWSER_SUPERVISOR_OUTER_ROOT,
         PROVIDER_FREE_BROWSER_SUPERVISOR_NESTED_ROOT,
+        "--tmpfs",
+        PROVIDER_FREE_BROWSER_SUPERVISOR_OUTER_ROOT,
         "--setenv",
         "PLAYWRIGHT_BROWSERS_PATH",
         PROVIDER_FREE_STAGED_BROWSER_CACHE,

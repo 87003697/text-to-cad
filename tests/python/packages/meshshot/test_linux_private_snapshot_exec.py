@@ -11,6 +11,7 @@ import secrets
 import shutil
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -58,11 +59,14 @@ class LinuxPrivateSnapshotExecutionTests(unittest.TestCase):
                     "--ro-bind",
                     "/meshshot-supervisor",
                     "/run/meshshot-supervisor",
+                    "--tmpfs",
+                    "/meshshot-supervisor",
                     "--",
                     "/usr/bin/python3",
                     "-c",
                     (
-                        "import socket;"
+                        "import os,socket;"
+                        "assert not os.path.exists('/meshshot-supervisor/authority.sock');"
                         "s=socket.socket(socket.AF_UNIX,socket.SOCK_SEQPACKET);"
                         "s.connect('/run/meshshot-supervisor/authority.sock');"
                         "s.send(b'hello');"
@@ -78,6 +82,12 @@ class LinuxPrivateSnapshotExecutionTests(unittest.TestCase):
             server.settimeout(5)
             connection, _address = server.accept()
             try:
+                peer_pid, peer_uid, _peer_gid = struct.unpack(
+                    "3i",
+                    connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12),
+                )
+                self.assertEqual(child.pid, peer_pid)
+                self.assertEqual(os.geteuid(), peer_uid)
                 self.assertEqual(b"hello", connection.recv(16))
                 connection.send(b"authority")
             finally:

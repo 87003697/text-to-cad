@@ -213,6 +213,7 @@ class ResidualRendererTests(unittest.TestCase):
         base = {
             "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
             "type": "authority",
+            "nonce": "a" * 64,
             "endpoint": "http://127.0.0.1:9222",
             "process_group": 42,
             "browser_runtime": attachment.evidence,
@@ -226,7 +227,10 @@ class ResidualRendererTests(unittest.TestCase):
             with self.subTest(mutation=mutation), self.assertRaises(
                 browser_runtime.BrowserRuntimeError
             ) as raised:
-                attachment._validate_authority(mutation)
+                attachment._validate_authority(
+                    mutation,
+                    expected_nonce="a" * 64,
+                )
             self.assertEqual(substage, raised.exception.browser_identity_substage)
 
     def test_attachment_requires_independent_exact_listener_ownership(self) -> None:
@@ -243,6 +247,7 @@ class ResidualRendererTests(unittest.TestCase):
         authority = {
             "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
             "type": "authority",
+            "nonce": "a" * 64,
             "endpoint": "http://127.0.0.1:9222",
             "process_group": 42,
             "browser_runtime": attachment.evidence,
@@ -253,7 +258,10 @@ class ResidualRendererTests(unittest.TestCase):
         ) as verify:
             self.assertEqual(
                 ("http://127.0.0.1:9222", 42),
-                attachment._validate_authority(authority),
+                attachment._validate_authority(
+                    authority,
+                    expected_nonce="a" * 64,
+                ),
             )
         verify.assert_called_once_with(42, 9222, 0.1)
 
@@ -273,6 +281,7 @@ class ResidualRendererTests(unittest.TestCase):
         authority = {
             "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
             "type": "authority",
+            "nonce": "a" * 64,
             "endpoint": "http://127.0.0.1:9222",
             "process_group": 42,
             "browser_runtime": attachment.evidence,
@@ -282,6 +291,12 @@ class ResidualRendererTests(unittest.TestCase):
         chromium.connect_over_cdp.side_effect = OSError("private raw failure")
         with (
             mock.patch.object(attachment, "_validate_socket_path"),
+            mock.patch.object(
+                attachment,
+                "_client_authority",
+                return_value=(4242, "a" * 64),
+            ),
+            mock.patch.object(attachment, "_validate_supervisor_peer"),
             mock.patch.object(
                 browser_runtime.socket,
                 "socket",
@@ -295,6 +310,7 @@ class ResidualRendererTests(unittest.TestCase):
                     {
                         "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
                         "type": "shutdown",
+                        "nonce": "a" * 64,
                     },
                 ],
             ),
@@ -313,6 +329,7 @@ class ResidualRendererTests(unittest.TestCase):
             {
                 "schema": browser_runtime.SUPERVISOR_PROTOCOL_SCHEMA,
                 "type": "completion",
+                "nonce": "a" * 64,
                 "result": "failed",
             },
             send.call_args_list[1].args[1],

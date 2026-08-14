@@ -117,6 +117,12 @@ binds the Python-owned private browser image to the isolated executable tmpfs
 at `/meshshot-exec` and binds the outer `/meshshot-supervisor` tmpfs read-only
 at nested `/run/meshshot-supervisor`. Arbitrary socket paths, endpoints,
 ambient descriptors, and temporary roots remain forbidden.
+The original outer `/meshshot-supervisor` path is hidden inside the nested
+sandbox after the read-only authority bind. Every packet carries a fresh
+attempt nonce and both sides require exact Linux `SO_PEERCRED` process
+identity. The one-shot listener is closed and inode-bound unlinked immediately
+after the authenticated client is accepted; failures cross the boundary only
+through the private closed result vocabulary.
 
 Successful preview evidence also carries the closed
 `meshshot.prelaunched-cdp-runtime/1` receipt. Its frozen adapter-profile digest

@@ -16,7 +16,9 @@ import re
 import selectors
 import shutil
 import signal
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -92,7 +94,15 @@ BROWSER_EXEC_PROBE_ENVIRONMENT = {
     "PATH": "/usr/bin:/bin",
 }
 _BROWSER_SUPERVISOR_SOCKET = Path("/meshshot-supervisor/authority.sock")
+_BROWSER_SUPERVISOR_AUTHORITY = Path(
+    "/meshshot-supervisor/client-authority.json"
+)
+_BROWSER_SUPERVISOR_CLIENT = Path("/meshshot-supervisor/expected-client.json")
+_BROWSER_SUPERVISOR_RESULT = Path("/meshshot-supervisor/result.json")
 _BROWSER_SUPERVISOR_TIMEOUT_SECONDS = 15.0
+_BROWSER_SUPERVISOR_AUTHORITY_SCHEMA = "meshshot.browser-supervisor-authority/1"
+_BROWSER_SUPERVISOR_CLIENT_SCHEMA = "meshshot.browser-supervisor-client/1"
+_BROWSER_SUPERVISOR_RESULT_SCHEMA = "meshshot.browser-supervisor-result/1"
 _BROWSER_VERSION_OUTPUT = re.compile(
     rb"(?:Google Chrome for Testing|Chromium|Chrome|HeadlessChrome) "
     rb"[0-9]+(?:\.[0-9]+){3}\n"
@@ -474,18 +484,49 @@ def cadpy_runtime_evidence() -> dict[str, Any]:
     }
 
 
-def _run_public(argv: Sequence[str], *, cwd: Path, command_log: Path) -> dict[str, Any]:
+def _run_public(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    command_log: Path,
+    process_started: Any = None,
+) -> dict[str, Any]:
     started = time.monotonic()
     try:
-        completed = subprocess.run(
-            list(argv),
-            cwd=cwd,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=COMMAND_TIMEOUT_SECONDS,
-        )
+        if process_started is None:
+            completed = subprocess.run(
+                list(argv),
+                cwd=cwd,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=COMMAND_TIMEOUT_SECONDS,
+            )
+        else:
+            process = subprocess.Popen(
+                list(argv),
+                cwd=cwd,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                process_started(process.pid)
+                stdout, stderr = process.communicate(timeout=COMMAND_TIMEOUT_SECONDS)
+            except BaseException:
+                try:
+                    process.kill()
+                    process.communicate(timeout=5.0)
+                except BaseException as cleanup_exc:
+                    raise ScenarioError(
+                        "public command cleanup failed",
+                        operation="preview_browser_cleanup",
+                    ) from cleanup_exc
+                raise
+            completed = subprocess.CompletedProcess(
+                list(argv), process.returncode, stdout, stderr
+            )
     except subprocess.TimeoutExpired as exc:
         raise ScenarioError(
             "public command timed out",
@@ -617,6 +658,8 @@ def _preview_sandbox_argv(argv: Sequence[str], *, cwd: Path) -> list[str]:
         "--ro-bind",
         PROVIDER_FREE_BROWSER_SUPERVISOR_OUTER_ROOT,
         PROVIDER_FREE_BROWSER_SUPERVISOR_NESTED_ROOT,
+        "--tmpfs",
+        PROVIDER_FREE_BROWSER_SUPERVISOR_OUTER_ROOT,
         "--setenv",
         "PLAYWRIGHT_BROWSERS_PATH",
         PROVIDER_FREE_STAGED_BROWSER_CACHE,
@@ -690,6 +733,200 @@ def _cleanup_browser_supervisor(process: subprocess.Popen[bytes]) -> None:
 
 
 @contextmanager
+def _blocked_supervisor_signals() -> Any:
+    blocked = {signal.SIGINT, signal.SIGTERM}
+    if (
+        threading.current_thread() is not threading.main_thread()
+        or not hasattr(signal, "pthread_sigmask")
+    ):
+        yield
+        return
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, blocked)
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def _load_supervisor_authority(expected_pid: int) -> dict[str, Any]:
+    try:
+        info = _BROWSER_SUPERVISOR_AUTHORITY.lstat()
+        raw = _BROWSER_SUPERVISOR_AUTHORITY.read_bytes()
+    except OSError as exc:
+        raise ScenarioError(
+            "provider-free browser supervisor authority unavailable",
+            operation="preview_browser_readiness",
+        ) from exc
+    try:
+        value = _loads_json_strict(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ScenarioError(
+            "provider-free browser supervisor authority invalid",
+            operation="preview_browser_readiness",
+        ) from exc
+    nonce = value.get("nonce") if isinstance(value, dict) else None
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o400
+        or not isinstance(value, dict)
+        or set(value) != {"schema", "supervisor_pid", "nonce"}
+        or value.get("schema") != _BROWSER_SUPERVISOR_AUTHORITY_SCHEMA
+        or value.get("supervisor_pid") != expected_pid
+        or not isinstance(nonce, str)
+        or re.fullmatch(r"[0-9a-f]{64}", nonce) is None
+    ):
+        raise ScenarioError(
+            "provider-free browser supervisor authority invalid",
+            operation="preview_browser_readiness",
+        )
+    return value
+
+
+def _probe_supervisor_peer(*, expected_pid: int) -> None:
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+    try:
+        connection.settimeout(1.0)
+        connection.connect(os.fspath(_BROWSER_SUPERVISOR_SOCKET))
+        option = getattr(socket, "SO_PEERCRED", None)
+        if option is None:
+            raise OSError("peer credentials unavailable")
+        peer_pid, peer_uid, _peer_gid = struct.unpack(
+            "3i", connection.getsockopt(socket.SOL_SOCKET, option, 12)
+        )
+        if peer_pid != expected_pid or peer_uid != os.geteuid():
+            raise OSError("peer identity mismatch")
+    except (OSError, socket.timeout, struct.error) as exc:
+        raise ScenarioError(
+            "provider-free browser supervisor peer invalid",
+            operation="preview_browser_readiness",
+        ) from exc
+    finally:
+        connection.close()
+
+
+class _BrowserSupervisorSession:
+    def __init__(self, nonce: str) -> None:
+        self._nonce = nonce
+        self._registered = False
+
+    def register_client(self, client_pid: int) -> None:
+        if self._registered or client_pid <= 1:
+            raise ScenarioError(
+                "provider-free browser supervisor client invalid",
+                operation="preview_browser_connect",
+            )
+        raw = json.dumps(
+            {
+                "schema": _BROWSER_SUPERVISOR_CLIENT_SCHEMA,
+                "client_pid": client_pid,
+                "nonce": self._nonce,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                _BROWSER_SUPERVISOR_CLIENT,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o400,
+            )
+            if os.write(descriptor, raw) != len(raw):
+                raise OSError("short write")
+            os.fsync(descriptor)
+        except OSError as exc:
+            raise ScenarioError(
+                "provider-free browser supervisor client publication failed",
+                operation="preview_browser_connect",
+            ) from exc
+        finally:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError as exc:
+                    raise ScenarioError(
+                        "provider-free browser supervisor client cleanup failed",
+                        operation="preview_browser_cleanup",
+                    ) from exc
+        self._registered = True
+
+
+def _closed_supervisor_failure(value: Any) -> ScenarioError:
+    if not isinstance(value, dict) or "schema" not in value or "operation" not in value:
+        return ScenarioError(
+            "provider-free browser supervisor failed",
+            operation="preview_browser_prelaunch",
+        )
+    operation = value.get("operation")
+    if operation == "browser_identity":
+        substage = value.get("browser_identity_substage")
+        phase = value.get("browser_identity_phase")
+        check = value.get("browser_identity_check")
+        expected = {"schema", "operation", "browser_identity_substage"}
+        if phase is not None:
+            expected.add("browser_identity_phase")
+        if check is not None:
+            expected.add("browser_identity_check")
+        if (
+            set(value) == expected
+            and value.get("schema") == _BROWSER_SUPERVISOR_RESULT_SCHEMA
+            and substage in PROVIDER_FREE_BROWSER_IDENTITY_SUBSTAGES
+            and (
+                phase is None
+                or phase in PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES
+            )
+            and (
+                check is None
+                or check in provider_free_browser_identity_checks(phase)
+            )
+        ):
+            return ScenarioError(
+                "provider-free browser supervisor identity failed",
+                classification="preview_browser_identity_failed",
+                browser_identity_substage=substage,
+                browser_identity_phase=phase,
+                browser_identity_check=check,
+            )
+    if (
+        value.get("schema") == _BROWSER_SUPERVISOR_RESULT_SCHEMA
+        and set(value) == {"schema", "operation"}
+        and operation
+        in {
+            "browser_adapter_profile",
+            "browser_launch_process_limit",
+            "browser_launch_file_limit",
+            "browser_launch_address_space",
+            "browser_launch_shared_memory",
+            "browser_launch_executable_missing",
+            "browser_launch_executable_dependency",
+            "browser_launch_filesystem_permission",
+            "browser_launch_sandbox_permission",
+            "browser_launch_executable_spawn_permission",
+            "browser_launch_executable_permission",
+            "browser_profile",
+            "browser_prelaunch",
+            "browser_readiness",
+            "browser_readiness_timeout",
+            "browser_connect",
+            "browser_cleanup",
+            "browser_signal",
+            "browser_render",
+            "browser_result",
+        }
+    ):
+        return ScenarioError(
+            "provider-free browser supervisor failed",
+            classification=f"preview_{operation}_failed",
+        )
+    return ScenarioError(
+        "provider-free browser supervisor failed",
+        operation="preview_browser_prelaunch",
+    )
+
+
+@contextmanager
 def _browser_supervisor() -> Any:
     """Start one fixed outer owner and require terminal socket/process cleanup."""
 
@@ -704,20 +941,44 @@ def _browser_supervisor() -> Any:
         "PYTHONDONTWRITEBYTECODE": "1",
     }
     process: subprocess.Popen[bytes] | None = None
+    body_error: BaseException | None = None
     try:
-        process = subprocess.Popen(
-            [sys.executable, os.fspath(MESHSHOT_BROWSER_SUPERVISOR)],
-            cwd=REPO_ROOT,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-        )
+        if any(
+            os.path.lexists(path)
+            for path in (
+                _BROWSER_SUPERVISOR_SOCKET,
+                _BROWSER_SUPERVISOR_AUTHORITY,
+                _BROWSER_SUPERVISOR_CLIENT,
+                _BROWSER_SUPERVISOR_RESULT,
+            )
+        ):
+            raise ScenarioError(
+                "provider-free browser supervisor state was not empty",
+                operation="preview_browser_profile",
+            )
+        with _blocked_supervisor_signals():
+            process = subprocess.Popen(
+                [sys.executable, os.fspath(MESHSHOT_BROWSER_SUPERVISOR)],
+                cwd=REPO_ROOT,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+            )
         deadline = time.monotonic() + _BROWSER_SUPERVISOR_TIMEOUT_SECONDS
+        authority: dict[str, Any] | None = None
         while time.monotonic() < deadline:
             if process.poll() is not None:
+                try:
+                    result = _loads_json_strict(
+                        _BROWSER_SUPERVISOR_RESULT.read_text(encoding="utf-8")
+                    )
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                    result = None
+                if result is not None:
+                    raise _closed_supervisor_failure(result)
                 raise ScenarioError(
                     "provider-free browser supervisor failed before readiness",
                     operation="preview_browser_prelaunch",
@@ -742,13 +1003,27 @@ def _browser_supervisor() -> Any:
                     "provider-free browser supervisor socket invalid",
                     operation="preview_browser_readiness",
                 )
+            try:
+                authority = _load_supervisor_authority(process.pid)
+                _probe_supervisor_peer(expected_pid=process.pid)
+            except ScenarioError:
+                time.sleep(0.02)
+                continue
             break
         else:
             raise ScenarioError(
                 "provider-free browser supervisor readiness timed out",
                 operation="preview_browser_readiness_timeout",
             )
-        yield
+        if authority is None:
+            raise ScenarioError(
+                "provider-free browser supervisor authority absent",
+                operation="preview_browser_readiness",
+            )
+        try:
+            yield _BrowserSupervisorSession(str(authority["nonce"]))
+        except BaseException as exc:
+            body_error = exc
         try:
             process.wait(timeout=_BROWSER_SUPERVISOR_TIMEOUT_SECONDS)
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -756,14 +1031,27 @@ def _browser_supervisor() -> Any:
                 "provider-free browser supervisor did not terminate",
                 operation="preview_browser_cleanup",
             ) from exc
-        if process.returncode != 0 or not _browser_supervisor_group_empty(
-            process.pid
-        ):
+        if process.returncode != 0:
+            try:
+                result = _loads_json_strict(
+                    _BROWSER_SUPERVISOR_RESULT.read_text(encoding="utf-8")
+                )
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+                result = None
+            if result is not None:
+                raise _closed_supervisor_failure(result)
+            raise ScenarioError(
+                "provider-free browser supervisor failed",
+                operation="preview_browser_cleanup",
+            )
+        if not _browser_supervisor_group_empty(process.pid):
             raise ScenarioError(
                 "provider-free browser supervisor failed",
                 operation="preview_browser_cleanup",
             )
         process = None
+        if body_error is not None:
+            raise body_error
     finally:
         cleanup_error: ScenarioError | None = None
         if process is not None:
@@ -1538,11 +1826,16 @@ def _run_voxblame_preview(
             ) from exc
         try:
             supervisor = _browser_supervisor() if is_linux else nullcontext()
-            with supervisor:
+            with supervisor as supervisor_session:
                 result = _run_public(
                     sandbox_argv,
                     cwd=cwd,
                     command_log=command_log,
+                    process_started=(
+                        supervisor_session.register_client
+                        if supervisor_session is not None
+                        else None
+                    ),
                 )
         except ScenarioError as exc:
             renderer_operation = operations.get(exc.classification)

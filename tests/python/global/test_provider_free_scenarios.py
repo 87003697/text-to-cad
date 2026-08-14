@@ -86,8 +86,6 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
 
     def test_fixed_supervisor_process_has_no_ambient_descriptors_and_reaps(self) -> None:
         endpoint = self.repo / "authority.sock"
-        endpoint.touch()
-        endpoint.chmod(0o600)
         process = mock.MagicMock()
         process.pid = 4242
         process.poll.return_value = None
@@ -98,6 +96,12 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             return 0
 
         process.wait.side_effect = terminal_wait
+
+        def spawn(*_args: object, **_kwargs: object) -> mock.MagicMock:
+            endpoint.touch()
+            endpoint.chmod(0o600)
+            return process
+
         with (
             mock.patch.object(
                 provider_free_scenarios,
@@ -107,9 +111,15 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             mock.patch.object(
                 provider_free_scenarios.subprocess,
                 "Popen",
-                return_value=process,
+                side_effect=spawn,
             ) as popen,
             mock.patch.object(provider_free_scenarios.stat, "S_ISSOCK", return_value=True),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_load_supervisor_authority",
+                return_value={"nonce": "a" * 64},
+            ),
+            mock.patch.object(provider_free_scenarios, "_probe_supervisor_peer"),
             self.browser_supervisor(),
         ):
             pass
@@ -199,6 +209,67 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self.assertEqual(
             "private_version_helper_spawn_permission",
             error.browser_identity_check,
+        )
+
+    def test_private_supervisor_result_overrides_nested_connect_projection(self) -> None:
+        endpoint = self.repo / "authority.sock"
+        result_path = self.repo / "result.json"
+        process = mock.MagicMock()
+        process.pid = 4242
+        process.poll.return_value = None
+
+        def terminal_wait(*, timeout: float) -> int:
+            endpoint.unlink()
+            result_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "meshshot.browser-supervisor-result/1",
+                        "operation": "browser_identity",
+                        "browser_identity_substage": (
+                            "private_snapshot_launch_image_identity"
+                        ),
+                        "browser_identity_phase": (
+                            "private_launch_version_execution"
+                        ),
+                        "browser_identity_check": (
+                            "private_version_helper_spawn_permission"
+                        ),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            process.returncode = 1
+            return 1
+
+        process.wait.side_effect = terminal_wait
+
+        def spawn(*_args: object, **_kwargs: object) -> mock.MagicMock:
+            endpoint.touch()
+            endpoint.chmod(0o600)
+            return process
+
+        with (
+            mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_SOCKET", endpoint),
+            mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_AUTHORITY", self.repo / "absent-authority"),
+            mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_CLIENT", self.repo / "absent-client"),
+            mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_RESULT", result_path),
+            mock.patch.object(provider_free_scenarios.subprocess, "Popen", side_effect=spawn),
+            mock.patch.object(provider_free_scenarios.stat, "S_ISSOCK", return_value=True),
+            mock.patch.object(provider_free_scenarios, "_load_supervisor_authority", return_value={"nonce": "a" * 64}),
+            mock.patch.object(provider_free_scenarios, "_probe_supervisor_peer"),
+            mock.patch.object(provider_free_scenarios, "_cleanup_browser_supervisor"),
+            self.assertRaises(provider_free_scenarios.ScenarioError) as raised,
+        ):
+            with self.browser_supervisor():
+                raise provider_free_scenarios.ScenarioError(
+                    "nested projection",
+                    classification="preview_browser_connect_failed",
+                )
+
+        self.assertEqual("preview_browser_identity_failed", raised.exception.classification)
+        self.assertEqual(
+            "private_version_helper_spawn_permission",
+            raised.exception.browser_identity_check,
         )
 
     def test_supervisor_failure_always_uses_owned_group_cleanup(self) -> None:

@@ -18,6 +18,7 @@ import shutil
 import signal
 import socket
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -32,8 +33,15 @@ SUPERVISOR_PROTOCOL_SCHEMA = "meshshot.browser-supervisor/1"
 SUPERVISOR_RUNTIME_MODE = "provider-free-supervised-cdp/1"
 SUPERVISOR_OUTER_ROOT = Path("/meshshot-supervisor")
 SUPERVISOR_OUTER_SOCKET = SUPERVISOR_OUTER_ROOT / "authority.sock"
+SUPERVISOR_OUTER_AUTHORITY = SUPERVISOR_OUTER_ROOT / "client-authority.json"
+SUPERVISOR_OUTER_CLIENT = SUPERVISOR_OUTER_ROOT / "expected-client.json"
+SUPERVISOR_OUTER_RESULT = SUPERVISOR_OUTER_ROOT / "result.json"
 SUPERVISOR_NESTED_ROOT = Path("/run/meshshot-supervisor")
 SUPERVISOR_NESTED_SOCKET = SUPERVISOR_NESTED_ROOT / "authority.sock"
+SUPERVISOR_NESTED_AUTHORITY = SUPERVISOR_NESTED_ROOT / "client-authority.json"
+SUPERVISOR_AUTHORITY_SCHEMA = "meshshot.browser-supervisor-authority/1"
+SUPERVISOR_CLIENT_SCHEMA = "meshshot.browser-supervisor-client/1"
+SUPERVISOR_RESULT_SCHEMA = "meshshot.browser-supervisor-result/1"
 _SUPERVISOR_PACKET_LIMIT = 16 * 1024
 BROWSER_IDENTITY_SUBSTAGES = frozenset(
     {
@@ -247,6 +255,20 @@ def _receive_supervisor_packet(connection: socket.socket) -> Any:
     if not raw or len(raw) > _SUPERVISOR_PACKET_LIMIT:
         raise BrowserRuntimeError("browser_connect")
     return _loads_json_strict(raw)
+
+
+def _peer_credentials(connection: socket.socket) -> tuple[int, int, int]:
+    # Linux SO_PEERCRED is stable ABI value 17. The numeric fallback keeps the
+    # parser unit-testable on Darwin; production attachment is Linux-only.
+    option = getattr(socket, "SO_PEERCRED", 17)
+    try:
+        raw = connection.getsockopt(socket.SOL_SOCKET, option, 12)
+        pid, uid, gid = struct.unpack("3i", raw)
+    except (OSError, struct.error, TypeError, ValueError) as exc:
+        raise BrowserRuntimeError("browser_connect") from exc
+    if pid <= 1 or uid < 0 or gid < 0:
+        raise BrowserRuntimeError("browser_connect")
+    return pid, uid, gid
 
 
 def _load_profile() -> tuple[dict[str, Any], str]:
@@ -2204,10 +2226,69 @@ class SupervisedCdpAttachmentRuntime:
         ):
             raise BrowserRuntimeError("browser_connect")
 
-    def _validate_authority(self, authority: Any) -> tuple[str, int]:
+    @staticmethod
+    def _client_authority() -> tuple[int, str]:
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(
+                SUPERVISOR_NESTED_AUTHORITY,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            )
+            info = os.fstat(descriptor)
+            if info.st_size <= 0 or info.st_size > _SUPERVISOR_PACKET_LIMIT:
+                raise OSError("invalid private authority size")
+            raw = os.read(descriptor, _SUPERVISOR_PACKET_LIMIT + 1)
+        except OSError as exc:
+            raise BrowserRuntimeError("browser_connect") from exc
+        finally:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError as exc:
+                    raise BrowserRuntimeError("browser_cleanup") from exc
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o400
+            or not raw
+            or len(raw) > _SUPERVISOR_PACKET_LIMIT
+        ):
+            raise BrowserRuntimeError("browser_connect")
+        value = _loads_json_strict(raw)
+        if not isinstance(value, dict) or set(value) != {
+            "schema",
+            "supervisor_pid",
+            "nonce",
+        }:
+            raise BrowserRuntimeError("browser_connect")
+        supervisor_pid = value.get("supervisor_pid")
+        nonce = value.get("nonce")
+        if (
+            value.get("schema") != SUPERVISOR_AUTHORITY_SCHEMA
+            or isinstance(supervisor_pid, bool)
+            or not isinstance(supervisor_pid, int)
+            or supervisor_pid <= 1
+            or not isinstance(nonce, str)
+            or re.fullmatch(r"[0-9a-f]{64}", nonce) is None
+        ):
+            raise BrowserRuntimeError("browser_connect")
+        return supervisor_pid, nonce
+
+    @staticmethod
+    def _validate_supervisor_peer(
+        connection: socket.socket, *, expected_pid: int
+    ) -> None:
+        pid, uid, _gid = _peer_credentials(connection)
+        if pid != expected_pid or uid != os.geteuid():
+            raise BrowserRuntimeError("browser_connect")
+
+    def _validate_authority(
+        self, authority: Any, *, expected_nonce: str
+    ) -> tuple[str, int]:
         if not isinstance(authority, dict) or set(authority) != {
             "schema",
             "type",
+            "nonce",
             "endpoint",
             "process_group",
             "browser_runtime",
@@ -2222,6 +2303,7 @@ class SupervisedCdpAttachmentRuntime:
         if (
             authority.get("schema") != SUPERVISOR_PROTOCOL_SCHEMA
             or authority.get("type") != "authority"
+            or authority.get("nonce") != expected_nonce
             or not isinstance(endpoint, str)
             or isinstance(process_group, bool)
             or not isinstance(process_group, int)
@@ -2274,6 +2356,7 @@ class SupervisedCdpAttachmentRuntime:
     @contextmanager
     def open(self, chromium: Any) -> Iterator[Any]:
         self._validate_socket_path()
+        supervisor_pid, nonce = self._client_authority()
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         browser = None
         try:
@@ -2284,12 +2367,23 @@ class SupervisedCdpAttachmentRuntime:
                 connection.connect(os.fspath(SUPERVISOR_NESTED_SOCKET))
             except (OSError, socket.timeout) as exc:
                 raise BrowserRuntimeError("browser_connect") from exc
+            self._validate_supervisor_peer(
+                connection,
+                expected_pid=supervisor_pid,
+            )
             _send_supervisor_packet(
                 connection,
-                {"schema": SUPERVISOR_PROTOCOL_SCHEMA, "type": "hello"},
+                {
+                    "schema": SUPERVISOR_PROTOCOL_SCHEMA,
+                    "type": "hello",
+                    "nonce": nonce,
+                },
             )
             authority = _receive_supervisor_packet(connection)
-            endpoint, _process_group = self._validate_authority(authority)
+            endpoint, _process_group = self._validate_authority(
+                authority,
+                expected_nonce=nonce,
+            )
             try:
                 completion_result = "failed"
                 yielded = False
@@ -2329,6 +2423,7 @@ class SupervisedCdpAttachmentRuntime:
                         {
                             "schema": SUPERVISOR_PROTOCOL_SCHEMA,
                             "type": "completion",
+                            "nonce": nonce,
                             "result": completion_result,
                         },
                     )
@@ -2336,6 +2431,7 @@ class SupervisedCdpAttachmentRuntime:
                     if shutdown != {
                         "schema": SUPERVISOR_PROTOCOL_SCHEMA,
                         "type": "shutdown",
+                        "nonce": nonce,
                     }:
                         raise BrowserRuntimeError("browser_cleanup")
                 except BrowserRuntimeError:
