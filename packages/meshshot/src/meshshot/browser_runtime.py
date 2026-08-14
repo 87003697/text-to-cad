@@ -1750,7 +1750,19 @@ class _PinnedExecutable:
             except (OSError, socket.timeout) as exc:
                 raise BrowserRuntimeError("browser_identity") from exc
             if transition != b"":
-                raise BrowserRuntimeError("browser_identity")
+                failed = _loads_json_strict(transition)
+                cause = failed.get("cause") if isinstance(failed, dict) else None
+                if (
+                    not isinstance(failed, dict)
+                    or set(failed) != {"schema", "type", "cause"}
+                    or failed.get("schema") != _BROWSER_MOUNT_SCHEMA
+                    or failed.get("type") != "failed"
+                    or cause not in {"setup", "permission", "missing", "format", "other"}
+                ):
+                    raise BrowserRuntimeError("browser_identity")
+                raise BrowserRuntimeError("browser_identity") from OSError(
+                    f"closed browser mount exec cause: {cause}"
+                )
             connection.close()
             connection = None
             _BROWSER_MOUNT_AUTHORITY.unlink()

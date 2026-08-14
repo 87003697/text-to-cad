@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import errno
 import os
 from pathlib import Path
 import socket
@@ -57,6 +58,16 @@ def _packet(value: dict[str, object]) -> bytes:
     if not raw or len(raw) > PACKET_LIMIT:
         raise OSError("invalid mount handoff packet")
     return raw
+
+
+def _exec_cause(exc: OSError) -> str:
+    if exc.errno in {errno.EACCES, errno.EPERM, errno.ETXTBSY}:
+        return "permission"
+    if exc.errno in {errno.ENOENT, errno.ENOTDIR}:
+        return "missing"
+    if exc.errno == errno.ENOEXEC:
+        return "format"
+    return "other"
 
 
 def _authority() -> str:
@@ -166,11 +177,31 @@ def main() -> int:
             for name in sorted(_ENVIRONMENT)
             if name in os.environ
         }
-        os.execve(EXECUTABLE, browser_argv, environment)
+        try:
+            os.execve(EXECUTABLE, browser_argv, environment)
+        except OSError as exc:
+            connection.sendall(
+                _packet(
+                    {
+                        "schema": SCHEMA,
+                        "type": "failed",
+                        "cause": _exec_cause(exc),
+                    }
+                )
+            )
+            return 127
     except (OSError, TypeError, ValueError, UnicodeDecodeError):
         if connection is not None:
             try:
-                connection.sendall(_packet({"schema": SCHEMA, "type": "failed"}))
+                connection.sendall(
+                    _packet(
+                        {
+                            "schema": SCHEMA,
+                            "type": "failed",
+                            "cause": "setup",
+                        }
+                    )
+                )
             except OSError:
                 pass
     finally:
