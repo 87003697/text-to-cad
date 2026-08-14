@@ -211,11 +211,15 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 provider_free_scenarios.ScenarioError,
                 "private browser stage conflicts with authority",
-            ):
+            ) as raised:
                 provider_free_scenarios._materialize_outer_browser_stage()
 
         unlink.assert_not_called()
         rmdir.assert_not_called()
+        self.assertEqual(
+            "preview_browser_runtime_staging",
+            raised.exception.operation,
+        )
 
     def test_outer_browser_stage_rejects_nonempty_kernel_root(self) -> None:
         source, destination, manifest_sha256 = self._browser_stage_roots()
@@ -248,9 +252,13 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 provider_free_scenarios.ScenarioError,
                 "private browser stage is not empty",
-            ):
+            ) as raised:
                 provider_free_scenarios._materialize_outer_browser_stage()
         self.assertEqual(b"retained", (destination / "foreign").read_bytes())
+        self.assertEqual(
+            "preview_browser_runtime_staging",
+            raised.exception.operation,
+        )
 
     def test_outer_browser_stage_rejects_non_tmpfs_destination(self) -> None:
         source, destination, manifest_sha256 = self._browser_stage_roots()

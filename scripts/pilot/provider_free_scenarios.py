@@ -117,10 +117,16 @@ def _materialize_outer_browser_stage() -> None:
     """Copy the attested revision into the outer namespace-owned tmpfs."""
 
     if platform.system() != "Linux":
-        raise ScenarioError("private browser staging requires Linux")
+        raise ScenarioError(
+            "private browser staging requires Linux",
+            operation="preview_browser_runtime_staging",
+        )
     expected = os.environ.get("MESHSHOT_BROWSER_TREE_MANIFEST_SHA256")
     if not isinstance(expected, str) or re.fullmatch(r"[0-9a-f]{64}", expected) is None:
-        raise ScenarioError("private browser tree authority unavailable")
+        raise ScenarioError(
+            "private browser tree authority unavailable",
+            operation="preview_browser_runtime_staging",
+        )
     try:
         libc = ctypes.CDLL(None, use_errno=True)
         prctl = libc.prctl
@@ -134,9 +140,15 @@ def _materialize_outer_browser_stage() -> None:
         prctl.restype = ctypes.c_int
         dumpable_result = prctl(_PR_SET_DUMPABLE, 0, 0, 0, 0)
     except (AttributeError, OSError, TypeError, ValueError) as exc:
-        raise ScenarioError("private browser staging isolation unavailable") from exc
+        raise ScenarioError(
+            "private browser staging isolation unavailable",
+            operation="preview_browser_runtime_staging",
+        ) from exc
     if dumpable_result != 0:
-        raise ScenarioError("private browser staging isolation unavailable")
+        raise ScenarioError(
+            "private browser staging isolation unavailable",
+            operation="preview_browser_runtime_staging",
+        )
     source_fd: int | None = None
     destination_fd: int | None = None
     revision_fd: int | None = None
@@ -147,9 +159,15 @@ def _materialize_outer_browser_stage() -> None:
         source_fd = os.open(PROVIDER_FREE_BROWSER_SOURCE_REVISION, flags)
         destination_fd = os.open(PROVIDER_FREE_STAGED_BROWSER_CACHE, flags)
         if _linux_filesystem_type(destination_fd) != _LINUX_TMPFS_MAGIC:
-            raise ScenarioError("private browser stage is not kernel-owned tmpfs")
+            raise ScenarioError(
+                "private browser stage is not kernel-owned tmpfs",
+                operation="preview_browser_runtime_staging",
+            )
         if os.listdir(destination_fd):
-            raise ScenarioError("private browser stage is not empty")
+            raise ScenarioError(
+                "private browser stage is not empty",
+                operation="preview_browser_runtime_staging",
+            )
         source_manifest = deployment_authority._browser_tree_manifest_from_fd(
             source_fd,
             readonly_projection=True,
@@ -158,7 +176,10 @@ def _materialize_outer_browser_stage() -> None:
             deployment_authority.browser_tree_manifest_sha256(source_manifest)
             != expected
         ):
-            raise ScenarioError("private browser source conflicts with authority")
+            raise ScenarioError(
+                "private browser source conflicts with authority",
+                operation="preview_browser_runtime_staging",
+            )
         os.mkdir("attested", mode=0o700, dir_fd=destination_fd)
         revision_fd = os.open("attested", flags, dir_fd=destination_fd)
         from scripts.pilot.cvm_job.runtime import _copy_browser_tree_fd
@@ -176,7 +197,10 @@ def _materialize_outer_browser_stage() -> None:
             )
             != source_manifest
         ):
-            raise ScenarioError("private browser stage conflicts with authority")
+            raise ScenarioError(
+                "private browser stage conflicts with authority",
+                operation="preview_browser_runtime_staging",
+            )
         os.fchmod(destination_fd, 0o555)
         try:
             os.fsync(destination_fd)
@@ -190,7 +214,10 @@ def _materialize_outer_browser_stage() -> None:
         ValueError,
         deployment_authority.DeploymentAuthorityError,
     ) as exc:
-        raise ScenarioError("private browser staging failed") from exc
+        raise ScenarioError(
+            "private browser staging failed",
+            operation="preview_browser_runtime_staging",
+        ) from exc
     finally:
         for descriptor in (revision_fd, destination_fd, source_fd):
             if descriptor is not None:
@@ -199,7 +226,10 @@ def _materialize_outer_browser_stage() -> None:
                 except OSError:
                     cleanup_failed = True
         if cleanup_failed:
-            raise ScenarioError("private browser staging cleanup failed")
+            raise ScenarioError(
+                "private browser staging cleanup failed",
+                operation="preview_browser_cleanup",
+            )
 BROWSER_EXEC_PROBE_ENVIRONMENT = {
     "HOME": "/nonexistent",
     "LANG": "C.UTF-8",
@@ -2426,7 +2456,10 @@ def main(argv: list[str] | None = None) -> int:
     workspace = args.workspace.resolve()
     try:
         if args.command == "run-staged":
-            _materialize_outer_browser_stage()
+            _run_stage(
+                "native_measurement",
+                _materialize_outer_browser_stage,
+            )
         receipt = run_issue15_runtime_authority(workspace)
     except ScenarioError as exc:
         if exc.stage in PROVIDER_FREE_SCENARIO_FAILURE_STAGES:

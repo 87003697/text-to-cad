@@ -23,6 +23,7 @@ _EXECUTABLE = Path(
     "/tmp/provider-free-playwright/attested/"
     "chrome-headless-shell-linux64/chrome-headless-shell"
 )
+_SOURCE_REVISION = Path("/run/meshshot-browser-source")
 
 
 def _png_data_url(width: int = 504, height: int = 1008) -> str:
@@ -309,6 +310,14 @@ def _wrapper() -> Path:
 
 
 def _outer_argv(mode: str) -> list[str]:
+    from scripts.pilot import deployment_authority
+
+    manifest_sha256 = deployment_authority.browser_tree_manifest_sha256(
+        deployment_authority.browser_tree_manifest(
+            _FIXTURE / "browser-revision",
+            readonly_projection=True,
+        )
+    )
     capabilities = (
         "CAP_SYS_ADMIN",
         "CAP_SYS_CHROOT",
@@ -350,11 +359,16 @@ def _outer_argv(mode: str) -> list[str]:
             "/meshshot-exec",
             "--tmpfs",
             "/meshshot-supervisor",
-            "--dir",
+            "--tmpfs",
             "/tmp/provider-free-playwright",
+            "--dir",
+            os.fspath(_SOURCE_REVISION),
             "--ro-bind",
             os.fspath(_FIXTURE / "browser-revision"),
-            "/tmp/provider-free-playwright/attested",
+            os.fspath(_SOURCE_REVISION),
+            "--setenv",
+            "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256",
+            manifest_sha256,
             "--setenv",
             "MESHSHOT_R3_FIXTURE_ROOT",
             os.fspath(_FIXTURE),
@@ -383,6 +397,19 @@ def _configure_scenario() -> object:
     scenarios._BROWSER_SUPERVISOR_TIMEOUT_SECONDS = 10.0
     scenarios.sys.executable = os.fspath(_wrapper())
     return scenarios
+
+
+def _materialize_staged_runtime() -> None:
+    scenarios = _configure_scenario()
+    scenarios._materialize_outer_browser_stage()
+    staged = Path("/tmp/provider-free-playwright/attested")
+    source = _SOURCE_REVISION
+    if os.path.samefile(staged, source):
+        raise AssertionError("outer browser stage did not copy the source tree")
+    for path in (staged, *staged.rglob("*")):
+        if path.stat().st_mode & 0o222:
+            raise AssertionError("outer browser stage was not frozen")
+    Path("/tmp/r4-runtime-staging").write_text("passed", encoding="ascii")
 
 
 def _nested_render() -> int:
@@ -522,6 +549,9 @@ def _orchestrate() -> int:
         return 3
     result.update(
         {
+            "runtime_staging": Path("/tmp/r4-runtime-staging").read_text(
+                encoding="ascii"
+            ),
             "completion_shutdown": "passed",
             "supervisor_cleanup": (
                 "passed"
@@ -620,7 +650,7 @@ def run() -> dict[str, object]:
     _write_fake_playwright()
     _compile_browser()
     completed = subprocess.run(
-        _outer_argv("orchestrate"),
+        _outer_argv("run-staged-orchestrate"),
         check=False,
         text=True,
         stdout=subprocess.PIPE,
@@ -636,7 +666,7 @@ def run_signal_cleanup() -> dict[str, str]:
     _write_fake_playwright()
     _compile_browser()
     completed = subprocess.run(
-        _outer_argv("signal-orchestrate"),
+        _outer_argv("run-staged-signal-orchestrate"),
         check=False,
         text=True,
         stdout=subprocess.PIPE,
@@ -653,10 +683,16 @@ if __name__ == "__main__":
         raise SystemExit(2)
     if sys.argv[1] == "orchestrate":
         raise SystemExit(_orchestrate())
+    if sys.argv[1] == "run-staged-orchestrate":
+        _materialize_staged_runtime()
+        raise SystemExit(_orchestrate())
     if sys.argv[1] == "nested-render":
         raise SystemExit(_nested_render())
     if sys.argv[1] == "runtime-only":
         raise SystemExit(_runtime_only())
     if sys.argv[1] == "signal-orchestrate":
+        raise SystemExit(_signal_orchestrate())
+    if sys.argv[1] == "run-staged-signal-orchestrate":
+        _materialize_staged_runtime()
         raise SystemExit(_signal_orchestrate())
     raise SystemExit(2)

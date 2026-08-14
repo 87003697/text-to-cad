@@ -1846,10 +1846,7 @@ class _PinnedExecutable:
         mount.restype = ctypes.c_int
         target = os.fsencode(root)
         if mount(b"tmpfs", target, b"tmpfs", 0x2 | 0x4, b"mode=0700") != 0:
-            raise BrowserRuntimeError(
-                "browser_identity",
-                browser_identity_phase="private_tree_materialization",
-            )
+            raise BrowserRuntimeError("browser_cleanup")
 
     @staticmethod
     def _unmount_private_filesystem(root: Path) -> None:

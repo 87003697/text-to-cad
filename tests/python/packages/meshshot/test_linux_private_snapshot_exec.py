@@ -182,6 +182,7 @@ int main(int argc, char **argv) {
 
         result = run()
         self.assertEqual("permission", result["old_nested_owner"])
+        self.assertEqual("passed", result["runtime_staging"])
         self.assertEqual("passed", result["supervised_public_render"])
         self.assertEqual("passed", result["real_cdp_identity"])
         self.assertEqual(0, result["nested_browser_popen_count"])
@@ -520,6 +521,46 @@ class DockerLinuxPrivateSnapshotExecutionTests(unittest.TestCase):
         }
         environment["DOCKER_HOST"] = f"unix://{endpoint}"
         return environment
+
+    def test_production_fixture_uses_outer_tmpfs_staging_contract(self) -> None:
+        from tests.python.packages.meshshot.fixtures import (
+            production_shaped_supervised_render as fixture,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = root / "browser-revision/chrome-headless-shell-linux64"
+            revision.mkdir(parents=True)
+            executable = revision / "chrome-headless-shell"
+            executable.write_bytes(b"fixture browser")
+            executable.chmod(0o755)
+            with (
+                mock.patch.object(fixture, "_FIXTURE", root),
+                mock.patch.object(fixture, "_REPO", REPO_ROOT),
+            ):
+                argv = fixture._outer_argv("run-staged-orchestrate")
+
+        triples = [argv[index : index + 3] for index in range(len(argv) - 2)]
+        pairs = [argv[index : index + 2] for index in range(len(argv) - 1)]
+        self.assertIn(["--tmpfs", "/tmp/provider-free-playwright"], pairs)
+        self.assertIn(
+            [
+                "--ro-bind",
+                os.fspath(root / "browser-revision"),
+                "/run/meshshot-browser-source",
+            ],
+            triples,
+        )
+        self.assertNotIn(
+            [
+                "--ro-bind",
+                os.fspath(root / "browser-revision"),
+                "/tmp/provider-free-playwright/attested",
+            ],
+            triples,
+        )
+        self.assertIn("MESHSHOT_BROWSER_TREE_MANIFEST_SHA256", argv)
+        self.assertEqual("run-staged-orchestrate", argv[-1])
 
     def test_harness_scrubs_hostile_docker_routing_environment(self) -> None:
         calls: list[dict[str, object]] = []
