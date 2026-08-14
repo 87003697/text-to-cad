@@ -127,6 +127,10 @@ different destructive operation and requires a separate authorization.
   Cleanup continues after individual errors. Any missing absence proof
   dominates the original failure as fixed `prepare-cleanup-absence`; raw paths,
   errno, and exception text are not published.
+- After successful prepare cleanup, an existing fixed `ProbeError` retains its
+  check. Any other filesystem/runtime exception is replaced by fixed
+  `prepare-operation`; its traceback, path, errno, and message are not
+  published.
 - Remote begin followed by transfer/finalize failure: the wrapper invokes its
   one fixed abort operation, proves transfer absence when possible, writes a
   terminal failed receipt, and forbids retry.

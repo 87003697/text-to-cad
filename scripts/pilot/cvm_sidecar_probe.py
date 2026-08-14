@@ -858,7 +858,12 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
                 "prepare cleanup could not prove absence",
                 check="prepare-cleanup-absence",
             ) from operation_error
-        raise
+        if isinstance(operation_error, ProbeError):
+            raise
+        raise ProbeError(
+            "prepare operation failed",
+            check="prepare-operation",
+        ) from operation_error
 
 
 def provision(handle: str) -> Mapping[str, object]:
