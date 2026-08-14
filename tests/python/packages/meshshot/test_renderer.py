@@ -3512,10 +3512,11 @@ class ResidualRendererTests(unittest.TestCase):
             executable.chmod(0o755)
             profile = root / "profile"
             pinned = _PinnedExecutable(executable)
-            process = mock.MagicMock(spec=subprocess.Popen)
+            process = object.__new__(subprocess.Popen)
             process.pid = 43210
-            process.poll.return_value = None
-            process.wait.return_value = 0
+            process.returncode = None
+            process.poll = mock.MagicMock(return_value=None)
+            process.wait = mock.MagicMock(return_value=0)
             runtime = object.__new__(PrelaunchedCdpRuntime)
             runtime._executable = executable
             runtime._profile = {
@@ -3575,10 +3576,11 @@ class ResidualRendererTests(unittest.TestCase):
         for proof in (None, False, "passed", object()):
             with self.subTest(proof=type(proof).__name__), tempfile.TemporaryDirectory() as directory:
                 profile = Path(directory) / "profile"
-                process = mock.MagicMock(spec=subprocess.Popen)
+                process = object.__new__(subprocess.Popen)
                 process.pid = 43210
-                process.poll.return_value = None
-                process.wait.return_value = 0
+                process.returncode = None
+                process.poll = mock.MagicMock(return_value=None)
+                process.wait = mock.MagicMock(return_value=0)
                 pinned = mock.MagicMock()
                 pinned.launch_live.return_value = _LiveBrowserLaunch(process, proof)
                 runtime = object.__new__(PrelaunchedCdpRuntime)

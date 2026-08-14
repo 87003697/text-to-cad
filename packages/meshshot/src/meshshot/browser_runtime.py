@@ -2003,10 +2003,24 @@ class PrelaunchedCdpRuntime:
                             close_fds=True,
                             **launch_options,
                         )
-                        if not isinstance(launch, _LiveBrowserLaunch):
+                        process = (
+                            launch.process
+                            if isinstance(launch, _LiveBrowserLaunch)
+                            else launch
+                        )
+                        process_pid = (
+                            getattr(process, "pid", None)
+                            if type(process) is subprocess.Popen
+                            else None
+                        )
+                        if type(process_pid) is int and process_pid > 1:
+                            self._process = process
+                            self._process_group = process_pid
+                        if (
+                            not isinstance(launch, _LiveBrowserLaunch)
+                            or self._process is None
+                        ):
                             raise BrowserRuntimeError("browser_identity")
-                        self._process = launch.process
-                        self._process_group = self._process.pid
                         if launch._proof is not _LINUX_LIVE_IMAGE_PROOF:
                             raise BrowserRuntimeError("browser_identity")
                     else:
