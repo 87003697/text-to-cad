@@ -100,6 +100,7 @@ class ResidualRendererTests(unittest.TestCase):
             "nonce": nonce,
             "endpoint": "http://127.0.0.1:9222",
             "process_group": 42,
+            "listener_reproof": "passed",
             "browser_runtime": attachment.evidence,
         }
         with mock.patch.object(browser_runtime, "_verify_listener_owner"):
@@ -248,6 +249,7 @@ class ResidualRendererTests(unittest.TestCase):
             "nonce": "a" * 64,
             "endpoint": "http://127.0.0.1:9222",
             "process_group": 42,
+            "listener_reproof": "passed",
             "browser_runtime": attachment.evidence,
         }
         for mutation, substage in (
@@ -265,7 +267,7 @@ class ResidualRendererTests(unittest.TestCase):
                 )
             self.assertEqual(substage, raised.exception.browser_identity_substage)
 
-    def test_attachment_independently_revalidates_exact_listener_ownership(self) -> None:
+    def test_attachment_requires_authenticated_outer_listener_reproof(self) -> None:
         from meshshot import browser_runtime
 
         attachment = object.__new__(
@@ -282,6 +284,7 @@ class ResidualRendererTests(unittest.TestCase):
             "nonce": "a" * 64,
             "endpoint": "http://127.0.0.1:9222",
             "process_group": 42,
+            "listener_reproof": "passed",
             "browser_runtime": attachment.evidence,
         }
         with mock.patch.object(
@@ -295,24 +298,53 @@ class ResidualRendererTests(unittest.TestCase):
                     expected_nonce="a" * 64,
                 ),
             )
-        verify.assert_called_once_with(42, 9222, 0.1)
+        verify.assert_not_called()
 
-        for label in ("foreign-owner", "dead-owner", "replaced-port"):
+        for label, mutation in (
+            ("missing", {key: value for key, value in authority.items() if key != "listener_reproof"}),
+            ("tampered", {**authority, "listener_reproof": "failed"}),
+            ("replay", {**authority, "nonce": "b" * 64}),
+        ):
+            with (
+                self.subTest(label=label),
+                self.assertRaises(browser_runtime.BrowserRuntimeError) as raised,
+            ):
+                attachment._validate_authority(
+                    mutation,
+                    expected_nonce="a" * 64,
+                )
+            self.assertEqual("browser_identity", raised.exception.operation)
+            self.assertEqual(
+                "loopback_listener_address_ownership",
+                raised.exception.browser_identity_substage,
+            )
+
+    def test_supervisor_authority_freshly_reproves_listener_before_publication(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+
+        runtime = object.__new__(browser_runtime.PrelaunchedCdpRuntime)
+        runtime._endpoint = "http://127.0.0.1:9222"
+        runtime._process_group = 42
+        runtime._profile = {"startup_timeout_ms": 100}
+        runtime.evidence = {"schema": browser_runtime.RUNTIME_SCHEMA}
+        with mock.patch.object(browser_runtime, "_verify_listener_owner") as verify:
+            authority = runtime.supervisor_authority()
+        verify.assert_called_once_with(42, 9222, 0.1)
+        self.assertEqual("passed", authority["listener_reproof"])
+
+        for label in ("browser-death", "foreign-listener", "port-replacement"):
             with (
                 self.subTest(label=label),
                 mock.patch.object(
                     browser_runtime,
                     "_verify_listener_owner",
-                    side_effect=browser_runtime.BrowserRuntimeError(
-                        "browser_identity"
-                    ),
+                    side_effect=browser_runtime.BrowserRuntimeError("browser_identity"),
                 ),
                 self.assertRaises(browser_runtime.BrowserRuntimeError) as raised,
             ):
-                attachment._validate_authority(
-                    authority,
-                    expected_nonce="a" * 64,
-                )
+                runtime.supervisor_authority()
             self.assertEqual("browser_identity", raised.exception.operation)
             self.assertEqual(
                 "loopback_listener_address_ownership",
@@ -338,6 +370,7 @@ class ResidualRendererTests(unittest.TestCase):
             "nonce": "a" * 64,
             "endpoint": "http://127.0.0.1:9222",
             "process_group": 42,
+            "listener_reproof": "passed",
             "browser_runtime": attachment.evidence,
         }
         connection = mock.MagicMock()
