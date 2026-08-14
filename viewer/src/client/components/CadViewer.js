@@ -1894,6 +1894,13 @@ const CadViewer = forwardRef(function CadViewer({
   // re-read it here. Without it the highlight keeps the pose it was built against and only
   // corrects itself when the pointer next moves, which reads as the highlight being wrong.
   const [explodedViewPoseTick, setExplodedViewPoseTick] = useState(0);
+  // Bumped every time the scene is rebuilt and `runtime.displayRecords` becomes a fresh set of
+  // objects. State baked ONTO records rather than into React -- the exploded view's per-record
+  // matrix -- is lost by that rebuild and has to be re-applied. The scene rebuilds for reasons
+  // the exploded view knows nothing about (a topology load, an edge setting, part pickability),
+  // so this is a signal rather than a longer dependency list: the last attempt at a dependency
+  // list is why isolating a part while exploded collapsed the model.
+  const [displayRecordsToken, setDisplayRecordsToken] = useState(0);
   const activeViewPlaneFaceRef = useRef("");
   const defaultPerspectiveResettingRef = useRef(false);
   const previewModeRef = useRef(previewMode);
@@ -4108,6 +4115,7 @@ const CadViewer = forwardRef(function CadViewer({
     edgesGroup.add(cadScene.edgesGroup);
     runtime.cadScene = cadScene;
     runtime.displayRecords = cadScene.displayRecords;
+    setDisplayRecordsToken((token) => token + 1);
     runtime.hasVisibleModel = true;
     runtime.activeModelKey = modelKey || "";
     const initialEdgeRuntimes = resolveTopologyDisplayEdgeRuntimes({
@@ -4772,6 +4780,7 @@ const CadViewer = forwardRef(function CadViewer({
     meshGeometrySource,
     modelKey,
     focusedPartIds.length,
+    displayRecordsToken,
     normalizedSceneScaleMode,
     normalizedThemeSettings,
     viewerReadyTick
