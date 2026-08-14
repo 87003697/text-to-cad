@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -201,6 +202,7 @@ def _compile_browser() -> None:
     executable = revision / "chrome-headless-shell"
     source.write_text(
         r'''#include <arpa/inet.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -212,7 +214,11 @@ def _compile_browser() -> None:
 static volatile sig_atomic_t running = 1;
 static void stop(int sig) { (void)sig; running = 0; }
 int main(int argc, char **argv) {
+  int image_fd = open(argv[0], O_WRONLY | O_APPEND);
+  if (image_fd >= 0) { close(image_fd); return 16; }
+  if (chmod(argv[0], 0755) == 0) return 17;
   if (access("/meshshot-exec/attested", F_OK) == 0) return 18;
+  if (mkdir("/meshshot-exec/attested", 0700) == 0) return 19;
   if (argc == 2 && strcmp(argv[1], "--version") == 0) {
     puts("Google Chrome for Testing 148.0.7778.96");
     return 0;
@@ -476,6 +482,8 @@ def _orchestrate() -> int:
         cwd=_FIXTURE,
     )
     namespace_owned = "failed"
+    propagation_private = "failed"
+    shared_records_visible = "failed"
     try:
         with scenarios._browser_supervisor() as supervisor:
             supervisor_pid = json.loads(
@@ -496,6 +504,28 @@ def _orchestrate() -> int:
             ):
                 raise AssertionError("browser supervisor did not own its mount namespace")
             namespace_owned = "passed"
+            mountinfo = Path(
+                f"/proc/{supervisor_pid}/mountinfo"
+            ).read_text(encoding="utf-8")
+            root_records = [
+                line.split(" - ", 1)[0].split()
+                for line in mountinfo.splitlines()
+                if " - " in line and line.split(" - ", 1)[0].split()[4] == "/"
+            ]
+            if len(root_records) != 1 or any(
+                field.startswith(("shared:", "master:", "propagate_from:"))
+                for field in root_records[0][6:]
+            ):
+                raise AssertionError("browser supervisor mount propagation is not private")
+            propagation_private = "passed"
+            authority_path = Path("/meshshot-supervisor/authority.json")
+            socket_path = Path("/meshshot-supervisor/authority.sock")
+            if (
+                not authority_path.is_file()
+                or not stat.S_ISSOCK(socket_path.lstat().st_mode)
+            ):
+                raise AssertionError("shared supervisor records are not visible")
+            shared_records_visible = "passed"
             try:
                 result = scenarios._run_public(
                     nested,
@@ -573,6 +603,9 @@ def _orchestrate() -> int:
                 encoding="ascii"
             ),
             "supervisor_mount_namespace": namespace_owned,
+            "supervisor_mount_propagation": propagation_private,
+            "shared_supervisor_records": shared_records_visible,
+            "same_uid_mount_boundaries": "passed",
             "completion_shutdown": "passed",
             "supervisor_cleanup": (
                 "passed"

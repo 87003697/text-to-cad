@@ -3832,7 +3832,158 @@ class ResidualRendererTests(unittest.TestCase):
             if captured[index : index + 2]
             == ["--tmpfs", os.fspath(browser_runtime.MESHSHOT_EXECUTABLE_ROOT)]
         )
+        source_readonly = next(
+            index
+            for index in range(len(captured) - 1)
+            if captured[index : index + 2]
+            == [
+                "--remount-ro",
+                os.fspath(browser_runtime.MESHSHOT_EXECUTABLE_ROOT),
+            ]
+        )
         self.assertLess(source_bind, source_hidden)
+        self.assertLess(source_hidden, source_readonly)
+
+    def test_runtime_rejects_invalid_mounted_hidden_packets_and_reaps_group(
+        self,
+    ) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        invalid_packets = {
+            "missing": b"",
+            "reordered": browser_runtime._canonical_bytes(
+                {
+                    "schema": browser_runtime._BROWSER_MOUNT_SCHEMA,
+                    "type": "exec",
+                    "nonce": "a" * 64,
+                }
+            ),
+            "duplicate": (
+                b'{"schema":"meshshot.browser-mount-handoff/2",'
+                b'"type":"mounted-hidden","type":"mounted-hidden",'
+                b'"nonce":"' + b"a" * 64 + b'"}'
+            ),
+            "tampered": browser_runtime._canonical_bytes(
+                {
+                    "schema": browser_runtime._BROWSER_MOUNT_SCHEMA,
+                    "type": "mounted-hidden",
+                    "nonce": "b" * 64,
+                }
+            ),
+        }
+        for case, packet in invalid_packets.items():
+            with (
+                self.subTest(case=case),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                root.chmod(0o700)
+                pinned = object.__new__(_PinnedExecutable)
+                pinned.fd = os.open(os.devnull, os.O_RDONLY)
+                pinned.launch_root = root / "browser-image"
+                process = mock.MagicMock()
+                process.pid = 4242
+                connection = mock.MagicMock()
+                connection.recv.return_value = packet
+                listener = mock.MagicMock()
+                listener.accept.return_value = (connection, None)
+                real_stat = os.stat
+                socket_info = os.stat_result(
+                    (
+                        stat.S_IFSOCK | 0o600,
+                        2,
+                        1,
+                        1,
+                        os.geteuid(),
+                        os.getegid(),
+                        0,
+                        0,
+                        0,
+                        0,
+                    )
+                )
+
+                def stat_socket(
+                    path: object,
+                    *args: object,
+                    **kwargs: object,
+                ) -> os.stat_result:
+                    if path == "authority.sock":
+                        return socket_info
+                    return real_stat(path, *args, **kwargs)
+
+                try:
+                    with (
+                        mock.patch.object(
+                            browser_runtime.secrets,
+                            "token_hex",
+                            return_value="a" * 64,
+                        ),
+                        mock.patch.object(
+                            browser_runtime,
+                            "SUPERVISOR_OUTER_ROOT",
+                            root,
+                        ),
+                        mock.patch.object(
+                            browser_runtime,
+                            "_BROWSER_MOUNT_AUTHORITY",
+                            root / "authority.json",
+                        ),
+                        mock.patch.object(
+                            browser_runtime,
+                            "_BROWSER_MOUNT_SOCKET",
+                            root / "authority.sock",
+                        ),
+                        mock.patch.object(
+                            browser_runtime.socket,
+                            "socket",
+                            return_value=listener,
+                        ),
+                        mock.patch.object(
+                            browser_runtime.os,
+                            "stat",
+                            side_effect=stat_socket,
+                        ),
+                        mock.patch.object(browser_runtime.os, "chmod"),
+                        mock.patch.object(
+                            browser_runtime.subprocess,
+                            "Popen",
+                            return_value=process,
+                        ),
+                        mock.patch.object(
+                            browser_runtime,
+                            "_peer_credentials",
+                            return_value=(4343, os.geteuid(), os.getegid()),
+                        ),
+                        mock.patch.object(pinned, "_verify_bwrap_peer"),
+                        mock.patch.object(
+                            pinned,
+                            "_remove_detached_source",
+                        ) as relinquish,
+                        mock.patch.object(
+                            pinned,
+                            "_unlink_owned_handoff_entry",
+                        ),
+                        mock.patch.object(
+                            pinned,
+                            "_reap_failed_handoff",
+                            return_value=False,
+                        ) as reap,
+                        self.assertRaises(BrowserRuntimeError) as raised,
+                    ):
+                        pinned._detached_linux_popen(
+                            ["chrome-headless-shell"],
+                            deadline=time.monotonic() + 1,
+                            options={"start_new_session": True},
+                            completion="version",
+                        )
+                finally:
+                    os.close(pinned.fd)
+
+                self.assertEqual("browser_identity", raised.exception.operation)
+                relinquish.assert_not_called()
+                reap.assert_called_once_with(process, process_group=True)
 
     def test_detached_handoff_preserves_first_transport_cleanup_before_reap(self) -> None:
         from meshshot import browser_runtime
