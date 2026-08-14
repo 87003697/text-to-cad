@@ -26,6 +26,7 @@ import {
   resolvePerspectiveSnapshot
 } from "cadjs/lib/perspective";
 import { VIEWER_PICK_MODE } from "cadjs/lib/viewer/constants";
+import { resolveScenePartRendering } from "cadjs/lib/viewer/partRendering";
 import { normalizeStepClipSettings } from "cadjs/lib/viewer/clipPlane";
 import {
   buildDrawingPoint,
@@ -4016,22 +4017,14 @@ const CadViewer = forwardRef(function CadViewer({
       !wireframeMode &&
       normalizedThemeSettings.materials?.overrideSourceColors !== true &&
       meshNeedsPartRenderingForSourceColors(meshData);
-    const shouldRenderParts =
-      effectiveRenderPartsIndividually ||
-      shouldRenderFillParts ||
-      shouldRenderSourceColorParts ||
-      Array.isArray(pickableParts) &&
-      pickableParts.length > 0 &&
-      (
-        pickMode === VIEWER_PICK_MODE.PARTS ||
-        pickMode === VIEWER_PICK_MODE.ASSEMBLY ||
-        pickMode === VIEWER_PICK_MODE.AUTO
-      );
-    const renderedParts = effectiveRenderPartsIndividually
-      ? (Array.isArray(meshData?.parts) ? meshData.parts : [])
-      : shouldRenderFillParts || shouldRenderSourceColorParts
-        ? meshData.parts
-        : pickableParts;
+    const { renderParts: shouldRenderParts, parts: renderedParts } = resolveScenePartRendering({
+      meshData,
+      renderPartsIndividually: effectiveRenderPartsIndividually,
+      fillRotationParts: shouldRenderFillParts,
+      sourceColorParts: shouldRenderSourceColorParts,
+      pickableParts,
+      pickMode
+    });
     const materialSettings = {
       ...normalizedThemeSettings.materials,
       envMapIntensity: normalizedThemeSettings.materials.envMapIntensity * (
