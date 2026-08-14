@@ -1554,37 +1554,30 @@ class _PinnedExecutable:
                 time.sleep(0.002)
 
     @staticmethod
-    def _bwrap_helper_pid(
-        process: subprocess.Popen[bytes], deadline: float
-    ) -> int:
-        children_path = Path(
-            f"/proc/{process.pid}/task/{process.pid}/children"
-        )
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise BrowserRuntimeError("browser_identity")
+    def _verify_bwrap_peer(
+        process: subprocess.Popen[bytes], peer_pid: int
+    ) -> None:
+        current = peer_pid
+        for _depth in range(16):
             try:
-                children = children_path.read_text(encoding="utf-8").split()
-                if len(children) != 1 or not children[0].isdigit():
-                    time.sleep(0.002)
-                    continue
-                child = int(children[0])
-                raw = Path(f"/proc/{child}/stat").read_text(encoding="utf-8")
+                raw = Path(f"/proc/{current}/stat").read_text(encoding="utf-8")
                 tail = raw[raw.rfind(")") + 2 :].split()
                 if (
-                    child <= 1
+                    current <= 1
                     or len(tail) < 4
-                    or int(tail[1]) != process.pid
                     or int(tail[2]) != process.pid
                     or int(tail[3]) != process.pid
                 ):
                     raise BrowserRuntimeError("browser_identity")
-                return child
-            except (FileNotFoundError, ProcessLookupError):
-                time.sleep(0.002)
+                parent = int(tail[1])
+                if parent == process.pid:
+                    return
+                if parent <= 1 or parent == current:
+                    break
+                current = parent
             except (OSError, ValueError, IndexError) as exc:
                 raise BrowserRuntimeError("browser_identity") from exc
-        raise subprocess.TimeoutExpired([_BROWSER_MOUNT_SCHEMA], 0)
+        raise BrowserRuntimeError("browser_identity")
 
     @staticmethod
     def _mount_packet(connection: socket.socket) -> Any:
@@ -1708,12 +1701,12 @@ class _PinnedExecutable:
                 if name in os.environ
             }
             process = subprocess.Popen(helper_argv, **options)
-            expected_helper_pid = self._bwrap_helper_pid(process, deadline)
             connection, _address = listener.accept()
             connection.settimeout(max(0.001, deadline - time.monotonic()))
             peer_pid, peer_uid, _peer_gid = _peer_credentials(connection)
-            if peer_pid != expected_helper_pid or peer_uid != os.geteuid():
+            if peer_uid != os.geteuid():
                 raise BrowserRuntimeError("browser_identity")
+            self._verify_bwrap_peer(process, peer_pid)
             mounted = self._mount_packet(connection)
             if mounted != {
                 "schema": _BROWSER_MOUNT_SCHEMA,
@@ -1745,7 +1738,7 @@ class _PinnedExecutable:
             _BROWSER_MOUNT_AUTHORITY.unlink()
             if completion == "live":
                 self._wait_for_exec_replacement(
-                    process, deadline, image_pid=expected_helper_pid
+                    process, deadline, image_pid=peer_pid
                 )
             else:
                 setattr(process, "_meshshot_version_handoff_eof", True)
