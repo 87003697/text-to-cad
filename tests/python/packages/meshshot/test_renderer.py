@@ -2458,6 +2458,103 @@ class ResidualRendererTests(unittest.TestCase):
             mount.assert_not_called()
             self.assertTrue(created_path.is_dir())
 
+    def test_detached_mount_targets_exact_underlying_descriptor(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with mock.patch.object(
+                browser_runtime.tempfile,
+                "gettempdir",
+                return_value=root,
+            ):
+                owned = browser_runtime._private_directory("meshshot-tree-")
+            original_fd = owned.directory_fd
+            original = owned.path
+            retained = root / "retained-created"
+
+            def replace_at_mount(target: Path) -> None:
+                self.assertEqual(
+                    Path(f"/proc/self/fd/{original_fd}"),
+                    target,
+                )
+                os.replace(original, retained)
+                original.mkdir()
+
+            pinned = object.__new__(_PinnedExecutable)
+            pinned._detached_filesystem_mounted = False
+            pinned._detached_mount_parent_fd = None
+            pinned._detached_mount_fd = None
+            pinned._detached_underlying_fd = None
+            pinned._detached_mount_name = None
+            pinned._detached_underlying_identity = None
+            pinned._detached_mounted_identity = None
+            with (
+                mock.patch.object(
+                    pinned,
+                    "_mount_private_filesystem",
+                    side_effect=replace_at_mount,
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned._prepare_detached_mount(owned)
+
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+            self.assertTrue(original.is_dir())
+
+    def test_directory_fsync_descriptor_close_failure_is_cleanup(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            real_close = os.close
+            injected = False
+
+            def close_then_fail(descriptor: int) -> None:
+                nonlocal injected
+                real_close(descriptor)
+                if not injected:
+                    injected = True
+                    raise OSError("injected descriptor close failure")
+
+            with (
+                mock.patch(
+                    "meshshot.browser_runtime.os.close",
+                    side_effect=close_then_fail,
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable._fsync_directory(Path(directory))
+
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+
+    def test_path_digest_descriptor_close_failure_is_cleanup(self) -> None:
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "browser"
+            path.write_bytes(b"browser")
+            real_close = os.close
+            injected = False
+
+            def close_then_fail(descriptor: int) -> None:
+                nonlocal injected
+                real_close(descriptor)
+                if not injected:
+                    injected = True
+                    raise OSError("injected descriptor close failure")
+
+            with (
+                mock.patch(
+                    "meshshot.browser_runtime.os.close",
+                    side_effect=close_then_fail,
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable._sha256_fd_from_path(path)
+
+            self.assertEqual("browser_cleanup", raised.exception.operation)
+
     def test_tree_manifest_descriptor_close_failure_is_cleanup(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
 

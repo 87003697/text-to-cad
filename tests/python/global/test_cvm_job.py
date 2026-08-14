@@ -167,6 +167,57 @@ class CvmJobTests(unittest.TestCase):
 
         self.assertFalse(stage_root.exists())
 
+    def test_outer_sandbox_owns_browser_stage_tmpfs_lifecycle(self) -> None:
+        chromium, executable = self._browser_identity()
+        handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
+        exp_dir = self.repo_root / "outputs" / handle
+        exp_dir.mkdir(parents=True)
+
+        with (
+            mock.patch.object(
+                runtime,
+                "_copy_browser_tree_fd",
+                wraps=runtime._copy_browser_tree_fd,
+            ) as host_copy,
+            mock.patch.object(
+                runtime,
+                "_remove_browser_tree_owned",
+                wraps=runtime._remove_browser_tree_owned,
+            ) as host_remove,
+            runtime.staged_attested_browser(
+                chromium,
+                handle,
+                repo_root=self.repo_root,
+            ) as mount,
+        ):
+            argv = runtime.provider_free_sandbox_argv(
+                "issue15-runtime-authority",
+                exp_dir,
+                {"bwrap": {"path": "/usr/bin/bwrap"}, "chromium": chromium},
+                repo_root=self.repo_root,
+                browser_mount=mount,
+            )
+
+        host_copy.assert_not_called()
+        host_remove.assert_not_called()
+        self.assertEqual(executable.parents[1], mount.host_revision)
+        self.assertNotIn(".cvm-provider-free-browser-stages", " ".join(argv))
+        self.assertIn(
+            ["--tmpfs", protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE],
+            [argv[index : index + 2] for index in range(len(argv) - 1)],
+        )
+        source_root = protocol.PROVIDER_FREE_BROWSER_SOURCE_REVISION
+        self.assertIn(
+            ["--ro-bind", os.fspath(executable.parents[1]), source_root],
+            [argv[index : index + 3] for index in range(len(argv) - 2)],
+        )
+        self.assertEqual(
+            "kernel-discard-on-outer-mount-namespace-exit",
+            runtime.PROVIDER_FREE_SANDBOX_PROFILE["browser_runtime_staging"][
+                "cleanup"
+            ],
+        )
+
     def test_attested_browser_stage_freezes_and_revalidates_trusted_full_tree(
         self,
     ) -> None:
