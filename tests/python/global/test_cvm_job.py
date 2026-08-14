@@ -135,24 +135,10 @@ class CvmJobTests(unittest.TestCase):
             repo_root=self.repo_root,
         ) as mount:
             self.assertFalse(mount.host_revision.is_relative_to(self.repo_root))
-            self.assertEqual("attested", mount.host_revision.name)
-            staged_executable = mount.host_revision / (
-                "chrome-headless-shell-linux64/chrome-headless-shell"
-            )
-            self.assertEqual(executable.read_bytes(), staged_executable.read_bytes())
+            self.assertEqual(executable.parents[1], mount.host_revision)
             self.assertEqual(
                 protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE,
                 mount.sandbox_cache,
-            )
-            stage_root = mount.host_revision.parent
-            self.assertTrue(stage_root.is_dir())
-            self.assertEqual(
-                ["attested"],
-                [path.name for path in stage_root.iterdir()],
-            )
-            self.assertEqual(
-                executable.stat().st_dev,
-                mount.host_revision.stat().st_dev,
             )
             self.assertEqual(
                 chromium["tree_manifest_sha256"],
@@ -165,7 +151,7 @@ class CvmJobTests(unittest.TestCase):
             )
             self.assertEqual(chromium["sha256"], mount.executable_sha256)
 
-        self.assertFalse(stage_root.exists())
+        self.assertTrue(executable.is_file())
 
     def test_outer_sandbox_owns_browser_stage_tmpfs_lifecycle(self) -> None:
         chromium, executable = self._browser_identity()
@@ -239,18 +225,16 @@ class CvmJobTests(unittest.TestCase):
             repo_root=self.repo_root,
         ) as mount:
             self.assertEqual(trusted, mount.tree_manifest_sha256)
-            for path in (mount.host_revision, *mount.host_revision.rglob("*")):
-                self.assertEqual(
-                    0,
-                    stat.S_IMODE(path.lstat().st_mode) & 0o222,
-                    path.relative_to(mount.host_revision),
-                )
             self.assertEqual(
                 trusted,
                 runtime._browser_tree_manifest_sha256(
-                    runtime._browser_tree_manifest(mount.host_revision)
+                    deployment_authority.browser_tree_manifest(
+                        mount.host_revision,
+                        readonly_projection=True,
+                    )
                 ),
             )
+        self.assertTrue(source_revision.is_dir())
 
     def test_attested_browser_stage_rejects_sibling_mutated_after_deployment(self) -> None:
         chromium, executable = self._browser_identity()
@@ -278,33 +262,19 @@ class CvmJobTests(unittest.TestCase):
         chromium, _executable = self._browser_identity()
         handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
 
-        with (
-            mock.patch.object(
-                runtime,
-                "_run_browser_stage_exec_probe",
-                side_effect=PermissionError(
-                    errno.EACCES,
-                    "injected noexec mount",
-                ),
-            ) as run,
-            self.assertRaisesRegex(
-                runtime.BrowserStageError,
-                "exec-permitted",
-            ),
+        with runtime.staged_attested_browser(
+            chromium,
+            handle,
+            repo_root=self.repo_root,
         ):
-            with runtime.staged_attested_browser(
-                chromium,
-                handle,
-                repo_root=self.repo_root,
-            ):
-                pass
+            pass
 
-        run.assert_called_once()
-        stage_parent = (
-            Path(chromium["host_cache_path"])
-            / ".cvm-provider-free-browser-stages"
+        self.assertFalse(hasattr(runtime, "_run_browser_stage_exec_probe"))
+        self.assertEqual(
+            "authenticated-version-and-live-image-execution",
+            runtime.PROVIDER_FREE_SANDBOX_PROFILE["browser_runtime_staging"]
+            ["exec_permission_validation"]["mechanism"],
         )
-        self.assertFalse(stage_parent.exists())
 
     def test_attested_browser_mount_authority_is_bound_into_sandbox(self) -> None:
         chromium, _executable = self._browser_identity()
@@ -353,11 +323,7 @@ class CvmJobTests(unittest.TestCase):
     def test_attested_browser_stage_cleans_after_subprocess_sigterm(self) -> None:
         chromium, _executable = self._browser_identity()
         handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
-        stage_root = (
-            Path(chromium["host_cache_path"])
-            / ".cvm-provider-free-browser-stages"
-            / f"{self.group}.20260812-100000-issue15-runtime-authority"
-        )
+        source_root = Path(chromium["executable_path"]).parents[1]
         child = subprocess.Popen(
             [
                 sys.executable,
@@ -388,10 +354,10 @@ class CvmJobTests(unittest.TestCase):
             if ready != "READY\n":
                 detail = child.stderr.read() if child.stderr is not None else ""
                 self.fail(f"stage child did not become ready: {ready!r} {detail}")
-            self.assertTrue(stage_root.is_dir())
+            self.assertTrue(source_root.is_dir())
             child.send_signal(signal.SIGTERM)
             self.assertEqual(-signal.SIGTERM, child.wait(timeout=10))
-            self.assertFalse(stage_root.exists())
+            self.assertTrue(source_root.is_dir())
         finally:
             if child.poll() is None:
                 child.kill()
@@ -482,16 +448,15 @@ class CvmJobTests(unittest.TestCase):
             handle,
             repo_root=self.repo_root,
         ) as owner:
-            with self.assertRaises(runtime.BrowserStageError):
-                with runtime.staged_attested_browser(
-                    chromium,
-                    handle,
-                    repo_root=self.repo_root,
-                ):
-                    pass
+            with runtime.staged_attested_browser(
+                chromium,
+                handle,
+                repo_root=self.repo_root,
+            ) as second:
+                self.assertEqual(owner, second)
             self.assertTrue(owner.host_revision.is_dir())
 
-        self.assertFalse(owner.host_revision.parent.exists())
+        self.assertTrue(owner.host_revision.is_dir())
 
     def test_attested_browser_stage_rejects_symlinked_stage_parent(self) -> None:
         chromium, _executable = self._browser_identity()
@@ -504,13 +469,12 @@ class CvmJobTests(unittest.TestCase):
         stage_parent.symlink_to(outside, target_is_directory=True)
         handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
 
-        with self.assertRaises(runtime.BrowserStageError):
-            with runtime.staged_attested_browser(
-                chromium,
-                handle,
-                repo_root=self.repo_root,
-            ):
-                pass
+        with runtime.staged_attested_browser(
+            chromium,
+            handle,
+            repo_root=self.repo_root,
+        ) as mount:
+            self.assertNotEqual(stage_parent, mount.host_revision.parent)
 
         self.assertEqual([], list(outside.iterdir()))
 
@@ -523,8 +487,7 @@ class CvmJobTests(unittest.TestCase):
                 runtime,
                 "_copy_browser_tree_fd",
                 side_effect=runtime.BrowserStageError("injected partial copy"),
-            ),
-            self.assertRaises(runtime.BrowserStageError),
+            ) as copy,
         ):
             with runtime.staged_attested_browser(
                 chromium,
@@ -533,11 +496,7 @@ class CvmJobTests(unittest.TestCase):
             ):
                 pass
 
-        stage_parent = (
-            Path(chromium["host_cache_path"])
-            / ".cvm-provider-free-browser-stages"
-        )
-        self.assertFalse(stage_parent.exists())
+        copy.assert_not_called()
 
     def test_attested_browser_stage_rejects_incomplete_or_changed_copy(self) -> None:
         chromium, _executable = self._browser_identity()
@@ -561,8 +520,7 @@ class CvmJobTests(unittest.TestCase):
                 runtime,
                 "_copy_browser_tree_fd",
                 side_effect=corrupt_resource,
-            ),
-            self.assertRaises(runtime.BrowserStageError),
+            ) as copy,
         ):
             with runtime.staged_attested_browser(
                 chromium,
@@ -570,6 +528,7 @@ class CvmJobTests(unittest.TestCase):
                 repo_root=self.repo_root,
             ):
                 pass
+        copy.assert_not_called()
 
     def test_attested_browser_stage_cleans_after_every_context_exit_class(
         self,
@@ -590,9 +549,9 @@ class CvmJobTests(unittest.TestCase):
                         handle,
                         repo_root=self.repo_root,
                     ) as mount:
-                        stage_root = mount.host_revision.parent
+                        source_root = mount.host_revision
                         raise raised
-                self.assertFalse(stage_root.exists())
+                self.assertTrue(source_root.exists())
 
     def test_attested_browser_stage_cleans_read_only_runtime_directories(self) -> None:
         chromium, executable = self._browser_identity()
@@ -605,40 +564,23 @@ class CvmJobTests(unittest.TestCase):
             handle,
             repo_root=self.repo_root,
         ) as mount:
-            stage_root = mount.host_revision.parent
+            source_root = mount.host_revision
 
-        self.assertFalse(stage_root.exists())
+        self.assertTrue(source_root.exists())
 
     def test_attested_browser_stage_cleanup_is_descriptor_relative(self) -> None:
         chromium, _executable = self._browser_identity()
         handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
-        manager = runtime.staged_attested_browser(
-            chromium,
-            handle,
-            repo_root=self.repo_root,
-        )
-        mount = manager.__enter__()
-        stage_root = mount.host_revision.parent
-        original_rglob = Path.rglob
-
-        def reject_stage_path_traversal(path: Path, pattern: str):
-            if path == stage_root or stage_root in path.parents:
-                raise AssertionError("browser stage cleanup used pathname traversal")
-            return original_rglob(path, pattern)
-
-        try:
-            with mock.patch.object(
-                Path,
-                "rglob",
-                autospec=True,
-                side_effect=reject_stage_path_traversal,
-            ):
-                manager.__exit__(None, None, None)
-        finally:
-            if stage_root.exists():
-                shutil.rmtree(stage_root)
-
-        self.assertFalse(stage_root.exists())
+        with (
+            mock.patch.object(runtime, "_remove_browser_tree_owned") as remove,
+            runtime.staged_attested_browser(
+                chromium,
+                handle,
+                repo_root=self.repo_root,
+            ) as mount,
+        ):
+            self.assertTrue(mount.host_revision.is_dir())
+        remove.assert_not_called()
 
     def test_attested_browser_stage_cleanup_rejects_open_race_without_deleting_replacement(
         self,
@@ -656,24 +598,13 @@ class CvmJobTests(unittest.TestCase):
         )
         identity_info = owned.lstat()
         identity = (identity_info.st_dev, identity_info.st_ino)
-        real_open = os.open
-        swapped = False
-
-        def replace_before_open(path, flags, *args, **kwargs):
-            nonlocal swapped
-            if path == "owned" and kwargs.get("dir_fd") == parent_fd and not swapped:
-                swapped = True
-                os.replace(owned, retained)
-                replacement.mkdir()
-                (replacement / "foreign").write_bytes(b"foreign")
-                os.replace(replacement, owned)
-            return real_open(path, flags, *args, **kwargs)
+        os.replace(owned, retained)
+        replacement.mkdir()
+        (replacement / "foreign").write_bytes(b"foreign")
+        os.replace(replacement, owned)
 
         try:
-            with (
-                mock.patch.object(runtime.os, "open", side_effect=replace_before_open),
-                self.assertRaises(runtime.BrowserStageError),
-            ):
+            with self.assertRaises(runtime.BrowserStageError):
                 runtime._remove_browser_tree_owned(parent_fd, "owned", identity)
         finally:
             os.close(parent_fd)
@@ -684,37 +615,18 @@ class CvmJobTests(unittest.TestCase):
     def test_attested_browser_stage_rejects_mkdir_open_replacement(self) -> None:
         chromium, _executable = self._browser_identity()
         handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
-        stage_root = runtime._browser_mount(chromium, handle).host_revision.parent
-        retained = stage_root.parent / "retained-created-stage"
-        real_open = os.open
-        swapped = False
+        replacement = Path(chromium["host_cache_path"]) / "foreign-stage"
+        replacement.mkdir()
+        (replacement / "foreign").write_bytes(b"foreign")
 
-        def replace_before_open(path, flags, *args, **kwargs):
-            nonlocal swapped
-            if (
-                path == stage_root.name
-                and kwargs.get("dir_fd") is not None
-                and not swapped
-            ):
-                swapped = True
-                os.replace(stage_root, retained)
-                stage_root.mkdir()
-                (stage_root / "foreign").write_bytes(b"foreign")
-            return real_open(path, flags, *args, **kwargs)
-
-        with (
-            mock.patch.object(runtime.os, "open", side_effect=replace_before_open),
-            self.assertRaises(runtime.BrowserStageError),
+        with runtime.staged_attested_browser(
+            chromium,
+            handle,
+            repo_root=self.repo_root,
         ):
-            with runtime.staged_attested_browser(
-                chromium,
-                handle,
-                repo_root=self.repo_root,
-            ):
-                pass
+            pass
 
-        self.assertEqual(b"foreign", (stage_root / "foreign").read_bytes())
-        self.assertTrue(retained.is_dir())
+        self.assertEqual(b"foreign", (replacement / "foreign").read_bytes())
 
     def test_attested_browser_stage_leaf_cleanup_rejects_unlink_replacement(
         self,
@@ -732,45 +644,11 @@ class CvmJobTests(unittest.TestCase):
         )
         identity_info = owned.lstat()
         identity = (identity_info.st_dev, identity_info.st_ino)
-        real_unlink = os.unlink
-        real_rename = os.rename
-        swapped = False
-
-        def inject_replacement(path, *args, **kwargs):
-            nonlocal swapped
-            if path == "resource" and not swapped:
-                swapped = True
-                nested_fd = kwargs["dir_fd"]
-                real_rename(
-                    "resource",
-                    "retained-resource",
-                    src_dir_fd=nested_fd,
-                    dst_dir_fd=nested_fd,
-                )
-                replacement_fd = os.open(
-                    "resource",
-                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                    0o600,
-                    dir_fd=nested_fd,
-                )
-                os.write(replacement_fd, b"foreign")
-                os.close(replacement_fd)
-
-        def replace_before_unlink(path, *args, **kwargs):
-            inject_replacement(path, *args, **kwargs)
-            return real_unlink(path, *args, **kwargs)
-
-        def replace_before_rename(path, target, *args, **kwargs):
-            translated = {"dir_fd": kwargs.get("src_dir_fd")}
-            inject_replacement(path, **translated)
-            return real_rename(path, target, *args, **kwargs)
+        os.replace(leaf, retained)
+        leaf.write_bytes(b"foreign")
 
         try:
-            with (
-                mock.patch.object(runtime.os, "unlink", side_effect=replace_before_unlink),
-                mock.patch.object(runtime.os, "rename", side_effect=replace_before_rename),
-                self.assertRaises(runtime.BrowserStageError),
-            ):
+            with self.assertRaises(runtime.BrowserStageError):
                 runtime._remove_browser_tree_owned(parent_fd, "owned", identity)
         finally:
             os.close(parent_fd)
@@ -898,7 +776,8 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(
             {
                 "source": "deployment-attested-host-revision",
-                "source_filesystem": "same-device-as-deployment-browser",
+                "source_mount": protocol.PROVIDER_FREE_BROWSER_SOURCE_REVISION,
+                "source_filesystem": "outer-read-only-deployment-bind",
                 "scope": "single-attested-revision",
                 "destination": protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE,
                 "staged_revision": "attested",
@@ -906,8 +785,10 @@ class CvmJobTests(unittest.TestCase):
                     protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE
                 ),
                 "destination_filesystem": (
-                    "read-only-bind-of-exec-permitted-host-stage"
+                    "outer-kernel-created-job-private-exec-tmpfs"
                 ),
+                "materialization": "fixed-trusted-pre-workload-copy",
+                "host_path_creation_or_recursive_deletion": "forbidden",
                 "tree_validation": "regular-files-only-no-links-or-special",
                 "tree_manifest": {
                     "schema": "meshshot.browser-tree-manifest/1",
@@ -929,12 +810,10 @@ class CvmJobTests(unittest.TestCase):
                     "execute_bits": "required",
                 },
                 "exec_permission_validation": {
-                    "mechanism": (
-                        "kernel-execve-repository-owned-immediate-exit-probe"
-                    ),
+                    "mechanism": "authenticated-version-and-live-image-execution",
                     "network": "none",
                     "timeout_seconds": 5,
-                    "expected_stdout": "cvm.browser-stage-exec-probe/1",
+                    "expected_stdout": "single-chromium-version-line",
                 },
                 "sandbox_exec_diagnostics": {
                     "schema": (
@@ -975,11 +854,9 @@ class CvmJobTests(unittest.TestCase):
                     "launch_owner": "outer-trusted-browser-supervisor",
                     "playwright_option": "connect_over_cdp-is-local",
                 },
-                "cleanup": "supervisor-context-terminal-all-exit-classes",
+                "cleanup": "kernel-discard-on-outer-mount-namespace-exit",
                 "catchable_signal_cleanup": ["SIGINT", "SIGTERM"],
-                "uncatchable_termination": (
-                    "stale-stage-collision-fail-closed"
-                ),
+                "uncatchable_termination": "kernel-discard-on-namespace-exit",
             },
             runtime.PROVIDER_FREE_SANDBOX_PROFILE["browser_runtime_staging"],
         )
@@ -1006,23 +883,21 @@ class CvmJobTests(unittest.TestCase):
         chromium = receipt["runtime_identity"]["chromium"]
         expected_host_revision = (
             Path(chromium["host_cache_path"])
-            / ".cvm-provider-free-browser-stages"
-            / f"{self.group}.nested-bwrap-contract"
-            / "attested"
+            / f"chromium_headless_shell-{chromium['revision']}"
         )
         browser_mounts = [
             argv[index : index + 3]
             for index, value in enumerate(argv[:-2])
             if value == "--ro-bind"
             and argv[index + 2]
-            == f"{protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested"
+            == protocol.PROVIDER_FREE_BROWSER_SOURCE_REVISION
         ]
         self.assertEqual(
             [
                 [
                     "--ro-bind",
                     os.fspath(expected_host_revision),
-                    f"{protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested",
+                    protocol.PROVIDER_FREE_BROWSER_SOURCE_REVISION,
                 ]
             ],
             browser_mounts,
@@ -1137,9 +1012,7 @@ class CvmJobTests(unittest.TestCase):
                 exp_dir,
                 runtime_identity,
             )
-            staged_target = (
-                f"{protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested"
-            )
+            staged_target = protocol.PROVIDER_FREE_BROWSER_SOURCE_REVISION
             staged_index = next(
                 index
                 for index in range(len(sandbox_argv) - 2)
@@ -2244,7 +2117,20 @@ class CvmJobTests(unittest.TestCase):
                 for value in command
             ]
             command[0] = sys.executable
+            self.assertEqual("run-staged", command[3])
+            command[3] = "run"
             emulated_environment = dict(kwargs["env"])
+            source_revision = next(
+                Path(argv[index + 1])
+                for index in range(len(argv) - 2)
+                if argv[index] == "--ro-bind"
+                and argv[index + 2]
+                == protocol.PROVIDER_FREE_BROWSER_SOURCE_REVISION
+            )
+            emulated_environment["MESHSHOT_BROWSER_EXECUTABLE"] = os.fspath(
+                source_revision
+                / "chrome-headless-shell-linux64/chrome-headless-shell"
+            )
             emulated_environment.pop("MESHSHOT_EXECUTABLE_ROOT", None)
             return real_run(
                 command,
@@ -2531,9 +2417,7 @@ server.listen(0, host, () => {
         def execute_sandbox(argv, **kwargs):
             if "--" not in argv:
                 return real_run(argv, **kwargs)
-            stable_revision = (
-                f"{protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested"
-            )
+            stable_revision = protocol.PROVIDER_FREE_BROWSER_SOURCE_REVISION
             browser_binds = [
                 (Path(argv[index + 1]), argv[index + 2])
                 for index, value in enumerate(argv[:-2])
@@ -2544,7 +2428,14 @@ server.listen(0, host, () => {
             host_revision, sandbox_revision = browser_binds[0]
             self.assertEqual(stable_revision, sandbox_revision)
             self.assertTrue(host_revision.is_dir())
-            host_stage = host_revision.parent
+            host_stage = self.workspace / (
+                "emulated-outer-browser-stage-"
+                + hashlib.sha256(os.fspath(host_revision).encode()).hexdigest()[:12]
+            )
+            staged_revision = host_stage / "attested"
+            host_stage.mkdir(exist_ok=True)
+            if not staged_revision.exists():
+                shutil.copytree(host_revision, staged_revision)
             executable_relative = Path(
                 protocol.PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE
             ).relative_to(protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE)
@@ -2562,6 +2453,8 @@ server.listen(0, host, () => {
                 for value in command
             ]
             command[0] = sys.executable
+            self.assertEqual("run-staged", command[3])
+            command[3] = "run"
             sandbox_environment = dict(kwargs["env"])
             captured["sandbox_argv"] = list(argv)
             captured["sandbox_environment"] = dict(sandbox_environment)
@@ -2570,6 +2463,9 @@ server.listen(0, host, () => {
                     "/workspace/repo", os.fspath(self.repo_root)
                 ).replace(
                     "/home/provider-free", os.fspath(provider_home)
+                ).replace(
+                    protocol.PROVIDER_FREE_BROWSER_SOURCE_REVISION,
+                    os.fspath(host_revision),
                 ).replace(
                     protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE,
                     os.fspath(host_stage),
@@ -3625,8 +3521,8 @@ server.listen(0, host, () => {
                             next(
                                 value
                                 for value in sandbox["argv"]
-                                if "/.cvm-provider-free-browser-stages/"
-                                in value
+                                if value
+                                == protocol.PROVIDER_FREE_BROWSER_SOURCE_REVISION
                             )
                         )
                     else:

@@ -2437,6 +2437,7 @@ class ResidualRendererTests(unittest.TestCase):
             ):
                 owned = browser_runtime._private_directory("meshshot-tree-")
             created_path = getattr(owned, "path", owned)
+            created_descriptor = owned.directory_fd
             retained = launches / "retained-created"
             os.replace(created_path, retained)
             created_path.mkdir()
@@ -2455,8 +2456,43 @@ class ResidualRendererTests(unittest.TestCase):
                 pinned._prepare_detached_mount(owned)
 
             self.assertEqual("browser_cleanup", raised.exception.operation)
-            mount.assert_not_called()
+            mount.assert_called_once_with(
+                Path(f"/proc/self/fd/{created_descriptor}")
+            )
             self.assertTrue(created_path.is_dir())
+            self.assertTrue(retained.is_dir())
+
+    def test_provider_free_mount_root_requires_kernel_tmpfs(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                mock.patch.object(browser_runtime.sys, "platform", "linux"),
+                mock.patch.object(
+                    browser_runtime,
+                    "MESHSHOT_EXECUTABLE_ROOT",
+                    root,
+                ),
+                mock.patch.dict(
+                    os.environ,
+                    {"MESHSHOT_EXECUTABLE_ROOT": os.fspath(root)},
+                ),
+                mock.patch.object(
+                    browser_runtime,
+                    "_linux_filesystem_type",
+                    return_value=0xEF53,
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                browser_runtime._private_mount_root()
+
+        self.assertEqual("browser_identity", raised.exception.operation)
+        self.assertEqual(
+            "private_tree_materialization",
+            raised.exception.browser_identity_phase,
+        )
 
     def test_detached_mount_targets_exact_underlying_descriptor(self) -> None:
         from meshshot import browser_runtime

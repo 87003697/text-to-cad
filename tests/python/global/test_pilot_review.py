@@ -389,7 +389,8 @@ class PilotReviewTests(unittest.TestCase):
         self.assertEqual(
             {
                 "source": "deployment-attested-host-revision",
-                "source_filesystem": "same-device-as-deployment-browser",
+                "source_mount": "/run/meshshot-browser-source",
+                "source_filesystem": "outer-read-only-deployment-bind",
                 "scope": "single-attested-revision",
                 "destination": "/tmp/provider-free-playwright",
                 "staged_revision": "attested",
@@ -398,8 +399,10 @@ class PilotReviewTests(unittest.TestCase):
                     "chrome-headless-shell-linux64/chrome-headless-shell"
                 ),
                 "destination_filesystem": (
-                    "read-only-bind-of-exec-permitted-host-stage"
+                    "outer-kernel-created-job-private-exec-tmpfs"
                 ),
+                "materialization": "fixed-trusted-pre-workload-copy",
+                "host_path_creation_or_recursive_deletion": "forbidden",
                 "tree_validation": "regular-files-only-no-links-or-special",
                 "tree_manifest": {
                     "schema": "meshshot.browser-tree-manifest/1",
@@ -421,12 +424,10 @@ class PilotReviewTests(unittest.TestCase):
                     "execute_bits": "required",
                 },
                 "exec_permission_validation": {
-                    "mechanism": (
-                        "kernel-execve-repository-owned-immediate-exit-probe"
-                    ),
+                    "mechanism": "authenticated-version-and-live-image-execution",
                     "network": "none",
                     "timeout_seconds": 5,
-                    "expected_stdout": "cvm.browser-stage-exec-probe/1",
+                    "expected_stdout": "single-chromium-version-line",
                 },
                 "sandbox_exec_diagnostics": {
                     "schema": "cvm.provider-free-browser-exec-diagnostic/5",
@@ -467,11 +468,9 @@ class PilotReviewTests(unittest.TestCase):
                     "launch_owner": "outer-trusted-browser-supervisor",
                     "playwright_option": "connect_over_cdp-is-local",
                 },
-                "cleanup": "supervisor-context-terminal-all-exit-classes",
+                "cleanup": "kernel-discard-on-outer-mount-namespace-exit",
                 "catchable_signal_cleanup": ["SIGINT", "SIGTERM"],
-                "uncatchable_termination": (
-                    "stale-stage-collision-fail-closed"
-                ),
+                "uncatchable_termination": "kernel-discard-on-namespace-exit",
             },
             self.reviewer._SANDBOX_PROFILE["browser_runtime_staging"],
         )
@@ -761,7 +760,7 @@ class PilotReviewTests(unittest.TestCase):
             runtime_identity,
             repo_root=runtime_repo,
         )
-        staged_target = f"{protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested"
+        staged_target = protocol.PROVIDER_FREE_BROWSER_SOURCE_REVISION
         staged_index = next(
             index
             for index in range(len(sandbox_argv) - 2)
@@ -1053,8 +1052,7 @@ class PilotReviewTests(unittest.TestCase):
                         next(
                             value
                             for value in candidate["argv"]
-                            if "/.cvm-provider-free-browser-stages/"
-                            in value
+                            if value == "/run/meshshot-browser-source"
                         )
                     )
                 else:

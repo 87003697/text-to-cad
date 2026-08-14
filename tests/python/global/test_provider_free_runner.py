@@ -1073,9 +1073,7 @@ class ProviderFreeRunnerTests(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 0, stdout="")
             captured["argv"] = list(argv)
             captured["kwargs"] = kwargs
-            attested_target = (
-                f"{protocol.PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested"
-            )
+            attested_target = protocol.PROVIDER_FREE_BROWSER_SOURCE_REVISION
             mount_index = next(
                 index
                 for index, value in enumerate(argv[:-2])
@@ -1118,7 +1116,12 @@ class ProviderFreeRunnerTests(unittest.TestCase):
         self.assertIn("issue15-runtime-authority", argv)
         self.assertTrue(callable(captured["kwargs"]["preexec_fn"]))
         self.assertEqual(captured["kwargs"]["timeout"], 1800)
-        self.assertFalse(captured["host_stage"].parent.exists())
+        self.assertTrue(captured["host_stage"].is_dir())
+        self.assertFalse(
+            (
+                self.browser_cache / ".cvm-provider-free-browser-stages"
+            ).exists()
+        )
 
         exp_dir = self.repo / "outputs" / self.handle
         proof_path = exp_dir / "run" / "provider-free-execution.json"

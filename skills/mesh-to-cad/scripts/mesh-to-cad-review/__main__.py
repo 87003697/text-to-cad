@@ -76,9 +76,12 @@ _SANDBOX_PROFILE = {
     "temporary_filesystem": "/tmp",
     "private_browser_image_filesystem": {
         "root": "/meshshot-exec",
-        "mount": "repository-owned-exec-permitted-tmpfs",
+        "mount": "outer-kernel-created-exec-tmpfs",
         "scope": "single-preview-runtime",
-        "cleanup": "python-runtime-terminal-all-exit-classes",
+        "detached_mount_source": "exact-underlying-directory-descriptor",
+        "cleanup": (
+            "descriptor-bound-unmount-then-outer-namespace-kernel-discard"
+        ),
     },
     "browser_supervisor": {
         "schema": "meshshot.browser-supervisor/1",
@@ -98,10 +101,11 @@ _SANDBOX_PROFILE = {
     },
     "repository_mount": "read-only",
     "output_mount": "read-write-exact-experiment",
-    "browser_cache_mount": "read-only-job-scoped-attested-revision",
+    "browser_cache_mount": "read-only-deployment-source-plus-private-staged-revision",
     "browser_runtime_staging": {
         "source": "deployment-attested-host-revision",
-        "source_filesystem": "same-device-as-deployment-browser",
+        "source_mount": "/run/meshshot-browser-source",
+        "source_filesystem": "outer-read-only-deployment-bind",
         "scope": "single-attested-revision",
         "destination": "/tmp/provider-free-playwright",
         "staged_revision": "attested",
@@ -109,7 +113,9 @@ _SANDBOX_PROFILE = {
             "/tmp/provider-free-playwright/attested/"
             "chrome-headless-shell-linux64/chrome-headless-shell"
         ),
-        "destination_filesystem": "read-only-bind-of-exec-permitted-host-stage",
+        "destination_filesystem": "outer-kernel-created-job-private-exec-tmpfs",
+        "materialization": "fixed-trusted-pre-workload-copy",
+        "host_path_creation_or_recursive_deletion": "forbidden",
         "tree_validation": "regular-files-only-no-links-or-special",
         "tree_manifest": {
             "schema": "meshshot.browser-tree-manifest/1",
@@ -129,10 +135,10 @@ _SANDBOX_PROFILE = {
             "execute_bits": "required",
         },
         "exec_permission_validation": {
-            "mechanism": "kernel-execve-repository-owned-immediate-exit-probe",
+            "mechanism": "authenticated-version-and-live-image-execution",
             "network": "none",
             "timeout_seconds": 5,
-            "expected_stdout": "cvm.browser-stage-exec-probe/1",
+            "expected_stdout": "single-chromium-version-line",
         },
         "sandbox_exec_diagnostics": {
             "schema": "cvm.provider-free-browser-exec-diagnostic/5",
@@ -173,9 +179,9 @@ _SANDBOX_PROFILE = {
             "launch_owner": "outer-trusted-browser-supervisor",
             "playwright_option": "connect_over_cdp-is-local",
         },
-        "cleanup": "supervisor-context-terminal-all-exit-classes",
+        "cleanup": "kernel-discard-on-outer-mount-namespace-exit",
         "catchable_signal_cleanup": ["SIGINT", "SIGTERM"],
-        "uncatchable_termination": "stale-stage-collision-fail-closed",
+        "uncatchable_termination": "kernel-discard-on-namespace-exit",
     },
     "preview_process": {
         "capabilities": "drop-all",
@@ -399,8 +405,8 @@ def _validate_provider_free_sandbox_argv(
     if not isinstance(group, str) or not isinstance(exp, str):
         raise ReviewError("provider-free job identity is invalid")
     host_stage = (
-        f"{chromium['host_cache_path']}/.cvm-provider-free-browser-stages/"
-        f"{group}.{exp}/attested"
+        f"{chromium['host_cache_path']}/"
+        f"chromium_headless_shell-{chromium['revision']}"
     )
     tree_manifest_values = [
         argv[index + 2]
@@ -426,11 +432,13 @@ def _validate_provider_free_sandbox_argv(
         "/home/provider-free",
         "--dir",
         "/home/provider-free/.cache",
-        "--dir",
+        "--tmpfs",
         "/tmp/provider-free-playwright",
+        "--dir",
+        "/run/meshshot-browser-source",
         "--ro-bind",
         host_stage,
-        "/tmp/provider-free-playwright/attested",
+        "/run/meshshot-browser-source",
         "--setenv",
         "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256",
         tree_manifest_values[0],
@@ -468,7 +476,7 @@ def _validate_provider_free_sandbox_argv(
         "/workspace/repo/.venv/bin/python",
         "-m",
         "scripts.pilot.provider_free_scenarios",
-        "run",
+        "run-staged",
         immutable_request.get("scenario", {}).get("name"),
         "--workspace",
         sandbox_exp,

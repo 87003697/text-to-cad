@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable
 from unittest import mock
 
-from scripts.pilot import provider_free_scenarios
+from scripts.pilot import deployment_authority, provider_free_scenarios
 from scripts.pilot.cvm_job import protocol
 
 
@@ -89,6 +89,287 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
+
+    def _browser_stage_roots(self) -> tuple[Path, Path, str]:
+        source = Path(self.temporary.name) / "browser-source"
+        executable = source / (
+            "chrome-headless-shell-linux64/chrome-headless-shell"
+        )
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"trusted browser")
+        executable.chmod(0o755)
+        (source / "resources.pak").write_bytes(b"trusted resource")
+        destination = Path(self.temporary.name) / "browser-stage"
+        destination.mkdir()
+        manifest = deployment_authority.browser_tree_manifest(
+            source,
+            readonly_projection=True,
+        )
+        return (
+            source,
+            destination,
+            deployment_authority.browser_tree_manifest_sha256(manifest),
+        )
+
+    def test_outer_browser_stage_materializes_and_freezes_full_tree_without_delete(
+        self,
+    ) -> None:
+        source, destination, manifest_sha256 = self._browser_stage_roots()
+        libc = mock.MagicMock()
+        libc.prctl.return_value = 0
+
+        with (
+            mock.patch.object(provider_free_scenarios.platform, "system", return_value="Linux"),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_BROWSER_SOURCE_REVISION",
+                os.fspath(source),
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_STAGED_BROWSER_CACHE",
+                os.fspath(destination),
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_TREE_MANIFEST_SHA256": manifest_sha256},
+            ),
+            mock.patch.object(provider_free_scenarios.ctypes, "CDLL", return_value=libc),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_linux_filesystem_type",
+                return_value=provider_free_scenarios._LINUX_TMPFS_MAGIC,
+            ),
+            mock.patch.object(provider_free_scenarios.os, "unlink") as unlink,
+            mock.patch.object(provider_free_scenarios.os, "rmdir") as rmdir,
+        ):
+            provider_free_scenarios._materialize_outer_browser_stage()
+
+        unlink.assert_not_called()
+        rmdir.assert_not_called()
+        staged = destination / "attested"
+        self.assertEqual(
+            deployment_authority.browser_tree_manifest(
+                source,
+                readonly_projection=True,
+            ),
+            deployment_authority.browser_tree_manifest(
+                staged,
+                readonly_projection=False,
+            ),
+        )
+        for path in (destination, staged, *staged.rglob("*")):
+            self.assertEqual(0, path.stat().st_mode & 0o222, path)
+
+    def test_outer_browser_stage_rejects_source_mutation_without_path_delete(
+        self,
+    ) -> None:
+        source, destination, manifest_sha256 = self._browser_stage_roots()
+        libc = mock.MagicMock()
+        libc.prctl.return_value = 0
+        real_manifest = deployment_authority._browser_tree_manifest_from_fd
+        calls = 0
+
+        def mutate_between_measurements(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            result = real_manifest(*args, **kwargs)
+            if calls == 1:
+                (source / "resources.pak").write_bytes(b"substituted")
+            return result
+
+        with (
+            mock.patch.object(provider_free_scenarios.platform, "system", return_value="Linux"),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_BROWSER_SOURCE_REVISION",
+                os.fspath(source),
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_STAGED_BROWSER_CACHE",
+                os.fspath(destination),
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_TREE_MANIFEST_SHA256": manifest_sha256},
+            ),
+            mock.patch.object(provider_free_scenarios.ctypes, "CDLL", return_value=libc),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_linux_filesystem_type",
+                return_value=provider_free_scenarios._LINUX_TMPFS_MAGIC,
+            ),
+            mock.patch.object(
+                provider_free_scenarios.deployment_authority,
+                "_browser_tree_manifest_from_fd",
+                side_effect=mutate_between_measurements,
+            ),
+            mock.patch.object(provider_free_scenarios.os, "unlink") as unlink,
+            mock.patch.object(provider_free_scenarios.os, "rmdir") as rmdir,
+        ):
+            with self.assertRaisesRegex(
+                provider_free_scenarios.ScenarioError,
+                "private browser stage conflicts with authority",
+            ):
+                provider_free_scenarios._materialize_outer_browser_stage()
+
+        unlink.assert_not_called()
+        rmdir.assert_not_called()
+
+    def test_outer_browser_stage_rejects_nonempty_kernel_root(self) -> None:
+        source, destination, manifest_sha256 = self._browser_stage_roots()
+        (destination / "foreign").write_bytes(b"retained")
+        libc = mock.MagicMock()
+        libc.prctl.return_value = 0
+        with (
+            mock.patch.object(provider_free_scenarios.platform, "system", return_value="Linux"),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_BROWSER_SOURCE_REVISION",
+                os.fspath(source),
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_STAGED_BROWSER_CACHE",
+                os.fspath(destination),
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_TREE_MANIFEST_SHA256": manifest_sha256},
+            ),
+            mock.patch.object(provider_free_scenarios.ctypes, "CDLL", return_value=libc),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_linux_filesystem_type",
+                return_value=provider_free_scenarios._LINUX_TMPFS_MAGIC,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                provider_free_scenarios.ScenarioError,
+                "private browser stage is not empty",
+            ):
+                provider_free_scenarios._materialize_outer_browser_stage()
+        self.assertEqual(b"retained", (destination / "foreign").read_bytes())
+
+    def test_outer_browser_stage_rejects_non_tmpfs_destination(self) -> None:
+        source, destination, manifest_sha256 = self._browser_stage_roots()
+        libc = mock.MagicMock()
+        libc.prctl.return_value = 0
+        with (
+            mock.patch.object(provider_free_scenarios.platform, "system", return_value="Linux"),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_BROWSER_SOURCE_REVISION",
+                os.fspath(source),
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_STAGED_BROWSER_CACHE",
+                os.fspath(destination),
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_TREE_MANIFEST_SHA256": manifest_sha256},
+            ),
+            mock.patch.object(provider_free_scenarios.ctypes, "CDLL", return_value=libc),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_linux_filesystem_type",
+                return_value=0xEF53,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                provider_free_scenarios.ScenarioError,
+                "not kernel-owned tmpfs",
+            ):
+                provider_free_scenarios._materialize_outer_browser_stage()
+
+    def test_outer_browser_stage_rejects_dumpable_isolation_failure(self) -> None:
+        source, destination, manifest_sha256 = self._browser_stage_roots()
+        libc = mock.MagicMock()
+        libc.prctl.return_value = -1
+        with (
+            mock.patch.object(provider_free_scenarios.platform, "system", return_value="Linux"),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_BROWSER_SOURCE_REVISION",
+                os.fspath(source),
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_STAGED_BROWSER_CACHE",
+                os.fspath(destination),
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_TREE_MANIFEST_SHA256": manifest_sha256},
+            ),
+            mock.patch.object(provider_free_scenarios.ctypes, "CDLL", return_value=libc),
+        ):
+            with self.assertRaisesRegex(
+                provider_free_scenarios.ScenarioError,
+                "private browser staging isolation unavailable",
+            ):
+                provider_free_scenarios._materialize_outer_browser_stage()
+        self.assertEqual([], list(destination.iterdir()))
+
+    def test_outer_browser_stage_descriptor_cleanup_failure_is_terminal(self) -> None:
+        source, destination, manifest_sha256 = self._browser_stage_roots()
+        manifest = deployment_authority.browser_tree_manifest(
+            source,
+            readonly_projection=True,
+        )
+        libc = mock.MagicMock()
+        libc.prctl.return_value = 0
+        real_close = os.close
+        closed: list[int] = []
+
+        def close_once_then_fail(descriptor: int) -> None:
+            real_close(descriptor)
+            closed.append(descriptor)
+            if len(closed) == 1:
+                raise OSError("injected descriptor cleanup failure")
+
+        with (
+            mock.patch.object(provider_free_scenarios.platform, "system", return_value="Linux"),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_BROWSER_SOURCE_REVISION",
+                os.fspath(source),
+            ),
+            mock.patch.object(
+                provider_free_scenarios,
+                "PROVIDER_FREE_STAGED_BROWSER_CACHE",
+                os.fspath(destination),
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"MESHSHOT_BROWSER_TREE_MANIFEST_SHA256": manifest_sha256},
+            ),
+            mock.patch.object(provider_free_scenarios.ctypes, "CDLL", return_value=libc),
+            mock.patch.object(
+                provider_free_scenarios,
+                "_linux_filesystem_type",
+                return_value=provider_free_scenarios._LINUX_TMPFS_MAGIC,
+            ),
+            mock.patch.object(
+                provider_free_scenarios.deployment_authority,
+                "_browser_tree_manifest_from_fd",
+                return_value=manifest,
+            ),
+            mock.patch(
+                "scripts.pilot.cvm_job.runtime._copy_browser_tree_fd",
+            ),
+            mock.patch.object(provider_free_scenarios.os, "close", side_effect=close_once_then_fail),
+        ):
+            with self.assertRaisesRegex(
+                provider_free_scenarios.ScenarioError,
+                "private browser staging cleanup failed",
+            ):
+                provider_free_scenarios._materialize_outer_browser_stage()
+
+        self.assertEqual(3, len(closed))
 
     def test_fixed_supervisor_process_has_no_ambient_descriptors_and_reaps(self) -> None:
         endpoint = self.repo / "authority.sock"

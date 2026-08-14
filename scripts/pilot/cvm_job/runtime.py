@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import re
-import secrets
 import shutil
 import signal
 import stat
@@ -34,6 +33,7 @@ from .protocol import (
     PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
     PROVIDER_FREE_PRIVATE_SNAPSHOT_IDENTITY_PHASES,
     PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
+    PROVIDER_FREE_BROWSER_SOURCE_REVISION,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_OPERATIONS,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_EVIDENCE_PUBLICATION_OPERATION,
     PROVIDER_FREE_PREVIEW_PUBLIC_WRAPPER_PATH,
@@ -180,14 +180,7 @@ class _BrowserStageSignal(BaseException):
 
 
 _BROWSER_STAGE_SIGNALS = (signal.SIGINT, signal.SIGTERM)
-_EXEC_PROBE_BYTES = (
-    b"#!/bin/sh\n"
-    b"printf 'cvm.browser-stage-exec-probe/1\\n'\n"
-)
-_EXEC_PROBE_STDOUT = b"cvm.browser-stage-exec-probe/1\n"
-_EXEC_PROBE_NAME = ".cvm-browser-stage-exec-probe"
 _EXEC_PROBE_TIMEOUT_SECONDS = 5
-_PRODUCTION_SUBPROCESS_RUN = subprocess.run
 
 
 @contextmanager
@@ -225,85 +218,6 @@ def _browser_stage_signal_cleanup() -> Iterator[None]:
         raise BrowserStageError("failed to re-emit browser staging signal")
 
 
-def _run_browser_stage_exec_probe(
-    probe: Path,
-    stage_root: Path,
-) -> subprocess.CompletedProcess[bytes]:
-    """Use the real production exec boundary behind one private test seam."""
-
-    return _PRODUCTION_SUBPROCESS_RUN(
-        [os.fspath(probe)],
-        cwd=stage_root,
-        env={},
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-        timeout=_EXEC_PROBE_TIMEOUT_SECONDS,
-        start_new_session=True,
-        close_fds=True,
-    )
-
-
-def _probe_browser_stage_exec(stage_root: Path) -> None:
-    """Execute one bounded repository-owned probe on the staged filesystem."""
-
-    probe = stage_root / _EXEC_PROBE_NAME
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    flags |= getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    descriptor: int | None = None
-    probe_identity: tuple[int, int] | None = None
-    try:
-        descriptor = os.open(probe, flags, 0o700)
-        os.write(descriptor, _EXEC_PROBE_BYTES)
-        os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = None
-        probe.chmod(0o700)
-        probe_info = probe.lstat()
-        probe_identity = (probe_info.st_dev, probe_info.st_ino)
-        completed = _run_browser_stage_exec_probe(probe, stage_root)
-        if (
-            completed.returncode != 0
-            or completed.stdout != _EXEC_PROBE_STDOUT
-            or completed.stderr != b""
-        ):
-            raise BrowserStageError(
-                "browser stage is not exec-permitted"
-            )
-    except BrowserStageError:
-        raise
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise BrowserStageError(
-            "browser stage is not exec-permitted"
-        ) from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        if probe_identity is not None:
-            try:
-                probe_info = probe.lstat()
-                if (
-                    stat.S_ISLNK(probe_info.st_mode)
-                    or not stat.S_ISREG(probe_info.st_mode)
-                    or (probe_info.st_dev, probe_info.st_ino)
-                    != probe_identity
-                    or stat.S_IMODE(probe_info.st_mode) != 0o700
-                    or probe.read_bytes() != _EXEC_PROBE_BYTES
-                ):
-                    raise BrowserStageError(
-                        "browser stage exec probe identity changed"
-                    )
-                probe.unlink()
-            except BrowserStageError:
-                raise
-            except OSError as exc:
-                raise BrowserStageError(
-                    "browser stage exec probe cleanup failed"
-                ) from exc
-
-
 def _browser_mount(
     chromium: dict[str, Any],
     handle: str,
@@ -312,9 +226,7 @@ def _browser_mount(
     return AttestedBrowserMount(
         host_revision=(
             Path(chromium["host_cache_path"])
-            / ".cvm-provider-free-browser-stages"
-            / f"{parsed['group']}.{parsed['exp']}"
-            / "attested"
+            / f"chromium_headless_shell-{chromium['revision']}"
         ),
         sandbox_cache=PROVIDER_FREE_STAGED_BROWSER_CACHE,
     )
@@ -490,168 +402,9 @@ def _remove_browser_tree_owned(
     name: str,
     identity: tuple[int, int],
 ) -> None:
-    """Remove exactly one owned tree without following replacement paths."""
+    """Reject the retired host-path deletion seam."""
 
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    root_fd: int | None = None
-    try:
-        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        if (
-            not stat.S_ISDIR(current.st_mode)
-            or stat.S_ISLNK(current.st_mode)
-            or (current.st_dev, current.st_ino) != identity
-        ):
-            raise BrowserStageError("browser stage identity changed before cleanup")
-        root_fd = os.open(name, flags, dir_fd=parent_fd)
-        opened = os.fstat(root_fd)
-        if (opened.st_dev, opened.st_ino) != identity:
-            raise BrowserStageError("browser stage identity changed before cleanup")
-
-        def remove_contents(directory_fd: int) -> None:
-            os.fchmod(directory_fd, 0o700)
-            for child in sorted(os.listdir(directory_fd)):
-                info = os.stat(child, dir_fd=directory_fd, follow_symlinks=False)
-                if stat.S_ISLNK(info.st_mode):
-                    raise BrowserStageError("browser stage contains a link")
-                if stat.S_ISDIR(info.st_mode):
-                    child_fd = os.open(child, flags, dir_fd=directory_fd)
-                    try:
-                        child_opened = os.fstat(child_fd)
-                        if (child_opened.st_dev, child_opened.st_ino) != (
-                            info.st_dev,
-                            info.st_ino,
-                        ):
-                            raise BrowserStageError("browser stage changed during cleanup")
-                        remove_contents(child_fd)
-                    finally:
-                        os.close(child_fd)
-                    current_child = os.stat(
-                        child,
-                        dir_fd=directory_fd,
-                        follow_symlinks=False,
-                    )
-                    if (current_child.st_dev, current_child.st_ino) != (
-                        info.st_dev,
-                        info.st_ino,
-                    ):
-                        raise BrowserStageError("browser stage changed during cleanup")
-                    os.rmdir(child, dir_fd=directory_fd)
-                elif stat.S_ISREG(info.st_mode):
-                    leaf_fd: int | None = None
-                    quarantine: str | None = None
-                    try:
-                        leaf_fd = os.open(
-                            child,
-                            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-                            dir_fd=directory_fd,
-                        )
-                        opened_leaf = os.fstat(leaf_fd)
-                        if (
-                            opened_leaf.st_dev,
-                            opened_leaf.st_ino,
-                            opened_leaf.st_size,
-                            opened_leaf.st_mode,
-                        ) != (
-                            info.st_dev,
-                            info.st_ino,
-                            info.st_size,
-                            info.st_mode,
-                        ):
-                            raise BrowserStageError(
-                                "browser stage leaf changed during cleanup"
-                            )
-                        for _attempt in range(16):
-                            candidate = f".browser-cleanup-{secrets.token_hex(16)}"
-                            try:
-                                os.stat(
-                                    candidate,
-                                    dir_fd=directory_fd,
-                                    follow_symlinks=False,
-                                )
-                            except FileNotFoundError:
-                                quarantine = candidate
-                                break
-                            except OSError as exc:
-                                raise BrowserStageError(
-                                    "browser stage cleanup failed"
-                                ) from exc
-                        if quarantine is None:
-                            raise BrowserStageError(
-                                "browser stage cleanup quarantine exhausted"
-                            )
-                        os.rename(
-                            child,
-                            quarantine,
-                            src_dir_fd=directory_fd,
-                            dst_dir_fd=directory_fd,
-                        )
-                        moved = os.stat(
-                            quarantine,
-                            dir_fd=directory_fd,
-                            follow_symlinks=False,
-                        )
-                        after_open = os.fstat(leaf_fd)
-                        expected_leaf = (
-                            info.st_dev,
-                            info.st_ino,
-                            info.st_size,
-                            info.st_mode,
-                        )
-                        if (
-                            moved.st_dev,
-                            moved.st_ino,
-                            moved.st_size,
-                            moved.st_mode,
-                        ) != expected_leaf or (
-                            after_open.st_dev,
-                            after_open.st_ino,
-                            after_open.st_size,
-                            after_open.st_mode,
-                        ) != expected_leaf:
-                            try:
-                                os.stat(
-                                    child,
-                                    dir_fd=directory_fd,
-                                    follow_symlinks=False,
-                                )
-                            except FileNotFoundError:
-                                os.rename(
-                                    quarantine,
-                                    child,
-                                    src_dir_fd=directory_fd,
-                                    dst_dir_fd=directory_fd,
-                                )
-                                quarantine = None
-                            raise BrowserStageError(
-                                "browser stage leaf changed during cleanup"
-                            )
-                        os.unlink(quarantine, dir_fd=directory_fd)
-                        quarantine = None
-                    finally:
-                        if leaf_fd is not None:
-                            try:
-                                os.close(leaf_fd)
-                            except OSError as exc:
-                                raise BrowserStageError(
-                                    "browser stage descriptor cleanup failed"
-                                ) from exc
-                else:
-                    raise BrowserStageError("browser stage contains a special entry")
-
-        remove_contents(root_fd)
-        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        if (current.st_dev, current.st_ino) != identity:
-            raise BrowserStageError("browser stage identity changed during cleanup")
-        os.rmdir(name, dir_fd=parent_fd)
-    except OSError as exc:
-        raise BrowserStageError("browser stage cleanup failed") from exc
-    finally:
-        if root_fd is not None:
-            try:
-                os.close(root_fd)
-            except OSError as exc:
-                raise BrowserStageError("browser stage cleanup failed") from exc
+    raise BrowserStageError("host browser stage cleanup is forbidden")
 
 
 @contextmanager
@@ -682,9 +435,6 @@ def _staged_attested_browser(
     """Implement browser staging behind the signal-safe public interface."""
 
     source_fd: int | None = None
-    stage_parent_fd: int | None = None
-    stage_root_fd: int | None = None
-    staged_revision_fd: int | None = None
     try:
         parse_handle(handle)
         source_cache = Path(str(chromium["host_cache_path"])).resolve(strict=True)
@@ -731,16 +481,19 @@ def _staged_attested_browser(
             "chrome-headless-shell-linux64/chrome-headless-shell"
         )
         source_executable = source_revision / executable_relative
+        executable_entry = source_manifest.get(executable_relative.as_posix())
         if (
             os.fspath(source_executable) != chromium.get("executable_path")
             or not source_executable.lstat().st_mode & 0o111
+            or executable_entry is None
+            or executable_entry[0] != "file"
+            or executable_entry[2] != chromium.get("sha256")
         ):
             raise BrowserStageError(
                 "browser executable path or mode conflicts with deployment identity"
             )
         requested_root = REPO_ROOT if repo_root is None else Path(repo_root)
         repository = requested_root.resolve(strict=True)
-        stage_parent = source_cache / ".cvm-provider-free-browser-stages"
         mount_path = _browser_mount(chromium, handle)
         mount = AttestedBrowserMount(
             host_revision=mount_path.host_revision,
@@ -750,13 +503,12 @@ def _staged_attested_browser(
             executable_relative=executable_relative.as_posix(),
             executable_sha256=str(chromium["sha256"]),
         )
-        stage_root = mount.host_revision.parent
         try:
-            stage_parent.resolve(strict=False).relative_to(repository)
+            source_revision.relative_to(repository)
         except ValueError:
             pass
         else:
-            raise BrowserStageError("browser stage must be outside the repository")
+            raise BrowserStageError("browser source must be outside the repository")
     except BaseException as exc:
         failure: BaseException = exc
         if isinstance(
@@ -781,144 +533,10 @@ def _staged_attested_browser(
                     "browser stage descriptor cleanup failed"
                 ) from close_error
         raise failure
-    created = False
-    stage_identity: tuple[int, int] | None = None
     try:
-        try:
-            stage_parent.mkdir(mode=0o700, parents=False, exist_ok=True)
-            stage_parent_mode = stage_parent.lstat().st_mode
-            if (
-                stat.S_ISLNK(stage_parent_mode)
-                or not stat.S_ISDIR(stage_parent_mode)
-                or stage_parent.resolve(strict=True) != stage_parent
-                or stage_parent.stat().st_uid != os.getuid()
-                or stat.S_IMODE(stage_parent_mode) & 0o077
-            ):
-                raise BrowserStageError("browser stage parent is not private")
-            if stage_parent.stat().st_dev != source_revision.stat().st_dev:
-                raise BrowserStageError(
-                    "browser stage is not on the deployment browser filesystem"
-                )
-            stage_parent_fd = os.open(stage_parent, source_flags)
-            opened_parent = os.fstat(stage_parent_fd)
-            current_parent = stage_parent.lstat()
-            if (opened_parent.st_dev, opened_parent.st_ino) != (
-                current_parent.st_dev,
-                current_parent.st_ino,
-            ):
-                raise BrowserStageError("browser stage parent identity changed")
-            os.mkdir(stage_root.name, mode=0o700, dir_fd=stage_parent_fd)
-            created = True
-            created_stage = os.stat(
-                stage_root.name,
-                dir_fd=stage_parent_fd,
-                follow_symlinks=False,
-            )
-            if (
-                not stat.S_ISDIR(created_stage.st_mode)
-                or stat.S_ISLNK(created_stage.st_mode)
-                or created_stage.st_uid != os.getuid()
-                or stat.S_IMODE(created_stage.st_mode) != 0o700
-            ):
-                raise BrowserStageError("created browser stage identity is invalid")
-            stage_identity = (created_stage.st_dev, created_stage.st_ino)
-            stage_root_fd = os.open(stage_root.name, source_flags, dir_fd=stage_parent_fd)
-            stage_info = os.fstat(stage_root_fd)
-            current_stage = os.stat(
-                stage_root.name,
-                dir_fd=stage_parent_fd,
-                follow_symlinks=False,
-            )
-            if (
-                (stage_info.st_dev, stage_info.st_ino) != stage_identity
-                or (current_stage.st_dev, current_stage.st_ino) != stage_identity
-            ):
-                raise BrowserStageError("created browser stage identity changed")
-            staged_revision = stage_root / "attested"
-            os.mkdir("attested", mode=0o700, dir_fd=stage_root_fd)
-            staged_revision_fd = os.open(
-                "attested",
-                source_flags,
-                dir_fd=stage_root_fd,
-            )
-            _copy_browser_tree_fd(source_fd, staged_revision_fd)
-            if (
-                deployment_authority._browser_tree_manifest_from_fd(
-                    source_fd,
-                    readonly_projection=True,
-                )
-                != source_manifest
-                or deployment_authority._browser_tree_manifest_from_fd(
-                    staged_revision_fd,
-                    readonly_projection=False,
-                )
-                != source_manifest
-            ):
-                raise BrowserStageError(
-                    "staged browser tree conflicts with deployment revision"
-                )
-            staged_executable = staged_revision / executable_relative
-            if (
-                hashlib.sha256(staged_executable.read_bytes()).hexdigest()
-                != chromium["sha256"]
-                or not staged_executable.lstat().st_mode & 0o111
-            ):
-                raise BrowserStageError(
-                    "staged browser executable identity conflicts with deployment identity"
-                )
-            _probe_browser_stage_exec(stage_root)
-        except BrowserStageError:
-            raise
-        except (KeyError, OSError, shutil.Error, ValueError) as exc:
-            raise BrowserStageError("browser stage setup failed") from exc
         yield mount
     finally:
         cleanup_failed = False
-        if staged_revision_fd is not None:
-            descriptor = staged_revision_fd
-            staged_revision_fd = None
-            try:
-                os.close(descriptor)
-            except OSError:
-                cleanup_failed = True
-        if stage_root_fd is not None:
-            descriptor = stage_root_fd
-            stage_root_fd = None
-            try:
-                os.close(descriptor)
-            except OSError:
-                cleanup_failed = True
-        if created:
-            try:
-                if stage_parent_fd is None:
-                    raise BrowserStageError("browser stage cleanup authority missing")
-                if stage_identity is None:
-                    raise BrowserStageError("browser stage cleanup identity missing")
-                _remove_browser_tree_owned(
-                    stage_parent_fd,
-                    stage_root.name,
-                    stage_identity,
-                )
-            except (BrowserStageError, OSError):
-                cleanup_failed = True
-            if stage_parent_fd is not None:
-                descriptor = stage_parent_fd
-                stage_parent_fd = None
-                try:
-                    os.close(descriptor)
-                except OSError:
-                    cleanup_failed = True
-            try:
-                stage_parent.rmdir()
-            except OSError:
-                pass
-        if stage_parent_fd is not None:
-            descriptor = stage_parent_fd
-            stage_parent_fd = None
-            try:
-                os.close(descriptor)
-            except OSError:
-                cleanup_failed = True
         if source_fd is not None:
             descriptor = source_fd
             source_fd = None
@@ -974,9 +592,12 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
     "temporary_filesystem": "/tmp",
     "private_browser_image_filesystem": {
         "root": PROVIDER_FREE_MESHSHOT_EXECUTABLE_ROOT,
-        "mount": "repository-owned-exec-permitted-tmpfs",
+        "mount": "outer-kernel-created-exec-tmpfs",
         "scope": "single-preview-runtime",
-        "cleanup": "python-runtime-terminal-all-exit-classes",
+        "detached_mount_source": "exact-underlying-directory-descriptor",
+        "cleanup": (
+            "descriptor-bound-unmount-then-outer-namespace-kernel-discard"
+        ),
     },
     "browser_supervisor": {
         "schema": "meshshot.browser-supervisor/1",
@@ -996,15 +617,18 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
     },
     "repository_mount": "read-only",
     "output_mount": "read-write-exact-experiment",
-    "browser_cache_mount": "read-only-job-scoped-attested-revision",
+    "browser_cache_mount": "read-only-deployment-source-plus-private-staged-revision",
     "browser_runtime_staging": {
         "source": "deployment-attested-host-revision",
-        "source_filesystem": "same-device-as-deployment-browser",
+        "source_mount": PROVIDER_FREE_BROWSER_SOURCE_REVISION,
+        "source_filesystem": "outer-read-only-deployment-bind",
         "scope": "single-attested-revision",
         "destination": PROVIDER_FREE_STAGED_BROWSER_CACHE,
         "staged_revision": "attested",
         "staged_executable": PROVIDER_FREE_STAGED_BROWSER_EXECUTABLE,
-        "destination_filesystem": "read-only-bind-of-exec-permitted-host-stage",
+        "destination_filesystem": "outer-kernel-created-job-private-exec-tmpfs",
+        "materialization": "fixed-trusted-pre-workload-copy",
+        "host_path_creation_or_recursive_deletion": "forbidden",
         "tree_validation": "regular-files-only-no-links-or-special",
         "tree_manifest": {
             "schema": "meshshot.browser-tree-manifest/1",
@@ -1024,10 +648,10 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "execute_bits": "required",
         },
         "exec_permission_validation": {
-            "mechanism": "kernel-execve-repository-owned-immediate-exit-probe",
+            "mechanism": "authenticated-version-and-live-image-execution",
             "network": "none",
             "timeout_seconds": _EXEC_PROBE_TIMEOUT_SECONDS,
-            "expected_stdout": "cvm.browser-stage-exec-probe/1",
+            "expected_stdout": "single-chromium-version-line",
         },
         "sandbox_exec_diagnostics": {
             "schema": PROVIDER_FREE_BROWSER_EXEC_DIAGNOSTIC_SCHEMA,
@@ -1062,9 +686,9 @@ PROVIDER_FREE_SANDBOX_PROFILE = {
             "launch_owner": "outer-trusted-browser-supervisor",
             "playwright_option": "connect_over_cdp-is-local",
         },
-        "cleanup": "supervisor-context-terminal-all-exit-classes",
+        "cleanup": "kernel-discard-on-outer-mount-namespace-exit",
         "catchable_signal_cleanup": ["SIGINT", "SIGTERM"],
-        "uncatchable_termination": "stale-stage-collision-fail-closed",
+        "uncatchable_termination": "kernel-discard-on-namespace-exit",
     },
     "preview_process": {
         "capabilities": "drop-all",
@@ -1218,7 +842,10 @@ def provider_free_sandbox_argv(
     if browser_mount is not None:
         try:
             actual_manifest_sha256 = _browser_tree_manifest_sha256(
-                _browser_tree_manifest(mount.host_revision)
+                deployment_authority.browser_tree_manifest(
+                    mount.host_revision,
+                    readonly_projection=True,
+                )
             )
         except (BrowserStageError, OSError) as exc:
             raise ProtocolError(
@@ -1266,11 +893,13 @@ def provider_free_sandbox_argv(
         "/home/provider-free",
         "--dir",
         "/home/provider-free/.cache",
-        "--dir",
+        "--tmpfs",
         PROVIDER_FREE_STAGED_BROWSER_CACHE,
+        "--dir",
+        PROVIDER_FREE_BROWSER_SOURCE_REVISION,
         "--ro-bind",
         os.fspath(mount.host_revision),
-        f"{mount.sandbox_cache}/attested",
+        PROVIDER_FREE_BROWSER_SOURCE_REVISION,
     ))
     if browser_mount is not None:
         argv.extend(
@@ -1298,7 +927,7 @@ def provider_free_sandbox_argv(
             os.fspath(PROVIDER_FREE_SANDBOX_REPO_ROOT / ".venv/bin/python"),
             "-m",
             "scripts.pilot.provider_free_scenarios",
-            "run",
+            "run-staged",
             scenario_name,
             "--workspace",
             os.fspath(sandbox_exp),
@@ -1781,7 +1410,7 @@ def _provider_free_common_evidence_result(
     ):
         expected_argv = []
     else:
-        staged_target = f"{PROVIDER_FREE_STAGED_BROWSER_CACHE}/attested"
+        staged_target = PROVIDER_FREE_BROWSER_SOURCE_REVISION
         try:
             staged_index = next(
                 index
