@@ -1,4 +1,4 @@
-"""``cadgen.step_artifact`` must short-circuit on an already-current package.
+"""``cadgen.step_artifact_cli`` must short-circuit on an already-current package.
 
 This is the module the CAD Viewer's build POST runs, and it is a DIFFERENT path from
 ``cadgen.generation`` (covered by test_concurrent_generation.py). Its "already current"
@@ -52,7 +52,7 @@ class StepArtifactSkipTest(unittest.TestCase):
         """Run the module exactly as viewer/server_py/backend.py does."""
         proc = subprocess.run(
             [
-                sys.executable, "-m", "cadgen.step_artifact",
+                sys.executable, "-m", "cadgen.step_artifact_cli",
                 "--repo-root", str(self.root),
                 "--step", str(self.root / "widget.step"),
                 "--source-path", str(self.generator),
@@ -108,7 +108,7 @@ class StepArtifactSkipTest(unittest.TestCase):
         re-evaluates is_current() under the lock, which turns the loser into a no-op.
         """
         script = [
-            sys.executable, "-m", "cadgen.step_artifact",
+            sys.executable, "-m", "cadgen.step_artifact_cli",
             "--repo-root", str(self.root),
             "--step", str(self.root / "widget.step"),
             "--source-path", str(self.generator),

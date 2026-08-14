@@ -1834,10 +1834,10 @@ def _run_with_spec_generation_status(
     """Run ``action`` while holding the model's build lock, reporting its progress.
 
     Delegates to :func:`cadgen.coordination.artifact_build`, which is the SAME primitive
-    ``cadgen.step_artifact`` uses. That shared implementation is the point: the lock, the
+    ``cadgen.step_artifact_cli`` uses. That shared implementation is the point: the lock, the
     status record and the post-lock currency re-check used to be assembled by hand at each
     producer, and the two producers had drifted -- this one re-checked under the lock,
-    step_artifact's did not, so a queued viewer build redid a peer's whole generator+mesh.
+    step_artifact_cli's did not, so a queued viewer build redid a peer's whole generator+mesh.
 
     ``skip_if_current`` is re-evaluated AFTER the lock is acquired. The pre-lock fast path
     cannot cover the concurrent case: it ran before the other build existed.
@@ -1845,7 +1845,7 @@ def _run_with_spec_generation_status(
     ``action`` is called as ``action(spec, run)``; ``run`` is the progress reporter.
 
     ``lock_timeout_s`` bounds the wait for a peer's lock, exactly as it does in
-    ``cadgen.step_artifact``: 0 waits, and a positive value gives up and reports the peer
+    ``cadgen.step_artifact_cli``: 0 waits, and a positive value gives up and reports the peer
     instead. Same flag, same default, same meaning -- see :mod:`cadgen._internal.cli_locking`.
     """
     kind = DRAWING_PACKAGE if generator_name == "gen_dxf" else STEP_PACKAGE

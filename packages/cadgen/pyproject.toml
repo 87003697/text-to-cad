@@ -35,7 +35,7 @@ Repository = "https://github.com/earthtojake/text-to-cad"
 Issues = "https://github.com/earthtojake/text-to-cad/issues"
 
 [project.scripts]
-cadgen-step-artifact = "cadgen.step_artifact:main"
+cadgen-step-artifact = "cadgen.step_artifact_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -1188,7 +1188,7 @@ class ArtifactFormatDispatchIsTotal(unittest.TestCase):
 
         dispatch = worker._module_dispatch()
         for module in (
-            "cadgen.step_artifact",
+            "cadgen.step_artifact_cli",
             "cadgen.dxf_artifact",
             "cadgen.implicit_artifact",
             "cadgen.step_export_target",
