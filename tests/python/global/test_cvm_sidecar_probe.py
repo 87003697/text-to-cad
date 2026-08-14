@@ -21,6 +21,10 @@ MODULE = REPO_ROOT / "scripts" / "pilot" / "cvm_sidecar_probe.py"
 SOURCE_REVISION = "a" * 40
 SIDECAR_ID = f"sha256:{'1' * 64}"
 CLIENT_ID = f"sha256:{'2' * 64}"
+PORTABLE_SIDECAR_CONFIG = b'{"kind":"sidecar","schema":1}'
+PORTABLE_CLIENT_CONFIG = b'{"kind":"client","schema":1}'
+PORTABLE_SIDECAR_ID = "sha256:" + hashlib.sha256(PORTABLE_SIDECAR_CONFIG).hexdigest()
+PORTABLE_CLIENT_ID = "sha256:" + hashlib.sha256(PORTABLE_CLIENT_CONFIG).hexdigest()
 
 
 def copy_cli(repo: Path) -> Path:
@@ -82,6 +86,81 @@ def write_image_docker(path: Path) -> None:
                 print("Loaded exact images")
             elif sys.argv[1:3] == ["version", "--format"]:
                 print(json.dumps({{"Os": "linux", "Arch": "amd64"}}))
+            else:
+                raise SystemExit(f"unexpected docker argv: {{sys.argv[1:]}}")
+            """
+        ),
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def write_portable_archive_docker(path: Path) -> None:
+    path.write_text(
+        textwrap.dedent(
+            f"""\
+            #!/usr/bin/env python3
+            import io
+            import json
+            import os
+            import pathlib
+            import sys
+            import tarfile
+
+            sidecar = {PORTABLE_SIDECAR_ID!r}
+            client = {PORTABLE_CLIENT_ID!r}
+            blobs = {{
+                sidecar.removeprefix("sha256:") + ".json": {PORTABLE_SIDECAR_CONFIG!r},
+                client.removeprefix("sha256:") + ".json": {PORTABLE_CLIENT_CONFIG!r},
+            }}
+
+            def add_bytes(archive, name, payload):
+                member = tarfile.TarInfo(name)
+                member.size = len(payload)
+                member.mode = 0o644
+                archive.addfile(member, io.BytesIO(payload))
+
+            if sys.argv[1:3] == ["image", "inspect"]:
+                image = sys.argv[3]
+                config = {{
+                    "Labels": {{"org.opencontainers.image.revision": {SOURCE_REVISION!r}}},
+                    "Cmd": None,
+                }}
+                if os.environ.get("FAKE_INSPECT_VARIANT") == "empty-extra":
+                    config = {{
+                        "Labels": {{"org.opencontainers.image.revision": {SOURCE_REVISION!r}}},
+                        "Cmd": [],
+                        "Env": [],
+                        "ExposedPorts": {{}},
+                    }}
+                print(json.dumps([{{
+                    "Id": image,
+                    "Architecture": "amd64",
+                    "Os": "linux",
+                    "Config": config,
+                }}]))
+            elif sys.argv[1:3] == ["image", "save"]:
+                output = pathlib.Path(sys.argv[4])
+                assert sys.argv[5:] == [sidecar, client]
+                sidecar_path, client_path = list(blobs)
+                variant = os.environ.get("FAKE_MANIFEST_VARIANT", "valid")
+                configs = [sidecar_path, client_path]
+                if variant == "mismatch":
+                    configs[0] = "f" * 64 + ".json"
+                elif variant == "duplicate":
+                    configs[1] = sidecar_path
+                elif variant == "missing":
+                    configs = configs[:1]
+                elif variant == "traversal":
+                    configs[0] = "../" + sidecar_path
+                manifest = [
+                    {{"Config": config, "RepoTags": None, "Layers": []}}
+                    for config in configs
+                ]
+                with tarfile.open(output, "w") as archive:
+                    add_bytes(archive, "manifest.json", json.dumps(manifest).encode())
+                    for name, payload in blobs.items():
+                        add_bytes(archive, name, payload)
             else:
                 raise SystemExit(f"unexpected docker argv: {{sys.argv[1:]}}")
             """
@@ -379,6 +458,85 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("does not match", result.stderr)
             self.assertFalse((repo / ".cvm-sidecar-probes").exists())
+
+    def test_prepare_config_digest_is_portable_across_inspect_display(self) -> None:
+        receipts = []
+        for variant in ("null", "empty-extra"):
+            with tempfile.TemporaryDirectory(
+                prefix=f"cvm-sidecar-config-{variant}-"
+            ) as root_text:
+                root = Path(root_text)
+                repo = root / "repo"
+                wrapper = copy_cli(repo)
+                fake_bin = root / "bin"
+                fake_bin.mkdir()
+                write_portable_archive_docker(fake_bin / "docker")
+                env = cli_env(fake_bin)
+                env["FAKE_INSPECT_VARIANT"] = variant
+                result = subprocess.run(
+                    [
+                        wrapper,
+                        "prepare",
+                        "--source-revision",
+                        SOURCE_REVISION,
+                        "--sidecar-image",
+                        PORTABLE_SIDECAR_ID,
+                        "--client-image",
+                        PORTABLE_CLIENT_ID,
+                    ],
+                    cwd=repo,
+                    env=env,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                receipts.append(json.loads(result.stdout))
+
+        expected = [
+            PORTABLE_SIDECAR_ID.removeprefix("sha256:"),
+            PORTABLE_CLIENT_ID.removeprefix("sha256:"),
+        ]
+        self.assertEqual(
+            [image["configSha256"] for image in receipts[0]["images"]], expected
+        )
+        self.assertEqual(receipts[0]["images"], receipts[1]["images"])
+
+    def test_prepare_rejects_unbound_archive_manifest_without_state(self) -> None:
+        for variant in ("mismatch", "duplicate", "missing", "traversal"):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory(
+                prefix=f"cvm-sidecar-manifest-{variant}-"
+            ) as root_text:
+                root = Path(root_text)
+                repo = root / "repo"
+                wrapper = copy_cli(repo)
+                fake_bin = root / "bin"
+                fake_bin.mkdir()
+                write_portable_archive_docker(fake_bin / "docker")
+                env = cli_env(fake_bin)
+                env["FAKE_MANIFEST_VARIANT"] = variant
+                result = subprocess.run(
+                    [
+                        wrapper,
+                        "prepare",
+                        "--source-revision",
+                        SOURCE_REVISION,
+                        "--sidecar-image",
+                        PORTABLE_SIDECAR_ID,
+                        "--client-image",
+                        PORTABLE_CLIENT_ID,
+                    ],
+                    cwd=repo,
+                    env=env,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((repo / ".cvm-sidecar-probes").exists())
 
     def test_external_command_timeout_is_closed_and_classified(self) -> None:
         with mock.patch.object(
