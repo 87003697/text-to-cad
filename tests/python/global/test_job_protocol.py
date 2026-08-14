@@ -27,6 +27,10 @@ def pilot_record(handle: str, state: str = "running") -> dict[str, object]:
 
 class JobProtocolTests(unittest.TestCase):
     def test_browser_cleanup_vocabulary_names_exact_resource_owners(self) -> None:
+        self.assertEqual(
+            "meshshot.browser-cleanup-diagnostic/2",
+            protocol.PROVIDER_FREE_BROWSER_CLEANUP_DIAGNOSTIC_SCHEMA,
+        )
         expected = {
             "outer_browser_stage": {
                 "tree_copy_descriptor_close",
@@ -46,6 +50,17 @@ class JobProtocolTests(unittest.TestCase):
                 "recursive_remove",
                 "authority_descriptor_close",
                 "absence",
+            },
+            "private_browser_pinned_image": {
+                "executable_descriptor_close",
+                "detached_mount_create",
+                "detached_mount_authority",
+                "detached_mounted_identity",
+                "detached_underlying_identity",
+                "detached_mounted_descriptor_close",
+                "detached_underlying_descriptor_close",
+                "detached_parent_descriptor_close",
+                "detached_mount_retained",
             },
             "private_browser_handoff": {
                 "socket_unlink",

@@ -4589,6 +4589,11 @@ class ResidualRendererTests(unittest.TestCase):
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
 
+        checks_by_slot = {
+            0: "detached_parent_descriptor_close",
+            1: "detached_mounted_descriptor_close",
+            2: "detached_underlying_descriptor_close",
+        }
         for failed_slot in range(3):
             with (
                 self.subTest(failed_slot=failed_slot),
@@ -4635,7 +4640,7 @@ class ResidualRendererTests(unittest.TestCase):
                     raised.exception.browser_cleanup_substage,
                 )
                 self.assertEqual(
-                    "detached_mount_release",
+                    checks_by_slot[failed_slot],
                     raised.exception.browser_cleanup_check,
                 )
                 self.assertFalse(pinned._detached_filesystem_mounted)
@@ -4673,7 +4678,7 @@ class ResidualRendererTests(unittest.TestCase):
                 raised.exception.browser_cleanup_substage,
             )
             self.assertEqual(
-                "detached_mount_release",
+                "detached_mount_authority",
                 raised.exception.browser_cleanup_check,
             )
             self.assertFalse(pinned._detached_filesystem_mounted)
@@ -4843,6 +4848,14 @@ class ResidualRendererTests(unittest.TestCase):
 
         self.assertEqual("browser_cleanup", raised.exception.operation)
         self.assertIsNone(raised.exception.browser_identity_phase)
+        self.assertEqual(
+            "private_browser_pinned_image",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "detached_mount_create",
+            raised.exception.browser_cleanup_check,
+        )
 
     def test_directory_fsync_descriptor_close_failure_is_cleanup(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
