@@ -165,7 +165,7 @@ class PackagePortabilityTest(unittest.TestCase):
     def _noop_pass(root: Path) -> None:
         """Every producer, in the mode that should do nothing to a current package."""
         from cadgen.generation import generate_dxf_targets, generate_step_targets
-        from cadgen.step_artifact import build_step_artifact
+        from cadgen.step_artifact_cli import build_step_artifact
 
         generate_step_targets([str(root / "widget.step.py"), str(root / "rig.step.py")])
         build_step_artifact(repo_root=root, step=root / "imported.step")
