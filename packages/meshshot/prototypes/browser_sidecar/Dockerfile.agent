@@ -1,8 +1,11 @@
 # THROWAWAY browser-less Agent client, built independently from the same fixed base.
 FROM mcr.microsoft.com/playwright@sha256:83192064c7510f7ee73dd63dc5f22a5e01a92c81a2e6a9c715d9e3fe55471fd9
+ARG PROTOTYPE_SOURCE_REVISION=uncommitted
 LABEL org.opencontainers.image.title="meshshot-browser-sidecar-agent-client-prototype" \
       org.opencontainers.image.version="0.0.0-prototype" \
-      org.opencontainers.image.source-revision="9c5b7ea39030a013023a2f06c83b9b869a394861" \
+      org.opencontainers.image.revision="${PROTOTYPE_SOURCE_REVISION}" \
+      io.text-to-cad.source-base="9c5b7ea39030a013023a2f06c83b9b869a394861" \
+      io.text-to-cad.review-parent="629eaec232ab2816466dafb5182a1bb4fe66295d" \
       io.text-to-cad.throwaway="true" \
       io.text-to-cad.playwright="1.60.0" \
       io.text-to-cad.chromium-revision="none"
@@ -10,12 +13,19 @@ ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     NODE_ENV=production \
     HOME=/home/pwuser
 WORKDIR /opt/browser-sidecar
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --break-system-packages --no-cache-dir Pillow==11.3.0 playwright==1.60.0
 COPY packages/meshshot/prototypes/browser_sidecar/package.json packages/meshshot/prototypes/browser_sidecar/package-lock.json ./prototype/
 RUN cd ./prototype && npm ci --omit=dev --ignore-scripts
-COPY packages/meshshot/prototypes/browser_sidecar/client.mjs ./prototype/client.mjs
+COPY packages/meshshot/prototypes/browser_sidecar/client.mjs packages/meshshot/prototypes/browser_sidecar/contract.mjs ./prototype/
+COPY packages/meshshot/prototypes/browser_sidecar/public_parity.py ./prototype/public_parity.py
+COPY packages/meshshot/src/meshshot ./meshshot-src/meshshot
 COPY packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json ./profile.json
 RUN rm -rf /ms-playwright \
-    && find /usr /opt /home -xdev -type f \( -iname '*chrome*' -o -iname '*chromium*' \) -delete \
+    && rm -f /usr/bin/chromium /usr/bin/chromium-browser /usr/bin/google-chrome \
+    && rm -rf /opt/google/chrome \
     && chown -R pwuser:pwuser /opt/browser-sidecar
 USER pwuser
 ENTRYPOINT ["node", "/opt/browser-sidecar/prototype/client.mjs"]

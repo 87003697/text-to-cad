@@ -16,9 +16,12 @@ COPY packages/meshshot/prototypes/browser_sidecar/package.json packages/meshshot
 RUN npm ci --omit=dev --ignore-scripts
 
 FROM ${PLAYWRIGHT_BASE} AS sidecar
+ARG PROTOTYPE_SOURCE_REVISION=uncommitted
 LABEL org.opencontainers.image.title="meshshot-browser-sidecar-prototype" \
       org.opencontainers.image.version="0.0.0-prototype" \
-      org.opencontainers.image.source-revision="9c5b7ea39030a013023a2f06c83b9b869a394861" \
+      org.opencontainers.image.revision="${PROTOTYPE_SOURCE_REVISION}" \
+      io.text-to-cad.source-base="9c5b7ea39030a013023a2f06c83b9b869a394861" \
+      io.text-to-cad.review-parent="629eaec232ab2816466dafb5182a1bb4fe66295d" \
       io.text-to-cad.throwaway="true" \
       io.text-to-cad.playwright="1.60.0" \
       io.text-to-cad.chromium-revision="1223"

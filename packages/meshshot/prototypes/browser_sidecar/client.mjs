@@ -3,12 +3,12 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { chromium } from "playwright-core";
+import { parseRequest } from "./contract.mjs";
 
-const PROGRAMS = new Set(["suite", "probe", "viewer", "residual", "hold"]);
-const program = process.argv[2] || "";
-if (!PROGRAMS.has(program) || process.argv.length !== 3) {
-  throw new Error("usage: client.mjs <suite|probe|viewer|residual|hold>");
-}
+if (process.argv.length !== 2) throw new Error("client accepts one structured JSON request on stdin only");
+const requestText = fs.readFileSync(0, "utf8");
+const request = parseRequest(requestText);
+const { program } = request;
 const jobId = String(process.env.BROWSER_SIDECAR_JOB_ID || "").trim();
 const sidecarHost = String(process.env.BROWSER_SIDECAR_HOST || "sidecar").trim();
 if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(jobId) || !/^[a-z0-9][a-z0-9-]{0,47}$/.test(sidecarHost)) {
@@ -65,8 +65,20 @@ try {
           externalEgressBlocked: await externalEgressBlocked(),
         };
       } else if (requestedProgram === "viewer") {
+        const viewerPayload = program === "suite" ? request.payload.viewer : request.payload;
         await page.goto("http://127.0.0.1:4173/?file=cube.stl", { waitUntil: "networkidle", timeout: 60_000 });
         await page.waitForTimeout(2_000);
+        const projectionControl = page.getByRole("button", { name: /Display and projection:/ });
+        const inspectionBefore = await projectionControl.getAttribute("aria-label");
+        if (viewerPayload.inspectionControl !== "toggle-projection") throw new Error("unregistered inspection control");
+        await projectionControl.click();
+        const inspectionTarget = /Perspective/i.test(inspectionBefore || "") ? "Orthographic" : "Perspective";
+        await page.getByRole("menuitem", { name: inspectionTarget, exact: true }).click();
+        await page.waitForFunction(
+          (target) => document.querySelector('button[aria-label^="Display and projection:"]')?.getAttribute("aria-label")?.includes(target),
+          inspectionTarget,
+        );
+        const inspectionAfter = await projectionControl.getAttribute("aria-label");
         const screenshot = await page.screenshot({ type: "png", timeout: 120_000 });
         const body = await page.locator("body").innerText();
         results[requestedProgram] = {
@@ -76,24 +88,29 @@ try {
           bodyMentionsFixture: /cube\.stl/i.test(body),
           bodyExcerpt: body.slice(0, 300),
           programDigest: authority.programs.viewer,
+          modelKey: viewerPayload.modelKey,
+          inspection: {
+            control: viewerPayload.inspectionControl,
+            before: inspectionBefore,
+            target: inspectionTarget,
+            after: inspectionAfter,
+            changed: inspectionBefore !== inspectionAfter && String(inspectionAfter).includes(inspectionTarget),
+          },
         };
       } else if (requestedProgram === "residual") {
+        const residualPayload = program === "suite" ? request.payload.residual : request.payload;
         await page.goto("http://127.0.0.1:4174/render.html", { waitUntil: "load", timeout: 60_000 });
         await page.waitForFunction("typeof window.__meshshotRender === 'function'", null, { timeout: 60_000 });
         const profileResponse = await fetch(`http://${sidecarHost}:3001/v1/authority`);
         if (!profileResponse.ok) throw new Error("sidecar authority disappeared");
         const profileBytes = fs.readFileSync("/opt/browser-sidecar/profile.json");
         const profile = JSON.parse(profileBytes.toString("utf8"));
-        const cube = {
-          vertices: [[-0.5,-0.5,-0.5],[0.5,-0.5,-0.5],[0.5,0.5,-0.5],[-0.5,0.5,-0.5],[-0.5,-0.5,0.5],[0.5,-0.5,0.5],[0.5,0.5,0.5],[-0.5,0.5,0.5]],
-          faces: [[0,2,1],[0,3,2],[4,5,6],[4,6,7],[0,4,7],[0,7,3],[1,2,6],[1,6,5],[0,1,5],[0,5,4],[3,7,6],[3,6,2]],
-        };
         const render = await page.evaluate((payload) => window.__meshshotRender(payload), {
           profile,
-          variant: "step",
-          reference: cube,
-          candidate: cube,
-          exteriorDirections: [],
+          variant: residualPayload.variant,
+          reference: residualPayload.reference,
+          candidate: residualPayload.candidate,
+          exteriorDirections: residualPayload.exteriorDirections,
         });
         if (!render?.ok || !String(render.pngDataUrl || "").startsWith("data:image/png;base64,")) {
           throw new Error(render?.error || "invalid residual result");
@@ -105,14 +122,56 @@ try {
           profileSha256: sha256(profileBytes),
           views: render.views,
           programDigest: authority.programs.residual,
+          requestOptions: residualPayload.options,
         };
       } else {
-        await context.addCookies([{ name: `job-${jobId}`, value: jobId, url: "http://127.0.0.1:4174" }]);
+        const { model, ownMarker, peerMarker } = request.payload;
+        const consoleMessages = [];
+        page.on("console", (message) => consoleMessages.push(message.text()));
+        await context.addCookies([{ name: "job-marker", value: ownMarker, url: "http://127.0.0.1:4174" }]);
         await page.goto("http://127.0.0.1:4174/render.html", { waitUntil: "load" });
-        process.stdout.write(`${JSON.stringify({ event: "hold-ready", jobId })}\n`);
-        await page.waitForTimeout(6_000);
+        await page.waitForFunction("typeof window.__meshshotRender === 'function'");
+        await page.evaluate(({ ownMarker }) => {
+          document.body.dataset.jobMarker = ownMarker;
+          localStorage.setItem("job-marker", ownMarker);
+          console.log(`job-marker:${ownMarker}`);
+        }, { ownMarker });
+        const profile = JSON.parse(fs.readFileSync("/opt/browser-sidecar/profile.json", "utf8"));
+        const rendered = await page.evaluate((payload) => window.__meshshotRender(payload), {
+          profile,
+          variant: "step",
+          reference: model,
+          candidate: model,
+          exteriorDirections: [],
+        });
+        if (!rendered?.ok) throw new Error(rendered?.error || "hold model render failed");
+        const modelPng = Buffer.from(rendered.pngDataUrl.split(",", 2)[1], "base64");
+        const filesystemPath = "/tmp/browser-sidecar-isolation-marker";
+        fs.writeFileSync(filesystemPath, ownMarker, { encoding: "utf8", mode: 0o600 });
+        const pageMarker = await page.evaluate(() => document.body.dataset.jobMarker);
+        const storageMarker = await page.evaluate(() => localStorage.getItem("job-marker"));
         const cookies = await context.cookies();
-        results[requestedProgram] = { cookies: cookies.map(({ name, value }) => ({ name, value })), jobId };
+        const cookieValues = cookies.filter(({ name }) => name === "job-marker").map(({ value }) => value);
+        const filesystemMarker = fs.readFileSync(filesystemPath, "utf8");
+        const isolation = {
+          ownMarker,
+          peerMarker,
+          modelInputSha256: sha256(Buffer.from(JSON.stringify(model))),
+          modelPngSha256: sha256(modelPng),
+          pageOwn: pageMarker === ownMarker,
+          pagePeerAbsent: pageMarker !== peerMarker,
+          localStorageOwn: storageMarker === ownMarker,
+          localStoragePeerAbsent: storageMarker !== peerMarker,
+          cookieOwn: cookieValues.length === 1 && cookieValues[0] === ownMarker,
+          cookiePeerAbsent: !cookieValues.includes(peerMarker),
+          consoleOwn: consoleMessages.includes(`job-marker:${ownMarker}`),
+          consolePeerAbsent: !consoleMessages.some((message) => message.includes(peerMarker)),
+          filesystemOwn: filesystemMarker === ownMarker,
+          filesystemPeerAbsent: filesystemMarker !== peerMarker,
+        };
+        process.stdout.write(`${JSON.stringify({ event: "hold-ready", jobId, isolation })}\n`);
+        await page.waitForTimeout(6_000);
+        results[requestedProgram] = { isolation, jobId };
       }
     } finally {
       await context.close();
@@ -122,4 +181,11 @@ try {
 } finally {
   await browser.close();
 }
-process.stdout.write(`${JSON.stringify({ ok: true, program, jobId, result })}\n`);
+process.stdout.write(`${JSON.stringify({
+  ok: true,
+  schema: request.schema,
+  requestSha256: sha256(Buffer.from(requestText)),
+  program,
+  jobId,
+  result,
+})}\n`);
