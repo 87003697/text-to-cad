@@ -190,6 +190,50 @@ class CvmJobTests(unittest.TestCase):
         )
         self.assertFalse(stage_parent.exists())
 
+    def test_attested_browser_mount_authority_is_bound_into_sandbox(self) -> None:
+        chromium, _executable = self._browser_identity()
+        handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
+        exp_dir = self.repo_root / "outputs" / self.group / (
+            "20260812-100000-issue15-runtime-authority"
+        )
+        exp_dir.mkdir(parents=True)
+        identity = {
+            "bwrap": {"path": "/usr/bin/bwrap"},
+            "chromium": chromium,
+        }
+
+        with runtime.staged_attested_browser(
+            chromium,
+            handle,
+            repo_root=self.repo_root,
+        ) as mount:
+            argv = runtime.provider_free_sandbox_argv(
+                "issue15-runtime-authority",
+                exp_dir,
+                identity,
+                repo_root=self.repo_root,
+                browser_mount=mount,
+            )
+            marker = argv.index("MESHSHOT_BROWSER_TREE_MANIFEST_SHA256")
+            self.assertEqual("--setenv", argv[marker - 1])
+            self.assertEqual(mount.tree_manifest_sha256, argv[marker + 1])
+            tampered = runtime.AttestedBrowserMount(
+                host_revision=mount.host_revision,
+                sandbox_cache=mount.sandbox_cache,
+                tree_manifest_sha256="f" * 64,
+                revision=mount.revision,
+                executable_relative=mount.executable_relative,
+                executable_sha256=mount.executable_sha256,
+            )
+            with self.assertRaises(protocol.ProtocolError):
+                runtime.provider_free_sandbox_argv(
+                    "issue15-runtime-authority",
+                    exp_dir,
+                    identity,
+                    repo_root=self.repo_root,
+                    browser_mount=tampered,
+                )
+
     def test_attested_browser_stage_cleans_after_subprocess_sigterm(self) -> None:
         chromium, _executable = self._browser_identity()
         handle = f"{self.group}/20260812-100000-issue15-runtime-authority"
