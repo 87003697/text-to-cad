@@ -3,6 +3,7 @@ import struct
 import unittest
 from array import array
 from pathlib import Path
+from unittest import mock
 
 import build123d
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
@@ -10,6 +11,7 @@ from OCP.TopAbs import TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS
 
+from cadgen._internal import glb as glb_module
 from cadgen._internal.glb import (
     export_assembly_glb_from_scene,
     export_native_glb_from_scene,
@@ -89,6 +91,38 @@ def _read_glb_json(path: Path) -> dict[str, object]:
     if chunk_type != b"JSON":
         raise AssertionError("First GLB chunk is not JSON")
     return json.loads(payload[20:20 + chunk_length].decode("utf-8"))
+
+
+class AtomicGlbWriteTests(unittest.TestCase):
+    def test_retries_transient_windows_file_in_use_error(self) -> None:
+        with temporary_directory(prefix="cad-glb-atomic-") as temp_dir:
+            target = Path(temp_dir) / "component.glb.tmp1234"
+            locked = PermissionError(13, "file is in use", str(target))
+            locked.winerror = 32
+            with (
+                mock.patch.object(Path, "replace", side_effect=[locked, None]) as replace,
+                mock.patch.object(glb_module.time, "sleep") as sleep,
+            ):
+                glb_module._atomic_write_bytes(target, b"glTF")
+
+            self.assertEqual(2, replace.call_count)
+            sleep.assert_called_once_with(0.05)
+
+    def test_does_not_retry_other_replace_errors(self) -> None:
+        with temporary_directory(prefix="cad-glb-atomic-") as temp_dir:
+            target = Path(temp_dir) / "component.glb.tmp1234"
+            denied = PermissionError(13, "access denied", str(target))
+            denied.winerror = 5
+            with (
+                mock.patch.object(Path, "replace", side_effect=denied) as replace,
+                mock.patch.object(glb_module.time, "sleep") as sleep,
+            ):
+                with self.assertRaises(PermissionError) as raised:
+                    glb_module._atomic_write_bytes(target, b"glTF")
+
+            self.assertIs(denied, raised.exception)
+            self.assertEqual(1, replace.call_count)
+            sleep.assert_not_called()
 
 
 class GlbExportTests(unittest.TestCase):
