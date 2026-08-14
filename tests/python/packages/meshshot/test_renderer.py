@@ -510,6 +510,56 @@ class ResidualRendererTests(unittest.TestCase):
                 self.assertEqual("private_supervisor_state", raised.exception.browser_cleanup_substage)
                 self.assertEqual(expected_check, raised.exception.browser_cleanup_check)
 
+    def test_private_supervisor_preserves_runtime_cleanup_before_ordinary_close(self) -> None:
+        from meshshot import browser_supervisor
+        from meshshot.browser_runtime import BrowserRuntimeError
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root_fd = os.open(
+                root,
+                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            )
+            info = os.fstat(root_fd)
+            server = mock.MagicMock()
+            server.close.side_effect = OSError("later listener close")
+            with (
+                mock.patch.object(browser_supervisor, "SUPERVISOR_OUTER_ROOT", root),
+                mock.patch.object(
+                    browser_supervisor,
+                    "SUPERVISOR_OUTER_AUTHORITY",
+                    root / "authority.json",
+                ),
+                mock.patch.object(
+                    browser_supervisor,
+                    "SUPERVISOR_OUTER_CLIENT",
+                    root / "client.json",
+                ),
+                mock.patch.object(
+                    browser_supervisor,
+                    "SUPERVISOR_OUTER_SOCKET",
+                    root / "authority.sock",
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                browser_supervisor._cleanup_private_supervisor_state(
+                    root_fd=root_fd,
+                    root_identity=(info.st_dev, info.st_ino),
+                    server=server,
+                    connection=None,
+                    socket_identity=None,
+                    socket_unlinked=True,
+                    initial_substage="private_browser_profile",
+                    initial_check="authority_close",
+                )
+
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_profile",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual("authority_close", raised.exception.browser_cleanup_check)
+
     def test_supervisor_protocol_rejects_duplicate_unknown_and_oversize_packets(
         self,
     ) -> None:
@@ -1554,6 +1604,100 @@ class ResidualRendererTests(unittest.TestCase):
                 self.assertFalse(launch_root.exists())
             finally:
                 runtime._pinned_executable.close()
+
+    def test_runtime_constructor_preserves_attestation_cleanup_before_pinned_close(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        body_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_private_tree",
+            browser_cleanup_check="tree_descriptor_close",
+        )
+        later_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_pinned_image",
+            browser_cleanup_check="executable_descriptor_close",
+        )
+        pinned = mock.MagicMock()
+        pinned.close.side_effect = later_cleanup
+        with (
+            mock.patch.object(
+                browser_runtime,
+                "_load_profile",
+                return_value=({"name": "frozen"}, "a" * 64),
+            ),
+            mock.patch.object(
+                browser_runtime,
+                "_PinnedExecutable",
+                return_value=pinned,
+            ),
+            mock.patch.object(
+                browser_runtime,
+                "_attest",
+                side_effect=body_cleanup,
+            ),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            PrelaunchedCdpRuntime(Path("/private/browser"))
+
+        pinned.close.assert_called_once()
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_private_tree",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual("tree_descriptor_close", raised.exception.browser_cleanup_check)
+
+    def test_prelaunch_preserves_body_cleanup_before_runtime_cleanup(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
+
+        body_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_handoff",
+            browser_cleanup_check="transport_close",
+        )
+        later_cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_profile",
+            browser_cleanup_check="authority_close",
+        )
+        runtime = object.__new__(PrelaunchedCdpRuntime)
+        runtime._profile = {
+            "arguments": [],
+            "startup_timeout_ms": 100,
+            "cleanup_term_ms": 10,
+            "cleanup_kill_ms": 10,
+        }
+        runtime._executable = Path("/private/browser")
+        runtime._pinned_executable = mock.MagicMock()
+        runtime._profile_dir = None
+        runtime._profile_identity = None
+        runtime._profile_cleanup_forbidden = False
+        runtime._profile_fd = None
+        runtime._profile_parent_fd = None
+        runtime._process = None
+        runtime._process_group = None
+        runtime._endpoint = None
+        with (
+            mock.patch.object(
+                browser_runtime.tempfile,
+                "mkdtemp",
+                side_effect=body_cleanup,
+            ),
+            mock.patch.object(runtime, "_cleanup", side_effect=later_cleanup) as cleanup,
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            runtime._prelaunch()
+
+        cleanup.assert_called_once()
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_handoff",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual("transport_close", raised.exception.browser_cleanup_check)
 
     def test_spawned_session_uses_pid_as_group_before_readiness_failure(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, PrelaunchedCdpRuntime
