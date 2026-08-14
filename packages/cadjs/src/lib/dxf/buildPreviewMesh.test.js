@@ -254,13 +254,19 @@ test("an ACTIVE bend clear of every hole still folds", () => {
   assert.ok(meshData.triangle_count > 0);
 });
 
-test("an ACTIVE non-vertical bend reports its orientation, not a false hole claim", () => {
-  // The decomposition genuinely cannot fold this. It now says so, instead of blaming
-  // whichever hole happened to straddle the collapsed midpoint.
+test("an ACTIVE bend that stops short of both edges says so, not a false hole claim", () => {
+  // Was "requires vertical bend lines": a horizontal fold is fine now, but this one spans
+  // x 10..90 of a 100 wide blank, so it still separates nothing. Either way the answer is about
+  // the bend, never about whichever hole happened to straddle a collapsed midpoint.
   const dxfData = creasedPlate([10, 5], [90, 5], [40, 30, 60, 45]);
   assert.throws(
     () => buildDxfPreviewMeshData(dxfData, 2, FOLDING),
-    /requires vertical bend lines/
+    (error) => {
+      assert.match(error.message, /runs edge to edge/u);
+      assert.match(error.message, /5\.000 mm short/u);
+      assert.doesNotMatch(error.message, /hole/u);
+      return true;
+    }
   );
 });
 
@@ -295,18 +301,16 @@ function bentPlate(bends, { width = 100, height = 60, holeRect = null } = {}) {
 const UP_90 = { direction: "up", angleDeg: 90 };
 
 test("a bend line that stops short of the edge is refused, not folded anyway", () => {
-  // The reported failure: with several bends the preview came out twisted into spikes. The
-  // X-slab decomposition folds a whole slab about the bend's midpoint X, so a line spanning
-  // the top third stood the ENTIRE right half up -- material the bend does not separate.
+  // The reported failure: with several bends the preview came out twisted into spikes, because
+  // a fold line spanning the top third still hinged the whole face behind it. A fold has to cut
+  // a face in two to be a hinge at all.
   const dxfData = bentPlate([{ x: 60, y0: 40, y1: 60 }]);
   assert.throws(
     () => buildDxfPreviewMeshData(dxfData, 2, [UP_90]),
     (error) => {
       assert.match(error.message, /runs edge to edge/u);
-      assert.match(error.message, /bend 1 at x=60\.000/u, "the message must name the offending bend");
-      assert.match(error.message, /spans y 40\.000\.\.60\.000/u);
-      assert.match(error.message, /material there spans y 0\.000\.\.60\.000/u);
-      assert.match(error.message, /40\.000 mm short/u);
+      assert.match(error.message, /bend 1/u, "the message must name the offending bend");
+      assert.match(error.message, /20\.000 mm short/u, "and say how far short it stops");
       return true;
     }
   );
@@ -316,7 +320,7 @@ test("the offending bend is named even when an earlier bend is fine", () => {
   const dxfData = bentPlate([{ x: 40, y0: 0, y1: 60 }, { x: 80, y0: 30, y1: 60 }]);
   assert.throws(
     () => buildDxfPreviewMeshData(dxfData, 2, [UP_90, UP_90]),
-    /bend 2 at x=80\.000/u
+    /bend 2, from \(80\.000, 30\.000\) to \(80\.000, 60\.000\)/u
   );
 });
 
@@ -368,24 +372,51 @@ test("a partial bend left at 0 degrees is still just a crease mark", () => {
   assert.equal(meshData.guide_line_segments.length, 6);
 });
 
-test("the vertical-bend requirement names the bend and its endpoints", () => {
-  const dxfData = {
+test("a bend at any angle folds: orientation is no longer a restriction", () => {
+  // The X-slab decomposition could only represent bends parallel to Y. Faces are split along
+  // each fold's own segment now, so a horizontal or diagonal fold is just a fold.
+  const horizontal = {
+    geometry: {
+      lines: [...rectangle(0, 0, 100, 60), { kind: "bend", start: [0, 30], end: [100, 30] }],
+      arcs: [],
+      circles: []
+    },
+    defaultThicknessMm: 2
+  };
+  assert.ok(buildDxfPreviewMeshData(horizontal, 2, [UP_90]).triangle_count > 0, "horizontal fold");
+
+  const diagonal = {
+    geometry: {
+      lines: [...rectangle(0, 0, 60, 60), { kind: "bend", start: [0, 0], end: [60, 60] }],
+      arcs: [],
+      circles: []
+    },
+    defaultThicknessMm: 2
+  };
+  assert.ok(buildDxfPreviewMeshData(diagonal, 2, [UP_90]).triangle_count > 0, "diagonal fold");
+});
+
+test("two folds at right angles on an L blank both fold", () => {
+  // One fold per arm. The slab model cut every bend across the whole blank, so the second arm's
+  // fold sliced through the first arm as well.
+  const lBlank = {
     geometry: {
       lines: [
-        ...rectangle(0, 0, 100, 60),
-        { kind: "bend", start: [10, 30], end: [90, 30] }
+        { kind: "cut", start: [0, 0], end: [100, 0] },
+        { kind: "cut", start: [100, 0], end: [100, 30] },
+        { kind: "cut", start: [100, 30], end: [30, 30] },
+        { kind: "cut", start: [30, 30], end: [30, 80] },
+        { kind: "cut", start: [30, 80], end: [0, 80] },
+        { kind: "cut", start: [0, 80], end: [0, 0] },
+        { kind: "bend", start: [60, 0], end: [60, 30] },
+        { kind: "bend", start: [0, 55], end: [30, 55] }
       ],
       arcs: [],
       circles: []
     },
     defaultThicknessMm: 2
   };
-  assert.throws(
-    () => buildDxfPreviewMeshData(dxfData, 2, [UP_90]),
-    (error) => {
-      assert.match(error.message, /requires vertical bend lines/u);
-      assert.match(error.message, /bend 1 runs from \(10\.000, 30\.000\) to \(90\.000, 30\.000\)/u);
-      return true;
-    }
-  );
+  const meshData = buildDxfPreviewMeshData(lBlank, 2, [UP_90, UP_90]);
+  assert.ok(meshData.triangle_count > 0);
+  assert.equal(meshData.guide_line_segments.length, 12, "both bends still draw a guide");
 });
