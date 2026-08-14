@@ -345,8 +345,70 @@ class ResidualRendererTests(unittest.TestCase):
                 browser_supervisor.SUPERVISOR_OUTER_AUTHORITY,
                 {},
             )
-        self.assertEqual("private_supervisor_state", raised.exception.browser_cleanup_substage)
-        self.assertEqual("authority_record_unlink", raised.exception.browser_cleanup_check)
+        self.assertEqual(
+            "private_supervisor_record_descriptors",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "authority_record_descriptor_close",
+            raised.exception.browser_cleanup_check,
+        )
+
+    def test_private_supervisor_terminal_result_descriptor_cleanup_is_not_swallowed(self) -> None:
+        from meshshot import browser_supervisor
+        from meshshot.browser_runtime import BrowserRuntimeError
+
+        cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_supervisor_record_descriptors",
+            browser_cleanup_check="result_record_descriptor_close",
+        )
+        with (
+            mock.patch.object(
+                browser_supervisor,
+                "run",
+                side_effect=BrowserRuntimeError("browser_profile"),
+            ),
+            mock.patch.object(browser_supervisor.os.path, "lexists", return_value=False),
+            mock.patch.object(
+                browser_supervisor,
+                "_write_private_record",
+                side_effect=cleanup,
+            ),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            browser_supervisor.main()
+        self.assertIs(cleanup, raised.exception)
+
+    def test_private_tree_descriptor_cleanup_has_exact_owner(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "resource").write_bytes(b"resource")
+            descriptor = os.open(root / "resource", os.O_RDONLY)
+            real_close = os.close
+
+            def close_then_fail(value: int) -> None:
+                real_close(value)
+                raise OSError("tree descriptor close")
+
+            with (
+                mock.patch.object(browser_runtime.os, "open", return_value=descriptor),
+                mock.patch.object(browser_runtime.os, "close", side_effect=close_then_fail),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable._freeze_directories(root)
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_private_tree",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "tree_descriptor_close",
+            raised.exception.browser_cleanup_check,
+        )
 
     def test_private_supervisor_state_cleanup_seven_boundaries_and_dominance(self) -> None:
         from meshshot import browser_supervisor

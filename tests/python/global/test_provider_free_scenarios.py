@@ -424,11 +424,11 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self.assertGreater(close_calls, 3)
         self.assertEqual("preview_browser_cleanup", raised.exception.operation)
         self.assertEqual(
-            "private_browser_pinned_image",
+            "outer_browser_stage",
             raised.exception.browser_cleanup_substage,
         )
         self.assertEqual(
-            "executable_descriptor_close",
+            "tree_copy_descriptor_close",
             raised.exception.browser_cleanup_check,
         )
 
@@ -519,11 +519,11 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         self.assertEqual(3, len(closed))
         self.assertEqual("preview_browser_cleanup", raised.exception.operation)
         self.assertEqual(
-            "private_browser_pinned_image",
+            "outer_browser_stage",
             raised.exception.browser_cleanup_substage,
         )
         self.assertEqual(
-            "executable_descriptor_close",
+            "revision_descriptor_close",
             raised.exception.browser_cleanup_check,
         )
 
@@ -554,10 +554,16 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                     )
                 self.assertEqual("preview_browser_cleanup", raised.exception.operation)
                 self.assertEqual(
-                    "outer_supervisor_process_group",
+                    "nested_public_child",
                     raised.exception.browser_cleanup_substage,
                 )
-                self.assertEqual(expected_check, raised.exception.browser_cleanup_check)
+                self.assertEqual(
+                    {
+                        "kill_signal": "termination_signal",
+                        "leader_kill_wait": "completion_reap",
+                    }[expected_check],
+                    raised.exception.browser_cleanup_check,
+                )
 
     def test_client_publication_descriptor_cleanup_is_typed(self) -> None:
         session = provider_free_scenarios._BrowserSupervisorSession("a" * 64)
@@ -582,8 +588,14 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         ):
             session.register_client(mock.MagicMock(), expected_executable=Path("/python"))
         self.assertEqual("preview_browser_cleanup", raised.exception.operation)
-        self.assertEqual("private_supervisor_state", raised.exception.browser_cleanup_substage)
-        self.assertEqual("client_record_unlink", raised.exception.browser_cleanup_check)
+        self.assertEqual(
+            "private_supervisor_record_descriptors",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual(
+            "client_record_descriptor_close",
+            raised.exception.browser_cleanup_check,
+        )
 
     def test_run_staged_publishes_closed_runtime_staging_failure(self) -> None:
         workspace = self.repo / "outputs/group/exp"
@@ -841,6 +853,17 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
         )
         self.assertEqual("kill_group_empty", error.browser_cleanup_check)
 
+    def test_closed_supervisor_result_rejects_receiptless_cleanup(self) -> None:
+        error = provider_free_scenarios._closed_supervisor_failure(
+            {
+                "schema": "meshshot.browser-supervisor-result/1",
+                "operation": "browser_cleanup",
+            }
+        )
+        self.assertEqual("preview_browser_prelaunch", error.operation)
+        self.assertIsNone(error.browser_cleanup_substage)
+        self.assertIsNone(error.browser_cleanup_check)
+
     def test_closed_supervisor_result_accepts_every_cleanup_predicate(self) -> None:
         for substage, checks in sorted(
             protocol.PROVIDER_FREE_BROWSER_CLEANUP_CHECKS_BY_SUBSTAGE.items()
@@ -1072,6 +1095,79 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
                 self.assertEqual("preview_browser_cleanup", error.operation)
                 self.assertEqual(substage, error.browser_cleanup_substage)
                 self.assertEqual(check, error.browser_cleanup_check)
+
+    def test_outer_supervisor_first_wait_failure_survives_nonretained_cleanup(self) -> None:
+        endpoint = self.repo / "first-wait.sock"
+        authority_path = self.repo / "first-wait.authority"
+        client_path = self.repo / "first-wait.client"
+        result_path = self.repo / "first-wait.result"
+        process = mock.MagicMock()
+        process.pid = 4242
+        process.poll.return_value = None
+        process.wait.side_effect = OSError("first wait failure")
+
+        def spawn(*_args: object, **_kwargs: object) -> mock.MagicMock:
+            endpoint.touch()
+            endpoint.chmod(0o600)
+            return process
+
+        later = provider_free_scenarios.ScenarioError(
+            "later nonretained group cleanup",
+            operation="preview_browser_cleanup",
+            browser_cleanup_substage="outer_supervisor_process_group",
+            browser_cleanup_check="term_signal",
+        )
+        with (
+            mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_SOCKET", endpoint),
+            mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_AUTHORITY", authority_path),
+            mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_CLIENT", client_path),
+            mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_RESULT", result_path),
+            mock.patch.object(provider_free_scenarios.subprocess, "Popen", side_effect=spawn),
+            mock.patch.object(provider_free_scenarios.stat, "S_ISSOCK", return_value=True),
+            mock.patch.object(provider_free_scenarios, "_load_supervisor_authority", return_value={"nonce": "a" * 64}),
+            mock.patch.object(provider_free_scenarios, "_probe_supervisor_peer"),
+            mock.patch.object(provider_free_scenarios, "_cleanup_browser_supervisor", side_effect=later),
+            self.assertRaises(provider_free_scenarios.ScenarioError) as raised,
+        ):
+            with self.browser_supervisor():
+                pass
+        self.assertEqual("outer_supervisor_wait", raised.exception.browser_cleanup_substage)
+        self.assertEqual("supervisor_wait", raised.exception.browser_cleanup_check)
+
+    def test_outer_supervisor_retained_state_overrides_first_wait_failure(self) -> None:
+        endpoint = self.repo / "retained.sock"
+        authority_path = self.repo / "retained.authority"
+        client_path = self.repo / "retained.client"
+        result_path = self.repo / "retained.result"
+        process = mock.MagicMock()
+        process.pid = 4242
+        process.poll.return_value = None
+        process.wait.side_effect = OSError("first wait failure")
+
+        def spawn(*_args: object, **_kwargs: object) -> mock.MagicMock:
+            endpoint.touch()
+            endpoint.chmod(0o600)
+            return process
+
+        with (
+            mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_SOCKET", endpoint),
+            mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_AUTHORITY", authority_path),
+            mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_CLIENT", client_path),
+            mock.patch.object(provider_free_scenarios, "_BROWSER_SUPERVISOR_RESULT", result_path),
+            mock.patch.object(provider_free_scenarios.subprocess, "Popen", side_effect=spawn),
+            mock.patch.object(provider_free_scenarios.stat, "S_ISSOCK", return_value=True),
+            mock.patch.object(provider_free_scenarios, "_load_supervisor_authority", return_value={"nonce": "a" * 64}),
+            mock.patch.object(provider_free_scenarios, "_probe_supervisor_peer"),
+            mock.patch.object(provider_free_scenarios, "_cleanup_browser_supervisor"),
+            self.assertRaises(provider_free_scenarios.ScenarioError) as raised,
+        ):
+            with self.browser_supervisor():
+                pass
+        self.assertEqual(
+            "outer_supervisor_private_state",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual("socket_absence", raised.exception.browser_cleanup_check)
 
     def test_deployed_viewer_receipt_proves_source_bundle_and_deployed_digests(self) -> None:
         receipt = provider_free_scenarios.deployed_viewer_receipt(self.repo)
