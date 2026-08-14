@@ -696,7 +696,11 @@ def _private_directory(prefix: str) -> Path:
                 "browser_identity",
                 browser_identity_phase="private_tree_materialization",
             )
-    return path
+        return path
+    raise BrowserRuntimeError(
+        "browser_identity",
+        browser_identity_phase="private_tree_materialization",
+    )
 
 
 def _private_child_directory(
@@ -727,10 +731,6 @@ def _private_child_directory(
             raise BrowserRuntimeError("browser_cleanup")
         return parent / name
     raise BrowserRuntimeError("browser_cleanup")
-    raise BrowserRuntimeError(
-        "browser_identity",
-        browser_identity_phase="private_tree_materialization",
-    )
 
 
 class _PinnedExecutable:
@@ -1799,16 +1799,22 @@ def _verify_listener_owner(process_group: int, port: int, timeout: float) -> Non
             for process_path in Path("/proc").iterdir():
                 if not process_path.name.isdigit():
                     continue
-                stat_line = (process_path / "stat").read_text(encoding="utf-8")
-                tail = stat_line[stat_line.rfind(")") + 2 :].split()
-                group = int(tail[2])
+                try:
+                    stat_line = (process_path / "stat").read_text(encoding="utf-8")
+                    tail = stat_line[stat_line.rfind(")") + 2 :].split()
+                    group = int(tail[2])
+                except (FileNotFoundError, PermissionError, ProcessLookupError):
+                    continue
+                if group != process_group:
+                    continue
                 for descriptor in (process_path / "fd").iterdir():
                     try:
                         target = os.readlink(descriptor)
-                    except FileNotFoundError:
+                    except (FileNotFoundError, PermissionError):
                         # Unrelated descriptors may disappear while /proc is
-                        # enumerated. A vanished listener still fails closed
-                        # below because its socket inode has no exact owner.
+                        # enumerated or remain unreadable after capability
+                        # drop. A hidden listener still fails closed below
+                        # because its socket inode has no exact owner.
                         continue
                     if target.startswith("socket:["):
                         inode = target[8:-1]
@@ -2166,11 +2172,30 @@ class PrelaunchedCdpRuntime:
 
         if self._endpoint is None or self._process_group is None:
             raise BrowserRuntimeError("browser_connect")
+        parsed = urlsplit(self._endpoint)
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise BrowserRuntimeError("browser_identity") from exc
+        if port is None:
+            raise BrowserRuntimeError("browser_identity")
+        try:
+            _verify_listener_owner(
+                self._process_group,
+                port,
+                float(self._profile["startup_timeout_ms"]) / 1000,
+            )
+        except BrowserRuntimeError as exc:
+            raise BrowserRuntimeError(
+                "browser_identity",
+                browser_identity_substage="loopback_listener_address_ownership",
+            ) from exc
         return {
             "schema": SUPERVISOR_PROTOCOL_SCHEMA,
             "type": "authority",
             "endpoint": self._endpoint,
             "process_group": self._process_group,
+            "listener_reproof": "passed",
             "browser_runtime": self.evidence,
         }
 
@@ -2331,6 +2356,7 @@ class SupervisedCdpAttachmentRuntime:
             "nonce",
             "endpoint",
             "process_group",
+            "listener_reproof",
             "browser_runtime",
         }:
             raise BrowserRuntimeError(
@@ -2348,6 +2374,7 @@ class SupervisedCdpAttachmentRuntime:
             or isinstance(process_group, bool)
             or not isinstance(process_group, int)
             or process_group <= 1
+            or authority.get("listener_reproof") != "passed"
             or runtime != self.evidence
         ):
             raise BrowserRuntimeError(
@@ -2380,11 +2407,6 @@ class SupervisedCdpAttachmentRuntime:
                 "browser_identity",
                 browser_identity_substage="loopback_listener_address_ownership",
             )
-        # The authenticated outer PrelaunchedCdpRuntime already proved exact
-        # listener ownership before publishing this authority. Repeating the
-        # /proc proof here is both redundant and impossible after the nested
-        # sandbox drops all capabilities; SO_PEERCRED + nonce binds this exact
-        # authority to that outer proof.
         return endpoint, process_group
 
     @contextmanager

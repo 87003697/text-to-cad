@@ -81,12 +81,35 @@ def open(_stream): return _Image()
     )
     (package / "sync_api.py").write_text(
         '''from __future__ import annotations
+import base64
+import json
 import os
+from pathlib import Path
+import socket
+import struct
+from urllib.parse import urlsplit
 
 class Session:
+    def __init__(self, connection):
+        self.connection = connection
     def send(self, method):
         assert method == "Browser.getVersion"
-        return {"product": "HeadlessChrome/148.0.7778.96"}
+        payload = json.dumps({"id": 1, "method": method}, separators=(",", ":")).encode()
+        mask = b"R3cd"
+        frame = bytes((0x81, 0x80 | len(payload))) + mask + bytes(
+            value ^ mask[index % 4] for index, value in enumerate(payload)
+        )
+        self.connection.sendall(frame)
+        header = self.connection.recv(2)
+        if len(header) != 2 or header[0] != 0x81 or header[1] >= 126:
+            raise OSError("closed CDP response")
+        body = b""
+        while len(body) < header[1]:
+            body += self.connection.recv(header[1] - len(body))
+        response = json.loads(body.decode("utf-8"))
+        product = response["result"]["product"]
+        Path("/tmp/real-cdp-identity").write_text("passed", encoding="ascii")
+        return {"product": product}
     def detach(self):
         return None
 
@@ -119,17 +142,40 @@ class Context:
         return None
 
 class Browser:
+    def __init__(self, connection):
+        self.connection = connection
     def new_browser_cdp_session(self):
-        return Session()
+        return Session(self.connection)
     def new_context(self, **_kwargs):
         return Context()
     def close(self):
-        return None
+        self.connection.close()
 
 class Chromium:
     executable_path = os.environ.get("MESHSHOT_BROWSER_EXECUTABLE", "/missing")
-    def connect_over_cdp(self, *_args, **_kwargs):
-        return Browser()
+    def connect_over_cdp(self, endpoint, **_kwargs):
+        parsed = urlsplit(endpoint)
+        first = socket.create_connection((parsed.hostname, parsed.port), timeout=5)
+        first.sendall(b"GET /json/version HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n")
+        response = b""
+        while True:
+            chunk = first.recv(4096)
+            if not chunk: break
+            response += chunk
+        first.close()
+        body = response.split(b"\\r\\n\\r\\n", 1)[1]
+        websocket = urlsplit(json.loads(body.decode("utf-8"))["webSocketDebuggerUrl"])
+        connection = socket.create_connection((websocket.hostname, websocket.port), timeout=5)
+        connection.sendall(
+            b"GET /devtools/browser/fixture HTTP/1.1\\r\\n"
+            b"Host: 127.0.0.1\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n"
+            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\\r\\nSec-WebSocket-Version: 13\\r\\n\\r\\n"
+        )
+        handshake = connection.recv(4096)
+        if b"101 Switching Protocols" not in handshake or b"s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" not in handshake:
+            connection.close()
+            raise OSError("closed CDP handshake")
+        return Browser(connection)
 
 class Playwright:
     chromium = Chromium()
@@ -188,6 +234,46 @@ int main(int argc, char **argv) {
   if (!stream) return 23;
   fprintf(stream, "%u\n/devtools/browser/fixture\n", ntohs(address.sin_port));
   fclose(stream);
+  unsigned int port = ntohs(address.sin_port);
+  for (int request = 0; request < 4; ++request) {
+    int client = accept(fd, NULL, NULL);
+    if (client < 0) return 24;
+    unsigned char input[4096] = {0};
+    ssize_t count = read(client, input, sizeof(input) - 1);
+    if (count <= 0) return 25;
+    if (strstr((char *)input, "GET /json/version ")) {
+      char body[512];
+      int body_size = snprintf(
+        body, sizeof(body),
+        "{\"Browser\":\"HeadlessChrome/148.0.7778.96\","
+        "\"webSocketDebuggerUrl\":\"ws://127.0.0.1:%u/devtools/browser/fixture\"}",
+        port
+      );
+      dprintf(client,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s",
+        body_size, body);
+      close(client);
+      continue;
+    }
+    if (!strstr((char *)input, "GET /devtools/browser/fixture ") ||
+        !strstr((char *)input, "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==")) return 26;
+    dprintf(client,
+      "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+      "Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n");
+    unsigned char frame[1024] = {0};
+    count = read(client, frame, sizeof(frame));
+    if (count < 8 || frame[0] != 0x81 || !(frame[1] & 0x80)) return 27;
+    size_t length = frame[1] & 0x7f;
+    if (length >= 126 || count < (ssize_t)(6 + length)) return 28;
+    for (size_t i = 0; i < length; ++i) frame[6 + i] ^= frame[2 + (i % 4)];
+    frame[6 + length] = 0;
+    if (!strstr((char *)&frame[6], "\"method\":\"Browser.getVersion\"")) return 29;
+    const char *reply = "{\"id\":1,\"result\":{\"product\":\"HeadlessChrome/148.0.7778.96\"}}";
+    size_t reply_size = strlen(reply);
+    unsigned char prefix[2] = {0x81, (unsigned char)reply_size};
+    if (write(client, prefix, 2) != 2 || write(client, reply, reply_size) != (ssize_t)reply_size) return 30;
+    close(client);
+  }
   signal(SIGTERM, stop); signal(SIGINT, stop); signal(SIGALRM, stop); alarm(5);
   while (running) pause();
   close(fd);
@@ -229,7 +315,6 @@ def _outer_argv(mode: str) -> list[str]:
         "CAP_NET_ADMIN",
         "CAP_SETUID",
         "CAP_SETGID",
-        "CAP_SYS_PTRACE",
         "CAP_SETFCAP",
     )
     argv = [
@@ -297,7 +382,6 @@ def _configure_scenario() -> object:
     scenarios.TRUSTED_BWRAP_PATH = Path(_BWRAP)
     scenarios._BROWSER_SUPERVISOR_TIMEOUT_SECONDS = 10.0
     scenarios.sys.executable = os.fspath(_wrapper())
-    scenarios._browser_supervisor_group_empty = lambda _group: True
     return scenarios
 
 
@@ -332,6 +416,9 @@ def _nested_render() -> int:
                 "ok": True,
                 "old_nested_owner": old_result,
                 "supervised_public_render": "passed" if rendered.png_bytes else "failed",
+                "real_cdp_identity": Path("/tmp/real-cdp-identity").read_text(
+                    encoding="ascii"
+                ),
                 "nested_browser_popen_count": 0,
             },
             sort_keys=True,

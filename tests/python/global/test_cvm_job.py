@@ -488,7 +488,6 @@ class CvmJobTests(unittest.TestCase):
                     "CAP_NET_ADMIN",
                     "CAP_SETUID",
                     "CAP_SETGID",
-                    "CAP_SYS_PTRACE",
                     "CAP_SETFCAP",
                 ],
                 "scope": "outer-user-namespace",
@@ -683,7 +682,6 @@ class CvmJobTests(unittest.TestCase):
                 "CAP_NET_ADMIN",
                 "CAP_SETUID",
                 "CAP_SETGID",
-                "CAP_SYS_PTRACE",
                 "CAP_SETFCAP",
             ],
             [

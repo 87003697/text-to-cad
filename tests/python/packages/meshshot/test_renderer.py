@@ -300,10 +300,10 @@ class ResidualRendererTests(unittest.TestCase):
             )
         verify.assert_not_called()
 
-        for label, mutation in (
-            ("missing", {key: value for key, value in authority.items() if key != "listener_reproof"}),
-            ("tampered", {**authority, "listener_reproof": "failed"}),
-            ("replay", {**authority, "nonce": "b" * 64}),
+        for label, mutation, substage in (
+            ("missing", {key: value for key, value in authority.items() if key != "listener_reproof"}, "runtime_evidence_cross_binding"),
+            ("tampered", {**authority, "listener_reproof": "failed"}, "runtime_evidence_cross_binding"),
+            ("replay", {**authority, "nonce": "b" * 64}, "runtime_evidence_cross_binding"),
         ):
             with (
                 self.subTest(label=label),
@@ -315,7 +315,7 @@ class ResidualRendererTests(unittest.TestCase):
                 )
             self.assertEqual("browser_identity", raised.exception.operation)
             self.assertEqual(
-                "loopback_listener_address_ownership",
+                substage,
                 raised.exception.browser_identity_substage,
             )
 
