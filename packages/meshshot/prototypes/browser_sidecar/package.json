@@ -1,0 +1,10 @@
+{
+  "name": "meshshot-browser-sidecar-prototype",
+  "version": "0.0.0-prototype",
+  "private": true,
+  "type": "module",
+  "description": "THROWAWAY: outer-owned Playwright browser sidecar feasibility probe.",
+  "dependencies": {
+    "playwright-core": "1.60.0"
+  }
+}
