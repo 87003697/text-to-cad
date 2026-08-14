@@ -366,10 +366,76 @@ class ProviderFreeScenarioEvidenceTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 provider_free_scenarios.ScenarioError,
                 "private browser staging cleanup failed",
-            ):
+            ) as raised:
                 provider_free_scenarios._materialize_outer_browser_stage()
 
         self.assertEqual(3, len(closed))
+        self.assertEqual("preview_browser_cleanup", raised.exception.operation)
+
+    def test_run_staged_publishes_closed_runtime_staging_failure(self) -> None:
+        workspace = self.repo / "outputs/group/exp"
+        workspace.mkdir(parents=True)
+        with mock.patch.object(
+            provider_free_scenarios,
+            "_materialize_outer_browser_stage",
+            side_effect=provider_free_scenarios.ScenarioError(
+                "closed staging failure",
+                operation="preview_browser_runtime_staging",
+            ),
+        ):
+            status = provider_free_scenarios.main(
+                [
+                    "run-staged",
+                    "issue15-runtime-authority",
+                    "--workspace",
+                    os.fspath(workspace),
+                ]
+            )
+
+        self.assertEqual(1, status)
+        self.assertEqual(
+            {
+                "schema": protocol.PROVIDER_FREE_SCENARIO_FAILURE_SCHEMA,
+                "scenario_identity": "issue15.provider-free.runtime-authority/1",
+                "stage": "native_measurement",
+                "operation": "preview_browser_runtime_staging",
+            },
+            json.loads(
+                (workspace / protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH).read_text(
+                    encoding="utf-8"
+                )
+            ),
+        )
+
+    def test_run_staged_cleanup_failure_dominates_public_receipt(self) -> None:
+        workspace = self.repo / "outputs/group/cleanup-exp"
+        workspace.mkdir(parents=True)
+        with mock.patch.object(
+            provider_free_scenarios,
+            "_materialize_outer_browser_stage",
+            side_effect=provider_free_scenarios.ScenarioError(
+                "closed cleanup failure",
+                operation="preview_browser_cleanup",
+            ),
+        ):
+            status = provider_free_scenarios.main(
+                [
+                    "run-staged",
+                    "issue15-runtime-authority",
+                    "--workspace",
+                    os.fspath(workspace),
+                ]
+            )
+
+        self.assertEqual(1, status)
+        self.assertEqual(
+            "preview_browser_cleanup",
+            json.loads(
+                (workspace / protocol.PROVIDER_FREE_SCENARIO_FAILURE_PATH).read_text(
+                    encoding="utf-8"
+                )
+            )["operation"],
+        )
 
     def test_fixed_supervisor_process_has_no_ambient_descriptors_and_reaps(self) -> None:
         endpoint = self.repo / "authority.sock"

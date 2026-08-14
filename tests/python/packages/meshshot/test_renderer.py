@@ -2539,6 +2539,21 @@ class ResidualRendererTests(unittest.TestCase):
             self.assertEqual("browser_cleanup", raised.exception.operation)
             self.assertTrue(original.is_dir())
 
+    def test_detached_mount_syscall_failure_is_cleanup(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        libc = mock.MagicMock()
+        libc.mount.return_value = -1
+        with (
+            mock.patch.object(browser_runtime.ctypes, "CDLL", return_value=libc),
+            self.assertRaises(BrowserRuntimeError) as raised,
+        ):
+            _PinnedExecutable._mount_private_filesystem(Path("/proc/self/fd/17"))
+
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertIsNone(raised.exception.browser_identity_phase)
+
     def test_directory_fsync_descriptor_close_failure_is_cleanup(self) -> None:
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
 
