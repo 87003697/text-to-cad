@@ -815,6 +815,19 @@ def provider_free_sandbox_argv(
         )
     ):
         raise ProtocolError("provider-free browser mount conflicts with job authority")
+    if browser_mount is not None:
+        try:
+            actual_manifest_sha256 = _browser_tree_manifest_sha256(
+                _browser_tree_manifest(mount.host_revision)
+            )
+        except (BrowserStageError, OSError) as exc:
+            raise ProtocolError(
+                "provider-free browser mount identity is unavailable"
+            ) from exc
+        if actual_manifest_sha256 != mount.tree_manifest_sha256:
+            raise ProtocolError(
+                "provider-free browser mount conflicts with tree authority"
+            )
     sandbox_exp = PROVIDER_FREE_SANDBOX_REPO_ROOT / relative_exp
     bwrap = runtime_identity["bwrap"]["path"]
     chromium = runtime_identity["chromium"]
@@ -859,6 +872,14 @@ def provider_free_sandbox_argv(
         os.fspath(mount.host_revision),
         f"{mount.sandbox_cache}/attested",
     ))
+    if browser_mount is not None:
+        argv.extend(
+            (
+                "--setenv",
+                "MESHSHOT_BROWSER_TREE_MANIFEST_SHA256",
+                mount.tree_manifest_sha256,
+            )
+        )
     for source, target in (
         ("usr/bin", "/bin"),
         ("usr/sbin", "/sbin"),
