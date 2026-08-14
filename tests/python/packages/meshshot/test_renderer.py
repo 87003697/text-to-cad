@@ -2813,6 +2813,49 @@ class ResidualRendererTests(unittest.TestCase):
             raised.exception.browser_cleanup_check,
         )
 
+    def test_pinned_constructor_preserves_body_cleanup_before_source_close(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_private_tree",
+            browser_cleanup_check="tree_descriptor_close",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+            executable.chmod(0o755)
+            real_close = os.close
+
+            def close_source_then_fail(descriptor: int) -> None:
+                real_close(descriptor)
+                raise OSError("later source descriptor close")
+
+            with (
+                mock.patch.object(
+                    _PinnedExecutable,
+                    "_materialize_private_image",
+                    autospec=True,
+                    side_effect=cleanup,
+                ),
+                mock.patch.object(_PinnedExecutable, "close", autospec=True),
+                mock.patch.object(
+                    browser_runtime.os,
+                    "close",
+                    side_effect=close_source_then_fail,
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                _PinnedExecutable(executable)
+
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_private_tree",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual("tree_descriptor_close", raised.exception.browser_cleanup_check)
+
     def test_private_image_output_close_and_body_failure_keep_first_cleanup(self) -> None:
         from meshshot import browser_runtime
         from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
@@ -2938,6 +2981,59 @@ class ResidualRendererTests(unittest.TestCase):
             "executable_descriptor_close",
             raised.exception.browser_cleanup_check,
         )
+
+    def test_detached_materialization_preserves_body_cleanup_before_source_close(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        cleanup = BrowserRuntimeError(
+            "browser_cleanup",
+            browser_cleanup_substage="private_browser_pinned_image",
+            browser_cleanup_check="detached_mount_release",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            executable = Path(directory) / "chrome-headless-shell"
+            executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+            executable.chmod(0o755)
+            source_info = executable.stat()
+            pinned = object.__new__(_PinnedExecutable)
+            pinned.path = executable
+            pinned.fd = None
+            pinned.launch_root = None
+            pinned._detached_mount_mode = True
+            pinned._source_identity = (
+                source_info.st_dev,
+                source_info.st_ino,
+                source_info.st_size,
+                source_info.st_mode,
+            )
+            real_close = os.close
+
+            def close_source_then_fail(descriptor: int) -> None:
+                real_close(descriptor)
+                raise OSError("later source descriptor close")
+
+            with (
+                mock.patch.object(
+                    pinned,
+                    "_materialize_detached_tree",
+                    side_effect=cleanup,
+                ),
+                mock.patch.object(
+                    browser_runtime.os,
+                    "close",
+                    side_effect=close_source_then_fail,
+                ),
+                self.assertRaises(BrowserRuntimeError) as raised,
+            ):
+                pinned._ensure_detached_materialized()
+
+        self.assertEqual("browser_cleanup", raised.exception.operation)
+        self.assertEqual(
+            "private_browser_pinned_image",
+            raised.exception.browser_cleanup_substage,
+        )
+        self.assertEqual("detached_mount_release", raised.exception.browser_cleanup_check)
 
     def test_detached_handoff_authority_descriptor_close_keeps_exact_owner(self) -> None:
         from meshshot import browser_runtime
@@ -3151,6 +3247,154 @@ class ResidualRendererTests(unittest.TestCase):
         self.assertEqual("browser_cleanup", raised.exception.operation)
         self.assertEqual("private_browser_handoff", raised.exception.browser_cleanup_substage)
         self.assertEqual("root_descriptor_close", raised.exception.browser_cleanup_check)
+
+    def test_detached_handoff_records_normal_transport_close_before_retry(self) -> None:
+        from meshshot import browser_runtime
+        from meshshot.browser_runtime import BrowserRuntimeError, _PinnedExecutable
+
+        for completion, failing_endpoint in (
+            ("version", "listener"),
+            ("live", "connection"),
+        ):
+            with self.subTest(completion=completion, endpoint=failing_endpoint):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    root.chmod(0o700)
+                    pinned = object.__new__(_PinnedExecutable)
+                    pinned.fd = os.open(os.devnull, os.O_RDONLY)
+                    pinned.launch_root = root / "browser-image"
+                    process = mock.MagicMock()
+                    process.pid = 4242
+                    connection = mock.MagicMock()
+                    listener = mock.MagicMock()
+                    listener.accept.return_value = (connection, None)
+                    if failing_endpoint == "listener":
+                        listener.close.side_effect = (
+                            OSError("first listener close"),
+                            None,
+                        )
+                    else:
+                        connection.close.side_effect = (
+                            OSError("first connection close"),
+                            None,
+                        )
+                    mounted = browser_runtime._canonical_bytes(
+                        {
+                            "schema": browser_runtime._BROWSER_MOUNT_SCHEMA,
+                            "type": "mounted",
+                            "nonce": "a" * 64,
+                        }
+                    )
+                    executed = browser_runtime._canonical_bytes(
+                        {
+                            "schema": browser_runtime._BROWSER_MOUNT_SCHEMA,
+                            "type": "exec",
+                            "nonce": "a" * 64,
+                        }
+                    )
+                    connection.recv.side_effect = (mounted, executed, b"")
+                    real_stat = os.stat
+                    socket_info = os.stat_result(
+                        (
+                            stat.S_IFSOCK | 0o600,
+                            2,
+                            1,
+                            1,
+                            os.geteuid(),
+                            os.getegid(),
+                            0,
+                            0,
+                            0,
+                            0,
+                        )
+                    )
+
+                    def stat_socket(
+                        path: object,
+                        *args: object,
+                        **kwargs: object,
+                    ) -> os.stat_result:
+                        if path == "authority.sock":
+                            return socket_info
+                        return real_stat(path, *args, **kwargs)
+
+                    try:
+                        with (
+                            mock.patch.object(
+                                browser_runtime.secrets,
+                                "token_hex",
+                                return_value="a" * 64,
+                            ),
+                            mock.patch.object(
+                                browser_runtime,
+                                "SUPERVISOR_OUTER_ROOT",
+                                root,
+                            ),
+                            mock.patch.object(
+                                browser_runtime,
+                                "_BROWSER_MOUNT_AUTHORITY",
+                                root / "authority.json",
+                            ),
+                            mock.patch.object(
+                                browser_runtime,
+                                "_BROWSER_MOUNT_SOCKET",
+                                root / "authority.sock",
+                            ),
+                            mock.patch.object(
+                                browser_runtime.socket,
+                                "socket",
+                                return_value=listener,
+                            ),
+                            mock.patch.object(
+                                browser_runtime.os,
+                                "stat",
+                                side_effect=stat_socket,
+                            ),
+                            mock.patch.object(browser_runtime.os, "chmod"),
+                            mock.patch.object(
+                                browser_runtime.subprocess,
+                                "Popen",
+                                return_value=process,
+                            ),
+                            mock.patch.object(
+                                browser_runtime,
+                                "_peer_credentials",
+                                return_value=(4343, os.geteuid(), os.getegid()),
+                            ),
+                            mock.patch.object(pinned, "_verify_bwrap_peer"),
+                            mock.patch.object(pinned, "_send_mount_packet"),
+                            mock.patch.object(pinned, "_remove_detached_source"),
+                            mock.patch.object(pinned, "_wait_for_exec_replacement"),
+                            mock.patch.object(pinned, "_unlink_owned_handoff_entry"),
+                            mock.patch.object(
+                                pinned,
+                                "_reap_failed_handoff",
+                                return_value=False,
+                            ) as reap,
+                            self.assertRaises(BrowserRuntimeError) as raised,
+                        ):
+                            pinned._detached_linux_popen(
+                                [
+                                    "chrome-headless-shell",
+                                    "--user-data-dir=/tmp/profile",
+                                ],
+                                deadline=time.monotonic() + 1,
+                                options={"start_new_session": True},
+                                completion=completion,
+                            )
+                    finally:
+                        os.close(pinned.fd)
+
+                reap.assert_called_once_with(process, process_group=True)
+                self.assertEqual("browser_cleanup", raised.exception.operation)
+                self.assertEqual(
+                    "private_browser_handoff",
+                    raised.exception.browser_cleanup_substage,
+                )
+                self.assertEqual(
+                    "transport_close",
+                    raised.exception.browser_cleanup_check,
+                )
 
     def test_runtime_executes_pinned_image_during_swap_then_restore(self) -> None:
         from meshshot.browser_runtime import _PinnedExecutable
