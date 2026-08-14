@@ -420,3 +420,60 @@ test("two folds at right angles on an L blank both fold", () => {
   assert.ok(meshData.triangle_count > 0);
   assert.equal(meshData.guide_line_segments.length, 12, "both bends still draw a guide");
 });
+
+test("every bend guide rides on its own crease, not on an unrelated face", () => {
+  // The multi_bend_test_panel shape: four folds, five faces. The guide for a fold belongs to the
+  // face the fold HINGES; picking any face that merely sits on the fold's negative side left two
+  // of the four dashes floating off the part, drawn with the matrix of a face that has nothing to
+  // do with that bend.
+  const geometry = {
+    geometry: {
+      lines: [
+        ...[
+          [[0, 0], [70, 0]], [[70, 0], [70, -22]], [[70, -22], [110, -22]], [[110, -22], [110, 0]],
+          [[110, 0], [180, 0]], [[180, 0], [180, 56]], [[180, 56], [146, 90]], [[146, 90], [0, 90]],
+          [[0, 90], [0, 0]]
+        ].map(([start, end]) => ({ kind: "cut", start, end })),
+        ...[
+          [[45, 0], [45, 90]], [[70, 0], [110, 0]], [[120, 0], [120, 90]], [[180, 35], [125, 90]]
+        ].map(([start, end]) => ({ kind: "bend", start, end }))
+      ],
+      circles: []
+    }
+  };
+  const settings = [1, 2, 3, 4].map(() => ({ direction: "up", angleDeg: 90 }));
+  const mesh = buildDxfPreviewMeshData(geometry, 2, settings);
+  const guides = mesh.guide_line_segments;
+  assert.equal(guides.length, 4 * 6, "one segment per bend");
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let index = 0; index < mesh.vertices.length; index += 3) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      min[axis] = Math.min(min[axis], mesh.vertices[index + axis]);
+      max[axis] = Math.max(max[axis], mesh.vertices[index + axis]);
+    }
+  }
+  // A guide sitting on its crease is inside the folded part's extent; a stranded one is not. The
+  // slack is the elevation that floats the dashes clear of the surface.
+  const slack = 1.5;
+  for (let index = 0; index < guides.length; index += 3) {
+    for (const axis of [0, 1, 2]) {
+      const value = guides[index + axis];
+      assert.ok(
+        value >= min[axis] - slack && value <= max[axis] + slack,
+        `guide point ${index / 3} axis ${axis} at ${value.toFixed(1)} is outside `
+        + `[${min[axis].toFixed(1)}, ${max[axis].toFixed(1)}]`
+      );
+    }
+  }
+  // And each guide keeps its bend line's length: it is the same crease, moved rigidly.
+  for (let index = 0; index < guides.length; index += 6) {
+    const length = Math.hypot(
+      guides[index + 3] - guides[index],
+      guides[index + 4] - guides[index + 1],
+      guides[index + 5] - guides[index + 2]
+    );
+    const expected = [90, 40, 90, Math.hypot(55, 55)][index / 6];
+    assert.ok(Math.abs(length - expected) < 1e-4, `guide ${index / 6} length ${length} != ${expected}`);
+  }
+});

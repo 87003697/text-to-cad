@@ -618,21 +618,22 @@ function buildFlatStripDefinitions(sortedLoops) {
  * For a fold, the parent side is arbitrary but stable: the guide marks where the bend IS, so it
  * belongs to whichever face still contains the line's own position. For a crease, that is the
  * face the crease sits inside. */
-function regionIndexForGuide(regions, bendLine, foldIndex, foldLines) {
+function regionIndexForGuide(regions, bendLine, foldIndex, adjacency, parents) {
   const midpoint = [
     (bendLine.start[0] + bendLine.end[0]) / 2,
     (bendLine.start[1] + bendLine.end[1]) / 2
   ];
   if (foldIndex >= 0) {
-    const foldLine = foldLines[foldIndex];
-    // Both faces touch the fold; pick the one on its negative side so a chain of bends draws
-    // each guide once, on the face nearer the root of the fold order.
-    const owner = regions.findIndex((region) => region.sides
-      .some((entry) => entry.foldIndex === foldIndex && entry.side === -1));
-    if (owner >= 0) {
-      return owner;
+    // The guide belongs to the fold's HINGE PARENT, which is the frame its curved band is
+    // already built in, so the dashes land on the crease. Picking any face that merely sits on
+    // the fold's negative side does not: with more than two faces, several share that side
+    // without touching the fold, and the guide gets drawn with a face's matrix that has nothing
+    // to do with this bend -- dashes floating off the part.
+    const edge = adjacency.find((candidate) => candidate.foldIndex === foldIndex);
+    if (edge) {
+      const [a, b] = edge.regions;
+      return parents[b]?.region === a ? a : b;
     }
-    void foldLine;
   }
   const containing = regions.findIndex((region) => pointInLoop(midpoint, region.outerLoop));
   return containing >= 0 ? containing : 0;
@@ -1068,7 +1069,7 @@ export function buildDxfPreviewMeshData(dxfData, thicknessMm, bendSettings = nul
     // Guides ride on the face that owns them, so a crease on a folded face folds with it.
     const guideY = guideElevationSign * (halfThickness + BEND_LINE_ELEVATION_MM);
     guideLineSegments = guideOwners.flatMap(({ bendLine, foldIndex }) => {
-      const ownerIndex = regionIndexForGuide(regions, bendLine, foldIndex, foldLines);
+      const ownerIndex = regionIndexForGuide(regions, bendLine, foldIndex, adjacency, parents);
       const matrix = transforms[ownerIndex] || new Matrix4().identity();
       return [
         ...applyMatrixToPoint(matrix, [bendLine.start[0], guideY, bendLine.start[1]]),
