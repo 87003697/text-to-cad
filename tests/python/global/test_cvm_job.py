@@ -145,6 +145,16 @@ class CvmJobTests(unittest.TestCase):
                 executable.stat().st_dev,
                 mount.host_revision.stat().st_dev,
             )
+            self.assertEqual(
+                "102e2cd9ceb42e2eb9fa01bc9cb6333969c0ba5971fdfc45b23b3de87fa95835",
+                mount.tree_manifest_sha256,
+            )
+            self.assertEqual("1234", mount.revision)
+            self.assertEqual(
+                "chrome-headless-shell-linux64/chrome-headless-shell",
+                mount.executable_relative,
+            )
+            self.assertEqual(chromium["sha256"], mount.executable_sha256)
 
         self.assertFalse(stage_root.exists())
 
@@ -456,6 +466,15 @@ class CvmJobTests(unittest.TestCase):
             exp_dir,
             receipt["runtime_identity"],
             repo_root=self.repo_root,
+        )
+
+        self.assertEqual(
+            "issue15.provider-free-bounded/17",
+            runtime.PROVIDER_FREE_EXECUTION_PROFILE["id"],
+        )
+        self.assertEqual(
+            "cvm.provider-free-linux-sandbox/17",
+            runtime.PROVIDER_FREE_EXECUTION_PROFILE["sandbox_profile"],
         )
 
         executable_tmpfs = argv.index("--tmpfs", argv.index("--tmpfs") + 1)
