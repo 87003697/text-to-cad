@@ -6,8 +6,12 @@ import base64
 from collections.abc import Sequence
 from dataclasses import dataclass
 from io import BytesIO
+import json
 import math
+import os
 from pathlib import Path
+import re
+import socket
 from typing import Any
 
 from PIL import Image
@@ -22,6 +26,22 @@ _RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
 _BROWSER_STARTUP_TIMEOUT_MS = 15_000
 _RENDER_TIMEOUT_MS = 120_000
 _OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
+_AUTHORITY_ENV = "MESHSHOT_BROWSER_AUTHORITY_FILE"
+_AUTHORITY_SCHEMA = "meshshot.browser-authority/1"
+_REQUEST_SCHEMA = "meshshot.browser-sidecar.render-request/2"
+_RESPONSE_SCHEMA = "meshshot.browser-sidecar.render-response/1"
+_SIDECAR_IMAGE_ID = (
+    "sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1"
+)
+_PROGRAMS = {
+    "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
+    "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
+}
+_JOB_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
+_MAX_AUTHORITY_BYTES = 16 * 1024
+_MAX_REQUEST_BYTES = 1024 * 1024
+_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+_SOCKET_TIMEOUT_SECONDS = 120.0
 
 
 class MeshshotError(RuntimeError):
@@ -62,23 +82,132 @@ class RenderedPreview:
     views: tuple[dict[str, Any], ...]
 
 
-def render_residual_preview(
-    reference: MeshGeometry,
-    candidate: MeshGeometry,
-    *,
-    variant: str = "step",
-    exterior_directions: Sequence[str] = (),
-) -> RenderedPreview:
-    """Render reference green and candidate red in one batched browser job."""
+def _strict_json(payload: bytes, label: str) -> Any:
+    """Decode one duplicate-free JSON value from a bounded trusted channel."""
 
-    loaded = load_profile()
-    if variant not in loaded.profile["variants"]:
-        raise MeshshotError(f"unsupported render variant: {variant}")
-    directions = tuple(str(value) for value in exterior_directions)
-    if len(set(directions)) != len(directions) or any(
-        value not in _OUTSIDE_DIRECTIONS for value in directions
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise MeshshotError(f"{label} contains duplicate keys")
+            result[key] = value
+        return result
+
+    try:
+        return json.loads(payload, object_pairs_hook=unique_object)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise MeshshotError(f"{label} is not valid JSON") from exc
+
+
+def _exact_object(value: Any, keys: set[str], label: str) -> dict[str, Any]:
+    """Require one object with an exact public key set."""
+
+    if not isinstance(value, dict) or set(value) != keys:
+        raise MeshshotError(f"{label} has an invalid schema")
+    return value
+
+
+def _load_browser_authority() -> dict[str, Any] | None:
+    """Return the fixed formal authority, or None outside a formal job."""
+
+    if _AUTHORITY_ENV not in os.environ:
+        return None
+    raw_path = os.environ.get(_AUTHORITY_ENV, "")
+    if not raw_path or "\0" in raw_path:
+        raise MeshshotError("formal browser authority path is invalid")
+    path = Path(raw_path)
+    if not path.is_absolute():
+        raise MeshshotError("formal browser authority path must be absolute")
+    try:
+        with path.open("rb") as stream:
+            raw = stream.read(_MAX_AUTHORITY_BYTES + 1)
+    except OSError as exc:
+        raise MeshshotError("formal browser authority is unavailable") from exc
+    if not raw or len(raw) > _MAX_AUTHORITY_BYTES:
+        raise MeshshotError("formal browser authority has an invalid size")
+    authority = _exact_object(
+        _strict_json(raw, "formal browser authority"),
+        {"schema", "jobId", "imageId", "socketPath", "programs"},
+        "formal browser authority",
+    )
+    socket_path = authority["socketPath"]
+    if (
+        authority["schema"] != _AUTHORITY_SCHEMA
+        or not isinstance(authority["jobId"], str)
+        or _JOB_ID.fullmatch(authority["jobId"]) is None
+        or authority["imageId"] != _SIDECAR_IMAGE_ID
+        or authority["programs"] != _PROGRAMS
+        or not isinstance(socket_path, str)
+        or not socket_path.startswith("/")
+        or len(socket_path.encode("utf-8")) > 4096
+        or "\0" in socket_path
     ):
-        raise MeshshotError("exterior directions must be unique signed x/y/z values")
+        raise MeshshotError("formal browser authority identity is invalid")
+    return authority
+
+
+def _registered_residual_render(
+    authority: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Submit one exact residual request to the job-private program broker."""
+
+    request = {
+        "schema": _REQUEST_SCHEMA,
+        "jobId": authority["jobId"],
+        "imageId": authority["imageId"],
+        "program": "residual",
+        "payload": payload,
+    }
+    request_bytes = json.dumps(
+        request,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("ascii")
+    if len(request_bytes) > _MAX_REQUEST_BYTES:
+        raise MeshshotError("formal residual request exceeds 1 MiB")
+    response_bytes = bytearray()
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(_SOCKET_TIMEOUT_SECONDS)
+            connection.connect(authority["socketPath"])
+            connection.sendall(request_bytes + b"\n")
+            connection.shutdown(socket.SHUT_WR)
+            while True:
+                chunk = connection.recv(65536)
+                if not chunk:
+                    break
+                response_bytes.extend(chunk)
+                if len(response_bytes) > _MAX_RESPONSE_BYTES:
+                    raise MeshshotError("formal residual response is too large")
+    except MeshshotError:
+        raise
+    except OSError as exc:
+        raise MeshshotError("formal Browser Sidecar request failed") from exc
+    if not response_bytes.endswith(b"\n") or b"\n" in response_bytes[:-1]:
+        raise MeshshotError("formal residual response framing is invalid")
+    response = _exact_object(
+        _strict_json(bytes(response_bytes[:-1]), "formal residual response"),
+        {"schema", "jobId", "imageId", "program", "result"},
+        "formal residual response",
+    )
+    if (
+        response["schema"] != _RESPONSE_SCHEMA
+        or response["jobId"] != authority["jobId"]
+        or response["imageId"] != authority["imageId"]
+        or response["program"] != "residual"
+    ):
+        raise MeshshotError("formal residual response identity is invalid")
+    return _exact_object(
+        response["result"],
+        {"ok", "pngDataUrl", "views"},
+        "formal residual result",
+    )
+
+
+def _legacy_browser_render(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run the existing local browser path outside a formal pilot job."""
+
     runtime_files = {
         "/render.html": _RUNTIME_DIR / "render.html",
         "/residual-render.js": _RUNTIME_DIR / "residual-render.js",
@@ -89,14 +218,6 @@ def render_residual_preview(
             "meshshot browser runtime is missing; run the mesh-compare bundle: "
             + ", ".join(missing)
         )
-
-    payload = {
-        "profile": loaded.profile,
-        "variant": variant,
-        "reference": reference.to_json(),
-        "candidate": candidate.to_json(),
-        "exteriorDirections": list(directions),
-    }
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -154,6 +275,50 @@ def render_residual_preview(
         raise
     except Exception as exc:
         raise MeshshotError(f"headless residual render failed: {exc}") from exc
+    return result
+
+
+def render_residual_preview(
+    reference: MeshGeometry,
+    candidate: MeshGeometry,
+    *,
+    variant: str = "step",
+    exterior_directions: Sequence[str] = (),
+) -> RenderedPreview:
+    """Render reference green and candidate red in one batched browser job."""
+
+    loaded = load_profile()
+    if variant not in loaded.profile["variants"]:
+        raise MeshshotError(f"unsupported render variant: {variant}")
+    directions = tuple(str(value) for value in exterior_directions)
+    if len(set(directions)) != len(directions) or any(
+        value not in _OUTSIDE_DIRECTIONS for value in directions
+    ):
+        raise MeshshotError("exterior directions must be unique signed x/y/z values")
+    payload = {
+        "profile": loaded.profile,
+        "variant": variant,
+        "reference": reference.to_json(),
+        "candidate": candidate.to_json(),
+        "exteriorDirections": list(directions),
+    }
+    authority = _load_browser_authority()
+    if authority is None:
+        result = _legacy_browser_render(payload)
+    else:
+        result = _registered_residual_render(
+            authority,
+            {
+                "reference": payload["reference"],
+                "candidate": payload["candidate"],
+                "variant": variant,
+                "exteriorDirections": list(directions),
+                "options": {
+                    "cameraPolicy": "profile-fixed",
+                    "canonicalPostprocess": True,
+                },
+            },
+        )
 
     if not isinstance(result, dict) or result.get("ok") is not True:
         detail = result.get("error") if isinstance(result, dict) else None
