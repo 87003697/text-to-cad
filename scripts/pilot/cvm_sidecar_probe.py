@@ -1299,7 +1299,7 @@ def _stop_inventory_process(process: subprocess.Popen[bytes]) -> None:
 
 
 def _loaded_image_ids() -> frozenset[str]:
-    argv = ["docker", "image", "ls", "--no-trunc", "--quiet"]
+    argv = ["docker", "image", "ls", "--all", "--no-trunc", "--quiet"]
     try:
         process = subprocess.Popen(
             argv,

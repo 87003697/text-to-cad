@@ -169,7 +169,13 @@ def write_portable_archive_docker(path: Path) -> None:
                 if projection not in values:
                     raise SystemExit(f"unexpected inspect projection: {{projection}}")
                 print(values[projection])
-            elif sys.argv[1:] == ["image", "ls", "--no-trunc", "--quiet"]:
+            elif sys.argv[1:] == [
+                "image",
+                "ls",
+                "--all",
+                "--no-trunc",
+                "--quiet",
+            ]:
                 print(sidecar)
                 print(client)
             elif sys.argv[1:3] == ["image", "save"]:

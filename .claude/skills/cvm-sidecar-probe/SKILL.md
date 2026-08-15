@@ -34,9 +34,11 @@ The workflow has three separate public operations:
    free space of at least `3 GiB + archive bytes`, and verifies an accessible
    `linux/amd64` Docker server. It retains the 3 GiB post-transfer gate,
    verifies the archive hash before `docker image load`, then runs one fixed
-   `docker image ls --no-trunc --quiet` inventory proof. Every inventory entry
-   must be a complete canonical `sha256:<64-hex>` image ID, the bounded list may
-   contain at most 4096 entries, and both prepared config IDs must be present.
+   `docker image ls --all --no-trunc --quiet` inventory proof. `--all` is
+   mandatory because the Sidecar can be the untagged parent of the sealed
+   client image. Every inventory entry must be a complete canonical
+   `sha256:<64-hex>` image ID, the bounded list may contain at most 4096
+   entries, and both prepared config IDs must be present.
    The Docker client output is read incrementally with a 71-byte line ceiling;
    a 4097th entry, an oversized line, invalid ASCII/identity, or the 60-second
    deadline terminates and reaps the client before returning a closed failure.
