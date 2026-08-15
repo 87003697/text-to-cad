@@ -270,3 +270,43 @@ default inventory hides it.
 Require fresh independent Standards and Spec PASS on the clean successor before
 one new deployment, prepare handle, provision attempt, and conditional sealed
 probe. Neither failed handle may be retried, adopted, or cleaned.
+
+That successor passed independent Standards and Spec review and deployed as
+clean SHA `ab821e164a875f7b55c4b85c174ebda690fe41d0`. Fresh handle
+`cvmsp-2e90294556c9aea5e06db680` prepared the exact 1,084,572,160-byte archive
+successfully, but its single provision again terminated at
+`sidecar-loaded-id`. Nonce abort and all transfer-absence predicates passed,
+`retryAllowed:false`, and the sealed Chromium probe remained `NOT_RUN`.
+
+The second result disproved the parent-image-only diagnosis. Read-only local
+inspection of that fixed Docker-save archive showed two manifest entries whose
+portable config digests are `fc8f22ba...c35b846` and
+`3b477d93...d4a1f75b`, while Colima's source image IDs are `22ff2413...b146f1`
+and `a2dae484...e46373`. The local Docker image ID is therefore not a portable
+post-load ID across these two storage backends.
+
+## Role-reference loaded-ID successor
+
+- RED `98bc84b0`: public prepare requires two handle-and-role-bound archive
+  references and their exact local removal; public remote-provision requires
+  resolving those two references to distinct loaded IDs. Existing code failed
+  both seams.
+- GREEN `4efc4695`: prepare preflights two fixed references, tags the exact
+  inspected source IDs, saves the references into the one SHA-bound archive,
+  then removes and proves both local tags absent. Remote provision resolves
+  each fixed reference with the same bounded inventory reader and records the
+  two distinct loaded IDs in `retainedImageIds`. The sealed probe runs only
+  those retained IDs with `--pull=never`; the source image receipts remain
+  unchanged.
+- No public tag/reference/path argument, tar parser, image inspect fallback, or
+  raw Docker output was added. Reference names derive only from the validated
+  handle and the fixed `sidecar|client` role.
+- Focused CVM Sidecar suite: 42/42 PASS.
+- Global modules excluding `test_cvm_push`: 167/167 PASS. The remaining
+  `test_cvm_push` cases excluding the same pre-existing symlink-copy hang:
+  25/25 PASS.
+- Python compilation and diff check: PASS.
+
+Require fresh independent Standards and Spec PASS on the clean successor before
+one new deployment, prepare handle, provision attempt, and conditional sealed
+probe. None of the three failed handles may be retried, adopted, or cleaned.
