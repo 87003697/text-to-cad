@@ -35,10 +35,12 @@ The workflow has three separate public operations:
    `linux/amd64` Docker server. It retains the 3 GiB post-transfer gate,
    verifies the archive hash before `docker image load`, re-inspects the loaded
    exact IDs/platform/revision labels through one fixed `docker image inspect
-   --format` four-value JSON projection, derives the same config digests from
-   the IDs, removes the transfer archive, and intentionally retains the two
-   provisioned images. Full daemon inspect JSON is neither requested nor
-   accepted.
+   --format` projection containing exactly four TAB-delimited direct fields,
+   derives the same config digests from the IDs, removes the transfer archive,
+   and intentionally retains the two provisioned images. Missing or empty
+   revision fails the revision check; embedded TAB/newline content or any
+   output other than one line with four fields fails the inspect-format check.
+   Full daemon inspect JSON is neither requested nor accepted.
 3. `probe` is a second external CVM write and the only execution dispatch. It
    runs exactly one sealed probe with `--pull=never`, an internal network,
    fixed resource bounds, read-only filesystems, and exact runtime cleanup.
