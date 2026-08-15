@@ -27,17 +27,18 @@ _RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
 _BROWSER_STARTUP_TIMEOUT_MS = 15_000
 _RENDER_TIMEOUT_MS = 120_000
 _OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
-_AUTHORITY_ENV = "MESHSHOT_BROWSER_AUTHORITY_FILE"
-_AUTHORITY_SCHEMA = "meshshot.browser-authority/1"
-_REQUEST_SCHEMA = "meshshot.browser-sidecar.render-request/2"
-_RESPONSE_SCHEMA = "meshshot.browser-sidecar.render-response/1"
-_SIDECAR_IMAGE_ID = (
-    "sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1"
+_CONTRACT = json.loads(
+    (Path(__file__).resolve().parent / "browser_contract.json").read_text(
+        encoding="utf-8"
+    )
 )
-_PROGRAMS = {
-    "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
-    "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
-}
+_AUTHORITY_PATH = Path(_CONTRACT["authorityPath"])
+_SOCKET_PATH = Path(_CONTRACT["socketPath"])
+_AUTHORITY_SCHEMA = _CONTRACT["authoritySchema"]
+_REQUEST_SCHEMA = _CONTRACT["requestSchema"]
+_RESPONSE_SCHEMA = _CONTRACT["responseSchema"]
+_SIDECAR_IMAGE_ID = _CONTRACT["sidecarImageId"]
+_PROGRAMS = _CONTRACT["programs"]
 _JOB_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 _MAX_AUTHORITY_BYTES = 16 * 1024
 _MAX_REQUEST_BYTES = 1024 * 1024
@@ -111,46 +112,42 @@ def _exact_object(value: Any, keys: set[str], label: str) -> dict[str, Any]:
 def _load_browser_authority() -> dict[str, Any] | None:
     """Return the fixed formal authority, or None outside a formal job."""
 
-    if _AUTHORITY_ENV not in os.environ:
-        return None
-    raw_path = os.environ.get(_AUTHORITY_ENV, "")
-    if not raw_path or "\0" in raw_path:
-        raise MeshshotError("formal browser authority path is invalid")
-    path = Path(raw_path)
-    if not path.is_absolute():
-        raise MeshshotError("formal browser authority path must be absolute")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        metadata = path.lstat()
+        descriptor = os.open(_AUTHORITY_PATH, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise MeshshotError("formal browser authority file is unavailable") from exc
+    try:
+        metadata = os.fstat(descriptor)
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_nlink != 1
-            or metadata.st_mode & 0o022
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o444
         ):
             raise MeshshotError("formal browser authority file is replaceable")
-        with path.open("rb") as stream:
-            raw = stream.read(_MAX_AUTHORITY_BYTES + 1)
+        raw = os.read(descriptor, _MAX_AUTHORITY_BYTES + 1)
     except MeshshotError:
         raise
     except OSError as exc:
         raise MeshshotError("formal browser authority is unavailable") from exc
+    finally:
+        os.close(descriptor)
     if not raw or len(raw) > _MAX_AUTHORITY_BYTES:
         raise MeshshotError("formal browser authority has an invalid size")
     authority = _exact_object(
         _strict_json(raw, "formal browser authority"),
-        {"schema", "jobId", "imageId", "socketPath", "programs"},
+        {"schema", "jobId", "imageId", "programs"},
         "formal browser authority",
     )
-    socket_path = authority["socketPath"]
     if (
         authority["schema"] != _AUTHORITY_SCHEMA
         or not isinstance(authority["jobId"], str)
         or _JOB_ID.fullmatch(authority["jobId"]) is None
         or authority["imageId"] != _SIDECAR_IMAGE_ID
         or authority["programs"] != _PROGRAMS
-        or not isinstance(socket_path, str)
-        or not socket_path.startswith("/")
-        or len(socket_path.encode("utf-8")) > 4096
-        or "\0" in socket_path
     ):
         raise MeshshotError("formal browser authority identity is invalid")
     return authority
@@ -180,7 +177,7 @@ def _registered_residual_render(
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(_SOCKET_TIMEOUT_SECONDS)
-            connection.connect(authority["socketPath"])
+            connection.connect(os.fspath(_SOCKET_PATH))
             connection.sendall(request_bytes + b"\n")
             connection.shutdown(socket.SHUT_WR)
             while True:

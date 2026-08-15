@@ -22,14 +22,20 @@ from PIL import Image
 
 from meshshot import MeshGeometry, render_residual_preview
 from scripts.pilot.browser_sidecar import (
+    AUTHORITY_SCHEMA,
     BROKER_IMAGE_ID,
     BrowserSidecarJob,
     IMAGE_ID,
     PROGRAMS,
+    REQUEST_SCHEMA,
+    RESPONSE_SCHEMA,
+    SANDBOX_AUTHORITY_PATH,
+    SANDBOX_SOCKET_PATH,
 )
 
 
-AUTHORITY_PATH = Path("/run/meshshot-browser/authority.json")
+AUTHORITY_PATH = SANDBOX_AUTHORITY_PATH
+SOCKET_PATH = SANDBOX_SOCKET_PATH
 EXPECTED_PUBLIC_PNG_SHA256 = (
     "b498c55c68662989a3a95c4925432d61f979183d30c2cdf593e154c7b0ca9d5b"
 )
@@ -57,11 +63,10 @@ def _authority() -> Mapping[str, Any]:
     payload = _strict_json(AUTHORITY_PATH.read_bytes(), "authority")
     if (
         not isinstance(payload, dict)
-        or set(payload) != {"schema", "jobId", "imageId", "socketPath", "programs"}
-        or payload.get("schema") != "meshshot.browser-authority/1"
+        or set(payload) != {"schema", "jobId", "imageId", "programs"}
+        or payload.get("schema") != AUTHORITY_SCHEMA
         or payload.get("imageId") != IMAGE_ID
         or payload.get("programs") != PROGRAMS
-        or payload.get("socketPath") != "/run/meshshot-browser/browser-sidecar.sock"
     ):
         raise ValueError("formal authority identity mismatch")
     return payload
@@ -72,7 +77,7 @@ def _request(program: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
 
     authority = _authority()
     request = {
-        "schema": "meshshot.browser-sidecar.render-request/2",
+        "schema": REQUEST_SCHEMA,
         "jobId": authority["jobId"],
         "imageId": IMAGE_ID,
         "program": program,
@@ -82,7 +87,7 @@ def _request(program: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
     response = bytearray()
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(120)
-        connection.connect(authority["socketPath"])
+        connection.connect(os.fspath(SOCKET_PATH))
         connection.sendall(wire + b"\n")
         connection.shutdown(socket.SHUT_WR)
         while True:
@@ -97,7 +102,8 @@ def _request(program: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
     decoded = _strict_json(bytes(response[:-1]), "registered response")
     if (
         not isinstance(decoded, dict)
-        or decoded.get("schema") != "meshshot.browser-sidecar.render-response/1"
+        or set(decoded) != {"schema", "jobId", "imageId", "program", "result"}
+        or decoded.get("schema") != RESPONSE_SCHEMA
         or decoded.get("jobId") != authority["jobId"]
         or decoded.get("imageId") != IMAGE_ID
         or decoded.get("program") != program
@@ -122,6 +128,38 @@ def _browser_processes() -> list[dict[str, object]]:
     return found
 
 
+def validate_viewer_result(viewer: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Require the actual registered Viewer response used by conformance."""
+
+    viewer_result = viewer.get("result")
+    inspection = viewer_result.get("inspection") if isinstance(viewer_result, dict) else None
+    if (
+        not isinstance(viewer_result, dict)
+        or set(viewer_result)
+        != {
+            "title",
+            "modelKey",
+            "programDigest",
+            "screenshotDataUrl",
+            "screenshotSha256",
+            "screenshotBytes",
+            "bodyMentionsFixture",
+            "bodyHasArtifactError",
+            "inspection",
+        }
+        or viewer_result.get("modelKey") != "inspection-step"
+        or viewer_result.get("programDigest") != PROGRAMS["viewer"]
+        or viewer_result.get("bodyMentionsFixture") is not True
+        or viewer_result.get("bodyHasArtifactError") is not False
+        or not isinstance(inspection, dict)
+        or inspection.get("before") != "Display and projection: Solid, Orthographic"
+        or inspection.get("after") != "Display and projection: Solid, Perspective"
+        or inspection.get("changed") is not True
+    ):
+        raise ValueError("Viewer projection predicate failed")
+    return viewer_result
+
+
 def run_client() -> Mapping[str, Any]:
     """Exercise public residual and registered Viewer from a browser-less client."""
 
@@ -137,7 +175,6 @@ def run_client() -> Mapping[str, Any]:
             "faces": [[0, 1, 2]],
         },
     }
-    os.environ["MESHSHOT_BROWSER_AUTHORITY_FILE"] = os.fspath(AUTHORITY_PATH)
     rendered = render_residual_preview(
         MeshGeometry(**geometry["reference"]),
         MeshGeometry(**geometry["candidate"]),
@@ -161,19 +198,7 @@ def run_client() -> Mapping[str, Any]:
         "viewer",
         {"modelKey": "inspection-step", "inspectionControl": "toggle-projection"},
     )
-    viewer_result = viewer.get("result")
-    inspection = viewer_result.get("inspection") if isinstance(viewer_result, dict) else None
-    if (
-        not isinstance(viewer_result, dict)
-        or viewer_result.get("modelKey") != "inspection-step"
-        or viewer_result.get("bodyMentionsFixture") is not True
-        or viewer_result.get("bodyHasArtifactError") is not False
-        or not isinstance(inspection, dict)
-        or inspection.get("before") != "Display and projection: Solid, Orthographic"
-        or inspection.get("after") != "Display and projection: Solid, Perspective"
-        or inspection.get("changed") is not True
-    ):
-        raise ValueError("Viewer projection predicate failed")
+    viewer_result = validate_viewer_result(viewer)
     executable_candidates = (
         "/ms-playwright",
         "/usr/bin/chromium",

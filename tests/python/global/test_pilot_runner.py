@@ -581,6 +581,7 @@ class RunnerTests(unittest.TestCase):
 
     def test_run_pilot_owns_sidecar_around_nested_workload(self) -> None:
         events: list[object] = []
+        supervisor = self.supervisor
 
         class FakeSidecar:
             def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled=None):
@@ -595,11 +596,29 @@ class RunnerTests(unittest.TestCase):
             def close(self, *, workload_status):
                 events.append(("sidecar-close", workload_status))
                 return {
-                    "schema": "meshshot.browser-sidecar.job-receipt/2",
+                    "schema": supervisor.RECEIPT_SCHEMA,
                     "status": "succeeded",
+                    "imageId": supervisor.IMAGE_ID,
+                    "imageSourceRevision": supervisor.IMAGE_SOURCE_REVISION,
+                    "brokerImageId": supervisor.BROKER_IMAGE_ID,
+                    "brokerImageSourceRevision": supervisor.BROKER_IMAGE_SOURCE_REVISION,
+                    "brokerBaseImageId": supervisor.BROKER_BASE_IMAGE_ID,
+                    "programs": supervisor.PROGRAMS,
+                    "predicates": {
+                        name: True for name in supervisor.RECEIPT_PREDICATES
+                    },
+                    "counts": {
+                        "acceptedRequests": 2,
+                        "freshContexts": 3,
+                        "programCounts": {"residual": 1, "viewer": 1},
+                    },
+                    "failureCheck": None,
+                    "retryAllowed": False,
                 }
 
-        def run_supervised(exp_dir, inputs, command, environ, state, sidecar):
+        def run_supervised(
+            exp_dir, inputs, command, environ, state, sidecar, relay=None
+        ):
             events.append(("workload", sidecar.sandbox_authority_path))
             state.workload_started = True
             return 0
@@ -645,6 +664,7 @@ class RunnerTests(unittest.TestCase):
         class FakeRelay:
             def __init__(self):
                 self.cancelled = False
+                self.signum = None
 
             def __enter__(self):
                 events.append("relay-enter")
@@ -666,6 +686,7 @@ class RunnerTests(unittest.TestCase):
             def start(self):
                 events.append("sidecar-start")
                 relay.cancelled = True
+                relay.signum = signal.SIGTERM
 
             def close(self, *, workload_status):
                 events.append(("sidecar-close", workload_status))
@@ -699,9 +720,9 @@ class RunnerTests(unittest.TestCase):
                 self.environ,
             )
 
-        self.assertEqual(status, 1)
+        self.assertEqual(status, 128 + signal.SIGTERM)
         self.assertEqual(events[0:3], ["relay-enter", "construct", "sidecar-start"])
-        self.assertIn(("sidecar-close", 1), events)
+        self.assertIn(("sidecar-close", 128 + signal.SIGTERM), events)
         self.assertEqual(events[-1], "relay-exit")
         supervised.assert_not_called()
 
@@ -744,6 +765,16 @@ class RunnerTests(unittest.TestCase):
                 self.environ,
             )
         self.assertEqual(status, 1)
+
+    def test_runner_rejects_succeeded_receipt_with_absent_closed_predicate(self) -> None:
+        self.assertFalse(
+            self.supervisor.sidecar_receipt_succeeded(
+                {
+                    "schema": self.supervisor.RECEIPT_SCHEMA,
+                    "status": "succeeded",
+                }
+            )
+        )
 
 
 class ProductionPathContractTests(unittest.TestCase):

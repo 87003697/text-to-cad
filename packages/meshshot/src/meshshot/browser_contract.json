@@ -1,0 +1,12 @@
+{
+  "authorityPath": "/run/meshshot-browser/authority.json",
+  "authoritySchema": "meshshot.browser-authority/1",
+  "programs": {
+    "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
+    "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b"
+  },
+  "requestSchema": "meshshot.browser-sidecar.render-request/2",
+  "responseSchema": "meshshot.browser-sidecar.render-response/1",
+  "sidecarImageId": "sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
+  "socketPath": "/run/meshshot-browser/browser.sock"
+}

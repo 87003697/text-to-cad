@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections.abc import Callable
 import hashlib
 import json
 import math
@@ -29,9 +30,11 @@ PROFILE_PATH = (
     REPO_ROOT
     / "packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json"
 )
+CONTRACT_PATH = REPO_ROOT / "packages/meshshot/src/meshshot/browser_contract.json"
+CONTRACT = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
 
 
-IMAGE_ID = "sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1"
+IMAGE_ID = CONTRACT["sidecarImageId"]
 IMAGE_SOURCE_REVISION = "1abe4c97929906b5c0b28b0f3f38857bd923952f"
 BROKER_BASE_IMAGE_ID = (
     "sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373"
@@ -63,15 +66,33 @@ def _broker_lock() -> tuple[str, str]:
 
 
 BROKER_IMAGE_ID, BROKER_IMAGE_SOURCE_REVISION = _broker_lock()
-PROGRAMS = {
-    "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
-    "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
-}
-AUTHORITY_SCHEMA = "meshshot.browser-authority/1"
+PROGRAMS = CONTRACT["programs"]
+AUTHORITY_SCHEMA = CONTRACT["authoritySchema"]
 BROKER_SCHEMA = "meshshot.browser-sidecar.broker/1"
-RECEIPT_SCHEMA = "meshshot.browser-sidecar.job-receipt/1"
-REQUEST_SCHEMA = "meshshot.browser-sidecar.render-request/2"
-RESPONSE_SCHEMA = "meshshot.browser-sidecar.render-response/1"
+RECEIPT_SCHEMA = "meshshot.browser-sidecar.job-receipt/2"
+REQUEST_SCHEMA = CONTRACT["requestSchema"]
+RESPONSE_SCHEMA = CONTRACT["responseSchema"]
+SANDBOX_AUTHORITY_PATH = Path(CONTRACT["authorityPath"])
+SANDBOX_SOCKET_PATH = Path(CONTRACT["socketPath"])
+RECEIPT_PREDICATES = (
+    "sidecarReady",
+    "brokerReady",
+    "sourceAliasesHidden",
+    "externalEgressBlocked",
+    "socketFixed",
+    "residualAccepted",
+    "residualPublicParity",
+    "residualEightView",
+    "viewerAccepted",
+    "viewerProjectionChanged",
+    "viewerArtifactClean",
+    "freshContextsExact",
+    "brokerTerminalZero",
+    "sidecarClosingExact",
+    "sidecarTerminalZero",
+    "workloadTerminalZero",
+    "absenceProved",
+)
 JOB_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 IMAGE_PROJECTIONS = (
@@ -135,7 +156,7 @@ def _strict_json(raw: str, label: str) -> Any:
         ) from exc
 
 
-def _write_json_atomic(path: Path, payload: object) -> None:
+def _write_json_atomic(path: Path, payload: object, *, mode: int = 0o644) -> None:
     """Atomically publish one canonical JSON receipt or authority file."""
 
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -143,6 +164,7 @@ def _write_json_atomic(path: Path, payload: object) -> None:
         json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
+    temporary.chmod(mode)
     os.replace(temporary, path)
 
 
@@ -233,6 +255,12 @@ class RegisteredProgramBroker:
         self.profile = profile
         self.request_count = 0
         self.program_counts = {"residual": 0, "viewer": 0}
+        self.program_predicates = {
+            "residualPublicParity": False,
+            "residualEightView": False,
+            "viewerProjectionChanged": False,
+            "viewerArtifactClean": False,
+        }
 
     def preflight(self) -> Mapping[str, object]:
         """Prove exact baked authority, Source-Hidden, and blocked egress."""
@@ -483,6 +511,8 @@ class RegisteredProgramBroker:
                     + base64.b64encode(screenshot).decode("ascii"),
                     "screenshotSha256": hashlib.sha256(screenshot).hexdigest(),
                     "screenshotBytes": len(screenshot),
+                    "bodyMentionsFixture": True,
+                    "bodyHasArtifactError": False,
                     "inspection": {
                         "control": payload["inspectionControl"],
                         "before": before,
@@ -493,6 +523,8 @@ class RegisteredProgramBroker:
                 }
                 self.request_count += 1
                 self.program_counts["viewer"] += 1
+                self.program_predicates["viewerProjectionChanged"] = True
+                self.program_predicates["viewerArtifactClean"] = True
                 return {
                     "schema": RESPONSE_SCHEMA,
                     "jobId": self.job_id,
@@ -536,6 +568,8 @@ class RegisteredProgramBroker:
                 )
             self.request_count += 1
             self.program_counts["residual"] += 1
+            self.program_predicates["residualPublicParity"] = True
+            self.program_predicates["residualEightView"] = True
             return {
                 "schema": RESPONSE_SCHEMA,
                 "jobId": self.job_id,
@@ -556,6 +590,7 @@ class BrowserSidecarJob:
         sandbox_exp_dir: Path,
         *,
         job_id: str,
+        cancelled: Callable[[], bool] | None = None,
     ) -> None:
         """Bind immutable identities before any Docker resource is created."""
 
@@ -564,6 +599,7 @@ class BrowserSidecarJob:
         self.exp_dir = exp_dir.resolve()
         self.sandbox_exp_dir = sandbox_exp_dir
         self.job_id = job_id
+        self.cancelled = cancelled or (lambda: False)
         self.run_dir = self.exp_dir / "run"
         self.receipt_path = self.run_dir / "browser-sidecar-receipt.json"
         self.owner_nonce = secrets.token_hex(16)
@@ -571,7 +607,7 @@ class BrowserSidecarJob:
             tempfile.mkdtemp(prefix=f"meshshot-browser-{self.owner_nonce[:8]}-")
         ).resolve()
         self.authority_path = self.capability_dir / "authority.json"
-        self.socket_path = self.capability_dir / "browser-sidecar.sock"
+        self.socket_path = self.capability_dir / SANDBOX_SOCKET_PATH.name
         self.prefix = f"ttc-bs-{self.owner_nonce[:12]}"
         self.network_name = f"{self.prefix}-net"
         self.container_name = f"{self.prefix}-sidecar"
@@ -597,7 +633,16 @@ class BrowserSidecarJob:
     def sandbox_authority_path(self) -> Path:
         """Return the fixed authority path visible inside the pilot sandbox."""
 
-        return Path("/run/meshshot-browser/authority.json")
+        return SANDBOX_AUTHORITY_PATH
+
+    def _check_cancelled(self) -> None:
+        """Close startup at every boundary after an outer INT/TERM."""
+
+        if self.cancelled():
+            raise BrowserSidecarError(
+                "Browser Sidecar startup was interrupted",
+                check="startup-signal",
+            )
 
     def _docker(
         self,
@@ -692,6 +737,7 @@ class BrowserSidecarJob:
             raise BrowserSidecarError("Sidecar was not created", check="readiness")
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
+            self._check_cancelled()
             logs = self._docker("logs", "--tail", "50", self.container_id)
             for line in logs.stdout.splitlines():
                 if not line.startswith("{"):
@@ -763,6 +809,7 @@ class BrowserSidecarJob:
             raise BrowserSidecarError("Broker was not created", check="broker-readiness")
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
+            self._check_cancelled()
             logs = self._docker("logs", "--tail", "50", self.broker_container_id)
             records = [
                 _strict_json(line, "broker-readiness")
@@ -833,6 +880,7 @@ class BrowserSidecarJob:
     def start(self) -> Path:
         """Start one exact Sidecar and publish its bounded sandbox authority."""
 
+        self._check_cancelled()
         self.run_dir.mkdir(parents=True, exist_ok=True)
         for path, check in (
             (self.authority_path, "authority-preexisting"),
@@ -850,6 +898,7 @@ class BrowserSidecarJob:
                 check="docker-access",
             )
         try:
+            self._check_cancelled()
             self._inspect_image(
                 role="sidecar",
                 image_id=IMAGE_ID,
@@ -863,6 +912,7 @@ class BrowserSidecarJob:
             self._require_absent_name("network", self.network_name)
             self._require_absent_name("container", self.container_name)
             self._require_absent_name("container", self.broker_container_name)
+            self._check_cancelled()
             created = self._docker(
                 "network",
                 "create",
@@ -880,6 +930,7 @@ class BrowserSidecarJob:
                     check="network-id",
                 )
             self.network_id = network_id
+            self._check_cancelled()
             started = self._docker(
                 "run",
                 "-d",
@@ -927,7 +978,9 @@ class BrowserSidecarJob:
                     check="container-id",
                 )
             self.container_id = container_id
+            self._check_cancelled()
             self.readiness = self._wait_sidecar_ready()
+            self._check_cancelled()
             broker_started = self._docker(
                 "run",
                 "-d",
@@ -976,17 +1029,16 @@ class BrowserSidecarJob:
                     check="broker-container-id",
                 )
             self.broker_container_id = broker_container_id
+            self._check_cancelled()
             self._wait_broker_ready()
+            self._check_cancelled()
             authority = {
                 "schema": AUTHORITY_SCHEMA,
                 "jobId": self.job_id,
                 "imageId": IMAGE_ID,
-                "socketPath": str(
-                    Path("/run/meshshot-browser/browser-sidecar.sock")
-                ),
                 "programs": PROGRAMS,
             }
-            _write_json_atomic(self.authority_path, authority)
+            _write_json_atomic(self.authority_path, authority, mode=0o444)
             return self.authority_path
         except BaseException as exc:
             self.first_error = (
@@ -1118,6 +1170,7 @@ class BrowserSidecarJob:
                         terminal_record = terminals[0]
                         counts = terminal_record.get("programCounts")
                         accepted = terminal_record.get("acceptedRequests")
+                        program_predicates = terminal_record.get("programPredicates")
                         if (
                             set(terminal_record)
                             != {
@@ -1128,6 +1181,7 @@ class BrowserSidecarJob:
                                 "acceptedRequests",
                                 "freshContexts",
                                 "programCounts",
+                                "programPredicates",
                             }
                             or terminal_record.get("schema") != BROKER_SCHEMA
                             or terminal_record.get("jobId") != self.job_id
@@ -1145,6 +1199,18 @@ class BrowserSidecarJob:
                                 for count in counts.values()
                             )
                             or sum(counts.values()) != accepted
+                            or not isinstance(program_predicates, dict)
+                            or set(program_predicates)
+                            != {
+                                "residualPublicParity",
+                                "residualEightView",
+                                "viewerProjectionChanged",
+                                "viewerArtifactClean",
+                            }
+                            or any(
+                                not isinstance(predicate, bool)
+                                for predicate in program_predicates.values()
+                            )
                         ):
                             self.cleanup_errors.append("broker-terminal-evidence")
                         else:
@@ -1222,13 +1288,19 @@ class BrowserSidecarJob:
                     except BrowserSidecarError:
                         self.cleanup_errors.append("sidecar-closing")
                     else:
-                        closing_observed = any(
-                            isinstance(record, dict)
-                            and record.get("event") == "closing"
-                            and record.get("jobId") == self.job_id
-                            and record.get("reason") == "SIGTERM"
+                        closing_records = [
+                            record
                             for record in records
-                        )
+                            if isinstance(record, dict)
+                            and record.get("event") == "closing"
+                        ]
+                        closing_observed = closing_records == [
+                            {
+                                "event": "closing",
+                                "jobId": self.job_id,
+                                "reason": "SIGTERM",
+                            }
+                        ]
                         if not closing_observed:
                             self.cleanup_errors.append("sidecar-closing")
             try:
@@ -1286,12 +1358,10 @@ class BrowserSidecarJob:
                 "proved": False,
             }
         )
-        if absence.get("proved") is not True:
+        if absence.get("containers") or absence.get("networks"):
             self.cleanup_errors.append("retained-resource")
-        terminal = {
-            "state": terminal_state,
-            "closingObserved": closing_observed,
-        }
+        elif absence.get("proved") is not True:
+            self.cleanup_errors.append("absence-proof")
         try:
             self.authority_path.unlink(missing_ok=True)
         except OSError:
@@ -1312,47 +1382,142 @@ class BrowserSidecarJob:
             pass
         except OSError:
             self.cleanup_errors.append("capability-dir-remove")
-        succeeded = (
-            self.first_error is None
-            and workload_status == 0
-            and broker_status == 0
-            and isinstance(broker_terminal_state, dict)
-            and broker_terminal_state.get("ExitCode") == 0
-            and closing_observed
-            and isinstance(terminal_state, dict)
-            and terminal_state.get("ExitCode") == 0
-            and not self.cleanup_errors
-            and absence.get("proved") is True
+        terminal_record = self.broker_terminal or {}
+        accepted = terminal_record.get("acceptedRequests")
+        fresh_contexts = terminal_record.get("freshContexts")
+        program_counts = terminal_record.get("programCounts")
+        program_predicates = terminal_record.get("programPredicates")
+        counts_valid = (
+            isinstance(accepted, int)
+            and not isinstance(accepted, bool)
+            and accepted >= 0
+            and isinstance(fresh_contexts, int)
+            and not isinstance(fresh_contexts, bool)
+            and fresh_contexts >= 1
+            and isinstance(program_counts, dict)
+            and set(program_counts) == {"residual", "viewer"}
+            and all(
+                isinstance(count, int)
+                and not isinstance(count, bool)
+                and count >= 0
+                for count in program_counts.values()
+            )
         )
+        predicates = {
+            "sidecarReady": self.readiness is not None,
+            "brokerReady": self.broker_readiness is not None,
+            "sourceAliasesHidden": (
+                isinstance(self.broker_readiness, dict)
+                and isinstance(self.broker_readiness.get("isolation"), dict)
+                and self.broker_readiness["isolation"].get("sourceAliasesVisible") == []
+            ),
+            "externalEgressBlocked": (
+                isinstance(self.broker_readiness, dict)
+                and isinstance(self.broker_readiness.get("isolation"), dict)
+                and self.broker_readiness["isolation"].get("externalEgressBlocked") is True
+            ),
+            "socketFixed": self.socket_identity is not None,
+            "residualAccepted": (
+                counts_valid and program_counts.get("residual", 0) >= 1
+            ),
+            "residualPublicParity": (
+                isinstance(program_predicates, dict)
+                and program_predicates.get("residualPublicParity") is True
+            ),
+            "residualEightView": (
+                isinstance(program_predicates, dict)
+                and program_predicates.get("residualEightView") is True
+            ),
+            "viewerAccepted": (
+                counts_valid and program_counts.get("viewer", 0) >= 1
+            ),
+            "viewerProjectionChanged": (
+                isinstance(program_predicates, dict)
+                and program_predicates.get("viewerProjectionChanged") is True
+            ),
+            "viewerArtifactClean": (
+                isinstance(program_predicates, dict)
+                and program_predicates.get("viewerArtifactClean") is True
+            ),
+            "freshContextsExact": (
+                counts_valid
+                and accepted == sum(program_counts.values())
+                and fresh_contexts == accepted + 1
+            ),
+            "brokerTerminalZero": (
+                isinstance(broker_status, int)
+                and not isinstance(broker_status, bool)
+                and broker_status == 0
+                and isinstance(broker_terminal_state, dict)
+                and isinstance(broker_terminal_state.get("ExitCode"), int)
+                and not isinstance(broker_terminal_state.get("ExitCode"), bool)
+                and broker_terminal_state["ExitCode"] == 0
+            ),
+            "sidecarClosingExact": closing_observed,
+            "sidecarTerminalZero": (
+                isinstance(terminal_state, dict)
+                and isinstance(terminal_state.get("ExitCode"), int)
+                and not isinstance(terminal_state.get("ExitCode"), bool)
+                and terminal_state["ExitCode"] == 0
+            ),
+            "workloadTerminalZero": workload_status == 0,
+            "absenceProved": absence.get("proved") is True,
+        }
+        failure_by_predicate = {
+            "sidecarReady": "sidecar-readiness",
+            "brokerReady": "broker-readiness",
+            "sourceAliasesHidden": "source-alias",
+            "externalEgressBlocked": "external-egress",
+            "socketFixed": "broker-socket",
+            "residualAccepted": "residual-required",
+            "residualPublicParity": "residual-public-parity",
+            "residualEightView": "residual-eight-view",
+            "viewerAccepted": "viewer-required",
+            "viewerProjectionChanged": "viewer-projection",
+            "viewerArtifactClean": "viewer-artifact",
+            "freshContextsExact": "fresh-contexts",
+            "brokerTerminalZero": "broker-terminal",
+            "sidecarClosingExact": "sidecar-closing",
+            "sidecarTerminalZero": "sidecar-terminal",
+            "workloadTerminalZero": "workload-terminal",
+            "absenceProved": "retained-resource",
+        }
+        cleanup_failure = (
+            "retained-resource"
+            if "retained-resource" in self.cleanup_errors
+            else (self.cleanup_errors[0] if self.cleanup_errors else None)
+        )
+        predicate_failure = next(
+            (
+                failure_by_predicate[name]
+                for name, passed in predicates.items()
+                if not passed
+            ),
+            None,
+        )
+        failure_check = cleanup_failure or self.first_error or predicate_failure
+        succeeded = failure_check is None and all(predicates.values())
+        counts = {
+            "acceptedRequests": accepted if counts_valid else 0,
+            "freshContexts": fresh_contexts if counts_valid else 0,
+            "programCounts": (
+                dict(program_counts)
+                if counts_valid
+                else {"residual": 0, "viewer": 0}
+            ),
+        }
         receipt = {
             "schema": RECEIPT_SCHEMA,
             "status": "succeeded" if succeeded else "failed",
-            "jobId": self.job_id,
-            "ownerNonce": self.owner_nonce,
             "imageId": IMAGE_ID,
             "imageSourceRevision": IMAGE_SOURCE_REVISION,
             "brokerImageId": BROKER_IMAGE_ID,
             "brokerImageSourceRevision": BROKER_IMAGE_SOURCE_REVISION,
             "brokerBaseImageId": BROKER_BASE_IMAGE_ID,
             "programs": PROGRAMS,
-            "readiness": self.readiness,
-            "brokerReadiness": self.broker_readiness,
-            "brokerTerminal": self.broker_terminal,
-            "workloadStatus": workload_status,
-            "brokerStatus": broker_status,
-            "brokerContainerState": broker_terminal_state,
-            "terminal": terminal,
-            "ownedResources": {
-                "network": {"name": self.network_name, "id": self.network_id},
-                "sidecar": {"name": self.container_name, "id": self.container_id},
-                "broker": {
-                    "name": self.broker_container_name,
-                    "id": self.broker_container_id,
-                },
-            },
-            "absenceProof": absence,
-            "cleanupErrors": list(dict.fromkeys(self.cleanup_errors)),
-            "errorCheck": self.first_error,
+            "predicates": predicates,
+            "counts": counts,
+            "failureCheck": failure_check,
             "retryAllowed": False,
         }
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -1363,7 +1528,7 @@ class BrowserSidecarJob:
 def run_broker(args: argparse.Namespace) -> int:
     """Serve exact registered requests over one job-private Unix socket."""
 
-    socket_path = Path("/run/meshshot-browser/browser-sidecar.sock")
+    socket_path = SANDBOX_SOCKET_PATH
     if JOB_ID.fullmatch(args.job_id) is None:
         return 2
     try:
@@ -1506,6 +1671,7 @@ def run_broker(args: argparse.Namespace) -> int:
                             "acceptedRequests": broker.request_count,
                             "freshContexts": broker.request_count + 1,
                             "programCounts": broker.program_counts,
+                            "programPredicates": broker.program_predicates,
                         },
                         sort_keys=True,
                         separators=(",", ":"),

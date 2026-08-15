@@ -7,8 +7,10 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import socket
 import statistics
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -35,7 +37,7 @@ class ResidualRendererTests(unittest.TestCase):
     def test_formal_authority_rejects_symlink_without_local_fallback(self) -> None:
         triangle = ((-0.35, -0.3, 0.0), (0.35, -0.3, 0.0), (0.0, 0.35, 0.0))
         geometry = _geometry(triangle)
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
             root = Path(temp)
             target = root / "target.json"
             target.write_text(
@@ -140,18 +142,21 @@ class ResidualRendererTests(unittest.TestCase):
 
             connection = FakeConnection()
             with (
-                mock.patch.dict(
-                    os.environ,
-                    {"MESHSHOT_BROWSER_AUTHORITY_FILE": str(root / "attacker.json")},
-                    clear=False,
-                ),
+                mock.patch.dict(os.environ, {}, clear=True),
                 mock.patch("meshshot.renderer._AUTHORITY_PATH", authority_path),
+                mock.patch(
+                    "meshshot.renderer.os.open",
+                    wraps=os.open,
+                ) as authority_open,
                 mock.patch("playwright.sync_api.sync_playwright") as local_browser,
                 mock.patch("meshshot.renderer.socket.socket", return_value=connection),
             ):
                 rendered = render_residual_preview(geometry, geometry, variant="step")
 
         local_browser.assert_not_called()
+        opened_path, opened_flags = authority_open.call_args.args
+        self.assertEqual(opened_path, authority_path)
+        self.assertTrue(opened_flags & getattr(os, "O_NOFOLLOW", 0))
         self.assertEqual(rendered.variant, "step")
         self.assertEqual(view_names, [view["name"] for view in rendered.views])
         self.assertEqual((504, 1008), Image.open(BytesIO(rendered.png_bytes)).size)
@@ -185,24 +190,45 @@ class ResidualRendererTests(unittest.TestCase):
         legacy["pngDataUrl"] = "data:image/png;base64," + base64.b64encode(
             encoded.getvalue()
         ).decode("ascii")
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
             attacker = Path(temp) / "authority.json"
-            attacker.write_text("{}", encoding="utf-8")
-            fixed_absent = Path(temp) / "fixed-mount-absent.json"
-            with (
-                mock.patch.dict(
-                    os.environ,
-                    {"MESHSHOT_BROWSER_AUTHORITY_FILE": str(attacker)},
-                    clear=False,
+            attacker.write_text(
+                json.dumps(
+                    {
+                        "schema": "meshshot.browser-authority/1",
+                        "jobId": "formal-job-1",
+                        "imageId": "sha256:"
+                        + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
+                        "programs": {
+                            "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
+                            "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
+                        },
+                    }
                 ),
-                mock.patch("meshshot.renderer._AUTHORITY_PATH", fixed_absent),
-                mock.patch(
-                    "meshshot.renderer._legacy_browser_render",
-                    return_value=legacy,
-                ) as legacy_render,
-                mock.patch("meshshot.renderer.socket.socket") as formal_socket,
-            ):
-                rendered = render_residual_preview(geometry, geometry)
+                encoding="utf-8",
+            )
+            attacker.chmod(0o444)
+            attacker_socket_path = Path(temp) / "browser.sock"
+            attacker_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            attacker_socket.bind(os.fspath(attacker_socket_path))
+            fixed_absent = Path(temp) / "fixed-mount-absent.json"
+            try:
+                with (
+                    mock.patch.dict(
+                        os.environ,
+                        {"MESHSHOT_BROWSER_AUTHORITY_FILE": str(attacker)},
+                        clear=False,
+                    ),
+                    mock.patch("meshshot.renderer._AUTHORITY_PATH", fixed_absent),
+                    mock.patch(
+                        "meshshot.renderer._legacy_browser_render",
+                        return_value=legacy,
+                    ) as legacy_render,
+                    mock.patch("meshshot.renderer.socket.socket") as formal_socket,
+                ):
+                    rendered = render_residual_preview(geometry, geometry)
+            finally:
+                attacker_socket.close()
         self.assertEqual(rendered.variant, "step")
         legacy_render.assert_called_once()
         formal_socket.assert_not_called()
@@ -221,6 +247,41 @@ class ResidualRendererTests(unittest.TestCase):
         self.assertTrue(
             (Path(renderer.__file__).resolve().parent / "browser_contract.json").is_file()
         )
+
+    def test_formal_authority_rejects_replaceable_inode_metadata(self) -> None:
+        """The public seam rejects wrong owner, mode, or link count without fallback."""
+
+        triangle = ((-0.35, -0.3, 0.0), (0.35, -0.3, 0.0), (0.0, 0.35, 0.0))
+        geometry = _geometry(triangle)
+        with tempfile.TemporaryDirectory() as temp:
+            authority = Path(temp) / "authority.json"
+            authority.write_text("{}", encoding="utf-8")
+            authority.chmod(0o444)
+            actual = authority.stat()
+            variants = {
+                "owner": {"st_uid": actual.st_uid + 1},
+                "mode": {"st_mode": actual.st_mode | 0o200},
+                "links": {"st_nlink": 2},
+            }
+            for label, change in variants.items():
+                values = {
+                    "st_mode": actual.st_mode,
+                    "st_nlink": actual.st_nlink,
+                    "st_uid": actual.st_uid,
+                }
+                values.update(change)
+                metadata = SimpleNamespace(**values)
+                with self.subTest(label=label):
+                    with (
+                        mock.patch("meshshot.renderer._AUTHORITY_PATH", authority),
+                        mock.patch("meshshot.renderer.os.fstat", return_value=metadata),
+                        mock.patch(
+                            "playwright.sync_api.sync_playwright"
+                        ) as local_browser,
+                    ):
+                        with self.assertRaisesRegex(MeshshotError, "replaceable"):
+                            render_residual_preview(geometry, geometry)
+                    local_browser.assert_not_called()
 
     def test_step_render_exposes_eight_view_residual_channels_in_fixed_layout(self) -> None:
         shared = ((-0.12, -0.22, 0.0), (0.12, -0.22, 0.0), (0.0, 0.18, 0.0))

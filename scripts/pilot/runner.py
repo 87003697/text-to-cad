@@ -15,19 +15,39 @@ import sqlite3
 import subprocess
 import sys
 import time
-from contextlib import closing
+from contextlib import closing, nullcontext
 from pathlib import Path
 from types import FrameType
 from typing import Callable, Mapping
 
 try:
     from scripts.pilot.venus_retry_proxy import RetryProxy
-    from scripts.pilot.browser_sidecar import BrowserSidecarJob
+    from scripts.pilot.browser_sidecar import (
+        BROKER_BASE_IMAGE_ID,
+        BROKER_IMAGE_ID,
+        BROKER_IMAGE_SOURCE_REVISION,
+        IMAGE_ID,
+        IMAGE_SOURCE_REVISION,
+        PROGRAMS,
+        RECEIPT_PREDICATES,
+        RECEIPT_SCHEMA,
+        BrowserSidecarJob,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
     from venus_retry_proxy import RetryProxy
-    from browser_sidecar import BrowserSidecarJob
+    from browser_sidecar import (  # type: ignore[no-redef]
+        BROKER_BASE_IMAGE_ID,
+        BROKER_IMAGE_ID,
+        BROKER_IMAGE_SOURCE_REVISION,
+        IMAGE_ID,
+        IMAGE_SOURCE_REVISION,
+        PROGRAMS,
+        RECEIPT_PREDICATES,
+        RECEIPT_SCHEMA,
+        BrowserSidecarJob,
+    )
 
 
 READY_PATTERN = re.compile(r"listening on http://127\.0\.0\.1:(\d+)")
@@ -547,7 +567,6 @@ def existing_system_paths() -> list[Path]:
 def build_sandbox_environment(
     environ: Mapping[str, str],
     tap_url: str,
-    browser_authority_file: str | None = None,
 ) -> dict[str, str]:
     """Return the explicit child environment allowlist for Codex."""
 
@@ -572,8 +591,6 @@ def build_sandbox_environment(
             "XDG_CACHE_HOME": "/tmp/cache",
         }
     )
-    if browser_authority_file is not None:
-        child_env["MESHSHOT_BROWSER_AUTHORITY_FILE"] = browser_authority_file
     return child_env
 
 
@@ -734,6 +751,7 @@ def run_supervised(
     environ: Mapping[str, str],
     state: LifecycleState | None = None,
     sidecar: BrowserSidecarJob | None = None,
+    relay: SignalRelay | None = None,
 ) -> int:
     """Run command behind mandatory tap and return a shell-compatible status."""
 
@@ -765,7 +783,8 @@ def run_supervised(
 
     # Install signal handlers before tap Popen. This prevents an INT/TERM in
     # the start_tap -> relay-enter window from orphaning the new proxy.
-    with SignalRelay() as relay:
+    relay_context = nullcontext(relay) if relay is not None else SignalRelay()
+    with relay_context as active_relay:
         retry_proxy = RetryProxy(
             TAP_TARGET,
             exp_dir / "run/venus-retry.jsonl",
@@ -778,18 +797,13 @@ def run_supervised(
                     tap,
                     exp_dir / "run/.claude-tap.log",
                     ready_timeout,
-                    lambda: relay.cancelled,
+                    lambda: active_relay.cancelled,
                 )
                 if port is not None:
                     tap_url = f"http://127.0.0.1:{port}/v1"
                     child_env = build_sandbox_environment(
                         environ,
                         tap_url,
-                        (
-                            str(sidecar.sandbox_authority_path)
-                            if sidecar is not None
-                            else None
-                        ),
                     )
                     workload = subprocess.Popen(
                         bwrap_argv,
@@ -802,7 +816,7 @@ def run_supervised(
                         start_new_session=True,
                     )
                     state.workload_started = True
-                    relay.attach(workload)
+                    active_relay.attach(workload)
                     try:
                         child_status, tap_failed = wait_workload(
                             workload,
@@ -810,7 +824,7 @@ def run_supervised(
                             sidecar,
                         )
                     finally:
-                        relay.detach()
+                        active_relay.detach()
             finally:
                 tap_exited_before_stop = tap.poll() is not None
                 try:
@@ -855,8 +869,8 @@ def run_supervised(
 
         # Preserve the public priority explicitly: caller signal first, then
         # mandatory tap/trace health, then the workload's own status.
-        if relay.signum is not None:
-            return 128 + relay.signum
+        if active_relay.signum is not None:
+            return 128 + active_relay.signum
         if tap_failed or tap_exited_before_stop or not trace_valid:
             return 1
         if child_status is None:
@@ -1107,6 +1121,64 @@ def finalize_pilot(
     return final_status
 
 
+def sidecar_receipt_succeeded(receipt: object) -> bool:
+    """Accept only the exact proof-only successful Sidecar receipt."""
+
+    keys = {
+        "schema",
+        "status",
+        "imageId",
+        "imageSourceRevision",
+        "brokerImageId",
+        "brokerImageSourceRevision",
+        "brokerBaseImageId",
+        "programs",
+        "predicates",
+        "counts",
+        "failureCheck",
+        "retryAllowed",
+    }
+    if not isinstance(receipt, dict) or set(receipt) != keys:
+        return False
+    predicates = receipt.get("predicates")
+    counts = receipt.get("counts")
+    if (
+        receipt.get("schema") != RECEIPT_SCHEMA
+        or receipt.get("status") != "succeeded"
+        or receipt.get("imageId") != IMAGE_ID
+        or receipt.get("imageSourceRevision") != IMAGE_SOURCE_REVISION
+        or receipt.get("brokerImageId") != BROKER_IMAGE_ID
+        or receipt.get("brokerImageSourceRevision") != BROKER_IMAGE_SOURCE_REVISION
+        or receipt.get("brokerBaseImageId") != BROKER_BASE_IMAGE_ID
+        or receipt.get("programs") != PROGRAMS
+        or not isinstance(predicates, dict)
+        or set(predicates) != set(RECEIPT_PREDICATES)
+        or any(value is not True for value in predicates.values())
+        or not isinstance(counts, dict)
+        or set(counts) != {"acceptedRequests", "freshContexts", "programCounts"}
+        or receipt.get("failureCheck") is not None
+        or receipt.get("retryAllowed") is not False
+    ):
+        return False
+    accepted = counts.get("acceptedRequests")
+    fresh = counts.get("freshContexts")
+    program_counts = counts.get("programCounts")
+    return (
+        isinstance(accepted, int)
+        and not isinstance(accepted, bool)
+        and isinstance(fresh, int)
+        and not isinstance(fresh, bool)
+        and isinstance(program_counts, dict)
+        and set(program_counts) == {"residual", "viewer"}
+        and all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 1
+            for value in program_counts.values()
+        )
+        and accepted == sum(program_counts.values())
+        and fresh == accepted + 1
+    )
+
+
 def run_pilot(
     exp_dir: Path,
     input_paths: list[Path],
@@ -1123,49 +1195,67 @@ def run_pilot(
     job_id = "pilot-" + hashlib.sha256(
         relative_exp.as_posix().encode("utf-8")
     ).hexdigest()[:24]
-    sidecar = BrowserSidecarJob(
-        exp_dir,
-        sandbox_exp,
-        job_id=job_id,
-    )
     workload_status = 1
-    try:
-        sidecar.start()
-        workload_status = run_supervised(
-            exp_dir,
-            input_paths,
-            command,
-            environ,
-            state,
-            sidecar,
-        )
-    except (OSError, PilotError, TapError, subprocess.SubprocessError) as exc:
-        print(f"pilot-runner: {exc}", file=sys.stderr)
-        workload_status = 1
-    except Exception as exc:
-        print(
-            f"pilot-runner: Browser Sidecar failed ({type(exc).__name__})",
-            file=sys.stderr,
-        )
-        workload_status = 1
-    finally:
+    sidecar: BrowserSidecarJob | None = None
+    with SignalRelay() as relay:
         try:
-            sidecar_receipt = sidecar.close(workload_status=workload_status)
-        except Exception:
-            sidecar_receipt = {
-                "cleanupErrors": ["receipt-unavailable"],
-                "absenceProof": {"proved": False},
-            }
-        if (
-            sidecar_receipt.get("cleanupErrors")
-            or not isinstance(sidecar_receipt.get("absenceProof"), dict)
-            or sidecar_receipt["absenceProof"].get("proved") is not True
-        ):
+            sidecar = BrowserSidecarJob(
+                exp_dir,
+                sandbox_exp,
+                job_id=job_id,
+                cancelled=lambda: relay.cancelled,
+            )
+            sidecar.start()
+            if relay.cancelled:
+                workload_status = 128 + (relay.signum or signal.SIGTERM)
+            else:
+                workload_status = run_supervised(
+                    exp_dir,
+                    input_paths,
+                    command,
+                    environ,
+                    state,
+                    sidecar,
+                    relay,
+                )
+        except (OSError, PilotError, TapError, subprocess.SubprocessError) as exc:
+            print(f"pilot-runner: {exc}", file=sys.stderr)
+            workload_status = (
+                128 + (relay.signum or signal.SIGTERM)
+                if relay.cancelled
+                else 1
+            )
+        except Exception as exc:
             print(
-                "pilot-runner: Browser Sidecar terminal cleanup failed",
+                f"pilot-runner: Browser Sidecar failed ({type(exc).__name__})",
                 file=sys.stderr,
             )
-            workload_status = 1
+            workload_status = (
+                128 + (relay.signum or signal.SIGTERM)
+                if relay.cancelled
+                else 1
+            )
+        finally:
+            if sidecar is None:
+                sidecar_receipt: Mapping[str, object] = {
+                    "schema": "meshshot.browser-sidecar.job-receipt/2",
+                    "status": "failed",
+                }
+            else:
+                try:
+                    sidecar_receipt = sidecar.close(workload_status=workload_status)
+                except Exception:
+                    sidecar_receipt = {
+                        "schema": "meshshot.browser-sidecar.job-receipt/2",
+                        "status": "failed",
+                    }
+            if not sidecar_receipt_succeeded(sidecar_receipt):
+                print(
+                    "pilot-runner: Browser Sidecar terminal receipt failed",
+                    file=sys.stderr,
+                )
+                if not relay.cancelled:
+                    workload_status = 1
     return finalize_pilot(
         exp_dir,
         workload_status,

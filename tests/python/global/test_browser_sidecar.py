@@ -180,7 +180,6 @@ class BrowserSidecarJobTests(unittest.TestCase):
             {
                 "schema",
                 "status",
-                "jobId",
                 "imageId",
                 "imageSourceRevision",
                 "brokerImageId",
@@ -201,6 +200,10 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 "programCounts": {"residual": 1, "viewer": 1},
             },
         )
+        self.assertEqual(
+            set(receipt["predicates"]),
+            set(browser_sidecar.RECEIPT_PREDICATES),
+        )
         self.assertTrue(all(receipt["predicates"].values()))
         self.assertIsNone(receipt["failureCheck"])
         serialized = json.dumps(receipt, sort_keys=True)
@@ -209,6 +212,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertNotIn(BROKER_CONTAINER_ID, serialized)
         for forbidden in ("Pid", "StartedAt", "FinishedAt", "stderr", "argv"):
             self.assertNotIn(forbidden, serialized)
+        self.assertNotIn("jobId", receipt)
         runs = [command for command in calls if command[1] == "run"]
         self.assertEqual(len(runs), 2)
         sidecar_run, broker_run = runs
@@ -256,6 +260,90 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertTrue(receipt["predicates"]["absenceProved"])
         self.assertTrue(any(command[1:3] == ["container", "ls"] for command in calls))
         self.assertTrue(any(command[1:3] == ["network", "ls"] for command in calls))
+
+    def test_nonzero_terminal_and_nonexact_closing_are_closed_failures(self) -> None:
+        """Raw terminal success cannot hide either a nonzero exit or closing drift."""
+
+        cases = (
+            (9, {"event": "closing", "jobId": "formal-job-1", "reason": "SIGTERM"}, "sidecar-terminal"),
+            (
+                0,
+                {
+                    "event": "closing",
+                    "jobId": "formal-job-1",
+                    "reason": "SIGTERM",
+                    "extra": True,
+                },
+                "sidecar-closing",
+            ),
+        )
+        for exit_code, closing, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as temp:
+                def docker(argv, **kwargs):
+                    command = list(argv)
+                    if command[1] == "logs":
+                        if BROKER_CONTAINER_ID in command:
+                            terminal = {
+                                "event": "terminal",
+                                "schema": browser_sidecar.BROKER_SCHEMA,
+                                "jobId": "formal-job-1",
+                                "imageId": IMAGE_ID,
+                                "acceptedRequests": 2,
+                                "freshContexts": 3,
+                                "programCounts": {"residual": 1, "viewer": 1},
+                                "programPredicates": {
+                                    "residualPublicParity": True,
+                                    "residualEightView": True,
+                                    "viewerProjectionChanged": True,
+                                    "viewerArtifactClean": True,
+                                },
+                            }
+                            return subprocess.CompletedProcess(
+                                command, 0, json.dumps(terminal) + "\n", ""
+                            )
+                        return subprocess.CompletedProcess(
+                            command, 0, json.dumps(closing) + "\n", ""
+                        )
+                    if command[1:3] == ["container", "inspect"]:
+                        observed_exit = (
+                            0 if BROKER_CONTAINER_ID in command else exit_code
+                        )
+                        return subprocess.CompletedProcess(
+                            command,
+                            0,
+                            json.dumps(
+                                {"Running": False, "ExitCode": observed_exit}
+                            )
+                            + "\n",
+                            "",
+                        )
+                    return subprocess.CompletedProcess(command, 0, "", "")
+
+                job = browser_sidecar.BrowserSidecarJob(
+                    Path(temp),
+                    Path("/workspace/repo/outputs/group/exp"),
+                    job_id="formal-job-1",
+                )
+                job.docker = "/usr/bin/docker"
+                job.container_id = CONTAINER_ID
+                job.broker_container_id = BROKER_CONTAINER_ID
+                job.readiness = {"ready": True}
+                job.broker_readiness = {
+                    "isolation": {
+                        "sourceAliasesVisible": [],
+                        "externalEgressBlocked": True,
+                    }
+                }
+                job.socket_identity = (1, 1)
+                with mock.patch.object(
+                    browser_sidecar.subprocess,
+                    "run",
+                    side_effect=docker,
+                ):
+                    receipt = job.close(workload_status=0)
+
+            self.assertEqual(receipt["status"], "failed")
+            self.assertEqual(receipt["failureCheck"], expected)
 
     def test_public_job_requires_exact_broker_artifact_before_create(self) -> None:
         """The public job boundary attests both artifacts before resource creation."""
@@ -350,6 +438,10 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(contract["responseSchema"], browser_sidecar.RESPONSE_SCHEMA)
         self.assertEqual(contract["authorityPath"], "/run/meshshot-browser/authority.json")
         self.assertEqual(contract["socketPath"], "/run/meshshot-browser/browser.sock")
+        package_data = (
+            browser_sidecar.REPO_ROOT / "packages/meshshot/pyproject.toml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"browser_contract.json"', package_data)
 
     def test_public_job_rejects_preexisting_capability_socket(self) -> None:
         """A pre-existing path is foreign state and is never unlinked or adopted."""
@@ -476,6 +568,46 @@ class BrowserSidecarJobTests(unittest.TestCase):
             ):
                 retained = retained_job.close(workload_status=0)
         self.assertEqual(retained["failureCheck"], "retained-resource")
+
+    def test_success_requires_both_registered_programs(self) -> None:
+        """A residual-only terminal record cannot produce a successful receipt."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = browser_sidecar.BrowserSidecarJob(
+                Path(temp),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+            )
+            job.docker = "/usr/bin/docker"
+            job.readiness = {"ready": True}
+            job.broker_readiness = {
+                "isolation": {
+                    "sourceAliasesVisible": [],
+                    "externalEgressBlocked": True,
+                }
+            }
+            job.socket_identity = (1, 1)
+            job.broker_terminal = {
+                "acceptedRequests": 1,
+                "freshContexts": 2,
+                "programCounts": {"residual": 1, "viewer": 0},
+                "programPredicates": {
+                    "residualPublicParity": True,
+                    "residualEightView": True,
+                    "viewerProjectionChanged": False,
+                    "viewerArtifactClean": False,
+                },
+            }
+            with mock.patch.object(
+                browser_sidecar.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0, "", ""),
+            ):
+                receipt = job.close(workload_status=0)
+
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["failureCheck"], "viewer-required")
+        self.assertFalse(receipt["predicates"]["viewerAccepted"])
 
 
 class RegisteredProgramBrokerTests(unittest.TestCase):
