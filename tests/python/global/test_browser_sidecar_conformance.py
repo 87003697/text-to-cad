@@ -377,6 +377,10 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             "/home/pwuser:rw,nosuid,nodev,size=16m,uid=0,gid=0,mode=700",
             arguments,
         )
+        self.assertIn("DAC_READ_SEARCH", arguments)
+        self.assertNotIn(
+            "DAC_READ_SEARCH", conformance._fixed_container_isolation()
+        )
 
     def test_host_seals_and_validates_gate_before_fixed_client_exec(self) -> None:
         boundary = DockerBoundary()
