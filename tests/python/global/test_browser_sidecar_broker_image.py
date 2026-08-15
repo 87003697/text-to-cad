@@ -20,7 +20,10 @@ add_repo_path("packages/meshshot/src")
 
 from scripts.pilot import browser_sidecar
 from scripts.pilot import browser_sidecar_conformance as conformance
-from scripts.pilot.runner import _prepare_nested_browser_gate_from_manifest
+from scripts.pilot.runner import (
+    _build_gate_artifact,
+    _prepare_nested_browser_gate_from_manifest,
+)
 
 
 CLIENT_PATH = "/opt/text-to-cad/scripts/pilot/browser_sidecar_conformance.py"
@@ -441,6 +444,34 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
         )
         self.assertTrue(result["viewer"]["inspection"]["changed"])
         self.assertEqual(result["clientBrowserInventory"]["browserProcesses"], [])
+
+    def test_surface_discovery_copies_into_read_only_owned_container(self) -> None:
+        """The exact image works when the daemon cannot bind the Mac temp path."""
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
+            root = Path(temporary).resolve()
+            job = browser_sidecar.BrowserSidecarJob.create(
+                root / "exp",
+                Path("/workspace/repo/outputs/conformance/formal"),
+                job_id=f"formal-image-surface-{os.getpid()}",
+            )
+            job.docker = self.docker
+            artifact = root / "browser-gate-discovery.pyz"
+            _build_gate_artifact(browser_sidecar.REPO_ROOT, artifact)
+            try:
+                manifest = conformance._discover_client_surface(
+                    self.docker,
+                    job,
+                    artifact,
+                    f"{job.prefix}-image-surface",
+                )
+            finally:
+                job.close(workload_status=None)
+
+        self.assertEqual(
+            manifest["schema"], browser_sidecar.NESTED_GATE["surfaceSchema"]
+        )
+        self.assertIn("/opt", manifest["scanRoots"])
 
 
 if __name__ == "__main__":
