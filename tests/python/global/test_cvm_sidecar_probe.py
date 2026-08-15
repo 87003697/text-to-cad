@@ -441,6 +441,95 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
         )
         self.assertEqual(receipts[0]["images"], receipts[1]["images"])
 
+    def test_prepare_bounds_unexpected_role_inspect_boundary_failures(self) -> None:
+        for role, image_id in (("sidecar", SIDECAR_ID), ("client", CLIENT_ID)):
+            for phase, suffix, message in (
+                (
+                    "run",
+                    "inspect-access",
+                    f"{role} fixed image inspection is inaccessible",
+                ),
+                (
+                    "parse",
+                    "inspect-format",
+                    f"{role} fixed image inspection format is invalid",
+                ),
+            ):
+                with self.subTest(role=role, phase=phase), tempfile.TemporaryDirectory(
+                    prefix=f"cvm-sidecar-{role}-{phase}-"
+                ) as root_text:
+                    root = Path(root_text)
+                    repo = root / "repo"
+                    wrapper = copy_cli(repo)
+                    fake_bin = root / "bin"
+                    fake_bin.mkdir()
+                    write_image_docker(fake_bin / "docker")
+                    (root / "sitecustomize.py").write_text(
+                        textwrap.dedent(
+                            """\
+                            import json
+                            import os
+                            import subprocess
+
+                            target = os.environ["FAKE_INSPECT_EXCEPTION_ID"]
+                            phase = os.environ["FAKE_INSPECT_EXCEPTION_PHASE"]
+                            if phase == "run":
+                                original_run = subprocess.run
+
+                                def bounded_run(argv, *args, **kwargs):
+                                    if list(argv)[:3] == ["docker", "image", "inspect"] and list(argv)[-1] == target:
+                                        raise OSError(13, "forbidden raw inspect launch detail", "/private/inspect/socket")
+                                    return original_run(argv, *args, **kwargs)
+
+                                subprocess.run = bounded_run
+                            elif phase == "parse":
+                                original_loads = json.loads
+
+                                def bounded_loads(text, *args, **kwargs):
+                                    if target in text:
+                                        raise RuntimeError("forbidden raw inspect parse detail")
+                                    return original_loads(text, *args, **kwargs)
+
+                                json.loads = bounded_loads
+                            """
+                        ),
+                        encoding="utf-8",
+                    )
+                    env = cli_env(fake_bin)
+                    env["PYTHONPATH"] = os.fspath(root)
+                    env["FAKE_INSPECT_EXCEPTION_ID"] = image_id
+                    env["FAKE_INSPECT_EXCEPTION_PHASE"] = phase
+
+                    result = subprocess.run(
+                        [
+                            wrapper,
+                            "prepare",
+                            "--source-revision",
+                            SOURCE_REVISION,
+                            "--sidecar-image",
+                            SIDECAR_ID,
+                            "--client-image",
+                            CLIENT_ID,
+                        ],
+                        cwd=repo,
+                        env=env,
+                        check=False,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    )
+
+                    self.assertEqual(result.returncode, 2, suffix)
+                    self.assertEqual(
+                        result.stderr,
+                        f"cvm-sidecar-probe: {message}\n",
+                    )
+                    self.assertEqual(result.stdout, "")
+                    self.assertNotIn("forbidden raw", result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertNotIn(root_text, result.stderr)
+                    self.assertFalse((repo / ".cvm-sidecar-probes").exists())
+
     def test_prepare_attests_fixed_docker_save_as_opaque_bytes(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-opaque-save-") as root_text:
             root = Path(root_text)
