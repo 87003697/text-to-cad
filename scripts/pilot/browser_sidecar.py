@@ -188,6 +188,78 @@ class RegisteredProgramBroker:
         self.profile = profile
         self.request_count = 0
 
+    def preflight(self) -> Mapping[str, object]:
+        """Prove exact baked authority, Source-Hidden, and blocked egress."""
+
+        context = self.browser.new_context(
+            viewport={"width": 64, "height": 64},
+            device_scale_factor=1,
+        )
+        try:
+            page = context.new_page()
+            page.goto(
+                "http://127.0.0.1:4174/render.html",
+                wait_until="load",
+                timeout=60_000,
+            )
+            result = page.evaluate(
+                """async () => {
+                  const response = await fetch("http://127.0.0.1:3001/v1/authority");
+                  if (!response.ok) throw new Error("authority endpoint failed");
+                  const authority = await response.json();
+                  let externalEgressBlocked = false;
+                  try {
+                    await fetch("https://example.com/", { signal: AbortSignal.timeout(5000) });
+                  } catch {
+                    externalEgressBlocked = true;
+                  }
+                  return { authority, externalEgressBlocked };
+                }"""
+            )
+        finally:
+            context.close()
+        result = _exact_object(
+            result,
+            {"authority", "externalEgressBlocked"},
+            "isolation-preflight",
+        )
+        authority = result["authority"]
+        if (
+            not isinstance(authority, dict)
+            or set(authority)
+            != {
+                "schema",
+                "jobId",
+                "endpointPath",
+                "browserPid",
+                "chromiumRevision",
+                "chromiumVersion",
+                "playwrightVersion",
+                "programs",
+                "sourceAliasesVisible",
+            }
+            or authority.get("schema") != "meshshot.browser-sidecar.prototype/1"
+            or authority.get("jobId") != self.job_id
+            or authority.get("programs") != PROGRAMS
+            or authority.get("sourceAliasesVisible") != []
+            or authority.get("chromiumRevision") != "1223"
+            or authority.get("chromiumVersion") != "148.0.7778.96"
+            or authority.get("playwrightVersion") != "1.60.0"
+            or not isinstance(authority.get("browserPid"), int)
+            or isinstance(authority.get("browserPid"), bool)
+            or authority["browserPid"] <= 0
+            or result["externalEgressBlocked"] is not True
+        ):
+            raise BrowserSidecarError(
+                "Sidecar isolation predicates failed",
+                check="isolation-preflight",
+            )
+        return {
+            "sourceAliasesVisible": [],
+            "externalEgressBlocked": True,
+            "browserPid": authority["browserPid"],
+        }
+
     def _residual_payload(self, value: Any) -> dict[str, Any]:
         """Validate the only formal eight-view residual input schema."""
 
@@ -464,6 +536,7 @@ class BrowserSidecarJob:
         self.container_id: str | None = None
         self.broker: subprocess.Popen[bytes] | None = None
         self.readiness: Mapping[str, Any] | None = None
+        self.broker_readiness: Mapping[str, Any] | None = None
         self.request_count = 0
         self.first_error: str | None = None
         self.cleanup_errors: list[str] = []
@@ -656,17 +729,28 @@ class BrowserSidecarJob:
                 "registered-program broker readiness is invalid",
                 check="broker-readiness",
             ) from exc
-        if record != {
-            "event": "ready",
-            "schema": BROKER_SCHEMA,
-            "jobId": self.job_id,
-            "imageId": IMAGE_ID,
-            "programs": PROGRAMS,
-        }:
+        isolation = record.get("isolation") if isinstance(record, dict) else None
+        if (
+            not isinstance(record, dict)
+            or set(record)
+            != {"event", "schema", "jobId", "imageId", "programs", "isolation"}
+            or record.get("event") != "ready"
+            or record.get("schema") != BROKER_SCHEMA
+            or record.get("jobId") != self.job_id
+            or record.get("imageId") != IMAGE_ID
+            or record.get("programs") != PROGRAMS
+            or not isinstance(isolation, dict)
+            or set(isolation)
+            != {"sourceAliasesVisible", "externalEgressBlocked", "browserPid"}
+            or isolation.get("sourceAliasesVisible") != []
+            or isolation.get("externalEgressBlocked") is not True
+            or not isinstance(isolation.get("browserPid"), int)
+        ):
             raise BrowserSidecarError(
                 "registered-program broker identity mismatch",
                 check="broker-readiness",
             )
+        self.broker_readiness = record
 
     def start(self) -> Path:
         """Start one exact Sidecar and publish its bounded sandbox authority."""
@@ -938,6 +1022,7 @@ class BrowserSidecarJob:
             "imageSourceRevision": IMAGE_SOURCE_REVISION,
             "programs": PROGRAMS,
             "readiness": self.readiness,
+            "brokerReadiness": self.broker_readiness,
             "workloadStatus": workload_status,
             "brokerStatus": broker_status,
             "terminal": terminal,
@@ -996,6 +1081,7 @@ def run_broker(args: argparse.Namespace) -> int:
             )
             try:
                 broker = RegisteredProgramBroker(browser, args.job_id)
+                isolation = broker.preflight()
                 server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 server.bind(str(args.socket))
                 os.chmod(args.socket, 0o600)
@@ -1009,6 +1095,7 @@ def run_broker(args: argparse.Namespace) -> int:
                             "jobId": args.job_id,
                             "imageId": IMAGE_ID,
                             "programs": PROGRAMS,
+                            "isolation": isolation,
                         },
                         sort_keys=True,
                         separators=(",", ":"),

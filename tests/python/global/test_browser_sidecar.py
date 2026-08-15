@@ -38,6 +38,11 @@ class FakeBrokerProcess:
                         "jobId": job_id,
                         "imageId": IMAGE_ID,
                         "programs": PROGRAMS,
+                        "isolation": {
+                            "sourceAliasesVisible": [],
+                            "externalEgressBlocked": True,
+                            "browserPid": 321,
+                        },
                     },
                     separators=(",", ":"),
                 )
