@@ -177,3 +177,34 @@ attested fields.
 
 Require independent Standards and Spec PASS before one new deployment, prepare
 handle, provision attempt, and conditional sealed probe.
+
+## Bounded inventory stream successor
+
+Independent Spec review passed the loaded-inventory identity chain. Standards
+found one implementation boundary: the former generic command runner buffered
+all Docker inventory output before enforcing the 4096-entry limit.
+
+- RED `cbd668c4`: public `remote-provision` fixtures require exactly 4096 valid
+  entries to pass, while entry 4097 and a 72-byte line fail as
+  `image-inventory-format`; both overflowing producers remain live until the
+  workflow explicitly terminates and reaps them. The buffered implementation
+  failed all three cases.
+- GREEN uses one dedicated binary pipe reader with a 71-byte pending-line
+  ceiling, a 4096-entry counter, and one 60-second monotonic deadline. It stores
+  only validated canonical IDs, discards stderr, terminates/reaps the Docker
+  client on every terminal path, and retains the existing public check and
+  transfer-cleanup receipts.
+- The identity model, archive binding, Docker command, public schemas, and
+  probe authorization are unchanged.
+- Focused CVM Sidecar suite: 41/41 PASS.
+- Global modules excluding `test_cvm_push`: 166/166 PASS. The remaining
+  `test_cvm_push` cases excluding
+  `test_build_input_copy_does_not_follow_checkout_package_symlinks`: 25/25
+  PASS. The one excluded test hung inside its existing physical-copy
+  subprocess and was interrupted with an exact traceback; the complete global
+  wrapper is therefore NOT_RUN, not PASS.
+- Python compilation and diff check: PASS.
+
+Require independent Standards and Spec PASS on the clean successor before one
+new deployment, prepare handle, provision attempt, and conditional sealed
+probe.
