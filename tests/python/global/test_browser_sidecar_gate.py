@@ -207,6 +207,113 @@ class BrowserSidecarGateTests(unittest.TestCase):
         )
         self.assertEqual(executed.returncode, 2, executed.stderr)
 
+    def test_canonical_parent_mask_survives_bwrap_and_real_gate_closure(self) -> None:
+        """One empty parent mask replaces every contradictory child predicate."""
+
+        gate = load_gate()
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            root = Path(temp)
+            repo_root = root / "repo"
+            exp_dir = repo_root / "outputs/group/exp"
+            source = root / "source"
+            mounted = root / "mounted"
+            capability = root / "capability"
+            upper = exp_dir / "run/.codex-upper"
+            browser_dir = source / "ms-playwright"
+            executable = browser_dir / "chromium"
+            browser_dir.mkdir(parents=True)
+            executable.write_bytes(b"\x7fELF" + b"\0" * 32)
+            executable.chmod(0o755)
+            exclusions = runner.discover_browser_roots(
+                [(source, mounted, True)]
+            )
+
+            exp_dir.mkdir(parents=True)
+            upper.mkdir(parents=True)
+            (repo_root / ".venv").mkdir()
+            gateway = repo_root / "gateway/codex-tap-gpt56"
+            gateway.parent.mkdir(parents=True)
+            gateway.write_text("#!/bin/sh\n", encoding="utf-8")
+            capability.mkdir()
+            gate_artifact = capability / "browser-gate.pyz"
+            gate_artifact.write_bytes(b"sealed")
+            gate_artifact.chmod(0o444)
+            sandbox_exp = runner.SANDBOX_REPO_ROOT / exp_dir.relative_to(repo_root)
+            manifest = {
+                "schema": "meshshot.browser-sidecar.agent-browser-surface/1",
+                "scanRoots": sorted(
+                    [
+                        mounted.as_posix(),
+                        sandbox_exp.as_posix(),
+                        runner.SANDBOX_CODEX_HOME.as_posix(),
+                    ]
+                ),
+                "browserExclusions": exclusions,
+            }
+            (capability / "gate-input.json").write_text(
+                json.dumps({"surfaceManifest": manifest}) + "\n",
+                encoding="ascii",
+            )
+            environ = {
+                "HOME": str(root / "home"),
+                "PATH": "/fake/bin",
+                "VENUS_TOKEN": "test-token",
+            }
+            with (
+                mock.patch.object(
+                    runner.shutil,
+                    "which",
+                    side_effect=lambda command, **_: {
+                        "bwrap": "/fake/bwrap",
+                        "codex": "/usr/bin/codex",
+                    }[command],
+                ),
+                mock.patch.object(runner, "resolve_sandbox_codex"),
+                mock.patch.object(runner, "validate_input_paths", return_value=[]),
+                mock.patch.object(
+                    runner, "resolve_installed_skill_dirs", return_value=[]
+                ),
+                mock.patch.object(runner, "prepare_sandbox", return_value=upper),
+                mock.patch.object(runner, "existing_system_paths", return_value=[]),
+                mock.patch.object(
+                    runner,
+                    "_readonly_surface_mounts",
+                    return_value=[(source, mounted, True)],
+                ),
+            ):
+                argv = runner.build_bwrap_argv(
+                    repo_root,
+                    exp_dir,
+                    [],
+                    ["/fixed/agent"],
+                    environ,
+                    browser_capability_dir=capability,
+                )
+
+            masked_parent = mounted / "ms-playwright"
+            masked_parent.mkdir(parents=True)
+            closed = gate._exclusions_closed(exclusions)
+
+        self.assertEqual(
+            exclusions,
+            [
+                {
+                    "kind": "cache",
+                    "target": masked_parent.as_posix(),
+                    "mask": "tmpfs",
+                }
+            ],
+        )
+        triples = [argv[index : index + 3] for index in range(len(argv) - 2)]
+        self.assertIn(["--tmpfs", masked_parent.as_posix()], [
+            argv[index : index + 2] for index in range(len(argv) - 1)
+        ])
+        self.assertNotIn(
+            ["--ro-bind", "/dev/null", (masked_parent / "chromium").as_posix()],
+            triples,
+        )
+        self.assertTrue(closed)
+
 
 if __name__ == "__main__":
     unittest.main()

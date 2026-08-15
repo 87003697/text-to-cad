@@ -475,6 +475,33 @@ class BrowserSidecarJobTests(unittest.TestCase):
                         job.record_nested_gate(proof)
                     self.assertEqual(caught.exception.check, "nested-gate-proof")
 
+    def test_nested_gate_validator_rejects_exact_artifact_and_surface_mismatch(self) -> None:
+        """Each immutable proof digest is checked by the production job validator."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = browser_sidecar.BrowserSidecarJob(
+                Path(temp),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+            )
+            configure_gate(job)
+            mismatches = {
+                "artifact": nested_gate_proof(
+                    nonce=job.gate_nonce,
+                    artifact_sha256="4" * 64,
+                ),
+                "surface": nested_gate_proof(
+                    nonce=job.gate_nonce,
+                    surface_manifest_sha256="5" * 64,
+                ),
+            }
+            for label, proof in mismatches.items():
+                with self.subTest(label=label), self.assertRaises(
+                    browser_sidecar.BrowserSidecarError
+                ) as caught:
+                    job.record_nested_gate(proof)
+                self.assertEqual(caught.exception.check, "nested-gate-proof")
+
     def test_public_job_uses_internal_broker_container_and_exact_ledger(self) -> None:
         """No host port/process is present in the successful public lifecycle."""
 

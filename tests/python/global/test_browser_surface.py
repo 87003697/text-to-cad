@@ -105,11 +105,6 @@ class BrowserSurfaceTests(unittest.TestCase):
                     "kind": "cache",
                     "target": "/sandbox/libexec",
                     "mask": "tmpfs",
-                },
-                {
-                    "kind": "executable",
-                    "target": "/sandbox/libexec/vendor-render",
-                    "mask": "dev-null",
                 }
             ],
         )

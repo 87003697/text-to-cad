@@ -783,6 +783,106 @@ class RunnerTests(unittest.TestCase):
         terminate.assert_called_once_with(gate_process, signal.SIGTERM)
         wait_workload.assert_not_called()
 
+    def test_run_pilot_real_validator_rejects_surface_and_closes_job(self) -> None:
+        """The production validator withholds Agent release and publishes failure."""
+
+        runner = self.supervisor
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            repo_root = Path(temp) / "repo"
+            exp_dir = repo_root / "outputs/group/exp"
+            exp_dir.mkdir(parents=True)
+            relative = exp_dir.relative_to(repo_root)
+            job_id = "pilot-" + runner.hashlib.sha256(
+                relative.as_posix().encode("utf-8")
+            ).hexdigest()[:24]
+            job = runner.BrowserSidecarJob(
+                exp_dir,
+                runner.SANDBOX_REPO_ROOT / relative,
+                job_id=job_id,
+            )
+            job.configure_nested_gate(
+                artifact_sha256="b" * 64,
+                surface_manifest_sha256="c" * 64,
+            )
+            gate_process = FakeProcess()
+            tap = FakeProcess()
+            released: list[bool] = []
+
+            class GateChannel:
+                def __init__(self, capability_dir):
+                    self.capability_dir = capability_dir
+
+                def receive(self, cancelled):
+                    return nested_gate_proof(
+                        job_id=job.job_id,
+                        nonce=job.gate_nonce,
+                        artifact_sha256="b" * 64,
+                        surface_manifest_sha256="d" * 64,
+                    )
+
+                def release(self):
+                    released.append(True)
+
+                def close(self):
+                    return None
+
+            with (
+                mock.patch.object(runner, "REPO_ROOT", repo_root),
+                mock.patch.object(runner, "prepare_exp"),
+                mock.patch.object(runner, "prepare_nested_browser_gate"),
+                mock.patch.object(runner, "BrowserSidecarJob", return_value=job),
+                mock.patch.object(job, "start"),
+                mock.patch.object(job, "close", wraps=job.close) as close_job,
+                mock.patch.object(runner, "resolve_tap", return_value="/fake/tap"),
+                mock.patch.object(
+                    runner, "RetryProxy", return_value=FakeRetryProxy()
+                ),
+                mock.patch.object(runner, "start_tap", return_value=tap),
+                mock.patch.object(runner, "wait_ready", return_value=18888),
+                mock.patch.object(
+                    runner,
+                    "build_bwrap_argv",
+                    return_value=["/fake/bwrap", "--", "/fixed/gate"],
+                ),
+                mock.patch.object(runner, "NestedGateChannel", GateChannel),
+                mock.patch.object(
+                    runner.subprocess, "Popen", return_value=gate_process
+                ),
+                mock.patch.object(runner, "signal_process_group") as terminate,
+                mock.patch.object(runner, "wait_workload") as agent_workload,
+                mock.patch.object(runner, "stop_tap"),
+                mock.patch.object(
+                    runner,
+                    "read_trace",
+                    side_effect=runner.TapError("no Agent trace"),
+                ),
+                mock.patch.object(
+                    runner,
+                    "finalize_pilot",
+                    side_effect=lambda exp, status, env, **kwargs: status,
+                ),
+            ):
+                status = runner.run_pilot(
+                    exp_dir,
+                    [],
+                    ["/fixed/agent"],
+                    self.environ,
+                )
+            receipt = json.loads(
+                (exp_dir / "run/browser-sidecar-receipt.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(released, [])
+        agent_workload.assert_not_called()
+        terminate.assert_called_once_with(gate_process, signal.SIGTERM)
+        close_job.assert_called_once_with(workload_status=1)
+        self.assertEqual(receipt["status"], "failed")
+        self.assertFalse(receipt["predicates"]["absenceProved"])
+        self.assertEqual(receipt["failureCheck"], "absence-proof")
+
     def test_nested_gate_channel_is_one_shot_exact_and_bounded(self) -> None:
         """The outer-owned channel rejects absent, malformed, duplicate, and late proof."""
 
@@ -1905,6 +2005,59 @@ class ProductionPathContractTests(unittest.TestCase):
                 status = runner.run_pilot(exp, [], ["/fixed/agent"], {})
         self.assertEqual(status, 1)
         sidecar.start.assert_not_called()
+
+    def test_writable_browser_artifact_fails_actual_gate_preparation(self) -> None:
+        """Writable experiment/cache discovery closes before any Sidecar resource."""
+
+        runner = load_runner()
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            root = Path(temp)
+            repo_root = root / "repo"
+            exp_dir = repo_root / "outputs/group/exp"
+            input_path = repo_root / "models/toys4k/input.ply"
+            gateway = repo_root / "gateway/codex-tap-gpt56"
+            skill = repo_root / "skills/fake"
+            installed = root / "home/.codex/skills"
+            capability = root / "capability"
+            (repo_root / ".venv").mkdir(parents=True)
+            exp_dir.mkdir(parents=True)
+            input_path.parent.mkdir(parents=True)
+            input_path.write_text("ply\n", encoding="utf-8")
+            gateway.parent.mkdir(parents=True)
+            gateway.write_text("#!/bin/sh\n", encoding="utf-8")
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text("# fake\n", encoding="utf-8")
+            installed.mkdir(parents=True)
+            (installed / "fake").symlink_to(skill, target_is_directory=True)
+            capability.mkdir()
+            writable_browser = exp_dir / ".cache/ms-playwright/chrome"
+            writable_browser.parent.mkdir(parents=True)
+            writable_browser.write_bytes(b"\x7fELF" + b"\0" * 32)
+            writable_browser.chmod(0o755)
+            sidecar = mock.Mock(
+                capability_dir=capability,
+                job_id="formal-job-1",
+                gate_nonce="1" * 16,
+            )
+            with mock.patch.object(
+                runner, "existing_system_paths", return_value=[]
+            ):
+                with self.assertRaisesRegex(
+                    runner.PilotError,
+                    "writable Agent surface",
+                ):
+                    runner.prepare_nested_browser_gate(
+                        repo_root,
+                        exp_dir,
+                        [input_path],
+                        {"HOME": str(root / "home")},
+                        sidecar,
+                    )
+            capability_entries = list(capability.iterdir())
+
+        sidecar.start.assert_not_called()
+        sidecar.configure_nested_gate.assert_not_called()
+        self.assertEqual(capability_entries, [])
 
     def test_preflight_failure_skips_rollout_contract_and_writes_manifest(
         self,
