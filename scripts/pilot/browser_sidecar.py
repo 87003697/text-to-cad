@@ -1883,7 +1883,11 @@ class BrowserSidecarJob:
         failure_check = (
             "retained-resource"
             if cleanup_failure == "retained-resource"
-            else self.first_error or cleanup_failure or predicate_failure
+            else (
+                "startup-signal"
+                if self.first_error == "startup-signal"
+                else cleanup_failure or self.first_error or predicate_failure
+            )
         )
         succeeded = failure_check is None and all(predicates.values())
         counts = {

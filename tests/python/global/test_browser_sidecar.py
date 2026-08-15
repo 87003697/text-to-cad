@@ -930,6 +930,17 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(first["failureCheck"], "sidecar-stop")
 
         with tempfile.TemporaryDirectory() as temp:
+            signal_job = browser_sidecar.BrowserSidecarJob.create(
+                Path(temp),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+            )
+            signal_job.first_error = "startup-signal"
+            signal_job.cleanup_errors.append("sidecar-stop")
+            signal_receipt = signal_job.close(workload_status=None)
+        self.assertEqual(signal_receipt["failureCheck"], "startup-signal")
+
+        with tempfile.TemporaryDirectory() as temp:
             retained_job = browser_sidecar.BrowserSidecarJob.create(
                 Path(temp),
                 Path("/workspace/repo/outputs/group/exp"),
