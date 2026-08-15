@@ -521,7 +521,16 @@ def _validate_provision_success(
         "handle": handle,
         "retryAllowed": False,
     }
-    expected_retained = [image.get("id") for image in images if isinstance(image, dict)]
+    retained = remote.get("retainedImageIds")
+    retained_ok = bool(
+        isinstance(retained, list)
+        and len(retained) == 2
+        and all(
+            isinstance(image_id, str) and IMAGE_ID.fullmatch(image_id) is not None
+            for image_id in retained
+        )
+        and len(set(retained)) == 2
+    )
     if (
         set(remote) != expected_keys
         or remote.get("schema") != "cvm-sidecar.provision-receipt/1"
@@ -538,7 +547,7 @@ def _validate_provision_success(
         or int(remote["freeBytesAtLoad"]) < MIN_REMOTE_FREE_BYTES
         or remote.get("archive") != expected_archive
         or remote.get("images") != images
-        or remote.get("retainedImageIds") != expected_retained
+        or not retained_ok
         or remote.get("transferCleanup") != expected_cleanup
         or remote.get("retryAllowed") is not False
         or remote.get("terminalOperation") != expected_terminal
@@ -810,7 +819,7 @@ def _validate_probe_success(
         or not terminal_ok
         or not absence_ok
         or remote.get("retainedImageIds")
-        != [image.get("id") for image in images if isinstance(image, dict)]
+        != provision_receipt.get("retainedImageIds")
         or remote.get("terminalOperation")
         != {"operation": "probe", "handle": handle, "retryAllowed": False}
         or remote.get("errorOperation") is not None
@@ -830,6 +839,46 @@ def _path_absence(path: Path) -> bool:
         return not path.exists() and not path.is_symlink()
     except OSError:
         return False
+
+
+def _archive_image_reference(handle: str, role: str) -> str:
+    if role not in {"sidecar", "client"}:
+        raise ProbeError("fixed image role is invalid", check="prepare-operation")
+    return f"text-to-cad-cvm-sidecar-{role}:{handle}"
+
+
+def _local_reference_image_ids(reference: str) -> frozenset[str]:
+    completed = _run(
+        ["docker", "image", "ls", "--all", "--no-trunc", "--quiet", reference],
+        cwd=REPO_ROOT,
+        timeout=60,
+    )
+    lines = [line for line in completed.stdout.splitlines() if line]
+    if any(IMAGE_ID.fullmatch(line) is None for line in lines):
+        raise ProbeError("local fixed image reference is invalid")
+    return frozenset(lines)
+
+
+def _cleanup_archive_image_references(references: list[str]) -> bool:
+    cleanup_ok = True
+    for reference in reversed(references):
+        try:
+            if _local_reference_image_ids(reference):
+                _run(
+                    ["docker", "image", "rm", reference],
+                    cwd=REPO_ROOT,
+                    timeout=60,
+                )
+        except BaseException:
+            cleanup_ok = False
+    for reference in references:
+        try:
+            reference_absent = not _local_reference_image_ids(reference)
+        except BaseException:
+            cleanup_ok = False
+        else:
+            cleanup_ok = cleanup_ok and reference_absent
+    return cleanup_ok
 
 
 def _cleanup_failed_prepare(
@@ -901,7 +950,18 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
 
     archive = state / "images.tar"
     temporary_archive = state / "images.tar.tmp"
+    references: list[str] = []
     try:
+        for image in images:
+            reference = _archive_image_reference(handle, str(image["role"]))
+            if _local_reference_image_ids(reference):
+                raise ProbeError("local fixed image reference already exists")
+            references.append(reference)
+            _run(
+                ["docker", "image", "tag", str(image["id"]), reference],
+                cwd=REPO_ROOT,
+                timeout=60,
+            )
         _run(
             [
                 "docker",
@@ -909,8 +969,7 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
                 "save",
                 "--output",
                 os.fspath(temporary_archive),
-                args.sidecar_image,
-                args.client_image,
+                *references,
             ],
             cwd=REPO_ROOT,
             timeout=1800,
@@ -918,6 +977,11 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
         if not temporary_archive.is_file() or temporary_archive.stat().st_size == 0:
             raise ProbeError("docker save did not produce a non-empty archive")
         os.replace(temporary_archive, archive)
+        if not _cleanup_archive_image_references(references):
+            raise ProbeError(
+                "prepare cleanup could not prove absence",
+                check="prepare-cleanup-absence",
+            )
         receipt: Mapping[str, object] = {
             "schema": "cvm-sidecar.prepare-receipt/1",
             "status": "prepared",
@@ -936,7 +1000,9 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
         _write_json_atomic(state / "prepare.json", receipt)
         return receipt
     except BaseException as operation_error:
-        if not _cleanup_failed_prepare(state, temporary_archive, archive):
+        references_absent = _cleanup_archive_image_references(references)
+        files_absent = _cleanup_failed_prepare(state, temporary_archive, archive)
+        if not references_absent or not files_absent:
             raise ProbeError(
                 "prepare cleanup could not prove absence",
                 check="prepare-cleanup-absence",
@@ -1298,8 +1364,10 @@ def _stop_inventory_process(process: subprocess.Popen[bytes]) -> None:
         pass
 
 
-def _loaded_image_ids() -> frozenset[str]:
+def _loaded_image_ids(reference: str | None = None) -> frozenset[str]:
     argv = ["docker", "image", "ls", "--all", "--no-trunc", "--quiet"]
+    if reference is not None:
+        argv.append(reference)
     try:
         process = subprocess.Popen(
             argv,
@@ -1527,13 +1595,21 @@ def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
             _verify_image_receipt(images_payload[0], "sidecar"),
             _verify_image_receipt(images_payload[1], "client"),
         ]
-        loaded_ids = _loaded_image_ids()
+        loaded_ids: list[str] = []
         for image in images:
-            if image["id"] not in loaded_ids:
+            reference = _archive_image_reference(handle, str(image["role"]))
+            role_ids = _loaded_image_ids(reference)
+            if len(role_ids) != 1:
                 raise ProbeError(
                     f"loaded {image['role']} image ID is absent",
                     check=f"{image['role']}-loaded-id",
                 )
+            loaded_ids.append(next(iter(role_ids)))
+        if len(set(loaded_ids)) != 2:
+            raise ProbeError(
+                "loaded fixed image IDs are not distinct",
+                check="client-loaded-id",
+            )
         assert free_bytes is not None and verified_files is not None
         receipt_data = {
             "schema": "cvm-sidecar.provision-receipt/1",
@@ -1551,7 +1627,7 @@ def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
                 "remoteVerified": True,
             },
             "images": images,
-            "retainedImageIds": [image["id"] for image in images],
+            "retainedImageIds": loaded_ids,
             "retryAllowed": False,
             "terminalOperation": {
                 "operation": "provision",
@@ -1801,15 +1877,17 @@ def _run_remote_probe(
     images = provision_receipt.get("images")
     if not isinstance(images, list) or len(images) != 2:
         raise ProbeError("provision receipt does not name two fixed images")
-    by_role = {
-        image.get("role"): image.get("id")
-        for image in images
-        if isinstance(image, dict)
-    }
-    sidecar_id = by_role.get("sidecar")
-    client_id = by_role.get("client")
-    if not isinstance(sidecar_id, str) or not isinstance(client_id, str):
-        raise ProbeError("provisioned image roles are incomplete")
+    retained_ids = provision_receipt.get("retainedImageIds")
+    if (
+        not isinstance(retained_ids, list)
+        or len(retained_ids) != 2
+        or not all(
+            isinstance(image_id, str) and IMAGE_ID.fullmatch(image_id) is not None
+            for image_id in retained_ids
+        )
+    ):
+        raise ProbeError("provisioned runtime image IDs are incomplete")
+    sidecar_id, client_id = retained_ids
 
     state = LOCAL_STATE_ROOT / handle
     suffix = handle.removeprefix("cvmsp-")

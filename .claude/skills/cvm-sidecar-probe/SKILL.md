@@ -16,37 +16,40 @@ probe. It is not a general image transfer, Docker shell, or pilot runner.
 
 The workflow has three separate public operations:
 
-1. `prepare` is local-only. It saves exactly two supplied Docker image IDs,
-   verifies each exact canonical ID, OS, architecture, and immutable
+1. `prepare` is local-only. It verifies exactly two supplied Docker image IDs,
+   including each canonical ID, OS, architecture, and immutable
    `org.opencontainers.image.revision` label through four fixed local inspect
-   projections, then records their config and archive SHA-256 attestations.
-   `configSha256` is the immutable Docker/OCI image-config digest: exactly the
-   64-hex digest portion of the image ID, never a hash of Docker's
-   version-dependent `inspect Config` display. The archive is intentionally
-   opaque to this wrapper: `prepare` invokes fixed local `docker image save`
-   with only the two exact IDs, then binds the resulting bytes and size by
-   SHA-256. There is no public archive input and no tar/manifest parser surface.
-   It separately records the clean Git HEAD of this provisioning workflow; the
-   two revisions are not required to be the same commit.
+   projections, then records their source-image and archive SHA-256
+   attestations. The v1 `configSha256` field retains its historical name but is
+   exactly the 64-hex digest portion of the canonical local source image ID; it
+   is not assumed to remain the loaded image ID across Docker storage backends.
+   Prepare creates two fixed handle-and-role-bound archive references, saves
+   those references into one opaque archive, and proves the temporary local
+   references absent before publishing success. It binds the resulting archive
+   bytes and size by SHA-256. There is no public archive/reference input and no
+   tar/manifest parser surface. It separately records the clean Git HEAD of
+   this provisioning workflow; the two revisions are not required to be the
+   same commit.
 2. `provision` is an external CVM write. It transfers the fixed archive through
    this wrapper. Before any remote state write it verifies the deployed module
    and wrapper SHA-256 values, binds the exact archive bytes/SHA-256, requires
    free space of at least `3 GiB + archive bytes`, and verifies an accessible
    `linux/amd64` Docker server. It retains the 3 GiB post-transfer gate,
-   verifies the archive hash before `docker image load`, then runs one fixed
-   `docker image ls --all --no-trunc --quiet` inventory proof. `--all` is
-   mandatory because the Sidecar can be the untagged parent of the sealed
-   client image. Every inventory entry must be a complete canonical
-   `sha256:<64-hex>` image ID, the bounded list may contain at most 4096
-   entries, and both prepared config IDs must be present.
+   verifies the archive hash before `docker image load`, then resolves each
+   fixed handle-and-role archive reference through
+   `docker image ls --all --no-trunc --quiet <reference>`. Every result must be
+   exactly one complete canonical `sha256:<64-hex>` loaded image ID, the two
+   IDs must differ, and both are recorded as the retained runtime IDs. Each
+   reference is derived only from the validated handle and fixed role; it is
+   never caller supplied.
    The Docker client output is read incrementally with a 71-byte line ceiling;
    a 4097th entry, an oversized line, invalid ASCII/identity, or the 60-second
    deadline terminates and reaps the client before returning a closed failure.
-   The exact config digest cryptographically binds the OS, architecture, and
-   revision already attested by local `prepare`; CVM does not depend on its
-   incompatible image-inspect path. The workflow removes the transfer archive
-   and intentionally retains the two provisioned images. Full daemon inspect
-   JSON and raw inventory output are neither requested nor published.
+   The exact archive SHA binds the locally attested source identities to those
+   loaded role references; CVM does not depend on its incompatible image-inspect
+   path. The workflow removes the transfer archive and intentionally retains
+   the two loaded images. Full daemon inspect JSON and raw inventory output are
+   neither requested nor published.
 3. `probe` is a second external CVM write and the only execution dispatch. It
    runs exactly one sealed probe with `--pull=never`, an internal network,
    fixed resource bounds, read-only filesystems, and exact runtime cleanup.
@@ -130,14 +133,15 @@ different destructive operation and requires a separate authorization.
 - Image revision/platform/ID/config mismatch: stop before transfer.
 - A changed local archive fails its receipt hash/size check before the one-shot
   provision claim or any SSH/rsync transfer. On CVM, exact archive hash, Docker
-  load success, and exact loaded config-ID inventory membership are the
-  authoritative image-config proof; malformed bytes produce the bounded
-  archive/load failure receipt.
+  load success, and exact handle-and-role reference resolution to two distinct
+  loaded IDs are the authoritative runtime-image proof; malformed bytes
+  produce the bounded archive/load failure receipt.
 - If local prepare fails, cleanup attempts every exact owned temporary archive,
-  final archive, receipt, state directory, and the shared root only when empty.
-  Cleanup continues after individual errors. Any missing absence proof
-  dominates the original failure as fixed `prepare-cleanup-absence`; raw paths,
-  errno, and exception text are not published.
+  final archive, temporary role reference, receipt, state directory, and the
+  shared root only when empty. Cleanup continues after individual errors. Any
+  missing absence proof dominates the original failure as fixed
+  `prepare-cleanup-absence`; raw paths, errno, and exception text are not
+  published.
 - After successful prepare cleanup, an existing fixed `ProbeError` retains its
   check. Any other filesystem/runtime exception is replaced by fixed
   `prepare-operation`; its traceback, path, errno, and message are not

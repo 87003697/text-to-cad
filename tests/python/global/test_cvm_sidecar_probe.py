@@ -145,6 +145,7 @@ def write_portable_archive_docker(path: Path) -> None:
 
             sidecar = {PORTABLE_SIDECAR_ID!r}
             client = {PORTABLE_CLIENT_ID!r}
+            tag_state_path = pathlib.Path(__file__).with_suffix(".tags.json")
             blobs = {{
                 sidecar.removeprefix("sha256:") + ".json": {PORTABLE_SIDECAR_CONFIG!r},
                 client.removeprefix("sha256:") + ".json": {PORTABLE_CLIENT_CONFIG!r},
@@ -155,6 +156,14 @@ def write_portable_archive_docker(path: Path) -> None:
                 member.size = len(payload)
                 member.mode = 0o644
                 archive.addfile(member, io.BytesIO(payload))
+
+            def load_tags():
+                if not tag_state_path.exists():
+                    return {{}}
+                return json.loads(tag_state_path.read_text())
+
+            def save_tags(tags):
+                tag_state_path.write_text(json.dumps(tags, sort_keys=True))
 
             if sys.argv[1:4] == ["inspect", "--type=image", "--format"]:
                 projection = sys.argv[4]
@@ -171,18 +180,34 @@ def write_portable_archive_docker(path: Path) -> None:
                 if projection not in values:
                     raise SystemExit(f"unexpected inspect projection: {{projection}}")
                 print(values[projection])
-            elif sys.argv[1:] == [
-                "image",
-                "ls",
-                "--all",
-                "--no-trunc",
-                "--quiet",
+            elif sys.argv[1:6] == [
+                "image", "ls", "--all", "--no-trunc", "--quiet"
             ]:
-                print(sidecar)
-                print(client)
+                tags = load_tags()
+                if len(sys.argv) == 6:
+                    for image_id in sorted(set(tags.values())):
+                        print(image_id)
+                elif len(sys.argv) == 7 and sys.argv[6] in tags:
+                    print(tags[sys.argv[6]])
+            elif sys.argv[1:3] == ["image", "tag"]:
+                tags = load_tags()
+                image = sys.argv[3]
+                canonical_image = (
+                    image if image.startswith("sha256:") else "sha256:" + image
+                )
+                assert canonical_image in {{sidecar, client}}
+                tags[sys.argv[4]] = canonical_image
+                save_tags(tags)
+            elif sys.argv[1:3] == ["image", "rm"]:
+                tags = load_tags()
+                assert sys.argv[3] in tags
+                del tags[sys.argv[3]]
+                save_tags(tags)
             elif sys.argv[1:3] == ["image", "save"]:
                 output = pathlib.Path(sys.argv[4])
-                assert sys.argv[5:] == [sidecar, client]
+                tags = load_tags()
+                references = sys.argv[5:]
+                assert [tags[reference] for reference in references] == [sidecar, client]
                 if os.environ.get("FAKE_MANIFEST_VARIANT") == "opaque":
                     output.write_bytes(b"opaque fixed docker-save output" + bytes([10]))
                     raise SystemExit(0)
@@ -198,8 +223,8 @@ def write_portable_archive_docker(path: Path) -> None:
                 elif variant == "traversal":
                     configs[0] = "../" + sidecar_path
                 manifest = [
-                    {{"Config": config, "RepoTags": None, "Layers": []}}
-                    for config in configs
+                    {{"Config": config, "RepoTags": [reference], "Layers": []}}
+                    for config, reference in zip(configs, references, strict=True)
                 ]
                 with tarfile.open(output, "w") as archive:
                     add_bytes(archive, "manifest.json", json.dumps(manifest).encode())
@@ -207,7 +232,13 @@ def write_portable_archive_docker(path: Path) -> None:
                         add_bytes(archive, name, payload)
             elif sys.argv[1:3] == ["image", "load"]:
                 with tarfile.open(pathlib.Path(sys.argv[4]), "r") as archive:
-                    assert archive.getmember("manifest.json").isfile()
+                    manifest = json.loads(archive.extractfile("manifest.json").read())
+                tags = load_tags()
+                for entry in manifest:
+                    image_id = "sha256:" + pathlib.PurePosixPath(entry["Config"]).stem
+                    for reference in entry["RepoTags"]:
+                        tags[reference] = image_id
+                save_tags(tags)
                 print("Loaded exact images")
             elif sys.argv[1:3] == ["version", "--format"]:
                 print(json.dumps({{"Os": "linux", "Arch": "amd64"}}))
@@ -277,7 +308,7 @@ def write_verified_local_provision(repo: Path, handle: str) -> dict[str, object]
         "freeBytesAtLoad": 4 * 1024 * 1024 * 1024,
         "archive": {"sha256": "5" * 64, "bytes": 123, "remoteVerified": True},
         "images": images,
-        "retainedImageIds": [SIDECAR_ID, CLIENT_ID],
+        "retainedImageIds": [LOADED_SIDECAR_ID, LOADED_CLIENT_ID],
         "transferCleanup": {
             "archiveAbsent": True,
             "prepareReceiptAbsent": True,
@@ -366,7 +397,7 @@ def valid_probe_success(
             "errors": [],
             "proved": True,
         },
-        "retainedImageIds": [SIDECAR_ID, CLIENT_ID],
+        "retainedImageIds": provision["retainedImageIds"],
         "terminalOperation": {
             "operation": "probe",
             "handle": handle,
@@ -385,12 +416,23 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             root = Path(root_text)
             state_root = root / ".cvm-sidecar-probes"
             commands: list[list[str]] = []
+            local_references: dict[str, str] = {}
 
             def fixed_run(argv: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
                 del kwargs
                 arguments = list(argv)
                 commands.append(arguments)
-                if arguments[1:3] == ["image", "save"]:
+                if arguments[1:3] == ["image", "ls"]:
+                    reference = arguments[-1]
+                    image_id = local_references.get(reference)
+                    return subprocess.CompletedProcess(
+                        arguments, 0, f"{image_id}\n" if image_id else "", ""
+                    )
+                if arguments[1:3] == ["image", "tag"]:
+                    local_references[arguments[4]] = arguments[3]
+                elif arguments[1:3] == ["image", "rm"]:
+                    local_references.pop(arguments[3], None)
+                elif arguments[1:3] == ["image", "save"]:
                     Path(arguments[4]).write_bytes(b"fixed archive")
                 return subprocess.CompletedProcess(arguments, 0, "", "")
 
@@ -449,6 +491,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     ["docker", "image", "rm", references[0]],
                 ],
             )
+            self.assertEqual(local_references, {})
 
     def test_public_wrapper_exposes_only_prepare_provision_and_probe(self) -> None:
         result = subprocess.run(
@@ -764,6 +807,10 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             '{{{{index .Config.Labels "org.opencontainers.image.revision"}}}}': {SOURCE_REVISION!r},
                         }}
                         print(values[projection])
+                    elif sys.argv[1:3] == ["image", "ls"]:
+                        raise SystemExit(0)
+                    elif sys.argv[1:3] == ["image", "tag"]:
+                        raise SystemExit(0)
                     elif sys.argv[1:3] == ["image", "save"]:
                         pathlib.Path(sys.argv[4]).mkdir()
                         raise SystemExit(7)
@@ -1901,6 +1948,12 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 raise AssertionError(f"unexpected command: {arguments}")
 
             enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
+
+            def missing_sidecar(reference: str) -> frozenset[str]:
+                if "-sidecar:" in reference:
+                    return frozenset()
+                return frozenset({LOADED_CLIENT_ID})
+
             with (
                 mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
                 mock.patch.object(
@@ -1917,7 +1970,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 mock.patch.object(
                     cvm_sidecar_probe,
                     "_loaded_image_ids",
-                    return_value=frozenset({CLIENT_ID}),
+                    side_effect=missing_sidecar,
                 ),
             ):
                 receipt = cvm_sidecar_probe.remote_provision(handle, owner)
@@ -2029,6 +2082,12 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 raise AssertionError(f"unexpected command: {arguments}")
 
             enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
+
+            def missing_client(reference: str) -> frozenset[str]:
+                if "-client:" in reference:
+                    return frozenset()
+                return frozenset({LOADED_SIDECAR_ID})
+
             with (
                 mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
                 mock.patch.object(
@@ -2047,7 +2106,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 mock.patch.object(
                     cvm_sidecar_probe,
                     "_loaded_image_ids",
-                    return_value=frozenset({SIDECAR_ID}),
+                    side_effect=missing_client,
                 ),
             ):
                 receipt = cvm_sidecar_probe.remote_provision(handle, owner)
@@ -2157,15 +2216,18 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 state_root, state, incoming = write_remote_provision_attempt_fixture(
                     root, handle, owner, workflow
                 )
-                inventory_path = root / "inventory.bin"
-                if line_count is None:
-                    inventory = b"sha256:" + b"f" * 65 + b"\n"
-                else:
-                    ids = (SIDECAR_ID, CLIENT_ID)
-                    inventory = "".join(
-                        f"{ids[line % len(ids)]}\n" for line in range(line_count)
-                    ).encode("ascii")
-                inventory_path.write_bytes(inventory)
+                inventory_paths: dict[str, Path] = {}
+                for role, image_id in (
+                    ("sidecar", LOADED_SIDECAR_ID),
+                    ("client", LOADED_CLIENT_ID),
+                ):
+                    inventory_path = root / f"inventory-{role}.bin"
+                    if line_count is None:
+                        inventory = b"sha256:" + b"f" * 65 + b"\n"
+                    else:
+                        inventory = (f"{image_id}\n" * line_count).encode("ascii")
+                    inventory_path.write_bytes(inventory)
+                    inventory_paths[role] = inventory_path
                 spawned: list[subprocess.Popen[bytes]] = []
 
                 def fixed_run(
@@ -2177,7 +2239,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         return subprocess.CompletedProcess(
                             arguments, 0, "loaded\n", ""
                         )
-                    if arguments[1:] == ["image", "ls", "--no-trunc", "--quiet"]:
+                    if arguments[1:6] == [
+                        "image", "ls", "--all", "--no-trunc", "--quiet"
+                    ]:
                         raise AssertionError(
                             "inventory must not use buffering subprocess.run"
                         )
@@ -2187,17 +2251,11 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     argv: object, **kwargs: object
                 ) -> subprocess.Popen[bytes]:
                     arguments = list(argv)
-                    self.assertEqual(
-                        arguments,
-                        [
-                            "docker",
-                            "image",
-                            "ls",
-                            "--all",
-                            "--no-trunc",
-                            "--quiet",
-                        ],
-                    )
+                    self.assertEqual(arguments[:6], [
+                        "docker", "image", "ls", "--all", "--no-trunc", "--quiet"
+                    ])
+                    self.assertEqual(len(arguments), 7)
+                    role = "sidecar" if "-sidecar:" in arguments[6] else "client"
                     producer = original_popen(
                         [
                             sys.executable,
@@ -2208,7 +2266,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                                 "sys.stdout.buffer.flush();"
                                 "time.sleep(float(sys.argv[2]))"
                             ),
-                            os.fspath(inventory_path),
+                            os.fspath(inventory_paths[role]),
                             "0" if expected_check is None else "10",
                         ],
                         **kwargs,
@@ -2774,6 +2832,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             {"role": "sidecar", "id": SIDECAR_ID, "platform": "linux/amd64", "configSha256": SIDECAR_ID.removeprefix("sha256:")},
                             {"role": "client", "id": CLIENT_ID, "platform": "linux/amd64", "configSha256": CLIENT_ID.removeprefix("sha256:")},
                         ],
+                        "retainedImageIds": [LOADED_SIDECAR_ID, LOADED_CLIENT_ID],
                     }
                 ),
                 encoding="utf-8",
@@ -2815,7 +2874,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             self.assertEqual(len(docker_log.read_text().splitlines()), call_count)
             calls = [json.loads(line) for line in docker_log.read_text().splitlines()]
             create_client = next(call for call in calls if call["argv"][:2] == ["container", "create"])
-            self.assertEqual(create_client["argv"][-1], CLIENT_ID)
+            self.assertEqual(create_client["argv"][-1], LOADED_CLIENT_ID)
             self.assertIn("--pull=never", create_client["argv"])
             start_client = next(call for call in calls if call["argv"][:2] == ["container", "start"])
             self.assertEqual(
@@ -2946,6 +3005,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     {"role": "sidecar", "id": SIDECAR_ID},
                     {"role": "client", "id": CLIENT_ID},
                 ],
+                "retainedImageIds": [LOADED_SIDECAR_ID, LOADED_CLIENT_ID],
             }
             with (
                 mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
@@ -3177,6 +3237,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             {"role": "sidecar", "id": SIDECAR_ID, "platform": "linux/amd64", "configSha256": SIDECAR_ID.removeprefix("sha256:")},
                             {"role": "client", "id": CLIENT_ID, "platform": "linux/amd64", "configSha256": CLIENT_ID.removeprefix("sha256:")},
                         ],
+                        "retainedImageIds": [LOADED_SIDECAR_ID, LOADED_CLIENT_ID],
                     }
                 ),
                 encoding="utf-8",
