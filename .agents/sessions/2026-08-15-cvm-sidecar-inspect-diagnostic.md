@@ -261,6 +261,11 @@ default inventory hides it.
   binding, first-failure cleanup, receipts, and probe authorization remain
   unchanged.
 - Focused CVM Sidecar suite: 41/41 PASS.
+- Global modules excluding `test_cvm_push`: 166/166 PASS. The remaining
+  `test_cvm_push` cases excluding the same pre-existing
+  `test_build_input_copy_does_not_follow_checkout_package_symlinks` hang:
+  25/25 PASS.
+- Python compilation and diff check: PASS.
 
 Require fresh independent Standards and Spec PASS on the clean successor before
 one new deployment, prepare handle, provision attempt, and conditional sealed
