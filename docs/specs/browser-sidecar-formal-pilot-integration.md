@@ -8,9 +8,12 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 
 1. `meshshot.render_residual_preview(...)` keeps its existing signature,
    `RenderedPreview` result, canonical PNG post-processing, profile identity,
-   view order, and error type. Outside a formal pilot job, absence of Browser
-   Authority selects the existing local renderer. Once an outer authority is
-   declared, malformed or unavailable authority fails closed and never falls
+   view order, and error type. The only formal selector is the immutable fixed
+   mount `/run/meshshot-browser/authority.json`, and the only connection is
+   `/run/meshshot-browser/browser.sock`; callers and environment variables
+   cannot select either path. Outside a formal pilot job, absence of the fixed
+   mount selects the existing local renderer. A present but malformed,
+   replaceable, or unavailable fixed authority fails closed and never falls
    back to a locally launched browser.
 2. `scripts/pilot/runner.py run ...` owns exactly one Browser Sidecar for the
    complete nested Agent workload. It starts the Sidecar before bwrap, gives
@@ -30,9 +33,9 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Browser-less Broker base image:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Render Program Broker image:
-  `sha256:ac7a7adc13664de5661c674b7c55349b58170e48a0176e02e8bf1586fcc5a036`
+  `sha256:f0e94aa0fb73a83fb5be7c8f08460b189cbae3118ef97642a44e7fda7fd80980`
 - Broker OCI revision / production implementation commit:
-  `8188bbdc61e31805c7c7c0bae2f8dfb38590dc2c`
+  `fdbea34c0b7b80168936e376df1b72f07fc7309f`
 - Image source revision:
   `1abe4c97929906b5c0b28b0f3f38857bd923952f`
 - Residual program SHA-256:
@@ -40,8 +43,10 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Viewer program SHA-256:
   `e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b`
 
-These are the exact reviewed R8 artifacts. Runtime image pulls and browser
-downloads are forbidden. Replacing any identity is a new review decision.
+The corrected Broker was built cleanly from the GREEN implementation with
+`--pull=false --no-cache --network=none`; its exact identity remains subject
+to independent review. Runtime image pulls and browser downloads are
+forbidden. Replacing any accepted identity is a new review decision.
 
 ## Adversarial matrix
 
@@ -57,12 +62,13 @@ downloads are forbidden. Replacing any identity is a new review decision.
 | Broker readiness absent, malformed, late, or for another job | Authority is never published and nested workload never starts | Exact owned Broker, Sidecar, and network are stopped and absent |
 | Broker socket path pre-exists, is not one socket, changes identity, or remains writable to the nested workload | Pilot fails before authority publication | Exact owned Broker, Sidecar, and network are stopped and absent; no foreign path is removed |
 | Authority absent outside formal job | Existing local `render_residual_preview` behavior remains selected | Existing local browser cleanup remains unchanged |
+| Caller changes or unsets an authority/socket environment variable, or supplies a conforming temporary authority/socket | It cannot select formal mode, redirect the fixed connection, or trigger a formal-to-legacy fallback | The fixed mount remains the only formal selector |
 | Authority malformed/unreadable/unreachable after formal selection | `MeshshotError`; no local browser launch or transport fallback | Outer runner still performs terminal Sidecar cleanup |
 | Render request has extra/missing key, wrong program, URL, JS, path, endpoint, browser/Docker arg, invalid geometry/options, or oversized body | Registered-program broker rejects it before browser work | Fresh context is absent or closed; Sidecar remains job-owned |
 | Nested Agent attempts browser spawn or inventory | Formal workload exposes no browser executable/cache and no raw Sidecar endpoint; attempt fails | Nested browser-process inventory remains zero |
 | Browser can see source alias or external egress | Formal render and pilot fail closed | Sidecar is terminally stopped and absent |
 | Workload exits nonzero | Original workload status is preserved unless lifecycle/cleanup evidence is worse | Sidecar cleanup always runs after process-group terminal state |
-| Supervisor receives SIGINT or SIGTERM | Signal is relayed to the workload group; signal status wins | Sidecar receives bounded termination and is absent before return |
+| Supervisor receives SIGINT or SIGTERM at any startup or workload boundary | The relay is installed before Sidecar/Broker mutation; signal status wins and no later startup boundary is entered | Every already-created exact resource follows the same bounded cleanup and exact absence proof |
 | Sidecar exits during workload | Workload group is terminated; pilot fails closed; no replacement Sidecar starts | Exact terminal state is recorded and resource is absent |
 | Broker exits during workload | Workload group is terminated; pilot fails closed; no replacement Broker or host process starts | Exact terminal state is recorded and resource is absent |
 | Broker or Sidecar stop/terminal evidence times out | Cleanup failure dominates workload/render success | Remaining exact owned resources still receive their bounded cleanup attempts; retained proof is closed |
@@ -71,11 +77,22 @@ downloads are forbidden. Replacing any identity is a new review decision.
 
 ## Evidence and interruption rules
 
-The outer lifecycle writes one job receipt under `run/` using atomic
-publication. It binds the job, exact image and program identities, readiness,
-request count, fresh-context observations, workload terminal status, Sidecar
-terminal state, owned-resource ledger, absence proof, and first closed failure
-classification. A receipt is successful only when every predicate is positive.
+The outer lifecycle writes one proof-only job receipt under `run/` using
+atomic publication. Its exact public keys are the receipt schema/status,
+immutable Sidecar/Broker/base/source and program identities, the fixed
+predicate map, exact aggregate/program counts, one closed failure marker, and
+`retryAllowed:false`. It never publishes Docker State, PIDs, timestamps,
+errors, paths, argv/stderr, owner nonces, or resource/job identifiers. A
+receipt is successful only when every whitelisted predicate is positive,
+both registered programs have at least one accepted request, accepted counts
+sum exactly, and `freshContexts = acceptedRequests + 1`.
+
+The fixed authority is opened with no-follow semantics and must be one regular
+inode owned by the workload UID, mode `0444`, with link count one and the exact
+authority/job/image/program schema. The runner publishes it only after exact
+Sidecar, Broker, socket, readiness, and isolation checks, then mounts the
+capability directory read-only into bwrap. Nested code cannot remove or replace
+the fixed authority/socket mount.
 
 SIGINT/SIGTERM, workload failure, readiness failure, Sidecar exit, malformed
 broker traffic, and cleanup failure all traverse the same terminal cleanup
