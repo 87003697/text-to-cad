@@ -534,6 +534,39 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             boundary.calls,
         )
 
+    def test_unproved_surface_id_is_never_removed(self) -> None:
+        """A returned ID is cleanup authority only after both labels verify."""
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as capability:
+            with mock.patch.object(
+                browser_sidecar.tempfile, "mkdtemp", return_value=capability
+            ):
+                job = browser_sidecar.BrowserSidecarJob(
+                    Path(capability) / "exp",
+                    Path("/workspace/repo/outputs/conformance/formal"),
+                    job_id="formal-local-conformance",
+                )
+            artifact = Path(capability) / "artifact.pyz"
+            artifact.write_bytes(b"sealed")
+            with (
+                mock.patch.object(
+                    conformance,
+                    "_create_owned_container",
+                    return_value=SURFACE_ID,
+                ),
+                mock.patch.object(
+                    conformance,
+                    "_verify_container_owner",
+                    side_effect=RuntimeError("wrong labels"),
+                ),
+                mock.patch.object(conformance, "_remove_owned_container") as remove,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "wrong labels"):
+                    conformance._discover_client_surface(
+                        "/usr/bin/docker", job, artifact, "fixed-surface"
+                    )
+            remove.assert_not_called()
+
     def test_foreign_client_collision_is_preserved(self) -> None:
         """A client-name collision after Sidecar startup remains foreign state."""
 

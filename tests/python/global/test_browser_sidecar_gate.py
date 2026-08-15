@@ -145,6 +145,43 @@ class BrowserSidecarGateTests(unittest.TestCase):
         self.assertNotIn("urlopen", source)
         self.assertNotIn("SOURCE_ALIASES", source)
 
+    def test_browser_process_inventory_detects_headless_shell_names(self) -> None:
+        """Common Chromium product names cannot evade the zero-process proof."""
+
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as temp:
+            proc = Path(temp)
+            process = proc / "101"
+            process.mkdir()
+            (process / "comm").write_text("chrome-headless-shell\n", encoding="utf-8")
+            (process / "cmdline").write_bytes(
+                b"/opt/chrome-headless-shell\0--headless\0"
+            )
+            with mock.patch.object(
+                gate,
+                "Path",
+                new=lambda value: proc if value == "/proc" else Path(value),
+            ):
+                self.assertEqual(gate._browser_processes(), ["chrome-headless-shell"])
+
+    def test_browser_process_inventory_fails_closed_when_proc_is_unreadable(self) -> None:
+        """An inspectable live PID with unreadable metadata cannot prove zero."""
+
+        gate = load_gate()
+        with tempfile.TemporaryDirectory() as temp:
+            proc = Path(temp)
+            process = proc / "202"
+            process.mkdir()
+            (process / "comm").write_text("python\n", encoding="utf-8")
+            (process / "cmdline").mkdir()
+            with mock.patch.object(
+                gate,
+                "Path",
+                new=lambda value: proc if value == "/proc" else Path(value),
+            ):
+                with self.assertRaisesRegex(ValueError, "process inventory"):
+                    gate._browser_processes()
+
     def test_gate_artifact_and_proof_are_bound_to_read_only_job_input(self) -> None:
         """The sealed gate validates its bytes, job, nonce, and surface manifest."""
 

@@ -304,17 +304,40 @@ class BrowserSidecarJobTests(unittest.TestCase):
         for forbidden in ("Pid", "StartedAt", "FinishedAt", "stderr", "argv"):
             self.assertNotIn(forbidden, serialized)
         self.assertNotIn("jobId", receipt)
-        runs = [command for command in calls if command[1] == "run"]
-        self.assertEqual(len(runs), 2)
-        sidecar_run, broker_run = runs
-        self.assertIn("--pull=never", sidecar_run)
-        self.assertIn("--read-only", sidecar_run)
-        self.assertNotIn("--mount", sidecar_run)
-        self.assertIn(IMAGE_ID, sidecar_run)
-        self.assertIn("--pull=never", broker_run)
-        self.assertIn("--read-only", broker_run)
-        self.assertIn("--mount", broker_run)
-        self.assertIn(browser_sidecar.BROKER_IMAGE_ID, broker_run)
+        creates = [command for command in calls if command[1] == "create"]
+        self.assertEqual(len(creates), 2)
+        sidecar_create, broker_create = creates
+        self.assertFalse(any(command[1] == "run" for command in calls))
+        self.assertIn("--pull=never", sidecar_create)
+        self.assertIn("--read-only", sidecar_create)
+        self.assertNotIn("--mount", sidecar_create)
+        self.assertIn(IMAGE_ID, sidecar_create)
+        self.assertIn("--pull=never", broker_create)
+        self.assertIn("--read-only", broker_create)
+        self.assertIn("--mount", broker_create)
+        self.assertIn(browser_sidecar.BROKER_IMAGE_ID, broker_create)
+        broker_bind = next(
+            value for value in broker_create if value.startswith("type=bind,")
+        )
+        self.assertIn(f"src={job.broker_capability_dir},", broker_bind)
+        self.assertNotIn(f"src={job.capability_dir},", broker_bind)
+        self.assertNotEqual(job.broker_capability_dir, job.capability_dir)
+        starts = [command for command in calls if command[1] == "start"]
+        self.assertEqual(starts, [["/usr/bin/docker", "start", CONTAINER_ID], ["/usr/bin/docker", "start", BROKER_CONTAINER_ID]])
+        for container_id in (CONTAINER_ID, BROKER_CONTAINER_ID):
+            verified_at = max(
+                index
+                for index, command in enumerate(calls)
+                if command[1:3] == ["container", "inspect"]
+                and container_id in command
+                and "Labels" in command[-1]
+            )
+            started_at = next(
+                index
+                for index, command in enumerate(calls)
+                if command[1:3] == ["start", container_id]
+            )
+            self.assertLess(verified_at, started_at)
         self.assertFalse(any(command[1] == "port" for command in calls))
 
     def test_cleanup_timeout_publishes_failure_and_continues_absence_proof(self) -> None:
@@ -634,7 +657,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(job.capability_dir, returned.resolve())
 
     def test_created_container_requires_exact_owner_labels_before_readiness(self) -> None:
-        """A returned ID is retained but cannot be adopted with a wrong owner nonce."""
+        """A returned ID is untouched until exact labels prove cleanup authority."""
 
         calls: list[list[str]] = []
 
@@ -703,7 +726,8 @@ class BrowserSidecarJobTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.check, "container-owner-label")
         self.assertEqual(receipt["failureCheck"], "container-owner-label")
-        self.assertTrue(any(call[1:4] == ["rm", "-f", CONTAINER_ID] for call in calls))
+        self.assertFalse(any(call[1:4] == ["rm", "-f", CONTAINER_ID] for call in calls))
+        self.assertFalse(any(call[1:3] == ["start", CONTAINER_ID] for call in calls))
         self.assertFalse(any(call[-1] == job.container_name and call[1] == "rm" for call in calls))
 
     def test_startup_signal_after_network_create_closes_exact_resources(self) -> None:
