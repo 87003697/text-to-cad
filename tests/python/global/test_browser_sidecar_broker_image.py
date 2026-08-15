@@ -310,7 +310,7 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
                 ),
                 mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="7" * 32),
             ):
-                job = browser_sidecar.BrowserSidecarJob(
+                job = browser_sidecar.BrowserSidecarJob.create(
                     root / "exp",
                     Path("/workspace/repo/outputs/conformance/formal"),
                     job_id="formal-image-client",

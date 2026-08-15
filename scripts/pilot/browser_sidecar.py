@@ -684,7 +684,7 @@ class BrowserSidecarJob:
         job_id: str,
         cancelled: Callable[[], bool] | None = None,
     ) -> None:
-        """Bind immutable identities before any Docker resource is created."""
+        """Bind immutable identities without mutating the capability filesystem."""
 
         if JOB_ID.fullmatch(job_id) is None:
             raise BrowserSidecarError("job identity is invalid", check="job-id")
@@ -696,30 +696,16 @@ class BrowserSidecarJob:
         self.receipt_path = self.run_dir / "browser-sidecar-receipt.json"
         self.owner_nonce = secrets.token_hex(16)
         self.gate_nonce = self.owner_nonce
-        self.capability_dir = Path(
-            tempfile.mkdtemp(
-                prefix=f"meshshot-browser-{self.owner_nonce[:8]}-",
-                dir="/tmp",
-            )
-        ).resolve()
-        self.broker_capability_dir = self.capability_dir / "broker"
-        self.broker_capability_dir.mkdir(mode=0o700)
-        self.authority_path = self.capability_dir / "authority.json"
-        self.socket_path = self.broker_capability_dir / SANDBOX_SOCKET_PATH.name
-        self.public_socket_path = self.capability_dir / SANDBOX_SOCKET_PATH.name
-        self.public_socket_path.symlink_to(
-            Path("broker") / SANDBOX_SOCKET_PATH.name
-        )
-        public_socket_metadata = self.public_socket_path.lstat()
-        self.public_socket_link_identity = (
-            public_socket_metadata.st_dev,
-            public_socket_metadata.st_ino,
-        )
-        self.nested_gate_socket_path = (
-            self.capability_dir / NESTED_GATE_SOCKET_PATH.name
-        )
-        self.gate_artifact_path = self.capability_dir / Path(NESTED_GATE["artifactPath"]).name
-        self.gate_input_path = self.capability_dir / Path(NESTED_GATE["inputPath"]).name
+        self.capability_dir: Path | None = None
+        self.broker_capability_dir: Path | None = None
+        self.authority_path: Path | None = None
+        self.socket_path: Path | None = None
+        self.public_socket_path: Path | None = None
+        self.public_socket_link_identity: tuple[int, int] | None = None
+        self.public_socket_created = False
+        self.nested_gate_socket_path: Path | None = None
+        self.gate_artifact_path: Path | None = None
+        self.gate_input_path: Path | None = None
         self.prefix = f"ttc-bs-{self.owner_nonce[:12]}"
         self.network_name = f"{self.prefix}-net"
         self.container_name = f"{self.prefix}-sidecar"
@@ -744,6 +730,82 @@ class BrowserSidecarJob:
         self.first_error: str | None = None
         self.cleanup_errors: list[str] = []
         self._closed = False
+
+    @classmethod
+    def create(
+        cls,
+        exp_dir: Path,
+        sandbox_exp_dir: Path,
+        *,
+        job_id: str,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> BrowserSidecarJob:
+        """Create the capability layout under one receipt-owning job object."""
+
+        job = cls(
+            exp_dir,
+            sandbox_exp_dir,
+            job_id=job_id,
+            cancelled=cancelled,
+        )
+        try:
+            job._prepare_capability_layout()
+        except BaseException as exc:
+            job.first_error = "capability-layout"
+            try:
+                job.close(workload_status=None)
+            except BaseException as cleanup_exc:
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise exc
+                raise BrowserSidecarError(
+                    "Browser Sidecar capability cleanup failed",
+                    check="capability-layout",
+                ) from cleanup_exc
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            raise BrowserSidecarError(
+                "Browser Sidecar capability layout failed",
+                check="capability-layout",
+            ) from exc
+        return job
+
+    def _prepare_capability_layout(self) -> None:
+        """Create the exact private Broker directory and public socket link."""
+
+        if self.capability_dir is not None:
+            raise BrowserSidecarError(
+                "Browser Sidecar capability layout already exists",
+                check="capability-layout",
+            )
+        self.capability_dir = Path(
+            tempfile.mkdtemp(
+                prefix=f"meshshot-browser-{self.owner_nonce[:8]}-",
+                dir="/tmp",
+            )
+        ).resolve()
+        self.broker_capability_dir = self.capability_dir / "broker"
+        self.authority_path = self.capability_dir / "authority.json"
+        self.socket_path = self.broker_capability_dir / SANDBOX_SOCKET_PATH.name
+        self.public_socket_path = self.capability_dir / SANDBOX_SOCKET_PATH.name
+        self.nested_gate_socket_path = (
+            self.capability_dir / NESTED_GATE_SOCKET_PATH.name
+        )
+        self.gate_artifact_path = (
+            self.capability_dir / Path(NESTED_GATE["artifactPath"]).name
+        )
+        self.gate_input_path = (
+            self.capability_dir / Path(NESTED_GATE["inputPath"]).name
+        )
+        self.broker_capability_dir.mkdir(mode=0o700)
+        self.public_socket_path.symlink_to(
+            Path("broker") / SANDBOX_SOCKET_PATH.name
+        )
+        self.public_socket_created = True
+        public_socket_metadata = self.public_socket_path.lstat()
+        self.public_socket_link_identity = (
+            public_socket_metadata.st_dev,
+            public_socket_metadata.st_ino,
+        )
 
     @property
     def sandbox_authority_path(self) -> Path:
@@ -1603,11 +1665,14 @@ class BrowserSidecarJob:
             self.cleanup_errors.append("retained-resource")
         elif absence.get("proved") is not True:
             self.cleanup_errors.append("absence-proof")
-        try:
-            self.authority_path.unlink(missing_ok=True)
-        except OSError:
-            self.cleanup_errors.append("authority-remove")
-        if self.socket_path.exists() or self.socket_path.is_symlink():
+        if self.authority_path is not None:
+            try:
+                self.authority_path.unlink(missing_ok=True)
+            except OSError:
+                self.cleanup_errors.append("authority-remove")
+        if self.socket_path is not None and (
+            self.socket_path.exists() or self.socket_path.is_symlink()
+        ):
             try:
                 current = self.socket_path.lstat()
                 current_identity = (current.st_dev, current.st_ino)
@@ -1617,19 +1682,23 @@ class BrowserSidecarJob:
                     self.socket_path.unlink()
             except OSError:
                 self.cleanup_errors.append("socket-remove")
-        try:
-            public_socket_metadata = self.public_socket_path.lstat()
-            if (
-                public_socket_metadata.st_dev,
-                public_socket_metadata.st_ino,
-            ) != self.public_socket_link_identity:
-                self.cleanup_errors.append("public-socket-identity")
-            else:
-                self.public_socket_path.unlink()
-        except FileNotFoundError:
-            self.cleanup_errors.append("public-socket-remove")
-        except OSError:
-            self.cleanup_errors.append("public-socket-remove")
+        if self.public_socket_path is not None and self.public_socket_created:
+            try:
+                if self.public_socket_link_identity is None:
+                    self.public_socket_path.unlink()
+                else:
+                    public_socket_metadata = self.public_socket_path.lstat()
+                    if (
+                        public_socket_metadata.st_dev,
+                        public_socket_metadata.st_ino,
+                    ) != self.public_socket_link_identity:
+                        self.cleanup_errors.append("public-socket-identity")
+                    else:
+                        self.public_socket_path.unlink()
+            except FileNotFoundError:
+                self.cleanup_errors.append("public-socket-remove")
+            except OSError:
+                self.cleanup_errors.append("public-socket-remove")
         for path, identity in self.gate_file_identities.items():
             try:
                 metadata = path.lstat()
@@ -1641,18 +1710,20 @@ class BrowserSidecarJob:
                 pass
             except OSError:
                 self.cleanup_errors.append("nested-gate-file-remove")
-        try:
-            self.broker_capability_dir.rmdir()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            self.cleanup_errors.append("broker-capability-dir-remove")
-        try:
-            self.capability_dir.rmdir()
-        except FileNotFoundError:
-            pass
-        except OSError:
-            self.cleanup_errors.append("capability-dir-remove")
+        if self.broker_capability_dir is not None:
+            try:
+                self.broker_capability_dir.rmdir()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                self.cleanup_errors.append("broker-capability-dir-remove")
+        if self.capability_dir is not None:
+            try:
+                self.capability_dir.rmdir()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                self.cleanup_errors.append("capability-dir-remove")
         terminal_record = self.broker_terminal or {}
         accepted = terminal_record.get("acceptedRequests")
         fresh_contexts = terminal_record.get("freshContexts")

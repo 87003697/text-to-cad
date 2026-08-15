@@ -595,7 +595,7 @@ def run_host(evidence_path: Path) -> int:
         )
 
         temporary_root = Path(temporary).resolve()
-        job = BrowserSidecarJob(
+        job = BrowserSidecarJob.create(
             temporary_root,
             Path("/workspace/repo/outputs/conformance/formal"),
             job_id="formal-local-conformance",

@@ -472,7 +472,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
                 ),
                 mock.patch.object(subprocess, "run", side_effect=boundary.run),
             ):
-                job = browser_sidecar.BrowserSidecarJob(
+                job = browser_sidecar.BrowserSidecarJob.create(
                     Path(temp) / "exp",
                     Path("/workspace/repo/outputs/conformance/formal"),
                     job_id="formal-local-conformance",
@@ -546,7 +546,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             with mock.patch.object(
                 browser_sidecar.tempfile, "mkdtemp", return_value=capability
             ):
-                job = browser_sidecar.BrowserSidecarJob(
+                job = browser_sidecar.BrowserSidecarJob.create(
                     Path(capability) / "exp",
                     Path("/workspace/repo/outputs/conformance/formal"),
                     job_id="formal-local-conformance",

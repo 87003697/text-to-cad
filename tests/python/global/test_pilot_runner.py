@@ -795,7 +795,7 @@ class RunnerTests(unittest.TestCase):
             job_id = "pilot-" + runner.hashlib.sha256(
                 relative.as_posix().encode("utf-8")
             ).hexdigest()[:24]
-            job = runner.BrowserSidecarJob(
+            job = runner.BrowserSidecarJob.create(
                 exp_dir,
                 runner.SANDBOX_REPO_ROOT / relative,
                 job_id=job_id,
@@ -830,7 +830,11 @@ class RunnerTests(unittest.TestCase):
                 mock.patch.object(runner, "REPO_ROOT", repo_root),
                 mock.patch.object(runner, "prepare_exp"),
                 mock.patch.object(runner, "prepare_nested_browser_gate"),
-                mock.patch.object(runner, "BrowserSidecarJob", return_value=job),
+                mock.patch.object(
+                    runner.BrowserSidecarJob,
+                    "create",
+                    return_value=job,
+                ),
                 mock.patch.object(job, "start"),
                 mock.patch.object(job, "close", wraps=job.close) as close_job,
                 mock.patch.object(runner, "resolve_tap", return_value="/fake/tap"),
@@ -1134,6 +1138,10 @@ class RunnerTests(unittest.TestCase):
         supervisor = self.supervisor
 
         class FakeSidecar:
+            @classmethod
+            def create(cls, *args, **kwargs):
+                return cls(*args, **kwargs)
+
             def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled=None):
                 events.append(("construct", exp_dir, sandbox_exp_dir, job_id))
                 self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
@@ -1239,6 +1247,10 @@ class RunnerTests(unittest.TestCase):
         relay = FakeRelay()
 
         class FakeSidecar:
+            @classmethod
+            def create(cls, *args, **kwargs):
+                return cls(*args, **kwargs)
+
             def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled):
                 self.capability_dir = Path("/private/tmp/fixed-capability")
                 self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
@@ -1291,6 +1303,10 @@ class RunnerTests(unittest.TestCase):
 
     def test_runner_rejects_failed_receipt_after_successful_workload(self) -> None:
         class FakeSidecar:
+            @classmethod
+            def create(cls, *args, **kwargs):
+                return cls(*args, **kwargs)
+
             def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled=None):
                 self.capability_dir = Path("/private/tmp/fixed-capability")
                 self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
@@ -1989,7 +2005,8 @@ class ProductionPathContractTests(unittest.TestCase):
             exp = (Path(temp) / "repo/outputs/group/exp").resolve()
             exp.mkdir(parents=True)
             sidecar = mock.Mock()
-            sidecar_type = mock.Mock(return_value=sidecar)
+            sidecar_type = mock.Mock()
+            sidecar_type.create.return_value = sidecar
             with (
                 mock.patch.object(runner, "REPO_ROOT", (Path(temp) / "repo").resolve()),
                 mock.patch.object(runner, "prepare_exp"),
@@ -2068,6 +2085,10 @@ class ProductionPathContractTests(unittest.TestCase):
             runner = load_runner()
 
             class FakeSidecar:
+                @classmethod
+                def create(cls, *args, **kwargs):
+                    return cls(*args, **kwargs)
+
                 def __init__(self, *args, **kwargs):
                     pass
 

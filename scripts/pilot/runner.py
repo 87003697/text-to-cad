@@ -1699,7 +1699,7 @@ def run_pilot(
     sidecar: BrowserSidecarJob | None = None
     with SignalRelay() as relay:
         try:
-            sidecar = BrowserSidecarJob(
+            sidecar = BrowserSidecarJob.create(
                 exp_dir,
                 sandbox_exp,
                 job_id=job_id,

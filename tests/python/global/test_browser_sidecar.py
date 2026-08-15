@@ -126,7 +126,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
         """A closed pre-create failure cannot imply an unproved retained resource."""
 
         with tempfile.TemporaryDirectory() as temp:
-            job = browser_sidecar.BrowserSidecarJob(
+            job = browser_sidecar.BrowserSidecarJob.create(
                 Path(temp),
                 Path("/workspace/repo/outputs/group/exp"),
                 job_id="formal-job-1",
@@ -281,7 +281,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="1" * 16),
                 mock.patch.object(browser_sidecar.tempfile, "mkdtemp", return_value=capability),
             ):
-                job = browser_sidecar.BrowserSidecarJob(
+                job = browser_sidecar.BrowserSidecarJob.create(
                     exp_dir,
                     Path("/workspace/repo/outputs/group/exp"),
                     job_id="formal-job-1",
@@ -414,7 +414,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, "", "")
 
         with tempfile.TemporaryDirectory() as temp:
-            job = browser_sidecar.BrowserSidecarJob(
+            job = browser_sidecar.BrowserSidecarJob.create(
                 Path(temp),
                 Path("/workspace/repo/outputs/group/exp"),
                 job_id="formal-job-1",
@@ -488,7 +488,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                         )
                     return subprocess.CompletedProcess(command, 0, "", "")
 
-                job = browser_sidecar.BrowserSidecarJob(
+                job = browser_sidecar.BrowserSidecarJob.create(
                     Path(temp),
                     Path("/workspace/repo/outputs/group/exp"),
                     job_id="formal-job-1",
@@ -548,7 +548,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
                 mock.patch.object(browser_sidecar.subprocess, "run", side_effect=docker),
             ):
-                job = browser_sidecar.BrowserSidecarJob(
+                job = browser_sidecar.BrowserSidecarJob.create(
                     Path(temp),
                     Path("/workspace/repo/outputs/group/exp"),
                     job_id="formal-job-1",
@@ -565,7 +565,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
         """A proof from Job A or a wrong outer nonce cannot satisfy Job B."""
 
         with tempfile.TemporaryDirectory() as temp:
-            job = browser_sidecar.BrowserSidecarJob(
+            job = browser_sidecar.BrowserSidecarJob.create(
                 Path(temp),
                 Path("/workspace/repo/outputs/group/exp"),
                 job_id="formal-job-b",
@@ -587,7 +587,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
         """Each immutable proof digest is checked by the production job validator."""
 
         with tempfile.TemporaryDirectory() as temp:
-            job = browser_sidecar.BrowserSidecarJob(
+            job = browser_sidecar.BrowserSidecarJob.create(
                 Path(temp),
                 Path("/workspace/repo/outputs/group/exp"),
                 job_id="formal-job-1",
@@ -621,7 +621,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertNotIn("subprocess.Popen(", source)
 
         with tempfile.TemporaryDirectory() as temp:
-            job = browser_sidecar.BrowserSidecarJob(
+            job = browser_sidecar.BrowserSidecarJob.create(
                 Path(temp),
                 Path("/workspace/repo/outputs/group/exp"),
                 job_id="formal-job-1",
@@ -682,7 +682,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
         """A pre-existing path is foreign state and is never unlinked or adopted."""
 
         with tempfile.TemporaryDirectory() as temp:
-            job = browser_sidecar.BrowserSidecarJob(
+            job = browser_sidecar.BrowserSidecarJob.create(
                 Path(temp),
                 Path("/workspace/repo/outputs/group/exp"),
                 job_id="formal-job-1",
@@ -707,7 +707,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 "mkdtemp",
                 return_value=os.fspath(returned),
             ):
-                job = browser_sidecar.BrowserSidecarJob(
+                job = browser_sidecar.BrowserSidecarJob.create(
                     Path("/tmp/formal-exp"),
                     Path("/workspace/repo/outputs/group/exp"),
                     job_id="formal-job-1",
@@ -773,7 +773,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 mock.patch.object(browser_sidecar.subprocess, "run", side_effect=docker),
                 mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="1" * 16),
             ):
-                job = browser_sidecar.BrowserSidecarJob(
+                job = browser_sidecar.BrowserSidecarJob.create(
                     Path(temp),
                     Path("/workspace/repo/outputs/group/exp"),
                     job_id="formal-job-1",
@@ -834,7 +834,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 mock.patch.object(browser_sidecar.subprocess, "run", side_effect=docker),
                 mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="1" * 16),
             ):
-                job = browser_sidecar.BrowserSidecarJob(
+                job = browser_sidecar.BrowserSidecarJob.create(
                     Path(temp),
                     Path("/workspace/repo/outputs/group/exp"),
                     job_id="formal-job-1",
@@ -855,7 +855,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
         """First cleanup failure is stable, except positive retention dominates."""
 
         with tempfile.TemporaryDirectory() as temp:
-            job = browser_sidecar.BrowserSidecarJob(
+            job = browser_sidecar.BrowserSidecarJob.create(
                 Path(temp),
                 Path("/workspace/repo/outputs/group/exp"),
                 job_id="formal-job-1",
@@ -871,7 +871,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(first["failureCheck"], "sidecar-stop")
 
         with tempfile.TemporaryDirectory() as temp:
-            retained_job = browser_sidecar.BrowserSidecarJob(
+            retained_job = browser_sidecar.BrowserSidecarJob.create(
                 Path(temp),
                 Path("/workspace/repo/outputs/group/exp"),
                 job_id="formal-job-1",
@@ -895,7 +895,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
         """A residual-only terminal record cannot produce a successful receipt."""
 
         with tempfile.TemporaryDirectory() as temp:
-            job = browser_sidecar.BrowserSidecarJob(
+            job = browser_sidecar.BrowserSidecarJob.create(
                 Path(temp),
                 Path("/workspace/repo/outputs/group/exp"),
                 job_id="formal-job-1",
