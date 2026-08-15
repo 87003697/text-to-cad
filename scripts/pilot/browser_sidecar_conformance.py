@@ -259,6 +259,11 @@ def _fixed_container_isolation(*, user: str | None = None) -> list[str]:
         "--read-only",
         "--cap-drop",
         "ALL",
+        *(
+            ["--cap-add", "DAC_READ_SEARCH"]
+            if runtime_user == "0:0"
+            else []
+        ),
         "--security-opt",
         "no-new-privileges:true",
         "--pids-limit",
