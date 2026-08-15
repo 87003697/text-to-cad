@@ -569,7 +569,7 @@ class BrowserSidecarJob:
         self.owner_nonce = secrets.token_hex(16)
         self.capability_dir = Path(
             tempfile.mkdtemp(prefix=f"meshshot-browser-{self.owner_nonce[:8]}-")
-        )
+        ).resolve()
         self.authority_path = self.capability_dir / "authority.json"
         self.socket_path = self.capability_dir / "browser-sidecar.sock"
         self.prefix = f"ttc-bs-{self.owner_nonce[:12]}"
