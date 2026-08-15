@@ -74,4 +74,3 @@ and transfer cleanup contract are unchanged.
    or retry on failure.
 5. If and only if provision succeeds, dispatch the sealed `probe` exactly once
    on that same handle and report its terminal receipt and absence proof.
-
