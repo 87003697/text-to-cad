@@ -78,6 +78,14 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
     `ce3143e4bc30c222b400aa5637edc8df48619169` preserves existing bounded
     `ProbeError` checks but replaces every other successfully-cleaned exception
     with fixed `prepare-operation`. No external operation occurred.
+11. A third authorized handle again ended with bounded
+    `errorCheck=image-attestation` after image load; transfer cleanup and abort
+    both proved absence. R8 used only that structured receipt and did not inspect
+    raw logs or either old handle. RED
+    `794dd002bdb275354a5ffec1730f36623e2fdb7e` proved all 12 sidecar/client
+    field failures collapsed to the generic check. GREEN
+    `2a65efba2300b42487db1ae05e8b93a7c43d0db5` adds one portable four-field
+    inspect projection and preserves exact role/field checks end to end.
 
 ## Session 产出
 
@@ -99,6 +107,8 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
 | `faa23e5c8a482a4ee1c017cca9e92f028c90c677` R6 GREEN | skill, module, tests | Removed tar parser; retained whole-archive attestation and authoritative post-load identity proof; bounded exact prepare cleanup. |
 | `7ab9c5878605aaa9ae9e58441a7c73fafd8eab5b` R7 RED | public CLI test | Injected post-save `os.replace` failure escaped as rc1/raw traceback despite successful cleanup. |
 | `ce3143e4bc30c222b400aa5637edc8df48619169` R7 GREEN | skill, module | Preserve fixed `ProbeError`; map every other successfully-cleaned prepare exception to fixed `prepare-operation`. |
+| `794dd002bdb275354a5ffec1730f36623e2fdb7e` R8 RED | remote-provision matrix | Sidecar/client inspect access, format, ID, platform, revision, and receipt failures all collapsed to `image-attestation`. |
+| `2a65efba2300b42487db1ae05e8b93a7c43d0db5` R8 GREEN | skill, module, tests | Fixed four-field inspect projection; strict compact parse and closed role-specific failure preservation through public receipts. |
 
 ### 核心行为
 
@@ -168,6 +178,13 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
   cleanup, or deployed workflow hash. Public provision accepts such a failure
   only with SSH exit 1, preserves its exact classification, performs the same
   nonce-scoped abort, and never publishes raw stderr/path/errno as evidence.
+- Loaded-image inspection requests only a fixed JSON array of ID, OS,
+  architecture, and OCI revision label; it never requests or accepts full
+  daemon inspect JSON. Sidecar and client independently classify inspect access,
+  compact format, ID, platform, revision, and strict prepare-receipt failures.
+  An unexpected implementation escape uses the sole fixed
+  `image-attestation-unexpected` fallback; existing role-specific `ProbeError`
+  checks are never blanket-wrapped.
 - Prepare cleanup failure still dominates as `prepare-cleanup-absence`. When
   cleanup proves absence, existing fixed checks remain unchanged and every
   non-`ProbeError` becomes `prepare-operation`; no traceback/path/errno/message
@@ -245,6 +262,16 @@ R7 final validation:
 - `git diff --check` and staged diff check → exit 0.
 - External/CVM operations: **zero**; incremental spend: **$0**.
 
+R8 final validation:
+
+- RED remote-provision matrix → **12 expected failures**.
+- Focused suite → **35 tests, OK**.
+- Global gate with the project virtualenv and local loopback permission →
+  **186 tests, OK**, explicit exit 0 from the continued process.
+- `python3 -m py_compile` for the module and focused test → exit 0.
+- `git diff --check` and staged diff check → exit 0.
+- External/CVM operations: **zero**; incremental spend: **$0**.
+
 The first restricted global run was not accepted as product evidence: it had
 eight loopback-bind permission errors and two missing-worktree-dependency
 errors. It also exposed one real README compatibility assertion introduced by
@@ -289,6 +316,10 @@ both previously failed handles remain terminal and untouched.
 R7 adds no new external attempt. Its clean implementation review range is
 `367681a5cb5cb98376f0b5d388c076ee54d61c6b..ce3143e4bc30c222b400aa5637edc8df48619169`;
 both previously failed handles remain terminal and untouched.
+
+R8 adds no new external attempt. Its clean implementation review range is
+`e6ffdf77853800d2e9b711b035aac86ef5dadfc8..2a65efba2300b42487db1ae05e8b93a7c43d0db5`;
+all three previously failed handles remain terminal and untouched.
 
 ## 下一步
 
