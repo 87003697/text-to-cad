@@ -118,3 +118,29 @@ address changes to the bare 64-hex config digest.
 The next external boundary requires independent Standards and Spec PASS on one
 clean successor. Then deploy that exact SHA once, create one new prepare handle,
 provision it once, and run the sealed probe only if provision succeeds.
+
+That boundary completed at reviewed/deployed SHA
+`05aa03b30aeb4349d6d7f166f2af513a951c3884` with fresh handle
+`cvmsp-f12792a693f6a3d162e0f7b0`. Provision again terminated at
+`sidecar-inspect-id-access`, proving that the `sha256:` prefix was not the CVM
+compatibility defect. The nonce-scoped abort and all three transfer-absence
+predicates passed; the sealed probe remained `NOT_RUN`.
+
+## Root inspect command successor
+
+The remaining narrow CLI compatibility seam is the image-inspect command
+namespace. The next fixed command is the older, portable root form
+`docker inspect --type=image --format`, still addressed by the exact bare
+config digest and still requiring returned canonical `.Id` equality.
+
+- RED `9d576c0f`: a legacy-Docker public `remote-provision` fixture rejects
+  `docker image inspect` and accepts only the root inspect form. Existing code
+  failed in 2 ms at `sidecar-inspect-id-access`.
+- GREEN `769835cb`: all four projections use the single root inspect command;
+  no command fallback, tag, prefix match, or relaxed identity path exists.
+- Focused CVM Sidecar suite: 40/40 PASS.
+- Global policy gate with local loopback permitted: 191/191 PASS.
+- Python compilation and diff check: PASS.
+
+Require a fresh independent Standards and Spec PASS before one new deployment,
+prepare handle, provision attempt, and conditional sealed probe.
