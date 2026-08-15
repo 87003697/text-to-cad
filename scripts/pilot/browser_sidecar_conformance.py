@@ -277,7 +277,7 @@ def _fixed_container_isolation(
         "--memory-swap",
         "256m",
         "--cpus",
-        "0.5",
+        "1" if read_only_discovery else "0.5",
         "--tmpfs",
         "/tmp:rw,nosuid,nodev,size=16m,mode=1777",
         "--tmpfs",
