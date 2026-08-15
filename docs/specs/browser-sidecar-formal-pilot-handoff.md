@@ -159,9 +159,9 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Browser-less Broker base:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Final corrected Broker:
-  `sha256:cdc77541406802bbcfd1b26cf101833fac420889a1f90746afdbf46b240c7e34`
+  `sha256:7ee52e2f5a048d6c40b8245770e8c91a2094e6ffa6d7c776eb0df0f3767b60fc`
 - Broker OCI revision:
-  `e4e5f67b275c123b034034a1defb29ec45c3cd57`
+  `55e8727a951ae943a5b18d542d876321a4e6dc4f`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
   `sha256:60a5274143f441556ca8fa7ded30395ee32b3530d76a60e3a17cd01dc422cdac`
 - Platform: `linux/amd64`
@@ -218,10 +218,10 @@ Passed for the current review corrections:
 - Exact locked-image extraction, real packaged-client gate, and image-sealed
   surface discovery: **3 tests, OK**.
 - Focused Browser Sidecar, conformance host, sealed-image contract, surface
-  scanner, nested gate, runner, and public renderer suites: **116 tests, OK**
+  scanner, nested gate, runner, and public renderer suites: **119 tests, OK**
   (**3 opt-in image tests skipped** in this non-Docker aggregate and passed
   separately above).
-- Global policy gate: **267 tests, OK**, with the same 3 opt-in image tests
+- Global policy gate: **270 tests, OK**, with the same 3 opt-in image tests
   skipped there and passed separately against the exact locked image.
 - CVM Sidecar prepare/provision/probe suite: **48 tests, OK**, including both
   legacy two-role and Formal three-role provisioning receipts.
@@ -242,9 +242,10 @@ Passed for the current review corrections:
   was causal: changing only the discovery role to 1 bounded CPU completed the
   scan in 98.743 seconds. The first corrected image carried a nonexistent
   expanded revision and was rejected by the commit-existence gate despite
-  passing its exact tests. Final image `cdc77541...0c7e34` then completed the
-  aggregate **3 tests, OK** in 113.840 seconds. Both timeouts remain recorded
-  rather than reclassified.
+  passing its exact tests. Superseded image `cdc77541...0c7e34` completed the
+  aggregate in 113.840 seconds before its conformance job exposed the
+  daemon-share gap. Final image `7ee52e2f...7b60fc` completed **3 tests, OK**
+  in 131.488 seconds. Both timeouts remain recorded rather than reclassified.
 
 The conformance-host correction starts with RED commit `9defcace` and GREEN
 commit `fdadf9aa`. Truthful pre-resource absence starts with RED commit
@@ -335,14 +336,13 @@ Not passed / not complete:
 
 - The earlier full Python wrapper reached unrelated `meshscope` tests but the
   lightweight worktree lacks the native octree backend: 26 errors, one skip.
-- Standards and Spec/security both passed clean HEAD `5266c60c`, then its one
-  production-shaped conformance job exposed the Mac temp-sharing defect below.
-  The next independent review found the final four security/provenance gaps
-  above; fresh review has **not yet been rerun** against their corrections and
-  exact replacement image.
-- The failed `5266c60c` conformance receipt is preserved and never retried. A
-  successor conformance job remains separately gated on the fresh review and
-  renewed run authorization.
+- Standards and Spec/security both passed clean HEAD `70b88271`. Its one
+  production-shaped conformance job then exposed the remaining dedicated
+  Colima mount prerequisite below. Fresh review has **not yet been rerun**
+  against that localized correction and exact replacement image.
+- The failed `70b88271` conformance receipt is preserved and will not be
+  retried. A successor conformance job requires the fresh dual review and a
+  distinct clean SHA.
 - The Broker was rebuilt because the host correction changes the
   Dockerfile-copied conformance module. The replacement build used only the
   exact existing base, with no pull and no build network.
@@ -352,6 +352,24 @@ Not passed / not complete:
 Dedicated Colima profile: `browser-sidecar-prototype`, `linux/amd64`, Docker
 socket
 `unix:///Users/zhiyuanma/.colima/browser-sidecar-prototype/docker.sock`.
+
+Dual-reviewed clean HEAD `70b88271744523941b140dd49b38eb16a7dcd3a3`
+used exact Broker `sha256:cdc77541...0c7e34`. Its one job completed sealed
+surface discovery and exact Sidecar start/readiness, then failed closed at
+Broker create with `failureCheck:docker-create-status`: the dedicated profile
+had `mounts:null`, so its VM could see neither the canonical `/private/tmp`
+capability source nor any host home path. It accepted zero requests/contexts,
+published `absenceProved:true` and `retryAllowed:false`, cleaned the exact
+Sidecar/network, and left empty labeled inventories. Immutable evidence is at
+`/tmp/browser-sidecar-formal-pilot-conformance-70b88271-20260816.json`, size
+1,599 bytes, SHA-256
+`e39bf578ca870f263e3b80319a36cdec4e2ff544b5dfc412440ce930b342e7eb`.
+RED `c09e9ad7` binds the conformance capability to one daemon-shared evidence
+parent. GREEN `55e8727a` accepts only an existing, canonical, current-uid,
+mode-`0700` parent and retains random child ownership/cleanup. The dedicated
+profile now mounts only `/Users/zhiyuanma/.ttc-bs` writable at the same path;
+the VM observes mode `0700`. No broader `/tmp`, repository, or home mount was
+added. The failed SHA and evidence path will not be reused.
 
 Exactly one successor conformance job was run, with no pull, download, source
 mount, external provider, or CVM operation. It used Broker image
@@ -418,6 +436,9 @@ preserved artifact. The same SHA/handle was not rerun.
 
 - Exact successor conformance job containers/networks: absent by receipt and
   exact owner-label inventory.
+- Exact `70b88271...` attempt resources: the terminal receipt and direct
+  post-run label inventories prove the Sidecar/network were removed and no
+  Broker was created.
 - Exact `4cdbfecf...` attempt resources: none created; pre/post exact Docker
   inventories were empty and the capability tree was absent.
 - Exact `5266c60c...` attempt resources: none created; the terminal receipt and
@@ -442,8 +463,9 @@ preserved artifact. The same SHA/handle was not rerun.
   `sha256:23294596...16eaed`, `sha256:41462957...5bf1a2d`, and superseded
   `sha256:b7058cb6...bfb5b1`, plus superseded Broker image
   `sha256:02533b89...b0df105`, rejected-provenance
-  `sha256:a286f43f...8b9249`, plus final Broker image
-  `sha256:cdc77541...0c7e34`, are retained; no image deletion was authorized.
+  `sha256:a286f43f...8b9249`, superseded Broker image
+  `sha256:cdc77541...0c7e34`, plus final Broker image
+  `sha256:7ee52e2f...7b60fc`, are retained; no image deletion was authorized.
   The
   first full-context `fd4a9db9...` build was rejected by byte-parity extraction
   because the legacy builder admitted working-tree bytecode; its image
@@ -453,6 +475,9 @@ preserved artifact. The same SHA/handle was not rerun.
   did not chmod, retry deletion, or reuse those paths.
 - Final read-only Docker inventory found no `ttc-bs-*` or Browser Sidecar
   container/network residue after the exact-image tests.
+- The persistent dedicated profile mount root `/Users/zhiyuanma/.ttc-bs` is
+  intentional local infrastructure, current-user owned and mode `0700`; no
+  per-job capability child remained after the failed attempt or unit tests.
 - No unrelated Docker resource was adopted, stopped, relabeled, or removed.
 
 ## Deferred interaction and required next action
@@ -462,7 +487,7 @@ Return for full independent Standards and Spec/security review of
 self-approved either axis. If both axes accept the corrections and exact new
 artifact, execute the already bounded one new clean-SHA local conformance
 attempt using Broker
-image `sha256:cdc77541406802bbcfd1b26cf101833fac420889a1f90746afdbf46b240c7e34`.
+image `sha256:7ee52e2f5a048d6c40b8245770e8c91a2094e6ffa6d7c776eb0df0f3767b60fc`.
 Do not reuse either failed SHA/handle.
 
 Before paid CVM closure, Formal preparation must supply all three ordered roles:

@@ -33,9 +33,9 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Browser-less Broker base image:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Render Program Broker image:
-  `sha256:cdc77541406802bbcfd1b26cf101833fac420889a1f90746afdbf46b240c7e34`
+  `sha256:7ee52e2f5a048d6c40b8245770e8c91a2094e6ffa6d7c776eb0df0f3767b60fc`
 - Broker OCI revision / production implementation commit:
-  `e4e5f67b275c123b034034a1defb29ec45c3cd57`
+  `55e8727a951ae943a5b18d542d876321a4e6dc4f`
 - Image source revision:
   `1abe4c97929906b5c0b28b0f3f38857bd923952f`
 - Residual program SHA-256:
@@ -169,6 +169,11 @@ authority, proof channel, and lifecycle evidence remain siblings outside the
 Broker mount. The fixed public `browser.sock` is an outer-owned, inode-checked
 relative symlink to the private Broker socket, preserving the public path in the
 read-only Agent mount without giving the Broker write authority over it.
+For the local host, the evidence parent is also the exact daemon-shared
+capability parent: it must already exist, resolve without a symlink, be owned by
+the invoking uid, and have mode `0700`. Each job creates and later removes only
+one random private child below it. This permits the one live Broker socket bind
+without sharing `/tmp`, the repository, or a broader home tree with Colima.
 
 Source-Hidden and blocked external browser egress remain direct Sidecar facts:
 the Browser and Broker use one Docker `--internal` network, no source mount,
