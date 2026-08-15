@@ -15,12 +15,13 @@ import secrets
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 from typing import Any, Mapping, Sequence
-from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,36 @@ PROFILE_PATH = (
 
 IMAGE_ID = "sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1"
 IMAGE_SOURCE_REVISION = "1abe4c97929906b5c0b28b0f3f38857bd923952f"
+BROKER_BASE_IMAGE_ID = (
+    "sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373"
+)
+BROKER_LOCK_PATH = (
+    REPO_ROOT / "packages/meshshot/browser_sidecar_broker/image-lock.json"
+)
+
+
+def _broker_lock() -> tuple[str, str]:
+    """Load the reviewed Broker identity, or a permanently closed sentinel."""
+
+    try:
+        payload = json.loads(BROKER_LOCK_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "sha256:" + "0" * 64, "unbuilt"
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"imageId", "sourceRevision", "baseImageId"}
+        or not isinstance(payload.get("imageId"), str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", payload["imageId"]) is None
+        or payload.get("imageId") == "sha256:" + "0" * 64
+        or not isinstance(payload.get("sourceRevision"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", payload["sourceRevision"]) is None
+        or payload.get("baseImageId") != BROKER_BASE_IMAGE_ID
+    ):
+        return "sha256:" + "0" * 64, "unbuilt"
+    return payload["imageId"], payload["sourceRevision"]
+
+
+BROKER_IMAGE_ID, BROKER_IMAGE_SOURCE_REVISION = _broker_lock()
 PROGRAMS = {
     "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
     "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
@@ -43,7 +74,6 @@ REQUEST_SCHEMA = "meshshot.browser-sidecar.render-request/2"
 RESPONSE_SCHEMA = "meshshot.browser-sidecar.render-response/1"
 JOB_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
-LOOPBACK_PORT = re.compile(r"127\.0\.0\.1:([1-9][0-9]{0,4})\Z")
 IMAGE_PROJECTIONS = (
     ("id", "{{.Id}}", IMAGE_ID),
     ("os", "{{.Os}}", "linux"),
@@ -52,6 +82,21 @@ IMAGE_PROJECTIONS = (
         "revision",
         '{{index .Config.Labels "org.opencontainers.image.revision"}}',
         IMAGE_SOURCE_REVISION,
+    ),
+)
+BROKER_IMAGE_PROJECTIONS = (
+    ("id", "{{.Id}}", BROKER_IMAGE_ID),
+    ("os", "{{.Os}}", "linux"),
+    ("architecture", "{{.Architecture}}", "amd64"),
+    (
+        "revision",
+        '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+        BROKER_IMAGE_SOURCE_REVISION,
+    ),
+    (
+        "base",
+        '{{index .Config.Labels "io.text-to-cad.browser-sidecar-broker-base"}}',
+        BROKER_BASE_IMAGE_ID,
     ),
 )
 VIEW_ORDER = ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
@@ -530,6 +575,7 @@ class BrowserSidecarJob:
         self.prefix = f"ttc-bs-{self.owner_nonce[:12]}"
         self.network_name = f"{self.prefix}-net"
         self.container_name = f"{self.prefix}-sidecar"
+        self.broker_container_name = f"{self.prefix}-broker"
         self.label = f"io.text-to-cad.browser-sidecar-job={self.job_id}"
         self.owner_label = (
             f"io.text-to-cad.browser-sidecar-owner={self.owner_nonce}"
@@ -537,7 +583,8 @@ class BrowserSidecarJob:
         self.docker: str | None = None
         self.network_id: str | None = None
         self.container_id: str | None = None
-        self.broker: subprocess.Popen[bytes] | None = None
+        self.broker_container_id: str | None = None
+        self.socket_identity: tuple[int, int] | None = None
         self.readiness: Mapping[str, Any] | None = None
         self.broker_readiness: Mapping[str, Any] | None = None
         self.broker_terminal: Mapping[str, Any] | None = None
@@ -607,23 +654,35 @@ class BrowserSidecarJob:
                 check=f"{kind}-name-absence",
             )
 
-    def _inspect_image(self) -> None:
-        """Require the exact pre-provisioned linux/amd64 reviewed image."""
+    def _inspect_image(
+        self,
+        *,
+        role: str,
+        image_id: str,
+        projections: Sequence[tuple[str, str, str]],
+    ) -> None:
+        """Require one exact pre-provisioned linux/amd64 reviewed image."""
 
-        address = IMAGE_ID.removeprefix("sha256:")
-        for field, projection, expected in IMAGE_PROJECTIONS:
-            completed = self._docker(
-                "inspect",
-                "--type=image",
-                "--format",
-                projection,
-                address,
-            )
+        address = image_id.removeprefix("sha256:")
+        for field, projection, expected in projections:
+            try:
+                completed = self._docker(
+                    "inspect",
+                    "--type=image",
+                    "--format",
+                    projection,
+                    address,
+                )
+            except BrowserSidecarError as exc:
+                raise BrowserSidecarError(
+                    f"{role} image is unavailable",
+                    check=f"{role}-image-access",
+                ) from exc
             lines = completed.stdout.splitlines()
             if lines != [expected]:
                 raise BrowserSidecarError(
-                    f"Sidecar image {field} mismatch",
-                    check=f"image-{field}",
+                    f"{role} image {field} mismatch",
+                    check=f"{role}-image-{field}",
                 )
 
     def _wait_sidecar_ready(self) -> Mapping[str, Any]:
@@ -673,66 +732,79 @@ class BrowserSidecarJob:
             check="readiness-timeout",
         )
 
-    def _published_port(self, container_port: int) -> int:
-        """Resolve one Docker-assigned loopback port with exact framing."""
+    def _broker_socket_identity(self) -> tuple[int, int]:
+        """Require the exact private socket inode created by the Broker."""
 
-        if self.container_id is None:
-            raise BrowserSidecarError("Sidecar was not created", check="port")
-        completed = self._docker("port", self.container_id, f"{container_port}/tcp")
-        lines = completed.stdout.splitlines()
-        match = LOOPBACK_PORT.fullmatch(lines[0]) if len(lines) == 1 else None
-        if match is None or int(match.group(1)) > 65535:
-            raise BrowserSidecarError(
-                "Sidecar loopback port projection is invalid",
-                check="port-format",
-            )
-        return int(match.group(1))
-
-    def _start_broker(self, endpoint_path: str, ports: Mapping[int, int]) -> None:
-        """Start the only host broker and require its bound identity record."""
-
-        argv = [
-            sys.executable,
-            str(Path(__file__)),
-            "broker",
-            "--job-id",
-            self.job_id,
-            "--socket",
-            str(self.socket_path),
-            "--browser-endpoint",
-            f"ws://127.0.0.1:{ports[3000]}{endpoint_path}",
-        ]
         try:
-            self.broker = subprocess.Popen(
-                argv,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            parent = self.capability_dir.stat()
+            socket_state = self.socket_path.lstat()
         except OSError as exc:
             raise BrowserSidecarError(
-                "registered-program broker did not start",
-                check="broker-start",
+                "registered-program broker socket is unavailable",
+                check="broker-socket",
             ) from exc
-        if self.broker.stdout is None:
+        if (
+            stat.S_IMODE(parent.st_mode) != 0o700
+            or not stat.S_ISSOCK(socket_state.st_mode)
+            or socket_state.st_nlink != 1
+            or socket_state.st_uid != os.getuid()
+            or stat.S_IMODE(socket_state.st_mode) != 0o600
+        ):
             raise BrowserSidecarError(
-                "registered-program broker has no readiness channel",
-                check="broker-readiness",
+                "registered-program broker socket identity is invalid",
+                check="broker-socket",
             )
-        ready = self.broker.stdout.readline(16 * 1024)
-        if not ready.endswith(b"\n"):
-            raise BrowserSidecarError(
-                "registered-program broker readiness is incomplete",
-                check="broker-readiness",
+        return socket_state.st_dev, socket_state.st_ino
+
+    def _wait_broker_ready(self) -> Mapping[str, Any]:
+        """Wait for one exact Broker-container readiness record."""
+
+        if self.broker_container_id is None:
+            raise BrowserSidecarError("Broker was not created", check="broker-readiness")
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            logs = self._docker("logs", "--tail", "50", self.broker_container_id)
+            records = [
+                _strict_json(line, "broker-readiness")
+                for line in logs.stdout.splitlines()
+                if line.startswith("{")
+            ]
+            ready = next(
+                (
+                    record
+                    for record in records
+                    if isinstance(record, dict) and record.get("event") == "ready"
+                ),
+                None,
             )
-        try:
-            record = _strict_json(ready.decode("ascii"), "broker-readiness")
-        except UnicodeDecodeError as exc:
+            if ready is not None:
+                record = ready
+                break
+            state = self._docker(
+                "container",
+                "inspect",
+                self.broker_container_id,
+                "--format",
+                "{{json .State}}",
+                check=False,
+            )
+            if state.returncode:
+                raise BrowserSidecarError(
+                    "Broker disappeared before readiness",
+                    check="broker-readiness-exit",
+                )
+            payload = _strict_json(state.stdout, "broker-state")
+            if not isinstance(payload, dict) or payload.get("Running") is not True:
+                raise BrowserSidecarError(
+                    "Broker stopped before readiness",
+                    check="broker-readiness-exit",
+                )
+            time.sleep(0.1)
+        else:
             raise BrowserSidecarError(
-                "registered-program broker readiness is invalid",
-                check="broker-readiness",
-            ) from exc
+                "Broker readiness deadline exceeded",
+                check="broker-readiness-timeout",
+            )
         isolation = record.get("isolation") if isinstance(record, dict) else None
         if (
             not isinstance(record, dict)
@@ -755,13 +827,22 @@ class BrowserSidecarJob:
                 check="broker-readiness",
             )
         self.broker_readiness = record
+        self.socket_identity = self._broker_socket_identity()
+        return record
 
     def start(self) -> Path:
         """Start one exact Sidecar and publish its bounded sandbox authority."""
 
         self.run_dir.mkdir(parents=True, exist_ok=True)
-        self.authority_path.unlink(missing_ok=True)
-        self.socket_path.unlink(missing_ok=True)
+        for path, check in (
+            (self.authority_path, "authority-preexisting"),
+            (self.socket_path, "broker-socket-preexisting"),
+        ):
+            if path.exists() or path.is_symlink():
+                raise BrowserSidecarError(
+                    "job-private capability path already exists",
+                    check=check,
+                )
         self.docker = shutil.which("docker")
         if self.docker is None:
             raise BrowserSidecarError(
@@ -769,9 +850,19 @@ class BrowserSidecarJob:
                 check="docker-access",
             )
         try:
-            self._inspect_image()
+            self._inspect_image(
+                role="sidecar",
+                image_id=IMAGE_ID,
+                projections=IMAGE_PROJECTIONS,
+            )
+            self._inspect_image(
+                role="broker",
+                image_id=BROKER_IMAGE_ID,
+                projections=BROKER_IMAGE_PROJECTIONS,
+            )
             self._require_absent_name("network", self.network_name)
             self._require_absent_name("container", self.container_name)
+            self._require_absent_name("container", self.broker_container_name)
             created = self._docker(
                 "network",
                 "create",
@@ -800,6 +891,8 @@ class BrowserSidecarJob:
                 self.owner_label,
                 "--network",
                 self.network_name,
+                "--network-alias",
+                "sidecar",
                 "--pull=never",
                 "--platform",
                 "linux/amd64",
@@ -823,8 +916,6 @@ class BrowserSidecarJob:
                 "/tmp:rw,nosuid,nodev,size=128m,mode=1777",
                 "--tmpfs",
                 "/home/pwuser:rw,nosuid,nodev,size=64m,uid=1001,gid=1001,mode=700",
-                "-p",
-                "127.0.0.1::3000",
                 "-e",
                 f"BROWSER_SIDECAR_JOB_ID={self.job_id}",
                 IMAGE_ID,
@@ -837,11 +928,55 @@ class BrowserSidecarJob:
                 )
             self.container_id = container_id
             self.readiness = self._wait_sidecar_ready()
-            browser_port = self._published_port(3000)
-            self._start_broker(
-                str(self.readiness["endpointPath"]),
-                {3000: browser_port},
+            broker_started = self._docker(
+                "run",
+                "-d",
+                "--name",
+                self.broker_container_name,
+                "--label",
+                self.label,
+                "--label",
+                self.owner_label,
+                "--network",
+                self.network_name,
+                "--pull=never",
+                "--platform",
+                "linux/amd64",
+                "--read-only",
+                "--init",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges:true",
+                "--pids-limit",
+                "64",
+                "--memory",
+                "384m",
+                "--memory-swap",
+                "384m",
+                "--cpus",
+                "0.5",
+                "--tmpfs",
+                "/tmp:rw,nosuid,nodev,size=32m,mode=1777",
+                "--user",
+                f"{os.getuid()}:{os.getgid()}",
+                "--mount",
+                (
+                    "type=bind,src="
+                    f"{self.capability_dir},dst=/run/meshshot-browser"
+                ),
+                BROKER_IMAGE_ID,
+                "--job-id",
+                self.job_id,
             )
+            broker_container_id = broker_started.stdout.strip()
+            if RESOURCE_ID.fullmatch(broker_container_id) is None:
+                raise BrowserSidecarError(
+                    "created Broker identity is invalid",
+                    check="broker-container-id",
+                )
+            self.broker_container_id = broker_container_id
+            self._wait_broker_ready()
             authority = {
                 "schema": AUTHORITY_SCHEMA,
                 "jobId": self.job_id,
@@ -863,25 +998,36 @@ class BrowserSidecarJob:
     def poll_failed(self) -> bool:
         """Return whether the exact Sidecar or broker exited during workload."""
 
-        if self.broker is not None and self.broker.poll() is not None:
-            return True
-        if self.container_id is None:
-            return True
-        state = self._docker(
-            "container",
-            "inspect",
-            self.container_id,
-            "--format",
-            "{{json .State}}",
-            check=False,
-        )
-        if state.returncode:
+        if self.socket_identity is None:
             return True
         try:
-            payload = _strict_json(state.stdout, "sidecar-state")
+            if self._broker_socket_identity() != self.socket_identity:
+                return True
         except BrowserSidecarError:
             return True
-        return not isinstance(payload, dict) or payload.get("Running") is not True
+        for role, container_id in (
+            ("sidecar", self.container_id),
+            ("broker", self.broker_container_id),
+        ):
+            if container_id is None:
+                return True
+            state = self._docker(
+                "container",
+                "inspect",
+                container_id,
+                "--format",
+                "{{json .State}}",
+                check=False,
+            )
+            if state.returncode:
+                return True
+            try:
+                payload = _strict_json(state.stdout, f"{role}-state")
+            except BrowserSidecarError:
+                return True
+            if not isinstance(payload, dict) or payload.get("Running") is not True:
+                return True
+        return False
 
     def _prove_absence(self) -> Mapping[str, object]:
         """Prove no resource with both exact job and owner labels remains."""
@@ -930,82 +1076,113 @@ class BrowserSidecarJob:
                 ) from exc
         self._closed = True
         broker_status: int | None = None
-        if self.broker is not None:
+        broker_terminal_state: Mapping[str, Any] | None = None
+        if self.broker_container_id is not None:
             try:
-                if self.broker.poll() is None:
-                    self.broker.terminate()
-                broker_status = self.broker.wait(timeout=10)
-                if broker_status != 0:
-                    self.cleanup_errors.append("broker-terminal")
-                elif self.broker.stdout is None:
+                stopped = self._docker(
+                    "stop",
+                    "--time",
+                    "10",
+                    self.broker_container_id,
+                    check=False,
+                )
+                if stopped.returncode:
+                    self.cleanup_errors.append("broker-stop")
+            except BrowserSidecarError:
+                self.cleanup_errors.append("broker-stop")
+            try:
+                logs = self._docker(
+                    "logs",
+                    "--tail",
+                    "50",
+                    self.broker_container_id,
+                    check=False,
+                )
+                if logs.returncode:
                     self.cleanup_errors.append("broker-terminal-evidence")
                 else:
-                    remaining = self.broker.stdout.read(16 * 1024 + 1)
-                    if (
-                        len(remaining) > 16 * 1024
-                        or not remaining.endswith(b"\n")
-                        or b"\n" in remaining[:-1]
-                    ):
+                    records = [
+                        _strict_json(line, "broker-terminal")
+                        for line in logs.stdout.splitlines()
+                        if line.startswith("{")
+                    ]
+                    terminals = [
+                        record
+                        for record in records
+                        if isinstance(record, dict)
+                        and record.get("event") == "terminal"
+                    ]
+                    if len(terminals) != 1:
                         self.cleanup_errors.append("broker-terminal-evidence")
                     else:
-                        try:
-                            terminal_record = _strict_json(
-                                remaining.decode("ascii"),
-                                "broker-terminal",
+                        terminal_record = terminals[0]
+                        counts = terminal_record.get("programCounts")
+                        accepted = terminal_record.get("acceptedRequests")
+                        if (
+                            set(terminal_record)
+                            != {
+                                "event",
+                                "schema",
+                                "jobId",
+                                "imageId",
+                                "acceptedRequests",
+                                "freshContexts",
+                                "programCounts",
+                            }
+                            or terminal_record.get("schema") != BROKER_SCHEMA
+                            or terminal_record.get("jobId") != self.job_id
+                            or terminal_record.get("imageId") != IMAGE_ID
+                            or not isinstance(accepted, int)
+                            or isinstance(accepted, bool)
+                            or accepted < 0
+                            or terminal_record.get("freshContexts") != accepted + 1
+                            or not isinstance(counts, dict)
+                            or set(counts) != {"residual", "viewer"}
+                            or any(
+                                not isinstance(count, int)
+                                or isinstance(count, bool)
+                                or count < 0
+                                for count in counts.values()
                             )
-                        except (BrowserSidecarError, UnicodeDecodeError):
+                            or sum(counts.values()) != accepted
+                        ):
                             self.cleanup_errors.append("broker-terminal-evidence")
                         else:
-                            counts = (
-                                terminal_record.get("programCounts")
-                                if isinstance(terminal_record, dict)
-                                else None
-                            )
-                            accepted = (
-                                terminal_record.get("acceptedRequests")
-                                if isinstance(terminal_record, dict)
-                                else None
-                            )
-                            if (
-                                not isinstance(terminal_record, dict)
-                                or set(terminal_record)
-                                != {
-                                    "event",
-                                    "schema",
-                                    "jobId",
-                                    "imageId",
-                                    "acceptedRequests",
-                                    "freshContexts",
-                                    "programCounts",
-                                }
-                                or terminal_record.get("event") != "terminal"
-                                or terminal_record.get("schema") != BROKER_SCHEMA
-                                or terminal_record.get("jobId") != self.job_id
-                                or terminal_record.get("imageId") != IMAGE_ID
-                                or not isinstance(accepted, int)
-                                or isinstance(accepted, bool)
-                                or accepted < 0
-                                or terminal_record.get("freshContexts") != accepted + 1
-                                or not isinstance(counts, dict)
-                                or set(counts) != {"residual", "viewer"}
-                                or any(
-                                    not isinstance(count, int)
-                                    or isinstance(count, bool)
-                                    or count < 0
-                                    for count in counts.values()
-                                )
-                                or sum(counts.values()) != accepted
-                            ):
-                                self.cleanup_errors.append("broker-terminal-evidence")
-                            else:
-                                self.broker_terminal = terminal_record
-            except (OSError, subprocess.TimeoutExpired):
-                try:
-                    self.broker.kill()
-                    self.broker.wait(timeout=2)
-                except (OSError, subprocess.TimeoutExpired):
-                    pass
+                            self.broker_terminal = terminal_record
+            except BrowserSidecarError:
+                self.cleanup_errors.append("broker-terminal-evidence")
+            try:
+                inspected = self._docker(
+                    "container",
+                    "inspect",
+                    self.broker_container_id,
+                    "--format",
+                    "{{json .State}}",
+                    check=False,
+                )
+                if inspected.returncode:
+                    self.cleanup_errors.append("broker-terminal")
+                else:
+                    state = _strict_json(inspected.stdout, "broker-terminal-state")
+                    broker_terminal_state = state if isinstance(state, dict) else None
+                    broker_status = (
+                        state.get("ExitCode") if isinstance(state, dict) else None
+                    )
+                    if broker_status != 0:
+                        self.cleanup_errors.append("broker-terminal")
+            except BrowserSidecarError:
                 self.cleanup_errors.append("broker-terminal")
+            try:
+                removed = self._docker(
+                    "rm",
+                    "-f",
+                    self.broker_container_id,
+                    check=False,
+                )
+                if removed.returncode:
+                    self.cleanup_errors.append("broker-remove")
+            except BrowserSidecarError:
+                self.cleanup_errors.append("broker-remove")
         terminal_state: Mapping[str, Any] | None = None
         closing_observed = False
         if self.container_id is not None:
@@ -1115,14 +1292,20 @@ class BrowserSidecarJob:
             "state": terminal_state,
             "closingObserved": closing_observed,
         }
-        for path, error in (
-            (self.authority_path, "authority-remove"),
-            (self.socket_path, "socket-remove"),
-        ):
+        try:
+            self.authority_path.unlink(missing_ok=True)
+        except OSError:
+            self.cleanup_errors.append("authority-remove")
+        if self.socket_path.exists() or self.socket_path.is_symlink():
             try:
-                path.unlink(missing_ok=True)
+                current = self.socket_path.lstat()
+                current_identity = (current.st_dev, current.st_ino)
+                if self.socket_identity is None or current_identity != self.socket_identity:
+                    self.cleanup_errors.append("socket-identity")
+                else:
+                    self.socket_path.unlink()
             except OSError:
-                self.cleanup_errors.append(error)
+                self.cleanup_errors.append("socket-remove")
         try:
             self.capability_dir.rmdir()
         except FileNotFoundError:
@@ -1133,6 +1316,8 @@ class BrowserSidecarJob:
             self.first_error is None
             and workload_status == 0
             and broker_status == 0
+            and isinstance(broker_terminal_state, dict)
+            and broker_terminal_state.get("ExitCode") == 0
             and closing_observed
             and isinstance(terminal_state, dict)
             and terminal_state.get("ExitCode") == 0
@@ -1146,13 +1331,25 @@ class BrowserSidecarJob:
             "ownerNonce": self.owner_nonce,
             "imageId": IMAGE_ID,
             "imageSourceRevision": IMAGE_SOURCE_REVISION,
+            "brokerImageId": BROKER_IMAGE_ID,
+            "brokerImageSourceRevision": BROKER_IMAGE_SOURCE_REVISION,
+            "brokerBaseImageId": BROKER_BASE_IMAGE_ID,
             "programs": PROGRAMS,
             "readiness": self.readiness,
             "brokerReadiness": self.broker_readiness,
             "brokerTerminal": self.broker_terminal,
             "workloadStatus": workload_status,
             "brokerStatus": broker_status,
+            "brokerContainerState": broker_terminal_state,
             "terminal": terminal,
+            "ownedResources": {
+                "network": {"name": self.network_name, "id": self.network_id},
+                "sidecar": {"name": self.container_name, "id": self.container_id},
+                "broker": {
+                    "name": self.broker_container_name,
+                    "id": self.broker_container_id,
+                },
+            },
             "absenceProof": absence,
             "cleanupErrors": list(dict.fromkeys(self.cleanup_errors)),
             "errorCheck": self.first_error,
@@ -1166,19 +1363,8 @@ class BrowserSidecarJob:
 def run_broker(args: argparse.Namespace) -> int:
     """Serve exact registered requests over one job-private Unix socket."""
 
-    if JOB_ID.fullmatch(args.job_id) is None or not args.socket.is_absolute():
-        return 2
-    parsed = urlsplit(args.browser_endpoint)
-    if (
-        parsed.scheme != "ws"
-        or parsed.hostname != "127.0.0.1"
-        or parsed.port is None
-        or not parsed.path.startswith("/")
-        or parsed.query
-        or parsed.fragment
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
+    socket_path = Path("/run/meshshot-browser/browser-sidecar.sock")
+    if JOB_ID.fullmatch(args.job_id) is None:
         return 2
     try:
         from playwright.sync_api import sync_playwright
@@ -1199,19 +1385,49 @@ def run_broker(args: argparse.Namespace) -> int:
         for signum in (signal.SIGINT, signal.SIGTERM)
     }
     server: socket.socket | None = None
-    args.socket.unlink(missing_ok=True)
+    if socket_path.exists() or socket_path.is_symlink():
+        return 2
     try:
+        with urlopen("http://sidecar:3001/v1/authority", timeout=15) as response:
+            if response.status != 200:
+                return 1
+            raw_authority = response.read(16 * 1024 + 1)
+        if len(raw_authority) > 16 * 1024:
+            return 1
+        authority = _strict_json(raw_authority.decode("ascii"), "sidecar-authority")
+        if (
+            not isinstance(authority, dict)
+            or set(authority)
+            != {
+                "schema",
+                "jobId",
+                "endpointPath",
+                "browserPid",
+                "chromiumRevision",
+                "chromiumVersion",
+                "playwrightVersion",
+                "programs",
+                "sourceAliasesVisible",
+            }
+            or authority.get("schema") != "meshshot.browser-sidecar.prototype/1"
+            or authority.get("jobId") != args.job_id
+            or authority.get("programs") != PROGRAMS
+            or not isinstance(authority.get("endpointPath"), str)
+            or not authority["endpointPath"].startswith("/browser/")
+        ):
+            return 1
+        browser_endpoint = f"ws://sidecar:3000{authority['endpointPath']}"
         with sync_playwright() as playwright:
             browser = playwright.chromium.connect(
-                args.browser_endpoint,
+                browser_endpoint,
                 timeout=15_000,
             )
             try:
                 broker = RegisteredProgramBroker(browser, args.job_id)
                 isolation = broker.preflight()
                 server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                server.bind(str(args.socket))
-                os.chmod(args.socket, 0o600)
+                server.bind(str(socket_path))
+                os.chmod(socket_path, 0o600)
                 server.listen(4)
                 server.settimeout(0.2)
                 print(
@@ -1303,7 +1519,7 @@ def run_broker(args: argparse.Namespace) -> int:
     finally:
         if server is not None:
             server.close()
-        args.socket.unlink(missing_ok=True)
+        socket_path.unlink(missing_ok=True)
         for signum, handler in previous.items():
             signal.signal(signum, handler)
     return 0
@@ -1314,10 +1530,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(description="Browser Sidecar lifecycle helper")
     subparsers = parser.add_subparsers(dest="action", required=True)
-    broker = subparsers.add_parser("broker")
+    broker = subparsers.add_parser("broker-container")
     broker.add_argument("--job-id", required=True)
-    broker.add_argument("--socket", type=Path, required=True)
-    broker.add_argument("--browser-endpoint", required=True)
     return parser.parse_args(argv)
 
 
@@ -1325,7 +1539,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run only the fixed registered-program broker action."""
 
     args = parse_args(argv)
-    if args.action == "broker":
+    if args.action == "broker-container":
         return run_broker(args)
     return 2
 

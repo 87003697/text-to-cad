@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from io import BytesIO
 import json
 from pathlib import Path
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -24,61 +24,6 @@ CONTAINER_ID = "b" * 64
 BROKER_CONTAINER_ID = "c" * 64
 
 
-class FakeBrokerProcess:
-    """External broker-process stand-in at the process boundary."""
-
-    def __init__(self, job_id: str) -> None:
-        self.pid = 9876
-        self.returncode: int | None = None
-        self.stdout = BytesIO(
-            (
-                json.dumps(
-                    {
-                        "event": "ready",
-                        "schema": "meshshot.browser-sidecar.broker/1",
-                        "jobId": job_id,
-                        "imageId": IMAGE_ID,
-                        "programs": PROGRAMS,
-                        "isolation": {
-                            "sourceAliasesVisible": [],
-                            "externalEgressBlocked": True,
-                            "browserPid": 321,
-                        },
-                    },
-                    separators=(",", ":"),
-                )
-                + "\n"
-                + json.dumps(
-                    {
-                        "event": "terminal",
-                        "schema": "meshshot.browser-sidecar.broker/1",
-                        "jobId": job_id,
-                        "imageId": IMAGE_ID,
-                        "acceptedRequests": 2,
-                        "freshContexts": 3,
-                        "programCounts": {"residual": 1, "viewer": 1},
-                    },
-                    separators=(",", ":"),
-                )
-                + "\n"
-            ).encode("ascii")
-        )
-
-    def poll(self):
-        return self.returncode
-
-    def terminate(self) -> None:
-        self.returncode = 0
-
-    def kill(self) -> None:
-        self.returncode = -9
-
-    def wait(self, timeout=None) -> int:
-        if self.returncode is None:
-            self.returncode = 0
-        return self.returncode
-
-
 class BrowserSidecarJobTests(unittest.TestCase):
     """Observe one complete exact-image lifecycle through its public adapter."""
 
@@ -90,16 +35,26 @@ class BrowserSidecarJobTests(unittest.TestCase):
             calls.append(command)
             if command[1:4] == ["inspect", "--type=image", "--format"]:
                 projection = command[4]
+                is_broker = command[5] == browser_sidecar.BROKER_IMAGE_ID.removeprefix("sha256:")
                 values = {
-                    "{{.Id}}": IMAGE_ID,
+                    "{{.Id}}": browser_sidecar.BROKER_IMAGE_ID if is_broker else IMAGE_ID,
                     "{{.Os}}": "linux",
                     "{{.Architecture}}": "amd64",
-                    '{{index .Config.Labels "org.opencontainers.image.revision"}}': SOURCE_REVISION,
+                    '{{index .Config.Labels "org.opencontainers.image.revision"}}': (
+                        browser_sidecar.BROKER_IMAGE_SOURCE_REVISION if is_broker else SOURCE_REVISION
+                    ),
+                    '{{index .Config.Labels "io.text-to-cad.browser-sidecar-broker-base"}}': (
+                        browser_sidecar.BROKER_BASE_IMAGE_ID
+                    ),
                 }
                 return subprocess.CompletedProcess(command, 0, values[projection] + "\n", "")
             if command[1:3] in (["container", "inspect"], ["network", "inspect"]):
-                if CONTAINER_ID in command and "--format" in command:
-                    running = not any(call[1] == "stop" for call in calls)
+                if (
+                    (CONTAINER_ID in command or BROKER_CONTAINER_ID in command)
+                    and "--format" in command
+                ):
+                    target = BROKER_CONTAINER_ID if BROKER_CONTAINER_ID in command else CONTAINER_ID
+                    running = not any(call[1] == "stop" and target in call for call in calls)
                     return subprocess.CompletedProcess(
                         command,
                         0,
@@ -110,8 +65,49 @@ class BrowserSidecarJobTests(unittest.TestCase):
             if command[1:3] == ["network", "create"]:
                 return subprocess.CompletedProcess(command, 0, NETWORK_ID + "\n", "")
             if command[1] == "run":
+                if browser_sidecar.BROKER_IMAGE_ID in command:
+                    bind = next(value for value in command if value.startswith("type=bind,"))
+                    source = Path(bind.split("src=", 1)[1].split(",dst=", 1)[0])
+                    created_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    created_socket.bind(str(source / "browser-sidecar.sock"))
+                    created_socket.close()
+                    (source / "browser-sidecar.sock").chmod(0o600)
+                    return subprocess.CompletedProcess(command, 0, BROKER_CONTAINER_ID + "\n", "")
                 return subprocess.CompletedProcess(command, 0, CONTAINER_ID + "\n", "")
             if command[1] == "logs":
+                if BROKER_CONTAINER_ID in command:
+                    records = [
+                        {
+                            "event": "ready",
+                            "schema": "meshshot.browser-sidecar.broker/1",
+                            "jobId": "formal-job-1",
+                            "imageId": IMAGE_ID,
+                            "programs": PROGRAMS,
+                            "isolation": {
+                                "sourceAliasesVisible": [],
+                                "externalEgressBlocked": True,
+                                "browserPid": 321,
+                            },
+                        }
+                    ]
+                    if any(call[1] == "stop" and BROKER_CONTAINER_ID in call for call in calls):
+                        records.append(
+                            {
+                                "event": "terminal",
+                                "schema": "meshshot.browser-sidecar.broker/1",
+                                "jobId": "formal-job-1",
+                                "imageId": IMAGE_ID,
+                                "acceptedRequests": 2,
+                                "freshContexts": 3,
+                                "programCounts": {"residual": 1, "viewer": 1},
+                            }
+                        )
+                    return subprocess.CompletedProcess(
+                        command,
+                        0,
+                        "".join(json.dumps(record) + "\n" for record in records),
+                        "",
+                    )
                 records = [
                     {
                         "event": "ready",
@@ -134,11 +130,6 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     "".join(json.dumps(record) + "\n" for record in records),
                     "",
                 )
-            if command[1] == "port":
-                ports = {"3000/tcp": 43000, "4173/tcp": 43173, "4174/tcp": 43174}
-                return subprocess.CompletedProcess(
-                    command, 0, f"127.0.0.1:{ports[command[-1]]}\n", ""
-                )
             if command[1:3] in (
                 ["container", "ls"],
                 ["network", "ls"],
@@ -146,14 +137,15 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "", "")
             return subprocess.CompletedProcess(command, 0, "", "")
 
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory(
+            dir="/tmp"
+        ) as capability:
             exp_dir = Path(temp)
-            broker = FakeBrokerProcess("formal-job-1")
             with (
                 mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
                 mock.patch.object(browser_sidecar.subprocess, "run", side_effect=docker),
-                mock.patch.object(browser_sidecar.subprocess, "Popen", return_value=broker) as popen,
                 mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="1" * 16),
+                mock.patch.object(browser_sidecar.tempfile, "mkdtemp", return_value=capability),
             ):
                 job = browser_sidecar.BrowserSidecarJob(
                     exp_dir,
@@ -176,6 +168,8 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "succeeded")
         self.assertTrue(receipt["absenceProof"]["proved"])
         self.assertEqual(receipt["cleanupErrors"], [])
+        self.assertEqual(receipt["brokerImageId"], browser_sidecar.BROKER_IMAGE_ID)
+        self.assertEqual(receipt["ownedResources"]["broker"]["id"], BROKER_CONTAINER_ID)
         self.assertEqual(receipt["terminal"]["closingObserved"], True)
         self.assertEqual(
             receipt["brokerTerminal"],
@@ -189,14 +183,18 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 "programCounts": {"residual": 1, "viewer": 1},
             },
         )
-        run = next(command for command in calls if command[1] == "run")
-        self.assertIn("--pull=never", run)
-        self.assertIn("--read-only", run)
-        self.assertNotIn("-v", run)
-        self.assertNotIn("--mount", run)
-        self.assertEqual(run[-1], IMAGE_ID)
-        broker_argv = popen.call_args.args[0]
-        self.assertEqual(broker_argv[1:3], [str(browser_sidecar.Path(browser_sidecar.__file__)), "broker"])
+        runs = [command for command in calls if command[1] == "run"]
+        self.assertEqual(len(runs), 2)
+        sidecar_run, broker_run = runs
+        self.assertIn("--pull=never", sidecar_run)
+        self.assertIn("--read-only", sidecar_run)
+        self.assertNotIn("--mount", sidecar_run)
+        self.assertIn(IMAGE_ID, sidecar_run)
+        self.assertIn("--pull=never", broker_run)
+        self.assertIn("--read-only", broker_run)
+        self.assertIn("--mount", broker_run)
+        self.assertIn(browser_sidecar.BROKER_IMAGE_ID, broker_run)
+        self.assertFalse(any(command[1] == "port" for command in calls))
 
     def test_cleanup_timeout_publishes_failure_and_continues_absence_proof(self) -> None:
         calls: list[list[str]] = []
@@ -224,8 +222,6 @@ class BrowserSidecarJobTests(unittest.TestCase):
             job.docker = "/usr/bin/docker"
             job.container_id = CONTAINER_ID
             job.network_id = NETWORK_ID
-            job.broker = FakeBrokerProcess("formal-job-1")
-            job.broker.stdout.readline()
             with mock.patch.object(browser_sidecar.subprocess, "run", side_effect=docker):
                 receipt = job.close(workload_status=0)
 
@@ -280,6 +276,8 @@ class BrowserSidecarJobTests(unittest.TestCase):
         """No host port/process is present in the successful public lifecycle."""
 
         self.assertRegex(browser_sidecar.BROKER_IMAGE_ID, r"sha256:[0-9a-f]{64}\Z")
+        self.assertNotEqual(browser_sidecar.BROKER_IMAGE_ID, "sha256:" + "0" * 64)
+        self.assertRegex(browser_sidecar.BROKER_IMAGE_SOURCE_REVISION, r"[0-9a-f]{40}\Z")
         source = Path(browser_sidecar.__file__).read_text(encoding="utf-8")
         self.assertNotIn('"-p",', source)
         self.assertNotIn("subprocess.Popen(", source)
