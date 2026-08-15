@@ -82,6 +82,24 @@ def configure_gate(job: browser_sidecar.BrowserSidecarJob) -> None:
 class BrowserSidecarJobTests(unittest.TestCase):
     """Observe one complete exact-image lifecycle through its public adapter."""
 
+    def test_pre_resource_gate_identity_failure_truthfully_proves_absence(self) -> None:
+        """A closed pre-create failure cannot imply an unproved retained resource."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = browser_sidecar.BrowserSidecarJob(
+                Path(temp),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+            )
+            with self.assertRaises(browser_sidecar.BrowserSidecarError) as raised:
+                job.start()
+            receipt = job.close(workload_status=None)
+
+        self.assertEqual(raised.exception.check, "nested-gate-identity")
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["failureCheck"], "nested-gate-identity")
+        self.assertTrue(receipt["predicates"]["absenceProved"])
+
     def test_success_owns_one_sidecar_and_publishes_terminal_absence(self) -> None:
         calls: list[list[str]] = []
 
