@@ -21,6 +21,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import trimesh
 from build123d import Box, Polyline, Pos, Rotation, export_stl, extrude, make_face
 
 from tests.python.support.paths import add_repo_path
@@ -135,6 +136,42 @@ class OrientationTest(unittest.TestCase):
         self.assertEqual(best["support_area_mm2"], 0.0)
         for candidate in candidates:
             self.assertGreater(candidate["build_height_mm"], 0.0)
+
+
+class FormatCoverageTest(unittest.TestCase):
+    """SKILL.md advertises .stl, .obj, .ply and .3mf, so each has to load.
+
+    A format that is claimed but unreadable is worse than one that is not
+    claimed, because the failure surfaces at the user rather than here.
+    """
+
+    def test_each_advertised_format_loads_and_measures(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            source = trimesh.load(_stl(Box(20, 20, 15), tmp, "box"), force="mesh")
+
+            for suffix in (".stl", ".obj", ".ply", ".3mf"):
+                with self.subTest(fmt=suffix):
+                    path = tmp / f"box{suffix}"
+                    source.export(str(path))
+                    facts = dfam_tool._mesh_facts(dfam_tool._load(str(path)))
+
+                    self.assertAlmostEqual(facts["volume_mm3"], 6000.0, delta=1.0)
+                    self.assertEqual(facts["body_count"], 1)
+
+
+class DegenerateMeshTest(unittest.TestCase):
+    def test_zero_area_mesh_reports_instead_of_dividing_by_zero(self) -> None:
+        """Area weighting needs a positive total; say so rather than crash."""
+        mesh = trimesh.Trimesh(
+            vertices=[[0, 0, 0], [1, 0, 0], [2, 0, 0]],
+            faces=[[0, 1, 2]],
+            process=False,
+        )
+        facts = dfam_tool._wall_facts(mesh, samples=100)
+
+        self.assertEqual(facts["samples"], 0)
+        self.assertIn("degenerate", facts["note"])
 
 
 def _run_cli(argv: list[str]) -> dict:

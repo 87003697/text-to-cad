@@ -173,8 +173,19 @@ def _wall_facts_single(mesh: trimesh.Trimesh, samples: int, seed: int = 42) -> d
     """Ray-cast thickness field for ONE connected body."""
     rng = np.random.default_rng(seed)
     n = min(samples, max(len(mesh.faces), 1))
+
+    # Area weighting needs a positive total. A mesh of only degenerate faces
+    # has none, and is not something a thickness field can describe - say so
+    # rather than dividing by zero inside rng.choice.
+    total_area = float(mesh.area_faces.sum())
+    if not np.isfinite(total_area) or total_area <= 0.0:
+        return {
+            "samples": 0,
+            "note": "no positive face area; mesh is degenerate, thickness not measured",
+        }
+
     face_idx = rng.choice(len(mesh.faces), size=n,
-                          p=mesh.area_faces / mesh.area_faces.sum())
+                          p=mesh.area_faces / total_area)
 
     origins = mesh.triangles_center[face_idx]
     directions = -mesh.face_normals[face_idx]
@@ -268,7 +279,14 @@ def _orientation_facts(mesh: trimesh.Trimesh, angle_limit: float) -> dict:
             "support_area_pct": ov["down_facing_area_below_limit_pct"],
             "build_height_mm": round(float(m.extents[2]), 2),
         })
-    return {"angle_limit_used_deg": angle_limit, "candidates": out}
+    return {
+        "angle_limit_used_deg": angle_limit,
+        # Percentages are of total surface area, which is rotation-invariant.
+        # That makes them comparable between candidates but not a measure of
+        # plate coverage - rank on support_area_mm2, read pct as a signal.
+        "pct_denominator": "total surface area",
+        "candidates": out,
+    }
 
 
 def _safe(fn, *args) -> dict:
