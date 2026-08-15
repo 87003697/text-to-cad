@@ -306,9 +306,9 @@ class _FakeMsvcrt:
 
 class WindowsLockBackendTests(unittest.TestCase):
     """The Windows backend is not importable here, so it is driven with a faithful fake:
-    ``fcntl=None`` + a fake ``msvcrt``. These pin the backend contract -- region locking,
-    no shared mode, empty-sentinel degradation, waiting semantics -- which is exactly what
-    the two production modules diverge on."""
+    ``fcntl=None`` + a fake ``msvcrt``. These pin the backend contract -- region locking, no
+    shared mode, the sibling mutex that keeps the sentinel readable, waiting semantics --
+    which is exactly what the two production modules diverge on."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -321,6 +321,12 @@ class WindowsLockBackendTests(unittest.TestCase):
         self._msvcrt.start()
         self.addCleanup(self._msvcrt.stop)
         self.addCleanup(self._fcntl.stop)
+
+    @staticmethod
+    def _inode_key(path: Path) -> tuple[int, int]:
+        """The key _FakeMsvcrt uses: file identity, so a lock is attributable to a path."""
+        info = os.stat(path)
+        return (info.st_dev, info.st_ino)
 
     def test_locking_available_with_windows_backend(self) -> None:
         self.assertTrue(lock.locking_available())
@@ -352,13 +358,69 @@ class WindowsLockBackendTests(unittest.TestCase):
             release.set()
             thread.join(10)
 
-    def test_locking_past_eof_is_impossible_so_empty_sentinels_are_unknown(self) -> None:
-        # A 0-byte sentinel cannot carry a Windows region lock at all. It must read as
-        # degraded -- never held -- or a crash before stamping would wedge future builds.
-        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self.lock_path.write_bytes(b"")
-        result = lock.probe(self.lock_path)
-        self.assertEqual((False, True), result)
+    def test_an_empty_mutex_reads_as_idle(self) -> None:
+        # A 0-byte file cannot carry a Windows region lock at all. The MUTEX is padded before
+        # the lock is taken, so 0 bytes means no run ever held it -- idle, and specifically not
+        # a state that wedges future builds. (The old rule had to say "unknown" here, because
+        # the lock lived on the sentinel and a crash before stamping left it legitimately empty.)
+        mutex = lock.mutex_path(self.lock_path)
+        mutex.parent.mkdir(parents=True, exist_ok=True)
+        mutex.write_bytes(b"")
+        self.assertEqual((False, False), lock.probe(self.lock_path))
+
+    def test_nothing_locks_the_file_the_builders_read(self) -> None:
+        """Issue #269: Windows byte-range locks are MANDATORY.
+
+        Locking byte 0 of the sentinel made it unreadable to every other process for the whole
+        build -- the Node child's readFileSync got EBUSY, its catch turned that into an empty
+        string, and the run-id comparison failed against a sentinel holding exactly the right
+        run id. Python's own read_run_id broke the same way.
+
+        Mandatory locking cannot be emulated on POSIX: the fake tracks which files are locked,
+        it cannot make a real read fail. So this asserts the INVARIANT that prevents the bug --
+        the sentinel is never among the locked files -- by checking the fake's own ledger
+        against both inodes, rather than pretending a successful read here proves anything.
+        """
+        holding = threading.Event()
+        release = threading.Event()
+        observed = {}
+
+        def hold():
+            with exclusive(self.lock_path) as run_id:
+                observed["run_id"] = run_id
+                holding.set()
+                release.wait(10)
+
+        thread = threading.Thread(target=hold, daemon=True)
+        thread.start()
+        self.assertTrue(holding.wait(10), "holder never acquired")
+        try:
+            sentinel_key = self._inode_key(self.lock_path)
+            mutex_key = self._inode_key(lock.mutex_path(self.lock_path))
+            locked = set(lock.msvcrt._held)
+            self.assertIn(mutex_key, locked, "the mutex must be the locked file")
+            self.assertNotIn(sentinel_key, locked, "the sentinel must never be locked")
+            # And the stamp is there to be read, from both readers that need it.
+            self.assertEqual(observed["run_id"], lock.read_run_id(self.lock_path))
+            self.assertEqual(observed["run_id"], self.lock_path.read_bytes()[:32].decode().strip())
+            # The lock really is held -- so this is not "unlocked because nothing ran".
+            self.assertEqual((True, False), lock.probe(self.lock_path))
+        finally:
+            release.set()
+            thread.join(10)
+
+    def test_the_lock_is_taken_on_a_sibling_mutex_not_the_sentinel(self) -> None:
+        mutex = lock.mutex_path(self.lock_path)
+        self.assertNotEqual(mutex, self.lock_path)
+        self.assertEqual(f"{self.lock_path.name}.mutex", mutex.name)
+        with exclusive(self.lock_path):
+            self.assertTrue(mutex.is_file(), "the mutex must exist while held")
+        # The run id lives in the sentinel; the mutex carries no run id at all.
+        self.assertTrue(self.lock_path.is_file())
+        self.assertNotIn(
+            (lock.read_run_id(self.lock_path) or ""),
+            mutex.read_bytes().decode("ascii", "ignore"),
+        )
 
     def test_run_id_is_still_stamped(self) -> None:
         from cadgen.coordination.lock import read_run_id
