@@ -246,6 +246,10 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     Path("/workspace/repo/outputs/group/exp"),
                     job_id="formal-job-1",
                 )
+                job.gate_artifact_path.write_bytes(b"sealed-gate")
+                job.gate_artifact_path.chmod(0o444)
+                job.gate_input_path.write_bytes(b"sealed-input")
+                job.gate_input_path.chmod(0o444)
                 configure_gate(job)
                 self.assertEqual(
                     job.public_socket_path.readlink(),
