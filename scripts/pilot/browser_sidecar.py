@@ -683,6 +683,7 @@ class BrowserSidecarJob:
         *,
         job_id: str,
         cancelled: Callable[[], bool] | None = None,
+        capability_parent: Path | None = None,
     ) -> None:
         """Bind immutable identities without mutating the capability filesystem."""
 
@@ -692,6 +693,7 @@ class BrowserSidecarJob:
         self.sandbox_exp_dir = sandbox_exp_dir
         self.job_id = job_id
         self.cancelled = cancelled or (lambda: False)
+        self.capability_parent = capability_parent
         self.run_dir = self.exp_dir / "run"
         self.receipt_path = self.run_dir / "browser-sidecar-receipt.json"
         self.owner_nonce = secrets.token_hex(16)
@@ -739,6 +741,7 @@ class BrowserSidecarJob:
         *,
         job_id: str,
         cancelled: Callable[[], bool] | None = None,
+        capability_parent: Path | None = None,
     ) -> BrowserSidecarJob:
         """Create the capability layout under one receipt-owning job object."""
 
@@ -747,6 +750,7 @@ class BrowserSidecarJob:
             sandbox_exp_dir,
             job_id=job_id,
             cancelled=cancelled,
+            capability_parent=capability_parent,
         )
         try:
             job._prepare_capability_layout()
@@ -777,10 +781,31 @@ class BrowserSidecarJob:
                 "Browser Sidecar capability layout already exists",
                 check="capability-layout",
             )
+        parent = Path("/tmp")
+        if self.capability_parent is not None:
+            try:
+                named_parent = self.capability_parent.lstat()
+                parent = self.capability_parent.resolve(strict=True)
+                parent_state = parent.stat()
+            except OSError as exc:
+                raise BrowserSidecarError(
+                    "Browser Sidecar capability parent is unavailable",
+                    check="capability-layout",
+                ) from exc
+            if (
+                stat.S_ISLNK(named_parent.st_mode)
+                or not stat.S_ISDIR(parent_state.st_mode)
+                or parent_state.st_uid != os.getuid()
+                or stat.S_IMODE(parent_state.st_mode) != 0o700
+            ):
+                raise BrowserSidecarError(
+                    "Browser Sidecar capability parent is not private",
+                    check="capability-layout",
+                )
         self.capability_dir = Path(
             tempfile.mkdtemp(
                 prefix=f"meshshot-browser-{self.owner_nonce[:8]}-",
-                dir="/tmp",
+                dir=parent,
             )
         ).resolve()
         self.broker_capability_dir = self.capability_dir / "broker"

@@ -748,6 +748,31 @@ class BrowserSidecarJobTests(unittest.TestCase):
             job.close(workload_status=None)
             self.assertFalse(capability.exists())
 
+    def test_public_job_rejects_nonprivate_capability_parent(self) -> None:
+        """A shared root with group or other access cannot hold formal authority."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            parent = root / "shared"
+            parent.mkdir(mode=0o755)
+            exp_dir = root / "exp"
+            with self.assertRaises(browser_sidecar.BrowserSidecarError) as raised:
+                browser_sidecar.BrowserSidecarJob.create(
+                    exp_dir,
+                    Path("/workspace/repo/outputs/group/exp"),
+                    job_id="formal-job-1",
+                    capability_parent=parent,
+                )
+            receipt = json.loads(
+                (exp_dir / "run/browser-sidecar-receipt.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(raised.exception.check, "capability-layout")
+        self.assertEqual(receipt["failureCheck"], "capability-layout")
+        self.assertTrue(receipt["predicates"]["absenceProved"])
+
     def test_created_container_requires_exact_owner_labels_before_readiness(self) -> None:
         """A returned ID is untouched until exact labels prove cleanup authority."""
 

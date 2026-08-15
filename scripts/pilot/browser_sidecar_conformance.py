@@ -592,6 +592,10 @@ def run_host(evidence_path: Path) -> int:
     docker = shutil.which("docker")
     if docker is None or not evidence_path.is_absolute():
         return 2
+    try:
+        capability_parent = evidence_path.parent.resolve(strict=True)
+    except OSError:
+        return 2
     with tempfile.TemporaryDirectory(
         prefix="meshshot-formal-conformance-",
         dir="/tmp",
@@ -599,11 +603,15 @@ def run_host(evidence_path: Path) -> int:
         from scripts.pilot.runner import _prepare_nested_browser_gate_from_manifest
 
         temporary_root = Path(temporary).resolve()
-        job = BrowserSidecarJob.create(
-            temporary_root,
-            Path("/workspace/repo/outputs/conformance/formal"),
-            job_id="formal-local-conformance",
-        )
+        try:
+            job = BrowserSidecarJob.create(
+                temporary_root,
+                Path("/workspace/repo/outputs/conformance/formal"),
+                job_id="formal-local-conformance",
+                capability_parent=capability_parent,
+            )
+        except browser_sidecar.BrowserSidecarError:
+            return 2
         job.docker = docker
         client_name = f"{job.prefix}-client"
         surface_name = f"{job.prefix}-surface"

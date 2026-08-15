@@ -386,6 +386,25 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             "DAC_READ_SEARCH", conformance._fixed_container_isolation(user="0:0")
         )
 
+    def test_host_rejects_nonprivate_evidence_parent_before_docker(self) -> None:
+        """The CLI evidence parent is also the exact private daemon-share root."""
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            parent = Path(temp) / "public"
+            parent.mkdir(mode=0o755)
+            evidence = parent / "conformance.json"
+            with (
+                mock.patch.object(
+                    conformance.shutil, "which", return_value="/usr/bin/docker"
+                ),
+                mock.patch.object(subprocess, "run") as run,
+            ):
+                status = conformance.run_host(evidence)
+
+        self.assertEqual(status, 2)
+        self.assertFalse(evidence.exists())
+        run.assert_not_called()
+
     def test_surface_discovery_has_one_bounded_cpu(self) -> None:
         """The exhaustive immutable scan finishes inside the fixed host limit."""
 
@@ -453,7 +472,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
 
     def test_host_seals_and_validates_gate_before_fixed_client_exec(self) -> None:
         boundary = DockerBoundary()
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
             evidence_path = Path(temp) / "conformance.json"
             with (
                 mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
@@ -683,7 +702,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
         """A client-name collision after Sidecar startup remains foreign state."""
 
         boundary = DockerBoundary(foreign_client=True)
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
             evidence_path = Path(temp) / "conformance.json"
             with (
                 mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
@@ -707,7 +726,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
         """Cleanup targets the returned ID and never a replacement at its old name."""
 
         boundary = DockerBoundary(client_replaced=True)
-        with tempfile.TemporaryDirectory() as temp:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
             evidence_path = Path(temp) / "conformance.json"
             with (
                 mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
