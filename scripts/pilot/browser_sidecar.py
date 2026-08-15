@@ -187,6 +187,7 @@ class RegisteredProgramBroker:
             )
         self.profile = profile
         self.request_count = 0
+        self.program_counts = {"residual": 0, "viewer": 0}
 
     def preflight(self) -> Mapping[str, object]:
         """Prove exact baked authority, Source-Hidden, and blocked egress."""
@@ -446,6 +447,7 @@ class RegisteredProgramBroker:
                     },
                 }
                 self.request_count += 1
+                self.program_counts["viewer"] += 1
                 return {
                     "schema": RESPONSE_SCHEMA,
                     "jobId": self.job_id,
@@ -488,6 +490,7 @@ class RegisteredProgramBroker:
                     check="residual-result",
                 )
             self.request_count += 1
+            self.program_counts["residual"] += 1
             return {
                 "schema": RESPONSE_SCHEMA,
                 "jobId": self.job_id,
@@ -537,6 +540,7 @@ class BrowserSidecarJob:
         self.broker: subprocess.Popen[bytes] | None = None
         self.readiness: Mapping[str, Any] | None = None
         self.broker_readiness: Mapping[str, Any] | None = None
+        self.broker_terminal: Mapping[str, Any] | None = None
         self.request_count = 0
         self.first_error: str | None = None
         self.cleanup_errors: list[str] = []
@@ -933,6 +937,68 @@ class BrowserSidecarJob:
                 broker_status = self.broker.wait(timeout=10)
                 if broker_status != 0:
                     self.cleanup_errors.append("broker-terminal")
+                elif self.broker.stdout is None:
+                    self.cleanup_errors.append("broker-terminal-evidence")
+                else:
+                    remaining = self.broker.stdout.read(16 * 1024 + 1)
+                    if (
+                        len(remaining) > 16 * 1024
+                        or not remaining.endswith(b"\n")
+                        or b"\n" in remaining[:-1]
+                    ):
+                        self.cleanup_errors.append("broker-terminal-evidence")
+                    else:
+                        try:
+                            terminal_record = _strict_json(
+                                remaining.decode("ascii"),
+                                "broker-terminal",
+                            )
+                        except (BrowserSidecarError, UnicodeDecodeError):
+                            self.cleanup_errors.append("broker-terminal-evidence")
+                        else:
+                            counts = (
+                                terminal_record.get("programCounts")
+                                if isinstance(terminal_record, dict)
+                                else None
+                            )
+                            accepted = (
+                                terminal_record.get("acceptedRequests")
+                                if isinstance(terminal_record, dict)
+                                else None
+                            )
+                            if (
+                                not isinstance(terminal_record, dict)
+                                or set(terminal_record)
+                                != {
+                                    "event",
+                                    "schema",
+                                    "jobId",
+                                    "imageId",
+                                    "acceptedRequests",
+                                    "freshContexts",
+                                    "programCounts",
+                                }
+                                or terminal_record.get("event") != "terminal"
+                                or terminal_record.get("schema") != BROKER_SCHEMA
+                                or terminal_record.get("jobId") != self.job_id
+                                or terminal_record.get("imageId") != IMAGE_ID
+                                or not isinstance(accepted, int)
+                                or isinstance(accepted, bool)
+                                or accepted < 0
+                                or terminal_record.get("freshContexts") != accepted + 1
+                                or not isinstance(counts, dict)
+                                or set(counts) != {"residual", "viewer"}
+                                or any(
+                                    not isinstance(count, int)
+                                    or isinstance(count, bool)
+                                    or count < 0
+                                    for count in counts.values()
+                                )
+                                or sum(counts.values()) != accepted
+                            ):
+                                self.cleanup_errors.append("broker-terminal-evidence")
+                            else:
+                                self.broker_terminal = terminal_record
             except (OSError, subprocess.TimeoutExpired):
                 try:
                     self.broker.kill()
@@ -1023,6 +1089,7 @@ class BrowserSidecarJob:
             "programs": PROGRAMS,
             "readiness": self.readiness,
             "brokerReadiness": self.broker_readiness,
+            "brokerTerminal": self.broker_terminal,
             "workloadStatus": workload_status,
             "brokerStatus": broker_status,
             "terminal": terminal,
@@ -1153,6 +1220,22 @@ def run_broker(args: argparse.Namespace) -> int:
                             ).encode("ascii")
                             + b"\n"
                         )
+                print(
+                    json.dumps(
+                        {
+                            "event": "terminal",
+                            "schema": BROKER_SCHEMA,
+                            "jobId": args.job_id,
+                            "imageId": IMAGE_ID,
+                            "acceptedRequests": broker.request_count,
+                            "freshContexts": broker.request_count + 1,
+                            "programCounts": broker.program_counts,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    flush=True,
+                )
             finally:
                 browser.close()
     except (OSError, Exception):
