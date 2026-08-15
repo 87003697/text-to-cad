@@ -374,3 +374,31 @@ was the connectivity probe.
 
 Require fresh independent Standards and Spec PASS on the clean successor before
 one new deployment, prepare handle, provision attempt, and conditional probe.
+
+## Successful paid CVM closure
+
+The canonical-byte successor passed independent Standards and Spec review and
+deployed as clean workflow SHA
+`187c365ccfe9d565b34f2baadd7bc63548c64f77`. Fresh handle
+`cvmsp-1f730fb0885ed6ba906a5b52` prepared the exact 1,084,572,672-byte
+archive (`f44cfe9e...bdb16e9`) and provisioned once successfully. CVM resolved
+and retained the exact loaded sidecar/client IDs `fc8f22ba...c35b846` and
+`3b477d93...d4a1f75b`; all transfer-cleanup predicates passed.
+
+Its sole sealed Chromium probe completed successfully in 4.84 seconds:
+
+- terminal operation: `probe`, status `succeeded`, retry allowed `false`;
+- canonical request and sealed result SHA-256 both
+  `b155c2ac...fdf3a6`;
+- `connected:true`, one context, one page;
+- browser executable inventory and source aliases both empty;
+- external egress blocked;
+- read-only root, zero mounts, fixed CPU/memory/PID/shm bounds;
+- Sidecar observed SIGTERM and exited 0 without OOM/error;
+- exact network, Sidecar container, and client container all removed;
+- final absence proof true with no cleanup errors.
+
+This connectivity probe intentionally emits no PNG or Viewer screenshot. Local
+R8 remains the visual Viewer/residual parity evidence; a paid CVM visual Render
+Program is a separate follow-on acceptance operation, not part of this one-shot
+probe. Do not retry, adopt, or clean this successful terminal handle.
