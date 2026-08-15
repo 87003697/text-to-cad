@@ -63,6 +63,13 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
   Sidecar startup. The one-shot gate proof is validated and released before the
   fixed Agent-equivalent client is exec'd; Docker/process calls are the only
   faked boundaries in the public host regression.
+- Every host bind source is canonicalized before Docker argv construction,
+  including macOS `/var` aliases, discovery artifacts, capability directories,
+  and fixed client/gate inputs. Container creation returns one exact immutable
+  ID which is immediately checked for the exact job and owner-nonce labels.
+  Start, terminal observation, cleanup, and absence use only that ID: predictable
+  names are never cleanup authority, and foreign collisions, lost create output,
+  or name replacement remain untouched and fail closed.
 - The gate publishes one exact-key bounded proof over an outer-owned one-shot
   Unix socket. The outer unlinks/closes the listener after the first connection,
   validates that proof, sends the release byte, and closes the accepted channel
@@ -116,7 +123,9 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
 - The Broker artifact seals the fixed registered raw residual and Viewer
   programs. Public residual parity and nested namespace isolation belong only
   to the separate fixed Browser Gate, not to a Broker-reported boolean. The
-  legacy standalone conformance client is no longer copied into the Broker.
+  fixed browser-less conformance client is sealed at the exact path released by
+  that gate. Its host-only runner/contract dependencies are lazy imports and are
+  not copied into the Broker.
 - The successor adversarial matrix covers missing/wrong Broker identity,
   platform/revision/base mismatch, foreign Broker name, malformed/late/wrong
   readiness, pre-existing/non-socket/replaced socket, premature exits, exact
@@ -131,15 +140,18 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
 - Browser-less Broker base:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Final corrected Broker:
-  `sha256:45f0655ccb362f01097876d9e6d905139cb48058adcb51621472362cadc593dd`
+  `sha256:9709c13a634544c56b2f93cc113cca6c4ad52aae4ebdad72cf5230f55dce59e5`
 - Broker OCI revision:
-  `d2ee3b689b471e29b1b114a9400144867ff06531`
+  `fd4a9db9a3c98a0c78f1bb838a57d3a3cc38bba0`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
   `sha256:05f4b5b8b99380677c7861e04cb8a9a3c1624206bad59696f825e7f0d4c55c5c`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with
-`--pull=false --no-cache --network=none` from the exact sealed-client digest.
+`--pull=false --no-cache --network=none` from a `git archive` context containing
+only the exact committed Dockerfile, Broker/client sources, and meshshot
+runtime, based on the exact sealed-client digest. This excluded mutable
+working-tree bytecode and reduced the build context to the reviewed paths.
 Read-only inspection confirmed image ID, `linux/amd64`, the GREEN source
 revision, base label, fixed entrypoint, and browser-less `pwuser`. No
 conformance container was launched in this review-correction pass. `git
@@ -153,6 +165,7 @@ then removed.
 - `docs/specs/browser-sidecar-formal-pilot-integration.md`
 - `docs/specs/browser-sidecar-formal-pilot-handoff.md`
 - `packages/meshshot/browser_sidecar_broker/Dockerfile`
+- `packages/meshshot/browser_sidecar_broker/Dockerfile.dockerignore`
 - `packages/meshshot/browser_sidecar_broker/image-lock.json`
 - `packages/meshshot/pyproject.toml`
 - `packages/meshshot/src/meshshot/browser_contract.json`
@@ -165,10 +178,13 @@ then removed.
 - `scripts/pilot/runner.py`
 - `tests/python/global/test_browser_sidecar.py`
 - `tests/python/global/test_browser_sidecar_conformance.py`
+- `tests/python/global/test_browser_sidecar_broker_image.py`
 - `tests/python/global/test_browser_sidecar_gate.py`
 - `tests/python/global/test_browser_surface.py`
 - `tests/python/global/test_pilot_runner.py`
 - `tests/python/packages/meshshot/test_renderer.py`
+- `tests/python/fixtures/browser_sidecar_image_harness.py`
+- `tests/python/fixtures/browser_sidecar_linux_baseline.py`
 
 The throwaway prototype remains evidence only; production code was not copied
 wholesale from it.
@@ -275,8 +291,11 @@ preserved artifact. The same SHA/handle was not rerun.
 - The exact dedicated Docker socket remained live and served Linux/amd64. The
   Colima CLI profile registry reported the profile stopped, so no profile state
   mutation was attempted.
-- Historical reviewed images and corrected Broker image
-  `sha256:45f0655c...593dd`: retained; no image deletion was authorized.
+- Historical reviewed/superseded images and final Broker image
+  `sha256:9709c13...e59e5`: retained; no image deletion was authorized. The
+  first full-context `fd4a9db9...` build was rejected by byte-parity extraction
+  because the legacy builder admitted working-tree bytecode; its image
+  `sha256:51137e53...62bb` remains retained and is not an accepted artifact.
 - Byte-parity extraction residue is retained at
   `/tmp/browser-sidecar-broker-inspect-d2ee3b68.488VjC`. It is an owner-created
   ordinary directory tree with no symlinks; its Docker-extracted directories
@@ -291,7 +310,7 @@ Return for full independent Standards and Spec/security review of
 `90bc24cf8860125b158c5f04ddc5dfd65efbcb39..HEAD`. The owner has not
 self-approved either axis. If both axes accept the corrections and exact new
 artifact, authorize one new clean-SHA local conformance attempt using Broker
-image `sha256:45f0655ccb362f01097876d9e6d905139cb48058adcb51621472362cadc593dd`.
+image `sha256:9709c13a634544c56b2f93cc113cca6c4ad52aae4ebdad72cf5230f55dce59e5`.
 Do not reuse either failed SHA/handle.
 
 Before paid CVM closure, the provisioning receipt must represent the Broker

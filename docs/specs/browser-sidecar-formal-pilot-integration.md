@@ -33,9 +33,9 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Browser-less Broker base image:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Render Program Broker image:
-  `sha256:45f0655ccb362f01097876d9e6d905139cb48058adcb51621472362cadc593dd`
+  `sha256:9709c13a634544c56b2f93cc113cca6c4ad52aae4ebdad72cf5230f55dce59e5`
 - Broker OCI revision / production implementation commit:
-  `d2ee3b689b471e29b1b114a9400144867ff06531`
+  `fd4a9db9a3c98a0c78f1bb838a57d3a3cc38bba0`
 - Image source revision:
   `1abe4c97929906b5c0b28b0f3f38857bd923952f`
 - Residual program SHA-256:
@@ -43,8 +43,10 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Viewer program SHA-256:
   `e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b`
 
-The corrected Broker was built cleanly from that exact full GREEN commit with
-`--pull=false --no-cache --network=none`. Its Dockerfile-copied files were
+The corrected Broker was built cleanly from a path-allowlisted `git archive` of
+that exact full GREEN commit with `--pull=false --no-cache --network=none`.
+Mutable working-tree caches therefore never entered the build context. Its
+Dockerfile-copied files were
 extracted from one non-running inspection container and proved byte-identical
 to the commit; the container was removed. Its exact identity remains subject
 to independent review. Runtime image pulls and browser downloads are forbidden.
@@ -60,6 +62,7 @@ Replacing any accepted identity is a new review decision.
 | Broker image ID, platform, base identity, or OCI revision wrong | Pilot fails before create; both image ID and the production implementation revision are exact receipt identities | No owned Docker resource remains |
 | Foreign predictable container/network name exists | Pilot fails; it does not adopt, stop, remove, or relabel the foreign resource | Foreign resource is untouched; owned-label absence is proved |
 | Foreign predictable Broker container name exists | Pilot fails before network creation; it does not adopt, stop, remove, or relabel the foreign resource | Foreign Broker is untouched; owned-label absence is proved |
+| Docker create output is lost, the returned ID has wrong job/owner labels, or a predictable name is replaced after creation | Pilot fails closed without using the predictable name as cleanup authority | Only a successfully returned, exactly labeled ID may be started or removed; foreign/replacement resources are untouched and retained owner-label proof dominates |
 | Readiness absent, malformed, late, or for another job | Nested workload never starts; pilot is terminal failed | Exact owned Sidecar/network are stopped and absent |
 | Broker readiness absent, malformed, late, or for another job | Authority is never published and nested workload never starts | Exact owned Broker, Sidecar, and network are stopped and absent |
 | Broker socket path pre-exists, is not one socket, changes identity, or remains writable to the nested workload | Pilot fails before authority publication | Exact owned Broker, Sidecar, and network are stopped and absent; no foreign path is removed |
@@ -148,13 +151,22 @@ nested browser inventory/process zero before releasing the fixed
 Agent-equivalent client exactly once. Docker and spawned-process boundaries are
 the only fakes in the host regression.
 
+Every host-side bind source is resolved to its canonical path before it enters
+Docker argv, including macOS `/var` to `/private/var` aliases. Each conformance
+surface/client container is identified solely by the exact 64-hex ID returned
+from create and immediately validated against both fixed job and fresh owner
+nonce labels. Start, terminal observation, removal, and absence never use the
+planned name; a foreign collision, lost create result, wrong labels, or name
+replacement cannot be adopted or deleted.
+
 Source-Hidden and blocked external browser egress remain direct Sidecar facts:
 the Browser and Broker use one Docker `--internal` network, no source mount,
 baked fixed assets, and a browser-context preflight. Agent repository/skill
 visibility is required by the pilot and is not evidence about the Browser
-Execution Tree. The historical standalone conformance client is not copied
-into the production Broker artifact; acceptance uses the sealed runner gate,
-so the two principals cannot be conflated by duplicated production checks.
+Execution Tree. The fixed browser-less conformance client is copied to the
+exact path released by the sealed runner gate, while host-only runner and gate
+composition dependencies remain outside the artifact. The client reports only
+its fixed predicates, so the two principals are not conflated.
 
 SIGINT/SIGTERM, workload failure, readiness failure, Sidecar exit, malformed
 broker traffic, and cleanup failure all traverse the same terminal cleanup
