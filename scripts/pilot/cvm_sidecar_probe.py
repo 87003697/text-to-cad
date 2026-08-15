@@ -241,6 +241,11 @@ def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
             f"{role} fixed image inspection is inaccessible",
             check=f"{role}-inspect-access",
         ) from exc
+    except BaseException as exc:
+        raise ProbeError(
+            f"{role} fixed image inspection is inaccessible",
+            check=f"{role}-inspect-access",
+        ) from exc
     lines = completed.stdout.splitlines()
     if len(lines) != 1 or not lines[0]:
         raise ProbeError(
@@ -250,6 +255,11 @@ def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
     try:
         payload = _strict_json_loads(lines[0], f"{role} fixed image inspection")
     except ProbeError as exc:
+        raise ProbeError(
+            f"{role} fixed image inspection format is invalid",
+            check=f"{role}-inspect-format",
+        ) from exc
+    except BaseException as exc:
         raise ProbeError(
             f"{role} fixed image inspection format is invalid",
             check=f"{role}-inspect-format",
