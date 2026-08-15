@@ -402,7 +402,49 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
                 status = conformance.run_host(evidence)
 
         self.assertEqual(status, 2)
-        self.assertFalse(evidence.exists())
+        published = json.loads(evidence.read_text(encoding="utf-8"))
+        self.assertEqual(published["status"], "failed")
+        self.assertEqual(
+            published["receipt"]["failureCheck"], "capability-parent-private"
+        )
+        self.assertTrue(published["receipt"]["predicates"]["absenceProved"])
+        self.assertFalse(published["receipt"]["retryAllowed"])
+        run.assert_not_called()
+
+    def test_host_rejects_symlink_evidence_parent_and_publishes_canonically(
+        self,
+    ) -> None:
+        """A caller alias cannot split the capability root from terminal evidence."""
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            root = Path(temp)
+            parent = root / "private"
+            parent.mkdir(mode=0o700)
+            alias = root / "alias"
+            alias.symlink_to(parent, target_is_directory=True)
+            evidence = alias / "conformance.json"
+            canonical_evidence = parent / evidence.name
+            with (
+                mock.patch.object(
+                    conformance.shutil, "which", return_value="/usr/bin/docker"
+                ),
+                mock.patch.object(subprocess, "run") as run,
+                mock.patch.object(
+                    conformance, "_write_atomic", wraps=conformance._write_atomic
+                ) as write,
+            ):
+                status = conformance.run_host(evidence)
+
+            published = json.loads(canonical_evidence.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 2)
+        self.assertEqual(published["status"], "failed")
+        self.assertEqual(
+            published["receipt"]["failureCheck"], "capability-parent-canonical"
+        )
+        self.assertTrue(published["receipt"]["predicates"]["absenceProved"])
+        self.assertFalse(published["receipt"]["retryAllowed"])
+        self.assertEqual(write.call_args.args[0], canonical_evidence)
         run.assert_not_called()
 
     def test_surface_discovery_has_one_bounded_cpu(self) -> None:
