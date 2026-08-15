@@ -84,11 +84,28 @@ class NodeRuntimeTestCase(unittest.TestCase):
 
     @staticmethod
     def alive(pid: int) -> bool:
-        try:
-            os.kill(pid, 0)
-        except (ProcessLookupError, PermissionError):
-            return False
-        return True
+        """Is this pid still running? Signal 0 is the POSIX idiom and not portable.
+
+        Windows has no signal 0: ``os.kill(pid, 0)`` reaches ``TerminateProcess`` with an
+        exit code of 0 and raises WinError 87 for the bogus parameter -- an error that reads
+        like "the process is gone" and is not. ``OpenProcess`` is the honest question there,
+        and ``tasklist`` asks it without ctypes.
+        """
+        if os.name != "nt":
+            try:
+                os.kill(pid, 0)
+            except (ProcessLookupError, PermissionError):
+                return False
+            return True
+        listed = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        # tasklist prints "INFO: No tasks are running..." rather than an empty table, and
+        # exits 0 either way, so the pid has to be looked for in the output.
+        return str(pid) in listed.stdout
 
 
 class ProtocolTest(NodeRuntimeTestCase):

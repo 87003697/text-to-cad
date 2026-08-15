@@ -108,7 +108,11 @@ def _sibling_step_output(target: str) -> str:
     # foo.step.py -> foo.step; plain foo.py -> foo.step (the target's logical STEP).
     if target.lower().endswith(".step.py"):
         return target[: -len(".py")]
-    return str(Path(target).with_suffix(".step"))
+    # as_posix(), because this half of a SOURCE=OUTPUT pair is a logical path. str() on a
+    # Path renders the NATIVE separator, so on Windows the two branches disagreed: the slice
+    # above kept "parts/second.step" and this one produced "parts\second.step" for the same
+    # shape of input. Windows accepts forward slashes, so one spelling serves both.
+    return Path(target).with_suffix(".step").as_posix()
 
 
 def _targets_with_step_outputs(

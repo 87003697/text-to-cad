@@ -131,9 +131,16 @@ class GenerationLockBehaviourTest(unittest.TestCase):
                 done.set()
                 time.sleep(0.05)
 
+        thread = threading.Thread(target=run, daemon=True)
         with exclusive(self.lock):
-            threading.Thread(target=run, daemon=True).start()
+            thread.start()
             self.assertTrue(done.wait(10), "an unrelated model blocked on this one's lock")
+        # Join before the temp dir is removed. The thread is still inside exclusive() with
+        # the sentinel open when the assertion passes, and on Windows a file cannot be
+        # unlinked while a handle is open -- so leaving it running failed the CLEANUP, not
+        # the test. POSIX unlinks open files happily, which is why this never showed here.
+        thread.join(10)
+        self.assertFalse(thread.is_alive(), "the unrelated model's lock was never released")
 
     def test_threads_in_one_process_serialize(self):
         order = []
@@ -195,6 +202,12 @@ class GenerationLockBehaviourTest(unittest.TestCase):
         threading.Thread(target=lambda: (self._acquire_release(), done.set()), daemon=True).start()
         self.assertTrue(done.wait(15), "a SIGKILLed builder left a stale lock")
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "chmod only toggles the read-only bit on Windows and does not stop a directory "
+        "being written, so this would pass without ever reaching the degradation it claims "
+        "to cover. Making a directory truly unwritable there needs an ACL edit.",
+    )
     def test_unwritable_lock_directory_does_not_fail_the_build(self):
         blocked = self.root / "ro"
         blocked.mkdir()
@@ -240,27 +253,20 @@ class GenerationLockBehaviourTest(unittest.TestCase):
         """The two tests above pass "unknown-generator", which resolves to NO output dir
         and therefore no lock at all -- they pin call ordering, not mutual exclusion. This
         one asserts the currency check really does run inside the critical section, by
-        probing the sentinel from a second descriptor while the check is executing."""
-        import fcntl
+        probing the sentinel from a second descriptor while the check is executing.
 
+        Probes through ``lock.probe`` rather than raw ``fcntl``: it asks the same question
+        through whichever backend is compiled in, and a bare ``import fcntl`` here is an
+        ImportError on Windows -- where this assertion is worth more, not less."""
         from cadgen.coordination import STEP_PACKAGE, artifact_build
         from cadgen.coordination.paths import write_lock_path
 
         package = self.root / "__cadgen__" / "models" / "part.step.py"
-        lock = write_lock_path(package)
+        lock_path = write_lock_path(package)
         observed = []
 
         def _is_current():
-            handle = open(lock, "a+b")
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                observed.append("locked")
-            else:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-                observed.append("UNLOCKED")
-            finally:
-                handle.close()
+            observed.append("locked" if lock.probe(lock_path).held else "UNLOCKED")
             return True
 
         with artifact_build(STEP_PACKAGE, package, is_current=_is_current) as run:
@@ -277,6 +283,78 @@ class GenerationLockBehaviourTest(unittest.TestCase):
             self.assertEqual("S", enter, f"interleaved critical sections: {marks!r}")
             self.assertEqual("E", leave, f"interleaved critical sections: {marks!r}")
             self.assertEqual(tag, leave_tag, f"interleaved critical sections: {marks!r}")
+
+
+class RealBackendRegressionTests(unittest.TestCase):
+    """Field regressions, asserted against the REAL backend of whatever platform runs them.
+
+    Everything in ``WindowsLockBackendTests`` drives a fake, because ``msvcrt`` is not
+    importable on the CI box that has always run these. A fake cannot reproduce either of the
+    two bugs Windows users actually hit -- a backend that silently is not there, and a lock
+    that makes its own file unreadable -- so these assert the invariants directly and are
+    worth exactly what the platform running them is worth. On POSIX they pass trivially; on a
+    Windows runner they are the regression tests for #260 and #269.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.lock = write_lock_path(self.root / "__cadgen__" / "models" / "part.step.py")
+
+    def test_this_platform_really_has_a_locking_backend(self):
+        """#260: before it, Windows had no ``fcntl``, took no lock, and said nothing.
+
+        Every build proceeded unserialized and the degradation was invisible -- `exclusive()`
+        is designed to yield None rather than fail, which is right for a filesystem that
+        cannot lock and wrong as a description of the whole platform. Any OS the tests run on
+        is an OS someone builds on, so a missing backend is a bug there, not a degradation.
+        """
+        self.assertTrue(
+            lock.locking_available(),
+            f"no locking backend on {os.name}: builds here are not serialized at all",
+        )
+        with exclusive(self.lock) as run_id:
+            self.assertTrue(run_id, "a real backend must record a run id, not degrade to None")
+
+    def test_another_process_can_read_the_sentinel_while_the_lock_is_held(self):
+        """#269: Windows byte-range locks are MANDATORY, POSIX ``flock`` is advisory.
+
+        Locking byte 0 of the sentinel made it unreadable to every other process for the whole
+        build. The Node builders read it to prove they were started by the holder, and Python's
+        own ``read_run_id`` reads it to attribute progress -- both precisely while a lock is
+        held. So the sentinel must stay readable FROM ANOTHER PROCESS, which is the only place
+        the distinction shows up: the holder can always read its own locked region.
+        """
+        ready = self.root / "ready"
+        script = textwrap.dedent(
+            f"""
+            import sys, time
+            sys.path.insert(0, {_CADGEN_SRC!r})
+            from cadgen.coordination.lock import exclusive
+            with exclusive({str(self.lock)!r}):
+                open({str(ready)!r}, "wb").close()
+                time.sleep(120)
+            """
+        )
+        proc = subprocess.Popen([sys.executable, "-c", script])
+        try:
+            for _ in range(500):
+                if ready.exists():
+                    break
+                time.sleep(0.02)
+            self.assertTrue(ready.exists(), "helper never acquired the lock")
+
+            # The lock really is held, so this is not "readable because nothing ran".
+            self.assertTrue(lock.probe(self.lock).held, "the helper is not holding the lock")
+
+            # What the Node builders do (a whole-file read), and what read_run_id does.
+            raw = self.lock.read_bytes()[:32].decode("ascii").strip()
+            self.assertEqual(32, len(raw), f"sentinel unreadable or unstamped: {raw!r}")
+            self.assertEqual(raw, lock.read_run_id(self.lock))
+        finally:
+            proc.kill()
+            proc.wait(timeout=30)
 
 
 class _FakeMsvcrt:

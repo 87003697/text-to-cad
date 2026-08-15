@@ -51,9 +51,26 @@ class ReplaceAtomicTest(unittest.TestCase):
             "the backoff must grow, and must not sleep after the winning attempt",
         )
 
+    def test_the_window_covers_the_measured_tail_not_the_median(self) -> None:
+        """Issue #274, and the reason this number is not free to shrink.
+
+        Measured on a Synology SMB share over two 84-component builds: 126 of 168 renames
+        blocked at all, median 31 ms, p90 118 ms, max 389 ms. The budget is spent per rename
+        but the BUILD only succeeds if every one of them wins, so the window has to clear the
+        tail rather than the middle -- at 168 draws, a 1% per-rename loss rate is roughly a
+        1-in-5 chance of a clean build.
+        """
+        self.assertGreater(
+            sum(atomic_replace.RETRY_DELAYS_SECONDS),
+            0.389,
+            "the retry window must outlast the longest rename actually measured on SMB",
+        )
+        # ...and the first retry still has to be short, or the median rename pays for the tail.
+        self.assertLessEqual(atomic_replace.RETRY_DELAYS_SECONDS[0], 0.05)
+
     def test_it_gives_up_rather_than_hanging(self) -> None:
-        # A rename that cannot win in 350 ms is not a deferred close. Failing beats a build that
-        # retries forever.
+        # A rename that cannot win inside the window is not a deferred close. Failing beats a
+        # build that retries forever.
         error = sharing_violation()
         with mock.patch.object(atomic_replace.os, "replace", side_effect=error), \
              mock.patch.object(atomic_replace.time, "sleep") as sleep:
