@@ -628,32 +628,20 @@ def run_host(evidence_path: Path) -> int:
     except OSError:
         return 2
     canonical_evidence_path = capability_parent / evidence_path.name
+    if evidence_path.parent != capability_parent:
+        return 2
+    if (
+        not stat.S_ISDIR(parent_state.st_mode)
+        or parent_state.st_uid != os.getuid()
+        or stat.S_IMODE(parent_state.st_mode) != 0o700
+    ):
+        return 2
     with tempfile.TemporaryDirectory(
         prefix="meshshot-formal-conformance-", dir="/tmp"
     ) as temporary:
         from scripts.pilot.runner import _prepare_nested_browser_gate_from_manifest
 
         temporary_root = Path(temporary).resolve()
-        if evidence_path.parent != capability_parent:
-            return _publish_preflight_failure(
-                canonical_evidence_path,
-                temporary_root,
-                capability_parent,
-                check="capability-parent-canonical",
-                error="BrowserSidecarError: evidence parent is not canonical",
-            )
-        if (
-            not stat.S_ISDIR(parent_state.st_mode)
-            or parent_state.st_uid != os.getuid()
-            or stat.S_IMODE(parent_state.st_mode) != 0o700
-        ):
-            return _publish_preflight_failure(
-                canonical_evidence_path,
-                temporary_root,
-                capability_parent,
-                check="capability-parent-private",
-                error="BrowserSidecarError: evidence parent is not private",
-            )
         docker = shutil.which("docker")
         if docker is None:
             return _publish_preflight_failure(
