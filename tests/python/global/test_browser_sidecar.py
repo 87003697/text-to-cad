@@ -568,6 +568,15 @@ class BrowserSidecarJobTests(unittest.TestCase):
             dockerfile,
         )
         self.assertNotIn("COPY scripts/pilot/runner.py", dockerfile)
+        dockerignore = (
+            browser_sidecar.REPO_ROOT
+            / "packages/meshshot/browser_sidecar_broker/Dockerfile.dockerignore"
+        ).read_text(encoding="utf-8")
+        self.assertTrue(dockerignore.startswith("**\n"))
+        self.assertIn("!scripts/pilot/browser_sidecar.py\n", dockerignore)
+        self.assertIn("!scripts/pilot/browser_sidecar_conformance.py\n", dockerignore)
+        self.assertIn("!packages/meshshot/src/meshshot/**\n", dockerignore)
+        self.assertTrue(dockerignore.endswith("**/*.pyc\n"))
 
     def test_package_owned_contract_matches_outer_lifecycle(self) -> None:
         """Generated/vendor isolation keeps one package-owned identity source."""

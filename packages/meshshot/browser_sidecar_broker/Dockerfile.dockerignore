@@ -1,0 +1,12 @@
+**
+!packages/
+!packages/meshshot/
+!packages/meshshot/src/
+!packages/meshshot/src/meshshot/
+!packages/meshshot/src/meshshot/**
+!scripts/
+!scripts/pilot/
+!scripts/pilot/browser_sidecar.py
+!scripts/pilot/browser_sidecar_conformance.py
+**/__pycache__/
+**/*.pyc
