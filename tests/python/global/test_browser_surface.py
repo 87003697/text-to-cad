@@ -202,6 +202,53 @@ class BrowserSurfaceTests(unittest.TestCase):
                     permitted_symlink_roots=[usr, etc],
                 )
 
+    def test_cross_root_alias_may_canonically_return_to_source_root(self) -> None:
+        """Alternatives-style chains are resolved even when their final inode returns."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            usr = root / "usr"
+            etc = root / "etc"
+            binary = usr / "bin"
+            alternatives = etc / "alternatives"
+            binary.mkdir(parents=True)
+            alternatives.mkdir(parents=True)
+            target = binary / "mawk"
+            target.write_bytes(b"\x7fELF" + b"\0" * 64)
+            target.chmod(0o755)
+            (alternatives / "awk").symlink_to(target)
+            (binary / "awk").symlink_to(alternatives / "awk")
+
+            self.assertEqual(
+                browser_surface.discover_browser_roots(
+                    [
+                        (usr, Path("/sandbox/usr"), True),
+                        (etc, Path("/sandbox/etc"), True),
+                    ],
+                    permitted_symlink_roots=[usr, etc],
+                ),
+                [],
+            )
+
+            (alternatives / "chromium").symlink_to(target)
+            (binary / "chromium").symlink_to(alternatives / "chromium")
+            self.assertEqual(
+                browser_surface.discover_browser_roots(
+                    [
+                        (usr, Path("/sandbox/usr"), True),
+                        (etc, Path("/sandbox/etc"), True),
+                    ],
+                    permitted_symlink_roots=[usr, etc],
+                ),
+                [
+                    {
+                        "kind": "executable",
+                        "target": "/sandbox/usr/bin/chromium",
+                        "mask": "dev-null",
+                    }
+                ],
+            )
+
     def test_immutable_image_roots_allow_only_non_browser_dangling_aliases(self) -> None:
         """Sealed images tolerate distro doc links, never browser-shaped aliases."""
 
