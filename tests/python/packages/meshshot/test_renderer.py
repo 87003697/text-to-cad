@@ -18,7 +18,7 @@ from tests.python.support.paths import add_repo_path
 
 add_repo_path("packages/meshshot/src")
 
-from meshshot import MeshGeometry, render_residual_preview  # noqa: E402
+from meshshot import MeshGeometry, MeshshotError, render_residual_preview  # noqa: E402
 
 
 def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometry:
@@ -32,6 +32,42 @@ def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometr
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_formal_authority_rejects_symlink_without_local_fallback(self) -> None:
+        triangle = ((-0.35, -0.3, 0.0), (0.35, -0.3, 0.0), (0.0, 0.35, 0.0))
+        geometry = _geometry(triangle)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / "target.json"
+            target.write_text(
+                json.dumps(
+                    {
+                        "schema": "meshshot.browser-authority/1",
+                        "jobId": "formal-job-1",
+                        "imageId": "sha256:"
+                        + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
+                        "socketPath": "/run/meshshot-browser/browser-sidecar.sock",
+                        "programs": {
+                            "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
+                            "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            authority = root / "authority.json"
+            authority.symlink_to(target)
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"MESHSHOT_BROWSER_AUTHORITY_FILE": str(authority)},
+                    clear=False,
+                ),
+                mock.patch("playwright.sync_api.sync_playwright") as local_browser,
+            ):
+                with self.assertRaisesRegex(MeshshotError, "authority file"):
+                    render_residual_preview(geometry, geometry, variant="step")
+        local_browser.assert_not_called()
+
     def test_formal_browser_authority_selects_registered_residual_program(self) -> None:
         triangle = ((-0.35, -0.3, 0.0), (0.35, -0.3, 0.0), (0.0, 0.35, 0.0))
         geometry = _geometry(triangle)
