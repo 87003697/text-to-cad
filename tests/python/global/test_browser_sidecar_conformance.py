@@ -452,6 +452,47 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
         self.assertTrue(published["receipt"]["predicates"]["absenceProved"])
         self.assertFalse(published["receipt"]["retryAllowed"])
 
+    def test_host_publishes_capability_layout_failure_in_trusted_parent(
+        self,
+    ) -> None:
+        """The factory's cleaned terminal receipt survives construction failure."""
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            parent = Path(temp).resolve()
+            evidence = parent / "conformance.json"
+
+            real_mkdtemp = tempfile.mkdtemp
+
+            def fail_capability(*args, **kwargs):
+                prefix = kwargs.get("prefix")
+                if prefix is None and len(args) > 1:
+                    prefix = args[1]
+                if prefix == "meshshot-formal-conformance-":
+                    return real_mkdtemp(*args, **kwargs)
+                raise OSError("injected layout failure")
+
+            with (
+                mock.patch.object(
+                    conformance.shutil, "which", return_value="/usr/bin/docker"
+                ),
+                mock.patch.object(
+                    browser_sidecar.tempfile,
+                    "mkdtemp",
+                    side_effect=fail_capability,
+                ),
+                mock.patch.object(subprocess, "run") as run,
+            ):
+                status = conformance.run_host(evidence)
+            published = json.loads(evidence.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 2)
+        self.assertEqual(published["status"], "failed")
+        self.assertIn("capability layout failed", published["error"])
+        self.assertEqual(published["receipt"]["failureCheck"], "capability-layout")
+        self.assertTrue(published["receipt"]["predicates"]["absenceProved"])
+        self.assertFalse(published["receipt"]["retryAllowed"])
+        run.assert_not_called()
+
     def test_surface_discovery_has_one_bounded_cpu(self) -> None:
         """The exhaustive immutable scan finishes inside the fixed host limit."""
 
