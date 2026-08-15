@@ -338,6 +338,79 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
         self.assertEqual(browser.contexts[0].page.keyboard.keys, ["Enter", "Enter"])
         self.assertTrue(browser.contexts[0].closed)
 
+    def test_preflight_requires_no_source_alias_and_blocked_browser_egress(self) -> None:
+        preflight_result = [
+            {
+                "authority": {
+                    "schema": "meshshot.browser-sidecar.prototype/1",
+                    "jobId": "formal-job-1",
+                    "endpointPath": "/browser/token",
+                    "browserPid": 321,
+                    "chromiumRevision": "1223",
+                    "chromiumVersion": "148.0.7778.96",
+                    "playwrightVersion": "1.60.0",
+                    "programs": PROGRAMS,
+                    "sourceAliasesVisible": [],
+                },
+                "externalEgressBlocked": True,
+            }
+        ]
+
+        class FakePage:
+            def goto(self, url, **kwargs):
+                self.url = url
+
+            def evaluate(self, expression, argument=None):
+                return preflight_result[0]
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.page = FakePage()
+                self.closed = False
+
+            def new_page(self):
+                return self.page
+
+            def close(self):
+                self.closed = True
+
+        class FakeBrowser:
+            def __init__(self) -> None:
+                self.contexts: list[FakeContext] = []
+
+            def new_context(self, **kwargs):
+                context = FakeContext()
+                self.contexts.append(context)
+                return context
+
+        browser = FakeBrowser()
+        broker = browser_sidecar.RegisteredProgramBroker(browser, "formal-job-1")
+
+        receipt = broker.preflight()
+
+        self.assertEqual(
+            receipt,
+            {
+                "sourceAliasesVisible": [],
+                "externalEgressBlocked": True,
+                "browserPid": 321,
+            },
+        )
+        self.assertTrue(browser.contexts[0].closed)
+
+        preflight_result[0] = {
+            "authority": {
+                "schema": "meshshot.browser-sidecar.prototype/1",
+                "jobId": "formal-job-1",
+                "programs": PROGRAMS,
+                "sourceAliasesVisible": ["/workspace"],
+                "browserPid": 321,
+            },
+            "externalEgressBlocked": True,
+        }
+        with self.assertRaisesRegex(browser_sidecar.BrowserSidecarError, "isolation"):
+            broker.preflight()
+
 
 if __name__ == "__main__":
     unittest.main()
