@@ -38,7 +38,11 @@ try:
         BrowserSidecarError,
         BrowserSidecarJob,
     )
-    from scripts.pilot.browser_surface import BrowserSurfaceError, discover_browser_roots
+    from scripts.pilot.browser_surface import (
+        BrowserSurfaceError,
+        canonicalize_browser_masks,
+        discover_browser_roots,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
@@ -58,6 +62,7 @@ except ModuleNotFoundError as exc:
     )
     from browser_surface import (  # type: ignore[no-redef]
         BrowserSurfaceError,
+        canonicalize_browser_masks,
         discover_browser_roots,
     )
 
@@ -1109,9 +1114,14 @@ def build_bwrap_argv(
             if (
                 not isinstance(exclusion, dict)
                 or set(exclusion) != {"kind", "target", "mask"}
+                or exclusion.get("kind") not in {"package", "executable", "cache"}
                 or not isinstance(exclusion.get("target"), str)
+                or exclusion.get("mask") not in {"tmpfs", "dev-null"}
             ):
                 raise PilotError("fixed nested Browser Gate exclusion is invalid")
+        if exclusions != canonicalize_browser_masks(exclusions):
+            raise PilotError("fixed nested Browser Gate exclusions are not canonical")
+        for exclusion in exclusions:
             if exclusion.get("mask") == "tmpfs":
                 argv.extend(["--tmpfs", exclusion["target"]])
             elif exclusion.get("mask") == "dev-null":

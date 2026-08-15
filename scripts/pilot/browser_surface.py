@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import stat
-from typing import Iterable
+from typing import Iterable, Mapping
 
 
 _BROWSER_NAME = re.compile(
@@ -184,22 +184,24 @@ def _target_path(target_root: Path, relative: tuple[str, ...]) -> Path:
 
 
 def _finding(
-    findings: dict[str, dict[str, str]],
+    findings: list[dict[str, str]],
     *,
     kind: str,
     target: Path,
     directory: bool,
 ) -> None:
     target_text = target.as_posix()
-    findings[target_text] = {
-        "kind": kind,
-        "target": target_text,
-        "mask": "tmpfs" if directory else "dev-null",
-    }
+    findings.append(
+        {
+            "kind": kind,
+            "target": target_text,
+            "mask": "tmpfs" if directory else "dev-null",
+        }
+    )
 
 
 def _classify(
-    findings: dict[str, dict[str, str]],
+    findings: list[dict[str, str]],
     node: _Node,
     observed_relative: tuple[str, ...],
     target_root: Path,
@@ -342,7 +344,7 @@ def _walk_mount(
     target_root: Path,
     required: bool,
     filesystem: SurfaceFilesystem,
-    findings: dict[str, dict[str, str]],
+    findings: list[dict[str, str]],
 ) -> None:
     """Walk one declared root with directory descriptors and no implicit links."""
 
@@ -471,6 +473,53 @@ def _walk_mount(
         _classify(findings, target, relative, target_root)
 
 
+def canonicalize_browser_masks(
+    findings: Iterable[Mapping[str, str]],
+) -> list[dict[str, str]]:
+    """Return one deterministic shortest-directory antichain of exact masks."""
+
+    unique: dict[str, dict[str, str]] = {}
+    for finding in findings:
+        candidate = {
+            "kind": finding["kind"],
+            "target": finding["target"],
+            "mask": finding["mask"],
+        }
+        current = unique.get(candidate["target"])
+        rank = (candidate["mask"] != "tmpfs", candidate["kind"])
+        current_rank = (
+            (current["mask"] != "tmpfs", current["kind"])
+            if current is not None
+            else None
+        )
+        if current_rank is None or rank < current_rank:
+            unique[candidate["target"]] = candidate
+
+    ordered = sorted(
+        unique.values(),
+        key=lambda item: (
+            len(PurePosixPath(item["target"]).parts),
+            item["target"],
+            item["mask"] != "tmpfs",
+            item["kind"],
+        ),
+    )
+    selected: list[dict[str, str]] = []
+    for candidate in ordered:
+        target = PurePosixPath(candidate["target"])
+        if any(
+            selected_item["mask"] == "tmpfs"
+            and (
+                PurePosixPath(selected_item["target"]) == target
+                or PurePosixPath(selected_item["target"]) in target.parents
+            )
+            for selected_item in selected
+        ):
+            continue
+        selected.append(candidate)
+    return sorted(selected, key=lambda item: item["target"])
+
+
 def discover_browser_roots(
     mounts: Iterable[tuple[Path, Path, bool]],
     *,
@@ -479,7 +528,7 @@ def discover_browser_roots(
     """Return exact masks for required/optional source-to-sandbox mounts."""
 
     adapter = filesystem or SurfaceFilesystem()
-    findings: dict[str, dict[str, str]] = {}
+    findings: list[dict[str, str]] = []
     for source_root, target_root, required in mounts:
         if not isinstance(required, bool):
             raise BrowserSurfaceError("mounted browser surface requiredness is invalid")
@@ -491,4 +540,4 @@ def discover_browser_roots(
             raise
         except OSError as exc:
             raise _closed(exc) from exc
-    return [findings[target] for target in sorted(findings)]
+    return canonicalize_browser_masks(findings)

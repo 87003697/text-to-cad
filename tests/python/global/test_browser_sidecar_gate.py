@@ -222,6 +222,7 @@ class BrowserSidecarGateTests(unittest.TestCase):
             browser_dir = source / "ms-playwright"
             executable = browser_dir / "chromium"
             browser_dir.mkdir(parents=True)
+            (browser_dir / "playwright").mkdir()
             executable.write_bytes(b"\x7fELF" + b"\0" * 32)
             executable.chmod(0o755)
             exclusions = runner.discover_browser_roots(

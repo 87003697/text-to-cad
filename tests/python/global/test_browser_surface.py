@@ -139,6 +139,29 @@ class BrowserSurfaceTests(unittest.TestCase):
                             filesystem=adapter,
                         )
 
+    def test_duplicate_target_kind_is_deterministic_across_mount_order(self) -> None:
+        """Exact duplicate masks select one stable kind independent of traversal."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = root / "first"
+            second = root / "second"
+            (first / "ms-playwright").mkdir(parents=True)
+            (second / "ms-playwright").mkdir(parents=True)
+            target = Path("/sandbox/ms-playwright")
+            forward = browser_surface.discover_browser_roots(
+                [(first, Path("/sandbox"), True), (second, Path("/sandbox"), True)]
+            )
+            reverse = browser_surface.discover_browser_roots(
+                [(second, Path("/sandbox"), True), (first, Path("/sandbox"), True)]
+            )
+
+        expected = [
+            {"kind": "cache", "target": target.as_posix(), "mask": "tmpfs"}
+        ]
+        self.assertEqual(forward, expected)
+        self.assertEqual(reverse, expected)
+
 
 class _DeniedOperationFilesystem(browser_surface.SurfaceFilesystem):
     """Delegate to the real OS except for one deterministic EACCES boundary."""

@@ -39,6 +39,10 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
   escaping, cyclic, or uninspectable targets close, and reachable in-root
   targets are inspected once. Read-only findings receive canonical deterministic
   bwrap masks that are rechecked by the same scanner in the nested namespace.
+  Exact duplicates are stable, and a shortest covering directory `tmpfs` mask
+  removes every descendant mask. The outer bwrap builder and nested gate reject
+  any non-antichain manifest, so parent-empty and child-exists predicates cannot
+  conflict.
 - Immediately before Agent exec, the runner starts the fixed repository-owned
   Browser Gate inside the exact same bwrap PID/filesystem/network environment.
   The gate calls the real unchanged public residual API with one literal
@@ -57,6 +61,14 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
   before the gate uses `execvpe` on the already-fixed workload argv. Missing,
   malformed, duplicate, or late proof prevents Agent exec and enters the same
   terminal cleanup. The later Agent cannot forge a post-hoc ACK.
+- Production-validator tests now alter the artifact digest and surface digest
+  independently. A run-pilot test carries a wrong surface digest through the
+  real `BrowserSidecarJob.record_nested_gate` validator, proves the Agent release
+  is withheld, invokes real job close, and observes the closed failed receipt
+  and absence predicate.
+- Writable experiment/Codex state is inspected by the actual gate-preparation
+  path. A writable Playwright cache/executable fails before Sidecar start,
+  publishes no sealed gate files, and creates no Sidecar resource.
 - `BrowserSidecarJob` attests the exact Sidecar and Broker image IDs, platform,
   OCI revisions, and Broker base identity before resource creation. It rejects
   foreign network/Sidecar/Broker names and uses no pull, host port, host broker,
@@ -111,7 +123,7 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
 - Broker OCI revision:
   `a67e0a5845a8cff928607e07ef1db97ead75e97d`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:7a7aa0a316dd7cb8aaad7165dd73007999cff4a2a979d340b485ee318d1bb1c2`
+  `sha256:87f7a96b95aae3e057feb168cde25f192fc56bb03ec602a04b7603fdd0cb9695`
 - Platform: `linux/amd64`
 
 The corrected Broker was built cleanly with
@@ -149,8 +161,8 @@ wholesale from it.
 Passed for the current review corrections:
 
 - Focused Browser Sidecar, surface scanner, nested gate, runner, and public
-  renderer suites: **84 tests, OK**.
-- Global policy gate: **234 tests, OK**.
+  renderer suites: **89 tests, OK**.
+- Global policy gate: **239 tests, OK**.
 - Affected meshshot profile/renderer: **11 tests, OK**.
 - Public `mesh-compare` preview CLI: **8 tests, OK**.
 - `npm --prefix packages/meshshot test`.
@@ -159,8 +171,8 @@ Passed for the current review corrections:
 - Full-range `git diff --check`.
 - Clean networkless/no-pull Broker build and exact read-only image inspection.
 
-The current traversal correction starts with RED commit `d26af173`; its GREEN
-implementation and durable handoff are the current review HEAD.
+The current mask/lifecycle correction starts with RED commit `c7586f2e`; its
+GREEN implementation and durable handoff are the current review HEAD.
 
 Not passed / not complete:
 

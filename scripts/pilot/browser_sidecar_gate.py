@@ -16,9 +16,15 @@ import sys
 from typing import Any, Mapping, Sequence
 
 try:
-    from scripts.pilot.browser_surface import discover_browser_roots
+    from scripts.pilot.browser_surface import (
+        canonicalize_browser_masks,
+        discover_browser_roots,
+    )
 except ModuleNotFoundError:
-    from browser_surface import discover_browser_roots  # type: ignore[no-redef]
+    from browser_surface import (  # type: ignore[no-redef]
+        canonicalize_browser_masks,
+        discover_browser_roots,
+    )
 
 from PIL import Image
 from meshshot import MeshGeometry, render_residual_preview
@@ -117,6 +123,10 @@ def load_gate_identity() -> Mapping[str, Any]:
             or item.get("mask") not in {"tmpfs", "dev-null"}
             for item in manifest["browserExclusions"]
         )
+    ):
+        raise ValueError("gate input identity mismatch")
+    if manifest["browserExclusions"] != canonicalize_browser_masks(
+        manifest["browserExclusions"]
     ):
         raise ValueError("gate input identity mismatch")
     canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("ascii")
@@ -222,6 +232,8 @@ def _exclusions_closed(exclusions: Sequence[Mapping[str, Any]]) -> bool:
     """Verify every outer-discovered browser root is replaced by an empty mask."""
 
     try:
+        if list(exclusions) != canonicalize_browser_masks(exclusions):
+            return False
         null_device = Path("/dev/null").stat().st_rdev
         for item in exclusions:
             target = Path(item["target"])
