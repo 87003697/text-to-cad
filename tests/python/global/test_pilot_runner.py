@@ -5,9 +5,11 @@ import importlib.util
 import json
 import os
 import signal
+import socket
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -18,6 +20,43 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PILOT_ROOT = REPO_ROOT / "scripts" / "pilot"
 UTILS_ROOT = REPO_ROOT / "scripts" / "utils"
+
+
+def nested_gate_proof() -> dict[str, object]:
+    """Return the fixed successful proof accepted before Agent exec."""
+
+    return {
+        "schema": "meshshot.browser-sidecar.nested-gate-proof/1",
+        "status": "succeeded",
+        "predicates": {
+            "publicResidualParity": True,
+            "viewerProjectionChanged": True,
+            "viewerArtifactClean": True,
+            "browserInventoryEmpty": True,
+            "browserProcessZero": True,
+            "sourceHidden": True,
+            "egressBlocked": True,
+        },
+        "residual": {
+            "pngSha256": "b498c55c68662989a3a95c4925432d61f979183d30c2cdf593e154c7b0ca9d5b",
+            "mode": "RGB",
+            "size": [504, 1008],
+            "profileSha256": "87da3cc3f625cb9c24f51bed41dcdc70402a4d461b2af29eaa19846b1e8f7241",
+            "views": ["+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso"],
+        },
+        "viewer": {
+            "before": "Display and projection: Solid, Orthographic",
+            "after": "Display and projection: Solid, Perspective",
+            "bodyMentionsFixture": True,
+            "bodyHasArtifactError": False,
+        },
+        "inventory": {
+            "browserExecutables": [],
+            "browserCaches": [],
+            "browserProcesses": [],
+            "sourceAliases": [],
+        },
+    }
 
 
 def load_runner():
@@ -579,6 +618,246 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(retry_proxy.stopped)
         popen.assert_not_called()
 
+    def test_nested_gate_failure_never_executes_agent_workload(self) -> None:
+        """Missing, malformed, duplicate, or late proof closes before Agent exec."""
+
+        for classification in (
+            "nested-gate-missing",
+            "nested-gate-malformed",
+            "nested-gate-duplicate",
+            "nested-gate-timeout",
+        ):
+            with self.subTest(classification=classification):
+                tap = FakeProcess()
+                gate_process = FakeProcess()
+                retry_proxy = FakeRetryProxy()
+                state = self.supervisor.LifecycleState()
+
+                class FakeSidecar:
+                    capability_dir = self.exp_dir
+
+                    def record_nested_gate(self, proof):
+                        raise AssertionError("failed proof must not be recorded")
+
+                class FakeGateChannel:
+                    def __init__(self, capability_dir):
+                        self.capability_dir = capability_dir
+
+                    def receive(self, cancelled):
+                        raise self_error
+
+                    def release(self):
+                        raise AssertionError("failed proof must not release Agent")
+
+                    def close(self):
+                        return None
+
+                self_error = self.supervisor.PilotError(classification)
+                with (
+                    mock.patch.object(
+                        self.supervisor,
+                        "resolve_tap",
+                        return_value="/fake/claude-tap",
+                    ),
+                    mock.patch.object(
+                        self.supervisor,
+                        "RetryProxy",
+                        return_value=retry_proxy,
+                    ),
+                    mock.patch.object(self.supervisor, "start_tap", return_value=tap),
+                    mock.patch.object(self.supervisor, "wait_ready", return_value=18888),
+                    mock.patch.object(
+                        self.supervisor,
+                        "build_bwrap_argv",
+                        return_value=["/fake/bwrap", "--", "/fixed/gate"],
+                    ),
+                    mock.patch.object(
+                        self.supervisor,
+                        "NestedGateChannel",
+                        FakeGateChannel,
+                        create=True,
+                    ),
+                    mock.patch.object(
+                        self.supervisor.subprocess,
+                        "Popen",
+                        return_value=gate_process,
+                    ),
+                    mock.patch.object(self.supervisor, "signal_process_group"),
+                    mock.patch.object(self.supervisor, "wait_workload") as wait_workload,
+                    mock.patch.object(self.supervisor, "stop_tap"),
+                    mock.patch.object(
+                        self.supervisor,
+                        "read_trace",
+                        side_effect=self.supervisor.TapError("missing trace"),
+                    ),
+                ):
+                    status = self.supervisor.run_supervised(
+                        self.exp_dir,
+                        [],
+                        ["/fixed/agent"],
+                        self.environ,
+                        state,
+                        FakeSidecar(),
+                    )
+                self.assertEqual(status, 1)
+                self.assertFalse(state.workload_started)
+                wait_workload.assert_not_called()
+
+    def test_nested_gate_channel_is_one_shot_exact_and_bounded(self) -> None:
+        """The outer-owned channel rejects absent, malformed, duplicate, and late proof."""
+
+        runner = self.supervisor
+
+        def send(path: Path, payload: bytes, ack: list[bytes]) -> threading.Thread:
+            def client() -> None:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                    connection.connect(os.fspath(path))
+                    if payload:
+                        connection.sendall(payload)
+                    connection.shutdown(socket.SHUT_WR)
+                    ack.append(connection.recv(2))
+
+            thread = threading.Thread(target=client)
+            thread.start()
+            return thread
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            channel = runner.NestedGateChannel(Path(temp), timeout=0.05)
+            ack: list[bytes] = []
+            thread = send(channel.path, b"", ack)
+            with self.assertRaisesRegex(runner.PilotError, "missing"):
+                channel.receive(lambda: False)
+            channel.close()
+            thread.join(timeout=1)
+            self.assertEqual(ack, [b""])
+
+        for label, wire in (
+            ("malformed", b"{]\n"),
+            (
+                "duplicate",
+                json.dumps(nested_gate_proof()).encode("ascii")
+                + b"\n"
+                + json.dumps(nested_gate_proof()).encode("ascii")
+                + b"\n",
+            ),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory(dir="/tmp") as temp:
+                channel = runner.NestedGateChannel(Path(temp), timeout=0.2)
+                ack = []
+                thread = send(channel.path, wire, ack)
+                with self.assertRaisesRegex(runner.PilotError, label):
+                    channel.receive(lambda: False)
+                channel.close()
+                thread.join(timeout=1)
+                self.assertEqual(ack, [b""])
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            channel = runner.NestedGateChannel(Path(temp), timeout=0.01)
+            with self.assertRaisesRegex(runner.PilotError, "timeout"):
+                channel.receive(lambda: False)
+            channel.close()
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            channel = runner.NestedGateChannel(Path(temp), timeout=0.2)
+            ack = []
+            thread = send(
+                channel.path,
+                json.dumps(nested_gate_proof()).encode("ascii") + b"\n",
+                ack,
+            )
+            proof = channel.receive(lambda: False)
+            channel.release()
+            channel.close()
+            thread.join(timeout=1)
+            self.assertEqual(proof, nested_gate_proof())
+            self.assertEqual(ack, [b"\x01"])
+
+    def test_successful_nested_gate_releases_then_executes_workload_once(self) -> None:
+        """The same bwrap PID is released only after exact outer proof acceptance."""
+
+        tap = FakeProcess()
+        gate_process = FakeProcess(returncode=0)
+        recorded: list[object] = []
+        events: list[str] = []
+        state = self.supervisor.LifecycleState()
+
+        class FakeSidecar:
+            capability_dir = self.exp_dir
+
+            def record_nested_gate(self, proof):
+                events.append("record")
+                recorded.append(proof)
+
+        class FakeGateChannel:
+            def __init__(self, capability_dir):
+                events.append("open")
+
+            def receive(self, cancelled):
+                events.append("receive")
+                return nested_gate_proof()
+
+            def release(self):
+                events.append("release")
+
+            def close(self):
+                events.append("close")
+
+        def wait_workload(*args):
+            events.append("workload")
+            return 0, False
+
+        with (
+            mock.patch.object(self.supervisor, "resolve_tap", return_value="/fake/tap"),
+            mock.patch.object(
+                self.supervisor,
+                "RetryProxy",
+                return_value=FakeRetryProxy(),
+            ),
+            mock.patch.object(self.supervisor, "start_tap", return_value=tap),
+            mock.patch.object(self.supervisor, "wait_ready", return_value=18888),
+            mock.patch.object(
+                self.supervisor,
+                "build_bwrap_argv",
+                return_value=["/fake/bwrap", "--", "/fixed/gate", "--", "/fixed/agent"],
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "NestedGateChannel",
+                FakeGateChannel,
+                create=True,
+            ),
+            mock.patch.object(
+                self.supervisor.subprocess,
+                "Popen",
+                return_value=gate_process,
+            ) as popen,
+            mock.patch.object(
+                self.supervisor,
+                "wait_workload",
+                side_effect=wait_workload,
+            ),
+            mock.patch.object(self.supervisor, "stop_tap"),
+            mock.patch.object(
+                self.supervisor,
+                "read_trace",
+                return_value=("session-1", "complete", 1),
+            ),
+            mock.patch.object(self.supervisor, "export_html"),
+        ):
+            status = self.supervisor.run_supervised(
+                self.exp_dir,
+                [],
+                ["/fixed/agent"],
+                self.environ,
+                state,
+                FakeSidecar(),
+            )
+        self.assertEqual(status, 0)
+        self.assertEqual(recorded, [nested_gate_proof()])
+        self.assertEqual(events, ["open", "receive", "record", "release", "workload", "close"])
+        self.assertTrue(state.workload_started)
+        popen.assert_called_once()
+
     def test_run_pilot_owns_sidecar_around_nested_workload(self) -> None:
         events: list[object] = []
         supervisor = self.supervisor
@@ -1056,6 +1335,45 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertEqual(status, 3)
         self.assertEqual(manifest["final_status"], 3)
 
+    def test_finalize_preserves_int_term_through_postmortem_failures(self) -> None:
+        """SIGINT/TERM status dominates missing rollout, collection, and publication."""
+
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            expected = 128 + signum
+            with self.subTest(signum=signum, failure="missing-rollout"):
+                with tempfile.TemporaryDirectory() as temp:
+                    exp_dir = Path(temp) / "exp"
+                    (exp_dir / "run/.codex-upper").mkdir(parents=True)
+                    runner = load_runner()
+                    with mock.patch.object(
+                        runner,
+                        "publish_artifact_manifest",
+                        return_value=False,
+                    ):
+                        status = runner.finalize_pilot(exp_dir, expected, {})
+                self.assertEqual(status, expected)
+
+            with self.subTest(signum=signum, failure="collection"):
+                with tempfile.TemporaryDirectory() as temp:
+                    exp_dir = Path(temp) / "exp"
+                    rollout = (
+                        exp_dir
+                        / "run/.codex-upper/sessions/a/b/c/rollout-test.jsonl"
+                    )
+                    rollout.parent.mkdir(parents=True)
+                    rollout.write_text("{}\n", encoding="utf-8")
+                    runner = load_runner()
+                    with (
+                        mock.patch.object(Path, "replace", side_effect=OSError("closed")),
+                        mock.patch.object(
+                            runner,
+                            "publish_artifact_manifest",
+                            return_value=False,
+                        ),
+                    ):
+                        status = runner.finalize_pilot(exp_dir, expected, {})
+                self.assertEqual(status, expected)
+
     def test_finalize_preserves_nonzero_status_and_sandbox(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             exp_dir = Path(temp) / "exp"
@@ -1173,6 +1491,8 @@ class ProductionPathContractTests(unittest.TestCase):
             other_exp = repo_root / "outputs" / "group" / "other-exp"
             gateway = repo_root / "gateway" / "codex-tap-gpt56"
             venv = repo_root / ".venv"
+            gate_script = repo_root / "scripts/pilot/browser_sidecar_gate.py"
+            meshshot_source = repo_root / "packages/meshshot/src/meshshot"
             host_home = Path(temp) / "host-home"
             playwright = host_home / ".cache" / "ms-playwright"
             installed_skills = host_home / ".codex" / "skills"
@@ -1183,6 +1503,8 @@ class ProductionPathContractTests(unittest.TestCase):
             input_path.parent.mkdir(parents=True)
             gateway.parent.mkdir(parents=True)
             venv.mkdir()
+            gate_script.parent.mkdir(parents=True)
+            meshshot_source.mkdir(parents=True)
             playwright.mkdir(parents=True)
             installed_skills.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text("# fake\n", encoding="utf-8")
@@ -1202,6 +1524,7 @@ class ProductionPathContractTests(unittest.TestCase):
             input_path.write_text("ply\n", encoding="utf-8")
             other_input.write_text("ply\n", encoding="utf-8")
             gateway.write_text("#!/bin/sh\n", encoding="utf-8")
+            gate_script.write_text("# fixed gate\n", encoding="utf-8")
             environ = {
                 "HOME": str(host_home),
                 "PATH": "/fake/bin",
@@ -1233,7 +1556,17 @@ class ProductionPathContractTests(unittest.TestCase):
                 )
         triples = [argv[index : index + 3] for index in range(len(argv) - 2)]
         self.assertIn(Path("/etc/crypto-policies"), runner.SYSTEM_RO_PATHS)
-        self.assertEqual(argv[-3:], ["--", "/fake/codex", "prompt with spaces"])
+        self.assertEqual(
+            argv[-6:],
+            [
+                "--",
+                "/workspace/repo/.venv/bin/python",
+                "/run/meshshot-gate/browser_sidecar_gate.py",
+                "--",
+                "/fake/codex",
+                "prompt with spaces",
+            ],
+        )
         self.assertNotIn("super-secret-token", argv)
         self.assertNotIn("--dev-bind", argv)
         self.assertIn("--unshare-pid", argv)
@@ -1262,6 +1595,22 @@ class ProductionPathContractTests(unittest.TestCase):
                 "--ro-bind",
                 str((repo_root / "browser-capability").resolve()),
                 "/run/meshshot-browser",
+            ],
+            triples,
+        )
+        self.assertIn(
+            [
+                "--ro-bind",
+                str((repo_root / "scripts/pilot/browser_sidecar_gate.py").resolve()),
+                "/run/meshshot-gate/browser_sidecar_gate.py",
+            ],
+            triples,
+        )
+        self.assertIn(
+            [
+                "--ro-bind",
+                str((repo_root / "packages/meshshot/src").resolve()),
+                "/run/meshshot-gate/meshshot-src",
             ],
             triples,
         )

@@ -26,6 +26,43 @@ CONTAINER_ID = "b" * 64
 BROKER_CONTAINER_ID = "c" * 64
 
 
+def nested_gate_proof() -> dict[str, object]:
+    """Return one independently fixed successful nested-gate proof."""
+
+    return {
+        "schema": "meshshot.browser-sidecar.nested-gate-proof/1",
+        "status": "succeeded",
+        "predicates": {
+            "publicResidualParity": True,
+            "viewerProjectionChanged": True,
+            "viewerArtifactClean": True,
+            "browserInventoryEmpty": True,
+            "browserProcessZero": True,
+            "sourceHidden": True,
+            "egressBlocked": True,
+        },
+        "residual": {
+            "pngSha256": "b498c55c68662989a3a95c4925432d61f979183d30c2cdf593e154c7b0ca9d5b",
+            "mode": "RGB",
+            "size": [504, 1008],
+            "profileSha256": "87da3cc3f625cb9c24f51bed41dcdc70402a4d461b2af29eaa19846b1e8f7241",
+            "views": ["+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso"],
+        },
+        "viewer": {
+            "before": "Display and projection: Solid, Orthographic",
+            "after": "Display and projection: Solid, Perspective",
+            "bodyMentionsFixture": True,
+            "bodyHasArtifactError": False,
+        },
+        "inventory": {
+            "browserExecutables": [],
+            "browserCaches": [],
+            "browserProcesses": [],
+            "sourceAliases": [],
+        },
+    }
+
+
 class BrowserSidecarJobTests(unittest.TestCase):
     """Observe one complete exact-image lifecycle through its public adapter."""
 
@@ -103,7 +140,6 @@ class BrowserSidecarJobTests(unittest.TestCase):
                                 "freshContexts": 3,
                                 "programCounts": {"residual": 1, "viewer": 1},
                                 "programPredicates": {
-                                    "residualPublicParity": True,
                                     "residualEightView": True,
                                     "viewerProjectionChanged": True,
                                     "viewerArtifactClean": True,
@@ -162,6 +198,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 )
                 authority_path = job.start()
                 authority = json.loads(authority_path.read_text(encoding="utf-8"))
+                job.record_nested_gate(nested_gate_proof())
                 receipt = job.close(workload_status=0)
 
         self.assertEqual(authority["schema"], "meshshot.browser-authority/1")
@@ -205,6 +242,8 @@ class BrowserSidecarJobTests(unittest.TestCase):
             set(browser_sidecar.RECEIPT_PREDICATES),
         )
         self.assertTrue(all(receipt["predicates"].values()))
+        self.assertNotIn("residualPublicParity", receipt["predicates"])
+        self.assertIn("nestedPublicResidualParity", receipt["predicates"])
         self.assertIsNone(receipt["failureCheck"])
         serialized = json.dumps(receipt, sort_keys=True)
         self.assertNotIn(NETWORK_ID, serialized)
@@ -292,7 +331,6 @@ class BrowserSidecarJobTests(unittest.TestCase):
                                 "freshContexts": 3,
                                 "programCounts": {"residual": 1, "viewer": 1},
                                 "programPredicates": {
-                                    "residualPublicParity": True,
                                     "residualEightView": True,
                                     "viewerProjectionChanged": True,
                                     "viewerArtifactClean": True,
@@ -592,7 +630,6 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 "freshContexts": 2,
                 "programCounts": {"residual": 1, "viewer": 0},
                 "programPredicates": {
-                    "residualPublicParity": True,
                     "residualEightView": True,
                     "viewerProjectionChanged": False,
                     "viewerArtifactClean": False,
