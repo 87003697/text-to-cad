@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import socket
+import stat
 from typing import Any
 
 from PIL import Image
@@ -119,8 +120,17 @@ def _load_browser_authority() -> dict[str, Any] | None:
     if not path.is_absolute():
         raise MeshshotError("formal browser authority path must be absolute")
     try:
+        metadata = path.lstat()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_mode & 0o022
+        ):
+            raise MeshshotError("formal browser authority file is replaceable")
         with path.open("rb") as stream:
             raw = stream.read(_MAX_AUTHORITY_BYTES + 1)
+    except MeshshotError:
+        raise
     except OSError as exc:
         raise MeshshotError("formal browser authority is unavailable") from exc
     if not raw or len(raw) > _MAX_AUTHORITY_BYTES:
