@@ -315,6 +315,10 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
                     Path("/workspace/repo/outputs/conformance/formal"),
                     job_id="formal-image-client",
                 )
+            self.assertEqual(
+                job.public_socket_path.readlink(),
+                Path("broker") / "browser.sock",
+            )
             manifest = {
                 "schema": browser_sidecar.NESTED_GATE["surfaceSchema"],
                 "scanRoots": [],
