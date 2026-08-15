@@ -188,6 +188,43 @@ class BrowserSidecarJobTests(unittest.TestCase):
         broker_argv = popen.call_args.args[0]
         self.assertEqual(broker_argv[1:3], [str(browser_sidecar.Path(browser_sidecar.__file__)), "broker"])
 
+    def test_cleanup_timeout_publishes_failure_and_continues_absence_proof(self) -> None:
+        calls: list[list[str]] = []
+
+        def docker(argv, **kwargs):
+            command = list(argv)
+            calls.append(command)
+            if command[1] == "stop":
+                raise subprocess.TimeoutExpired(command, 30)
+            if command[1:3] == ["container", "inspect"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"Running": False, "ExitCode": 0}) + "\n",
+                    "",
+                )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = browser_sidecar.BrowserSidecarJob(
+                Path(temp),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+            )
+            job.docker = "/usr/bin/docker"
+            job.container_id = CONTAINER_ID
+            job.network_id = NETWORK_ID
+            job.broker = FakeBrokerProcess("formal-job-1")
+            job.broker.stdout.readline()
+            with mock.patch.object(browser_sidecar.subprocess, "run", side_effect=docker):
+                receipt = job.close(workload_status=0)
+
+        self.assertEqual(receipt["status"], "failed")
+        self.assertIn("sidecar-stop", receipt["cleanupErrors"])
+        self.assertTrue(receipt["absenceProof"]["proved"])
+        self.assertTrue(any(command[1:3] == ["container", "ls"] for command in calls))
+        self.assertTrue(any(command[1:3] == ["network", "ls"] for command in calls))
+
 
 class RegisteredProgramBrokerTests(unittest.TestCase):
     """Observe exact request validation and fresh contexts at the broker seam."""
