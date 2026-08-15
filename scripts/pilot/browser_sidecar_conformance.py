@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -243,6 +244,36 @@ def _write_atomic(path: Path, payload: object) -> None:
         encoding="utf-8",
     )
     os.replace(temporary, path)
+
+
+def _publish_preflight_failure(
+    evidence_path: Path,
+    temporary_root: Path,
+    capability_parent: Path,
+    *,
+    check: str,
+    error: str,
+) -> int:
+    """Publish exact terminal absence before any Docker resource can exist."""
+
+    job = BrowserSidecarJob(
+        temporary_root,
+        Path("/workspace/repo/outputs/conformance/formal"),
+        job_id="formal-local-conformance",
+        capability_parent=capability_parent,
+    )
+    job.first_error = check
+    receipt = job.close(workload_status=None)
+    evidence = {
+        "schema": "meshshot.browser-sidecar.local-conformance/1",
+        "status": "failed",
+        "error": error,
+        "client": None,
+        "receipt": receipt,
+    }
+    _write_atomic(evidence_path, evidence)
+    print(json.dumps(evidence, sort_keys=True, separators=(",", ":")))
+    return 2
 
 
 def _fixed_container_isolation(
@@ -589,20 +620,49 @@ def _run_gate_then_client(
 def run_host(evidence_path: Path) -> int:
     """Own one exact job and one fixed networkless conformance client."""
 
-    docker = shutil.which("docker")
-    if docker is None or not evidence_path.is_absolute():
+    if not evidence_path.is_absolute():
         return 2
     try:
         capability_parent = evidence_path.parent.resolve(strict=True)
+        parent_state = capability_parent.stat()
     except OSError:
         return 2
+    canonical_evidence_path = capability_parent / evidence_path.name
     with tempfile.TemporaryDirectory(
-        prefix="meshshot-formal-conformance-",
-        dir="/tmp",
+        prefix="meshshot-formal-conformance-", dir="/tmp"
     ) as temporary:
         from scripts.pilot.runner import _prepare_nested_browser_gate_from_manifest
 
         temporary_root = Path(temporary).resolve()
+        if evidence_path.parent != capability_parent:
+            return _publish_preflight_failure(
+                canonical_evidence_path,
+                temporary_root,
+                capability_parent,
+                check="capability-parent-canonical",
+                error="BrowserSidecarError: evidence parent is not canonical",
+            )
+        if (
+            not stat.S_ISDIR(parent_state.st_mode)
+            or parent_state.st_uid != os.getuid()
+            or stat.S_IMODE(parent_state.st_mode) != 0o700
+        ):
+            return _publish_preflight_failure(
+                canonical_evidence_path,
+                temporary_root,
+                capability_parent,
+                check="capability-parent-private",
+                error="BrowserSidecarError: evidence parent is not private",
+            )
+        docker = shutil.which("docker")
+        if docker is None:
+            return _publish_preflight_failure(
+                canonical_evidence_path,
+                temporary_root,
+                capability_parent,
+                check="docker-resolution",
+                error="BrowserSidecarError: docker executable is unavailable",
+            )
         try:
             job = BrowserSidecarJob.create(
                 temporary_root,
@@ -640,8 +700,7 @@ def run_host(evidence_path: Path) -> int:
             "client": client_result,
             "receipt": receipt,
         }
-        evidence_path.parent.mkdir(parents=True, exist_ok=True)
-        _write_atomic(evidence_path, evidence)
+        _write_atomic(canonical_evidence_path, evidence)
         print(json.dumps(evidence, sort_keys=True, separators=(",", ":")))
         return 0 if succeeded else 1
 

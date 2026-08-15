@@ -390,7 +390,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
         """The CLI evidence parent is also the exact private daemon-share root."""
 
         with tempfile.TemporaryDirectory(dir="/tmp") as temp:
-            parent = Path(temp) / "public"
+            parent = Path(temp).resolve() / "public"
             parent.mkdir(mode=0o755)
             evidence = parent / "conformance.json"
             with (
@@ -400,9 +400,9 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
                 mock.patch.object(subprocess, "run") as run,
             ):
                 status = conformance.run_host(evidence)
+            published = json.loads(evidence.read_text(encoding="utf-8"))
 
         self.assertEqual(status, 2)
-        published = json.loads(evidence.read_text(encoding="utf-8"))
         self.assertEqual(published["status"], "failed")
         self.assertEqual(
             published["receipt"]["failureCheck"], "capability-parent-private"
@@ -417,7 +417,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
         """A caller alias cannot split the capability root from terminal evidence."""
 
         with tempfile.TemporaryDirectory(dir="/tmp") as temp:
-            root = Path(temp)
+            root = Path(temp).resolve()
             parent = root / "private"
             parent.mkdir(mode=0o700)
             alias = root / "alias"
@@ -515,7 +515,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
     def test_host_seals_and_validates_gate_before_fixed_client_exec(self) -> None:
         boundary = DockerBoundary()
         with tempfile.TemporaryDirectory(dir="/tmp") as temp:
-            evidence_path = Path(temp) / "conformance.json"
+            evidence_path = Path(temp).resolve() / "conformance.json"
             with (
                 mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
                 mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
@@ -664,7 +664,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
 
         boundary = DockerBoundary(foreign_surface=True)
         with tempfile.TemporaryDirectory() as temp:
-            evidence_path = Path(temp) / "conformance.json"
+            evidence_path = Path(temp).resolve() / "conformance.json"
             with (
                 mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
                 mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
@@ -689,7 +689,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
 
         boundary = DockerBoundary(surface_output_loss=True)
         with tempfile.TemporaryDirectory() as temp:
-            evidence_path = Path(temp) / "conformance.json"
+            evidence_path = Path(temp).resolve() / "conformance.json"
             with (
                 mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
                 mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
@@ -745,7 +745,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
 
         boundary = DockerBoundary(foreign_client=True)
         with tempfile.TemporaryDirectory(dir="/tmp") as temp:
-            evidence_path = Path(temp) / "conformance.json"
+            evidence_path = Path(temp).resolve() / "conformance.json"
             with (
                 mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
                 mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
@@ -769,7 +769,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
 
         boundary = DockerBoundary(client_replaced=True)
         with tempfile.TemporaryDirectory(dir="/tmp") as temp:
-            evidence_path = Path(temp) / "conformance.json"
+            evidence_path = Path(temp).resolve() / "conformance.json"
             with (
                 mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
                 mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
