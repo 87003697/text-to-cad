@@ -38,6 +38,19 @@ def load_gate():
 class BrowserSidecarGateTests(unittest.TestCase):
     """Exercise the repository-owned gate with no caller-selected render input."""
 
+    def test_discovery_permits_only_the_fixed_runtime_shm_alias(self) -> None:
+        """Ubuntu's /run/shm alias may resolve only to Docker's fixed shm mount."""
+
+        gate = load_gate()
+        with mock.patch.object(
+            gate, "discover_browser_roots", return_value=[]
+        ) as discover:
+            gate.discover_conformance_surface()
+
+        permitted = discover.call_args.kwargs["permitted_symlink_roots"]
+        self.assertIn(Path("/dev/shm"), permitted)
+        self.assertNotIn(Path("/dev"), permitted)
+
     def test_fixed_gate_calls_public_residual_and_registered_viewer(self) -> None:
         gate = load_gate()
         surface = {
