@@ -8,5 +8,8 @@
 !scripts/pilot/
 !scripts/pilot/browser_sidecar.py
 !scripts/pilot/browser_sidecar_conformance.py
+!scripts/pilot/browser_sidecar_gate.py
+!scripts/pilot/browser_gate_contract.py
+!scripts/pilot/browser_surface.py
 **/__pycache__/
 **/*.pyc

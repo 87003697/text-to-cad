@@ -630,8 +630,8 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(job.broker_container_name, f"{job.prefix}-broker")
         self.assertNotEqual(job.broker_container_name, job.container_name)
 
-    def test_broker_artifact_contains_fixed_conformance_client(self) -> None:
-        """The gate can release only a reviewed client path present in its image."""
+    def test_broker_artifact_contains_fixed_client_and_discovery_source(self) -> None:
+        """The image seals both the released client and surface discovery role."""
 
         dockerfile = (
             browser_sidecar.REPO_ROOT
@@ -646,6 +646,15 @@ class BrowserSidecarJobTests(unittest.TestCase):
             "./scripts/pilot/browser_sidecar_conformance.py",
             dockerfile,
         )
+        for source in (
+            "browser_sidecar_gate.py",
+            "browser_gate_contract.py",
+            "browser_surface.py",
+        ):
+            self.assertIn(
+                f"COPY scripts/pilot/{source} ./scripts/pilot/{source}",
+                dockerfile,
+            )
         self.assertNotIn("COPY scripts/pilot/runner.py", dockerfile)
         dockerignore = (
             browser_sidecar.REPO_ROOT
@@ -654,6 +663,9 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertTrue(dockerignore.startswith("**\n"))
         self.assertIn("!scripts/pilot/browser_sidecar.py\n", dockerignore)
         self.assertIn("!scripts/pilot/browser_sidecar_conformance.py\n", dockerignore)
+        self.assertIn("!scripts/pilot/browser_sidecar_gate.py\n", dockerignore)
+        self.assertIn("!scripts/pilot/browser_gate_contract.py\n", dockerignore)
+        self.assertIn("!scripts/pilot/browser_surface.py\n", dockerignore)
         self.assertIn("!packages/meshshot/src/meshshot/**\n", dockerignore)
         self.assertTrue(dockerignore.endswith("**/*.pyc\n"))
 

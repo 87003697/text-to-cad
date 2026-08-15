@@ -21,7 +21,6 @@ add_repo_path("packages/meshshot/src")
 from scripts.pilot import browser_sidecar
 from scripts.pilot import browser_sidecar_conformance as conformance
 from scripts.pilot.runner import (
-    _build_gate_artifact,
     _prepare_nested_browser_gate_from_manifest,
 )
 
@@ -239,6 +238,9 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
             for remote in (
                 "/opt/text-to-cad/scripts/pilot/browser_sidecar.py",
                 CLIENT_PATH,
+                "/opt/text-to-cad/scripts/pilot/browser_sidecar_gate.py",
+                "/opt/text-to-cad/scripts/pilot/browser_gate_contract.py",
+                "/opt/text-to-cad/scripts/pilot/browser_surface.py",
                 "/opt/text-to-cad/packages/meshshot/src/meshshot",
             ):
                 copied = subprocess.run(
@@ -268,6 +270,17 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
                 "browser_sidecar_conformance.py": (
                     browser_sidecar.REPO_ROOT
                     / "scripts/pilot/browser_sidecar_conformance.py"
+                ).read_bytes(),
+                "browser_sidecar_gate.py": (
+                    browser_sidecar.REPO_ROOT
+                    / "scripts/pilot/browser_sidecar_gate.py"
+                ).read_bytes(),
+                "browser_gate_contract.py": (
+                    browser_sidecar.REPO_ROOT
+                    / "scripts/pilot/browser_gate_contract.py"
+                ).read_bytes(),
+                "browser_surface.py": (
+                    browser_sidecar.REPO_ROOT / "scripts/pilot/browser_surface.py"
                 ).read_bytes(),
             }
             meshshot_root = (
@@ -445,8 +458,8 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
         self.assertTrue(result["viewer"]["inspection"]["changed"])
         self.assertEqual(result["clientBrowserInventory"]["browserProcesses"], [])
 
-    def test_surface_discovery_copies_into_read_only_owned_container(self) -> None:
-        """The exact image works when the daemon cannot bind the Mac temp path."""
+    def test_surface_discovery_runs_revision_bound_read_only_image_source(self) -> None:
+        """The exact image needs no daemon-visible host path or rootfs write."""
 
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
             root = Path(temporary).resolve()
@@ -456,13 +469,10 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
                 job_id=f"formal-image-surface-{os.getpid()}",
             )
             job.docker = self.docker
-            artifact = root / "browser-gate-discovery.pyz"
-            _build_gate_artifact(browser_sidecar.REPO_ROOT, artifact)
             try:
                 manifest = conformance._discover_client_surface(
                     self.docker,
                     job,
-                    artifact,
                     f"{job.prefix}-image-surface",
                 )
             finally:

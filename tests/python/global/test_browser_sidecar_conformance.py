@@ -15,7 +15,6 @@ from unittest import mock
 
 from scripts.pilot import browser_sidecar
 from scripts.pilot import browser_sidecar_conformance as conformance
-from scripts.pilot.runner import _build_gate_artifact
 
 
 NETWORK_ID = "a" * 64
@@ -441,14 +440,11 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             ),
             surface_create,
         )
-        surface_copy = next(
-            call
-            for call in boundary.calls
-            if call[1:3] == ["cp", "-a"]
-            and call[-1]
-            == f"{SURFACE_ID}:{conformance.DISCOVERY_ARTIFACT_PATH}"
+        self.assertIn(conformance.DISCOVERY_ARTIFACT_PATH, surface_create)
+        self.assertFalse(
+            any(call[1:3] == ["cp", "-a"] for call in boundary.calls),
+            boundary.calls,
         )
-        self.assertEqual(Path(surface_copy[-2]), Path(surface_copy[-2]).resolve())
         bind_sources = [
             value.split("src=", 1)[1].split(",dst=", 1)[0]
             for call in boundary.calls
@@ -478,15 +474,11 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             any(call[1:3] == ["network", "rm"] and NETWORK_ID in call for call in boundary.calls)
         )
 
-    def test_discovery_artifact_is_copied_by_verified_id_without_host_bind(self) -> None:
-        """The daemon need not share the Mac temp path used to build the artifact."""
+    def test_surface_discovery_uses_only_the_revision_bound_image_source(self) -> None:
+        """Discovery needs neither a daemon-visible host path nor a rootfs write."""
 
         boundary = DockerBoundary()
         with tempfile.TemporaryDirectory() as temp:
-            artifact = Path(temp) / "browser-gate-discovery.pyz"
-            if not artifact.as_posix().startswith("/var/"):
-                self.skipTest("default temporary root is not the macOS /var alias")
-            _build_gate_artifact(browser_sidecar.REPO_ROOT, artifact)
             with (
                 mock.patch.object(
                     browser_sidecar.secrets, "token_hex", return_value="1" * 32
@@ -500,7 +492,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
                 )
                 try:
                     conformance._discover_client_surface(
-                        "/usr/bin/docker", job, artifact, f"{job.prefix}-surface"
+                        "/usr/bin/docker", job, f"{job.prefix}-surface"
                     )
                 finally:
                     job.close(workload_status=None)
@@ -514,12 +506,8 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             ),
             create,
         )
-        copy = next(call for call in boundary.calls if call[1:3] == ["cp", "-a"])
-        self.assertEqual(Path(copy[-2]), artifact.resolve())
-        self.assertEqual(
-            copy[-1],
-            f"{SURFACE_ID}:{conformance.DISCOVERY_ARTIFACT_PATH}",
-        )
+        self.assertIn(conformance.DISCOVERY_ARTIFACT_PATH, create)
+        self.assertFalse(any(call[1:3] == ["cp", "-a"] for call in boundary.calls))
 
     def test_foreign_surface_collision_is_preserved(self) -> None:
         """A pre-existing predictable name is never adopted or removed."""
@@ -582,8 +570,6 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
                     Path("/workspace/repo/outputs/conformance/formal"),
                     job_id="formal-local-conformance",
                 )
-            artifact = Path(capability) / "artifact.pyz"
-            artifact.write_bytes(b"sealed")
             def docker(argv):
                 command = list(argv)
                 if command[1] == "create":
@@ -600,7 +586,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "job label mismatch"):
                     conformance._discover_client_surface(
-                        "/usr/bin/docker", job, artifact, "fixed-surface"
+                        "/usr/bin/docker", job, "fixed-surface"
                     )
             remove.assert_not_called()
 

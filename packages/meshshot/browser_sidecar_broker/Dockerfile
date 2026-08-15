@@ -10,10 +10,16 @@ USER root
 WORKDIR /opt/text-to-cad
 COPY scripts/pilot/browser_sidecar.py ./scripts/pilot/browser_sidecar.py
 COPY scripts/pilot/browser_sidecar_conformance.py ./scripts/pilot/browser_sidecar_conformance.py
+COPY scripts/pilot/browser_sidecar_gate.py ./scripts/pilot/browser_sidecar_gate.py
+COPY scripts/pilot/browser_gate_contract.py ./scripts/pilot/browser_gate_contract.py
+COPY scripts/pilot/browser_surface.py ./scripts/pilot/browser_surface.py
 COPY packages/meshshot/src/meshshot ./packages/meshshot/src/meshshot
 ENV PYTHONPATH=/opt/text-to-cad:/opt/text-to-cad/packages/meshshot/src
 RUN chmod 0555 ./scripts/pilot/browser_sidecar.py \
     ./scripts/pilot/browser_sidecar_conformance.py \
+    && chmod 0444 ./scripts/pilot/browser_sidecar_gate.py \
+    ./scripts/pilot/browser_gate_contract.py \
+    ./scripts/pilot/browser_surface.py \
     && find ./packages/meshshot/src/meshshot -type f -exec chmod 0444 {} + \
     && find ./packages/meshshot/src/meshshot -type d -exec chmod 0555 {} +
 USER pwuser

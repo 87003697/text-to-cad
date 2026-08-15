@@ -40,9 +40,7 @@ EXPECTED_PUBLIC_PNG_SHA256 = (
 VIEW_ORDER = ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 CONFORMANCE_TIMEOUT_SECONDS = 180
-DISCOVERY_ARTIFACT_PATH = (
-    "/opt/text-to-cad/scripts/pilot/browser-sidecar-discovery.pyz"
-)
+DISCOVERY_ARTIFACT_PATH = "/opt/text-to-cad/scripts/pilot/browser_sidecar_gate.py"
 
 
 def _strict_json(raw: bytes, label: str) -> Any:
@@ -387,10 +385,9 @@ def _remove_owned_container(docker: str, container_id: str, role: str) -> None:
 def _discover_client_surface(
     docker: str,
     job: BrowserSidecarJob,
-    artifact: Path,
     container_name: str,
 ) -> Mapping[str, object]:
-    """Run the sealed fixed discovery role in the exact client image."""
+    """Run the image-sealed fixed discovery role without a host source mount."""
 
     from scripts.pilot.browser_gate_contract import (
         CONFORMANCE_OPTIONAL_ROOTS,
@@ -399,7 +396,6 @@ def _discover_client_surface(
         CONFORMANCE_TOP_LEVEL_BROWSER_ROOTS,
     )
 
-    artifact = artifact.resolve()
     container_id: str | None = None
     primary: BaseException | None = None
     decoded: Any = None
@@ -418,17 +414,6 @@ def _discover_client_surface(
                 "--discover-conformance-surface",
             ],
         )
-        copied = _run_docker(
-            [
-                docker,
-                "cp",
-                "-a",
-                os.fspath(artifact),
-                f"{container_id}:{DISCOVERY_ARTIFACT_PATH}",
-            ]
-        )
-        if copied.returncode != 0:
-            raise RuntimeError("fixed conformance-surface copy failed")
         completed = _run_docker(
             [docker, "start", "-a", container_id],
             timeout=CONFORMANCE_TIMEOUT_SECONDS,
@@ -598,10 +583,7 @@ def run_host(evidence_path: Path) -> int:
         prefix="meshshot-formal-conformance-",
         dir="/tmp",
     ) as temporary:
-        from scripts.pilot.runner import (
-            _build_gate_artifact,
-            _prepare_nested_browser_gate_from_manifest,
-        )
+        from scripts.pilot.runner import _prepare_nested_browser_gate_from_manifest
 
         temporary_root = Path(temporary).resolve()
         job = BrowserSidecarJob.create(
@@ -616,11 +598,7 @@ def run_host(evidence_path: Path) -> int:
         client_status: int | None = None
         error: str | None = None
         try:
-            discovery_artifact = temporary_root / "browser-gate-discovery.pyz"
-            _build_gate_artifact(browser_sidecar.REPO_ROOT, discovery_artifact)
-            manifest = _discover_client_surface(
-                docker, job, discovery_artifact, surface_name
-            )
+            manifest = _discover_client_surface(docker, job, surface_name)
             _prepare_nested_browser_gate_from_manifest(
                 browser_sidecar.REPO_ROOT, job, manifest
             )
