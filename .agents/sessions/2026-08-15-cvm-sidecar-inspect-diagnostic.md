@@ -96,3 +96,25 @@ and transfer cleanup contract are unchanged.
 
 Steps 1–4 completed. Step 5 was correctly not dispatched because provision
 failed terminally at the first Sidecar ID-addressability predicate.
+
+## Portable image-address successor
+
+The terminal CVM result showed that `docker image load` completed but the
+daemon rejected the canonical `sha256:<64-hex>` value as the first inspect
+address. The identity contract remains canonical; only the fixed Docker CLI
+address changes to the bare 64-hex config digest.
+
+- RED `d77bdf1a`: an older-Docker public `remote-provision` fixture rejects the
+  canonical address, accepts the bare config digest, and requires the returned
+  `.Id` to equal the original canonical identity. Existing code failed in 2 ms
+  at `sidecar-inspect-id-access`.
+- GREEN `ca66f6af`: every fixed ID/OS/architecture/revision projection uses the
+  same bare digest address. There is no runtime fallback, tag, prefix matching,
+  or relaxed receipt comparison.
+- Focused CVM Sidecar suite: 39/39 PASS.
+- Global policy gate with local loopback permitted: 190/190 PASS.
+- Python compilation and diff check: PASS.
+
+The next external boundary requires independent Standards and Spec PASS on one
+clean successor. Then deploy that exact SHA once, create one new prepare handle,
+provision it once, and run the sealed probe only if provision succeeds.
