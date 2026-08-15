@@ -86,6 +86,13 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
     field failures collapsed to the generic check. GREEN
     `2a65efba2300b42487db1ae05e8b93a7c43d0db5` adds one portable four-field
     inspect projection and preserves exact role/field checks end to end.
+12. R8 Standards review found that `_inspect_image` translated only existing
+    `ProbeError`; command-launch `OSError` and unexpected parser exceptions
+    could still escape local prepare before state. R9 RED
+    `b8f8fd7aed355fc3e83b47540dc82087b964a1ff` proved four public CLI escapes
+    across sidecar/client access and parse boundaries. R9 GREEN
+    `874ca5e2300241d641150e14b2a9d1db29a7c525` maps them to the existing exact
+    role checks without changing lifecycle or receipts.
 
 ## Session 产出
 
@@ -109,6 +116,8 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
 | `ce3143e4bc30c222b400aa5637edc8df48619169` R7 GREEN | skill, module | Preserve fixed `ProbeError`; map every other successfully-cleaned prepare exception to fixed `prepare-operation`. |
 | `794dd002bdb275354a5ffec1730f36623e2fdb7e` R8 RED | remote-provision matrix | Sidecar/client inspect access, format, ID, platform, revision, and receipt failures all collapsed to `image-attestation`. |
 | `2a65efba2300b42487db1ae05e8b93a7c43d0db5` R8 GREEN | skill, module, tests | Fixed four-field inspect projection; strict compact parse and closed role-specific failure preservation through public receipts. |
+| `b8f8fd7aed355fc3e83b47540dc82087b964a1ff` R9 RED | public prepare CLI matrix | Sidecar/client command-launch and compact-parser unexpected exceptions returned rc1/raw traceback. |
+| `874ca5e2300241d641150e14b2a9d1db29a7c525` R9 GREEN | skill, module | Bound unexpected run exceptions to role `inspect-access` and parser exceptions to role `inspect-format`. |
 
 ### 核心行为
 
@@ -185,6 +194,10 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
   An unexpected implementation escape uses the sole fixed
   `image-attestation-unexpected` fallback; existing role-specific `ProbeError`
   checks are never blanket-wrapped.
+- The same role checks close local prepare before state: launch/socket/
+  permission exceptions become role `inspect-access`, and unexpected compact
+  parser exceptions become role `inspect-format`. Public stderr is fixed and
+  contains no traceback, path, errno, or source exception text.
 - Prepare cleanup failure still dominates as `prepare-cleanup-absence`. When
   cleanup proves absence, existing fixed checks remain unchanged and every
   non-`ProbeError` becomes `prepare-operation`; no traceback/path/errno/message
@@ -272,6 +285,16 @@ R8 final validation:
 - `git diff --check` and staged diff check → exit 0.
 - External/CVM operations: **zero**; incremental spend: **$0**.
 
+R9 final validation:
+
+- RED public CLI matrix → **4 expected failures**.
+- Focused suite → **36 tests, OK**.
+- Global gate with the project virtualenv and local loopback permission →
+  **187 tests, OK**, explicit exit 0 from the continued process.
+- `python3 -m py_compile` for the module and focused test → exit 0.
+- `git diff --check` and staged diff check → exit 0.
+- External/CVM operations: **zero**; incremental spend: **$0**.
+
 The first restricted global run was not accepted as product evidence: it had
 eight loopback-bind permission errors and two missing-worktree-dependency
 errors. It also exposed one real README compatibility assertion introduced by
@@ -319,6 +342,10 @@ both previously failed handles remain terminal and untouched.
 
 R8 adds no new external attempt. Its clean implementation review range is
 `e6ffdf77853800d2e9b711b035aac86ef5dadfc8..2a65efba2300b42487db1ae05e8b93a7c43d0db5`;
+all three previously failed handles remain terminal and untouched.
+
+R9 adds no new external attempt. Its clean implementation review range is
+`c86ce8faf7dfe85cc78f50852b60ff0b846c2b64..874ca5e2300241d641150e14b2a9d1db29a7c525`;
 all three previously failed handles remain terminal and untouched.
 
 ## 下一步
