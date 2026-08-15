@@ -230,3 +230,38 @@ and intentionally creates a new workflow source revision while leaving runtime
 code, fixed image IDs, and image source revision unchanged. Require independent
 Standards and Spec PASS before deploying this successor and creating exactly
 one new deterministic prepare handle.
+
+That docs-only successor passed independent Standards and Spec review and was
+deployed as clean SHA `b4b72d306f40f20b0120d1640e0cfed091b1fe1c`.
+Fresh handle `cvmsp-a840718c3160195b93ba8fea` prepared the exact 1,084,572,160
+byte archive successfully, but its single provision terminated at:
+
+- operation: `provision`
+- exit: `2`
+- exact check: `sidecar-loaded-id`
+- nonce-scoped abort: succeeded
+- transfer archive/incoming/prepare receipt absence: all proved
+- retry allowed: `false`
+- sealed Chromium probe: `NOT_RUN`
+
+Local read-only reproduction with the same exact images explains the mismatch:
+plain `docker image ls --no-trunc --quiet` returns only the sealed client, while
+`docker image ls --all --no-trunc --quiet` returns both exact client and
+Sidecar IDs. The Sidecar is the client's untagged parent image and Docker's
+default inventory hides it.
+
+## All-images inventory successor
+
+- RED `c4eaab6a`: the existing public remote-provision stream seam requires the
+  fixed inventory command to include `--all`; all three bounded stream variants
+  failed against the prior command.
+- GREEN `2ce0221e` changes only the fixed inventory argv to
+  `docker image ls --all --no-trunc --quiet` and migrates the exact fake-Docker
+  contract. Identity parsing, 4096-line/71-byte/60-second bounds, archive
+  binding, first-failure cleanup, receipts, and probe authorization remain
+  unchanged.
+- Focused CVM Sidecar suite: 41/41 PASS.
+
+Require fresh independent Standards and Spec PASS on the clean successor before
+one new deployment, prepare handle, provision attempt, and conditional sealed
+probe. Neither failed handle may be retried, adopted, or cleaned.
