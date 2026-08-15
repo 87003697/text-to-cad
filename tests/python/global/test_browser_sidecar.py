@@ -82,6 +82,46 @@ def configure_gate(job: browser_sidecar.BrowserSidecarJob) -> None:
 class BrowserSidecarJobTests(unittest.TestCase):
     """Observe one complete exact-image lifecycle through its public adapter."""
 
+    def test_capability_layout_failure_is_terminal_and_released(self) -> None:
+        """Partial pre-Docker construction still owns cleanup and a receipt."""
+
+        with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory(
+            dir="/tmp"
+        ) as temporary:
+            exp_dir = Path(temp)
+            capability = Path(temporary) / "capability"
+            capability.mkdir(mode=0o700)
+            with (
+                mock.patch.object(
+                    browser_sidecar.tempfile,
+                    "mkdtemp",
+                    return_value=os.fspath(capability),
+                ),
+                mock.patch.object(
+                    browser_sidecar.Path,
+                    "symlink_to",
+                    side_effect=OSError("closed fixture"),
+                ),
+                self.assertRaises(browser_sidecar.BrowserSidecarError) as raised,
+            ):
+                browser_sidecar.BrowserSidecarJob.create(
+                    exp_dir,
+                    Path("/workspace/repo/outputs/group/exp"),
+                    job_id="formal-job-1",
+                )
+
+            receipt = json.loads(
+                (exp_dir / "run/browser-sidecar-receipt.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertEqual(raised.exception.check, "capability-layout")
+        self.assertFalse(capability.exists())
+        self.assertEqual(receipt["status"], "failed")
+        self.assertEqual(receipt["failureCheck"], "capability-layout")
+        self.assertTrue(receipt["predicates"]["absenceProved"])
+
     def test_pre_resource_gate_identity_failure_truthfully_proves_absence(self) -> None:
         """A closed pre-create failure cannot imply an unproved retained resource."""
 
