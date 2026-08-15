@@ -16,7 +16,6 @@ import subprocess
 import sys
 import tempfile
 from typing import Any, Mapping, Sequence
-from urllib.request import urlopen
 
 from PIL import Image
 
@@ -63,10 +62,11 @@ def _authority() -> Mapping[str, Any]:
     payload = _strict_json(AUTHORITY_PATH.read_bytes(), "authority")
     if (
         not isinstance(payload, dict)
-        or set(payload) != {"schema", "jobId", "imageId", "programs"}
+        or set(payload) != {"schema", "jobId", "gateNonce", "imageId", "programs"}
         or payload.get("schema") != AUTHORITY_SCHEMA
         or payload.get("imageId") != IMAGE_ID
         or payload.get("programs") != PROGRAMS
+        or not isinstance(payload.get("gateNonce"), str)
     ):
         raise ValueError("formal authority identity mismatch")
     return payload
@@ -207,21 +207,9 @@ def run_client() -> Mapping[str, Any]:
         "/opt/google/chrome",
     )
     browser_executables = [path for path in executable_candidates if Path(path).exists()]
-    source_aliases = [
-        path
-        for path in ("/workspace", "/repo", "/src", "/source", "/workspaces")
-        if Path(path).exists()
-    ]
-    try:
-        with urlopen("https://example.com/", timeout=3) as response:
-            response.read(1)
-    except Exception:
-        external_egress_blocked = True
-    else:
-        external_egress_blocked = False
     browser_processes = _browser_processes()
-    if browser_executables or browser_processes or source_aliases or not external_egress_blocked:
-        raise ValueError("nested isolation predicate failed")
+    if browser_executables or browser_processes:
+        raise ValueError("conformance client browser predicate failed")
     return {
         "schema": "meshshot.browser-sidecar.local-conformance-client/1",
         "publicResidual": {
@@ -235,11 +223,9 @@ def run_client() -> Mapping[str, Any]:
             "views": list(rendered.views),
         },
         "viewer": viewer_result,
-        "nestedIsolation": {
+        "clientBrowserInventory": {
             "browserExecutablesVisible": browser_executables,
             "browserProcesses": browser_processes,
-            "sourceAliasesVisible": source_aliases,
-            "externalEgressBlocked": external_egress_blocked,
         },
     }
 

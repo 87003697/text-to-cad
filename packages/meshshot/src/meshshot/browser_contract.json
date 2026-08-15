@@ -2,20 +2,22 @@
   "authorityPath": "/run/meshshot-browser/authority.json",
   "authoritySchema": "meshshot.browser-authority/1",
   "nestedGate": {
+    "artifactPath": "/run/meshshot-browser/browser-gate.pyz",
+    "inputPath": "/run/meshshot-browser/gate-input.json",
+    "inputSchema": "meshshot.browser-sidecar.nested-gate-input/1",
     "maxProofBytes": 16384,
     "predicates": [
       "publicResidualParity",
       "viewerProjectionChanged",
       "viewerArtifactClean",
       "browserInventoryEmpty",
-      "browserProcessZero",
-      "sourceHidden",
-      "egressBlocked"
+      "browserProcessZero"
     ],
     "profileSha256": "87da3cc3f625cb9c24f51bed41dcdc70402a4d461b2af29eaa19846b1e8f7241",
     "publicPngSha256": "b498c55c68662989a3a95c4925432d61f979183d30c2cdf593e154c7b0ca9d5b",
     "schema": "meshshot.browser-sidecar.nested-gate-proof/1",
     "socketPath": "/run/meshshot-browser/gate.sock",
+    "surfaceSchema": "meshshot.browser-sidecar.agent-browser-surface/1",
     "views": ["+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso"]
   },
   "programs": {

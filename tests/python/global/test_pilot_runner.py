@@ -1007,6 +1007,11 @@ class RunnerTests(unittest.TestCase):
 
         with (
             mock.patch.object(self.supervisor, "prepare_exp"),
+            mock.patch.object(
+                self.supervisor,
+                "prepare_nested_browser_gate",
+                side_effect=lambda *args: events.append("gate-prepare"),
+            ),
             mock.patch.object(self.supervisor, "BrowserSidecarJob", FakeSidecar),
             mock.patch.object(self.supervisor, "run_supervised", side_effect=run_supervised),
             mock.patch.object(self.supervisor, "finalize_pilot", side_effect=finalize),
@@ -1029,10 +1034,17 @@ class RunnerTests(unittest.TestCase):
                 event if isinstance(event, str) else event[0]
                 for event in events
             ],
-            ["construct", "sidecar-start", "workload", "sidecar-close", "finalize"],
+            [
+                "construct",
+                "gate-prepare",
+                "sidecar-start",
+                "workload",
+                "sidecar-close",
+                "finalize",
+            ],
         )
         self.assertEqual(
-            events[2][1],
+            events[3][1],
             Path("/run/meshshot-browser/authority.json"),
         )
 
@@ -1077,6 +1089,7 @@ class RunnerTests(unittest.TestCase):
 
         with (
             mock.patch.object(self.supervisor, "prepare_exp"),
+            mock.patch.object(self.supervisor, "prepare_nested_browser_gate"),
             mock.patch.object(self.supervisor, "SignalRelay", return_value=relay),
             mock.patch.object(self.supervisor, "BrowserSidecarJob", FakeSidecar),
             mock.patch.object(self.supervisor, "run_supervised") as supervised,
@@ -1602,8 +1615,25 @@ class ProductionPathContractTests(unittest.TestCase):
             (repo_root / "browser-capability" / "browser-gate.pyz").write_bytes(
                 b"sealed-gate"
             )
+            (repo_root / "browser-capability" / "browser-gate.pyz").chmod(0o444)
             (repo_root / "browser-capability" / "gate-input.json").write_text(
-                "{}\n", encoding="utf-8"
+                json.dumps({
+                    "surfaceManifest": {
+                        "schema": "meshshot.browser-sidecar.agent-browser-surface/1",
+                        "scanRoots": sorted([
+                            "/usr",
+                            "/workspace/repo/.venv",
+                            "/workspace/repo/gateway/codex-tap-gpt56",
+                            "/workspace/repo/models/toys4k/input.ply",
+                            "/workspace/repo/outputs/group/exp with spaces",
+                            "/workspace/repo/skills/fake",
+                            "/home/pilot/.codex",
+                            "/home/pilot/.codex/skills/fake",
+                        ]),
+                        "browserExclusions": [],
+                    }
+                }) + "\n",
+                encoding="utf-8",
             )
             input_path.parent.mkdir(parents=True)
             gateway.parent.mkdir(parents=True)
@@ -1782,14 +1812,14 @@ class ProductionPathContractTests(unittest.TestCase):
     def test_browser_surface_preflight_failure_precedes_sidecar_start(self) -> None:
         """An unclosed mounted surface fails before any Docker lifecycle mutation."""
 
-        runner = self.supervisor
+        runner = load_runner()
         with tempfile.TemporaryDirectory() as temp:
-            exp = Path(temp) / "repo/outputs/group/exp"
+            exp = (Path(temp) / "repo/outputs/group/exp").resolve()
             exp.mkdir(parents=True)
             sidecar = mock.Mock()
             sidecar_type = mock.Mock(return_value=sidecar)
             with (
-                mock.patch.object(runner, "REPO_ROOT", Path(temp) / "repo"),
+                mock.patch.object(runner, "REPO_ROOT", (Path(temp) / "repo").resolve()),
                 mock.patch.object(runner, "prepare_exp"),
                 mock.patch.object(runner, "validate_exp_dir", return_value=exp),
                 mock.patch.object(runner, "BrowserSidecarJob", sidecar_type),

@@ -1,52 +1,41 @@
 #!/usr/bin/env python3
-"""Run the fixed Browser Gate, then exec the already-selected pilot workload."""
+"""Run the sealed Browser Gate, then exec the already-selected workload."""
 
 from __future__ import annotations
 
 from io import BytesIO
 import hashlib
+from importlib.resources import files
 import json
 import os
 from pathlib import Path
 import re
-import shutil
 import socket
+import stat
 import sys
 from typing import Any, Mapping, Sequence
-from urllib.request import urlopen
 
+try:
+    from scripts.pilot.browser_surface import discover_browser_roots
+except ModuleNotFoundError:
+    from browser_surface import discover_browser_roots  # type: ignore[no-redef]
 
-GATE_ROOT = Path("/run/meshshot-gate")
-sys.path.insert(0, os.fspath(GATE_ROOT / "meshshot-src"))
-
-from PIL import Image  # noqa: E402
-from meshshot import MeshGeometry, render_residual_preview  # noqa: E402
+from PIL import Image
+from meshshot import MeshGeometry, render_residual_preview
 
 
 CONTRACT = json.loads(
-    (GATE_ROOT / "meshshot-src/meshshot/browser_contract.json").read_text(
-        encoding="utf-8"
-    )
+    files("meshshot").joinpath("browser_contract.json").read_text(encoding="utf-8")
 )
 GATE = CONTRACT["nestedGate"]
 AUTHORITY_PATH = Path(CONTRACT["authorityPath"])
 BROKER_SOCKET_PATH = Path(CONTRACT["socketPath"])
 GATE_SOCKET_PATH = Path(GATE["socketPath"])
+GATE_INPUT_PATH = Path(GATE["inputPath"])
+GATE_ARTIFACT_PATH = Path(GATE["artifactPath"])
 MAX_PROOF_BYTES = GATE["maxProofBytes"]
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
-SOURCE_ALIASES = (Path("/repo"), Path("/src"), Path("/source"), Path("/workspaces"))
-BROWSER_EXECUTABLES = (
-    "/ms-playwright",
-    "/usr/bin/chromium",
-    "/usr/bin/chromium-browser",
-    "/usr/bin/google-chrome",
-    "/opt/google/chrome",
-)
-BROWSER_CACHES = (
-    "/home/pilot/.cache/ms-playwright",
-    "/root/.cache/ms-playwright",
-    "/tmp/ms-playwright",
-)
+HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def _strict_json(raw: bytes, label: str) -> Any:
@@ -63,26 +52,102 @@ def _strict_json(raw: bytes, label: str) -> Any:
     return json.loads(raw, object_pairs_hook=unique)
 
 
-def _authority() -> Mapping[str, Any]:
-    """Read the fixed outer-published authority used by both gate programs."""
+def _fixed_bytes(path: Path, *, mode: int, limit: int) -> bytes:
+    """Read one exact outer-owned regular inode without following links."""
 
-    payload = _strict_json(AUTHORITY_PATH.read_bytes(), "authority")
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) != mode
+        ):
+            raise ValueError("fixed gate input identity mismatch")
+        raw = os.read(descriptor, limit + 1)
+    finally:
+        os.close(descriptor)
+    if not raw or len(raw) > limit:
+        raise ValueError("fixed gate input size mismatch")
+    return raw
+
+
+def _artifact_sha256() -> str:
+    """Hash the exact read-only zipapp selected by the outer runner."""
+
+    return hashlib.sha256(GATE_ARTIFACT_PATH.read_bytes()).hexdigest()
+
+
+def load_gate_identity() -> Mapping[str, Any]:
+    """Validate the sealed artifact and exact job-bound read-only input."""
+
+    value = _strict_json(_fixed_bytes(GATE_INPUT_PATH, mode=0o444, limit=16384), "gate input")
+    if not isinstance(value, dict) or set(value) != {
+        "schema",
+        "jobId",
+        "nonce",
+        "artifactSha256",
+        "surfaceManifest",
+    }:
+        raise ValueError("gate input schema mismatch")
+    manifest = value["surfaceManifest"]
+    if (
+        value["schema"] != GATE["inputSchema"]
+        or not isinstance(value["jobId"], str)
+        or not isinstance(value["nonce"], str)
+        or not isinstance(value["artifactSha256"], str)
+        or HEX_64.fullmatch(value["artifactSha256"]) is None
+        or value["artifactSha256"] != _artifact_sha256()
+        or not isinstance(manifest, dict)
+        or set(manifest) != {"schema", "scanRoots", "browserExclusions"}
+        or manifest["schema"] != GATE["surfaceSchema"]
+        or not isinstance(manifest["scanRoots"], list)
+        or not all(isinstance(root, str) and root.startswith("/") for root in manifest["scanRoots"])
+        or not isinstance(manifest["browserExclusions"], list)
+        or any(
+            not isinstance(item, dict)
+            or set(item) != {"kind", "target", "mask"}
+            or item.get("kind") not in {"package", "executable", "cache"}
+            or not isinstance(item.get("target"), str)
+            or not item["target"].startswith("/")
+            or item.get("mask") not in {"tmpfs", "dev-null"}
+            for item in manifest["browserExclusions"]
+        )
+    ):
+        raise ValueError("gate input identity mismatch")
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return {
+        **value,
+        "surfaceManifestSha256": hashlib.sha256(canonical).hexdigest(),
+    }
+
+
+def _authority(identity: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Read and cross-bind the fixed formal authority to the gate input."""
+
+    payload = _strict_json(_fixed_bytes(AUTHORITY_PATH, mode=0o444, limit=16384), "authority")
     if (
         not isinstance(payload, dict)
-        or set(payload) != {"schema", "jobId", "imageId", "programs"}
+        or set(payload) != {"schema", "jobId", "gateNonce", "imageId", "programs"}
         or payload.get("schema") != CONTRACT["authoritySchema"]
+        or payload.get("jobId") != identity["jobId"]
+        or payload.get("gateNonce") != identity["nonce"]
         or payload.get("imageId") != CONTRACT["sidecarImageId"]
         or payload.get("programs") != CONTRACT["programs"]
-        or not isinstance(payload.get("jobId"), str)
     ):
         raise ValueError("fixed authority identity mismatch")
     return payload
 
 
-def _viewer_request() -> Mapping[str, Any]:
+def _viewer_request(identity: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
     """Execute the one registered Viewer projection operation."""
 
-    authority = _authority()
+    identity = load_gate_identity() if identity is None else identity
+    authority = _authority(identity)
     request = {
         "schema": CONTRACT["requestSchema"],
         "jobId": authority["jobId"],
@@ -100,10 +165,7 @@ def _viewer_request() -> Mapping[str, Any]:
         connection.connect(os.fspath(BROKER_SOCKET_PATH))
         connection.sendall(wire + b"\n")
         connection.shutdown(socket.SHUT_WR)
-        while True:
-            chunk = connection.recv(65536)
-            if not chunk:
-                break
+        while chunk := connection.recv(65536):
             response.extend(chunk)
             if len(response) > MAX_RESPONSE_BYTES:
                 raise ValueError("Viewer response exceeded its bound")
@@ -123,25 +185,17 @@ def _viewer_request() -> Mapping[str, Any]:
     inspection = result.get("inspection") if isinstance(result, dict) else None
     if (
         not isinstance(result, dict)
-        or set(result)
-        != {
-            "title",
-            "modelKey",
-            "programDigest",
-            "screenshotDataUrl",
-            "screenshotSha256",
-            "screenshotBytes",
-            "bodyMentionsFixture",
-            "bodyHasArtifactError",
-            "inspection",
+        or set(result) != {
+            "title", "modelKey", "programDigest", "screenshotDataUrl",
+            "screenshotSha256", "screenshotBytes", "bodyMentionsFixture",
+            "bodyHasArtifactError", "inspection",
         }
         or result.get("modelKey") != "inspection-step"
         or result.get("programDigest") != CONTRACT["programs"]["viewer"]
         or result.get("bodyMentionsFixture") is not True
         or result.get("bodyHasArtifactError") is not False
         or not isinstance(inspection, dict)
-        or inspection.get("before")
-        != "Display and projection: Solid, Orthographic"
+        or inspection.get("before") != "Display and projection: Solid, Orthographic"
         or inspection.get("after") != "Display and projection: Solid, Perspective"
         or inspection.get("changed") is not True
     ):
@@ -150,7 +204,7 @@ def _viewer_request() -> Mapping[str, Any]:
 
 
 def _browser_processes() -> list[str]:
-    """Inventory browser processes in the gate/Agent PID namespace."""
+    """Inventory Chromium processes in the gate/Agent PID namespace."""
 
     found: list[str] = []
     for process_dir in Path("/proc").glob("[0-9]*"):
@@ -159,15 +213,34 @@ def _browser_processes() -> list[str]:
             name = (process_dir / "comm").read_text(encoding="utf-8").strip()
         except OSError:
             continue
-        text = command.decode("utf-8", errors="replace")
-        if re.search(r"(?:chromium|chrome)(?:\s|$)", f"{name} {text}", re.I):
+        if re.search(r"(?:chromium|chrome)(?:\s|$)", f"{name} {command.decode(errors='replace')}", re.I):
             found.append(name)
     return found
 
 
-def run_gate_checks() -> Mapping[str, Any]:
-    """Run both registered programs and inspect the future Agent namespace."""
+def _exclusions_closed(exclusions: Sequence[Mapping[str, Any]]) -> bool:
+    """Verify every outer-discovered browser root is replaced by an empty mask."""
 
+    try:
+        null_device = Path("/dev/null").stat().st_rdev
+        for item in exclusions:
+            target = Path(item["target"])
+            metadata = target.stat()
+            if item["mask"] == "tmpfs":
+                if not target.is_dir() or any(target.iterdir()):
+                    return False
+            elif not stat.S_ISCHR(metadata.st_mode) or metadata.st_rdev != null_device:
+                return False
+    except OSError:
+        return False
+    return True
+
+
+def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
+    """Run public parity and prove the fixed Agent browser surface is empty."""
+
+    identity = load_gate_identity() if identity is None else identity
+    _authority(identity)
     reference = MeshGeometry(
         vertices=[[-0.46, -0.2, 0.0], [-0.2, -0.2, 0.0], [-0.33, 0.2, 0.0]],
         faces=[[0, 1, 2]],
@@ -176,82 +249,63 @@ def run_gate_checks() -> Mapping[str, Any]:
         vertices=[[0.2, -0.2, 0.0], [0.46, -0.2, 0.0], [0.33, 0.2, 0.0]],
         faces=[[0, 1, 2]],
     )
-    rendered = render_residual_preview(
-        reference,
-        candidate,
-        variant="step",
-        exterior_directions=[],
-    )
-    png_sha256 = hashlib.sha256(rendered.png_bytes).hexdigest()
+    rendered = render_residual_preview(reference, candidate, variant="step", exterior_directions=[])
     with Image.open(BytesIO(rendered.png_bytes)) as image:
         image.load()
-        mode = image.mode
-        size = list(image.size)
-    views = [view["name"] for view in rendered.views]
-    residual = {
-        "pngSha256": png_sha256,
-        "mode": mode,
-        "size": size,
-        "profileSha256": rendered.profile_sha256,
-        "views": views,
-    }
-    if residual != {
+        residual = {
+            "pngSha256": hashlib.sha256(rendered.png_bytes).hexdigest(),
+            "mode": image.mode,
+            "size": list(image.size),
+            "profileSha256": rendered.profile_sha256,
+            "views": [view["name"] for view in rendered.views],
+        }
+    expected_residual = {
         "pngSha256": GATE["publicPngSha256"],
         "mode": "RGB",
         "size": [504, 1008],
         "profileSha256": GATE["profileSha256"],
         "views": GATE["views"],
-    }:
+    }
+    if residual != expected_residual:
         raise ValueError("public residual parity predicate failed")
-    viewer_result = _viewer_request()
+    viewer_result = _viewer_request(identity)
     viewer = {
         "before": viewer_result["inspection"]["before"],
         "after": viewer_result["inspection"]["after"],
         "bodyMentionsFixture": viewer_result["bodyMentionsFixture"],
         "bodyHasArtifactError": viewer_result["bodyHasArtifactError"],
     }
-    executables = sorted(
-        {
-            path
-            for path in BROWSER_EXECUTABLES
-            if Path(path).exists()
-        }
-        | {
-            path
-            for name in ("chromium", "chromium-browser", "google-chrome", "chrome")
-            if (path := shutil.which(name)) is not None
-        }
+    manifest = identity["surfaceManifest"]
+    if not _exclusions_closed(manifest["browserExclusions"]):
+        raise ValueError("nested browser exclusion predicate failed")
+    visible = discover_browser_roots(
+        (Path(root), Path(root)) for root in manifest["scanRoots"]
     )
-    caches = [path for path in BROWSER_CACHES if Path(path).exists()]
+    excluded_targets = {item["target"] for item in manifest["browserExclusions"]}
+    visible = [item for item in visible if item["target"] not in excluded_targets]
     processes = _browser_processes()
-    aliases = [os.fspath(path) for path in SOURCE_ALIASES if path.exists()]
-    try:
-        with urlopen("https://example.com/", timeout=3) as response:
-            response.read(1)
-    except Exception:
-        egress_blocked = True
-    else:
-        egress_blocked = False
     inventory = {
-        "browserExecutables": executables,
-        "browserCaches": caches,
+        "browserExecutables": [item["target"] for item in visible if item["kind"] == "executable"],
+        "browserPackages": [item["target"] for item in visible if item["kind"] == "package"],
+        "browserCaches": [item["target"] for item in visible if item["kind"] == "cache"],
         "browserProcesses": processes,
-        "sourceAliases": aliases,
     }
     predicates = {
         "publicResidualParity": True,
         "viewerProjectionChanged": True,
         "viewerArtifactClean": True,
-        "browserInventoryEmpty": not executables and not caches,
+        "browserInventoryEmpty": not visible,
         "browserProcessZero": not processes,
-        "sourceHidden": not aliases,
-        "egressBlocked": egress_blocked,
     }
     if any(value is not True for value in predicates.values()):
-        raise ValueError("nested namespace predicate failed")
+        raise ValueError("nested browser predicate failed")
     return {
         "schema": GATE["schema"],
         "status": "succeeded",
+        "jobId": identity["jobId"],
+        "nonce": identity["nonce"],
+        "artifactSha256": identity["artifactSha256"],
+        "surfaceManifestSha256": identity["surfaceManifestSha256"],
         "predicates": predicates,
         "residual": residual,
         "viewer": viewer,
@@ -259,32 +313,18 @@ def run_gate_checks() -> Mapping[str, Any]:
     }
 
 
-def _failed_proof() -> Mapping[str, Any]:
-    """Return a fixed closed proof without exposing an exception string."""
+def _failed_proof(identity: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return one identity-bound closed proof without exception text."""
 
     return {
-        "schema": GATE["schema"],
-        "status": "failed",
+        "schema": GATE["schema"], "status": "failed",
+        "jobId": identity["jobId"], "nonce": identity["nonce"],
+        "artifactSha256": identity["artifactSha256"],
+        "surfaceManifestSha256": identity["surfaceManifestSha256"],
         "predicates": {name: False for name in GATE["predicates"]},
-        "residual": {
-            "pngSha256": "0" * 64,
-            "mode": "",
-            "size": [0, 0],
-            "profileSha256": "0" * 64,
-            "views": [],
-        },
-        "viewer": {
-            "before": "",
-            "after": "",
-            "bodyMentionsFixture": False,
-            "bodyHasArtifactError": True,
-        },
-        "inventory": {
-            "browserExecutables": [],
-            "browserCaches": [],
-            "browserProcesses": [],
-            "sourceAliases": [],
-        },
+        "residual": {"pngSha256": "0" * 64, "mode": "", "size": [0, 0], "profileSha256": "0" * 64, "views": []},
+        "viewer": {"before": "", "after": "", "bodyMentionsFixture": False, "bodyHasArtifactError": True},
+        "inventory": {"browserExecutables": [], "browserPackages": [], "browserCaches": [], "browserProcesses": []},
     }
 
 
@@ -300,28 +340,29 @@ def publish_and_wait(proof: Mapping[str, Any]) -> bool:
             connection.connect(os.fspath(GATE_SOCKET_PATH))
             connection.sendall(wire + b"\n")
             connection.shutdown(socket.SHUT_WR)
-            release = connection.recv(2)
-            if release != b"\x01" or connection.recv(1) != b"":
-                return False
+            return connection.recv(2) == b"\x01" and connection.recv(1) == b""
     except OSError:
         return False
-    return True
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the gate with no variable inputs, then replace this exact PID."""
+    """Run the gate with no render inputs, then replace this exact PID."""
 
     arguments = list(sys.argv[1:] if argv is None else argv)
     if not arguments or arguments[0] != "--" or len(arguments) == 1:
         return 2
-    workload = arguments[1:]
     try:
-        proof = run_gate_checks()
+        identity = load_gate_identity()
     except Exception:
-        publish_and_wait(_failed_proof())
+        return 1
+    try:
+        proof = run_gate_checks(identity)
+    except Exception:
+        publish_and_wait(_failed_proof(identity))
         return 1
     if not publish_and_wait(proof):
         return 1
+    workload = arguments[1:]
     os.execvpe(workload[0], workload, os.environ.copy())
     return 1
 

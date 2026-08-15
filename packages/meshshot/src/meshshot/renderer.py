@@ -6,6 +6,7 @@ import base64
 from collections.abc import Sequence
 from dataclasses import dataclass
 from io import BytesIO
+from importlib.resources import files
 import json
 import math
 import os
@@ -28,9 +29,7 @@ _BROWSER_STARTUP_TIMEOUT_MS = 15_000
 _RENDER_TIMEOUT_MS = 120_000
 _OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
 _CONTRACT = json.loads(
-    (Path(__file__).resolve().parent / "browser_contract.json").read_text(
-        encoding="utf-8"
-    )
+    files("meshshot").joinpath("browser_contract.json").read_text(encoding="utf-8")
 )
 _AUTHORITY_PATH = Path(_CONTRACT["authorityPath"])
 _SOCKET_PATH = Path(_CONTRACT["socketPath"])
@@ -40,6 +39,7 @@ _RESPONSE_SCHEMA = _CONTRACT["responseSchema"]
 _SIDECAR_IMAGE_ID = _CONTRACT["sidecarImageId"]
 _PROGRAMS = _CONTRACT["programs"]
 _JOB_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
+_GATE_NONCE = re.compile(r"[0-9a-f]{16,64}\Z")
 _MAX_AUTHORITY_BYTES = 16 * 1024
 _MAX_REQUEST_BYTES = 1024 * 1024
 _MAX_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -139,13 +139,15 @@ def _load_browser_authority() -> dict[str, Any] | None:
         raise MeshshotError("formal browser authority has an invalid size")
     authority = _exact_object(
         _strict_json(raw, "formal browser authority"),
-        {"schema", "jobId", "imageId", "programs"},
+        {"schema", "jobId", "gateNonce", "imageId", "programs"},
         "formal browser authority",
     )
     if (
         authority["schema"] != _AUTHORITY_SCHEMA
         or not isinstance(authority["jobId"], str)
         or _JOB_ID.fullmatch(authority["jobId"]) is None
+        or not isinstance(authority["gateNonce"], str)
+        or _GATE_NONCE.fullmatch(authority["gateNonce"]) is None
         or authority["imageId"] != _SIDECAR_IMAGE_ID
         or authority["programs"] != _PROGRAMS
     ):

@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import time
+import zipfile
 from contextlib import closing, nullcontext
 from pathlib import Path
 from types import FrameType
@@ -34,8 +35,10 @@ try:
         RECEIPT_PREDICATES,
         RECEIPT_SCHEMA,
         NESTED_GATE,
+        BrowserSidecarError,
         BrowserSidecarJob,
     )
+    from scripts.pilot.browser_surface import BrowserSurfaceError, discover_browser_roots
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
@@ -50,7 +53,12 @@ except ModuleNotFoundError as exc:
         RECEIPT_PREDICATES,
         RECEIPT_SCHEMA,
         NESTED_GATE,
+        BrowserSidecarError,
         BrowserSidecarJob,
+    )
+    from browser_surface import (  # type: ignore[no-redef]
+        BrowserSurfaceError,
+        discover_browser_roots,
     )
 
 
@@ -66,7 +74,6 @@ ARTIFACT_CONTRACT_STATUS = 4
 MANIFEST_EXCLUDED_ROOTS = {".git"}
 MANIFEST_EXCLUDED_PREFIXES = {"run/.codex-upper"}
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
-SANDBOX_NESTED_GATE_ROOT = Path("/run/meshshot-gate")
 NESTED_GATE_TIMEOUT_SECONDS = 180.0
 SYSTEM_RO_PATHS = (
     Path("/usr"),
@@ -759,6 +766,190 @@ def build_sandbox_environment(
     return child_env
 
 
+def _readonly_surface_mounts(
+    repo_root: Path,
+    exp_dir: Path,
+    input_paths: list[Path],
+    environ: Mapping[str, str],
+) -> list[tuple[Path, Path]]:
+    """Resolve the exact immutable execution surface later mounted into bwrap."""
+
+    host_home_value = environ.get("HOME")
+    if not host_home_value:
+        raise PilotError("HOME must be set")
+    host_codex_home = Path(
+        environ.get("CODEX_HOME", str(Path(host_home_value) / ".codex"))
+    ).resolve()
+    inputs = validate_input_paths(repo_root, input_paths)
+    skills = resolve_installed_skill_dirs(repo_root, host_codex_home)
+    gateway = (repo_root / "gateway/codex-tap-gpt56").resolve()
+    venv = (repo_root / ".venv").resolve()
+    mounts: list[tuple[Path, Path]] = [
+        (venv, SANDBOX_REPO_ROOT / ".venv"),
+        (gateway, SANDBOX_REPO_ROOT / "gateway" / gateway.name),
+    ]
+    mounts.extend((path.resolve(), path) for path in existing_system_paths())
+    mounts.extend(
+        (path, SANDBOX_REPO_ROOT / path.relative_to(repo_root)) for path in inputs
+    )
+    for skill in skills:
+        mounts.extend(
+            (
+                (skill, SANDBOX_REPO_ROOT / "skills" / skill.name),
+                (skill, SANDBOX_CODEX_HOME / "skills" / skill.name),
+            )
+        )
+    return mounts
+
+
+def _build_gate_artifact(repo_root: Path, destination: Path) -> str:
+    """Create one deterministic zipapp from reviewed gate and meshshot source."""
+
+    entries: list[tuple[str, bytes]] = [
+        (
+            "__main__.py",
+            (repo_root / "scripts/pilot/browser_sidecar_gate.py").read_bytes(),
+        ),
+        (
+            "browser_surface.py",
+            (repo_root / "scripts/pilot/browser_surface.py").read_bytes(),
+        ),
+    ]
+    meshshot = repo_root / "packages/meshshot/src/meshshot"
+    for path in sorted(meshshot.rglob("*")):
+        if path.is_symlink():
+            raise PilotError("sealed gate source contains a symlink")
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
+            entries.append(
+                ("meshshot/" + path.relative_to(meshshot).as_posix(), path.read_bytes())
+            )
+    temporary = destination.with_suffix(".tmp")
+    temporary.unlink(missing_ok=True)
+    try:
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as archive:
+            for name, payload in entries:
+                info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                info.create_system = 3
+                info.external_attr = 0o444 << 16
+                archive.writestr(info, payload)
+        temporary.chmod(0o444)
+        os.replace(temporary, destination)
+        destination.chmod(0o444)
+        return hashlib.sha256(destination.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise PilotError("cannot create sealed nested Browser Gate") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def prepare_nested_browser_gate(
+    repo_root: Path,
+    exp_dir: Path,
+    input_paths: list[Path],
+    environ: Mapping[str, str],
+    sidecar: BrowserSidecarJob,
+) -> None:
+    """Seal the gate and close the complete mounted Agent browser surface."""
+
+    mounts = _readonly_surface_mounts(
+        repo_root.resolve(), exp_dir.resolve(), input_paths, environ
+    )
+    host_home = Path(environ["HOME"])
+    host_codex_home = Path(
+        environ.get("CODEX_HOME", str(host_home / ".codex"))
+    ).resolve()
+    skills = resolve_installed_skill_dirs(repo_root.resolve(), host_codex_home)
+    upper = prepare_sandbox(exp_dir.resolve(), skills)
+    relative_exp = exp_dir.resolve().relative_to(repo_root.resolve())
+    writable_mounts = [
+        (exp_dir.resolve(), SANDBOX_REPO_ROOT / relative_exp),
+        (upper.resolve(), SANDBOX_CODEX_HOME),
+    ]
+    try:
+        exclusions = discover_browser_roots(mounts)
+        writable_findings = discover_browser_roots(writable_mounts)
+    except BrowserSurfaceError as exc:
+        raise PilotError("cannot close mounted Agent browser surface") from exc
+    if writable_findings:
+        raise PilotError("writable Agent surface contains a browser artifact")
+    scan_roots = sorted(
+        {target.as_posix() for _, target in [*mounts, *writable_mounts]}
+    )
+    manifest = {
+        "schema": NESTED_GATE["surfaceSchema"],
+        "scanRoots": scan_roots,
+        "browserExclusions": exclusions,
+    }
+    manifest_bytes = json.dumps(
+        manifest, sort_keys=True, separators=(",", ":")
+    ).encode("ascii")
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    artifact = sidecar.capability_dir / Path(NESTED_GATE["artifactPath"]).name
+    input_path = sidecar.capability_dir / Path(NESTED_GATE["inputPath"]).name
+    created: dict[Path, tuple[int, int]] = {}
+    artifact_sha256 = _build_gate_artifact(repo_root.resolve(), artifact)
+    artifact_metadata = artifact.lstat()
+    created[artifact] = (artifact_metadata.st_dev, artifact_metadata.st_ino)
+    gate_input = {
+        "schema": NESTED_GATE["inputSchema"],
+        "jobId": sidecar.job_id,
+        "nonce": sidecar.gate_nonce,
+        "artifactSha256": artifact_sha256,
+        "surfaceManifest": manifest,
+    }
+    temporary = input_path.with_suffix(".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(gate_input, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="ascii",
+        )
+        temporary.chmod(0o444)
+        os.replace(temporary, input_path)
+        input_path.chmod(0o444)
+        input_metadata = input_path.lstat()
+        created[input_path] = (input_metadata.st_dev, input_metadata.st_ino)
+        sidecar.configure_nested_gate(
+            artifact_sha256=artifact_sha256,
+            surface_manifest_sha256=manifest_sha256,
+        )
+    except Exception as exc:
+        cleanup_failed = False
+        for path, identity in reversed(list(created.items())):
+            try:
+                metadata = path.lstat()
+                if (metadata.st_dev, metadata.st_ino) != identity:
+                    cleanup_failed = True
+                else:
+                    path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                cleanup_failed = True
+        if cleanup_failed:
+            raise PilotError("nested Browser Gate preparation cleanup failed") from exc
+        if isinstance(exc, BrowserSidecarError):
+            raise PilotError("cannot bind fixed nested Browser Gate") from exc
+        raise PilotError("cannot publish fixed nested Browser Gate input") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _gate_surface_manifest(capability_dir: Path) -> Mapping[str, object]:
+    """Read the outer-owned gate input used to construct exact bwrap masks."""
+
+    path = capability_dir / Path(NESTED_GATE["inputPath"]).name
+    try:
+        value = json.loads(path.read_text(encoding="ascii"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PilotError("fixed nested Browser Gate input is unavailable") from exc
+    manifest = value.get("surfaceManifest") if isinstance(value, dict) else None
+    if not isinstance(manifest, dict) or set(manifest) != {
+        "schema", "scanRoots", "browserExclusions"
+    }:
+        raise PilotError("fixed nested Browser Gate surface is invalid")
+    return manifest
+
+
 def build_bwrap_argv(
     repo_root: Path,
     exp_dir: Path,
@@ -794,20 +985,32 @@ def build_bwrap_argv(
     relative_exp = exp_dir.relative_to(repo_root)
     sandbox_exp = SANDBOX_REPO_ROOT / relative_exp
     gateway = repo_root / "gateway" / "codex-tap-gpt56"
-    nested_gate_script = repo_root / "scripts/pilot/browser_sidecar_gate.py"
-    nested_gate_package = repo_root / "packages/meshshot/src"
     if not gateway.is_file():
         raise PilotError(f"gateway not found: {gateway}")
     venv = repo_root / ".venv"
     if not venv.is_dir():
         raise PilotError(f"pilot runtime not found: {venv}")
     upper = prepare_sandbox(exp_dir, skill_dirs)
-    if not nested_gate_script.is_file() or not nested_gate_package.is_dir():
-        raise PilotError("fixed nested Browser Gate package is unavailable")
+    gate_manifest: Mapping[str, object] | None = None
     if browser_capability_dir is not None:
         browser_capability_dir = browser_capability_dir.resolve()
         if not browser_capability_dir.is_dir():
             raise PilotError("Browser Sidecar capability directory is unavailable")
+        gate_artifact = browser_capability_dir / Path(NESTED_GATE["artifactPath"]).name
+        if not gate_artifact.is_file() or stat.S_IMODE(gate_artifact.stat().st_mode) != 0o444:
+            raise PilotError("sealed nested Browser Gate artifact is unavailable")
+        gate_manifest = _gate_surface_manifest(browser_capability_dir)
+        expected_scan_roots = sorted(
+            {
+                target.as_posix()
+                for _, target in _readonly_surface_mounts(
+                    repo_root, exp_dir, input_paths, environ
+                )
+            }
+            | {sandbox_exp.as_posix(), SANDBOX_CODEX_HOME.as_posix()}
+        )
+        if gate_manifest.get("scanRoots") != expected_scan_roots:
+            raise PilotError("nested Browser Gate mount surface changed")
     argv = [
         bwrap,
         "--unshare-pid",
@@ -839,8 +1042,6 @@ def build_bwrap_argv(
         "/home",
         "--dir",
         "/run",
-        "--dir",
-        os.fspath(SANDBOX_NESTED_GATE_ROOT),
         "--dir",
         str(SANDBOX_HOME),
         "--symlink",
@@ -900,16 +1101,23 @@ def build_bwrap_argv(
                 "/run/meshshot-browser",
             ]
         )
-    argv.extend(
-        [
-            "--ro-bind",
-            os.fspath(nested_gate_script.resolve()),
-            os.fspath(SANDBOX_NESTED_GATE_ROOT / nested_gate_script.name),
-            "--ro-bind",
-            os.fspath(nested_gate_package.resolve()),
-            os.fspath(SANDBOX_NESTED_GATE_ROOT / "meshshot-src"),
-        ]
-    )
+    if gate_manifest is not None:
+        exclusions = gate_manifest.get("browserExclusions")
+        if not isinstance(exclusions, list):
+            raise PilotError("fixed nested Browser Gate exclusions are invalid")
+        for exclusion in exclusions:
+            if (
+                not isinstance(exclusion, dict)
+                or set(exclusion) != {"kind", "target", "mask"}
+                or not isinstance(exclusion.get("target"), str)
+            ):
+                raise PilotError("fixed nested Browser Gate exclusion is invalid")
+            if exclusion.get("mask") == "tmpfs":
+                argv.extend(["--tmpfs", exclusion["target"]])
+            elif exclusion.get("mask") == "dev-null":
+                argv.extend(["--ro-bind", "/dev/null", exclusion["target"]])
+            else:
+                raise PilotError("fixed nested Browser Gate exclusion is invalid")
     argv.extend(
         [
             "--remount-ro",
@@ -920,7 +1128,7 @@ def build_bwrap_argv(
             str(SANDBOX_REPO_ROOT),
             "--",
             os.fspath(SANDBOX_REPO_ROOT / ".venv/bin/python"),
-            os.fspath(SANDBOX_NESTED_GATE_ROOT / nested_gate_script.name),
+            NESTED_GATE["artifactPath"],
             "--",
             *workload,
         ]
@@ -1432,6 +1640,15 @@ def run_pilot(
                 job_id=job_id,
                 cancelled=lambda: relay.cancelled,
             )
+            prepare_nested_browser_gate(
+                REPO_ROOT,
+                exp_dir,
+                input_paths,
+                environ,
+                sidecar,
+            )
+            if relay.cancelled:
+                raise PilotError("nested Browser Gate preparation was interrupted")
             sidecar.start()
             if relay.cancelled:
                 workload_status = 128 + (relay.signum or signal.SIGTERM)

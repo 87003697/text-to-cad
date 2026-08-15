@@ -6,9 +6,15 @@ import importlib.util
 import json
 import hashlib
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest import mock
+import zipfile
+
+from scripts.pilot import runner
 
 from tests.python.support.paths import add_repo_path
 
@@ -17,25 +23,15 @@ add_repo_path("packages/meshshot/src")
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 GATE_PATH = REPO_ROOT / "scripts/pilot/browser_sidecar_gate.py"
-CONTRACT_PATH = REPO_ROOT / "packages/meshshot/src/meshshot/browser_contract.json"
 
 
 def load_gate():
     """Load the fixed-path gate using the repository-owned contract fixture."""
 
-    contract = CONTRACT_PATH.read_text(encoding="utf-8")
     spec = importlib.util.spec_from_file_location("browser_sidecar_gate", GATE_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    original = Path.read_text
-
-    def fixed_read(path: Path, *args, **kwargs):
-        if path == Path("/run/meshshot-gate/meshshot-src/meshshot/browser_contract.json"):
-            return contract
-        return original(path, *args, **kwargs)
-
-    with mock.patch.object(Path, "read_text", fixed_read):
-        spec.loader.exec_module(module)
+    spec.loader.exec_module(module)
     return module
 
 
@@ -44,6 +40,21 @@ class BrowserSidecarGateTests(unittest.TestCase):
 
     def test_fixed_gate_calls_public_residual_and_registered_viewer(self) -> None:
         gate = load_gate()
+        surface = {
+            "schema": "meshshot.browser-sidecar.agent-browser-surface/1",
+            "scanRoots": ["/usr"],
+            "browserExclusions": [],
+        }
+        identity = {
+            "schema": "meshshot.browser-sidecar.nested-gate-input/1",
+            "jobId": "formal-job-1",
+            "nonce": "a" * 32,
+            "artifactSha256": "b" * 64,
+            "surfaceManifest": surface,
+            "surfaceManifestSha256": hashlib.sha256(
+                json.dumps(surface, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        }
         public_render = gate.render_residual_preview(
             gate.MeshGeometry(
                 vertices=[[-0.46, -0.2, 0.0], [-0.2, -0.2, 0.0], [-0.33, 0.2, 0.0]],
@@ -87,9 +98,10 @@ class BrowserSidecarGateTests(unittest.TestCase):
                 ),
             ),
             mock.patch.object(gate, "_viewer_request", return_value=viewer) as request,
+            mock.patch.object(gate, "load_gate_identity", return_value=identity),
+            mock.patch.object(gate, "_authority", return_value={"jobId": "formal-job-1"}),
+            mock.patch.object(gate, "discover_browser_roots", return_value=[]),
             mock.patch.object(gate, "_browser_processes", return_value=[]),
-            mock.patch.object(gate.shutil, "which", return_value=None),
-            mock.patch.object(gate, "urlopen", side_effect=OSError("blocked")),
         ):
             proof = gate.run_gate_checks()
 
@@ -117,7 +129,7 @@ class BrowserSidecarGateTests(unittest.TestCase):
                 "browserProcesses": [],
             },
         )
-        request.assert_called_once_with()
+        request.assert_called_once_with(identity)
         public_api.assert_called_once()
         self.assertEqual(public_api.call_args.kwargs, {
             "variant": "step",
@@ -153,7 +165,11 @@ class BrowserSidecarGateTests(unittest.TestCase):
         ).encode("ascii")
         with (
             mock.patch.object(gate, "GATE_INPUT_PATH", Path("/fixed/gate-input.json")),
-            mock.patch.object(Path, "read_bytes", return_value=(json.dumps(expected) + "\n").encode()),
+            mock.patch.object(
+                gate,
+                "_fixed_bytes",
+                return_value=(json.dumps(expected) + "\n").encode(),
+            ),
             mock.patch.object(gate, "_artifact_sha256", return_value="b" * 64),
         ):
             identity = gate.load_gate_identity()
@@ -162,6 +178,34 @@ class BrowserSidecarGateTests(unittest.TestCase):
         self.assertEqual(
             identity["surfaceManifestSha256"], hashlib.sha256(canonical).hexdigest()
         )
+
+    def test_outer_builds_one_deterministic_source_free_gate_zipapp(self) -> None:
+        """The fixed mount is one immutable artifact, not a live source alias."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            first = Path(temp) / "first.pyz"
+            second = Path(temp) / "second.pyz"
+            first_digest = runner._build_gate_artifact(REPO_ROOT, first)
+            second_digest = runner._build_gate_artifact(REPO_ROOT, second)
+            first_bytes = first.read_bytes()
+            second_bytes = second.read_bytes()
+            with zipfile.ZipFile(first) as archive:
+                names = set(archive.namelist())
+            executed = subprocess.run(
+                [sys.executable, first],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(first_digest, second_digest)
+        self.assertEqual(first_bytes, second_bytes)
+        self.assertIn("__main__.py", names)
+        self.assertIn("browser_surface.py", names)
+        self.assertIn("meshshot/browser_contract.json", names)
+        self.assertFalse(
+            any(name.startswith("/") or ".." in Path(name).parts for name in names)
+        )
+        self.assertEqual(executed.returncode, 2, executed.stderr)
 
 
 if __name__ == "__main__":

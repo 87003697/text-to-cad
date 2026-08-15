@@ -80,8 +80,8 @@ NESTED_GATE_SOCKET_PATH = Path(NESTED_GATE["socketPath"])
 RECEIPT_PREDICATES = (
     "sidecarReady",
     "brokerReady",
-    "brokerSourceHidden",
-    "brokerEgressBlocked",
+    "sidecarSourceHidden",
+    "sidecarEgressBlocked",
     "socketFixed",
     "brokerResidualAccepted",
     "brokerResidualEightView",
@@ -94,8 +94,6 @@ RECEIPT_PREDICATES = (
     "nestedViewerArtifactClean",
     "nestedBrowserInventoryEmpty",
     "nestedBrowserProcessZero",
-    "nestedSourceHidden",
-    "nestedEgressBlocked",
     "brokerTerminalZero",
     "sidecarClosingExact",
     "sidecarTerminalZero",
@@ -188,12 +186,30 @@ def _exact_object(value: Any, keys: set[str], label: str) -> dict[str, Any]:
     return value
 
 
-def validate_nested_gate_proof(value: Any) -> Mapping[str, bool]:
+def validate_nested_gate_proof(
+    value: Any,
+    *,
+    expected_job_id: str,
+    expected_nonce: str,
+    expected_artifact_sha256: str,
+    expected_surface_manifest_sha256: str,
+) -> Mapping[str, bool]:
     """Validate the exact fixed proof produced before Agent exec."""
 
     proof = _exact_object(
         value,
-        {"schema", "status", "predicates", "residual", "viewer", "inventory"},
+        {
+            "schema",
+            "status",
+            "jobId",
+            "nonce",
+            "artifactSha256",
+            "surfaceManifestSha256",
+            "predicates",
+            "residual",
+            "viewer",
+            "inventory",
+        },
         "nested-gate-proof",
     )
     predicates = _exact_object(
@@ -211,12 +227,21 @@ def validate_nested_gate_proof(value: Any) -> Mapping[str, bool]:
     )
     inventory = _exact_object(
         proof["inventory"],
-        {"browserExecutables", "browserCaches", "browserProcesses", "sourceAliases"},
+        {
+            "browserExecutables",
+            "browserPackages",
+            "browserCaches",
+            "browserProcesses",
+        },
         "nested-gate-inventory",
     )
     if (
         proof["schema"] != NESTED_GATE_SCHEMA
         or proof["status"] != "succeeded"
+        or proof["jobId"] != expected_job_id
+        or proof["nonce"] != expected_nonce
+        or proof["artifactSha256"] != expected_artifact_sha256
+        or proof["surfaceManifestSha256"] != expected_surface_manifest_sha256
         or any(value is not True for value in predicates.values())
         or residual
         != {
@@ -236,9 +261,9 @@ def validate_nested_gate_proof(value: Any) -> Mapping[str, bool]:
         or inventory
         != {
             "browserExecutables": [],
+            "browserPackages": [],
             "browserCaches": [],
             "browserProcesses": [],
-            "sourceAliases": [],
         }
     ):
         raise BrowserSidecarError(
@@ -670,6 +695,7 @@ class BrowserSidecarJob:
         self.run_dir = self.exp_dir / "run"
         self.receipt_path = self.run_dir / "browser-sidecar-receipt.json"
         self.owner_nonce = secrets.token_hex(16)
+        self.gate_nonce = self.owner_nonce
         self.capability_dir = Path(
             tempfile.mkdtemp(prefix=f"meshshot-browser-{self.owner_nonce[:8]}-")
         ).resolve()
@@ -678,6 +704,8 @@ class BrowserSidecarJob:
         self.nested_gate_socket_path = (
             self.capability_dir / NESTED_GATE_SOCKET_PATH.name
         )
+        self.gate_artifact_path = self.capability_dir / Path(NESTED_GATE["artifactPath"]).name
+        self.gate_input_path = self.capability_dir / Path(NESTED_GATE["inputPath"]).name
         self.prefix = f"ttc-bs-{self.owner_nonce[:12]}"
         self.network_name = f"{self.prefix}-net"
         self.container_name = f"{self.prefix}-sidecar"
@@ -695,6 +723,9 @@ class BrowserSidecarJob:
         self.broker_readiness: Mapping[str, Any] | None = None
         self.broker_terminal: Mapping[str, Any] | None = None
         self.nested_gate_predicates: Mapping[str, bool] | None = None
+        self.gate_artifact_sha256: str | None = None
+        self.surface_manifest_sha256: str | None = None
+        self.gate_file_identities: dict[Path, tuple[int, int]] = {}
         self.request_count = 0
         self.first_error: str | None = None
         self.cleanup_errors: list[str] = []
@@ -723,7 +754,54 @@ class BrowserSidecarJob:
                 "nested Browser Gate proof was already recorded",
                 check="nested-gate-duplicate",
             )
-        self.nested_gate_predicates = validate_nested_gate_proof(proof)
+        if self.gate_artifact_sha256 is None or self.surface_manifest_sha256 is None:
+            raise BrowserSidecarError(
+                "nested Browser Gate identity is unavailable",
+                check="nested-gate-proof",
+            )
+        self.nested_gate_predicates = validate_nested_gate_proof(
+            proof,
+            expected_job_id=self.job_id,
+            expected_nonce=self.gate_nonce,
+            expected_artifact_sha256=self.gate_artifact_sha256,
+            expected_surface_manifest_sha256=self.surface_manifest_sha256,
+        )
+
+    def configure_nested_gate(
+        self,
+        *,
+        artifact_sha256: str,
+        surface_manifest_sha256: str,
+    ) -> None:
+        """Bind one sealed gate artifact and surface manifest before startup."""
+
+        if (
+            self.gate_artifact_sha256 is not None
+            or re.fullmatch(r"[0-9a-f]{64}", artifact_sha256) is None
+            or re.fullmatch(r"[0-9a-f]{64}", surface_manifest_sha256) is None
+        ):
+            raise BrowserSidecarError(
+                "nested Browser Gate identity is invalid",
+                check="nested-gate-identity",
+            )
+        self.gate_artifact_sha256 = artifact_sha256
+        self.surface_manifest_sha256 = surface_manifest_sha256
+        for path in (self.gate_artifact_path, self.gate_input_path):
+            try:
+                metadata = path.lstat()
+            except FileNotFoundError:
+                continue
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_nlink != 1
+                or stat.S_IMODE(metadata.st_mode) != 0o444
+            ):
+                raise BrowserSidecarError(
+                    "nested Browser Gate file identity is invalid",
+                    check="nested-gate-identity",
+                )
+            self.gate_file_identities[path] = (metadata.st_dev, metadata.st_ino)
 
     def _docker(
         self,
@@ -962,6 +1040,11 @@ class BrowserSidecarJob:
         """Start one exact Sidecar and publish its bounded sandbox authority."""
 
         self._check_cancelled()
+        if self.gate_artifact_sha256 is None or self.surface_manifest_sha256 is None:
+            raise BrowserSidecarError(
+                "nested Browser Gate must be sealed before Sidecar startup",
+                check="nested-gate-identity",
+            )
         self.run_dir.mkdir(parents=True, exist_ok=True)
         for path, check in (
             (self.authority_path, "authority-preexisting"),
@@ -1117,6 +1200,7 @@ class BrowserSidecarJob:
             authority = {
                 "schema": AUTHORITY_SCHEMA,
                 "jobId": self.job_id,
+                "gateNonce": self.gate_nonce,
                 "imageId": IMAGE_ID,
                 "programs": PROGRAMS,
             }
@@ -1457,6 +1541,17 @@ class BrowserSidecarJob:
                     self.socket_path.unlink()
             except OSError:
                 self.cleanup_errors.append("socket-remove")
+        for path, identity in self.gate_file_identities.items():
+            try:
+                metadata = path.lstat()
+                if (metadata.st_dev, metadata.st_ino) != identity:
+                    self.cleanup_errors.append("nested-gate-file-identity")
+                else:
+                    path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                self.cleanup_errors.append("nested-gate-file-remove")
         try:
             self.capability_dir.rmdir()
         except FileNotFoundError:
@@ -1488,12 +1583,12 @@ class BrowserSidecarJob:
         predicates = {
             "sidecarReady": self.readiness is not None,
             "brokerReady": self.broker_readiness is not None,
-            "brokerSourceHidden": (
+            "sidecarSourceHidden": (
                 isinstance(self.broker_readiness, dict)
                 and isinstance(self.broker_readiness.get("isolation"), dict)
                 and self.broker_readiness["isolation"].get("sourceAliasesVisible") == []
             ),
-            "brokerEgressBlocked": (
+            "sidecarEgressBlocked": (
                 isinstance(self.broker_readiness, dict)
                 and isinstance(self.broker_readiness.get("isolation"), dict)
                 and self.broker_readiness["isolation"].get("externalEgressBlocked") is True
@@ -1531,8 +1626,6 @@ class BrowserSidecarJob:
                 nested.get("browserInventoryEmpty") is True
             ),
             "nestedBrowserProcessZero": nested.get("browserProcessZero") is True,
-            "nestedSourceHidden": nested.get("sourceHidden") is True,
-            "nestedEgressBlocked": nested.get("egressBlocked") is True,
             "brokerTerminalZero": (
                 isinstance(broker_status, int)
                 and not isinstance(broker_status, bool)
@@ -1555,8 +1648,8 @@ class BrowserSidecarJob:
         failure_by_predicate = {
             "sidecarReady": "sidecar-readiness",
             "brokerReady": "broker-readiness",
-            "brokerSourceHidden": "broker-source-alias",
-            "brokerEgressBlocked": "broker-external-egress",
+            "sidecarSourceHidden": "sidecar-source-alias",
+            "sidecarEgressBlocked": "sidecar-external-egress",
             "socketFixed": "broker-socket",
             "brokerResidualAccepted": "residual-required",
             "brokerResidualEightView": "residual-eight-view",
@@ -1569,8 +1662,6 @@ class BrowserSidecarJob:
             "nestedViewerArtifactClean": "nested-viewer-artifact",
             "nestedBrowserInventoryEmpty": "nested-browser-inventory",
             "nestedBrowserProcessZero": "nested-browser-process",
-            "nestedSourceHidden": "nested-source-alias",
-            "nestedEgressBlocked": "nested-external-egress",
             "brokerTerminalZero": "broker-terminal",
             "sidecarClosingExact": "sidecar-closing",
             "sidecarTerminalZero": "sidecar-terminal",

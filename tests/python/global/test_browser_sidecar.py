@@ -12,7 +12,6 @@ import unittest
 from unittest import mock
 
 from scripts.pilot import browser_sidecar
-from scripts.pilot import browser_sidecar_conformance
 
 
 IMAGE_ID = "sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1"
@@ -69,6 +68,15 @@ def nested_gate_proof(
             "browserProcesses": [],
         },
     }
+
+
+def configure_gate(job: browser_sidecar.BrowserSidecarJob) -> None:
+    """Bind fixed test identities before the public job starts."""
+
+    job.configure_nested_gate(
+        artifact_sha256="2" * 64,
+        surface_manifest_sha256="3" * 64,
+    )
 
 
 class BrowserSidecarJobTests(unittest.TestCase):
@@ -204,13 +212,10 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     Path("/workspace/repo/outputs/group/exp"),
                     job_id="formal-job-1",
                 )
+                configure_gate(job)
                 authority_path = job.start()
                 authority = json.loads(authority_path.read_text(encoding="utf-8"))
-                job.configure_nested_gate(
-                    artifact_sha256="2" * 64,
-                    surface_manifest_sha256="3" * 64,
-                )
-                job.record_nested_gate(nested_gate_proof())
+                job.record_nested_gate(nested_gate_proof(nonce=job.gate_nonce))
                 receipt = job.close(workload_status=0)
 
         self.assertEqual(authority["schema"], "meshshot.browser-authority/1")
@@ -395,7 +400,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     artifact_sha256="2" * 64,
                     surface_manifest_sha256="3" * 64,
                 )
-                job.record_nested_gate(nested_gate_proof())
+                job.record_nested_gate(nested_gate_proof(nonce=job.gate_nonce))
                 with mock.patch.object(
                     browser_sidecar.subprocess,
                     "run",
@@ -440,6 +445,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     Path("/workspace/repo/outputs/group/exp"),
                     job_id="formal-job-1",
                 )
+                configure_gate(job)
                 with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
                     job.start()
 
@@ -461,7 +467,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 surface_manifest_sha256="3" * 64,
             )
             for proof in (
-                nested_gate_proof(job_id="formal-job-a"),
+                nested_gate_proof(job_id="formal-job-a", nonce=job.gate_nonce),
                 nested_gate_proof(job_id="formal-job-b", nonce="9" * 16),
             ):
                 with self.subTest(proof=proof["jobId"], nonce=proof["nonce"]):
@@ -489,8 +495,8 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(job.broker_container_name, f"{job.prefix}-broker")
         self.assertNotEqual(job.broker_container_name, job.container_name)
 
-    def test_broker_artifact_seals_current_public_conformance_client(self) -> None:
-        """The exact browser-less artifact can prove the public API without source mounts."""
+    def test_broker_artifact_contains_only_registered_program_runtime(self) -> None:
+        """Nested public parity lives in the sealed runner gate, not the Broker image."""
 
         dockerfile = (
             browser_sidecar.REPO_ROOT
@@ -500,10 +506,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
             "COPY packages/meshshot/src/meshshot ./packages/meshshot/src/meshshot",
             dockerfile,
         )
-        self.assertIn(
-            "COPY scripts/pilot/browser_sidecar_conformance.py",
-            dockerfile,
-        )
+        self.assertNotIn("browser_sidecar_conformance.py", dockerfile)
 
     def test_package_owned_contract_matches_outer_lifecycle(self) -> None:
         """Generated/vendor isolation keeps one package-owned identity source."""
@@ -535,6 +538,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 Path("/workspace/repo/outputs/group/exp"),
                 job_id="formal-job-1",
             )
+            configure_gate(job)
             job.socket_path.write_text("foreign", encoding="utf-8")
             with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
                 job.start()
@@ -602,6 +606,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     job_id="formal-job-1",
                     cancelled=lambda: cancelled,
                 )
+                configure_gate(job)
                 with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
                     job.start()
                 receipt = job.close(workload_status=None)
@@ -684,7 +689,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 artifact_sha256="2" * 64,
                 surface_manifest_sha256="3" * 64,
             )
-            job.record_nested_gate(nested_gate_proof())
+            job.record_nested_gate(nested_gate_proof(nonce=job.gate_nonce))
             with mock.patch.object(
                 browser_sidecar.subprocess,
                 "run",
@@ -875,10 +880,6 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
             },
         )
         self.assertTrue(response["result"]["screenshotDataUrl"].startswith("data:image/png;base64,"))
-        self.assertEqual(
-            browser_sidecar_conformance.validate_viewer_result(response),
-            response["result"],
-        )
         self.assertEqual(browser.contexts[0].page.keyboard.keys, ["Enter", "Enter"])
         self.assertTrue(browser.contexts[0].closed)
 
