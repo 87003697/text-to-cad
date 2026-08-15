@@ -49,7 +49,13 @@ class BrowserSidecarGateTests(unittest.TestCase):
 
         permitted = discover.call_args.kwargs["permitted_symlink_roots"]
         self.assertIn(Path("/dev/shm"), permitted)
+        self.assertTrue(
+            {Path("/bin"), Path("/lib"), Path("/lib64"), Path("/sbin")}.issubset(
+                permitted
+            )
+        )
         self.assertNotIn(Path("/dev"), permitted)
+        self.assertNotIn(Path("/"), permitted)
 
     def test_fixed_gate_calls_public_residual_and_registered_viewer(self) -> None:
         gate = load_gate()
