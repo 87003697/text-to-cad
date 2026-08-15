@@ -2133,6 +2133,74 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 + [CLIENT_ID.removeprefix("sha256:")] * 4,
             )
 
+    def test_remote_provision_accepts_exact_loaded_inventory_without_image_inspect(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="cvm-sidecar-loaded-inventory-"
+        ) as root_text:
+            handle = "cvmsp-" + "c" * 24
+            owner = "d" * 32
+            workflow = {"module": "1" * 64, "wrapper": "2" * 64}
+            state_root, _, _ = write_remote_provision_attempt_fixture(
+                Path(root_text), handle, owner, workflow
+            )
+            commands: list[list[str]] = []
+
+            def inventory_only_docker_run(
+                argv: object, **kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                del kwargs
+                arguments = list(argv)
+                commands.append(arguments)
+                if arguments[1:3] == ["image", "load"]:
+                    return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
+                if arguments[1:] == ["image", "ls", "--no-trunc", "--quiet"]:
+                    return subprocess.CompletedProcess(
+                        arguments, 0, f"{SIDECAR_ID}\n{CLIENT_ID}\n", ""
+                    )
+                if "inspect" in arguments:
+                    return subprocess.CompletedProcess(
+                        arguments, 1, "", "image inspect is unavailable"
+                    )
+                raise AssertionError(f"unexpected command: {arguments}")
+
+            enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
+            with (
+                mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_workflow_file_hashes",
+                    return_value=workflow,
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe.shutil, "disk_usage", return_value=enough
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe.subprocess,
+                    "run",
+                    side_effect=inventory_only_docker_run,
+                ),
+            ):
+                receipt = cvm_sidecar_probe.remote_provision(handle, owner)
+
+            self.assertEqual(
+                receipt["status"], "provisioned", receipt.get("errorCheck")
+            )
+            self.assertEqual(
+                commands,
+                [
+                    [
+                        "docker",
+                        "image",
+                        "load",
+                        "--input",
+                        os.fspath(
+                            state_root / handle / "incoming" / "images.tar"
+                        ),
+                    ],
+                    ["docker", "image", "ls", "--no-trunc", "--quiet"],
+                ],
+            )
+
     def test_remote_provision_cleanup_failure_dominates_hash_failure(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-cleanup-dominates-") as root_text:
             root = Path(root_text)
