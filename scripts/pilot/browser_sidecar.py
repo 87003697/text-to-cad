@@ -5,16 +5,27 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
 import re
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlsplit
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MESHSOT_SRC = REPO_ROOT / "packages" / "meshshot" / "src"
+if str(MESHSOT_SRC) not in sys.path:
+    sys.path.insert(0, str(MESHSOT_SRC))
+
+from meshshot.profile import load_profile  # noqa: E402
 
 
 IMAGE_ID = "sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1"
@@ -26,6 +37,8 @@ PROGRAMS = {
 AUTHORITY_SCHEMA = "meshshot.browser-authority/1"
 BROKER_SCHEMA = "meshshot.browser-sidecar.broker/1"
 RECEIPT_SCHEMA = "meshshot.browser-sidecar.job-receipt/1"
+REQUEST_SCHEMA = "meshshot.browser-sidecar.render-request/2"
+RESPONSE_SCHEMA = "meshshot.browser-sidecar.render-response/1"
 JOB_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 LOOPBACK_PORT = re.compile(r"127\.0\.0\.1:([1-9][0-9]{0,4})\Z")
@@ -39,6 +52,9 @@ IMAGE_PROJECTIONS = (
         IMAGE_SOURCE_REVISION,
     ),
 )
+VIEW_ORDER = ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
+OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
+MAX_REQUEST_BYTES = 1024 * 1024
 
 
 class BrowserSidecarError(RuntimeError):
@@ -81,6 +97,195 @@ def _write_json_atomic(path: Path, payload: object) -> None:
         encoding="utf-8",
     )
     os.replace(temporary, path)
+
+
+def _exact_object(value: Any, keys: set[str], label: str) -> dict[str, Any]:
+    """Require one object with exactly the registered public keys."""
+
+    if not isinstance(value, dict) or set(value) != keys:
+        raise BrowserSidecarError(
+            f"{label} schema is invalid",
+            check=f"{label}-schema",
+        )
+    return value
+
+
+def _geometry(value: Any, label: str) -> dict[str, Any]:
+    """Validate one bounded indexed-triangle geometry payload."""
+
+    geometry = _exact_object(value, {"vertices", "faces"}, label)
+    vertices = geometry["vertices"]
+    faces = geometry["faces"]
+    if (
+        not isinstance(vertices, list)
+        or not 0 < len(vertices) <= 10_000
+        or any(
+            not isinstance(vertex, list)
+            or len(vertex) != 3
+            or any(
+                not isinstance(coordinate, (int, float))
+                or isinstance(coordinate, bool)
+                or not math.isfinite(coordinate)
+                for coordinate in vertex
+            )
+            for vertex in vertices
+        )
+    ):
+        raise BrowserSidecarError(
+            f"{label} vertices are invalid",
+            check=f"{label}-geometry",
+        )
+    if (
+        not isinstance(faces, list)
+        or not 0 < len(faces) <= 20_000
+        or any(
+            not isinstance(face, list)
+            or len(face) != 3
+            or any(
+                not isinstance(index, int)
+                or isinstance(index, bool)
+                or index < 0
+                or index >= len(vertices)
+                for index in face
+            )
+            for face in faces
+        )
+    ):
+        raise BrowserSidecarError(
+            f"{label} faces are invalid",
+            check=f"{label}-geometry",
+        )
+    return geometry
+
+
+class RegisteredProgramBroker:
+    """Public exact-schema adapter over one outer-owned Playwright connection."""
+
+    def __init__(self, browser: Any, job_id: str) -> None:
+        """Bind one exact job and immutable profile to a stable connection."""
+
+        if JOB_ID.fullmatch(job_id) is None:
+            raise BrowserSidecarError("job identity is invalid", check="job-id")
+        self.browser = browser
+        self.job_id = job_id
+        self.profile = load_profile().profile
+        self.request_count = 0
+
+    def _residual_payload(self, value: Any) -> dict[str, Any]:
+        """Validate the only formal eight-view residual input schema."""
+
+        payload = _exact_object(
+            value,
+            {"reference", "candidate", "variant", "exteriorDirections", "options"},
+            "residual-payload",
+        )
+        reference = _geometry(payload["reference"], "reference")
+        candidate = _geometry(payload["candidate"], "candidate")
+        if payload["variant"] not in {"step", "final"}:
+            raise BrowserSidecarError(
+                "residual variant is invalid",
+                check="residual-variant",
+            )
+        directions = payload["exteriorDirections"]
+        if (
+            not isinstance(directions, list)
+            or len(set(directions)) != len(directions)
+            or any(direction not in OUTSIDE_DIRECTIONS for direction in directions)
+        ):
+            raise BrowserSidecarError(
+                "residual directions are invalid",
+                check="residual-directions",
+            )
+        options = _exact_object(
+            payload["options"],
+            {"cameraPolicy", "canonicalPostprocess"},
+            "residual-options",
+        )
+        if options != {
+            "cameraPolicy": "profile-fixed",
+            "canonicalPostprocess": True,
+        }:
+            raise BrowserSidecarError(
+                "residual options are not registered",
+                check="residual-options",
+            )
+        return {
+            "profile": self.profile,
+            "variant": payload["variant"],
+            "reference": reference,
+            "candidate": candidate,
+            "exteriorDirections": directions,
+        }
+
+    def execute(self, value: Any) -> Mapping[str, object]:
+        """Execute one exact Render Program in a fresh context and page."""
+
+        request = _exact_object(
+            value,
+            {"schema", "jobId", "imageId", "program", "payload"},
+            "render-request",
+        )
+        if (
+            request["schema"] != REQUEST_SCHEMA
+            or request["jobId"] != self.job_id
+            or request["imageId"] != IMAGE_ID
+            or request["program"] != "residual"
+        ):
+            raise BrowserSidecarError(
+                "render request identity is invalid",
+                check="render-request-identity",
+            )
+        payload = self._residual_payload(request["payload"])
+        context = self.browser.new_context(
+            viewport={"width": 64, "height": 64},
+            device_scale_factor=1,
+        )
+        try:
+            page = context.new_page()
+            page.goto(
+                "http://127.0.0.1:4174/render.html",
+                wait_until="load",
+                timeout=120_000,
+            )
+            page.wait_for_function(
+                "typeof window.__meshshotRender === 'function'",
+                timeout=120_000,
+            )
+            result = page.evaluate(
+                "(renderPayload) => window.__meshshotRender(renderPayload)",
+                payload,
+            )
+            result = _exact_object(
+                result,
+                {"ok", "pngDataUrl", "views"},
+                "residual-result",
+            )
+            views = result["views"]
+            if (
+                result["ok"] is not True
+                or not isinstance(result["pngDataUrl"], str)
+                or not result["pngDataUrl"].startswith("data:image/png;base64,")
+                or not isinstance(views, list)
+                or tuple(
+                    view.get("name") if isinstance(view, dict) else None
+                    for view in views
+                )
+                != VIEW_ORDER
+            ):
+                raise BrowserSidecarError(
+                    "residual result predicates failed",
+                    check="residual-result",
+                )
+            self.request_count += 1
+            return {
+                "schema": RESPONSE_SCHEMA,
+                "jobId": self.job_id,
+                "imageId": IMAGE_ID,
+                "program": "residual",
+                "result": result,
+            }
+        finally:
+            context.close()
 
 
 class BrowserSidecarJob:
@@ -271,10 +476,6 @@ class BrowserSidecarJob:
             str(self.socket_path),
             "--browser-endpoint",
             f"ws://127.0.0.1:{ports[3000]}{endpoint_path}",
-            "--viewer-origin",
-            f"http://127.0.0.1:{ports[4173]}",
-            "--residual-origin",
-            f"http://127.0.0.1:{ports[4174]}",
         ]
         try:
             self.broker = subprocess.Popen(
@@ -388,10 +589,6 @@ class BrowserSidecarJob:
                 "/home/pwuser:rw,nosuid,nodev,size=64m,uid=1001,gid=1001,mode=700",
                 "-p",
                 "127.0.0.1::3000",
-                "-p",
-                "127.0.0.1::4173",
-                "-p",
-                "127.0.0.1::4174",
                 "-e",
                 f"BROWSER_SIDECAR_JOB_ID={self.job_id}",
                 IMAGE_ID,
@@ -404,11 +601,11 @@ class BrowserSidecarJob:
                 )
             self.container_id = container_id
             self.readiness = self._wait_sidecar_ready()
-            ports = {
-                port: self._published_port(port)
-                for port in (3000, 4173, 4174)
-            }
-            self._start_broker(str(self.readiness["endpointPath"]), ports)
+            browser_port = self._published_port(3000)
+            self._start_broker(
+                str(self.readiness["endpointPath"]),
+                {3000: browser_port},
+            )
             authority = {
                 "schema": AUTHORITY_SCHEMA,
                 "jobId": self.job_id,
@@ -601,10 +798,131 @@ class BrowserSidecarJob:
 
 
 def run_broker(args: argparse.Namespace) -> int:
-    """Run the registered-program broker (implemented by the next TDD slice)."""
+    """Serve exact registered requests over one job-private Unix socket."""
 
-    del args
-    return 2
+    if JOB_ID.fullmatch(args.job_id) is None or not args.socket.is_absolute():
+        return 2
+    parsed = urlsplit(args.browser_endpoint)
+    if (
+        parsed.scheme != "ws"
+        or parsed.hostname != "127.0.0.1"
+        or parsed.port is None
+        or not parsed.path.startswith("/")
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        return 2
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return 2
+
+    closing = False
+
+    def request_close(signum: int, frame: object) -> None:
+        """Request broker-loop termination without changing request content."""
+
+        del signum, frame
+        nonlocal closing
+        closing = True
+
+    previous = {
+        signum: signal.signal(signum, request_close)
+        for signum in (signal.SIGINT, signal.SIGTERM)
+    }
+    server: socket.socket | None = None
+    args.socket.unlink(missing_ok=True)
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.connect(
+                args.browser_endpoint,
+                timeout=15_000,
+            )
+            try:
+                broker = RegisteredProgramBroker(browser, args.job_id)
+                server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                server.bind(str(args.socket))
+                os.chmod(args.socket, 0o600)
+                server.listen(4)
+                server.settimeout(0.2)
+                print(
+                    json.dumps(
+                        {
+                            "event": "ready",
+                            "schema": BROKER_SCHEMA,
+                            "jobId": args.job_id,
+                            "imageId": IMAGE_ID,
+                            "programs": PROGRAMS,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    flush=True,
+                )
+                while not closing:
+                    try:
+                        connection, _ = server.accept()
+                    except TimeoutError:
+                        continue
+                    with connection:
+                        connection.settimeout(120)
+                        raw = bytearray()
+                        try:
+                            while True:
+                                chunk = connection.recv(65536)
+                                if not chunk:
+                                    break
+                                raw.extend(chunk)
+                                if len(raw) > MAX_REQUEST_BYTES + 1:
+                                    raise BrowserSidecarError(
+                                        "render request is too large",
+                                        check="render-request-size",
+                                    )
+                            if not raw.endswith(b"\n") or b"\n" in raw[:-1]:
+                                raise BrowserSidecarError(
+                                    "render request framing is invalid",
+                                    check="render-request-framing",
+                                )
+                            request = _strict_json(
+                                bytes(raw[:-1]).decode("utf-8"),
+                                "render-request",
+                            )
+                            response = broker.execute(request)
+                        except (BrowserSidecarError, UnicodeDecodeError) as exc:
+                            response = {
+                                "schema": "meshshot.browser-sidecar.render-error/1",
+                                "jobId": args.job_id,
+                                "imageId": IMAGE_ID,
+                                "program": None,
+                                "error": {
+                                    "classification": (
+                                        exc.check
+                                        if isinstance(exc, BrowserSidecarError)
+                                        else "render-request-encoding"
+                                    )
+                                },
+                            }
+                        connection.sendall(
+                            json.dumps(
+                                response,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ).encode("ascii")
+                            + b"\n"
+                        )
+            finally:
+                browser.close()
+    except (OSError, Exception):
+        return 1
+    finally:
+        if server is not None:
+            server.close()
+        args.socket.unlink(missing_ok=True)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+    return 0
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -616,8 +934,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     broker.add_argument("--job-id", required=True)
     broker.add_argument("--socket", type=Path, required=True)
     broker.add_argument("--browser-endpoint", required=True)
-    broker.add_argument("--viewer-origin", required=True)
-    broker.add_argument("--residual-origin", required=True)
     return parser.parse_args(argv)
 
 
