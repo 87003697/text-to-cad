@@ -1990,7 +1990,7 @@ def _run_remote_probe(
             "pidsLimit": host_config.get("PidsLimit"),
             "shmSize": host_config.get("ShmSize"),
         }
-        request_text = _canonical_json(REQUEST).decode("ascii") + "\n"
+        request_text = _canonical_json(REQUEST).decode("ascii")
         client_created = _docker(
             "container", "create", "--name", client,
             "--label", label, "--label", owner_label,

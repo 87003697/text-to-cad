@@ -1429,7 +1429,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 textwrap.dedent(
                     """\
                     #!/usr/bin/env python3
-                    import hashlib, json, os, pathlib, sys
+                    import json, os, pathlib, sys
                     log = pathlib.Path(os.environ["FAKE_TRANSPORT_LOG"])
                     with log.open("a") as stream:
                         stream.write(json.dumps({"tool": "ssh", "argv": sys.argv[1:]}) + "\\n")
@@ -3047,7 +3047,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 textwrap.dedent(
                     """\
                     #!/usr/bin/env python3
-                    import json, os, pathlib, sys
+                    import hashlib, json, os, pathlib, sys
                     log = pathlib.Path(os.environ["FAKE_DOCKER_LOG"])
                     state_path = pathlib.Path(os.environ["FAKE_DOCKER_STATE"])
                     state = json.loads(state_path.read_text()) if state_path.exists() else {"containers": {}, "networks": {}}
@@ -3165,7 +3165,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 stderr=subprocess.PIPE,
             )
 
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
             receipt = json.loads(result.stdout)
             self.assertEqual(receipt["status"], "succeeded")
             self.assertTrue(receipt["absenceProof"]["proved"])
