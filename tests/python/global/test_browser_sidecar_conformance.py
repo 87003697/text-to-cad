@@ -493,6 +493,54 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
         self.assertFalse(published["receipt"]["retryAllowed"])
         run.assert_not_called()
 
+    def test_host_preserves_construction_cleanup_failure_precedence(self) -> None:
+        """A partial-layout cleanup failure dominates its construction error."""
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            parent = Path(temp).resolve()
+            capability = parent / "partial-capability"
+            capability.mkdir(mode=0o700)
+            evidence = parent / "conformance.json"
+            real_rmdir = Path.rmdir
+
+            def fail_broker_rmdir(path: Path) -> None:
+                if path == capability / "broker":
+                    raise OSError("injected cleanup failure")
+                real_rmdir(path)
+
+            with (
+                mock.patch.object(
+                    conformance.shutil, "which", return_value="/usr/bin/docker"
+                ),
+                mock.patch.object(
+                    browser_sidecar.tempfile,
+                    "mkdtemp",
+                    return_value=os.fspath(capability),
+                ),
+                mock.patch.object(
+                    browser_sidecar.Path,
+                    "symlink_to",
+                    side_effect=OSError("injected construction failure"),
+                ),
+                mock.patch.object(
+                    browser_sidecar.Path,
+                    "rmdir",
+                    autospec=True,
+                    side_effect=fail_broker_rmdir,
+                ),
+                mock.patch.object(subprocess, "run") as run,
+            ):
+                status = conformance.run_host(evidence)
+            published = json.loads(evidence.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 2)
+        self.assertEqual(
+            published["receipt"]["failureCheck"], "broker-capability-dir-remove"
+        )
+        self.assertTrue(published["receipt"]["predicates"]["absenceProved"])
+        self.assertFalse(published["receipt"]["retryAllowed"])
+        run.assert_not_called()
+
     def test_surface_discovery_has_one_bounded_cpu(self) -> None:
         """The exhaustive immutable scan finishes inside the fixed host limit."""
 
