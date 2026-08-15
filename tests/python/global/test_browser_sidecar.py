@@ -111,18 +111,26 @@ class BrowserSidecarJobTests(unittest.TestCase):
             if command[1] == "run":
                 return subprocess.CompletedProcess(command, 0, CONTAINER_ID + "\n", "")
             if command[1] == "logs":
+                records = [
+                    {
+                        "event": "ready",
+                        "jobId": "formal-job-1",
+                        "endpointPath": "/browser/session-token",
+                        "programs": PROGRAMS,
+                    }
+                ]
+                if any(call[1] == "stop" for call in calls):
+                    records.append(
+                        {
+                            "event": "closing",
+                            "jobId": "formal-job-1",
+                            "reason": "SIGTERM",
+                        }
+                    )
                 return subprocess.CompletedProcess(
                     command,
                     0,
-                    json.dumps(
-                        {
-                            "event": "ready",
-                            "jobId": "formal-job-1",
-                            "endpointPath": "/browser/session-token",
-                            "programs": PROGRAMS,
-                        }
-                    )
-                    + "\n",
+                    "".join(json.dumps(record) + "\n" for record in records),
                     "",
                 )
             if command[1] == "port":
@@ -167,6 +175,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "succeeded")
         self.assertTrue(receipt["absenceProof"]["proved"])
         self.assertEqual(receipt["cleanupErrors"], [])
+        self.assertEqual(receipt["terminal"]["closingObserved"], True)
         self.assertEqual(
             receipt["brokerTerminal"],
             {
