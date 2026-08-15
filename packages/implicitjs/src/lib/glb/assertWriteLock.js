@@ -40,10 +40,23 @@ export function assertWriteLock(packageDir, runId) {
   const sentinel = writeLockPath(packageDir);
   const expected = String(runId || "").trim();
   let stamped = "";
+  let readError = null;
   try {
     stamped = fs.readFileSync(sentinel).subarray(0, RUN_ID_BYTES).toString("ascii").trim();
-  } catch {
-    stamped = "";
+  } catch (error) {
+    // Say WHICH failure this is. Collapsing an unreadable sentinel into "" reported a
+    // mismatch against a file that held exactly the right run id, which is how issue #269
+    // presented: EBUSY from a mandatory Windows lock, described as a lock violation. The
+    // lock no longer sits on this file, so a read error here means something else -- and
+    // whatever it is, the reader deserves to be told about it rather than misdirected.
+    readError = error;
+  }
+  if (readError) {
+    throw new Error(
+      `could not read the generation sentinel for ${packageDir}: `
+      + `${readError.code || readError.message} reading ${sentinel}. `
+      + "The run id could not be checked, so the package was not written."
+    );
   }
   if (!expected || stamped !== expected) {
     throw new Error(

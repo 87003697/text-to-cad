@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { MeshoptDecoder, MeshoptEncoder } from "meshoptimizer";
@@ -203,4 +206,38 @@ test("an authored colour round-trips through GLB as the same sRGB hex", async ()
   const gltf = await parseGlb(bytes);
   const readBack = collectMeshes(gltf).map((mesh) => `#${mesh.material.color.getHexString()}`);
   assert.deepEqual(readBack, authored);
+});
+
+test("an unreadable sentinel is reported as a read failure, not a lock violation", async () => {
+  // Issue #269: a mandatory Windows lock made the sentinel unreadable, the catch collapsed that
+  // into "", and the error then claimed the run id did not match a file that held exactly the
+  // right run id. The two failures must not wear the same message.
+  const { assertWriteLock, writeLockPath } = await import("./assertWriteLock.js");
+  const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "writelock-"));
+  const packageDir = path.join(directory, "part.step.py");
+  await fs.promises.mkdir(packageDir, { recursive: true });
+  const sentinel = writeLockPath(packageDir);
+
+  // A directory where the sentinel should be is unreadable in the same way a locked file is:
+  // readFileSync throws rather than returning bytes.
+  await fs.promises.mkdir(sentinel, { recursive: true });
+  assert.throws(
+    () => assertWriteLock(packageDir, "a".repeat(32)),
+    (error) => {
+      assert.match(error.message, /could not read the generation sentinel/u);
+      assert.doesNotMatch(error.message, /does not match/u, "must not blame the run id");
+      return true;
+    }
+  );
+  await fs.promises.rm(sentinel, { recursive: true, force: true });
+
+  // A readable sentinel with the wrong id still reports a mismatch.
+  await fs.promises.writeFile(sentinel, "b".repeat(32));
+  assert.throws(
+    () => assertWriteLock(packageDir, "a".repeat(32)),
+    /does not match/u
+  );
+  // And the matching case passes.
+  await fs.promises.writeFile(sentinel, "a".repeat(32));
+  assertWriteLock(packageDir, "a".repeat(32));
 });
