@@ -2043,6 +2043,72 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         json.loads((state / "provision.json").read_text()), receipt
                     )
 
+    def test_remote_provision_uses_bare_config_digest_as_portable_image_address(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="cvm-sidecar-bare-image-address-"
+        ) as root_text:
+            handle = "cvmsp-" + "a" * 24
+            owner = "b" * 32
+            workflow = {"module": "1" * 64, "wrapper": "2" * 64}
+            state_root, _, _ = write_remote_provision_attempt_fixture(
+                Path(root_text), handle, owner, workflow
+            )
+            inspected_addresses: list[str] = []
+
+            def older_docker_run(
+                argv: object, **kwargs: object
+            ) -> subprocess.CompletedProcess[str]:
+                del kwargs
+                arguments = list(argv)
+                if arguments[1:3] == ["image", "load"]:
+                    return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
+                if arguments[1:3] != ["image", "inspect"]:
+                    raise AssertionError(f"unexpected command: {arguments}")
+                inspected_address = arguments[-1]
+                inspected_addresses.append(inspected_address)
+                if inspected_address.startswith("sha256:"):
+                    return subprocess.CompletedProcess(
+                        arguments, 1, "", "unsupported canonical image address"
+                    )
+                canonical_id = "sha256:" + inspected_address
+                values = {
+                    "{{.Id}}": canonical_id,
+                    "{{.Os}}": "linux",
+                    "{{.Architecture}}": "amd64",
+                    '{{index .Config.Labels "org.opencontainers.image.revision"}}': SOURCE_REVISION,
+                }
+                return subprocess.CompletedProcess(
+                    arguments, 0, values[arguments[4]] + "\n", ""
+                )
+
+            enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
+            with (
+                mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_workflow_file_hashes",
+                    return_value=workflow,
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe.shutil, "disk_usage", return_value=enough
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe.subprocess,
+                    "run",
+                    side_effect=older_docker_run,
+                ),
+            ):
+                receipt = cvm_sidecar_probe.remote_provision(handle, owner)
+
+            self.assertEqual(
+                receipt["status"], "provisioned", receipt.get("errorCheck")
+            )
+            self.assertEqual(
+                inspected_addresses,
+                [SIDECAR_ID.removeprefix("sha256:")] * 4
+                + [CLIENT_ID.removeprefix("sha256:")] * 4,
+            )
+
     def test_remote_provision_cleanup_failure_dominates_hash_failure(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-cleanup-dominates-") as root_text:
             root = Path(root_text)
