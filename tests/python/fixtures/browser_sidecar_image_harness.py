@@ -103,7 +103,7 @@ def main() -> int:
         ).encode("ascii")
     ).hexdigest()
     broker_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    broker_listener.bind(os.fspath(CAPABILITY / "browser.sock"))
+    broker_listener.bind(os.fspath(CAPABILITY / "broker" / "browser.sock"))
     broker_listener.listen(4)
     gate_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     gate_listener.bind(os.fspath(CAPABILITY / "gate.sock"))
