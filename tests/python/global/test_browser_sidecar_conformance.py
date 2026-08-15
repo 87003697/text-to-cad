@@ -398,17 +398,13 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
                     conformance.shutil, "which", return_value="/usr/bin/docker"
                 ),
                 mock.patch.object(subprocess, "run") as run,
+                mock.patch.object(conformance, "_write_atomic") as write,
             ):
                 status = conformance.run_host(evidence)
-            published = json.loads(evidence.read_text(encoding="utf-8"))
 
         self.assertEqual(status, 2)
-        self.assertEqual(published["status"], "failed")
-        self.assertEqual(
-            published["receipt"]["failureCheck"], "capability-parent-private"
-        )
-        self.assertTrue(published["receipt"]["predicates"]["absenceProved"])
-        self.assertFalse(published["receipt"]["retryAllowed"])
+        self.assertFalse(evidence.exists())
+        write.assert_not_called()
         run.assert_not_called()
 
     def test_host_rejects_symlink_evidence_parent_and_publishes_canonically(
@@ -435,17 +431,26 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             ):
                 status = conformance.run_host(evidence)
 
-            published = json.loads(canonical_evidence.read_text(encoding="utf-8"))
+        self.assertEqual(status, 2)
+        self.assertFalse(canonical_evidence.exists())
+        write.assert_not_called()
+        run.assert_not_called()
+
+    def test_host_publishes_docker_resolution_failure_in_trusted_parent(self) -> None:
+        """After root admission, pre-resource failure has terminal evidence."""
+
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            parent = Path(temp).resolve()
+            evidence = parent / "conformance.json"
+            with mock.patch.object(conformance.shutil, "which", return_value=None):
+                status = conformance.run_host(evidence)
+            published = json.loads(evidence.read_text(encoding="utf-8"))
 
         self.assertEqual(status, 2)
         self.assertEqual(published["status"], "failed")
-        self.assertEqual(
-            published["receipt"]["failureCheck"], "capability-parent-canonical"
-        )
+        self.assertEqual(published["receipt"]["failureCheck"], "docker-resolution")
         self.assertTrue(published["receipt"]["predicates"]["absenceProved"])
         self.assertFalse(published["receipt"]["retryAllowed"])
-        self.assertEqual(write.call_args.args[0], canonical_evidence)
-        run.assert_not_called()
 
     def test_surface_discovery_has_one_bounded_cpu(self) -> None:
         """The exhaustive immutable scan finishes inside the fixed host limit."""
