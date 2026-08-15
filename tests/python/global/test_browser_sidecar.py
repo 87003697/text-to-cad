@@ -12,6 +12,7 @@ import unittest
 from unittest import mock
 
 from scripts.pilot import browser_sidecar
+from scripts.pilot import browser_sidecar_conformance
 
 
 IMAGE_ID = "sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1"
@@ -70,9 +71,9 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     bind = next(value for value in command if value.startswith("type=bind,"))
                     source = Path(bind.split("src=", 1)[1].split(",dst=", 1)[0])
                     created_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    created_socket.bind(str(source / "browser-sidecar.sock"))
+                    created_socket.bind(str(source / "browser.sock"))
                     created_socket.close()
-                    (source / "browser-sidecar.sock").chmod(0o600)
+                    (source / "browser.sock").chmod(0o600)
                     return subprocess.CompletedProcess(command, 0, BROKER_CONTAINER_ID + "\n", "")
                 return subprocess.CompletedProcess(command, 0, CONTAINER_ID + "\n", "")
             if command[1] == "logs":
@@ -101,6 +102,12 @@ class BrowserSidecarJobTests(unittest.TestCase):
                                 "acceptedRequests": 2,
                                 "freshContexts": 3,
                                 "programCounts": {"residual": 1, "viewer": 1},
+                                "programPredicates": {
+                                    "residualPublicParity": True,
+                                    "residualEightView": True,
+                                    "viewerProjectionChanged": True,
+                                    "viewerArtifactClean": True,
+                                },
                             }
                         )
                     return subprocess.CompletedProcess(
@@ -161,29 +168,47 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(authority["imageId"], IMAGE_ID)
         self.assertEqual(authority["programs"], PROGRAMS)
         self.assertEqual(
-            authority["socketPath"],
-            "/run/meshshot-browser/browser-sidecar.sock",
+            set(authority),
+            {"schema", "jobId", "imageId", "programs"},
         )
         self.assertEqual(job.sandbox_authority_path, Path("/run/meshshot-browser/authority.json"))
         self.assertFalse(authority_path.parent.exists())
         self.assertEqual(receipt["status"], "succeeded")
-        self.assertTrue(receipt["absenceProof"]["proved"])
-        self.assertEqual(receipt["cleanupErrors"], [])
         self.assertEqual(receipt["brokerImageId"], browser_sidecar.BROKER_IMAGE_ID)
-        self.assertEqual(receipt["ownedResources"]["broker"]["id"], BROKER_CONTAINER_ID)
-        self.assertEqual(receipt["terminal"]["closingObserved"], True)
         self.assertEqual(
-            receipt["brokerTerminal"],
+            set(receipt),
             {
-                "event": "terminal",
-                "schema": "meshshot.browser-sidecar.broker/1",
-                "jobId": "formal-job-1",
-                "imageId": IMAGE_ID,
+                "schema",
+                "status",
+                "jobId",
+                "imageId",
+                "imageSourceRevision",
+                "brokerImageId",
+                "brokerImageSourceRevision",
+                "brokerBaseImageId",
+                "programs",
+                "predicates",
+                "counts",
+                "failureCheck",
+                "retryAllowed",
+            },
+        )
+        self.assertEqual(
+            receipt["counts"],
+            {
                 "acceptedRequests": 2,
                 "freshContexts": 3,
                 "programCounts": {"residual": 1, "viewer": 1},
             },
         )
+        self.assertTrue(all(receipt["predicates"].values()))
+        self.assertIsNone(receipt["failureCheck"])
+        serialized = json.dumps(receipt, sort_keys=True)
+        self.assertNotIn(NETWORK_ID, serialized)
+        self.assertNotIn(CONTAINER_ID, serialized)
+        self.assertNotIn(BROKER_CONTAINER_ID, serialized)
+        for forbidden in ("Pid", "StartedAt", "FinishedAt", "stderr", "argv"):
+            self.assertNotIn(forbidden, serialized)
         runs = [command for command in calls if command[1] == "run"]
         self.assertEqual(len(runs), 2)
         sidecar_run, broker_run = runs
@@ -227,8 +252,8 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 receipt = job.close(workload_status=0)
 
         self.assertEqual(receipt["status"], "failed")
-        self.assertIn("sidecar-stop", receipt["cleanupErrors"])
-        self.assertTrue(receipt["absenceProof"]["proved"])
+        self.assertEqual(receipt["failureCheck"], "sidecar-stop")
+        self.assertTrue(receipt["predicates"]["absenceProved"])
         self.assertTrue(any(command[1:3] == ["container", "ls"] for command in calls))
         self.assertTrue(any(command[1:3] == ["network", "ls"] for command in calls))
 
@@ -309,6 +334,23 @@ class BrowserSidecarJobTests(unittest.TestCase):
             dockerfile,
         )
 
+    def test_package_owned_contract_matches_outer_lifecycle(self) -> None:
+        """Generated/vendor isolation keeps one package-owned identity source."""
+
+        contract = json.loads(
+            (
+                browser_sidecar.REPO_ROOT
+                / "packages/meshshot/src/meshshot/browser_contract.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(contract["sidecarImageId"], browser_sidecar.IMAGE_ID)
+        self.assertEqual(contract["programs"], browser_sidecar.PROGRAMS)
+        self.assertEqual(contract["authoritySchema"], browser_sidecar.AUTHORITY_SCHEMA)
+        self.assertEqual(contract["requestSchema"], browser_sidecar.REQUEST_SCHEMA)
+        self.assertEqual(contract["responseSchema"], browser_sidecar.RESPONSE_SCHEMA)
+        self.assertEqual(contract["authorityPath"], "/run/meshshot-browser/authority.json")
+        self.assertEqual(contract["socketPath"], "/run/meshshot-browser/browser.sock")
+
     def test_public_job_rejects_preexisting_capability_socket(self) -> None:
         """A pre-existing path is foreign state and is never unlinked or adopted."""
 
@@ -341,6 +383,99 @@ class BrowserSidecarJobTests(unittest.TestCase):
             )
 
         self.assertEqual(job.capability_dir, returned.resolve())
+
+    def test_startup_signal_after_network_create_closes_exact_resources(self) -> None:
+        """Cancellation at a startup boundary enters the same terminal cleanup."""
+
+        calls: list[list[str]] = []
+        cancelled = False
+
+        def docker(argv, **kwargs):
+            nonlocal cancelled
+            command = list(argv)
+            calls.append(command)
+            if command[1:4] == ["inspect", "--type=image", "--format"]:
+                projection = command[4]
+                is_broker = command[5] == browser_sidecar.BROKER_IMAGE_ID.removeprefix("sha256:")
+                values = {
+                    "{{.Id}}": browser_sidecar.BROKER_IMAGE_ID if is_broker else IMAGE_ID,
+                    "{{.Os}}": "linux",
+                    "{{.Architecture}}": "amd64",
+                    '{{index .Config.Labels "org.opencontainers.image.revision"}}': (
+                        browser_sidecar.BROKER_IMAGE_SOURCE_REVISION if is_broker else SOURCE_REVISION
+                    ),
+                    '{{index .Config.Labels "io.text-to-cad.browser-sidecar-broker-base"}}': browser_sidecar.BROKER_BASE_IMAGE_ID,
+                }
+                return subprocess.CompletedProcess(command, 0, values[projection] + "\n", "")
+            if command[1:3] in (["container", "inspect"], ["network", "inspect"]):
+                return subprocess.CompletedProcess(command, 1, "", "not found")
+            if command[1:3] == ["network", "create"]:
+                cancelled = True
+                return subprocess.CompletedProcess(command, 0, NETWORK_ID + "\n", "")
+            if command[1:3] in (["container", "ls"], ["network", "ls"]):
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as temp:
+            with (
+                mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(browser_sidecar.subprocess, "run", side_effect=docker),
+            ):
+                job = browser_sidecar.BrowserSidecarJob(
+                    Path(temp),
+                    Path("/workspace/repo/outputs/group/exp"),
+                    job_id="formal-job-1",
+                    cancelled=lambda: cancelled,
+                )
+                with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
+                    job.start()
+                receipt = job.close(workload_status=None)
+
+        self.assertEqual(caught.exception.check, "startup-signal")
+        self.assertEqual(receipt["failureCheck"], "startup-signal")
+        self.assertTrue(receipt["predicates"]["absenceProved"])
+        self.assertFalse(any(command[1] == "run" for command in calls))
+        self.assertTrue(any(command[1:3] == ["network", "rm"] for command in calls))
+
+    def test_cleanup_failure_precedence_and_retained_override(self) -> None:
+        """First cleanup failure is stable, except positive retention dominates."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = browser_sidecar.BrowserSidecarJob(
+                Path(temp),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+            )
+            job.docker = "/usr/bin/docker"
+            job.cleanup_errors.extend(["sidecar-stop", "network-remove"])
+            with mock.patch.object(
+                browser_sidecar.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0, "", ""),
+            ):
+                first = job.close(workload_status=0)
+        self.assertEqual(first["failureCheck"], "sidecar-stop")
+
+        with tempfile.TemporaryDirectory() as temp:
+            retained_job = browser_sidecar.BrowserSidecarJob(
+                Path(temp),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+            )
+            retained_job.docker = "/usr/bin/docker"
+            retained_job.cleanup_errors.extend(["sidecar-stop", "network-remove"])
+            with mock.patch.object(
+                retained_job,
+                "_prove_absence",
+                return_value={
+                    "containers": ["retained"],
+                    "networks": [],
+                    "errors": [],
+                    "proved": False,
+                },
+            ):
+                retained = retained_job.close(workload_status=0)
+        self.assertEqual(retained["failureCheck"], "retained-resource")
 
 
 class RegisteredProgramBrokerTests(unittest.TestCase):
@@ -508,6 +643,8 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
         )
 
         self.assertEqual(response["program"], "viewer")
+        self.assertIs(response["result"]["bodyMentionsFixture"], True)
+        self.assertIs(response["result"]["bodyHasArtifactError"], False)
         self.assertEqual(
             response["result"]["inspection"],
             {
@@ -519,6 +656,10 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
             },
         )
         self.assertTrue(response["result"]["screenshotDataUrl"].startswith("data:image/png;base64,"))
+        self.assertEqual(
+            browser_sidecar_conformance.validate_viewer_result(response),
+            response["result"],
+        )
         self.assertEqual(browser.contexts[0].page.keyboard.keys, ["Enter", "Enter"])
         self.assertTrue(browser.contexts[0].closed)
 

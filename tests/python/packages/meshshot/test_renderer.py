@@ -45,7 +45,6 @@ class ResidualRendererTests(unittest.TestCase):
                         "jobId": "formal-job-1",
                         "imageId": "sha256:"
                         + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
-                        "socketPath": "/run/meshshot-browser/browser-sidecar.sock",
                         "programs": {
                             "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
                             "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
@@ -59,9 +58,10 @@ class ResidualRendererTests(unittest.TestCase):
             with (
                 mock.patch.dict(
                     os.environ,
-                    {"MESHSHOT_BROWSER_AUTHORITY_FILE": str(authority)},
+                    {"MESHSHOT_BROWSER_AUTHORITY_FILE": str(target)},
                     clear=False,
                 ),
+                mock.patch("meshshot.renderer._AUTHORITY_PATH", authority),
                 mock.patch("playwright.sync_api.sync_playwright") as local_browser,
             ):
                 with self.assertRaisesRegex(MeshshotError, "authority file"):
@@ -82,7 +82,6 @@ class ResidualRendererTests(unittest.TestCase):
                         "jobId": "formal-job-1",
                         "imageId": "sha256:"
                         + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
-                        "socketPath": "/workspace/repo/outputs/group/exp/run/browser.sock",
                         "programs": {
                             "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
                             "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
@@ -91,6 +90,7 @@ class ResidualRendererTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            authority_path.chmod(0o444)
             image = Image.new("RGB", (504, 1008), (17, 23, 31))
             encoded = BytesIO()
             image.save(encoded, format="PNG")
@@ -142,9 +142,10 @@ class ResidualRendererTests(unittest.TestCase):
             with (
                 mock.patch.dict(
                     os.environ,
-                    {"MESHSHOT_BROWSER_AUTHORITY_FILE": str(authority_path)},
+                    {"MESHSHOT_BROWSER_AUTHORITY_FILE": str(root / "attacker.json")},
                     clear=False,
                 ),
+                mock.patch("meshshot.renderer._AUTHORITY_PATH", authority_path),
                 mock.patch("playwright.sync_api.sync_playwright") as local_browser,
                 mock.patch("meshshot.renderer.socket.socket", return_value=connection),
             ):
@@ -160,9 +161,65 @@ class ResidualRendererTests(unittest.TestCase):
             {"schema", "jobId", "imageId", "program", "payload"},
         )
         self.assertEqual(observed["program"], "residual")
+        self.assertEqual(connection.path, "/run/meshshot-browser/browser.sock")
         self.assertEqual(
             observed["payload"]["options"],
             {"cameraPolicy": "profile-fixed", "canonicalPostprocess": True},
+        )
+
+    def test_attacker_env_authority_cannot_redirect_or_select_formal_mode(self) -> None:
+        triangle = ((-0.35, -0.3, 0.0), (0.35, -0.3, 0.0), (0.0, 0.35, 0.0))
+        geometry = _geometry(triangle)
+        legacy = {
+            "ok": True,
+            "pngDataUrl": "data:image/png;base64,"
+            + base64.b64encode(Image.new("RGB", (504, 1008)).tobytes()).decode("ascii"),
+            "views": [
+                {"name": name}
+                for name in ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
+            ],
+        }
+        image = Image.new("RGB", (504, 1008), (1, 2, 3))
+        encoded = BytesIO()
+        image.save(encoded, format="PNG")
+        legacy["pngDataUrl"] = "data:image/png;base64," + base64.b64encode(
+            encoded.getvalue()
+        ).decode("ascii")
+        with tempfile.TemporaryDirectory() as temp:
+            attacker = Path(temp) / "authority.json"
+            attacker.write_text("{}", encoding="utf-8")
+            fixed_absent = Path(temp) / "fixed-mount-absent.json"
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"MESHSHOT_BROWSER_AUTHORITY_FILE": str(attacker)},
+                    clear=False,
+                ),
+                mock.patch("meshshot.renderer._AUTHORITY_PATH", fixed_absent),
+                mock.patch(
+                    "meshshot.renderer._legacy_browser_render",
+                    return_value=legacy,
+                ) as legacy_render,
+                mock.patch("meshshot.renderer.socket.socket") as formal_socket,
+            ):
+                rendered = render_residual_preview(geometry, geometry)
+        self.assertEqual(rendered.variant, "step")
+        legacy_render.assert_called_once()
+        formal_socket.assert_not_called()
+
+    def test_formal_authority_open_is_nofollow_and_fixed_contract_is_package_owned(self) -> None:
+        from meshshot import renderer
+
+        self.assertEqual(
+            renderer._AUTHORITY_PATH,
+            Path("/run/meshshot-browser/authority.json"),
+        )
+        self.assertEqual(
+            renderer._SOCKET_PATH,
+            Path("/run/meshshot-browser/browser.sock"),
+        )
+        self.assertTrue(
+            (Path(renderer.__file__).resolve().parent / "browser_contract.json").is_file()
         )
 
     def test_step_render_exposes_eight_view_residual_channels_in_fixed_layout(self) -> None:

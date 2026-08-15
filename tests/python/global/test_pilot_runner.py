@@ -583,9 +583,11 @@ class RunnerTests(unittest.TestCase):
         events: list[object] = []
 
         class FakeSidecar:
-            def __init__(self, exp_dir, sandbox_exp_dir, *, job_id):
+            def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled=None):
                 events.append(("construct", exp_dir, sandbox_exp_dir, job_id))
                 self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
+                self.capability_dir = Path("/private/tmp/fixed-capability")
+                self.cancelled = cancelled
 
             def start(self):
                 events.append("sidecar-start")
@@ -593,10 +595,8 @@ class RunnerTests(unittest.TestCase):
             def close(self, *, workload_status):
                 events.append(("sidecar-close", workload_status))
                 return {
-                    "cleanupErrors": [],
-                    "absenceProof": {"proved": True},
-                    "terminal": {"ExitCode": 0},
-                    "brokerStatus": 0,
+                    "schema": "meshshot.browser-sidecar.job-receipt/2",
+                    "status": "succeeded",
                 }
 
         def run_supervised(exp_dir, inputs, command, environ, state, sidecar):
@@ -638,6 +638,112 @@ class RunnerTests(unittest.TestCase):
             events[2][1],
             Path("/run/meshshot-browser/authority.json"),
         )
+
+    def test_run_pilot_installs_relay_before_sidecar_and_cleans_startup_signal(self) -> None:
+        events: list[object] = []
+
+        class FakeRelay:
+            def __init__(self):
+                self.cancelled = False
+
+            def __enter__(self):
+                events.append("relay-enter")
+                return self
+
+            def __exit__(self, *args):
+                events.append("relay-exit")
+                return False
+
+        relay = FakeRelay()
+
+        class FakeSidecar:
+            def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled):
+                self.capability_dir = Path("/private/tmp/fixed-capability")
+                self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
+                self.cancelled = cancelled
+                events.append("construct")
+
+            def start(self):
+                events.append("sidecar-start")
+                relay.cancelled = True
+
+            def close(self, *, workload_status):
+                events.append(("sidecar-close", workload_status))
+                return {
+                    "schema": "meshshot.browser-sidecar.job-receipt/2",
+                    "status": "failed",
+                    "cleanupErrors": [],
+                    "absenceProof": {"proved": True},
+                }
+
+        with (
+            mock.patch.object(self.supervisor, "prepare_exp"),
+            mock.patch.object(self.supervisor, "SignalRelay", return_value=relay),
+            mock.patch.object(self.supervisor, "BrowserSidecarJob", FakeSidecar),
+            mock.patch.object(self.supervisor, "run_supervised") as supervised,
+            mock.patch.object(
+                self.supervisor,
+                "finalize_pilot",
+                side_effect=lambda exp, status, env, **kwargs: status,
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "validate_exp_dir",
+                return_value=self.supervisor.REPO_ROOT / "outputs/group/exp",
+            ),
+        ):
+            status = self.supervisor.run_pilot(
+                self.supervisor.REPO_ROOT / "outputs/group/exp",
+                [],
+                ["/fake/workload"],
+                self.environ,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertEqual(events[0:3], ["relay-enter", "construct", "sidecar-start"])
+        self.assertIn(("sidecar-close", 1), events)
+        self.assertEqual(events[-1], "relay-exit")
+        supervised.assert_not_called()
+
+    def test_runner_rejects_failed_receipt_after_successful_workload(self) -> None:
+        class FakeSidecar:
+            def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled=None):
+                self.capability_dir = Path("/private/tmp/fixed-capability")
+                self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
+
+            def start(self):
+                return None
+
+            def close(self, *, workload_status):
+                return {
+                    "schema": "meshshot.browser-sidecar.job-receipt/2",
+                    "status": "failed",
+                    "cleanupErrors": [],
+                    "absenceProof": {"proved": True},
+                }
+
+        with (
+            mock.patch.object(self.supervisor, "prepare_exp"),
+            mock.patch.object(self.supervisor, "BrowserSidecarJob", FakeSidecar),
+            mock.patch.object(self.supervisor, "run_supervised", return_value=0),
+            mock.patch.object(
+                self.supervisor,
+                "finalize_pilot",
+                side_effect=lambda exp, status, env, **kwargs: status,
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "validate_exp_dir",
+                return_value=self.supervisor.REPO_ROOT / "outputs/group/exp",
+            ),
+        ):
+            status = self.supervisor.run_pilot(
+                self.supervisor.REPO_ROOT / "outputs/group/exp",
+                [],
+                ["/fake/workload"],
+                self.environ,
+            )
+        self.assertEqual(status, 1)
 
 
 class ProductionPathContractTests(unittest.TestCase):
@@ -1158,13 +1264,9 @@ class ProductionPathContractTests(unittest.TestCase):
         child_env = runner.build_sandbox_environment(
             environ,
             "http://127.0.0.1:18888/v1",
-            "/workspace/repo/outputs/group/exp/run/browser-authority.json",
         )
         self.assertNotIn("PLAYWRIGHT_BROWSERS_PATH", child_env)
-        self.assertEqual(
-            child_env["MESHSHOT_BROWSER_AUTHORITY_FILE"],
-            "/workspace/repo/outputs/group/exp/run/browser-authority.json",
-        )
+        self.assertNotIn("MESHSHOT_BROWSER_AUTHORITY_FILE", child_env)
 
     def test_preflight_failure_skips_rollout_contract_and_writes_manifest(
         self,
