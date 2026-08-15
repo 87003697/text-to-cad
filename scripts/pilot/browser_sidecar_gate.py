@@ -16,11 +16,23 @@ import sys
 from typing import Any, Mapping, Sequence
 
 try:
+    from scripts.pilot.browser_gate_contract import (
+        CONFORMANCE_OPTIONAL_ROOTS,
+        CONFORMANCE_REQUIRED_ROOTS,
+        CONFORMANCE_SURFACE_SCHEMA,
+        CONFORMANCE_TOP_LEVEL_BROWSER_ROOTS,
+    )
     from scripts.pilot.browser_surface import (
         canonicalize_browser_masks,
         discover_browser_roots,
     )
 except ModuleNotFoundError:
+    from browser_gate_contract import (  # type: ignore[no-redef]
+        CONFORMANCE_OPTIONAL_ROOTS,
+        CONFORMANCE_REQUIRED_ROOTS,
+        CONFORMANCE_SURFACE_SCHEMA,
+        CONFORMANCE_TOP_LEVEL_BROWSER_ROOTS,
+    )
     from browser_surface import (  # type: ignore[no-redef]
         canonicalize_browser_masks,
         discover_browser_roots,
@@ -325,6 +337,48 @@ def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, A
     }
 
 
+def discover_conformance_surface() -> Mapping[str, Any]:
+    """Inventory the fixed immutable client-image surface before Sidecar start."""
+
+    roots = [*CONFORMANCE_REQUIRED_ROOTS]
+    roots.extend(
+        root
+        for root in CONFORMANCE_OPTIONAL_ROOTS
+        if Path(root).exists() or Path(root).is_symlink()
+    )
+    direct_exclusions: list[dict[str, str]] = []
+    for root in CONFORMANCE_TOP_LEVEL_BROWSER_ROOTS:
+        path = Path(root)
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(metadata.st_mode):
+            raise ValueError("conformance browser root is a symlink")
+        if stat.S_ISDIR(metadata.st_mode):
+            roots.append(root)
+            direct_exclusions.append(
+                {"kind": "cache", "target": root, "mask": "tmpfs"}
+            )
+        elif stat.S_ISREG(metadata.st_mode):
+            roots.append(root)
+            direct_exclusions.append(
+                {"kind": "executable", "target": root, "mask": "dev-null"}
+            )
+        else:
+            raise ValueError("conformance browser root type is invalid")
+    roots = sorted(set(roots))
+    findings = discover_browser_roots(
+        (Path(root), Path(root), True) for root in roots
+    )
+    exclusions = canonicalize_browser_masks([*findings, *direct_exclusions])
+    return {
+        "schema": CONFORMANCE_SURFACE_SCHEMA,
+        "scanRoots": roots,
+        "browserExclusions": exclusions,
+    }
+
+
 def _failed_proof(identity: Mapping[str, Any]) -> Mapping[str, Any]:
     """Return one identity-bound closed proof without exception text."""
 
@@ -361,6 +415,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the gate with no render inputs, then replace this exact PID."""
 
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments == ["--discover-conformance-surface"]:
+        try:
+            result = discover_conformance_surface()
+        except Exception:
+            return 1
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+        return 0
     if not arguments or arguments[0] != "--" or len(arguments) == 1:
         return 2
     try:

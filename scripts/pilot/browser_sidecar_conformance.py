@@ -20,6 +20,7 @@ from typing import Any, Mapping, Sequence
 from PIL import Image
 
 from meshshot import MeshGeometry, render_residual_preview
+from scripts.pilot import browser_sidecar
 from scripts.pilot.browser_sidecar import (
     AUTHORITY_SCHEMA,
     BROKER_IMAGE_ID,
@@ -31,6 +32,17 @@ from scripts.pilot.browser_sidecar import (
     SANDBOX_AUTHORITY_PATH,
     SANDBOX_SOCKET_PATH,
 )
+from scripts.pilot.browser_gate_contract import (
+    CONFORMANCE_OPTIONAL_ROOTS,
+    CONFORMANCE_REQUIRED_ROOTS,
+    CONFORMANCE_SURFACE_SCHEMA,
+    CONFORMANCE_TOP_LEVEL_BROWSER_ROOTS,
+)
+from scripts.pilot.runner import (
+    NestedGateChannel,
+    _build_gate_artifact,
+    _prepare_nested_browser_gate_from_manifest,
+)
 
 
 AUTHORITY_PATH = SANDBOX_AUTHORITY_PATH
@@ -40,6 +52,7 @@ EXPECTED_PUBLIC_PNG_SHA256 = (
 )
 VIEW_ORDER = ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+CONFORMANCE_TIMEOUT_SECONDS = 180
 
 
 def _strict_json(raw: bytes, label: str) -> Any:
@@ -241,6 +254,212 @@ def _write_atomic(path: Path, payload: object) -> None:
     os.replace(temporary, path)
 
 
+def _fixed_container_isolation() -> list[str]:
+    """Return the identical fixed isolation shared by discovery and execution."""
+
+    return [
+        "--pull=never",
+        "--platform",
+        "linux/amd64",
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges:true",
+        "--pids-limit",
+        "32",
+        "--memory",
+        "256m",
+        "--memory-swap",
+        "256m",
+        "--cpus",
+        "0.5",
+        "--tmpfs",
+        "/tmp:rw,nosuid,nodev,size=16m,mode=1777",
+        "--tmpfs",
+        (
+            "/home/pwuser:rw,nosuid,nodev,size=16m,"
+            f"uid={os.getuid()},gid={os.getgid()},mode=700"
+        ),
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+    ]
+
+
+def _discover_client_surface(
+    docker: str,
+    job: BrowserSidecarJob,
+    artifact: Path,
+    container_name: str,
+) -> Mapping[str, object]:
+    """Run the sealed fixed discovery role in the exact client image."""
+
+    absent = subprocess.run(
+        [docker, "container", "inspect", container_name],
+        check=False,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+    )
+    if absent.returncode != 1:
+        raise RuntimeError("foreign conformance-surface name exists")
+    completed = subprocess.run(
+        [
+            docker,
+            "run",
+            "--rm",
+            "--name",
+            container_name,
+            "--label",
+            job.label,
+            "--label",
+            job.owner_label,
+            *_fixed_container_isolation(),
+            "--mount",
+            (
+                f"type=bind,src={artifact},"
+                f"dst={browser_sidecar.NESTED_GATE['artifactPath']},readonly"
+            ),
+            "--entrypoint",
+            "python3",
+            BROKER_IMAGE_ID,
+            browser_sidecar.NESTED_GATE["artifactPath"],
+            "--discover-conformance-surface",
+        ],
+        check=False,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=CONFORMANCE_TIMEOUT_SECONDS,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError("fixed conformance-surface discovery failed")
+    lines = completed.stdout.splitlines()
+    if len(lines) != 1:
+        raise RuntimeError("fixed conformance-surface result is malformed")
+    decoded = _strict_json(lines[0].encode("ascii"), "conformance surface")
+    allowed_roots = {
+        *CONFORMANCE_REQUIRED_ROOTS,
+        *CONFORMANCE_OPTIONAL_ROOTS,
+        *CONFORMANCE_TOP_LEVEL_BROWSER_ROOTS,
+    }
+    if (
+        not isinstance(decoded, dict)
+        or set(decoded) != {"schema", "scanRoots", "browserExclusions"}
+        or decoded.get("schema") != CONFORMANCE_SURFACE_SCHEMA
+        or not isinstance(decoded.get("scanRoots"), list)
+        or decoded["scanRoots"] != sorted(set(decoded["scanRoots"]))
+        or not set(CONFORMANCE_REQUIRED_ROOTS).issubset(decoded["scanRoots"])
+        or not set(decoded["scanRoots"]).issubset(allowed_roots)
+    ):
+        raise RuntimeError("fixed conformance-surface result is malformed")
+    return {
+        "schema": browser_sidecar.NESTED_GATE["surfaceSchema"],
+        "scanRoots": decoded["scanRoots"],
+        "browserExclusions": decoded["browserExclusions"],
+    }
+
+
+def _browser_mask_arguments(manifest: Mapping[str, object]) -> list[str]:
+    """Translate the already-validated canonical surface into Docker masks."""
+
+    arguments: list[str] = []
+    exclusions = manifest["browserExclusions"]
+    assert isinstance(exclusions, list)
+    for exclusion in exclusions:
+        assert isinstance(exclusion, dict)
+        if exclusion["mask"] == "tmpfs":
+            arguments.extend(
+                ["--tmpfs", f"{exclusion['target']}:ro,nosuid,nodev,size=1m"]
+            )
+        else:
+            arguments.extend(
+                [
+                    "--mount",
+                    (
+                        "type=bind,src=/dev/null,"
+                        f"dst={exclusion['target']},readonly"
+                    ),
+                ]
+            )
+    return arguments
+
+
+def _run_gate_then_client(
+    docker: str,
+    job: BrowserSidecarJob,
+    client_name: str,
+    manifest: Mapping[str, object],
+) -> tuple[int, Mapping[str, Any]]:
+    """Validate one proof before releasing the fixed Agent-equivalent client."""
+
+    channel = NestedGateChannel(job.capability_dir)
+    process: subprocess.Popen[str] | None = None
+    try:
+        process = subprocess.Popen(
+            [
+                docker,
+                "run",
+                "--rm",
+                "--name",
+                client_name,
+                "--label",
+                job.label,
+                "--label",
+                job.owner_label,
+                *_fixed_container_isolation(),
+                *_browser_mask_arguments(manifest),
+                "--mount",
+                (
+                    "type=bind,src="
+                    f"{job.capability_dir},dst=/run/meshshot-browser,readonly"
+                ),
+                "--entrypoint",
+                "python3",
+                BROKER_IMAGE_ID,
+                browser_sidecar.NESTED_GATE["artifactPath"],
+                "--",
+                "/opt/text-to-cad/scripts/pilot/browser_sidecar_conformance.py",
+                "client",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        proof = channel.receive(lambda: False)
+        job.record_nested_gate(proof)
+        channel.release()
+        stdout, _ = process.communicate(timeout=CONFORMANCE_TIMEOUT_SECONDS)
+        status = process.returncode
+        if status != 0:
+            raise RuntimeError("fixed conformance client failed")
+        lines = stdout.splitlines()
+        if len(lines) != 1:
+            raise RuntimeError("fixed conformance client output is malformed")
+        decoded = _strict_json(lines[0].encode("ascii"), "conformance client")
+        if not isinstance(decoded, dict):
+            raise RuntimeError("fixed conformance client result is malformed")
+        return status, decoded
+    except BaseException:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+        raise
+    finally:
+        channel.close()
+
+
 def run_host(evidence_path: Path) -> int:
     """Own one exact job and one fixed networkless conformance client."""
 
@@ -254,10 +473,19 @@ def run_host(evidence_path: Path) -> int:
             job_id="formal-local-conformance",
         )
         client_name = f"{job.prefix}-client"
+        surface_name = f"{job.prefix}-surface"
         client_result: Mapping[str, Any] | None = None
         client_status: int | None = None
         error: str | None = None
         try:
+            discovery_artifact = Path(temporary) / "browser-gate-discovery.pyz"
+            _build_gate_artifact(browser_sidecar.REPO_ROOT, discovery_artifact)
+            manifest = _discover_client_surface(
+                docker, job, discovery_artifact, surface_name
+            )
+            _prepare_nested_browser_gate_from_manifest(
+                browser_sidecar.REPO_ROOT, job, manifest
+            )
             job.start()
             absent = subprocess.run(
                 [docker, "container", "inspect", client_name],
@@ -270,81 +498,24 @@ def run_host(evidence_path: Path) -> int:
             )
             if absent.returncode != 1:
                 raise RuntimeError("foreign conformance-client name exists")
-            completed = subprocess.run(
-                [
-                    docker,
-                    "run",
-                    "--rm",
-                    "--name",
-                    client_name,
-                    "--label",
-                    job.label,
-                    "--label",
-                    job.owner_label,
-                    "--pull=never",
-                    "--platform",
-                    "linux/amd64",
-                    "--network",
-                    "none",
-                    "--read-only",
-                    "--cap-drop",
-                    "ALL",
-                    "--security-opt",
-                    "no-new-privileges:true",
-                    "--pids-limit",
-                    "32",
-                    "--memory",
-                    "256m",
-                    "--memory-swap",
-                    "256m",
-                    "--cpus",
-                    "0.5",
-                    "--tmpfs",
-                    "/tmp:rw,nosuid,nodev,size=16m,mode=1777",
-                    "--user",
-                    f"{os.getuid()}:{os.getgid()}",
-                    "--mount",
-                    (
-                        "type=bind,src="
-                        f"{job.capability_dir},dst=/run/meshshot-browser,readonly"
-                    ),
-                    "--entrypoint",
-                    "python3",
-                    BROKER_IMAGE_ID,
-                    "/opt/text-to-cad/scripts/pilot/browser_sidecar_conformance.py",
-                    "client",
-                ],
-                check=False,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=180,
+            client_status, client_result = _run_gate_then_client(
+                docker, job, client_name, manifest
             )
-            client_status = completed.returncode
-            if client_status != 0:
-                raise RuntimeError(f"fixed conformance client failed: {completed.stderr[:1000]}")
-            lines = completed.stdout.splitlines()
-            if len(lines) != 1:
-                raise RuntimeError("fixed conformance client output is malformed")
-            decoded = _strict_json(lines[0].encode("ascii"), "conformance client")
-            if not isinstance(decoded, dict):
-                raise RuntimeError("fixed conformance client result is malformed")
-            client_result = decoded
         except BaseException as exc:
             error = f"{type(exc).__name__}: {exc}"
             client_status = 1 if client_status is None else client_status
         finally:
             try:
-                subprocess.run(
-                    [docker, "rm", "-f", client_name],
-                    check=False,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=30,
-                )
+                for name in (client_name, surface_name):
+                    subprocess.run(
+                        [docker, "rm", "-f", name],
+                        check=False,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                    )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 error = f"client-cleanup: {type(exc).__name__}"
                 client_status = 1

@@ -299,6 +299,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
                 mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
                 mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
                 mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="1" * 32),
+                mock.patch.object(tempfile, "tempdir", "/tmp"),
                 mock.patch.object(subprocess, "run", side_effect=boundary.run),
                 mock.patch.object(subprocess, "Popen", side_effect=boundary.popen),
             ):

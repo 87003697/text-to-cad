@@ -819,6 +819,10 @@ def _build_gate_artifact(repo_root: Path, destination: Path) -> str:
             "browser_surface.py",
             (repo_root / "scripts/pilot/browser_surface.py").read_bytes(),
         ),
+        (
+            "browser_gate_contract.py",
+            (repo_root / "scripts/pilot/browser_gate_contract.py").read_bytes(),
+        ),
     ]
     meshshot = repo_root / "packages/meshshot/src/meshshot"
     for path in sorted(meshshot.rglob("*")):
@@ -843,6 +847,108 @@ def _build_gate_artifact(repo_root: Path, destination: Path) -> str:
         return hashlib.sha256(destination.read_bytes()).hexdigest()
     except OSError as exc:
         raise PilotError("cannot create sealed nested Browser Gate") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _prepare_nested_browser_gate_from_manifest(
+    repo_root: Path,
+    sidecar: BrowserSidecarJob,
+    manifest: Mapping[str, object],
+) -> None:
+    """Seal and bind one exact already-observed mounted-surface manifest."""
+
+    if set(manifest) != {"schema", "scanRoots", "browserExclusions"}:
+        raise PilotError("nested Browser Gate surface manifest is invalid")
+    scan_roots = manifest.get("scanRoots")
+    exclusions = manifest.get("browserExclusions")
+    if (
+        manifest.get("schema") != NESTED_GATE["surfaceSchema"]
+        or not isinstance(scan_roots, list)
+        or scan_roots != sorted(set(scan_roots))
+        or not all(
+            isinstance(root, str)
+            and Path(root).is_absolute()
+            and Path(root).as_posix() == root
+            for root in scan_roots
+        )
+        or not isinstance(exclusions, list)
+        or any(
+            not isinstance(item, dict)
+            or set(item) != {"kind", "target", "mask"}
+            or item.get("kind") not in {"package", "executable", "cache"}
+            or not isinstance(item.get("target"), str)
+            or not Path(item["target"]).is_absolute()
+            or Path(item["target"]).as_posix() != item["target"]
+            or item.get("mask") not in {"tmpfs", "dev-null"}
+            for item in exclusions
+        )
+        or exclusions != canonicalize_browser_masks(exclusions)
+    ):
+        raise PilotError("nested Browser Gate surface manifest is invalid")
+    if any(
+        not any(
+            target == root or target.startswith(root.rstrip("/") + "/")
+            for root in scan_roots
+        )
+        for target in (item["target"] for item in exclusions)
+    ):
+        raise PilotError("nested Browser Gate exclusion escapes its surface")
+    canonical_manifest = {
+        "schema": manifest["schema"],
+        "scanRoots": list(scan_roots),
+        "browserExclusions": [dict(item) for item in exclusions],
+    }
+    manifest_bytes = json.dumps(
+        canonical_manifest, sort_keys=True, separators=(",", ":")
+    ).encode("ascii")
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    artifact = sidecar.capability_dir / Path(NESTED_GATE["artifactPath"]).name
+    input_path = sidecar.capability_dir / Path(NESTED_GATE["inputPath"]).name
+    created: dict[Path, tuple[int, int]] = {}
+    artifact_sha256 = _build_gate_artifact(repo_root.resolve(), artifact)
+    artifact_metadata = artifact.lstat()
+    created[artifact] = (artifact_metadata.st_dev, artifact_metadata.st_ino)
+    gate_input = {
+        "schema": NESTED_GATE["inputSchema"],
+        "jobId": sidecar.job_id,
+        "nonce": sidecar.gate_nonce,
+        "artifactSha256": artifact_sha256,
+        "surfaceManifest": canonical_manifest,
+    }
+    temporary = input_path.with_suffix(".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(gate_input, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="ascii",
+        )
+        temporary.chmod(0o444)
+        os.replace(temporary, input_path)
+        input_path.chmod(0o444)
+        input_metadata = input_path.lstat()
+        created[input_path] = (input_metadata.st_dev, input_metadata.st_ino)
+        sidecar.configure_nested_gate(
+            artifact_sha256=artifact_sha256,
+            surface_manifest_sha256=manifest_sha256,
+        )
+    except Exception as exc:
+        cleanup_failed = False
+        for path, identity in reversed(list(created.items())):
+            try:
+                metadata = path.lstat()
+                if (metadata.st_dev, metadata.st_ino) != identity:
+                    cleanup_failed = True
+                else:
+                    path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                cleanup_failed = True
+        if cleanup_failed:
+            raise PilotError("nested Browser Gate preparation cleanup failed") from exc
+        if isinstance(exc, BrowserSidecarError):
+            raise PilotError("cannot bind fixed nested Browser Gate") from exc
+        raise PilotError("cannot publish fixed nested Browser Gate input") from exc
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -885,58 +991,7 @@ def prepare_nested_browser_gate(
         "scanRoots": scan_roots,
         "browserExclusions": exclusions,
     }
-    manifest_bytes = json.dumps(
-        manifest, sort_keys=True, separators=(",", ":")
-    ).encode("ascii")
-    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
-    artifact = sidecar.capability_dir / Path(NESTED_GATE["artifactPath"]).name
-    input_path = sidecar.capability_dir / Path(NESTED_GATE["inputPath"]).name
-    created: dict[Path, tuple[int, int]] = {}
-    artifact_sha256 = _build_gate_artifact(repo_root.resolve(), artifact)
-    artifact_metadata = artifact.lstat()
-    created[artifact] = (artifact_metadata.st_dev, artifact_metadata.st_ino)
-    gate_input = {
-        "schema": NESTED_GATE["inputSchema"],
-        "jobId": sidecar.job_id,
-        "nonce": sidecar.gate_nonce,
-        "artifactSha256": artifact_sha256,
-        "surfaceManifest": manifest,
-    }
-    temporary = input_path.with_suffix(".tmp")
-    try:
-        temporary.write_text(
-            json.dumps(gate_input, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="ascii",
-        )
-        temporary.chmod(0o444)
-        os.replace(temporary, input_path)
-        input_path.chmod(0o444)
-        input_metadata = input_path.lstat()
-        created[input_path] = (input_metadata.st_dev, input_metadata.st_ino)
-        sidecar.configure_nested_gate(
-            artifact_sha256=artifact_sha256,
-            surface_manifest_sha256=manifest_sha256,
-        )
-    except Exception as exc:
-        cleanup_failed = False
-        for path, identity in reversed(list(created.items())):
-            try:
-                metadata = path.lstat()
-                if (metadata.st_dev, metadata.st_ino) != identity:
-                    cleanup_failed = True
-                else:
-                    path.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError:
-                cleanup_failed = True
-        if cleanup_failed:
-            raise PilotError("nested Browser Gate preparation cleanup failed") from exc
-        if isinstance(exc, BrowserSidecarError):
-            raise PilotError("cannot bind fixed nested Browser Gate") from exc
-        raise PilotError("cannot publish fixed nested Browser Gate input") from exc
-    finally:
-        temporary.unlink(missing_ok=True)
+    _prepare_nested_browser_gate_from_manifest(repo_root, sidecar, manifest)
 
 
 def _gate_surface_manifest(capability_dir: Path) -> Mapping[str, object]:
