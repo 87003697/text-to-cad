@@ -292,6 +292,22 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(job.broker_container_name, f"{job.prefix}-broker")
         self.assertNotEqual(job.broker_container_name, job.container_name)
 
+    def test_broker_artifact_seals_current_public_conformance_client(self) -> None:
+        """The exact browser-less artifact can prove the public API without source mounts."""
+
+        dockerfile = (
+            browser_sidecar.REPO_ROOT
+            / "packages/meshshot/browser_sidecar_broker/Dockerfile"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "COPY packages/meshshot/src/meshshot ./packages/meshshot/src/meshshot",
+            dockerfile,
+        )
+        self.assertIn(
+            "COPY scripts/pilot/browser_sidecar_conformance.py",
+            dockerfile,
+        )
+
     def test_public_job_rejects_preexisting_capability_socket(self) -> None:
         """A pre-existing path is foreign state and is never unlinked or adopted."""
 
