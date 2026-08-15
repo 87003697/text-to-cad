@@ -1668,7 +1668,13 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         if expected_check == "image-load":
                             raise cvm_sidecar_probe.ProbeError("load failed")
                         return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
-                    if arguments[1:] == ["image", "ls", "--no-trunc", "--quiet"]:
+                    if arguments[1:] == [
+                        "image",
+                        "ls",
+                        "--all",
+                        "--no-trunc",
+                        "--quiet",
+                    ]:
                         if expected_check == "image-inventory-timeout":
                             raise cvm_sidecar_probe.ProbeError(
                                 "inventory timeout", check="docker-timeout"
@@ -2093,7 +2099,14 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     arguments = list(argv)
                     self.assertEqual(
                         arguments,
-                        ["docker", "image", "ls", "--no-trunc", "--quiet"],
+                        [
+                            "docker",
+                            "image",
+                            "ls",
+                            "--all",
+                            "--no-trunc",
+                            "--quiet",
+                        ],
                     )
                     producer = original_popen(
                         [
