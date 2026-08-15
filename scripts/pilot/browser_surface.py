@@ -41,6 +41,10 @@ class BrowserSurfaceError(RuntimeError):
     """The complete mounted surface could not be inspected fail-closed."""
 
 
+class _DanglingSurfaceLink(BrowserSurfaceError):
+    """One enumerated immutable link has no current target."""
+
+
 class SurfaceFilesystem:
     """Public OS-boundary adapter for deterministic fail-closed inspection tests."""
 
@@ -289,6 +293,10 @@ def _resolve_permitted_external_alias(
     )
     try:
         resolved = os.path.realpath(candidate, strict=True)
+    except FileNotFoundError as exc:
+        raise _DanglingSurfaceLink(
+            "mounted browser surface symlink is dangling"
+        ) from exc
     except (OSError, RuntimeError) as exc:
         raise BrowserSurfaceError(
             "mounted browser surface external symlink is unresolved"
@@ -324,7 +332,9 @@ def _resolve_link(
             prefix = pending[: index + 1]
             target = nodes.get(prefix)
             if target is None:
-                raise BrowserSurfaceError("mounted browser surface symlink is dangling")
+                raise _DanglingSurfaceLink(
+                    "mounted browser surface symlink is dangling"
+                )
             if target.link_target is None:
                 continue
             if prefix in seen:
@@ -342,7 +352,9 @@ def _resolve_link(
             continue
         target = nodes.get(pending)
         if target is None:
-            raise BrowserSurfaceError("mounted browser surface symlink is dangling")
+            raise _DanglingSurfaceLink(
+                "mounted browser surface symlink is dangling"
+            )
         if stat.S_ISDIR(target.metadata.st_mode):
             parent = link.relative[:-1]
             if (
@@ -393,6 +405,7 @@ def _walk_mount(
     filesystem: SurfaceFilesystem,
     findings: list[dict[str, str]],
     permitted_symlink_roots: tuple[str, ...],
+    permitted_dangling_symlink_roots: tuple[str, ...],
 ) -> None:
     """Walk one declared root with directory descriptors and no implicit links."""
 
@@ -492,6 +505,29 @@ def _walk_mount(
     resolved_links: dict[tuple[str, ...], tuple[str, ...]] = {}
     resolved_aliases: list[tuple[tuple[str, ...], _Node]] = []
     force_complete: set[tuple[str, ...]] = set()
+
+    def dangling_alias_is_permitted(link: _Node, candidate: str) -> bool:
+        """Accept only inert aliases inside an immutable declared-root closure."""
+
+        if not permitted_dangling_symlink_roots:
+            return False
+        resolved_candidate = os.path.realpath(candidate)
+        if not any(
+            _inside_root(root, resolved_candidate)
+            for root in permitted_dangling_symlink_roots
+        ):
+            return False
+        sensitive_parts = {
+            part.casefold()
+            for part in (*link.relative, *Path(resolved_candidate).parts)
+        }
+        return not any(
+            part == "cache"
+            or part in {"metadata", "package.json"}
+            or _BROWSER_NAME.fullmatch(part) is not None
+            for part in sensitive_parts
+        )
+
     for relative in sorted(
         (path for path, node in nodes.items() if node.link_target is not None)
     ):
@@ -504,12 +540,22 @@ def _walk_mount(
                 raise BrowserSurfaceError(
                     "mounted browser surface symlink escapes root"
                 )
-            alias = _resolve_permitted_external_alias(
-                source_text, link, permitted_symlink_roots, filesystem
-            )
+            try:
+                alias = _resolve_permitted_external_alias(
+                    source_text, link, permitted_symlink_roots, filesystem
+                )
+            except _DanglingSurfaceLink:
+                if dangling_alias_is_permitted(link, candidate):
+                    continue
+                raise
             _classify(findings, alias, relative, target_root)
             continue
-        target = _resolve_link(source_text, link, nodes)
+        try:
+            target = _resolve_link(source_text, link, nodes)
+        except _DanglingSurfaceLink:
+            if dangling_alias_is_permitted(link, candidate):
+                continue
+            raise
         resolved_links[relative] = target.relative
         resolved_aliases.append((relative, target))
         alias_name = relative[-1].casefold()
@@ -586,6 +632,7 @@ def discover_browser_roots(
     *,
     filesystem: SurfaceFilesystem | None = None,
     permitted_symlink_roots: Iterable[Path] = (),
+    permitted_dangling_symlink_roots: Iterable[Path] = (),
 ) -> list[dict[str, str]]:
     """Return exact masks, optionally closing immutable cross-root aliases."""
 
@@ -595,6 +642,14 @@ def discover_browser_roots(
             {
                 os.path.realpath(os.path.abspath(os.fspath(root)), strict=True)
                 for root in permitted_symlink_roots
+            }
+        )
+    )
+    permitted_dangling = tuple(
+        sorted(
+            {
+                os.path.realpath(os.path.abspath(os.fspath(root)), strict=True)
+                for root in permitted_dangling_symlink_roots
             }
         )
     )
@@ -610,6 +665,7 @@ def discover_browser_roots(
                 adapter,
                 findings,
                 permitted,
+                permitted_dangling,
             )
         except BrowserSurfaceError:
             raise
