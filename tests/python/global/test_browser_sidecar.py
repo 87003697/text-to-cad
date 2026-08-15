@@ -21,6 +21,7 @@ PROGRAMS = {
 }
 NETWORK_ID = "a" * 64
 CONTAINER_ID = "b" * 64
+BROKER_CONTAINER_ID = "c" * 64
 
 
 class FakeBrokerProcess:
@@ -233,6 +234,81 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertTrue(receipt["absenceProof"]["proved"])
         self.assertTrue(any(command[1:3] == ["container", "ls"] for command in calls))
         self.assertTrue(any(command[1:3] == ["network", "ls"] for command in calls))
+
+    def test_public_job_requires_exact_broker_artifact_before_create(self) -> None:
+        """The public job boundary attests both artifacts before resource creation."""
+
+        calls: list[list[str]] = []
+
+        def docker(argv, **kwargs):
+            command = list(argv)
+            calls.append(command)
+            if command[1:4] == ["inspect", "--type=image", "--format"]:
+                projection = command[4]
+                address = command[5]
+                if address == IMAGE_ID.removeprefix("sha256:"):
+                    values = {
+                        "{{.Id}}": IMAGE_ID,
+                        "{{.Os}}": "linux",
+                        "{{.Architecture}}": "amd64",
+                        '{{index .Config.Labels "org.opencontainers.image.revision"}}': SOURCE_REVISION,
+                    }
+                    return subprocess.CompletedProcess(command, 0, values[projection] + "\n", "")
+                return subprocess.CompletedProcess(command, 1, "", "missing")
+            if command[1:3] in (["container", "ls"], ["network", "ls"]):
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, 1, "", "not found")
+
+        with tempfile.TemporaryDirectory() as temp:
+            with (
+                mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(browser_sidecar.subprocess, "run", side_effect=docker),
+            ):
+                job = browser_sidecar.BrowserSidecarJob(
+                    Path(temp),
+                    Path("/workspace/repo/outputs/group/exp"),
+                    job_id="formal-job-1",
+                )
+                with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
+                    job.start()
+
+        self.assertEqual(caught.exception.check, "broker-image-access")
+        self.assertFalse(any(command[1:3] == ["network", "create"] for command in calls))
+        self.assertFalse(any(command[1] == "run" for command in calls))
+
+    def test_public_job_uses_internal_broker_container_and_exact_ledger(self) -> None:
+        """No host port/process is present in the successful public lifecycle."""
+
+        self.assertRegex(browser_sidecar.BROKER_IMAGE_ID, r"sha256:[0-9a-f]{64}\Z")
+        source = Path(browser_sidecar.__file__).read_text(encoding="utf-8")
+        self.assertNotIn('"-p",', source)
+        self.assertNotIn("subprocess.Popen(", source)
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = browser_sidecar.BrowserSidecarJob(
+                Path(temp),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+            )
+
+        self.assertEqual(job.broker_container_name, f"{job.prefix}-broker")
+        self.assertNotEqual(job.broker_container_name, job.container_name)
+
+    def test_public_job_rejects_preexisting_capability_socket(self) -> None:
+        """A pre-existing path is foreign state and is never unlinked or adopted."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = browser_sidecar.BrowserSidecarJob(
+                Path(temp),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+            )
+            job.socket_path.write_text("foreign", encoding="utf-8")
+            with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
+                job.start()
+            self.assertEqual(job.socket_path.read_text(encoding="utf-8"), "foreign")
+
+        self.assertEqual(caught.exception.check, "broker-socket-preexisting")
 
 
 class RegisteredProgramBrokerTests(unittest.TestCase):
