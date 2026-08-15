@@ -47,6 +47,19 @@ class FakeBrokerProcess:
                     separators=(",", ":"),
                 )
                 + "\n"
+                + json.dumps(
+                    {
+                        "event": "terminal",
+                        "schema": "meshshot.browser-sidecar.broker/1",
+                        "jobId": job_id,
+                        "imageId": IMAGE_ID,
+                        "acceptedRequests": 2,
+                        "freshContexts": 3,
+                        "programCounts": {"residual": 1, "viewer": 1},
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n"
             ).encode("ascii")
         )
 
@@ -154,6 +167,18 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "succeeded")
         self.assertTrue(receipt["absenceProof"]["proved"])
         self.assertEqual(receipt["cleanupErrors"], [])
+        self.assertEqual(
+            receipt["brokerTerminal"],
+            {
+                "event": "terminal",
+                "schema": "meshshot.browser-sidecar.broker/1",
+                "jobId": "formal-job-1",
+                "imageId": IMAGE_ID,
+                "acceptedRequests": 2,
+                "freshContexts": 3,
+                "programCounts": {"residual": 1, "viewer": 1},
+            },
+        )
         run = next(command for command in calls if command[1] == "run")
         self.assertIn("--pull=never", run)
         self.assertIn("--read-only", run)
