@@ -579,6 +579,66 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(retry_proxy.stopped)
         popen.assert_not_called()
 
+    def test_run_pilot_owns_sidecar_around_nested_workload(self) -> None:
+        events: list[object] = []
+
+        class FakeSidecar:
+            def __init__(self, exp_dir, sandbox_exp_dir, *, job_id):
+                events.append(("construct", exp_dir, sandbox_exp_dir, job_id))
+                self.sandbox_authority_path = sandbox_exp_dir / "run/browser-authority.json"
+
+            def start(self):
+                events.append("sidecar-start")
+
+            def close(self, *, workload_status):
+                events.append(("sidecar-close", workload_status))
+                return {
+                    "cleanupErrors": [],
+                    "absenceProof": {"proved": True},
+                    "terminal": {"ExitCode": 0},
+                    "brokerStatus": 0,
+                }
+
+        def run_supervised(exp_dir, inputs, command, environ, state, sidecar):
+            events.append(("workload", sidecar.sandbox_authority_path))
+            state.workload_started = True
+            return 0
+
+        def finalize(exp_dir, status, environ, *, require_rollout):
+            events.append(("finalize", status, require_rollout))
+            return status
+
+        with (
+            mock.patch.object(self.supervisor, "prepare_exp"),
+            mock.patch.object(self.supervisor, "BrowserSidecarJob", FakeSidecar),
+            mock.patch.object(self.supervisor, "run_supervised", side_effect=run_supervised),
+            mock.patch.object(self.supervisor, "finalize_pilot", side_effect=finalize),
+            mock.patch.object(
+                self.supervisor,
+                "validate_exp_dir",
+                return_value=self.supervisor.REPO_ROOT / "outputs/group/exp",
+            ),
+        ):
+            status = self.supervisor.run_pilot(
+                self.supervisor.REPO_ROOT / "outputs/group/exp",
+                [],
+                ["/fake/workload"],
+                self.environ,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            [
+                event if isinstance(event, str) else event[0]
+                for event in events
+            ],
+            ["construct", "sidecar-start", "workload", "sidecar-close", "finalize"],
+        )
+        self.assertEqual(
+            events[2][1],
+            self.supervisor.SANDBOX_REPO_ROOT / "outputs/group/exp/run/browser-authority.json",
+        )
+
 
 class ProductionPathContractTests(unittest.TestCase):
     """Keep the production entrypoint mandatory-tap and status preserving."""
@@ -1046,6 +1106,7 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertNotIn(str(repo_root.resolve()), argv)
         self.assertNotIn(str(host_home.resolve()), argv)
         self.assertNotIn(str(host_home / ".codex"), argv)
+        self.assertNotIn(str(playwright.resolve()), argv)
         self.assertNotIn(str(other_input.resolve()), argv)
         self.assertNotIn(str(other_exp.resolve()), argv)
         self.assertNotIn(str(outside_skill.resolve()), argv)
@@ -1083,6 +1144,17 @@ class ProductionPathContractTests(unittest.TestCase):
         )
         self.assertNotIn("--overlay-src", argv)
         self.assertEqual(argv[argv.index("--chdir") + 1], "/workspace/repo")
+
+        child_env = runner.build_sandbox_environment(
+            environ,
+            "http://127.0.0.1:18888/v1",
+            "/workspace/repo/outputs/group/exp/run/browser-authority.json",
+        )
+        self.assertNotIn("PLAYWRIGHT_BROWSERS_PATH", child_env)
+        self.assertEqual(
+            child_env["MESHSHOT_BROWSER_AUTHORITY_FILE"],
+            "/workspace/repo/outputs/group/exp/run/browser-authority.json",
+        )
 
     def test_preflight_failure_skips_rollout_contract_and_writes_manifest(
         self,
