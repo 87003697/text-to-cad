@@ -310,3 +310,34 @@ post-load ID across these two storage backends.
 Require fresh independent Standards and Spec PASS on the clean successor before
 one new deployment, prepare handle, provision attempt, and conditional sealed
 probe. None of the three failed handles may be retried, adopted, or cleaned.
+
+## Role-reference ownership hardening
+
+Independent review of `468a16bd` found three fail-closed gaps: local temporary
+references were predictable and could be retargeted between checks, remote
+provision did not reject an existing reference before image load, and the
+loaded-ID reader collapsed duplicate lines into a set.
+
+- RED `423d4b90` adds local retarget/collision, remote pre-load collision,
+  load-output-loss, and inventory multiplicity seams. The pre-save retarget
+  case failed because Docker save still ran after the sidecar reference had
+  changed ownership.
+- GREEN `47be574f` binds both references to one fresh 32-hex prepare nonce,
+  records each exact reference in its closed image receipt, and tracks every
+  local reference with its expected source image ID. Prepare verifies exact
+  single-line ownership after tag and again immediately before save; cleanup
+  removes a reference only while it still resolves to that expected ID and
+  otherwise fails without touching the foreign reference.
+- Remote provision validates both nonce-bound references and requires each to
+  be absent before `docker image load`. It never removes remote references.
+  After load, each role must emit exactly one canonical ID; ordered tuples
+  preserve duplicate lines so multiplicity cannot collapse into success.
+- Focused CVM Sidecar suite: 47/47 PASS.
+- Global modules excluding `test_cvm_push`: 172/172 PASS. The remaining
+  `test_cvm_push` cases excluding the same pre-existing symlink-copy hang:
+  25/25 PASS.
+- Python compilation, symlink layout, and full diff check: PASS.
+
+Independent Standards/Spec review, deployment, fresh prepare, one-shot
+provision, and the conditional sealed Chromium probe remain pending. The three
+prior failed handles remain no-retry/no-adopt/no-clean.

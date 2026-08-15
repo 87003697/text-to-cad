@@ -36,12 +36,15 @@ The workflow has three separate public operations:
    free space of at least `3 GiB + archive bytes`, and verifies an accessible
    `linux/amd64` Docker server. It retains the 3 GiB post-transfer gate,
    verifies the archive hash before `docker image load`, then resolves each
-   fixed handle-and-role archive reference through
+   fixed handle-, role-, and one-shot nonce-bound archive reference through
    `docker image ls --all --no-trunc --quiet <reference>`. Every result must be
    exactly one complete canonical `sha256:<64-hex>` loaded image ID, the two
    IDs must differ, and both are recorded as the retained runtime IDs. Each
-   reference is derived only from the validated handle and fixed role; it is
-   never caller supplied.
+   reference is derived only from the validated handle, fixed role, and locally
+   generated nonce; it is never caller supplied. Before `docker image load`,
+   both references must be absent on CVM. A collision fails before load and is
+   never adopted, retagged, or removed. Duplicate inventory lines do not
+   collapse: each role must resolve to exactly one emitted line after load.
    The Docker client output is read incrementally with a 71-byte line ceiling;
    a 4097th entry, an oversized line, invalid ASCII/identity, or the 60-second
    deadline terminates and reaps the client before returning a closed failure.
@@ -133,8 +136,9 @@ different destructive operation and requires a separate authorization.
 - Image revision/platform/ID/config mismatch: stop before transfer.
 - A changed local archive fails its receipt hash/size check before the one-shot
   provision claim or any SSH/rsync transfer. On CVM, exact archive hash, Docker
-  load success, and exact handle-and-role reference resolution to two distinct
-  loaded IDs are the authoritative runtime-image proof; malformed bytes
+  load success, and exact handle-, role-, and nonce-bound reference resolution
+  to two distinct loaded IDs are the authoritative runtime-image proof;
+  pre-load reference collisions and malformed bytes
   produce the bounded archive/load failure receipt.
 - If local prepare fails, cleanup attempts every exact owned temporary archive,
   final archive, temporary role reference, receipt, state directory, and the
