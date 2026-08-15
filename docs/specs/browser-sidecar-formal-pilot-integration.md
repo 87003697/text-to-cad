@@ -33,9 +33,9 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Browser-less Broker base image:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Render Program Broker image:
-  `sha256:39f1c3bb637a57860cb7c5d0065c95ea4455ec323e44077517769efb8e2f7b10`
+  `sha256:ccb52638b1be112225d0dfa478f1168dcc40307da02494cfc60b8a918ae8b5fe`
 - Broker OCI revision / production implementation commit:
-  `5a3d20a92e5149787245054f24f520c80affd254`
+  `6aed1817116b8b9c407848cc529aceead96370e6`
 - Image source revision:
   `1abe4c97929906b5c0b28b0f3f38857bd923952f`
 - Residual program SHA-256:
@@ -175,9 +175,11 @@ the invoking uid, and have mode `0700`. Each job creates and later removes only
 one random private child below it. This permits the one live Broker socket bind
 without sharing `/tmp`, the repository, or a broader home tree with Colima.
 The host retains that canonical parent for terminal evidence publication. An
-aliased or non-private supplied parent fails before Docker resource creation and
-publishes an exact-absence, non-retryable terminal receipt at the canonical
-target rather than continuing through the caller alias.
+absent, unresolvable, aliased, wrong-owner, or non-private supplied parent is an
+invalid CLI root rejected before a formal attempt begins: no Docker operation
+or evidence publication occurs through that untrusted authority. Once the root
+is admitted, failures enter terminal publication at the retained canonical
+target.
 
 Source-Hidden and blocked external browser egress remain direct Sidecar facts:
 the Browser and Broker use one Docker `--internal` network, no source mount,
@@ -194,10 +196,12 @@ path. There is one attempt per job: no resource adoption, Sidecar replacement,
 retry, pull, download, source mount, egress fallback, host-process browser, or
 legacy browser fallback after formal authority selection.
 
-A failure before Docker resolution still enters terminal publication. Because
-the fresh owner has not created a network or container at that point, its
-receipt records exact absence true and retains the original closed startup
-check rather than manufacturing an `absence-proof` cleanup failure.
+After evidence-root admission, a failure before Docker resolution still enters
+terminal publication. Because the fresh owner has not created a network or
+container at that point, its receipt records exact absence true and retains the
+original closed startup check rather than manufacturing an `absence-proof`
+cleanup failure. Invalid evidence roots remain pre-attempt CLI rejection and do
+not claim authoritative evidence inside a rejected directory.
 
 ## Validation boundary
 
