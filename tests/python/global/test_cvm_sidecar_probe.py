@@ -157,8 +157,11 @@ def write_portable_archive_docker(path: Path) -> None:
             if sys.argv[1:4] == ["image", "inspect", "--format"]:
                 projection = sys.argv[4]
                 image = sys.argv[5]
+                canonical_image = (
+                    image if image.startswith("sha256:") else "sha256:" + image
+                )
                 values = {{
-                    "{{{{.Id}}}}": image,
+                    "{{{{.Id}}}}": canonical_image,
                     "{{{{.Os}}}}": "linux",
                     "{{{{.Architecture}}}}": "amd64",
                     '{{{{index .Config.Labels "org.opencontainers.image.revision"}}}}': {SOURCE_REVISION!r},
@@ -578,7 +581,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     )
                     env = cli_env(fake_bin)
                     env["PYTHONPATH"] = os.fspath(root)
-                    env["FAKE_INSPECT_EXCEPTION_ID"] = image_id
+                    env["FAKE_INSPECT_EXCEPTION_ID"] = image_id.removeprefix(
+                        "sha256:"
+                    )
                     env["FAKE_INSPECT_EXCEPTION_PHASE"] = phase
 
                     result = subprocess.run(
@@ -670,8 +675,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     if sys.argv[1:4] == ["image", "inspect", "--format"]:
                         projection = sys.argv[4]
                         image = sys.argv[5]
+                        canonical_image = "sha256:" + image
                         values = {{
-                            "{{{{.Id}}}}": image,
+                            "{{{{.Id}}}}": canonical_image,
                             "{{{{.Os}}}}": "linux",
                             "{{{{.Architecture}}}}": "amd64",
                             '{{{{index .Config.Labels "org.opencontainers.image.revision"}}}}': {SOURCE_REVISION!r},
@@ -1751,7 +1757,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         if arguments[1:3] != ["image", "inspect"]:
                             raise AssertionError(f"unexpected command: {arguments}")
                         inspect_calls.append(arguments)
-                        inspected_id = arguments[-1]
+                        inspected_address = arguments[-1]
+                        inspected_id = "sha256:" + inspected_address
                         inspected_role = (
                             "sidecar" if inspected_id == SIDECAR_ID else "client"
                         )
@@ -1903,7 +1910,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     )
                 if inspect_format not in portable_formats:
                     raise AssertionError(f"unexpected inspect format: {inspect_format}")
-                inspected_id = arguments[-1]
+                inspected_address = arguments[-1]
+                inspected_id = "sha256:" + inspected_address
                 values = {
                     "{{.Id}}": inspected_id,
                     "{{.Os}}": "linux",
@@ -1975,7 +1983,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         if arguments[1:3] != ["image", "inspect"]:
                             raise AssertionError(f"unexpected command: {arguments}")
                         projection = arguments[4]
-                        inspected_id = arguments[-1]
+                        inspected_address = arguments[-1]
+                        inspected_id = "sha256:" + inspected_address
                         inspect_formats.append(projection)
                         if inspected_id == image_id and projection == "{{.Id}}":
                             return subprocess.CompletedProcess(

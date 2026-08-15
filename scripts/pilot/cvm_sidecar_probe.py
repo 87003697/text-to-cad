@@ -222,7 +222,9 @@ def _run(
     return completed
 
 
-def _inspect_image_field(role: str, image_id: str, field: str, projection: str) -> str:
+def _inspect_image_field(
+    role: str, image_address: str, field: str, projection: str
+) -> str:
     try:
         completed = _run(
             [
@@ -231,7 +233,7 @@ def _inspect_image_field(role: str, image_id: str, field: str, projection: str) 
                 "inspect",
                 "--format",
                 projection,
-                image_id,
+                image_address,
             ],
             cwd=REPO_ROOT,
             timeout=60,
@@ -277,9 +279,10 @@ def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
             f"{role} image must be an exact sha256 image ID",
             check=f"{role}-id",
         )
+    image_address = image_id.removeprefix("sha256:")
     projections = dict(IMAGE_INSPECT_FIELDS)
     inspected_id = _inspect_image_field(
-        role, image_id, "id", projections["id"]
+        role, image_address, "id", projections["id"]
     )
     if inspected_id != image_id:
         raise ProbeError(
@@ -287,7 +290,7 @@ def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
             check=f"{role}-id",
         )
     operating_system = _inspect_image_field(
-        role, image_id, "os", projections["os"]
+        role, image_address, "os", projections["os"]
     )
     if operating_system != "linux":
         raise ProbeError(
@@ -295,7 +298,7 @@ def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
             check=f"{role}-os",
         )
     architecture = _inspect_image_field(
-        role, image_id, "architecture", projections["architecture"]
+        role, image_address, "architecture", projections["architecture"]
     )
     if architecture != "amd64":
         raise ProbeError(
@@ -303,7 +306,7 @@ def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
             check=f"{role}-architecture",
         )
     revision = _inspect_image_field(
-        role, image_id, "revision", projections["revision"]
+        role, image_address, "revision", projections["revision"]
     )
     if not isinstance(revision, str) or SOURCE_REVISION.fullmatch(revision) is None:
         raise ProbeError(
