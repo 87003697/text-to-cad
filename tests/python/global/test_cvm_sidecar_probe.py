@@ -23,6 +23,8 @@ SIDECAR_CONFIG_BLOB = b'{"kind":"sidecar","schema":1}'
 CLIENT_CONFIG_BLOB = b'{"kind":"client","schema":1}'
 SIDECAR_ID = "sha256:" + hashlib.sha256(SIDECAR_CONFIG_BLOB).hexdigest()
 CLIENT_ID = "sha256:" + hashlib.sha256(CLIENT_CONFIG_BLOB).hexdigest()
+LOADED_SIDECAR_ID = "sha256:" + "e" * 64
+LOADED_CLIENT_ID = "sha256:" + "f" * 64
 PORTABLE_SIDECAR_CONFIG = SIDECAR_CONFIG_BLOB
 PORTABLE_CLIENT_CONFIG = CLIENT_CONFIG_BLOB
 PORTABLE_SIDECAR_ID = SIDECAR_ID
@@ -378,6 +380,76 @@ def valid_probe_success(
 
 
 class CvmSidecarProbeCliTests(unittest.TestCase):
+    def test_prepare_exports_handle_bound_role_references_and_removes_them(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-role-tags-") as root_text:
+            root = Path(root_text)
+            state_root = root / ".cvm-sidecar-probes"
+            commands: list[list[str]] = []
+
+            def fixed_run(argv: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                del kwargs
+                arguments = list(argv)
+                commands.append(arguments)
+                if arguments[1:3] == ["image", "save"]:
+                    Path(arguments[4]).write_bytes(b"fixed archive")
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+
+            images = remote_provision_images()
+            args = type(
+                "Args",
+                (),
+                {
+                    "source_revision": SOURCE_REVISION,
+                    "sidecar_image": SIDECAR_ID,
+                    "client_image": CLIENT_ID,
+                },
+            )()
+            with (
+                mock.patch.object(cvm_sidecar_probe, "REPO_ROOT", root),
+                mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_inspect_workflow_source",
+                    return_value="b" * 40,
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_workflow_file_hashes",
+                    return_value={"module": "1" * 64, "wrapper": "2" * 64},
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_inspect_image",
+                    side_effect=images,
+                ),
+                mock.patch.object(cvm_sidecar_probe, "_run", side_effect=fixed_run),
+            ):
+                receipt = cvm_sidecar_probe.prepare(args)
+
+            handle = str(receipt["handle"])
+            references = [
+                f"text-to-cad-cvm-sidecar-sidecar:{handle}",
+                f"text-to-cad-cvm-sidecar-client:{handle}",
+            ]
+            tag_commands = [command for command in commands if command[1:3] == ["image", "tag"]]
+            remove_commands = [command for command in commands if command[1:3] == ["image", "rm"]]
+            save_command = next(command for command in commands if command[1:3] == ["image", "save"])
+            self.assertEqual(
+                tag_commands,
+                [
+                    ["docker", "image", "tag", SIDECAR_ID, references[0]],
+                    ["docker", "image", "tag", CLIENT_ID, references[1]],
+                ],
+            )
+            self.assertEqual(save_command[-2:], references)
+            self.assertEqual(
+                remove_commands,
+                [
+                    ["docker", "image", "rm", references[1]],
+                    ["docker", "image", "rm", references[0]],
+                ],
+            )
+
     def test_public_wrapper_exposes_only_prepare_provision_and_probe(self) -> None:
         result = subprocess.run(
             [WRAPPER, "remote-probe", "cvmsp-" + "0" * 24],
@@ -1983,7 +2055,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             self.assertEqual(receipt["status"], "failed")
             self.assertEqual(receipt["errorCheck"], "client-loaded-id")
 
-    def test_remote_provision_accepts_exact_loaded_inventory_without_image_inspect(self) -> None:
+    def test_remote_provision_binds_role_references_to_loaded_ids(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="cvm-sidecar-loaded-inventory-"
         ) as root_text:
@@ -2014,6 +2086,14 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 raise AssertionError(f"unexpected command: {arguments}")
 
             enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
+            role_references = {
+                f"text-to-cad-cvm-sidecar-sidecar:{handle}": LOADED_SIDECAR_ID,
+                f"text-to-cad-cvm-sidecar-client:{handle}": LOADED_CLIENT_ID,
+            }
+
+            def loaded_role_id(reference: str) -> frozenset[str]:
+                return frozenset({role_references[reference]})
+
             with (
                 mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
                 mock.patch.object(
@@ -2032,7 +2112,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 mock.patch.object(
                     cvm_sidecar_probe,
                     "_loaded_image_ids",
-                    return_value=frozenset({SIDECAR_ID, CLIENT_ID}),
+                    side_effect=loaded_role_id,
                 ),
             ):
                 receipt = cvm_sidecar_probe.remote_provision(handle, owner)
@@ -2053,6 +2133,10 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         ),
                     ],
                 ],
+            )
+            self.assertEqual(
+                receipt["retainedImageIds"],
+                [LOADED_SIDECAR_ID, LOADED_CLIENT_ID],
             )
 
     def test_remote_provision_streams_bounded_loaded_image_inventory(self) -> None:
