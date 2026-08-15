@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -95,6 +96,8 @@ class BrowserSidecarGateTests(unittest.TestCase):
         self.assertEqual(proof["schema"], gate.GATE["schema"])
         self.assertEqual(proof["status"], "succeeded")
         self.assertTrue(all(proof["predicates"].values()))
+        self.assertNotIn("sourceHidden", proof["predicates"])
+        self.assertNotIn("egressBlocked", proof["predicates"])
         self.assertEqual(
             proof["residual"],
             {
@@ -109,9 +112,9 @@ class BrowserSidecarGateTests(unittest.TestCase):
             proof["inventory"],
             {
                 "browserExecutables": [],
+                "browserPackages": [],
                 "browserCaches": [],
                 "browserProcesses": [],
-                "sourceAliases": [],
             },
         )
         request.assert_called_once_with()
@@ -127,6 +130,38 @@ class BrowserSidecarGateTests(unittest.TestCase):
         self.assertNotIn("shell=True", source)
         self.assertNotIn("add_argument", source)
         self.assertNotIn("MESHSHOT_BROWSER_AUTHORITY_FILE", source)
+        self.assertNotIn("urlopen", source)
+        self.assertNotIn("SOURCE_ALIASES", source)
+
+    def test_gate_artifact_and_proof_are_bound_to_read_only_job_input(self) -> None:
+        """The sealed gate validates its bytes, job, nonce, and surface manifest."""
+
+        gate = load_gate()
+        expected = {
+            "schema": "meshshot.browser-sidecar.nested-gate-input/1",
+            "jobId": "formal-job-1",
+            "nonce": "a" * 32,
+            "artifactSha256": "b" * 64,
+            "surfaceManifest": {
+                "schema": "meshshot.browser-sidecar.agent-browser-surface/1",
+                "scanRoots": ["/usr", "/workspace/repo/.venv"],
+                "browserExclusions": [],
+            },
+        }
+        canonical = json.dumps(
+            expected["surfaceManifest"], sort_keys=True, separators=(",", ":")
+        ).encode("ascii")
+        with (
+            mock.patch.object(gate, "GATE_INPUT_PATH", Path("/fixed/gate-input.json")),
+            mock.patch.object(Path, "read_bytes", return_value=(json.dumps(expected) + "\n").encode()),
+            mock.patch.object(gate, "_artifact_sha256", return_value="b" * 64),
+        ):
+            identity = gate.load_gate_identity()
+        self.assertEqual(identity["jobId"], "formal-job-1")
+        self.assertEqual(identity["nonce"], "a" * 32)
+        self.assertEqual(
+            identity["surfaceManifestSha256"], hashlib.sha256(canonical).hexdigest()
+        )
 
 
 if __name__ == "__main__":

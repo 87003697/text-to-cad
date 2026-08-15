@@ -22,20 +22,28 @@ PILOT_ROOT = REPO_ROOT / "scripts" / "pilot"
 UTILS_ROOT = REPO_ROOT / "scripts" / "utils"
 
 
-def nested_gate_proof() -> dict[str, object]:
+def nested_gate_proof(
+    *,
+    job_id: str = "pilot-test-job",
+    nonce: str = "a" * 32,
+    artifact_sha256: str = "b" * 64,
+    surface_manifest_sha256: str = "c" * 64,
+) -> dict[str, object]:
     """Return the fixed successful proof accepted before Agent exec."""
 
     return {
         "schema": "meshshot.browser-sidecar.nested-gate-proof/1",
         "status": "succeeded",
+        "jobId": job_id,
+        "nonce": nonce,
+        "artifactSha256": artifact_sha256,
+        "surfaceManifestSha256": surface_manifest_sha256,
         "predicates": {
             "publicResidualParity": True,
             "viewerProjectionChanged": True,
             "viewerArtifactClean": True,
             "browserInventoryEmpty": True,
             "browserProcessZero": True,
-            "sourceHidden": True,
-            "egressBlocked": True,
         },
         "residual": {
             "pngSha256": "b498c55c68662989a3a95c4925432d61f979183d30c2cdf593e154c7b0ca9d5b",
@@ -52,9 +60,9 @@ def nested_gate_proof() -> dict[str, object]:
         },
         "inventory": {
             "browserExecutables": [],
+            "browserPackages": [],
             "browserCaches": [],
             "browserProcesses": [],
-            "sourceAliases": [],
         },
     }
 
@@ -1591,6 +1599,12 @@ class ProductionPathContractTests(unittest.TestCase):
             skill_dir.mkdir(parents=True)
             outside_skill.mkdir()
             (repo_root / "browser-capability").mkdir()
+            (repo_root / "browser-capability" / "browser-gate.pyz").write_bytes(
+                b"sealed-gate"
+            )
+            (repo_root / "browser-capability" / "gate-input.json").write_text(
+                "{}\n", encoding="utf-8"
+            )
             input_path.parent.mkdir(parents=True)
             gateway.parent.mkdir(parents=True)
             venv.mkdir()
@@ -1615,7 +1629,7 @@ class ProductionPathContractTests(unittest.TestCase):
             input_path.write_text("ply\n", encoding="utf-8")
             other_input.write_text("ply\n", encoding="utf-8")
             gateway.write_text("#!/bin/sh\n", encoding="utf-8")
-            gate_script.write_text("# fixed gate\n", encoding="utf-8")
+            gate_script.write_text("# artifact builder only\n", encoding="utf-8")
             environ = {
                 "HOME": str(host_home),
                 "PATH": "/fake/bin",
@@ -1652,7 +1666,7 @@ class ProductionPathContractTests(unittest.TestCase):
             [
                 "--",
                 "/workspace/repo/.venv/bin/python",
-                "/run/meshshot-gate/browser_sidecar_gate.py",
+                "/run/meshshot-browser/browser-gate.pyz",
                 "--",
                 "/fake/codex",
                 "prompt with spaces",
@@ -1689,21 +1703,11 @@ class ProductionPathContractTests(unittest.TestCase):
             ],
             triples,
         )
-        self.assertIn(
-            [
-                "--ro-bind",
-                str((repo_root / "scripts/pilot/browser_sidecar_gate.py").resolve()),
-                "/run/meshshot-gate/browser_sidecar_gate.py",
-            ],
-            triples,
-        )
-        self.assertIn(
-            [
-                "--ro-bind",
-                str((repo_root / "packages/meshshot/src").resolve()),
-                "/run/meshshot-gate/meshshot-src",
-            ],
-            triples,
+        self.assertNotIn("/run/meshshot-gate/meshshot-src", argv)
+        self.assertNotIn(str((repo_root / "packages/meshshot/src").resolve()), argv)
+        self.assertNotIn(
+            str((repo_root / "scripts/pilot/browser_sidecar_gate.py").resolve()),
+            argv,
         )
         self.assertIn(
             [
@@ -1738,6 +1742,67 @@ class ProductionPathContractTests(unittest.TestCase):
         )
         self.assertNotIn("PLAYWRIGHT_BROWSERS_PATH", child_env)
         self.assertNotIn("MESHSHOT_BROWSER_AUTHORITY_FILE", child_env)
+
+    def test_mounted_surface_browser_discovery_catches_renames_distros_and_caches(self) -> None:
+        """Every browser root in a mounted read-only surface becomes an exact mask."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "runtime"
+            renamed_package = source / "lib/python/site-packages/runtime_tools"
+            distro_binary = source / "bin/web-renderer"
+            renamed_cache = source / "var/cache/vendor-build-1223"
+            renamed_package.mkdir(parents=True)
+            distro_binary.parent.mkdir(parents=True)
+            renamed_cache.mkdir(parents=True)
+            (renamed_package / "METADATA").write_text(
+                "Metadata-Version: 2.1\nName: playwright\n", encoding="utf-8"
+            )
+            distro_binary.write_bytes(
+                b"\x7fELF" + b"\0" * 64 + b"Chromium 148.0.7778.96 HeadlessChrome"
+            )
+            distro_binary.chmod(0o755)
+            (renamed_cache / "browser-marker.json").write_text(
+                '{"product":"chromium","revision":"1223"}\n', encoding="utf-8"
+            )
+            runner = load_runner()
+            result = runner.discover_browser_roots(
+                [(source, Path("/usr"))]
+            )
+
+        self.assertEqual(
+            {(item["kind"], item["target"]) for item in result},
+            {
+                ("package", "/usr/lib/python/site-packages/runtime_tools"),
+                ("executable", "/usr/bin/web-renderer"),
+                ("cache", "/usr/var/cache/vendor-build-1223"),
+            },
+        )
+        self.assertTrue(all(set(item) == {"kind", "target", "mask"} for item in result))
+
+    def test_browser_surface_preflight_failure_precedes_sidecar_start(self) -> None:
+        """An unclosed mounted surface fails before any Docker lifecycle mutation."""
+
+        runner = self.supervisor
+        with tempfile.TemporaryDirectory() as temp:
+            exp = Path(temp) / "repo/outputs/group/exp"
+            exp.mkdir(parents=True)
+            sidecar = mock.Mock()
+            sidecar_type = mock.Mock(return_value=sidecar)
+            with (
+                mock.patch.object(runner, "REPO_ROOT", Path(temp) / "repo"),
+                mock.patch.object(runner, "prepare_exp"),
+                mock.patch.object(runner, "validate_exp_dir", return_value=exp),
+                mock.patch.object(runner, "BrowserSidecarJob", sidecar_type),
+                mock.patch.object(
+                    runner,
+                    "prepare_nested_browser_gate",
+                    side_effect=runner.PilotError("browser surface is not closed"),
+                ),
+                mock.patch.object(runner, "finalize_pilot", return_value=1),
+            ):
+                status = runner.run_pilot(exp, [], ["/fixed/agent"], {})
+        self.assertEqual(status, 1)
+        sidecar.start.assert_not_called()
 
     def test_preflight_failure_skips_rollout_contract_and_writes_manifest(
         self,

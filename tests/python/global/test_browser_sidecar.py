@@ -26,20 +26,28 @@ CONTAINER_ID = "b" * 64
 BROKER_CONTAINER_ID = "c" * 64
 
 
-def nested_gate_proof() -> dict[str, object]:
+def nested_gate_proof(
+    *,
+    job_id: str = "formal-job-1",
+    nonce: str = "1" * 16,
+    artifact_sha256: str = "2" * 64,
+    surface_manifest_sha256: str = "3" * 64,
+) -> dict[str, object]:
     """Return one independently fixed successful nested-gate proof."""
 
     return {
         "schema": "meshshot.browser-sidecar.nested-gate-proof/1",
         "status": "succeeded",
+        "jobId": job_id,
+        "nonce": nonce,
+        "artifactSha256": artifact_sha256,
+        "surfaceManifestSha256": surface_manifest_sha256,
         "predicates": {
             "publicResidualParity": True,
             "viewerProjectionChanged": True,
             "viewerArtifactClean": True,
             "browserInventoryEmpty": True,
             "browserProcessZero": True,
-            "sourceHidden": True,
-            "egressBlocked": True,
         },
         "residual": {
             "pngSha256": "b498c55c68662989a3a95c4925432d61f979183d30c2cdf593e154c7b0ca9d5b",
@@ -56,9 +64,9 @@ def nested_gate_proof() -> dict[str, object]:
         },
         "inventory": {
             "browserExecutables": [],
+            "browserPackages": [],
             "browserCaches": [],
             "browserProcesses": [],
-            "sourceAliases": [],
         },
     }
 
@@ -198,6 +206,10 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 )
                 authority_path = job.start()
                 authority = json.loads(authority_path.read_text(encoding="utf-8"))
+                job.configure_nested_gate(
+                    artifact_sha256="2" * 64,
+                    surface_manifest_sha256="3" * 64,
+                )
                 job.record_nested_gate(nested_gate_proof())
                 receipt = job.close(workload_status=0)
 
@@ -206,7 +218,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(authority["programs"], PROGRAMS)
         self.assertEqual(
             set(authority),
-            {"schema", "jobId", "imageId", "programs"},
+            {"schema", "jobId", "gateNonce", "imageId", "programs"},
         )
         self.assertEqual(job.sandbox_authority_path, Path("/run/meshshot-browser/authority.json"))
         self.assertFalse(authority_path.parent.exists())
@@ -244,6 +256,12 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertTrue(all(receipt["predicates"].values()))
         self.assertNotIn("residualPublicParity", receipt["predicates"])
         self.assertIn("nestedPublicResidualParity", receipt["predicates"])
+        self.assertIn("sidecarSourceHidden", receipt["predicates"])
+        self.assertIn("sidecarEgressBlocked", receipt["predicates"])
+        self.assertNotIn("brokerSourceHidden", receipt["predicates"])
+        self.assertNotIn("brokerEgressBlocked", receipt["predicates"])
+        self.assertFalse(any(name.startswith("nestedSource") for name in receipt["predicates"]))
+        self.assertFalse(any(name.startswith("nestedEgress") for name in receipt["predicates"]))
         self.assertIsNone(receipt["failureCheck"])
         serialized = json.dumps(receipt, sort_keys=True)
         self.assertNotIn(NETWORK_ID, serialized)
@@ -373,6 +391,10 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     }
                 }
                 job.socket_identity = (1, 1)
+                job.configure_nested_gate(
+                    artifact_sha256="2" * 64,
+                    surface_manifest_sha256="3" * 64,
+                )
                 job.record_nested_gate(nested_gate_proof())
                 with mock.patch.object(
                     browser_sidecar.subprocess,
@@ -424,6 +446,28 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(caught.exception.check, "broker-image-access")
         self.assertFalse(any(command[1:3] == ["network", "create"] for command in calls))
         self.assertFalse(any(command[1] == "run" for command in calls))
+
+    def test_nested_gate_proof_is_bound_to_exact_job_and_fresh_nonce(self) -> None:
+        """A proof from Job A or a wrong outer nonce cannot satisfy Job B."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = browser_sidecar.BrowserSidecarJob(
+                Path(temp),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-b",
+            )
+            job.configure_nested_gate(
+                artifact_sha256="2" * 64,
+                surface_manifest_sha256="3" * 64,
+            )
+            for proof in (
+                nested_gate_proof(job_id="formal-job-a"),
+                nested_gate_proof(job_id="formal-job-b", nonce="9" * 16),
+            ):
+                with self.subTest(proof=proof["jobId"], nonce=proof["nonce"]):
+                    with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
+                        job.record_nested_gate(proof)
+                    self.assertEqual(caught.exception.check, "nested-gate-proof")
 
     def test_public_job_uses_internal_broker_container_and_exact_ledger(self) -> None:
         """No host port/process is present in the successful public lifecycle."""
@@ -636,6 +680,10 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     "viewerArtifactClean": False,
                 },
             }
+            job.configure_nested_gate(
+                artifact_sha256="2" * 64,
+                surface_manifest_sha256="3" * 64,
+            )
             job.record_nested_gate(nested_gate_proof())
             with mock.patch.object(
                 browser_sidecar.subprocess,

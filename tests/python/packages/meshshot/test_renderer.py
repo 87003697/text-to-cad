@@ -45,6 +45,7 @@ class ResidualRendererTests(unittest.TestCase):
                     {
                         "schema": "meshshot.browser-authority/1",
                         "jobId": "formal-job-1",
+                        "gateNonce": "a" * 32,
                         "imageId": "sha256:"
                         + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
                         "programs": {
@@ -82,6 +83,7 @@ class ResidualRendererTests(unittest.TestCase):
                     {
                         "schema": "meshshot.browser-authority/1",
                         "jobId": "formal-job-1",
+                        "gateNonce": "a" * 32,
                         "imageId": "sha256:"
                         + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
                         "programs": {
@@ -197,6 +199,7 @@ class ResidualRendererTests(unittest.TestCase):
                     {
                         "schema": "meshshot.browser-authority/1",
                         "jobId": "formal-job-1",
+                        "gateNonce": "a" * 32,
                         "imageId": "sha256:"
                         + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
                         "programs": {
