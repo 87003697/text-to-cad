@@ -6,6 +6,7 @@ CONFORMANCE_OPTIONAL_ROOTS = (
     "/app",
     "/etc",
     "/home",
+    "/run",
     "/srv",
     "/var",
     "/workspace",

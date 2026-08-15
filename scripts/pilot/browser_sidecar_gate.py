@@ -316,6 +316,7 @@ def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, A
         permitted_symlink_roots=[
             *(Path(root) for root in manifest["scanRoots"]),
             Path("/dev/null"),
+            Path("/proc/mounts"),
         ],
         permitted_dangling_symlink_roots=[
             *(Path(root) for root in manifest["scanRoots"]),
@@ -386,7 +387,11 @@ def discover_conformance_surface() -> Mapping[str, Any]:
     roots = sorted(set(roots))
     findings = discover_browser_roots(
         ((Path(root), Path(root), True) for root in roots),
-        permitted_symlink_roots=[*(Path(root) for root in roots), Path("/dev/null")],
+        permitted_symlink_roots=[
+            *(Path(root) for root in roots),
+            Path("/dev/null"),
+            Path("/proc/mounts"),
+        ],
         permitted_dangling_symlink_roots=[*(Path(root) for root in roots)],
     )
     exclusions = canonicalize_browser_masks([*findings, *direct_exclusions])
