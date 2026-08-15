@@ -144,3 +144,36 @@ config digest and still requiring returned canonical `.Id` equality.
 
 Require a fresh independent Standards and Spec PASS before one new deployment,
 prepare handle, provision attempt, and conditional sealed probe.
+
+That boundary completed at reviewed/deployed SHA
+`feafd4301d6c574d71cc788f26a803f488ec6c48` with fresh handle
+`cvmsp-469b9884cd56545d8e295048`. Provision again terminated at
+`sidecar-inspect-id-access`, proving that neither canonical-vs-bare addressing
+nor root-vs-image inspect syntax was the CVM blocker. Nonce abort and all
+transfer-absence predicates passed; the sealed probe remained `NOT_RUN`.
+
+## Loaded inventory successor
+
+Remote inspection is unnecessary once the following chain is exact: local
+prepare attests canonical config ID + linux/amd64 + immutable source revision;
+the complete opaque archive bytes are SHA-bound; CVM verifies the same bytes,
+loads them successfully, and proves both exact config IDs occur in its loaded
+image inventory. The config digest cryptographically binds the locally
+attested fields.
+
+- RED `394283d1`: actual `remote-provision` receives exact loaded Sidecar/client
+  inventory while every image-inspect command is unavailable. Existing code
+  still failed in 2 ms at `sidecar-inspect-id-access`.
+- GREEN `ab70b224`: remote provision runs one bounded fixed
+  `docker image ls --no-trunc --quiet`; every line must be a full canonical ID,
+  at most 4096 lines are accepted, and both prepared IDs must be present.
+  Missing Sidecar/client IDs and inventory access/timeout/format each remain
+  closed predicates. Remote raw inventory is never published.
+- Local prepare retains the exact four-field image inspection and canonical
+  receipt binding.
+- Focused CVM Sidecar suite: 40/40 PASS.
+- Global policy gate with local loopback permitted: 191/191 PASS.
+- Python compilation and diff check: PASS.
+
+Require independent Standards and Spec PASS before one new deployment, prepare
+handle, provision attempt, and conditional sealed probe.
