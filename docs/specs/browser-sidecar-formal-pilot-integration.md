@@ -33,9 +33,9 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Browser-less Broker base image:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Render Program Broker image:
-  `sha256:7ee52e2f5a048d6c40b8245770e8c91a2094e6ffa6d7c776eb0df0f3767b60fc`
+  `sha256:39f1c3bb637a57860cb7c5d0065c95ea4455ec323e44077517769efb8e2f7b10`
 - Broker OCI revision / production implementation commit:
-  `55e8727a951ae943a5b18d542d876321a4e6dc4f`
+  `5a3d20a92e5149787245054f24f520c80affd254`
 - Image source revision:
   `1abe4c97929906b5c0b28b0f3f38857bd923952f`
 - Residual program SHA-256:
@@ -174,6 +174,10 @@ capability parent: it must already exist, resolve without a symlink, be owned by
 the invoking uid, and have mode `0700`. Each job creates and later removes only
 one random private child below it. This permits the one live Broker socket bind
 without sharing `/tmp`, the repository, or a broader home tree with Colima.
+The host retains that canonical parent for terminal evidence publication. An
+aliased or non-private supplied parent fails before Docker resource creation and
+publishes an exact-absence, non-retryable terminal receipt at the canonical
+target rather than continuing through the caller alias.
 
 Source-Hidden and blocked external browser egress remain direct Sidecar facts:
 the Browser and Broker use one Docker `--internal` network, no source mount,
