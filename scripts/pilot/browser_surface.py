@@ -355,13 +355,6 @@ def _resolve_link(
             raise _DanglingSurfaceLink(
                 "mounted browser surface symlink is dangling"
             )
-        if stat.S_ISDIR(target.metadata.st_mode):
-            parent = link.relative[:-1]
-            if (
-                len(target.relative) <= len(parent)
-                and parent[: len(target.relative)] == target.relative
-            ):
-                raise BrowserSurfaceError("mounted browser surface symlink cycle")
         return target
 
 
@@ -581,6 +574,19 @@ def _walk_mount(
             if dangling_alias_is_permitted(link, candidate):
                 continue
             raise
+        parent = link.relative[:-1]
+        if (
+            stat.S_ISDIR(target.metadata.st_mode)
+            and len(target.relative) <= len(parent)
+            and parent[: len(target.relative)] == target.relative
+        ):
+            _classify(
+                findings,
+                _Node(link.relative, target.metadata),
+                link.relative,
+                target_root,
+            )
+            continue
         resolved_links[relative] = target.relative
         resolved_aliases.append((relative, target))
         alias_name = relative[-1].casefold()
