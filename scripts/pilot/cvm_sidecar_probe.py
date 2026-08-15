@@ -28,8 +28,8 @@ OWNER_NONCE = re.compile(r"[0-9a-f]{32}\Z")
 REMOTE_ROOT = "~/text-to-cad"
 MIN_REMOTE_FREE_BYTES = 3 * 1024 * 1024 * 1024
 IMAGE_INSPECT_FORMAT = (
-    '[{{json .Id}},{{json .Os}},{{json .Architecture}},'
-    '{{json (index .Config.Labels "org.opencontainers.image.revision")}}]'
+    '{{.Id}}\t{{.Os}}\t{{.Architecture}}\t'
+    '{{index .Config.Labels "org.opencontainers.image.revision"}}'
 )
 IMAGE_ATTESTATION_FAILURE_CHECKS = frozenset(
     f"{role}-{suffix}"
@@ -246,14 +246,14 @@ def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
             f"{role} fixed image inspection is inaccessible",
             check=f"{role}-inspect-access",
         ) from exc
-    lines = completed.stdout.splitlines()
-    if len(lines) != 1 or not lines[0]:
-        raise ProbeError(
-            f"{role} fixed image inspection format is invalid",
-            check=f"{role}-inspect-format",
-        )
     try:
-        payload = _strict_json_loads(lines[0], f"{role} fixed image inspection")
+        lines = completed.stdout.splitlines()
+        if len(lines) != 1 or not lines[0]:
+            raise ProbeError(
+                f"{role} fixed image inspection format is invalid",
+                check=f"{role}-inspect-format",
+            )
+        payload = lines[0].split("\t")
     except ProbeError as exc:
         raise ProbeError(
             f"{role} fixed image inspection format is invalid",
@@ -264,7 +264,7 @@ def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
             f"{role} fixed image inspection format is invalid",
             check=f"{role}-inspect-format",
         ) from exc
-    if not isinstance(payload, list) or len(payload) != 4:
+    if len(payload) != 4:
         raise ProbeError(
             f"{role} fixed image inspection format is invalid",
             check=f"{role}-inspect-format",

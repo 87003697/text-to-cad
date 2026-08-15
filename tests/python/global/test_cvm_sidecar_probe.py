@@ -90,7 +90,7 @@ def write_portable_archive_docker(path: Path) -> None:
 
             if sys.argv[1:4] == ["image", "inspect", "--format"]:
                 image = sys.argv[5]
-                print(json.dumps([image, "linux", "amd64", {SOURCE_REVISION!r}]))
+                print("\\t".join([image, "linux", "amd64", {SOURCE_REVISION!r}]))
             elif sys.argv[1:3] == ["image", "save"]:
                 output = pathlib.Path(sys.argv[4])
                 assert sys.argv[5:] == [sidecar, client]
@@ -467,7 +467,6 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     (root / "sitecustomize.py").write_text(
                         textwrap.dedent(
                             """\
-                            import json
                             import os
                             import subprocess
 
@@ -483,14 +482,21 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
 
                                 subprocess.run = bounded_run
                             elif phase == "parse":
-                                original_loads = json.loads
+                                original_run = subprocess.run
 
-                                def bounded_loads(text, *args, **kwargs):
-                                    if target in text:
+                                class BrokenCompleted:
+                                    returncode = 0
+
+                                    @property
+                                    def stdout(self):
                                         raise RuntimeError("forbidden raw inspect parse detail")
-                                    return original_loads(text, *args, **kwargs)
 
-                                json.loads = bounded_loads
+                                def bounded_run(argv, *args, **kwargs):
+                                    if list(argv)[:3] == ["docker", "image", "inspect"] and list(argv)[-1] == target:
+                                        return BrokenCompleted()
+                                    return original_run(argv, *args, **kwargs)
+
+                                subprocess.run = bounded_run
                             """
                         ),
                         encoding="utf-8",
@@ -585,10 +591,10 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 textwrap.dedent(
                     f"""\
                     #!/usr/bin/env python3
-                    import json, pathlib, sys
+                    import pathlib, sys
                     if sys.argv[1:4] == ["image", "inspect", "--format"]:
                         image = sys.argv[5]
-                        print(json.dumps([image, "linux", "amd64", {SOURCE_REVISION!r}]))
+                        print("\\t".join([image, "linux", "amd64", {SOURCE_REVISION!r}]))
                     elif sys.argv[1:3] == ["image", "save"]:
                         pathlib.Path(sys.argv[4]).mkdir()
                         raise SystemExit(7)
@@ -1602,8 +1608,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
 
     def test_remote_provision_splits_portable_image_attestation_checks(self) -> None:
         inspect_format = (
-            '[{{json .Id}},{{json .Os}},{{json .Architecture}},'
-            '{{json (index .Config.Labels "org.opencontainers.image.revision")}}]'
+            '{{.Id}}\t{{.Os}}\t{{.Architecture}}\t'
+            '{{index .Config.Labels "org.opencontainers.image.revision"}}'
         )
         cases = (
             ("inspect-access", "inspect-access"),
@@ -1694,34 +1700,38 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         if inspected_role == role and variant == "inspect-access":
                             raise cvm_sidecar_probe.ProbeError("opaque inspect failure")
                         if inspected_role == role and variant == "inspect-format":
-                            output: object = [
-                                {
-                                    "Id": inspected_id,
-                                    "Os": "linux",
-                                    "Architecture": "amd64",
-                                    "Config": {
-                                        "Labels": {
-                                            "org.opencontainers.image.revision": SOURCE_REVISION
+                            output = json.dumps(
+                                [
+                                    {
+                                        "Id": inspected_id,
+                                        "Os": "linux",
+                                        "Architecture": "amd64",
+                                        "Config": {
+                                            "Labels": {
+                                                "org.opencontainers.image.revision": SOURCE_REVISION
+                                            },
+                                            "EngineVersionSpecific": None,
                                         },
-                                        "EngineVersionSpecific": None,
-                                    },
-                                }
-                            ]
+                                    }
+                                ]
+                            )
                         else:
-                            output = [
-                                "sha256:" + "9" * 64
-                                if inspected_role == role and variant == "id"
-                                else inspected_id,
-                                "windows"
-                                if inspected_role == role and variant == "platform"
-                                else "linux",
-                                "amd64",
-                                "b" * 40
-                                if inspected_role == role and variant == "revision"
-                                else SOURCE_REVISION,
-                            ]
+                            output = "\t".join(
+                                [
+                                    "sha256:" + "9" * 64
+                                    if inspected_role == role and variant == "id"
+                                    else inspected_id,
+                                    "windows"
+                                    if inspected_role == role and variant == "platform"
+                                    else "linux",
+                                    "amd64",
+                                    "b" * 40
+                                    if inspected_role == role and variant == "revision"
+                                    else SOURCE_REVISION,
+                                ]
+                            )
                         return subprocess.CompletedProcess(
-                            arguments, 0, json.dumps(output) + "\n", ""
+                            arguments, 0, output + "\n", ""
                         )
 
                     enough = type(
