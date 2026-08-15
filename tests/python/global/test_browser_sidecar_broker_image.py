@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import base64
 from io import BytesIO
 import json
 import os
 from pathlib import Path
 import re
 import shutil
-import socket
 import subprocess
 import tarfile
 import tempfile
-import threading
 import unittest
 from unittest import mock
 
@@ -21,98 +18,15 @@ from tests.python.support.paths import add_repo_path
 
 add_repo_path("packages/meshshot/src")
 
-from meshshot import MeshGeometry, render_residual_preview
 from scripts.pilot import browser_sidecar
 from scripts.pilot import browser_sidecar_conformance as conformance
-from scripts.pilot.runner import _build_gate_artifact, _prepare_nested_browser_gate_from_manifest
+from scripts.pilot.runner import _prepare_nested_browser_gate_from_manifest
 
 
 CLIENT_PATH = "/opt/text-to-cad/scripts/pilot/browser_sidecar_conformance.py"
+LEGACY_IMAGE_ID = "sha256:7a15df89f7e8f194446ba251cfdb280416e85c46b9a514528d4ab221201ca3af"
+LEGACY_SOURCE_REVISION = "7e9fbbd15a365d5df691a79b0d2352492888d361"
 RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
-
-
-class FixedBrokerFixture:
-    """Serve only the two registered programs from one canonical public render."""
-
-    def __init__(self, capability: Path, rendered) -> None:
-        self.path = capability / "browser.sock"
-        self.rendered = rendered
-        self.requests: list[str] = []
-        self.error: BaseException | None = None
-        self.stop = threading.Event()
-        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.server.bind(os.fspath(self.path))
-        self.path.chmod(0o600)
-        self.server.listen(4)
-        self.server.settimeout(0.2)
-        self.thread = threading.Thread(target=self._serve, daemon=True)
-        self.thread.start()
-
-    def _serve(self) -> None:
-        try:
-            while len(self.requests) < 4 and not self.stop.is_set():
-                try:
-                    connection, _ = self.server.accept()
-                except TimeoutError:
-                    continue
-                with connection:
-                    wire = bytearray()
-                    while chunk := connection.recv(65536):
-                        wire.extend(chunk)
-                    request = json.loads(bytes(wire).decode("ascii"))
-                    program = request["program"]
-                    self.requests.append(program)
-                    result = self._result(program)
-                    response = {
-                        "schema": browser_sidecar.RESPONSE_SCHEMA,
-                        "jobId": request["jobId"],
-                        "imageId": browser_sidecar.IMAGE_ID,
-                        "program": program,
-                        "result": result,
-                    }
-                    connection.sendall(
-                        json.dumps(response, sort_keys=True, separators=(",", ":")).encode(
-                            "ascii"
-                        )
-                        + b"\n"
-                    )
-        except BaseException as exc:  # surfaced by the owning test thread
-            self.error = exc
-
-    def _result(self, program: str) -> dict[str, object]:
-        if program == "residual":
-            return {
-                "ok": True,
-                "pngDataUrl": "data:image/png;base64,"
-                + base64.b64encode(self.rendered.png_bytes).decode("ascii"),
-                "views": list(self.rendered.views),
-            }
-        if program != "viewer":
-            raise ValueError("unexpected registered program")
-        return {
-            "title": "CAD Viewer | browser_sidecar_inspection.step",
-            "modelKey": "inspection-step",
-            "programDigest": browser_sidecar.PROGRAMS["viewer"],
-            "screenshotDataUrl": "data:image/png;base64,cG5n",
-            "screenshotSha256": "0" * 64,
-            "screenshotBytes": 3,
-            "bodyMentionsFixture": True,
-            "bodyHasArtifactError": False,
-            "inspection": {
-                "control": "toggle-projection",
-                "before": "Display and projection: Solid, Orthographic",
-                "target": "Perspective",
-                "after": "Display and projection: Solid, Perspective",
-                "changed": True,
-            },
-        }
-
-    def close(self) -> None:
-        self.stop.set()
-        self.thread.join(timeout=1)
-        self.server.close()
-        if self.error is not None:
-            raise self.error
 
 
 @unittest.skipUnless(
@@ -127,6 +41,132 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
         cls.docker = shutil.which("docker")
         if cls.docker is None:
             raise unittest.SkipTest("docker is unavailable")
+
+    def _linux_public_fixture(self) -> dict[str, object]:
+        """Render one canonical fixture in the exact reviewed Linux baseline."""
+
+        for projection, expected in (
+            ("{{.Id}}", LEGACY_IMAGE_ID),
+            ("{{.Os}}", "linux"),
+            ("{{.Architecture}}", "amd64"),
+            (
+                '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+                LEGACY_SOURCE_REVISION,
+            ),
+        ):
+            inspected = subprocess.run(
+                [
+                    self.docker,
+                    "inspect",
+                    "--type=image",
+                    "--format",
+                    projection,
+                    LEGACY_IMAGE_ID.removeprefix("sha256:"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(inspected.returncode, 0, inspected.stderr)
+            self.assertEqual(inspected.stdout.splitlines(), [expected])
+        name = f"ttc-bs-image-baseline-{os.getpid()}"
+        absent = subprocess.run(
+            [self.docker, "container", "inspect", name],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(absent.returncode, 1, "foreign baseline-test name exists")
+        created = subprocess.run(
+            [
+                self.docker,
+                "create",
+                "--name",
+                name,
+                "--label",
+                "io.text-to-cad.browser-sidecar-image-test=linux-baseline",
+                "--pull=never",
+                "--platform",
+                "linux/amd64",
+                "--network",
+                "none",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges:true",
+                "--pids-limit",
+                "128",
+                "--memory",
+                "768m",
+                "--memory-swap",
+                "768m",
+                "--cpus",
+                "1",
+                "--shm-size",
+                "256m",
+                "--tmpfs",
+                "/tmp:rw,nosuid,nodev,size=64m,mode=1777",
+                "--tmpfs",
+                "/home/pwuser:rw,nosuid,nodev,size=32m,uid=1001,gid=1001,mode=700",
+                "--entrypoint",
+                "python3",
+                LEGACY_IMAGE_ID,
+                "/opt/browser-sidecar/image-baseline.py",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        container_id = created.stdout.strip()
+        self.assertRegex(container_id, RESOURCE_ID)
+        helper = (
+            browser_sidecar.REPO_ROOT
+            / "tests/python/fixtures/browser_sidecar_linux_baseline.py"
+        )
+        try:
+            copied = subprocess.run(
+                [
+                    self.docker,
+                    "cp",
+                    "-a",
+                    os.fspath(helper),
+                    f"{container_id}:/opt/browser-sidecar/image-baseline.py",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(copied.returncode, 0, copied.stderr)
+            completed = subprocess.run(
+                [self.docker, "start", "-a", container_id],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=conformance.CONFORMANCE_TIMEOUT_SECONDS,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            lines = completed.stdout.splitlines()
+            self.assertEqual(len(lines), 1, completed.stdout)
+            fixture = json.loads(lines[0])
+        finally:
+            subprocess.run(
+                [self.docker, "rm", "-f", container_id],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        self.assertEqual(
+            fixture["pngSha256"], browser_sidecar.NESTED_GATE["publicPngSha256"]
+        )
+        self.assertEqual(
+            fixture["profileSha256"], browser_sidecar.NESTED_GATE["profileSha256"]
+        )
+        return fixture
 
     def test_locked_image_contains_exact_executable_client_source(self) -> None:
         """Extraction and execution both use the exact locked image and file path."""
@@ -192,26 +232,50 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
         container_id = created.stdout.strip()
         self.assertRegex(container_id, RESOURCE_ID)
         try:
-            copied = subprocess.run(
-                [self.docker, "cp", f"{container_id}:{CLIENT_PATH}", "-"],
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=30,
+            copied_sources: dict[str, bytes] = {}
+            for remote in (
+                "/opt/text-to-cad/scripts/pilot/browser_sidecar.py",
+                CLIENT_PATH,
+                "/opt/text-to-cad/packages/meshshot/src/meshshot",
+            ):
+                copied = subprocess.run(
+                    [self.docker, "cp", f"{container_id}:{remote}", "-"],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=30,
+                )
+                self.assertEqual(
+                    copied.returncode,
+                    0,
+                    copied.stderr.decode(errors="replace"),
+                )
+                with tarfile.open(fileobj=BytesIO(copied.stdout), mode="r|") as archive:
+                    while member := archive.next():
+                        if not member.isfile():
+                            continue
+                        extracted = archive.extractfile(member)
+                        self.assertIsNotNone(extracted)
+                        assert extracted is not None
+                        copied_sources[member.name] = extracted.read()
+            expected_sources = {
+                "browser_sidecar.py": (
+                    browser_sidecar.REPO_ROOT / "scripts/pilot/browser_sidecar.py"
+                ).read_bytes(),
+                "browser_sidecar_conformance.py": (
+                    browser_sidecar.REPO_ROOT
+                    / "scripts/pilot/browser_sidecar_conformance.py"
+                ).read_bytes(),
+            }
+            meshshot_root = (
+                browser_sidecar.REPO_ROOT / "packages/meshshot/src/meshshot"
             )
-            self.assertEqual(copied.returncode, 0, copied.stderr.decode(errors="replace"))
-            with tarfile.open(fileobj=BytesIO(copied.stdout), mode="r|") as archive:
-                member = archive.next()
-                self.assertIsNotNone(member)
-                assert member is not None
-                extracted = archive.extractfile(member)
-                self.assertIsNotNone(extracted)
-                assert extracted is not None
-                image_bytes = extracted.read()
-            expected = (
-                browser_sidecar.REPO_ROOT / "scripts/pilot/browser_sidecar_conformance.py"
-            ).read_bytes()
-            self.assertEqual(image_bytes, expected)
+            for path in sorted(meshshot_root.rglob("*")):
+                if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc":
+                    expected_sources["meshshot/" + path.relative_to(meshshot_root).as_posix()] = (
+                        path.read_bytes()
+                    )
+            self.assertEqual(copied_sources, expected_sources)
             executed = subprocess.run(
                 [self.docker, "start", "-a", container_id],
                 check=False,
@@ -233,17 +297,7 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
     def test_gate_release_executes_image_client_and_completes_predicates(self) -> None:
         """The real sealed gate replaces its PID with the packaged fixed client."""
 
-        reference = MeshGeometry(
-            vertices=[[-0.46, -0.2, 0.0], [-0.2, -0.2, 0.0], [-0.33, 0.2, 0.0]],
-            faces=[[0, 1, 2]],
-        )
-        candidate = MeshGeometry(
-            vertices=[[0.2, -0.2, 0.0], [0.46, -0.2, 0.0], [0.33, 0.2, 0.0]],
-            faces=[[0, 1, 2]],
-        )
-        rendered = render_residual_preview(
-            reference, candidate, variant="step", exterior_directions=[]
-        )
+        linux_fixture = self._linux_public_fixture()
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
             root = Path(temporary).resolve()
             capability = root / "capability"
@@ -261,11 +315,11 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
                     Path("/workspace/repo/outputs/conformance/formal"),
                     job_id="formal-image-client",
                 )
-            discovery = capability / "browser-gate-discovery.pyz"
-            _build_gate_artifact(browser_sidecar.REPO_ROOT, discovery)
-            manifest = conformance._discover_client_surface(
-                self.docker, job, discovery, f"{job.prefix}-surface"
-            )
+            manifest = {
+                "schema": browser_sidecar.NESTED_GATE["surfaceSchema"],
+                "scanRoots": [],
+                "browserExclusions": [],
+            }
             _prepare_nested_browser_gate_from_manifest(
                 browser_sidecar.REPO_ROOT, job, manifest
             )
@@ -281,15 +335,99 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
                 encoding="ascii",
             )
             job.authority_path.chmod(0o444)
-            broker = FixedBrokerFixture(capability, rendered)
-            try:
-                status, result = conformance._run_gate_then_client(
-                    self.docker, job, f"{job.prefix}-client", manifest
+            fixture = root / "fixture.json"
+            fixture.write_text(
+                json.dumps(
+                    {
+                        "pngDataUrl": linux_fixture["pngDataUrl"],
+                        "views": linux_fixture["views"],
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
                 )
+                + "\n",
+                encoding="ascii",
+            )
+            harness = (
+                browser_sidecar.REPO_ROOT
+                / "tests/python/fixtures/browser_sidecar_image_harness.py"
+            )
+            name = f"ttc-bs-image-gate-{os.getpid()}"
+            absent = subprocess.run(
+                [self.docker, "container", "inspect", name],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(absent.returncode, 1, "foreign image-gate name exists")
+            created = subprocess.run(
+                [
+                    self.docker,
+                    "create",
+                    "--name",
+                    name,
+                    "--label",
+                    "io.text-to-cad.browser-sidecar-image-test=gate-client",
+                    "--pull=never",
+                    "--platform",
+                    "linux/amd64",
+                    "--network",
+                    "none",
+                    "--user",
+                    f"{os.getuid()}:{os.getgid()}",
+                    "--entrypoint",
+                    "python3",
+                    browser_sidecar.BROKER_IMAGE_ID,
+                    "/tmp/browser-sidecar-image-harness.py",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            container_id = created.stdout.strip()
+            self.assertRegex(container_id, RESOURCE_ID)
+            try:
+                for source, destination in (
+                    (capability, "/run/meshshot-browser"),
+                    (harness, "/tmp/browser-sidecar-image-harness.py"),
+                    (fixture, "/tmp/browser-sidecar-image-fixture.json"),
+                ):
+                    copied = subprocess.run(
+                        [
+                            self.docker,
+                            "cp",
+                            "-a",
+                            os.fspath(source),
+                            f"{container_id}:{destination}",
+                        ],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    self.assertEqual(copied.returncode, 0, copied.stderr)
+                completed = subprocess.run(
+                    [self.docker, "start", "-a", container_id],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=conformance.CONFORMANCE_TIMEOUT_SECONDS,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                lines = completed.stdout.splitlines()
+                self.assertEqual(len(lines), 1, completed.stdout)
+                result = json.loads(lines[0])
             finally:
-                broker.close()
+                subprocess.run(
+                    [self.docker, "rm", "-f", container_id],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
 
-        self.assertEqual(status, 0)
         self.assertEqual(
             result["schema"], "meshshot.browser-sidecar.local-conformance-client/1"
         )
@@ -299,7 +437,6 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
         )
         self.assertTrue(result["viewer"]["inspection"]["changed"])
         self.assertEqual(result["clientBrowserInventory"]["browserProcesses"], [])
-        self.assertEqual(broker.requests, ["residual", "viewer", "residual", "viewer"])
 
 
 if __name__ == "__main__":
