@@ -208,3 +208,25 @@ all Docker inventory output before enforcing the 4096-entry limit.
 Require independent Standards and Spec PASS on the clean successor before one
 new deployment, prepare handle, provision attempt, and conditional sealed
 probe.
+
+That boundary passed independent Standards and Spec review and deployed clean
+SHA `547c36f1fc03f18578f3fcc27a66a4f3eb609c76`. Its deterministic local
+prepare handle `cvmsp-73f95823109c40120b8bd7f4` terminated before any CVM
+provision at:
+
+- operation: `prepare`
+- exit: `2`
+- bounded failure: `prepare cleanup could not prove absence`
+- retained exact temporary archive: `312583168` bytes
+- prepare receipt: absent
+- CVM provision: `NOT_RUN`
+- sealed Chromium probe: `NOT_RUN`
+
+The failed handle is retained and must not be retried, adopted, or cleaned.
+Because the handle is derived from image source revision, workflow source
+revision, workflow file hashes, and exact image IDs, the same clean SHA must
+continue to reject reuse. This docs-only successor records the terminal fact
+and intentionally creates a new workflow source revision while leaving runtime
+code, fixed image IDs, and image source revision unchanged. Require independent
+Standards and Spec PASS before deploying this successor and creating exactly
+one new deterministic prepare handle.
