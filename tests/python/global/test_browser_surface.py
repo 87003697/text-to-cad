@@ -155,6 +155,42 @@ class BrowserSurfaceTests(unittest.TestCase):
                     permitted_symlink_roots=[usr, etc],
                 )
 
+    def test_immutable_image_roots_allow_only_non_browser_dangling_aliases(self) -> None:
+        """Sealed images tolerate distro doc links, never browser-shaped aliases."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            usr = root / "usr"
+            etc = root / "etc"
+            (usr / "share/doc/vendor").mkdir(parents=True)
+            (etc / "modules-load.d").mkdir(parents=True)
+            (usr / "share/doc/vendor/NEWS.gz").symlink_to("missing-news.gz")
+            (etc / "modules-load.d/modules.conf").symlink_to("../modules")
+
+            with self.assertRaises(browser_surface.BrowserSurfaceError):
+                browser_surface.discover_browser_roots(
+                    [(usr, Path("/usr"), True), (etc, Path("/etc"), True)],
+                    permitted_symlink_roots=[usr, etc],
+                )
+
+            self.assertEqual(
+                browser_surface.discover_browser_roots(
+                    [(usr, Path("/usr"), True), (etc, Path("/etc"), True)],
+                    permitted_symlink_roots=[usr, etc],
+                    permitted_dangling_symlink_roots=[usr, etc],
+                ),
+                [],
+            )
+
+            (usr / "bin").mkdir()
+            (usr / "bin/chromium").symlink_to("missing-browser")
+            with self.assertRaises(browser_surface.BrowserSurfaceError):
+                browser_surface.discover_browser_roots(
+                    [(usr, Path("/usr"), True), (etc, Path("/etc"), True)],
+                    permitted_symlink_roots=[usr, etc],
+                    permitted_dangling_symlink_roots=[usr, etc],
+                )
+
     def test_os_boundary_errors_are_never_suppressed(self) -> None:
         """EACCES from lstat, open, read, or scandir reaches the public closure."""
 
