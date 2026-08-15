@@ -2,7 +2,7 @@
 
 ## 对话 Transcript
 
-`/Users/zhiyuanma/.codex/sessions/2026/08/15/rollout-2026-08-15T02-54-15-01a0019f-f3ee-7d22-a564-dbd24bf4660c.jsonl`
+`/Users/zhiyuanma/.codex/sessions/2026/08/13/rollout-2026-08-13T12-37-10-019ff968-ea54-7c60-b3fc-f08a022322f9.jsonl`
 
 ## 前序 Session
 
@@ -104,6 +104,16 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
     `209cf6b10e40e2e257b8ce7b4d38c2bec4b44650` replaces only that projection
     and parser. Lifecycle, receipts, exact identity checks, and no-retry remain
     unchanged.
+14. R10 passed independent Spec and Standards review after two docs-only
+    contract corrections; the deployed clean workflow SHA was
+    `c4f1e8385a40043a4147e2b108d7a6f693d63051`. A fresh authorized handle
+    `cvmsp-b1ff1da80d7ed0006ff13fff` still terminated at exact
+    `sidecar-inspect-access`. Its nonce-scoped abort reports no errors and
+    proves the transfer archive, incoming directory, and prepare receipt are
+    absent. The handle is terminal with `retryAllowed:false`; `probe` was not
+    dispatched. This falsifies the hypothesis that the composite `json`
+    template was the only CVM incompatibility. No raw remote log or terminal
+    handle was inspected or mutated.
 
 ## Session 产出
 
@@ -131,6 +141,7 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
 | `874ca5e2300241d641150e14b2a9d1db29a7c525` R9 GREEN | skill, module | Bound unexpected run exceptions to role `inspect-access` and parser exceptions to role `inspect-format`. |
 | `bba5365be466f7f0d46b807ac0bc1ac8efc4051b` R10 RED | remote-provision compatibility seam | An older-Docker fake rejected the composite `json` template and reproduced exact `sidecar-inspect-access`. |
 | `209cf6b10e40e2e257b8ce7b4d38c2bec4b44650` R10 GREEN | module, tests | Direct-field/index tab projection works without the template `json` helper while retaining strict role checks. |
+| `c4f1e8385a40043a4147e2b108d7a6f693d63051` reviewed R10 workflow | skill contract/docs | Final clean deployed SHA; documents the TAB projection and closed parser checks exactly. |
 
 ### 核心行为
 
@@ -210,13 +221,36 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
   `image-attestation-unexpected` fallback; existing role-specific `ProbeError`
   checks are never blanket-wrapped.
 - The same role checks close local prepare before state: launch/socket/
-  permission exceptions become role `inspect-access`, and unexpected compact
-  parser exceptions become role `inspect-format`. Public stderr is fixed and
-  contains no traceback, path, errno, or source exception text.
+  permission exceptions become role `inspect-access`, and unexpected
+  TAB-delimited projection parser exceptions become role `inspect-format`.
+  Public stderr is fixed and contains no traceback, path, errno, or source
+  exception text.
 - Prepare cleanup failure still dominates as `prepare-cleanup-absence`. When
   cleanup proves absence, existing fixed checks remain unchanged and every
   non-`ProbeError` becomes `prepare-operation`; no traceback/path/errno/message
   crosses the public CLI boundary.
+
+### Prototype and execution evidence
+
+- The local dedicated Colima prototype is independently reviewed **ADOPT** at
+  runtime/image source `1abe4c97929906b5c0b28b0f3f38857bd923952f`.
+- Exact images are Sidecar
+  `sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1`
+  and sealed Agent
+  `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`.
+- R8 evidence is
+  `/tmp/browser-sidecar-prototype-evidence-r2-r8/evidence.json`, SHA-256
+  `dc7b29c4109e3ae64c5f1e610363c729e8b7a791b05563f23b6964129142305e`:
+  30/30 predicates true, 134 operations, and 13/13 exact resources absent.
+- Visual proof: the real STEP Viewer changed Orthographic to Perspective;
+  screenshot was 60,743 bytes with SHA-256
+  `ef40fdbc99f49ecda27df4ec3a6352d5349d217baf922acaafb4e72fc054a2c9`.
+  The unchanged public `meshshot.render_residual_preview` local baseline and
+  remote Sidecar result matched in PNG bytes/hash, mode, dimensions, profile,
+  view order, variant, and evidence.
+- CVM execution did **not** reach this runtime. Every CVM attempt stopped in
+  provisioning before the sealed probe; no Viewer screenshot, Chromium
+  process, model-provider call, or paid pilot was produced on CVM.
 
 ### 验证结果
 
@@ -322,7 +356,18 @@ R10 final validation:
 - The first restricted global run was environment-only FAIL: eight loopback
   bind permission errors plus two missing lightweight-worktree dependencies;
   the authorized same-code rerun above passed.
-- External/CVM operations: **zero**; incremental spend: **$0**.
+- Independent Spec and Standards reviews passed on implementation
+  `209cf6b10e40e2e257b8ce7b4d38c2bec4b44650` and final clean docs/workflow
+  `c4f1e8385a40043a4147e2b108d7a6f693d63051`.
+- `cvm-push` deployed `c4f1e838...` successfully and verified the remote
+  runtime contract. CVM Git base was `no-git` and is not the deployment
+  identity.
+- Fresh prepare handle `cvmsp-b1ff1da80d7ed0006ff13fff` bound archive
+  1,084,572,160 bytes, SHA-256
+  `2ae8ec5106f642aa38cbb20f649c8dce17c885eb6eb22ea98dbd66dffd357e17`.
+- Its only provision ended terminal `sidecar-inspect-access`; retry is false.
+  Nonce-scoped abort had no errors and proved all three transfer artifacts
+  absent. Probe dispatch was **NOT_RUN**.
 
 The first restricted global run was not accepted as product evidence: it had
 eight loopback-bind permission errors and two missing-worktree-dependency
@@ -343,55 +388,46 @@ this branch; that wording was fixed before the clean 162-test rerun.
 
 ## 未完成事项
 
-- The real final prototype image IDs were not available during this ticket.
-  Do not run `prepare` until the prototype owner supplies both final IDs and the
-  full clean image-source SHA whose label is present in both configs. The owner
-  reported clean runtime commit prefix `e1a68655`; verify the full SHA and final
-  rebuild receipt rather than expanding this prefix.
-- R4 performed no CVM code push, provision, or probe and spent `$0`. The prior
-  failed handle remains terminal with structured abort/transfer-absence proof;
-  R4 neither inspected nor mutated it.
-- Independent Standards/Spec review and parent integration remain parent-owned.
+- CVM capability probe is **NOT_RUN**. No CVM Chromium, Viewer, eight-view
+  render, paid model, or full pilot evidence exists.
+- The latest two exact attempts both failed after `docker image load` at
+  `sidecar-inspect-access`, once with the composite JSON template and once with
+  the direct TAB projection. Template composition is therefore ruled out as
+  the sole cause.
+- The closed receipt does not distinguish a missing/unaddressable loaded image,
+  a failure of even the simplest ID-only inspect, or Docker client/daemon
+  access/timeout. Do not guess among them and do not read raw remote logs.
+- Provision may have retained the loaded image IDs by design. Their deletion is
+  a separate destructive action and remains unauthorized.
+- Every handle below is terminal, `retryAllowed:false`, and must never be
+  resubmitted or adopted:
 
-R4 adds no new external attempt. Its clean review range is
-`97aef65d..1ee713d0e00e2b0510c7cce577786cccb9801491`; the previously failed
-handle remains terminal and untouched.
-
-R5 adds no new external attempt. Its clean implementation review range is
-`e7b881186feadde7d6cb9e8b5df48730f84cb06a..3f6274d1090fc53c5023e20b7e61bcc89f2db279`;
-both previously failed handles remain terminal and untouched.
-
-R6 adds no new external attempt. Its clean implementation review range is
-`1da059f0a4ee95f49644a3deb2d5cba3c4db6498..faa23e5c8a482a4ee1c017cca9e92f028c90c677`;
-both previously failed handles remain terminal and untouched.
-
-R7 adds no new external attempt. Its clean implementation review range is
-`367681a5cb5cb98376f0b5d388c076ee54d61c6b..ce3143e4bc30c222b400aa5637edc8df48619169`;
-both previously failed handles remain terminal and untouched.
-
-R8 adds no new external attempt. Its clean implementation review range is
-`e6ffdf77853800d2e9b711b035aac86ef5dadfc8..2a65efba2300b42487db1ae05e8b93a7c43d0db5`;
-all three previously failed handles remain terminal and untouched.
-
-R9 adds no new external attempt. Its clean implementation review range is
-`c86ce8faf7dfe85cc78f50852b60ff0b846c2b64..874ca5e2300241d641150e14b2a9d1db29a7c525`;
-all three previously failed handles remain terminal and untouched.
-
-R10 adds no new external attempt. Its clean implementation review range is
-`df6951ecc51ab71e41160d4bcdfb9ed6a54602aa..209cf6b10e40e2e257b8ce7b4d38c2bec4b44650`;
-the newly failed handle and every earlier terminal handle remain untouched.
+| handle | deployed workflow | terminal check | transfer absence |
+|---|---|---|---|
+| `cvmsp-400bce2bc3943c2715fdc8ce` | `97aef65d...` | `workflow` | proved |
+| `cvmsp-475cb7351c40347e39b2e337` | `e7b88118...` | `image-attestation` | proved |
+| `cvmsp-f09440db5fc58c4c7286e24d` | `e6ffdf77...` | `image-attestation` | proved |
+| `cvmsp-cc4a136cdb7012a4ea37412f` | `df6951ec...` | `sidecar-inspect-access` | proved |
+| `cvmsp-b1ff1da80d7ed0006ff13fff` | `c4f1e838...` | `sidecar-inspect-access` | proved |
 
 ## 下一步
 
-1. Review fixed range
-   `9c5b7ea39030a013023a2f06c83b9b869a394861..HEAD`; require both axes PASS on
-   the same clean SHA.
-2. Obtain the prototype owner's exact final Sidecar/client IDs and full clean
-   image-source SHA. Locally inspect both labels before `prepare`.
-3. Deploy the reviewed workflow code once through `$cvm-push`; preserve that
-   deployment receipt as the workflow-source attestation.
-4. Run `prepare` locally. With the separately authorized external gate, run
-   `provision <handle>`, then exactly one `probe <same-handle>`.
-5. Report exact reviewed workflow SHA, image-source SHA, both image IDs/config
-   hashes, archive SHA-256, handle, probe receipt, terminal operation, and
-   absence proof. Never retry a failed handle.
+1. Open one narrow diagnostic ticket at the fixed public remote-provision seam.
+   The first fixed command should inspect only `{{.Id}}`; later OS,
+   architecture, and revision projections run only after ID access succeeds.
+   Persist one bounded check for ID-only command access versus later field
+   format/identity failure; never persist Docker output, stderr, path, errno,
+   socket, or daemon JSON.
+2. Add deterministic RED coverage for: loaded ID not addressable, ID-only
+   inspect command nonzero, timeout, OS/architecture/revision field failure,
+   first-failure preservation, and transfer cleanup. Keep the public
+   prepare/provision/probe interface unchanged.
+3. Require one new clean SHA, focused/global gates, and independent Spec plus
+   Standards PASS. Only then may the parent authorize one fresh handle. Do not
+   touch any tabled handle or delete retained images.
+4. If and only if provision succeeds, dispatch `probe` exactly once on that
+   same fresh handle. A successful provision without probe is still not a CVM
+   capability result.
+5. Keep the report distinction explicit: Colima R8 is real local ADOPT with a
+   visual Viewer/render result; CVM has only deployment/provision receipts and
+   no runtime visual or paid-flow result.
