@@ -637,6 +637,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
             browser_sidecar.REPO_ROOT
             / "packages/meshshot/browser_sidecar_broker/Dockerfile"
         ).read_text(encoding="utf-8")
+        self.assertIn("-xtype l -delete", dockerfile)
         self.assertIn(
             "COPY packages/meshshot/src/meshshot ./packages/meshshot/src/meshshot",
             dockerfile,

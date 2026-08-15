@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import inspect
 import os
 from pathlib import Path
 import tempfile
@@ -13,6 +14,40 @@ from scripts.pilot import browser_surface
 
 class BrowserSurfaceTests(unittest.TestCase):
     """Exercise the scanner through real filesystem trees and its OS adapter."""
+
+    def test_scanner_has_no_dangling_link_bypass(self) -> None:
+        """Every dangling link remains fail-closed on every scanner surface."""
+
+        self.assertNotIn(
+            "permitted_dangling_symlink_roots",
+            inspect.signature(browser_surface.discover_browser_roots).parameters,
+        )
+
+    def test_declared_root_closure_rejects_undeclared_transit(self) -> None:
+        """A link chain cannot leave declared roots and return at its final inode."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            usr = root / "usr"
+            etc = root / "etc"
+            undeclared = root / "tmp"
+            usr.mkdir()
+            etc.mkdir()
+            undeclared.mkdir()
+            target = usr / "target"
+            target.write_text("inert", encoding="utf-8")
+            (usr / "alias").symlink_to(etc / "alias")
+            (etc / "alias").symlink_to(undeclared / "alias")
+            (undeclared / "alias").symlink_to(target)
+
+            with self.assertRaises(browser_surface.BrowserSurfaceError):
+                browser_surface.discover_browser_roots(
+                    [
+                        (usr, Path("/sandbox/usr"), True),
+                        (etc, Path("/sandbox/etc"), True),
+                    ],
+                    permitted_symlink_roots=[usr, etc],
+                )
 
     def test_required_and_optional_missing_roots_are_distinct(self) -> None:
         """A vanished exact mount closes; an explicitly optional root may be absent."""

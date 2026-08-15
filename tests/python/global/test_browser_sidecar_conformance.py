@@ -10,6 +10,7 @@ import socket
 import subprocess
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -372,15 +373,73 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
     def test_surface_discovery_home_matches_fixed_root_role(self) -> None:
         """Capability-dropped root can inspect its fresh private home."""
 
-        arguments = conformance._fixed_container_isolation(user="0:0")
+        arguments = conformance._fixed_container_isolation(
+            user="0:0", read_only_discovery=True
+        )
         self.assertIn(
             "/home/pwuser:rw,nosuid,nodev,size=16m,uid=0,gid=0,mode=700",
             arguments,
         )
         self.assertIn("DAC_READ_SEARCH", arguments)
+        self.assertNotIn("DAC_READ_SEARCH", conformance._fixed_container_isolation())
         self.assertNotIn(
-            "DAC_READ_SEARCH", conformance._fixed_container_isolation()
+            "DAC_READ_SEARCH", conformance._fixed_container_isolation(user="0:0")
         )
+
+    def test_cleanup_failure_dominates_discovery_failure(self) -> None:
+        """A failed removal remains the terminal discovery classification."""
+
+        with (
+            mock.patch.object(
+                conformance, "_create_owned_container", return_value=SURFACE_ID
+            ),
+            mock.patch.object(
+                conformance,
+                "_run_docker",
+                return_value=subprocess.CompletedProcess([], 1, "", "failed"),
+            ),
+            mock.patch.object(
+                conformance,
+                "_remove_owned_container",
+                side_effect=RuntimeError("surface cleanup failed"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "surface cleanup failed"):
+                conformance._discover_client_surface(
+                    "/usr/bin/docker", mock.Mock(), "fixed-surface"
+                )
+
+    def test_cleanup_failure_dominates_client_failure(self) -> None:
+        """A failed removal remains the terminal client classification."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            job = SimpleNamespace(capability_dir=Path(temporary))
+            channel = mock.Mock()
+            with (
+                mock.patch(
+                    "scripts.pilot.runner.NestedGateChannel", return_value=channel
+                ),
+                mock.patch.object(
+                    conformance, "_create_owned_container", return_value=CLIENT_ID
+                ),
+                mock.patch.object(
+                    conformance.subprocess,
+                    "Popen",
+                    side_effect=RuntimeError("client start failed"),
+                ),
+                mock.patch.object(
+                    conformance,
+                    "_remove_owned_container",
+                    side_effect=RuntimeError("client cleanup failed"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "client cleanup failed"):
+                    conformance._run_gate_then_client(
+                        "/usr/bin/docker",
+                        job,
+                        "fixed-client",
+                        {"browserExclusions": []},
+                    )
 
     def test_host_seals_and_validates_gate_before_fixed_client_exec(self) -> None:
         boundary = DockerBoundary()
