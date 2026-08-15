@@ -29,6 +29,72 @@ PORTABLE_SIDECAR_ID = SIDECAR_ID
 PORTABLE_CLIENT_ID = CLIENT_ID
 
 
+def remote_provision_images() -> list[dict[str, object]]:
+    return [
+        {
+            "role": "sidecar",
+            "id": SIDECAR_ID,
+            "platform": "linux/amd64",
+            "configSha256": SIDECAR_ID.removeprefix("sha256:"),
+            "sourceRevision": SOURCE_REVISION,
+        },
+        {
+            "role": "client",
+            "id": CLIENT_ID,
+            "platform": "linux/amd64",
+            "configSha256": CLIENT_ID.removeprefix("sha256:"),
+            "sourceRevision": SOURCE_REVISION,
+        },
+    ]
+
+
+def write_remote_provision_attempt_fixture(
+    root: Path,
+    handle: str,
+    owner: str,
+    workflow: dict[str, str],
+    *,
+    images: list[dict[str, object]] | None = None,
+) -> tuple[Path, Path, Path]:
+    state_root = root / "state"
+    state = state_root / handle
+    incoming = state / "incoming"
+    incoming.mkdir(parents=True)
+    archive_bytes = b"x"
+    archive_sha = hashlib.sha256(archive_bytes).hexdigest()
+    image_receipts = images if images is not None else remote_provision_images()
+    (state / "provision-attempt.json").write_text(
+        json.dumps(
+            {
+                "schema": "cvm-sidecar.remote-provision-attempt/1",
+                "handle": handle,
+                "ownerNonce": owner,
+                "workflowFilesVerified": workflow,
+                "freeBytes": 4 * 1024 * 1024 * 1024,
+                "archive": {"bytes": 1, "sha256": archive_sha},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (incoming / "prepare.json").write_text(
+        json.dumps(
+            {
+                "schema": "cvm-sidecar.prepare-receipt/1",
+                "handle": handle,
+                "sourceRevision": SOURCE_REVISION,
+                "imageSourceRevision": SOURCE_REVISION,
+                "workflowSourceRevision": "b" * 40,
+                "workflowFiles": workflow,
+                "archive": {"bytes": 1, "sha256": archive_sha},
+                "images": image_receipts,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (incoming / "images.tar").write_bytes(archive_bytes)
+    return state_root, state, incoming
+
+
 def copy_cli(repo: Path) -> Path:
     pilot = repo / "scripts" / "pilot"
     pilot.mkdir(parents=True)
@@ -1657,63 +1723,22 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 ), tempfile.TemporaryDirectory(
                     prefix=f"cvm-sidecar-{role}-{field}-{variant}-"
                 ) as root_text:
-                    state_root = Path(root_text) / "state"
                     handle = "cvmsp-" + "6" * 24
                     owner = "a" * 32
                     workflow = {"module": "1" * 64, "wrapper": "2" * 64}
-                    archive_bytes = b"x"
-                    archive_sha = hashlib.sha256(archive_bytes).hexdigest()
-                    state = state_root / handle
-                    incoming = state / "incoming"
-                    incoming.mkdir(parents=True)
-                    images = [
-                        {
-                            "role": "sidecar",
-                            "id": SIDECAR_ID,
-                            "platform": "linux/amd64",
-                            "configSha256": SIDECAR_ID.removeprefix("sha256:"),
-                            "sourceRevision": SOURCE_REVISION,
-                        },
-                        {
-                            "role": "client",
-                            "id": CLIENT_ID,
-                            "platform": "linux/amd64",
-                            "configSha256": CLIENT_ID.removeprefix("sha256:"),
-                            "sourceRevision": SOURCE_REVISION,
-                        },
-                    ]
+                    images = remote_provision_images()
                     if field == "receipt":
                         target = 0 if role == "sidecar" else 1
                         images[target]["configSha256"] = "f" * 64
-                    (state / "provision-attempt.json").write_text(
-                        json.dumps(
-                            {
-                                "schema": "cvm-sidecar.remote-provision-attempt/1",
-                                "handle": handle,
-                                "ownerNonce": owner,
-                                "workflowFilesVerified": workflow,
-                                "freeBytes": 4 * 1024 * 1024 * 1024,
-                                "archive": {"bytes": 1, "sha256": archive_sha},
-                            }
-                        ),
-                        encoding="utf-8",
+                    state_root, state, incoming = (
+                        write_remote_provision_attempt_fixture(
+                            Path(root_text),
+                            handle,
+                            owner,
+                            workflow,
+                            images=images,
+                        )
                     )
-                    (incoming / "prepare.json").write_text(
-                        json.dumps(
-                            {
-                                "schema": "cvm-sidecar.prepare-receipt/1",
-                                "handle": handle,
-                                "sourceRevision": SOURCE_REVISION,
-                                "imageSourceRevision": SOURCE_REVISION,
-                                "workflowSourceRevision": "b" * 40,
-                                "workflowFiles": workflow,
-                                "archive": {"bytes": 1, "sha256": archive_sha},
-                                "images": images,
-                            }
-                        ),
-                        encoding="utf-8",
-                    )
-                    (incoming / "images.tar").write_bytes(archive_bytes)
                     inspect_calls: list[list[str]] = []
 
                     def fixed_run(
@@ -1826,6 +1851,19 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     )
                     for arguments in inspect_calls:
                         self.assertEqual(arguments[1:4], ["image", "inspect", "--format"])
+                    self.assertEqual(
+                        receipt["transferCleanup"],
+                        {
+                            "archiveAbsent": True,
+                            "prepareReceiptAbsent": True,
+                            "incomingDirectoryAbsent": True,
+                            "errors": [],
+                        },
+                    )
+                    self.assertFalse(incoming.exists())
+                    self.assertEqual(
+                        json.loads((state / "provision.json").read_text()), receipt
+                    )
 
     def test_remote_provision_uses_older_docker_compatible_projection(self) -> None:
         portable_formats = (
@@ -1837,60 +1875,15 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(
             prefix="cvm-sidecar-older-docker-inspect-"
         ) as root_text:
-            state_root = Path(root_text) / "state"
             handle = "cvmsp-" + "8" * 24
             owner = "a" * 32
             workflow = {"module": "1" * 64, "wrapper": "2" * 64}
-            archive_bytes = b"x"
-            archive_sha = hashlib.sha256(archive_bytes).hexdigest()
-            state = state_root / handle
-            incoming = state / "incoming"
-            incoming.mkdir(parents=True)
-            images = [
-                {
-                    "role": "sidecar",
-                    "id": SIDECAR_ID,
-                    "platform": "linux/amd64",
-                    "configSha256": SIDECAR_ID.removeprefix("sha256:"),
-                    "sourceRevision": SOURCE_REVISION,
-                },
-                {
-                    "role": "client",
-                    "id": CLIENT_ID,
-                    "platform": "linux/amd64",
-                    "configSha256": CLIENT_ID.removeprefix("sha256:"),
-                    "sourceRevision": SOURCE_REVISION,
-                },
-            ]
-            (state / "provision-attempt.json").write_text(
-                json.dumps(
-                    {
-                        "schema": "cvm-sidecar.remote-provision-attempt/1",
-                        "handle": handle,
-                        "ownerNonce": owner,
-                        "workflowFilesVerified": workflow,
-                        "freeBytes": 4 * 1024 * 1024 * 1024,
-                        "archive": {"bytes": 1, "sha256": archive_sha},
-                    }
-                ),
-                encoding="utf-8",
+            state_root, _, _ = write_remote_provision_attempt_fixture(
+                Path(root_text),
+                handle,
+                owner,
+                workflow,
             )
-            (incoming / "prepare.json").write_text(
-                json.dumps(
-                    {
-                        "schema": "cvm-sidecar.prepare-receipt/1",
-                        "handle": handle,
-                        "sourceRevision": SOURCE_REVISION,
-                        "imageSourceRevision": SOURCE_REVISION,
-                        "workflowSourceRevision": "b" * 40,
-                        "workflowFiles": workflow,
-                        "archive": {"bytes": 1, "sha256": archive_sha},
-                        "images": images,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (incoming / "images.tar").write_bytes(archive_bytes)
             inspect_formats: list[str] = []
 
             def older_docker_run(
@@ -1947,101 +1940,108 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             self.assertEqual(inspect_formats, list(portable_formats) * 2)
 
     def test_remote_provision_distinguishes_id_only_inspect_access(self) -> None:
-        with tempfile.TemporaryDirectory(
-            prefix="cvm-sidecar-id-only-inspect-"
-        ) as root_text:
-            state_root = Path(root_text) / "state"
-            handle = "cvmsp-" + "9" * 24
-            owner = "a" * 32
-            workflow = {"module": "1" * 64, "wrapper": "2" * 64}
-            archive_bytes = b"x"
-            archive_sha = hashlib.sha256(archive_bytes).hexdigest()
-            state = state_root / handle
-            incoming = state / "incoming"
-            incoming.mkdir(parents=True)
-            images = [
-                {
-                    "role": "sidecar",
-                    "id": SIDECAR_ID,
-                    "platform": "linux/amd64",
-                    "configSha256": SIDECAR_ID.removeprefix("sha256:"),
-                    "sourceRevision": SOURCE_REVISION,
-                },
-                {
-                    "role": "client",
-                    "id": CLIENT_ID,
-                    "platform": "linux/amd64",
-                    "configSha256": CLIENT_ID.removeprefix("sha256:"),
-                    "sourceRevision": SOURCE_REVISION,
-                },
-            ]
-            (state / "provision-attempt.json").write_text(
-                json.dumps(
-                    {
-                        "schema": "cvm-sidecar.remote-provision-attempt/1",
-                        "handle": handle,
-                        "ownerNonce": owner,
-                        "workflowFilesVerified": workflow,
-                        "freeBytes": 4 * 1024 * 1024 * 1024,
-                        "archive": {"bytes": 1, "sha256": archive_sha},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (incoming / "prepare.json").write_text(
-                json.dumps(
-                    {
-                        "schema": "cvm-sidecar.prepare-receipt/1",
-                        "handle": handle,
-                        "sourceRevision": SOURCE_REVISION,
-                        "imageSourceRevision": SOURCE_REVISION,
-                        "workflowSourceRevision": "b" * 40,
-                        "workflowFiles": workflow,
-                        "archive": {"bytes": 1, "sha256": archive_sha},
-                        "images": images,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (incoming / "images.tar").write_bytes(archive_bytes)
-            inspect_formats: list[str] = []
+        projections = (
+            "{{.Id}}",
+            "{{.Os}}",
+            "{{.Architecture}}",
+            '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+        )
+        for role, image_id in (("sidecar", SIDECAR_ID), ("client", CLIENT_ID)):
+            for reason, returncode in (("not-addressable", 1), ("command-nonzero", 64)):
+                with self.subTest(
+                    role=role, reason=reason
+                ), tempfile.TemporaryDirectory(
+                    prefix=f"cvm-sidecar-{role}-id-{reason}-"
+                ) as root_text:
+                    handle = "cvmsp-" + "9" * 24
+                    owner = "a" * 32
+                    workflow = {"module": "1" * 64, "wrapper": "2" * 64}
+                    state_root, state, incoming = (
+                        write_remote_provision_attempt_fixture(
+                            Path(root_text), handle, owner, workflow
+                        )
+                    )
+                    inspect_formats: list[str] = []
 
-            def fixed_run(
-                argv: object, **kwargs: object
-            ) -> subprocess.CompletedProcess[str]:
-                del kwargs
-                arguments = list(argv)
-                if arguments[1:3] == ["image", "load"]:
-                    return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
-                if arguments[1:3] != ["image", "inspect"]:
-                    raise AssertionError(f"unexpected command: {arguments}")
-                inspect_formats.append(arguments[4])
-                raise cvm_sidecar_probe.ProbeError("opaque ID-only inspect failure")
+                    def fixed_subprocess_run(
+                        argv: object, **kwargs: object
+                    ) -> subprocess.CompletedProcess[str]:
+                        del kwargs
+                        arguments = list(argv)
+                        if arguments[1:3] == ["image", "load"]:
+                            return subprocess.CompletedProcess(
+                                arguments, 0, "loaded\n", ""
+                            )
+                        if arguments[1:3] != ["image", "inspect"]:
+                            raise AssertionError(f"unexpected command: {arguments}")
+                        projection = arguments[4]
+                        inspected_id = arguments[-1]
+                        inspect_formats.append(projection)
+                        if inspected_id == image_id and projection == "{{.Id}}":
+                            return subprocess.CompletedProcess(
+                                arguments,
+                                returncode,
+                                "",
+                                "fixed inaccessible image" if reason == "not-addressable" else "fixed command failure",
+                            )
+                        values = {
+                            "{{.Id}}": inspected_id,
+                            "{{.Os}}": "linux",
+                            "{{.Architecture}}": "amd64",
+                            '{{index .Config.Labels "org.opencontainers.image.revision"}}': SOURCE_REVISION,
+                        }
+                        return subprocess.CompletedProcess(
+                            arguments, 0, values[projection] + "\n", ""
+                        )
 
-            enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
-            with (
-                mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
-                mock.patch.object(
-                    cvm_sidecar_probe,
-                    "_workflow_file_hashes",
-                    return_value=workflow,
-                ),
-                mock.patch.object(
-                    cvm_sidecar_probe.shutil, "disk_usage", return_value=enough
-                ),
-                mock.patch.object(
-                    cvm_sidecar_probe, "_run", side_effect=fixed_run
-                ),
-            ):
-                receipt = cvm_sidecar_probe.remote_provision(handle, owner)
+                    enough = type(
+                        "Usage", (), {"free": 4 * 1024 * 1024 * 1024}
+                    )()
+                    with (
+                        mock.patch.object(
+                            cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root
+                        ),
+                        mock.patch.object(
+                            cvm_sidecar_probe,
+                            "_workflow_file_hashes",
+                            return_value=workflow,
+                        ),
+                        mock.patch.object(
+                            cvm_sidecar_probe.shutil,
+                            "disk_usage",
+                            return_value=enough,
+                        ),
+                        mock.patch.object(
+                            cvm_sidecar_probe.subprocess,
+                            "run",
+                            side_effect=fixed_subprocess_run,
+                        ),
+                    ):
+                        receipt = cvm_sidecar_probe.remote_provision(handle, owner)
 
-            self.assertEqual(receipt["status"], "failed")
-            self.assertEqual(receipt["errorCheck"], "sidecar-inspect-id-access")
-            self.assertEqual(inspect_formats, ["{{.Id}}"])
-            self.assertEqual(receipt["transferCleanup"]["errors"], [])
-            self.assertEqual(
-                json.loads((state / "provision.json").read_text()), receipt
-            )
+                    expected_formats = (
+                        ["{{.Id}}"]
+                        if role == "sidecar"
+                        else list(projections) + ["{{.Id}}"]
+                    )
+                    self.assertEqual(receipt["status"], "failed")
+                    self.assertEqual(
+                        receipt["errorCheck"], f"{role}-inspect-id-access"
+                    )
+                    self.assertEqual(inspect_formats, expected_formats)
+                    self.assertEqual(
+                        receipt["transferCleanup"],
+                        {
+                            "archiveAbsent": True,
+                            "prepareReceiptAbsent": True,
+                            "incomingDirectoryAbsent": True,
+                            "errors": [],
+                        },
+                    )
+                    self.assertFalse(incoming.exists())
+                    self.assertEqual(
+                        json.loads((state / "provision.json").read_text()), receipt
+                    )
 
     def test_remote_provision_cleanup_failure_dominates_hash_failure(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-cleanup-dominates-") as root_text:
