@@ -37,17 +37,17 @@ IMAGE_INSPECT_FIELDS = (
     ),
 )
 IMAGE_ATTESTATION_FAILURE_CHECKS = frozenset(
-    f"{role}-{suffix}"
-    for role in ("sidecar", "client")
-    for suffix in (
-        *(f"inspect-{field}-{kind}" for field, _ in IMAGE_INSPECT_FIELDS for kind in ("access", "timeout", "format")),
-        "id",
-        "os",
-        "architecture",
-        "revision",
-        "receipt",
-    )
-) | {"image-attestation-unexpected"}
+    {
+        "image-inventory-access",
+        "image-inventory-timeout",
+        "image-inventory-format",
+        "sidecar-loaded-id",
+        "sidecar-receipt",
+        "client-loaded-id",
+        "client-receipt",
+        "image-attestation-unexpected",
+    }
+)
 REMOTE_PROVISION_FAILURE_CHECKS = frozenset(
     {
         "prepare-receipt",
@@ -1265,18 +1265,48 @@ def _verify_image_receipt(
             f"{expected_role} prepare image receipt is invalid",
             check=f"{expected_role}-receipt",
         )
-    inspected = _inspect_image(expected_role, str(image["id"]))
-    if inspected.get("sourceRevision") != image.get("sourceRevision"):
-        raise ProbeError(
-            f"loaded {expected_role} image revision changed",
-            check=f"{expected_role}-revision",
+    return dict(image)
+
+
+def _loaded_image_ids() -> frozenset[str]:
+    try:
+        completed = _run(
+            ["docker", "image", "ls", "--no-trunc", "--quiet"],
+            cwd=REPO_ROOT,
+            timeout=60,
         )
-    if inspected != image:
-        raise ProbeError(
-            f"loaded {expected_role} image receipt changed",
-            check=f"{expected_role}-receipt",
+    except ProbeError as exc:
+        check = (
+            "image-inventory-timeout"
+            if exc.check == "docker-timeout"
+            else "image-inventory-access"
         )
-    return inspected
+        raise ProbeError(
+            "loaded image inventory is inaccessible",
+            check=check,
+        ) from exc
+    except BaseException as exc:
+        raise ProbeError(
+            "loaded image inventory is inaccessible",
+            check="image-inventory-access",
+        ) from exc
+    try:
+        lines = completed.stdout.splitlines()
+        if not lines or len(lines) > 4096 or any(
+            IMAGE_ID.fullmatch(line) is None for line in lines
+        ):
+            raise ProbeError(
+                "loaded image inventory format is invalid",
+                check="image-inventory-format",
+            )
+    except ProbeError:
+        raise
+    except BaseException as exc:
+        raise ProbeError(
+            "loaded image inventory format is invalid",
+            check="image-inventory-format",
+        ) from exc
+    return frozenset(lines)
 
 
 def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
@@ -1390,6 +1420,13 @@ def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
             _verify_image_receipt(images_payload[0], "sidecar"),
             _verify_image_receipt(images_payload[1], "client"),
         ]
+        loaded_ids = _loaded_image_ids()
+        for image in images:
+            if image["id"] not in loaded_ids:
+                raise ProbeError(
+                    f"loaded {image['role']} image ID is absent",
+                    check=f"{image['role']}-loaded-id",
+                )
         assert free_bytes is not None and verified_files is not None
         receipt_data = {
             "schema": "cvm-sidecar.provision-receipt/1",

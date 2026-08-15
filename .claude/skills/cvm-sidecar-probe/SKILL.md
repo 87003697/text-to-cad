@@ -17,35 +17,31 @@ probe. It is not a general image transfer, Docker shell, or pilot runner.
 The workflow has three separate public operations:
 
 1. `prepare` is local-only. It saves exactly two supplied Docker image IDs,
-   verifies both are `linux/amd64`, binds both immutable
-   `org.opencontainers.image.revision` labels to the reviewed clean SHA, and
-   records their config and archive SHA-256 attestations. `configSha256` is the
-   immutable Docker/OCI image-config digest: exactly the 64-hex digest portion
-   of the image ID, never a hash of Docker's version-dependent `inspect Config`
-   display. The archive is intentionally opaque to this wrapper: `prepare`
-   invokes fixed local `docker image save` with only the two exact IDs, then
-   binds the resulting bytes and size by SHA-256. There is no public archive
-   input and no tar/manifest parser surface. It separately records the clean
-   Git HEAD of this provisioning workflow; the two revisions are not required
-   to be the same commit.
+   verifies each exact canonical ID, OS, architecture, and immutable
+   `org.opencontainers.image.revision` label through four fixed local inspect
+   projections, then records their config and archive SHA-256 attestations.
+   `configSha256` is the immutable Docker/OCI image-config digest: exactly the
+   64-hex digest portion of the image ID, never a hash of Docker's
+   version-dependent `inspect Config` display. The archive is intentionally
+   opaque to this wrapper: `prepare` invokes fixed local `docker image save`
+   with only the two exact IDs, then binds the resulting bytes and size by
+   SHA-256. There is no public archive input and no tar/manifest parser surface.
+   It separately records the clean Git HEAD of this provisioning workflow; the
+   two revisions are not required to be the same commit.
 2. `provision` is an external CVM write. It transfers the fixed archive through
    this wrapper. Before any remote state write it verifies the deployed module
    and wrapper SHA-256 values, binds the exact archive bytes/SHA-256, requires
    free space of at least `3 GiB + archive bytes`, and verifies an accessible
    `linux/amd64` Docker server. It retains the 3 GiB post-transfer gate,
-   verifies the archive hash before `docker image load`, re-inspects the loaded
-   exact IDs/platform/revision labels through four fixed `docker inspect
-   --type=image --format` projections in the order ID, OS, architecture, then
-   revision. A command addresses its image by the fixed bare 64-hex config
-   digest for Docker CLI compatibility; the input, receipt, and returned `.Id`
-   remain the exact canonical `sha256:<64-hex>` identity. A later projection
-   runs only after the preceding field is accessible, single-line, and valid.
-   Each command must return exactly one non-empty field; embedded TAB/newline
-   content fails that field's inspect-format check. Missing or empty revision
-   fails the revision check. The workflow derives the same config digests from
-   the IDs, removes the transfer archive, and intentionally retains the two
-   provisioned images. Full daemon inspect JSON is neither requested nor
-   accepted.
+   verifies the archive hash before `docker image load`, then runs one fixed
+   `docker image ls --no-trunc --quiet` inventory proof. Every inventory entry
+   must be a complete canonical `sha256:<64-hex>` image ID, the bounded list may
+   contain at most 4096 entries, and both prepared config IDs must be present.
+   The exact config digest cryptographically binds the OS, architecture, and
+   revision already attested by local `prepare`; CVM does not depend on its
+   incompatible image-inspect path. The workflow removes the transfer archive
+   and intentionally retains the two provisioned images. Full daemon inspect
+   JSON and raw inventory output are neither requested nor published.
 3. `probe` is a second external CVM write and the only execution dispatch. It
    runs exactly one sealed probe with `--pull=never`, an internal network,
    fixed resource bounds, read-only filesystems, and exact runtime cleanup.
@@ -128,9 +124,10 @@ different destructive operation and requires a separate authorization.
 
 - Image revision/platform/ID/config mismatch: stop before transfer.
 - A changed local archive fails its receipt hash/size check before the one-shot
-  provision claim or any SSH/rsync transfer. On CVM, Docker load plus exact
-  loaded ID/platform/revision verification is the authoritative image-config
-  proof; malformed bytes produce the bounded archive/load failure receipt.
+  provision claim or any SSH/rsync transfer. On CVM, exact archive hash, Docker
+  load success, and exact loaded config-ID inventory membership are the
+  authoritative image-config proof; malformed bytes produce the bounded
+  archive/load failure receipt.
 - If local prepare fails, cleanup attempts every exact owned temporary archive,
   final archive, receipt, state directory, and the shared root only when empty.
   Cleanup continues after individual errors. Any missing absence proof
@@ -146,21 +143,17 @@ different destructive operation and requires a separate authorization.
 - Remote provision failures emit and persist a fixed receipt whose
   `errorCheck` is one of `prepare-receipt`, `archive-hash-size`,
   `remote-disk-gate`, `image-load`, `transfer-cleanup`,
-  `deployed-workflow-hash`, `image-attestation-unexpected`, or one role-specific
-  image check. For each of `sidecar` and `client`, those checks are exactly
-  `inspect-<field>-access`, `inspect-<field>-timeout`, or
-  `inspect-<field>-format` for `<field>` equal to `id`, `os`, `architecture`, or
-  `revision`; plus the identity checks `id`, `os`, `architecture`, `revision`,
-  and `receipt`. Every check is prefixed by the role (for example
-  `client-inspect-architecture-access` or `client-revision`). Public
-  provision preserves that exact closed check and the bounded remote receipt
-  before the nonce-scoped abort. Raw stderr, paths, errno, full daemon inspect
-  JSON, and Docker output are not durable evidence.
-- Image-inspect command launch/socket/permission exceptions are bounded to the
-  exact role and field's `inspect-<field>-access`; command timeouts use
-  `inspect-<field>-timeout`; unexpected single-field projection parser
-  exceptions use `inspect-<field>-format`. Neither may publish traceback, path,
-  errno, or exception text, including during local prepare before state.
+  `deployed-workflow-hash`, `image-attestation-unexpected`,
+  `image-inventory-access`, `image-inventory-timeout`,
+  `image-inventory-format`, or one role-specific `loaded-id` / `receipt` check.
+  Public provision preserves that exact closed check and bounded remote receipt
+  before the nonce-scoped abort. Raw stderr, paths, errno, inventory, full
+  daemon JSON, and Docker output are not durable evidence.
+- Local prepare image-inspect launch/socket/permission exceptions remain
+  bounded to the exact role and field's `inspect-<field>-access`; command
+  timeouts use `inspect-<field>-timeout`; unexpected single-field projection
+  parser exceptions use `inspect-<field>-format`. Neither may publish traceback,
+  path, errno, or exception text before local state is committed.
 - Probe failure or cleanup failure: preserve the receipt and handle; do not
   rerun, submit a pilot, inspect raw remote state, or invent a cleanup command.
 - Missing or malformed receipt: report the missing structured evidence and

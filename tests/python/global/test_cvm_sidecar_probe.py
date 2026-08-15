@@ -169,6 +169,9 @@ def write_portable_archive_docker(path: Path) -> None:
                 if projection not in values:
                     raise SystemExit(f"unexpected inspect projection: {{projection}}")
                 print(values[projection])
+            elif sys.argv[1:] == ["image", "ls", "--no-trunc", "--quiet"]:
+                print(sidecar)
+                print(client)
             elif sys.argv[1:3] == ["image", "save"]:
                 output = pathlib.Path(sys.argv[4])
                 assert sys.argv[5:] == [sidecar, client]
@@ -1379,7 +1382,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             "handle": handle,
                             "ownerNonce": owner,
                             "errorOperation": "remote-provision",
-                            "errorCheck": "client-revision",
+                            "errorCheck": "client-loaded-id",
                             "transferCleanup": {"archiveAbsent": True, "prepareReceiptAbsent": True, "incomingDirectoryAbsent": True, "errors": []},
                             "retryAllowed": False,
                             "terminalOperation": {"operation": "provision", "handle": handle, "retryAllowed": False},
@@ -1434,7 +1437,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 (repo / ".cvm-sidecar-probes" / handle / "provision.json").read_text()
             )
             self.assertEqual(receipt["status"], "failed")
-            self.assertEqual(receipt["errorCheck"], "client-revision")
+            self.assertEqual(receipt["errorCheck"], "client-loaded-id")
             self.assertEqual(receipt["abort"]["status"], "aborted")
             self.assertFalse(receipt["retryAllowed"])
 
@@ -1594,9 +1597,14 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             )
             self.assertEqual(result.stderr, "")
 
-    def test_remote_provision_classifies_image_load_and_inspect_format(self) -> None:
+    def test_remote_provision_classifies_image_load_and_inventory_format(self) -> None:
         for index, expected_check in enumerate(
-            ("image-load", "sidecar-inspect-id-format"), start=1
+            (
+                "image-load",
+                "image-inventory-format",
+                "image-inventory-timeout",
+            ),
+            start=1,
         ):
             with self.subTest(expected_check=expected_check), tempfile.TemporaryDirectory(
                 prefix=f"cvm-sidecar-{expected_check}-"
@@ -1660,7 +1668,11 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         if expected_check == "image-load":
                             raise cvm_sidecar_probe.ProbeError("load failed")
                         return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
-                    if arguments[1:4] == ["inspect", "--type=image", "--format"]:
+                    if arguments[1:] == ["image", "ls", "--no-trunc", "--quiet"]:
+                        if expected_check == "image-inventory-timeout":
+                            raise cvm_sidecar_probe.ProbeError(
+                                "inventory timeout", check="docker-timeout"
+                            )
                         return subprocess.CompletedProcess(
                             arguments, 0, "invalid\tfield\n", ""
                         )
@@ -1696,32 +1708,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     json.loads((state / "provision.json").read_text()), receipt
                 )
 
-    def test_remote_provision_splits_portable_image_attestation_checks(self) -> None:
-        inspect_formats = (
-            ("id", "{{.Id}}"),
-            ("os", "{{.Os}}"),
-            ("architecture", "{{.Architecture}}"),
-            (
-                "revision",
-                '{{index .Config.Labels "org.opencontainers.image.revision"}}',
-            ),
-        )
-        cases = (
-            ("id", "access", "inspect-id-access"),
-            ("id", "timeout", "inspect-id-timeout"),
-            ("id", "format", "inspect-id-format"),
-            ("id", "identity", "id"),
-            ("os", "access", "inspect-os-access"),
-            ("os", "format", "inspect-os-format"),
-            ("os", "identity", "os"),
-            ("architecture", "access", "inspect-architecture-access"),
-            ("architecture", "format", "inspect-architecture-format"),
-            ("architecture", "identity", "architecture"),
-            ("revision", "access", "inspect-revision-access"),
-            ("revision", "format", "inspect-revision-format"),
-            ("revision", "identity", "revision"),
-            ("receipt", "identity", "receipt"),
-        )
+    def test_remote_provision_rejects_invalid_image_receipts(self) -> None:
+        cases = (("receipt", "identity", "receipt"),)
         for role, image_id in (("sidecar", SIDECAR_ID), ("client", CLIENT_ID)):
             for field, variant, check_suffix in cases:
                 with self.subTest(
@@ -1745,8 +1733,6 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             images=images,
                         )
                     )
-                    inspect_calls: list[list[str]] = []
-
                     def fixed_run(
                         argv: object, **kwargs: object
                     ) -> subprocess.CompletedProcess[str]:
@@ -1754,64 +1740,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         arguments = list(argv)
                         if arguments[1:3] == ["image", "load"]:
                             return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
-                        if arguments[1:4] != ["inspect", "--type=image", "--format"]:
-                            raise AssertionError(f"unexpected command: {arguments}")
-                        inspect_calls.append(arguments)
-                        inspected_address = arguments[-1]
-                        inspected_id = "sha256:" + inspected_address
-                        inspected_role = (
-                            "sidecar" if inspected_id == SIDECAR_ID else "client"
-                        )
-                        inspected_field = {
-                            projection: name for name, projection in inspect_formats
-                        }.get(arguments[4])
-                        if inspected_field is None:
-                            raise AssertionError(
-                                f"unexpected inspect format: {arguments[4]}"
-                            )
-                        if (
-                            inspected_role == role
-                            and inspected_field == field
-                            and variant == "access"
-                        ):
-                            raise cvm_sidecar_probe.ProbeError("opaque inspect failure")
-                        if (
-                            inspected_role == role
-                            and inspected_field == field
-                            and variant == "timeout"
-                        ):
-                            raise cvm_sidecar_probe.ProbeError(
-                                "opaque inspect timeout", check="docker-timeout"
-                            )
-                        if (
-                            inspected_role == role
-                            and inspected_field == field
-                            and variant == "format"
-                        ):
-                            output = "invalid\tfield"
-                        else:
-                            good_values = {
-                                "id": inspected_id,
-                                "os": "linux",
-                                "architecture": "amd64",
-                                "revision": SOURCE_REVISION,
-                            }
-                            identity_failures = {
-                                "id": "sha256:" + "9" * 64,
-                                "os": "windows",
-                                "architecture": "arm64",
-                                "revision": "b" * 40,
-                            }
-                            output = (
-                                identity_failures[inspected_field]
-                                if inspected_role == role
-                                and inspected_field == field
-                                and variant == "identity"
-                                else good_values[inspected_field]
-                            )
-                        return subprocess.CompletedProcess(
-                            arguments, 0, output + "\n", ""
-                        )
+                        raise AssertionError(f"unexpected command: {arguments}")
 
                     enough = type(
                         "Usage", (), {"free": 4 * 1024 * 1024 * 1024}
@@ -1840,26 +1769,6 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     self.assertEqual(
                         receipt["errorCheck"], f"{role}-{check_suffix}"
                     )
-                    field_formats = [value for _, value in inspect_formats]
-                    if field == "receipt":
-                        target_formats = []
-                    else:
-                        target_formats = field_formats[
-                            : [name for name, _ in inspect_formats].index(field) + 1
-                        ]
-                    expected_formats = (
-                        target_formats
-                        if role == "sidecar"
-                        else field_formats + target_formats
-                    )
-                    self.assertEqual(
-                        [arguments[4] for arguments in inspect_calls],
-                        expected_formats,
-                    )
-                    for arguments in inspect_calls:
-                        self.assertEqual(
-                            arguments[1:4], ["inspect", "--type=image", "--format"]
-                        )
                     self.assertEqual(
                         receipt["transferCleanup"],
                         {
@@ -1874,13 +1783,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         json.loads((state / "provision.json").read_text()), receipt
                     )
 
-    def test_remote_provision_uses_older_docker_compatible_projection(self) -> None:
-        portable_formats = (
-            "{{.Id}}",
-            "{{.Os}}",
-            "{{.Architecture}}",
-            '{{index .Config.Labels "org.opencontainers.image.revision"}}',
-        )
+    def test_remote_provision_requires_loaded_sidecar_id(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="cvm-sidecar-older-docker-inspect-"
         ) as root_text:
@@ -1893,8 +1796,6 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 owner,
                 workflow,
             )
-            inspect_formats: list[str] = []
-
             def older_docker_run(
                 argv: object, **kwargs: object
             ) -> subprocess.CompletedProcess[str]:
@@ -1902,30 +1803,11 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 arguments = list(argv)
                 if arguments[1:3] == ["image", "load"]:
                     return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
-                if arguments[1:4] != ["inspect", "--type=image", "--format"]:
-                    raise AssertionError(f"unexpected command: {arguments}")
-                inspect_format = arguments[4]
-                inspect_formats.append(inspect_format)
-                if "json" in inspect_format:
-                    raise cvm_sidecar_probe.ProbeError(
-                        "older Docker rejected composite inspect template"
+                if arguments[1:] == ["image", "ls", "--no-trunc", "--quiet"]:
+                    return subprocess.CompletedProcess(
+                        arguments, 0, f"{CLIENT_ID}\n", ""
                     )
-                if inspect_format not in portable_formats:
-                    raise AssertionError(f"unexpected inspect format: {inspect_format}")
-                inspected_address = arguments[-1]
-                inspected_id = "sha256:" + inspected_address
-                values = {
-                    "{{.Id}}": inspected_id,
-                    "{{.Os}}": "linux",
-                    "{{.Architecture}}": "amd64",
-                    '{{index .Config.Labels "org.opencontainers.image.revision"}}': SOURCE_REVISION,
-                }
-                return subprocess.CompletedProcess(
-                    arguments,
-                    0,
-                    values[inspect_format] + "\n",
-                    "",
-                )
+                raise AssertionError(f"unexpected command: {arguments}")
 
             enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
             with (
@@ -1944,19 +1826,11 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             ):
                 receipt = cvm_sidecar_probe.remote_provision(handle, owner)
 
-            self.assertEqual(
-                receipt["status"], "provisioned", receipt.get("errorCheck")
-            )
-            self.assertEqual(inspect_formats, list(portable_formats) * 2)
+            self.assertEqual(receipt["status"], "failed")
+            self.assertEqual(receipt["errorCheck"], "sidecar-loaded-id")
 
-    def test_remote_provision_distinguishes_id_only_inspect_access(self) -> None:
-        projections = (
-            "{{.Id}}",
-            "{{.Os}}",
-            "{{.Architecture}}",
-            '{{index .Config.Labels "org.opencontainers.image.revision"}}',
-        )
-        for role, image_id in (("sidecar", SIDECAR_ID), ("client", CLIENT_ID)):
+    def test_remote_provision_classifies_image_inventory_access(self) -> None:
+        for role in ("sidecar", "client"):
             for reason, returncode in (("not-addressable", 1), ("command-nonzero", 64)):
                 with self.subTest(
                     role=role, reason=reason
@@ -1971,8 +1845,6 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             Path(root_text), handle, owner, workflow
                         )
                     )
-                    inspect_formats: list[str] = []
-
                     def fixed_subprocess_run(
                         argv: object, **kwargs: object
                     ) -> subprocess.CompletedProcess[str]:
@@ -1982,28 +1854,14 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             return subprocess.CompletedProcess(
                                 arguments, 0, "loaded\n", ""
                             )
-                        if arguments[1:4] != ["inspect", "--type=image", "--format"]:
-                            raise AssertionError(f"unexpected command: {arguments}")
-                        projection = arguments[4]
-                        inspected_address = arguments[-1]
-                        inspected_id = "sha256:" + inspected_address
-                        inspect_formats.append(projection)
-                        if inspected_id == image_id and projection == "{{.Id}}":
+                        if arguments[1:] == ["image", "ls", "--no-trunc", "--quiet"]:
                             return subprocess.CompletedProcess(
                                 arguments,
                                 returncode,
                                 "",
-                                "fixed inaccessible image" if reason == "not-addressable" else "fixed command failure",
+                                "fixed inaccessible inventory",
                             )
-                        values = {
-                            "{{.Id}}": inspected_id,
-                            "{{.Os}}": "linux",
-                            "{{.Architecture}}": "amd64",
-                            '{{index .Config.Labels "org.opencontainers.image.revision"}}': SOURCE_REVISION,
-                        }
-                        return subprocess.CompletedProcess(
-                            arguments, 0, values[projection] + "\n", ""
-                        )
+                        raise AssertionError(f"unexpected command: {arguments}")
 
                     enough = type(
                         "Usage", (), {"free": 4 * 1024 * 1024 * 1024}
@@ -2030,16 +1888,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     ):
                         receipt = cvm_sidecar_probe.remote_provision(handle, owner)
 
-                    expected_formats = (
-                        ["{{.Id}}"]
-                        if role == "sidecar"
-                        else list(projections) + ["{{.Id}}"]
-                    )
                     self.assertEqual(receipt["status"], "failed")
-                    self.assertEqual(
-                        receipt["errorCheck"], f"{role}-inspect-id-access"
-                    )
-                    self.assertEqual(inspect_formats, expected_formats)
+                    self.assertEqual(receipt["errorCheck"], "image-inventory-access")
                     self.assertEqual(
                         receipt["transferCleanup"],
                         {
@@ -2054,7 +1904,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         json.loads((state / "provision.json").read_text()), receipt
                     )
 
-    def test_remote_provision_uses_legacy_compatible_image_addressing(self) -> None:
+    def test_remote_provision_requires_loaded_client_id(self) -> None:
         with tempfile.TemporaryDirectory(
             prefix="cvm-sidecar-root-image-inspect-"
         ) as root_text:
@@ -2064,9 +1914,6 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             state_root, _, _ = write_remote_provision_attempt_fixture(
                 Path(root_text), handle, owner, workflow
             )
-            inspect_commands: list[list[str]] = []
-            inspected_addresses: list[str] = []
-
             def legacy_docker_run(
                 argv: object, **kwargs: object
             ) -> subprocess.CompletedProcess[str]:
@@ -2074,29 +1921,11 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 arguments = list(argv)
                 if arguments[1:3] == ["image", "load"]:
                     return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
-                inspect_commands.append(arguments)
-                if arguments[1:3] == ["image", "inspect"]:
+                if arguments[1:] == ["image", "ls", "--no-trunc", "--quiet"]:
                     return subprocess.CompletedProcess(
-                        arguments, 1, "", "image subcommand is unavailable"
+                        arguments, 0, f"{SIDECAR_ID}\n", ""
                     )
-                if arguments[1:4] != ["inspect", "--type=image", "--format"]:
-                    raise AssertionError(f"unexpected command: {arguments}")
-                inspected_address = arguments[-1]
-                inspected_addresses.append(inspected_address)
-                if inspected_address.startswith("sha256:"):
-                    return subprocess.CompletedProcess(
-                        arguments, 1, "", "canonical address is unsupported"
-                    )
-                canonical_id = "sha256:" + inspected_address
-                values = {
-                    "{{.Id}}": canonical_id,
-                    "{{.Os}}": "linux",
-                    "{{.Architecture}}": "amd64",
-                    '{{index .Config.Labels "org.opencontainers.image.revision"}}': SOURCE_REVISION,
-                }
-                return subprocess.CompletedProcess(
-                    arguments, 0, values[arguments[4]] + "\n", ""
-                )
+                raise AssertionError(f"unexpected command: {arguments}")
 
             enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
             with (
@@ -2117,21 +1946,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             ):
                 receipt = cvm_sidecar_probe.remote_provision(handle, owner)
 
-            self.assertEqual(
-                receipt["status"], "provisioned", receipt.get("errorCheck")
-            )
-            self.assertEqual(len(inspect_commands), 8)
-            self.assertTrue(
-                all(
-                    command[1:4] == ["inspect", "--type=image", "--format"]
-                    for command in inspect_commands
-                )
-            )
-            self.assertEqual(
-                inspected_addresses,
-                [SIDECAR_ID.removeprefix("sha256:")] * 4
-                + [CLIENT_ID.removeprefix("sha256:")] * 4,
-            )
+            self.assertEqual(receipt["status"], "failed")
+            self.assertEqual(receipt["errorCheck"], "client-loaded-id")
 
     def test_remote_provision_accepts_exact_loaded_inventory_without_image_inspect(self) -> None:
         with tempfile.TemporaryDirectory(
