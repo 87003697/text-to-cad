@@ -1,9 +1,9 @@
 ---
 name: cvm-sidecar-probe
 description: >-
-  Prepare, provision, and probe one exact Browser Sidecar OCI pair on the
-  Tencent DevCloud CVM. Trigger: "CVM Browser Sidecar", "provision sidecar",
-  "probe sidecar on CVM", "CVM sidecar capability probe".
+  Prepare, provision, and probe exact Browser Sidecar OCI roles on the Tencent
+  DevCloud CVM. Trigger: "CVM Browser Sidecar", "provision sidecar", "probe
+  sidecar on CVM", "CVM sidecar capability probe".
 ---
 
 # CVM Browser Sidecar provision and one-shot probe
@@ -16,20 +16,23 @@ probe. It is not a general image transfer, Docker shell, or pilot runner.
 
 The workflow has three separate public operations:
 
-1. `prepare` is local-only. It verifies exactly two supplied Docker image IDs,
-   including each canonical ID, OS, architecture, and immutable
+1. `prepare` is local-only. It verifies the required Sidecar and sealed Agent
+   client Docker image IDs plus an optional distinct Broker image ID, including
+   each canonical ID, OS, architecture, and immutable
    `org.opencontainers.image.revision` label through four fixed local inspect
    projections, then records their source-image and archive SHA-256
    attestations. The v1 `configSha256` field retains its historical name but is
    exactly the 64-hex digest portion of the canonical local source image ID; it
    is not assumed to remain the loaded image ID across Docker storage backends.
-   Prepare creates two fixed handle-and-role-bound archive references, saves
-   those references into one opaque archive, and proves the temporary local
-   references absent before publishing success. It binds the resulting archive
-   bytes and size by SHA-256. There is no public archive/reference input and no
-   tar/manifest parser surface. It separately records the clean Git HEAD of
-   this provisioning workflow; the two revisions are not required to be the
-   same commit.
+   Prepare creates one fixed handle-and-role-bound archive reference per image,
+   saves those references into one opaque archive, and proves the temporary
+   local references absent before publishing success. It binds the resulting
+   archive bytes and size by SHA-256. There is no public archive/reference input
+   and no tar/manifest parser surface. Sidecar and sealed Agent client share
+   `--source-revision`; Broker is independently bound by
+   `--broker-source-revision`. It separately records the clean Git HEAD of this
+   provisioning workflow; image and workflow revisions need not be the same
+   commit.
 2. `provision` is an external CVM write. It transfers the fixed archive through
    this wrapper. Before any remote state write it verifies the deployed module
    and wrapper SHA-256 values, binds the exact archive bytes/SHA-256, requires
@@ -38,11 +41,11 @@ The workflow has three separate public operations:
    verifies the archive hash before `docker image load`, then resolves each
    fixed handle-, role-, and one-shot nonce-bound archive reference through
    `docker image ls --all --no-trunc --quiet <reference>`. Every result must be
-   exactly one complete canonical `sha256:<64-hex>` loaded image ID, the two
-   IDs must differ, and both are recorded as the retained runtime IDs. Each
+   exactly one complete canonical `sha256:<64-hex>` loaded image ID, all IDs
+   must differ, and all are recorded as retained runtime IDs. Each
    reference is derived only from the validated handle, fixed role, and locally
    generated nonce; it is never caller supplied. Before `docker image load`,
-   both references must be absent on CVM. A collision fails before load and is
+   every reference must be absent on CVM. A collision fails before load and is
    never adopted, retagged, or removed. Duplicate inventory lines do not
    collapse: each role must resolve to exactly one emitted line after load.
    The Docker client output is read incrementally with a 71-byte line ceiling;
@@ -51,17 +54,19 @@ The workflow has three separate public operations:
    The exact archive SHA binds the locally attested source identities to those
    loaded role references; CVM does not depend on its incompatible image-inspect
    path. The workflow removes the transfer archive and intentionally retains
-   the two loaded images. Full daemon inspect JSON and raw inventory output are
-   neither requested nor published.
+   the two or three loaded images. Full daemon inspect JSON and raw inventory
+   output are neither requested nor published.
 3. `probe` is a second external CVM write and the only execution dispatch. It
    runs exactly one sealed probe with `--pull=never`, an internal network,
    fixed resource bounds, read-only filesystems, and exact runtime cleanup.
 
 ## Authorization and review gate
 
-- `prepare` requires the final reviewed clean SHA and the exact Sidecar and
-  sealed-client image IDs. A tag, manifest-list name, dirty source SHA, parent
-  SHA, or floating reference is invalid.
+- `prepare` requires the final reviewed clean SHA and exact Sidecar and sealed
+  Agent client image IDs. A Formal Browser Sidecar pilot additionally requires
+  the distinct exact Broker image ID and its own reviewed source revision. A
+  tag, manifest-list name, dirty source SHA, parent SHA, floating reference, or
+  use of the Agent client as the Broker is invalid.
 - `provision` and `probe` each require explicit CVM authorization. Provision
   does not imply probe, paid pilot, S3, push, image deletion, or retry.
 - Before `provision`, deploy the reviewed wrapper code through `$cvm-push`.
@@ -83,8 +88,13 @@ From the reviewed clean checkout, run local preparation once:
 scripts/pilot/cvm-sidecar-probe.sh prepare \
   --source-revision <40-hex-reviewed-clean-sha> \
   --sidecar-image sha256:<64-hex-image-id> \
-  --client-image sha256:<64-hex-image-id>
+  --client-image sha256:<64-hex-image-id> \
+  --broker-source-revision <40-hex-reviewed-broker-sha> \
+  --broker-image sha256:<64-hex-image-id>
 ```
+
+Omit both Broker options only for the legacy provider-free Sidecar/client
+capability probe. Never omit them when provisioning a Formal pilot.
 
 Preserve the returned `handle`. After the separate CVM provision grant:
 
@@ -109,29 +119,29 @@ same stdin bytes and the outer receipt requires the identical SHA-256.
 
 Report only the compact JSON receipt fields:
 
-- exact `handle`, `imageSourceRevision`, `workflowSourceRevision`,
-  Sidecar/client image IDs and config hashes;
+- exact `handle`, `imageSourceRevision`, `workflowSourceRevision`, ordered
+  Sidecar/client/Broker image IDs, per-image revisions, and config hashes;
 - archive SHA-256 and remote verification result;
 - sealed request SHA-256 and fixed probe predicates;
 - exact resource ledger, Sidecar terminal state, and labeled absence proof;
 - `terminalOperation` and `retryAllowed:false`.
 
 Provision success is accepted only when the remote receipt exactly matches the
-prepared handle, archive hash/size, both ordered image roles/IDs/platform/config
-hashes/revisions, deployed workflow hashes, transfer absence, and terminal
-no-retry operation.
+prepared handle, archive hash/size, every ordered image role/ID/platform/config
+hash/revision, deployed workflow hashes, transfer absence, and terminal no-retry
+operation.
 
 Before the remote probe claims its one shot or creates Docker resources, it
 re-verifies the deployed module/wrapper SHA-256 values and the current 3 GiB
 free-disk gate. Public probe success is accepted only when SSH exits zero and
-the receipt exactly binds the local verified provision, both images and
-revisions, workflow hashes, fixed request/result predicates, owned resource
+the receipt exactly binds the local verified provision, every image and
+revision, workflow hashes, fixed request/result predicates, owned resource
 ledger, terminal state, absence proof, retained IDs, and no-retry operation.
 
-The two images in `retainedImageIds` remain provisioned by design. The archive,
-client container, Sidecar container, and internal network are owned temporary
-resources and must be absent in the receipt. Removing retained images is a
-different destructive operation and requires a separate authorization.
+The two or three images in `retainedImageIds` remain provisioned by design. The
+archive, client container, Sidecar container, and internal network are owned
+temporary resources and must be absent in the receipt. Removing retained images
+is a different destructive operation and requires a separate authorization.
 
 ## Failure handling
 
@@ -139,7 +149,7 @@ different destructive operation and requires a separate authorization.
 - A changed local archive fails its receipt hash/size check before the one-shot
   provision claim or any SSH/rsync transfer. On CVM, exact archive hash, Docker
   load success, and exact handle-, role-, and nonce-bound reference resolution
-  to two distinct loaded IDs are the authoritative runtime-image proof;
+  to distinct loaded IDs are the authoritative runtime-image proof;
   pre-load reference collisions and malformed bytes
   produce the bounded archive/load failure receipt.
 - If local prepare fails, cleanup attempts every exact owned temporary archive,

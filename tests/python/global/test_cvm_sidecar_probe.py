@@ -28,6 +28,7 @@ BROKER_ID = "sha256:" + hashlib.sha256(BROKER_CONFIG_BLOB).hexdigest()
 BROKER_SOURCE_REVISION = "b" * 40
 LOADED_SIDECAR_ID = "sha256:" + "e" * 64
 LOADED_CLIENT_ID = "sha256:" + "f" * 64
+LOADED_BROKER_ID = "sha256:" + "d" * 64
 FIXED_REFERENCE_NONCE = "9" * 32
 PORTABLE_SIDECAR_CONFIG = SIDECAR_CONFIG_BLOB
 PORTABLE_CLIENT_CONFIG = CLIENT_CONFIG_BLOB
@@ -43,8 +44,10 @@ def archive_reference(handle: str, role: str) -> str:
     )
 
 
-def remote_provision_images(handle: str) -> list[dict[str, object]]:
-    return [
+def remote_provision_images(
+    handle: str, *, include_broker: bool = False
+) -> list[dict[str, object]]:
+    images = [
         {
             "role": "sidecar",
             "id": SIDECAR_ID,
@@ -62,6 +65,18 @@ def remote_provision_images(handle: str) -> list[dict[str, object]]:
             "archiveReference": archive_reference(handle, "client"),
         },
     ]
+    if include_broker:
+        images.append(
+            {
+                "role": "broker",
+                "id": BROKER_ID,
+                "platform": "linux/amd64",
+                "configSha256": BROKER_ID.removeprefix("sha256:"),
+                "sourceRevision": BROKER_SOURCE_REVISION,
+                "archiveReference": archive_reference(handle, "broker"),
+            }
+        )
+    return images
 
 
 def write_remote_provision_attempt_fixture(
@@ -2359,93 +2374,107 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             self.assertEqual(receipt["errorCheck"], "client-loaded-id")
 
     def test_remote_provision_binds_role_references_to_loaded_ids(self) -> None:
-        with tempfile.TemporaryDirectory(
-            prefix="cvm-sidecar-loaded-inventory-"
-        ) as root_text:
-            handle = "cvmsp-" + "c" * 24
-            owner = "d" * 32
-            workflow = {"module": "1" * 64, "wrapper": "2" * 64}
-            state_root, _, _ = write_remote_provision_attempt_fixture(
-                Path(root_text), handle, owner, workflow
-            )
-            commands: list[list[str]] = []
+        for include_broker in (False, True):
+            with self.subTest(include_broker=include_broker), tempfile.TemporaryDirectory(
+                prefix="cvm-sidecar-loaded-inventory-"
+            ) as root_text:
+                handle = "cvmsp-" + "c" * 24
+                owner = "d" * 32
+                workflow = {"module": "1" * 64, "wrapper": "2" * 64}
+                state_root, _, _ = write_remote_provision_attempt_fixture(
+                    Path(root_text),
+                    handle,
+                    owner,
+                    workflow,
+                    images=remote_provision_images(
+                        handle, include_broker=include_broker
+                    ),
+                )
+                commands: list[list[str]] = []
 
-            def inventory_only_docker_run(
-                argv: object, **kwargs: object
-            ) -> subprocess.CompletedProcess[str]:
-                del kwargs
-                arguments = list(argv)
-                commands.append(arguments)
-                if arguments[1:3] == ["image", "load"]:
-                    return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
-                if arguments[1:] == ["image", "ls", "--no-trunc", "--quiet"]:
-                    return subprocess.CompletedProcess(
-                        arguments, 0, f"{SIDECAR_ID}\n{CLIENT_ID}\n", ""
+                def inventory_only_docker_run(
+                    argv: object, **kwargs: object
+                ) -> subprocess.CompletedProcess[str]:
+                    del kwargs
+                    arguments = list(argv)
+                    commands.append(arguments)
+                    if arguments[1:3] == ["image", "load"]:
+                        return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
+                    if arguments[1:] == ["image", "ls", "--no-trunc", "--quiet"]:
+                        inventory = [SIDECAR_ID, CLIENT_ID]
+                        if include_broker:
+                            inventory.append(BROKER_ID)
+                        return subprocess.CompletedProcess(
+                            arguments, 0, "\n".join(inventory) + "\n", ""
+                        )
+                    if "inspect" in arguments:
+                        return subprocess.CompletedProcess(
+                            arguments, 1, "", "image inspect is unavailable"
+                        )
+                    raise AssertionError(f"unexpected command: {arguments}")
+
+                enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
+                role_references = {
+                    archive_reference(handle, "sidecar"): LOADED_SIDECAR_ID,
+                    archive_reference(handle, "client"): LOADED_CLIENT_ID,
+                }
+                if include_broker:
+                    role_references[archive_reference(handle, "broker")] = (
+                        LOADED_BROKER_ID
                     )
-                if "inspect" in arguments:
-                    return subprocess.CompletedProcess(
-                        arguments, 1, "", "image inspect is unavailable"
-                    )
-                raise AssertionError(f"unexpected command: {arguments}")
 
-            enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
-            role_references = {
-                archive_reference(handle, "sidecar"): LOADED_SIDECAR_ID,
-                archive_reference(handle, "client"): LOADED_CLIENT_ID,
-            }
+                inventory_calls: dict[str, int] = {}
 
-            inventory_calls: dict[str, int] = {}
+                def loaded_role_id(reference: str) -> tuple[str, ...]:
+                    inventory_calls[reference] = inventory_calls.get(reference, 0) + 1
+                    if inventory_calls[reference] == 1:
+                        return ()
+                    return (role_references[reference],)
 
-            def loaded_role_id(reference: str) -> tuple[str, ...]:
-                inventory_calls[reference] = inventory_calls.get(reference, 0) + 1
-                if inventory_calls[reference] == 1:
-                    return ()
-                return (role_references[reference],)
+                with (
+                    mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
+                    mock.patch.object(
+                        cvm_sidecar_probe,
+                        "_workflow_file_hashes",
+                        return_value=workflow,
+                    ),
+                    mock.patch.object(
+                        cvm_sidecar_probe.shutil, "disk_usage", return_value=enough
+                    ),
+                    mock.patch.object(
+                        cvm_sidecar_probe.subprocess,
+                        "run",
+                        side_effect=inventory_only_docker_run,
+                    ),
+                    mock.patch.object(
+                        cvm_sidecar_probe,
+                        "_loaded_image_ids",
+                        side_effect=loaded_role_id,
+                    ),
+                ):
+                    receipt = cvm_sidecar_probe.remote_provision(handle, owner)
 
-            with (
-                mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
-                mock.patch.object(
-                    cvm_sidecar_probe,
-                    "_workflow_file_hashes",
-                    return_value=workflow,
-                ),
-                mock.patch.object(
-                    cvm_sidecar_probe.shutil, "disk_usage", return_value=enough
-                ),
-                mock.patch.object(
-                    cvm_sidecar_probe.subprocess,
-                    "run",
-                    side_effect=inventory_only_docker_run,
-                ),
-                mock.patch.object(
-                    cvm_sidecar_probe,
-                    "_loaded_image_ids",
-                    side_effect=loaded_role_id,
-                ),
-            ):
-                receipt = cvm_sidecar_probe.remote_provision(handle, owner)
-
-            self.assertEqual(
-                receipt["status"], "provisioned", receipt.get("errorCheck")
-            )
-            self.assertEqual(
-                commands,
-                [
+                self.assertEqual(
+                    receipt["status"], "provisioned", receipt.get("errorCheck")
+                )
+                self.assertEqual(
+                    commands,
                     [
-                        "docker",
-                        "image",
-                        "load",
-                        "--input",
-                        os.fspath(
-                            state_root / handle / "incoming" / "images.tar"
-                        ),
+                        [
+                            "docker",
+                            "image",
+                            "load",
+                            "--input",
+                            os.fspath(
+                                state_root / handle / "incoming" / "images.tar"
+                            ),
+                        ],
                     ],
-                ],
-            )
-            self.assertEqual(
-                receipt["retainedImageIds"],
-                [LOADED_SIDECAR_ID, LOADED_CLIENT_ID],
-            )
+                )
+                expected_ids = [LOADED_SIDECAR_ID, LOADED_CLIENT_ID]
+                if include_broker:
+                    expected_ids.append(LOADED_BROKER_ID)
+                self.assertEqual(receipt["retainedImageIds"], expected_ids)
 
     def test_remote_provision_rejects_reference_collision_before_load(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-remote-collision-") as root_text:

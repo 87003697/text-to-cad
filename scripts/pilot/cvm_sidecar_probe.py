@@ -49,6 +49,8 @@ IMAGE_ATTESTATION_FAILURE_CHECKS = frozenset(
         "sidecar-receipt",
         "client-loaded-id",
         "client-receipt",
+        "broker-loaded-id",
+        "broker-receipt",
         "image-attestation-unexpected",
     }
 )
@@ -524,12 +526,13 @@ def _validate_provision_success(
     retained = remote.get("retainedImageIds")
     retained_ok = bool(
         isinstance(retained, list)
-        and len(retained) == 2
+        and len(retained) == len(images)
+        and len(retained) in {2, 3}
         and all(
             isinstance(image_id, str) and IMAGE_ID.fullmatch(image_id) is not None
             for image_id in retained
         )
-        and len(set(retained)) == 2
+        and len(set(retained)) == len(retained)
     )
     if (
         set(remote) != expected_keys
@@ -697,7 +700,12 @@ def _validate_probe_success(
     }
     images = provision_receipt.get("images")
     workflow_files = provision_receipt.get("workflowFilesVerified")
-    if not isinstance(images, list) or len(images) != 2:
+    if (
+        not isinstance(images, list)
+        or len(images) not in {2, 3}
+        or [image.get("role") for image in images if isinstance(image, dict)]
+        != (["sidecar", "client"] if len(images) == 2 else ["sidecar", "client", "broker"])
+    ):
         raise ProbeError("local provision receipt has no exact images")
     owner_nonce = remote.get("ownerNonce")
     suffix = handle.removeprefix("cvmsp-")
@@ -842,7 +850,7 @@ def _path_absence(path: Path) -> bool:
 
 
 def _archive_image_reference(handle: str, role: str, nonce: str) -> str:
-    if role not in {"sidecar", "client"} or OWNER_NONCE.fullmatch(nonce) is None:
+    if role not in {"sidecar", "client", "broker"} or OWNER_NONCE.fullmatch(nonce) is None:
         raise ProbeError("fixed image role is invalid", check="prepare-operation")
     return f"text-to-cad-cvm-sidecar-{role}:{handle}-{nonce}"
 
@@ -926,14 +934,36 @@ def _cleanup_failed_prepare(
 def prepare(args: argparse.Namespace) -> Mapping[str, object]:
     if SOURCE_REVISION.fullmatch(args.source_revision) is None:
         raise ProbeError("source revision must be an exact 40-hex Git SHA")
+    broker_image = getattr(args, "broker_image", None)
+    broker_source_revision = getattr(args, "broker_source_revision", None)
+    if (broker_image is None) != (broker_source_revision is None):
+        raise ProbeError(
+            "Broker image and source revision must be supplied together",
+            check="broker-revision",
+        )
+    if (
+        broker_source_revision is not None
+        and SOURCE_REVISION.fullmatch(broker_source_revision) is None
+    ):
+        raise ProbeError(
+            "Broker source revision must be an exact 40-hex Git SHA",
+            check="broker-revision",
+        )
     workflow_source_revision = _inspect_workflow_source()
     workflow_files = _workflow_file_hashes()
     images = [
         _inspect_image("sidecar", args.sidecar_image),
         _inspect_image("client", args.client_image),
     ]
+    expected_revisions = {
+        "sidecar": args.source_revision,
+        "client": args.source_revision,
+    }
+    if broker_image is not None:
+        images.append(_inspect_image("broker", broker_image))
+        expected_revisions["broker"] = broker_source_revision
     for image in images:
-        if image.get("sourceRevision") != args.source_revision:
+        if image.get("sourceRevision") != expected_revisions[image["role"]]:
             raise ProbeError(
                 f"{image['role']} image source revision does not match",
                 check=f"{image['role']}-revision",
@@ -1600,14 +1630,19 @@ def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
                 "prepare receipt has no sidecar image",
                 check="sidecar-receipt",
             )
-        if len(images_payload) != 2:
+        if len(images_payload) not in {2, 3}:
             raise ProbeError(
-                "prepare receipt does not name exactly one client image",
+                "prepare receipt does not name the fixed image roles",
                 check="client-receipt",
             )
+        expected_roles = (
+            ["sidecar", "client"]
+            if len(images_payload) == 2
+            else ["sidecar", "client", "broker"]
+        )
         images = [
-            _verify_image_receipt(images_payload[0], "sidecar", handle),
-            _verify_image_receipt(images_payload[1], "client", handle),
+            _verify_image_receipt(image, role, handle)
+            for image, role in zip(images_payload, expected_roles, strict=True)
         ]
         for image in images:
             reference = str(image["archiveReference"])
@@ -1635,10 +1670,14 @@ def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
                     check=f"{image['role']}-loaded-id",
                 )
             loaded_ids.append(role_ids[0])
-        if len(set(loaded_ids)) != 2:
+        if len(set(loaded_ids)) != len(loaded_ids):
             raise ProbeError(
                 "loaded fixed image IDs are not distinct",
-                check="client-loaded-id",
+                check=(
+                    "broker-loaded-id"
+                    if len(loaded_ids) == 3
+                    else "client-loaded-id"
+                ),
             )
         assert free_bytes is not None and verified_files is not None
         receipt_data = {
@@ -1905,19 +1944,24 @@ def _run_remote_probe(
     free_bytes: int,
 ) -> Mapping[str, object]:
     images = provision_receipt.get("images")
-    if not isinstance(images, list) or len(images) != 2:
-        raise ProbeError("provision receipt does not name two fixed images")
+    if (
+        not isinstance(images, list)
+        or len(images) not in {2, 3}
+        or [image.get("role") for image in images if isinstance(image, dict)]
+        != (["sidecar", "client"] if len(images) == 2 else ["sidecar", "client", "broker"])
+    ):
+        raise ProbeError("provision receipt does not name the fixed image roles")
     retained_ids = provision_receipt.get("retainedImageIds")
     if (
         not isinstance(retained_ids, list)
-        or len(retained_ids) != 2
+        or len(retained_ids) != len(images)
         or not all(
             isinstance(image_id, str) and IMAGE_ID.fullmatch(image_id) is not None
             for image_id in retained_ids
         )
     ):
         raise ProbeError("provisioned runtime image IDs are incomplete")
-    sidecar_id, client_id = retained_ids
+    sidecar_id, client_id = retained_ids[:2]
 
     state = LOCAL_STATE_ROOT / handle
     suffix = handle.removeprefix("cvmsp-")
@@ -2166,7 +2210,7 @@ def _run_remote_probe(
         "ownerNonce": owner_nonce,
         "terminal": sidecar_terminal,
         "absenceProof": absence,
-        "retainedImageIds": [sidecar_id, client_id],
+        "retainedImageIds": list(retained_ids),
         "terminalOperation": {
             "operation": "probe",
             "handle": handle,
@@ -2293,6 +2337,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     prepare_parser.add_argument("--source-revision", required=True)
     prepare_parser.add_argument("--sidecar-image", required=True)
     prepare_parser.add_argument("--client-image", required=True)
+    prepare_parser.add_argument("--broker-source-revision")
+    prepare_parser.add_argument("--broker-image")
     provision_parser = subparsers.add_parser("provision")
     provision_parser.add_argument("handle")
     probe_parser = subparsers.add_parser("probe")
