@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 from io import BytesIO
+import json
+import os
+from pathlib import Path
 import statistics
+import tempfile
 import unittest
+from unittest import mock
 
 from PIL import Image
 
@@ -26,6 +32,103 @@ def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometr
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_formal_browser_authority_selects_registered_residual_program(self) -> None:
+        triangle = ((-0.35, -0.3, 0.0), (0.35, -0.3, 0.0), (0.0, 0.35, 0.0))
+        geometry = _geometry(triangle)
+        view_names = ["+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso"]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            authority_path = root / "authority.json"
+            authority_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "meshshot.browser-authority/1",
+                        "jobId": "formal-job-1",
+                        "imageId": "sha256:"
+                        + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
+                        "socketPath": "/workspace/repo/outputs/group/exp/run/browser.sock",
+                        "programs": {
+                            "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
+                            "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            image = Image.new("RGB", (504, 1008), (17, 23, 31))
+            encoded = BytesIO()
+            image.save(encoded, format="PNG")
+            response = {
+                "schema": "meshshot.browser-sidecar.render-response/1",
+                "jobId": "formal-job-1",
+                "imageId": "sha256:"
+                + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
+                "program": "residual",
+                "result": {
+                    "ok": True,
+                    "pngDataUrl": "data:image/png;base64,"
+                    + base64.b64encode(encoded.getvalue()).decode("ascii"),
+                    "views": [{"name": name} for name in view_names],
+                },
+            }
+
+            class FakeConnection:
+                def __init__(self) -> None:
+                    self.sent = b""
+                    self.response = (
+                        json.dumps(response, separators=(",", ":")).encode("ascii")
+                        + b"\n"
+                    )
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def settimeout(self, timeout):
+                    self.timeout = timeout
+
+                def connect(self, path):
+                    self.path = path
+
+                def sendall(self, payload):
+                    self.sent += payload
+
+                def shutdown(self, how):
+                    self.shutdown_how = how
+
+                def recv(self, size):
+                    result, self.response = self.response[:size], self.response[size:]
+                    return result
+
+            connection = FakeConnection()
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"MESHSHOT_BROWSER_AUTHORITY_FILE": str(authority_path)},
+                    clear=False,
+                ),
+                mock.patch("playwright.sync_api.sync_playwright") as local_browser,
+                mock.patch("meshshot.renderer.socket.socket", return_value=connection),
+            ):
+                rendered = render_residual_preview(geometry, geometry, variant="step")
+
+        local_browser.assert_not_called()
+        self.assertEqual(rendered.variant, "step")
+        self.assertEqual(view_names, [view["name"] for view in rendered.views])
+        self.assertEqual((504, 1008), Image.open(BytesIO(rendered.png_bytes)).size)
+        observed = json.loads(connection.sent)
+        self.assertEqual(
+            set(observed),
+            {"schema", "jobId", "imageId", "program", "payload"},
+        )
+        self.assertEqual(observed["program"], "residual")
+        self.assertEqual(
+            observed["payload"]["options"],
+            {"cameraPolicy": "profile-fixed", "canonicalPostprocess": True},
+        )
+
     def test_step_render_exposes_eight_view_residual_channels_in_fixed_layout(self) -> None:
         shared = ((-0.12, -0.22, 0.0), (0.12, -0.22, 0.0), (0.0, 0.18, 0.0))
         reference_only = ((-0.46, -0.2, 0.0), (-0.2, -0.2, 0.0), (-0.33, 0.2, 0.0))
