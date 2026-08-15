@@ -33,9 +33,9 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Browser-less Broker base image:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Render Program Broker image:
-  `sha256:f0e94aa0fb73a83fb5be7c8f08460b189cbae3118ef97642a44e7fda7fd80980`
+  `sha256:8fc448aa192dc9a22d3894eac06fecebc95ef3fc12606ca85bacba7344e0c7ed`
 - Broker OCI revision / production implementation commit:
-  `fdbea34c0b7b80168936e376df1b72f07fc7309f`
+  `be7651b524350a0a1a9cfcbe0bde3009ec14da06`
 - Image source revision:
   `1abe4c97929906b5c0b28b0f3f38857bd923952f`
 - Residual program SHA-256:
@@ -61,11 +61,12 @@ forbidden. Replacing any accepted identity is a new review decision.
 | Readiness absent, malformed, late, or for another job | Nested workload never starts; pilot is terminal failed | Exact owned Sidecar/network are stopped and absent |
 | Broker readiness absent, malformed, late, or for another job | Authority is never published and nested workload never starts | Exact owned Broker, Sidecar, and network are stopped and absent |
 | Broker socket path pre-exists, is not one socket, changes identity, or remains writable to the nested workload | Pilot fails before authority publication | Exact owned Broker, Sidecar, and network are stopped and absent; no foreign path is removed |
+| Nested-gate proof is absent, malformed, duplicated, late, or for a different job | The outer-owned channel rejects it and never releases the gate to exec the Agent workload | Exact owned Broker, Sidecar, and network follow terminal cleanup; the channel is closed and its socket is absent |
 | Authority absent outside formal job | Existing local `render_residual_preview` behavior remains selected | Existing local browser cleanup remains unchanged |
 | Caller changes or unsets an authority/socket environment variable, or supplies a conforming temporary authority/socket | It cannot select formal mode, redirect the fixed connection, or trigger a formal-to-legacy fallback | The fixed mount remains the only formal selector |
 | Authority malformed/unreadable/unreachable after formal selection | `MeshshotError`; no local browser launch or transport fallback | Outer runner still performs terminal Sidecar cleanup |
 | Render request has extra/missing key, wrong program, URL, JS, path, endpoint, browser/Docker arg, invalid geometry/options, or oversized body | Registered-program broker rejects it before browser work | Fresh context is absent or closed; Sidecar remains job-owned |
-| Nested Agent attempts browser spawn or inventory | Formal workload exposes no browser executable/cache and no raw Sidecar endpoint; attempt fails | Nested browser-process inventory remains zero |
+| Nested Agent attempts browser spawn or inventory | The fixed preflight in the same bwrap/PID/filesystem/network environment proves no browser executable/cache and zero visible Chromium processes before exec; the later Agent still receives no raw Sidecar endpoint | Nested browser-process inventory remains zero |
 | Browser can see source alias or external egress | Formal render and pilot fail closed | Sidecar is terminally stopped and absent |
 | Workload exits nonzero | Original workload status is preserved unless lifecycle/cleanup evidence is worse | Sidecar cleanup always runs after process-group terminal state |
 | Supervisor receives SIGINT or SIGTERM at any startup or workload boundary | The relay is installed before Sidecar/Broker mutation; signal status wins and no later startup boundary is entered | Every already-created exact resource follows the same bounded cleanup and exact absence proof |
@@ -73,7 +74,7 @@ forbidden. Replacing any accepted identity is a new review decision.
 | Broker exits during workload | Workload group is terminated; pilot fails closed; no replacement Broker or host process starts | Exact terminal state is recorded and resource is absent |
 | Broker or Sidecar stop/terminal evidence times out | Cleanup failure dominates workload/render success | Remaining exact owned resources still receive their bounded cleanup attempts; retained proof is closed |
 | Stop/remove/absence proof fails or an owned resource is retained | Cleanup failure dominates any render/workload success | Receipt names the closed predicate; no stronger cleanup or unrelated deletion |
-| Success | One exact Sidecar and one exact browser-less Broker served the whole job; residual parity and Viewer/eight-view predicates pass; each render had a fresh context/page; nested browser inventory/process count is zero | Broker/Sidecar/network exact IDs are terminal and removed, label inventory is empty, source/egress predicates are closed, and no browser process remains in the nested workload |
+| Success | One exact Sidecar and one exact browser-less Broker served the whole job; the Broker directly proves raw residual/eight-view and Viewer predicates and exact fresh contexts, while the nested gate separately proves public residual parity, Viewer transition, browser inventory/process zero, hidden sources, and blocked egress before it execs the workload exactly once | Broker/Sidecar/network exact IDs are terminal and removed, label inventory is empty, source/egress predicates are closed, and no browser process remains in the nested workload |
 
 ## Evidence and interruption rules
 
@@ -85,7 +86,11 @@ predicate map, exact aggregate/program counts, one closed failure marker, and
 errors, paths, argv/stderr, owner nonces, or resource/job identifiers. A
 receipt is successful only when every whitelisted predicate is positive,
 both registered programs have at least one accepted request, accepted counts
-sum exactly, and `freshContexts = acceptedRequests + 1`.
+sum exactly, and `freshContexts = acceptedRequests + 1`. Broker predicates
+cover only the raw registered programs and lifecycle evidence it observes;
+`residualPublicParity` is not a Broker claim. The separate `nestedGate`
+predicate group covers the unchanged public API, Viewer, inventory/process,
+source, and egress checks observed inside the workload namespace.
 
 The fixed authority is opened with no-follow semantics and must be one regular
 inode owned by the workload UID, mode `0444`, with link count one and the exact
@@ -93,6 +98,20 @@ authority/job/image/program schema. The runner publishes it only after exact
 Sidecar, Broker, socket, readiness, and isolation checks, then mounts the
 capability directory read-only into bwrap. Nested code cannot remove or replace
 the fixed authority/socket mount.
+
+Immediately before Agent execution, bwrap starts the fixed, repository-owned
+`scripts/pilot/browser_sidecar_gate.py` in the exact PID, filesystem, and
+network namespace that will contain the Agent. The runner mounts only that
+read-only script and the read-only meshshot package source at fixed paths. The
+gate calls the unchanged public residual API with a literal fixture, makes the
+fixed registered Viewer request, and checks exact PNG hash/mode/size/profile/
+views, Viewer projection/no-artifact state, browser executable/cache and
+process absence, fixed source-alias absence, and blocked egress. It writes one
+exact-key bounded proof to an outer-owned one-shot Unix socket. The outer
+runner accepts only the first proof, unlinks the listener, validates the proof,
+closes the channel, and only then releases the gate to `execvpe` the already
+fixed workload argv without shell interpolation. Missing, malformed,
+duplicate, or late proof therefore cannot be replaced by a later Agent ACK.
 
 SIGINT/SIGTERM, workload failure, readiness failure, Sidecar exit, malformed
 broker traffic, and cleanup failure all traverse the same terminal cleanup

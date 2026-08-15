@@ -1,6 +1,6 @@
 # Browser Sidecar formal-pilot integration handoff
 
-Outcome: **READY_FOR_FULL_REVIEW** (not accepted or complete)
+Outcome: **READY_FOR_THIRD_FULL_REVIEW** (not accepted or complete)
 
 Ticket: `browser-sidecar-formal-pilot-integration`
 
@@ -30,6 +30,19 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
   installs the signal relay before any Sidecar/Broker lifecycle mutation,
   removes browser caches/executables from bwrap, and exposes only the read-only
   authority/socket directory at `/run/meshshot-browser`.
+- Immediately before Agent exec, the runner starts the fixed repository-owned
+  Browser Gate inside the exact same bwrap PID/filesystem/network environment.
+  The gate calls the real unchanged public residual API with one literal
+  fixture, calls the fixed registered Viewer projection program, and proves
+  exact public PNG/profile/view parity, Viewer transition/no-artifact state,
+  browser executable/cache and process absence, fixed source-alias absence,
+  and blocked egress.
+- The gate publishes one exact-key bounded proof over an outer-owned one-shot
+  Unix socket. The outer unlinks/closes the listener after the first connection,
+  validates that proof, sends the release byte, and closes the accepted channel
+  before the gate uses `execvpe` on the already-fixed workload argv. Missing,
+  malformed, duplicate, or late proof prevents Agent exec and enters the same
+  terminal cleanup. The later Agent cannot forge a post-hoc ACK.
 - `BrowserSidecarJob` attests the exact Sidecar and Broker image IDs, platform,
   OCI revisions, and Broker base identity before resource creation. It rejects
   foreign network/Sidecar/Broker names and uses no pull, host port, host broker,
@@ -42,9 +55,11 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
   key sets and fixed profile, options, URLs, scripts, baked Viewer fixture, and
   projection operation. Every accepted request owns a fresh context/page.
 - Formal success requires accepted residual and Viewer requests, exact program
-  totals, `freshContexts = acceptedRequests + 1`, residual public/eight-view
-  parity, actual Viewer projection change/no-artifact evidence, zero terminal
-  states, exact Sidecar closing, workload success, and absence proof.
+  totals, `freshContexts = acceptedRequests + 1`, Broker-observed raw residual/
+  eight-view and Viewer predicates, separately observed nested public parity/
+  Viewer/inventory/process/source/egress predicates, zero terminal states,
+  exact Sidecar closing, workload success, and absence proof. The Broker no
+  longer claims `residualPublicParity`.
 - The public receipt is proof-only and exact-keyed. It exposes immutable image,
   source/base, and registered-program identities; fixed closed predicates;
   exact aggregate counts; one closed failure marker; and
@@ -55,10 +70,13 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
   terminal state, closing drift/absence, and terminal timeout are closed
   failures that dominate workload success, and the runner accepts only an
   exact `status:succeeded` receipt with every predicate true.
-- The Broker artifact seals the current public meshshot package plus one fixed
-  conformance client. That client can run networkless with only the read-only
-  capability bind and prove public residual parity, Viewer transition, nested
-  browser inventory/process zero, source-alias absence, and blocked egress.
+- `finalize_pilot` preserves signal status 130/143 across missing or invalid
+  rollout evidence and artifact/manifest collection failures; postmortem
+  preservation still runs, but a later publication error cannot mask SIGINT or
+  SIGTERM.
+- The Broker artifact seals the fixed registered raw residual and Viewer
+  programs. Public residual parity and nested namespace isolation belong only
+  to the separate fixed Browser Gate, not to a Broker-reported boolean.
 - The successor adversarial matrix covers missing/wrong Broker identity,
   platform/revision/base mismatch, foreign Broker name, malformed/late/wrong
   readiness, pre-existing/non-socket/replaced socket, premature exits, exact
@@ -73,16 +91,18 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
 - Browser-less Broker base:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Final corrected Broker:
-  `sha256:f0e94aa0fb73a83fb5be7c8f08460b189cbae3118ef97642a44e7fda7fd80980`
+  `sha256:8fc448aa192dc9a22d3894eac06fecebc95ef3fc12606ca85bacba7344e0c7ed`
 - Broker OCI revision:
-  `fdbea34c0b7b80168936e376df1b72f07fc7309f`
+  `be7651b524350a0a1a9cfcbe0bde3009ec14da06`
 - Platform: `linux/amd64`
 
 The corrected Broker was built cleanly with
 `--pull=false --no-cache --network=none` from the exact sealed-client digest.
 Read-only inspection confirmed image ID, `linux/amd64`, the GREEN source
 revision, base label, fixed entrypoint, and browser-less `pwuser`. No
-conformance container was launched in this review-correction pass.
+conformance container was launched in this review-correction pass. `git
+cat-file` resolves the complete OCI revision as a commit, and every source
+path copied by the Dockerfile is byte-identical to that exact revision.
 
 ## Changed files
 
@@ -95,8 +115,10 @@ conformance container was launched in this review-correction pass.
 - `packages/meshshot/src/meshshot/renderer.py`
 - `scripts/pilot/browser_sidecar.py`
 - `scripts/pilot/browser_sidecar_conformance.py`
+- `scripts/pilot/browser_sidecar_gate.py`
 - `scripts/pilot/runner.py`
 - `tests/python/global/test_browser_sidecar.py`
+- `tests/python/global/test_browser_sidecar_gate.py`
 - `tests/python/global/test_pilot_runner.py`
 - `tests/python/packages/meshshot/test_renderer.py`
 
@@ -107,9 +129,9 @@ wholesale from it.
 
 Passed for the current review corrections:
 
-- Focused Browser Sidecar, runner, and public renderer suites after locking the
-  corrected image: **67 tests, OK**.
-- Global policy gate: **217 tests, OK**.
+- Focused Browser Sidecar, nested gate, runner, and public renderer suites
+  after locking the corrected image: **74 tests, OK**.
+- Global policy gate: **224 tests, OK**.
 - Affected meshshot profile/renderer: **11 tests, OK**.
 - Public `mesh-compare` preview CLI: **8 tests, OK**.
 - `npm --prefix packages/meshshot test`.
@@ -118,7 +140,7 @@ Passed for the current review corrections:
 - Full-range `git diff --check`.
 - Clean networkless/no-pull Broker build and exact read-only image inspection.
 
-The review-correction RED/GREEN pair is `0da353ce` / `fdbea34c`.
+The third review-correction RED/GREEN pair is `dc923779` / `be7651b5`.
 
 Not passed / not complete:
 
@@ -126,8 +148,8 @@ Not passed / not complete:
   lightweight worktree lacks the native octree backend: 26 errors, one skip.
 - Bundle freshness remains **NOT VERIFIED**: the check attempted to fetch the
   missing `esbuild` package and failed DNS. No dependency was installed.
-- The previously failing independent Standards and Spec/security reviews have
-  **not yet been rerun** against this corrected range.
+- The independent Standards and Spec/security reviews have **not yet been
+  rerun for a third time** against this corrected range.
 - The production-shaped Docker conformance gate was **NOT RERUN**, per the
   review boundary. The preserved earlier failed attempt remains the only
   conformance execution.
@@ -172,16 +194,16 @@ conformance executions.
 - Docker build intermediate containers: removed by successful builds.
 - Dedicated Colima profile: left running because it pre-existed this ticket.
 - Historical reviewed images and corrected Broker image
-  `sha256:f0e94aa0...7fd80980`: retained; no image deletion was authorized.
+  `sha256:8fc448aa...4e0c7ed`: retained; no image deletion was authorized.
 - No unrelated Docker resource was adopted, stopped, relabeled, or removed.
 
 ## Deferred interaction and required next action
 
-Return for full independent Standards and Spec/security review of
+Return for the third full independent Standards and Spec/security review of
 `90bc24cf8860125b158c5f04ddc5dfd65efbcb39..HEAD`. The owner has not
 self-approved either axis. If both axes accept the corrections and exact new
 artifact, authorize one new clean-SHA local conformance attempt using Broker
-image `sha256:f0e94aa0fb73a83fb5be7c8f08460b189cbae3118ef97642a44e7fda7fd80980`.
+image `sha256:8fc448aa192dc9a22d3894eac06fecebc95ef3fc12606ca85bacba7344e0c7ed`.
 Do not reuse the failed job handle.
 
 Before paid CVM closure, the provisioning receipt must represent the Broker
