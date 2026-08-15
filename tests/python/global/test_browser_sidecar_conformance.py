@@ -369,6 +369,15 @@ class DockerBoundary:
 class BrowserSidecarConformanceHostTests(unittest.TestCase):
     """Observe the production host action through its public evidence file."""
 
+    def test_surface_discovery_home_matches_fixed_root_role(self) -> None:
+        """Capability-dropped root can inspect its fresh private home."""
+
+        arguments = conformance._fixed_container_isolation(user="0:0")
+        self.assertIn(
+            "/home/pwuser:rw,nosuid,nodev,size=16m,uid=0,gid=0,mode=700",
+            arguments,
+        )
+
     def test_host_seals_and_validates_gate_before_fixed_client_exec(self) -> None:
         boundary = DockerBoundary()
         with tempfile.TemporaryDirectory() as temp:
