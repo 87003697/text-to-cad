@@ -819,6 +819,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
         self.assertEqual(
             [image["configSha256"] for image in receipts[0]["images"]], expected
         )
+        for receipt in receipts:
+            for image in receipt["images"]:
+                image.pop("archiveReference")
         self.assertEqual(receipts[0]["images"], receipts[1]["images"])
 
     def test_prepare_bounds_unexpected_role_inspect_boundary_failures(self) -> None:
@@ -973,7 +976,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 textwrap.dedent(
                     f"""\
                     #!/usr/bin/env python3
-                    import pathlib, sys
+                    import json, pathlib, sys
+                    tag_state = pathlib.Path(__file__).with_suffix(".tags.json")
+                    tags = json.loads(tag_state.read_text()) if tag_state.exists() else {{}}
                     if sys.argv[1:4] == ["inspect", "--type=image", "--format"]:
                         projection = sys.argv[4]
                         image = sys.argv[5]
@@ -986,8 +991,16 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         }}
                         print(values[projection])
                     elif sys.argv[1:3] == ["image", "ls"]:
+                        if sys.argv[-1] in tags:
+                            print(tags[sys.argv[-1]])
                         raise SystemExit(0)
                     elif sys.argv[1:3] == ["image", "tag"]:
+                        tags[sys.argv[4]] = sys.argv[3]
+                        tag_state.write_text(json.dumps(tags))
+                        raise SystemExit(0)
+                    elif sys.argv[1:3] == ["image", "rm"]:
+                        tags.pop(sys.argv[3], None)
+                        tag_state.write_text(json.dumps(tags))
                         raise SystemExit(0)
                     elif sys.argv[1:3] == ["image", "save"]:
                         pathlib.Path(sys.argv[4]).mkdir()
@@ -1940,22 +1953,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             "schema": "cvm-sidecar.prepare-receipt/1",
                             "handle": handle,
                             "archive": {"bytes": 1, "sha256": archive_sha},
-                            "images": [
-                                {
-                                    "role": "sidecar",
-                                    "id": SIDECAR_ID,
-                                    "platform": "linux/amd64",
-                                    "configSha256": SIDECAR_ID.removeprefix("sha256:"),
-                                    "sourceRevision": SOURCE_REVISION,
-                                },
-                                {
-                                    "role": "client",
-                                    "id": CLIENT_ID,
-                                    "platform": "linux/amd64",
-                                    "configSha256": CLIENT_ID.removeprefix("sha256:"),
-                                    "sourceRevision": SOURCE_REVISION,
-                                },
-                            ],
+                            "images": remote_provision_images(handle),
                         }
                     ),
                     encoding="utf-8",

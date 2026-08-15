@@ -841,13 +841,13 @@ def _path_absence(path: Path) -> bool:
         return False
 
 
-def _archive_image_reference(handle: str, role: str) -> str:
-    if role not in {"sidecar", "client"}:
+def _archive_image_reference(handle: str, role: str, nonce: str) -> str:
+    if role not in {"sidecar", "client"} or OWNER_NONCE.fullmatch(nonce) is None:
         raise ProbeError("fixed image role is invalid", check="prepare-operation")
-    return f"text-to-cad-cvm-sidecar-{role}:{handle}"
+    return f"text-to-cad-cvm-sidecar-{role}:{handle}-{nonce}"
 
 
-def _local_reference_image_ids(reference: str) -> frozenset[str]:
+def _local_reference_image_ids(reference: str) -> tuple[str, ...]:
     completed = _run(
         ["docker", "image", "ls", "--all", "--no-trunc", "--quiet", reference],
         cwd=REPO_ROOT,
@@ -856,19 +856,22 @@ def _local_reference_image_ids(reference: str) -> frozenset[str]:
     lines = [line for line in completed.stdout.splitlines() if line]
     if any(IMAGE_ID.fullmatch(line) is None for line in lines):
         raise ProbeError("local fixed image reference is invalid")
-    return frozenset(lines)
+    return tuple(lines)
 
 
-def _cleanup_archive_image_references(references: list[str]) -> bool:
+def _cleanup_archive_image_references(references: Mapping[str, str]) -> bool:
     cleanup_ok = True
-    for reference in reversed(references):
+    for reference, expected_id in reversed(tuple(references.items())):
         try:
-            if _local_reference_image_ids(reference):
+            current_ids = _local_reference_image_ids(reference)
+            if current_ids == (expected_id,):
                 _run(
                     ["docker", "image", "rm", reference],
                     cwd=REPO_ROOT,
                     timeout=60,
                 )
+            elif current_ids:
+                cleanup_ok = False
         except BaseException:
             cleanup_ok = False
     for reference in references:
@@ -950,18 +953,27 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
 
     archive = state / "images.tar"
     temporary_archive = state / "images.tar.tmp"
-    references: list[str] = []
+    reference_nonce = secrets.token_hex(16)
+    references: dict[str, str] = {}
     try:
         for image in images:
-            reference = _archive_image_reference(handle, str(image["role"]))
+            reference = _archive_image_reference(
+                handle, str(image["role"]), reference_nonce
+            )
             if _local_reference_image_ids(reference):
                 raise ProbeError("local fixed image reference already exists")
-            references.append(reference)
+            references[reference] = str(image["id"])
             _run(
                 ["docker", "image", "tag", str(image["id"]), reference],
                 cwd=REPO_ROOT,
                 timeout=60,
             )
+            if _local_reference_image_ids(reference) != (str(image["id"]),):
+                raise ProbeError("local fixed image reference changed")
+            image["archiveReference"] = reference
+        for reference, expected_id in references.items():
+            if _local_reference_image_ids(reference) != (expected_id,):
+                raise ProbeError("local fixed image reference changed")
         _run(
             [
                 "docker",
@@ -969,7 +981,7 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
                 "save",
                 "--output",
                 os.fspath(temporary_archive),
-                *references,
+                *references.keys(),
             ],
             cwd=REPO_ROOT,
             timeout=1800,
@@ -1316,12 +1328,22 @@ def remote_abort(handle: str, owner_nonce: str) -> Mapping[str, object]:
 
 
 def _verify_image_receipt(
-    image: object, expected_role: str
+    image: object, expected_role: str, handle: str
 ) -> Mapping[str, object]:
+    expected_reference_prefix = (
+        f"text-to-cad-cvm-sidecar-{expected_role}:{handle}-"
+    )
     if (
         not isinstance(image, dict)
         or set(image)
-        != {"role", "id", "platform", "configSha256", "sourceRevision"}
+        != {
+            "role",
+            "id",
+            "platform",
+            "configSha256",
+            "sourceRevision",
+            "archiveReference",
+        }
         or image.get("role") != expected_role
         or not isinstance(image.get("id"), str)
         or IMAGE_ID.fullmatch(str(image["id"])) is None
@@ -1330,6 +1352,12 @@ def _verify_image_receipt(
         != str(image["id"]).removeprefix("sha256:")
         or not isinstance(image.get("sourceRevision"), str)
         or SOURCE_REVISION.fullmatch(str(image["sourceRevision"])) is None
+        or not isinstance(image.get("archiveReference"), str)
+        or not str(image["archiveReference"]).startswith(expected_reference_prefix)
+        or OWNER_NONCE.fullmatch(
+            str(image["archiveReference"])[len(expected_reference_prefix) :]
+        )
+        is None
     ):
         raise ProbeError(
             f"{expected_role} prepare image receipt is invalid",
@@ -1364,7 +1392,7 @@ def _stop_inventory_process(process: subprocess.Popen[bytes]) -> None:
         pass
 
 
-def _loaded_image_ids(reference: str | None = None) -> frozenset[str]:
+def _loaded_image_ids(reference: str | None = None) -> tuple[str, ...]:
     argv = ["docker", "image", "ls", "--all", "--no-trunc", "--quiet"]
     if reference is not None:
         argv.append(reference)
@@ -1382,7 +1410,7 @@ def _loaded_image_ids(reference: str | None = None) -> frozenset[str]:
             check="image-inventory-access",
         ) from exc
 
-    lines: set[str] = set()
+    lines: list[str] = []
     line_count = 0
     pending = bytearray()
     deadline = time.monotonic() + IMAGE_INVENTORY_TIMEOUT_SECONDS
@@ -1410,7 +1438,7 @@ def _loaded_image_ids(reference: str | None = None) -> frozenset[str]:
                 "loaded image inventory format is invalid",
                 check="image-inventory-format",
             )
-        lines.add(line)
+        lines.append(line)
 
     try:
         if process.stdout is None:
@@ -1467,11 +1495,6 @@ def _loaded_image_ids(reference: str | None = None) -> frozenset[str]:
                 "loaded image inventory is inaccessible",
                 check="image-inventory-access",
             )
-        if line_count == 0:
-            raise ProbeError(
-                "loaded image inventory format is invalid",
-                check="image-inventory-format",
-            )
     except ProbeError:
         raise
     except BaseException as exc:
@@ -1481,7 +1504,7 @@ def _loaded_image_ids(reference: str | None = None) -> frozenset[str]:
         ) from exc
     finally:
         _stop_inventory_process(process)
-    return frozenset(lines)
+    return tuple(lines)
 
 
 def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
@@ -1570,15 +1593,6 @@ def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
                 "remote archive hash or size mismatch",
                 check="archive-hash-size",
             )
-        current_check = "image-load"
-        try:
-            _run(
-                ["docker", "image", "load", "--input", os.fspath(archive)],
-                cwd=REPO_ROOT,
-                timeout=1800,
-            )
-        except BaseException as exc:
-            raise ProbeError("fixed image load failed", check="image-load") from exc
         current_check = "image-attestation-unexpected"
         images_payload = prepare_receipt.get("images")
         if not isinstance(images_payload, list) or not images_payload:
@@ -1592,19 +1606,35 @@ def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
                 check="client-receipt",
             )
         images = [
-            _verify_image_receipt(images_payload[0], "sidecar"),
-            _verify_image_receipt(images_payload[1], "client"),
+            _verify_image_receipt(images_payload[0], "sidecar", handle),
+            _verify_image_receipt(images_payload[1], "client", handle),
         ]
+        for image in images:
+            reference = str(image["archiveReference"])
+            if _loaded_image_ids(reference):
+                raise ProbeError(
+                    f"loaded {image['role']} image reference already exists",
+                    check=f"{image['role']}-loaded-id",
+                )
+        current_check = "image-load"
+        try:
+            _run(
+                ["docker", "image", "load", "--input", os.fspath(archive)],
+                cwd=REPO_ROOT,
+                timeout=1800,
+            )
+        except BaseException as exc:
+            raise ProbeError("fixed image load failed", check="image-load") from exc
         loaded_ids: list[str] = []
         for image in images:
-            reference = _archive_image_reference(handle, str(image["role"]))
+            reference = str(image["archiveReference"])
             role_ids = _loaded_image_ids(reference)
             if len(role_ids) != 1:
                 raise ProbeError(
                     f"loaded {image['role']} image ID is absent",
                     check=f"{image['role']}-loaded-id",
                 )
-            loaded_ids.append(next(iter(role_ids)))
+            loaded_ids.append(role_ids[0])
         if len(set(loaded_ids)) != 2:
             raise ProbeError(
                 "loaded fixed image IDs are not distinct",
