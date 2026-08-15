@@ -341,3 +341,36 @@ loaded-ID reader collapsed duplicate lines into a set.
 Independent Standards/Spec review, deployment, fresh prepare, one-shot
 provision, and the conditional sealed Chromium probe remain pending. The three
 prior failed handles remain no-retry/no-adopt/no-clean.
+
+## First provisioned CVM Sidecar and request-byte successor
+
+The ownership-hardened successor passed independent Standards and Spec review
+and deployed as clean SHA `eafa325e001f0b430ebc6c94103a9cb1f3a9d237`.
+Fresh handle `cvmsp-f190364fcf1b2c499110c0a8` prepared the fixed
+1,084,572,672-byte archive and provisioned successfully. CVM retained the exact
+loaded sidecar/client IDs `fc8f22ba...c35b846` and
+`3b477d93...d4a1f75b`; transfer archive, prepare receipt, and incoming
+directory absence all passed.
+
+Its sole probe reached real Chromium and returned `connected:true`, one context,
+one page, no visible browser executable/source aliases, and blocked external
+egress. The Sidecar observed SIGTERM, exited 0, and all two containers plus the
+network were removed with a clean absence proof. Public terminal status was
+nevertheless `failed` because the sealed result hashed the exact stdin bytes as
+`ad472568...3273`, while the outer contract expected canonical request hash
+`b155c2ac...f3a6`. The first value is exactly the SHA-256 of the same canonical
+JSON plus one trailing newline. This handle is terminal and must not be retried,
+adopted, or cleaned; it produced no visual artifact because the fixed program
+was the connectivity probe.
+
+- RED `886ededc` changes the real remote-probe fake client to hash its actual
+  stdin bytes. The prior code reproduced the production `ad472568...3273`
+  mismatch and failed in 0.8 seconds.
+- GREEN `41086945` removes only the transport newline; the request remains the
+  same fixed canonical JSON and the sealed/outer hashes now cover identical
+  bytes. No image, Chromium, resource, network, or lifecycle behavior changes.
+- Exact regression PASS; focused CVM Sidecar suite 47/47 PASS; global modules
+  172/172 PASS; remaining cvm-push partition 25/25 PASS.
+
+Require fresh independent Standards and Spec PASS on the clean successor before
+one new deployment, prepare handle, provision attempt, and conditional probe.

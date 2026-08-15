@@ -101,7 +101,9 @@ scripts/pilot/cvm-sidecar-probe.sh probe <same-cvmsp-handle>
 
 These are the complete public interfaces. There is no argument for a remote
 path, command, environment variable, URL, Docker option, Render Program, or
-request body.
+request body. The fixed probe request is sent as its exact canonical JSON bytes
+with no transport newline or other framing byte; the sealed client hashes those
+same stdin bytes and the outer receipt requires the identical SHA-256.
 
 ## Success receipt
 
