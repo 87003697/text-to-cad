@@ -1429,7 +1429,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 textwrap.dedent(
                     """\
                     #!/usr/bin/env python3
-                    import json, os, pathlib, sys
+                    import hashlib, json, os, pathlib, sys
                     log = pathlib.Path(os.environ["FAKE_TRANSPORT_LOG"])
                     with log.open("a") as stream:
                         stream.write(json.dumps({"tool": "ssh", "argv": sys.argv[1:]}) + "\\n")
@@ -3085,7 +3085,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         request = json.loads(stdin)
                         assert request == {"schema": "meshshot.browser-sidecar.render-request/2", "program": "probe", "payload": {}}
                         item["exit"] = 0
-                        print(json.dumps({"ok": True, "schema": request["schema"], "requestSha256": "b155c2ac8a5396971825cd09626f75510d2669fbcdd669f9e1cfe9ce41fdf3a6", "program": "probe", "jobId": job, "result": {"connected": True, "browserExecutablesVisible": [], "contextCount": 1, "pageCount": 1, "sourceAliasesVisible": [], "externalEgressBlocked": True}}))
+                        print(json.dumps({"ok": True, "schema": request["schema"], "requestSha256": hashlib.sha256(stdin.encode("utf-8")).hexdigest(), "program": "probe", "jobId": job, "result": {"connected": True, "browserExecutablesVisible": [], "contextCount": 1, "pageCount": 1, "sourceAliasesVisible": [], "externalEgressBlocked": True}}))
                     elif argv[0] == "logs":
                         item = container(argv[-1]); job = item["job"]
                         print(json.dumps({"event": "ready", "jobId": job, "endpointPath": "/fixed", "programs": {"viewer": "v", "residual": "r"}}))
