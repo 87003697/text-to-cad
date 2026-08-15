@@ -34,17 +34,18 @@ The workflow has three separate public operations:
    free space of at least `3 GiB + archive bytes`, and verifies an accessible
    `linux/amd64` Docker server. It retains the 3 GiB post-transfer gate,
    verifies the archive hash before `docker image load`, re-inspects the loaded
-   exact IDs/platform/revision labels through four fixed `docker image inspect
-   --format` projections in the order ID, OS, architecture, then revision. A
-   command addresses its image by the fixed bare 64-hex config digest for
-   Docker CLI compatibility; the input, receipt, and returned `.Id` remain the
-   exact canonical `sha256:<64-hex>` identity. A later projection runs only
-   after the preceding field is accessible, single-line, and valid. Each
-   command must return exactly one non-empty field; embedded TAB/newline content
-   fails that field's inspect-format check. Missing or empty revision fails the
-   revision check. The workflow derives the same config digests from the IDs,
-   removes the transfer archive, and intentionally retains the two provisioned
-   images. Full daemon inspect JSON is neither requested nor accepted.
+   exact IDs/platform/revision labels through four fixed `docker inspect
+   --type=image --format` projections in the order ID, OS, architecture, then
+   revision. A command addresses its image by the fixed bare 64-hex config
+   digest for Docker CLI compatibility; the input, receipt, and returned `.Id`
+   remain the exact canonical `sha256:<64-hex>` identity. A later projection
+   runs only after the preceding field is accessible, single-line, and valid.
+   Each command must return exactly one non-empty field; embedded TAB/newline
+   content fails that field's inspect-format check. Missing or empty revision
+   fails the revision check. The workflow derives the same config digests from
+   the IDs, removes the transfer archive, and intentionally retains the two
+   provisioned images. Full daemon inspect JSON is neither requested nor
+   accepted.
 3. `probe` is a second external CVM write and the only execution dispatch. It
    runs exactly one sealed probe with `--pull=never`, an internal network,
    fixed resource bounds, read-only filesystems, and exact runtime cleanup.

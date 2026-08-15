@@ -229,8 +229,8 @@ def _inspect_image_field(
         completed = _run(
             [
                 "docker",
-                "image",
                 "inspect",
+                "--type=image",
                 "--format",
                 projection,
                 image_address,

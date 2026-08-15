@@ -154,7 +154,7 @@ def write_portable_archive_docker(path: Path) -> None:
                 member.mode = 0o644
                 archive.addfile(member, io.BytesIO(payload))
 
-            if sys.argv[1:4] == ["image", "inspect", "--format"]:
+            if sys.argv[1:4] == ["inspect", "--type=image", "--format"]:
                 projection = sys.argv[4]
                 image = sys.argv[5]
                 canonical_image = (
@@ -554,7 +554,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                                 original_run = subprocess.run
 
                                 def bounded_run(argv, *args, **kwargs):
-                                    if list(argv)[:3] == ["docker", "image", "inspect"] and list(argv)[-1] == target:
+                                    if list(argv)[:4] == ["docker", "inspect", "--type=image", "--format"] and list(argv)[-1] == target:
                                         raise OSError(13, "forbidden raw inspect launch detail", "/private/inspect/socket")
                                     return original_run(argv, *args, **kwargs)
 
@@ -570,7 +570,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                                         raise RuntimeError("forbidden raw inspect parse detail")
 
                                 def bounded_run(argv, *args, **kwargs):
-                                    if list(argv)[:3] == ["docker", "image", "inspect"] and list(argv)[-1] == target:
+                                    if list(argv)[:4] == ["docker", "inspect", "--type=image", "--format"] and list(argv)[-1] == target:
                                         return BrokenCompleted()
                                     return original_run(argv, *args, **kwargs)
 
@@ -672,7 +672,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     f"""\
                     #!/usr/bin/env python3
                     import pathlib, sys
-                    if sys.argv[1:4] == ["image", "inspect", "--format"]:
+                    if sys.argv[1:4] == ["inspect", "--type=image", "--format"]:
                         projection = sys.argv[4]
                         image = sys.argv[5]
                         canonical_image = "sha256:" + image
@@ -1660,7 +1660,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         if expected_check == "image-load":
                             raise cvm_sidecar_probe.ProbeError("load failed")
                         return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
-                    if arguments[1:3] == ["image", "inspect"]:
+                    if arguments[1:4] == ["inspect", "--type=image", "--format"]:
                         return subprocess.CompletedProcess(
                             arguments, 0, "invalid\tfield\n", ""
                         )
@@ -1754,7 +1754,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         arguments = list(argv)
                         if arguments[1:3] == ["image", "load"]:
                             return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
-                        if arguments[1:3] != ["image", "inspect"]:
+                        if arguments[1:4] != ["inspect", "--type=image", "--format"]:
                             raise AssertionError(f"unexpected command: {arguments}")
                         inspect_calls.append(arguments)
                         inspected_address = arguments[-1]
@@ -1857,7 +1857,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         expected_formats,
                     )
                     for arguments in inspect_calls:
-                        self.assertEqual(arguments[1:4], ["image", "inspect", "--format"])
+                        self.assertEqual(
+                            arguments[1:4], ["inspect", "--type=image", "--format"]
+                        )
                     self.assertEqual(
                         receipt["transferCleanup"],
                         {
@@ -1900,7 +1902,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 arguments = list(argv)
                 if arguments[1:3] == ["image", "load"]:
                     return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
-                if arguments[1:3] != ["image", "inspect"]:
+                if arguments[1:4] != ["inspect", "--type=image", "--format"]:
                     raise AssertionError(f"unexpected command: {arguments}")
                 inspect_format = arguments[4]
                 inspect_formats.append(inspect_format)
@@ -1980,7 +1982,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             return subprocess.CompletedProcess(
                                 arguments, 0, "loaded\n", ""
                             )
-                        if arguments[1:3] != ["image", "inspect"]:
+                        if arguments[1:4] != ["inspect", "--type=image", "--format"]:
                             raise AssertionError(f"unexpected command: {arguments}")
                         projection = arguments[4]
                         inspected_address = arguments[-1]
@@ -2071,7 +2073,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 arguments = list(argv)
                 if arguments[1:3] == ["image", "load"]:
                     return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
-                if arguments[1:3] != ["image", "inspect"]:
+                if arguments[1:4] != ["inspect", "--type=image", "--format"]:
                     raise AssertionError(f"unexpected command: {arguments}")
                 inspected_address = arguments[-1]
                 inspected_addresses.append(inspected_address)
