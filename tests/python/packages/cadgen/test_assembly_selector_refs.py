@@ -133,6 +133,76 @@ class AssemblyOccurrenceRefsTest(unittest.TestCase):
         self.assertEqual(len(centres), len(placed), "occurrences collapsed to one position")
 
 
+class AssemblyEntityRefsTest(AssemblyOccurrenceRefsTest):
+    """Phase 2: the refs users actually pick. `#o1.12.f19` is face 19 of that occurrence's
+    component, which is the translation they were doing by hand -- and which the flat
+    whole-assembly namespace cannot express, since its numbering does not agree with the
+    component's ("the assembly's f18 is the wall's face; the part's f18 is a cylinder")."""
+
+    def _merged(self) -> lookup.SelectorIndex:
+        return assembly_lookup.merge_assembly_entities(
+            self._flat_index(), self.descriptor, self.package_dir
+        )
+
+    def test_entity_refs_inside_an_occurrence_resolve(self) -> None:
+        merged = self._merged()
+        occurrence_id = str(self.descriptor["occurrences"][0]["id"])
+        found = lookup.lookup_selector(f"#{occurrence_id}.f1", merged)
+        self.assertIsNotNone(found, f"{occurrence_id}.f1 did not resolve")
+        self.assertEqual("face", found[0])
+
+    def test_a_face_keeps_its_component_ordinal(self) -> None:
+        """The assembly ref carries the number the PART's own namespace uses, so a translated
+        ref stays checkable by hand against the part file."""
+        merged = self._merged()
+        occurrence_id = str(self.descriptor["occurrences"][0]["id"])
+        kind, row = lookup.lookup_selector(f"#{occurrence_id}.f1", merged)
+        self.assertEqual(1, int(row["ordinal"]))
+        self.assertEqual(occurrence_id, str(row["occurrenceId"]))
+
+    def test_geometry_is_placed_and_rigid_invariants_survive(self) -> None:
+        merged = self._merged()
+        rows = [row for row in merged.faces if str(row.get("occurrenceId", "")).count(".") >= 1]
+        self.assertTrue(rows, "no placed faces were merged")
+        # The two identical boxes differ ONLY by placement, so component-local centres would be
+        # identical. Distinct centres prove the occurrence transform was applied.
+        centres = {tuple(round(value, 6) for value in row["center"]) for row in rows}
+        self.assertGreater(len(centres), 1, "faces collapsed to one position")
+        for row in rows:
+            self.assertGreater(float(row["area"]), 0.0, "a rigid placement must preserve area")
+
+    def test_a_normal_is_rotated_not_translated(self) -> None:
+        """The silent failure: putting a direction through the full matrix makes it absorb the
+        occurrence's offset, so it stops being a unit vector and points somewhere false."""
+        merged = self._merged()
+        placed = [row for row in merged.faces if row.get("normal") and row.get("occurrenceId")]
+        self.assertTrue(placed)
+        for row in placed:
+            length = sum(component * component for component in row["normal"]) ** 0.5
+            self.assertAlmostEqual(1.0, length, places=6, msg=f"{row['id']} normal is not unit")
+
+    def test_adjacency_stays_inside_the_occurrence(self) -> None:
+        """Relation rows index their own component's tables and are re-based as they merge.
+        Without that, adjacency returns confident wrong neighbours -- worse than none."""
+        merged = self._merged()
+        occurrence_id = str(self.descriptor["occurrences"][0]["id"])
+        _, face = lookup.lookup_selector(f"#{occurrence_id}.f1", merged)
+        neighbours = lookup.face_adjacent_edge_selectors(face, merged)
+        self.assertTrue(neighbours, "a solid's face has adjacent edges")
+        for selector in neighbours:
+            self.assertTrue(
+                selector.startswith(f"{occurrence_id}."),
+                f"{selector} escaped {occurrence_id} -- relation offsets are wrong",
+            )
+
+    def test_the_flat_entity_namespace_still_resolves(self) -> None:
+        """Additive, again: a bare `#f1` still canonicalizes through single_occurrence_id into
+        the composed-compound namespace, which is what every part-shaped caller relies on."""
+        flat = self._flat_index()
+        merged = self._merged()
+        self.assertEqual(flat.single_occurrence_id, merged.single_occurrence_id)
+
+
 class TransformArithmeticTest(unittest.TestCase):
     """A box transformed by its min/max alone keeps its diagonal and loses its extent. Every
     occurrence in a posed assembly is rotated, so this is the failure mode that matters."""
@@ -170,6 +240,34 @@ class TransformArithmeticTest(unittest.TestCase):
         rows = assembly_lookup.transform_bbox(assembly_lookup._matrix("nonsense"), box)
         self.assertEqual(box["min"], rows["min"])
         self.assertEqual(box["max"], rows["max"])
+
+    def test_a_direction_ignores_the_translation_column(self) -> None:
+        matrix = [
+            1.0, 0.0, 0.0, 100.0,
+            0.0, 1.0, 0.0, -50.0,
+            0.0, 0.0, 1.0, 7.0,
+            0.0, 0.0, 0.0, 1.0,
+        ]
+        self.assertEqual([0.0, 0.0, 1.0], assembly_lookup.transform_direction(matrix, [0, 0, 1]))
+        # ...while a POINT under the same matrix does move.
+        self.assertEqual([100.0, -50.0, 8.0], assembly_lookup.transform_point(matrix, [0, 0, 1]))
+
+    def test_params_move_by_key_not_wholesale(self) -> None:
+        """`origin` is a point, `axis`/`direction` are directions, `radius` is a length a rigid
+        transform does not change. Leaving params local while center is placed would put one
+        payload in two frames."""
+        matrix = [
+            1.0, 0.0, 0.0, 10.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0,
+        ]
+        placed = assembly_lookup._transform_params(
+            matrix, {"origin": [1.0, 2.0, 3.0], "axis": [0.0, 0.0, 1.0], "radius": 3.0}
+        )
+        self.assertEqual([11.0, 2.0, 3.0], placed["origin"])
+        self.assertEqual([0.0, 0.0, 1.0], placed["axis"])
+        self.assertEqual(3.0, placed["radius"])
 
     def test_a_missing_bbox_is_none_rather_than_a_crash(self) -> None:
         self.assertIsNone(assembly_lookup.transform_bbox(assembly_lookup._matrix(None), None))

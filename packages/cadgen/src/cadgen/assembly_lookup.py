@@ -103,6 +103,76 @@ def transform_bbox(matrix: list[float], bbox: object) -> dict[str, list[float]] 
     }
 
 
+# How each entity field moves under a rigid placement. Classified by KEY, because the schema is
+# uniform across surface and curve types: a plane and a cylinder both carry `origin`/`axis`, a
+# line carries `origin`/`direction`, and a cylinder's `radius` is a length that a rigid transform
+# does not change. Anything unlisted is carried through untouched, which is right for ordinals,
+# counts, flags and areas -- and is why `params` is transformed key-by-key rather than wholesale.
+_POINT_FIELDS = ("center",)
+_POINT_PARAM_KEYS = ("origin",)
+_DIRECTION_FIELDS = ("normal",)
+_DIRECTION_PARAM_KEYS = ("axis", "direction")
+
+
+def transform_direction(matrix: list[float], vector: object) -> list[float] | None:
+    """Rotate a direction. The translation column must NOT apply -- a surface normal that picks
+    up the occurrence's offset stops being a unit vector and starts pointing somewhere false."""
+    if not isinstance(vector, (list, tuple)) or len(vector) < 3:
+        return None
+    try:
+        x, y, z = (float(vector[0]), float(vector[1]), float(vector[2]))
+    except (TypeError, ValueError):
+        return None
+    return [
+        matrix[0] * x + matrix[1] * y + matrix[2] * z,
+        matrix[4] * x + matrix[5] * y + matrix[6] * z,
+        matrix[8] * x + matrix[9] * y + matrix[10] * z,
+    ]
+
+
+def _transform_params(matrix: list[float], params: object) -> object:
+    """Place a face's or edge's surface/curve parameters.
+
+    Leaving these in component-local coordinates while `center` and `bbox` are placed would be
+    the worst of both: a cylinder whose centre is in the assembly and whose axis origin is in the
+    part, with nothing in the payload saying so. That is the frame mismatch FEEDBACK.md P2 charges
+    a wrong edit and a full revert to.
+    """
+    if not isinstance(params, Mapping):
+        return params
+    placed: dict[str, Any] = {}
+    for key, value in params.items():
+        name = str(key)
+        if name in _POINT_PARAM_KEYS:
+            placed[name] = transform_point(matrix, value) or value
+        elif name in _DIRECTION_PARAM_KEYS:
+            placed[name] = transform_direction(matrix, value) or value
+        else:
+            placed[name] = value
+    return placed
+
+
+def _place_entity_row(matrix: list[float], row: Mapping[str, Any]) -> dict[str, Any]:
+    placed = dict(row)
+    for field in _POINT_FIELDS:
+        if field in placed:
+            moved = transform_point(matrix, placed[field])
+            if moved is not None:
+                placed[field] = moved
+    for field in _DIRECTION_FIELDS:
+        if field in placed:
+            moved = transform_direction(matrix, placed[field])
+            if moved is not None:
+                placed[field] = moved
+    if "bbox" in placed:
+        moved_box = transform_bbox(matrix, placed["bbox"])
+        if moved_box is not None:
+            placed["bbox"] = moved_box
+    if "params" in placed:
+        placed["params"] = _transform_params(matrix, placed["params"])
+    return placed
+
+
 def _component_bundle_reader():
     """Imported lazily: cadgen._internal.glb pulls in the GLB machinery, and a part entry
     never reaches this module."""
@@ -184,6 +254,151 @@ def assembly_occurrence_rows(
     return materialized
 
 
+def _component_index(package_dir: Path, component: str, cache: dict[str, Any]) -> Any:
+    """The component's own selector index, loaded once per content hash.
+
+    tom_v2 places 160 occurrences over 65 distinct components, so the cache is most of the cost:
+    the whole set reads in about 0.2 s.
+    """
+    if component in cache:
+        return cache[component]
+    from cadgen.lookup import build_selector_index
+
+    read_bundle = _component_bundle_reader()
+    path = package_dir / COMPONENTS_DIRNAME / f"{component}.glb"
+    bundle = read_bundle(path) if path.is_file() else None
+    manifest = getattr(bundle, "manifest", None)
+    built = None
+    if isinstance(manifest, Mapping):
+        built = build_selector_index(dict(manifest), buffers=getattr(bundle, "buffers", None))
+    cache[component] = built
+    return built
+
+
+def _entity_id(occurrence_id: str, local_id: object, kind: str, ordinal: object) -> str:
+    """``o1.f19`` inside a component becomes ``o1.12.f19`` in the assembly.
+
+    Prefers the row's own ordinal over re-parsing its id, so the assembly ref keeps the number
+    the component's own namespace uses -- which is what makes a translated ref checkable by hand
+    against the part file, the exact step users were doing manually.
+    """
+    if ordinal is not None:
+        try:
+            return f"{occurrence_id}.{kind}{int(ordinal)}"
+        except (TypeError, ValueError):
+            pass
+    tail = str(local_id or "")
+    _, _, suffix = tail.rpartition(".")
+    return f"{occurrence_id}.{suffix}" if suffix else f"{occurrence_id}.{kind}"
+
+
+def merge_assembly_entities(
+    index: SelectorIndex,
+    descriptor: Mapping[str, Any],
+    package_dir: Path,
+) -> SelectorIndex:
+    """Add each occurrence's faces/edges/vertices, placed into world coordinates.
+
+    This is what makes a ref picked in the viewer measurable: `#o1.12.f19` is face 19 of that
+    occurrence's component, and until now only the flat whole-assembly namespace resolved, whose
+    numbering does not agree with the component's (FEEDBACK.md: "the assembly's f18 is the wall's
+    face; the part's f18 is a 17.085 mm2 cylinder").
+
+    Adjacency survives the merge. Component relation rows index that component's own tables, so
+    they are re-based as they are concatenated -- otherwise `face_adjacent_edge_selectors` would
+    return confident, wrong neighbours, which is worse than returning none.
+    """
+    occurrences = descriptor.get("occurrences")
+    if not isinstance(occurrences, list) or not occurrences:
+        return index
+
+    faces = list(index.faces)
+    edges = list(index.edges)
+    vertices = list(index.vertices)
+    face_by_id = dict(index.face_by_id)
+    edge_by_id = dict(index.edge_by_id)
+    vertex_by_id = dict(index.vertex_by_id)
+    relations = {name: list(rows) for name, rows in index.relations.items()}
+    cache: dict[str, Any] = {}
+    added = 0
+
+    for entry in occurrences:
+        if not isinstance(entry, Mapping):
+            continue
+        occurrence_id = str(entry.get("id") or "").strip()
+        component = str(entry.get("component") or "").strip()
+        if not occurrence_id or not component:
+            continue
+        component_index = _component_index(package_dir, component, cache)
+        if component_index is None:
+            continue
+        matrix = _matrix(entry.get("transform"))
+
+        face_offset = len(faces)
+        edge_offset = len(edges)
+        vertex_offset = len(vertices)
+        face_edge_offset = len(relations.get("faceEdgeRows", []))
+        edge_face_offset = len(relations.get("edgeFaceRows", []))
+        edge_vertex_offset = len(relations.get("edgeVertexRows", []))
+        vertex_edge_offset = len(relations.get("vertexEdgeRows", []))
+
+        for row in component_index.faces:
+            placed = _place_entity_row(matrix, row)
+            placed["id"] = _entity_id(occurrence_id, row.get("id"), "f", row.get("ordinal"))
+            placed["occurrenceId"] = occurrence_id
+            if "edgeStart" in placed:
+                placed["edgeStart"] = face_edge_offset + int(placed.get("edgeStart") or 0)
+            faces.append(placed)
+            face_by_id.setdefault(str(placed["id"]), placed)
+            added += 1
+        for row in component_index.edges:
+            placed = _place_entity_row(matrix, row)
+            placed["id"] = _entity_id(occurrence_id, row.get("id"), "e", row.get("ordinal"))
+            placed["occurrenceId"] = occurrence_id
+            if "faceStart" in placed:
+                placed["faceStart"] = edge_face_offset + int(placed.get("faceStart") or 0)
+            edges.append(placed)
+            edge_by_id.setdefault(str(placed["id"]), placed)
+            added += 1
+        for row in component_index.vertices:
+            placed = _place_entity_row(matrix, row)
+            placed["id"] = _entity_id(occurrence_id, row.get("id"), "v", row.get("ordinal"))
+            placed["occurrenceId"] = occurrence_id
+            vertices.append(placed)
+            vertex_by_id.setdefault(str(placed["id"]), placed)
+            added += 1
+
+        component_relations = component_index.relations
+        relations.setdefault("faceEdgeRows", []).extend(
+            edge_offset + int(value) for value in component_relations.get("faceEdgeRows", [])
+        )
+        relations.setdefault("edgeFaceRows", []).extend(
+            face_offset + int(value) for value in component_relations.get("edgeFaceRows", [])
+        )
+        relations.setdefault("edgeVertexRows", []).extend(
+            vertex_offset + int(value) for value in component_relations.get("edgeVertexRows", [])
+        )
+        relations.setdefault("vertexEdgeRows", []).extend(
+            edge_offset + int(value) for value in component_relations.get("vertexEdgeRows", [])
+        )
+        # Silence the unused-offset warnings for the two vertex rebases above; they are read
+        # through the extend() calls and exist so a package that does carry vertices works.
+        del edge_vertex_offset, vertex_edge_offset
+
+    if not added:
+        return index
+    return replace(
+        index,
+        faces=faces,
+        edges=edges,
+        vertices=vertices,
+        face_by_id=face_by_id,
+        edge_by_id=edge_by_id,
+        vertex_by_id=vertex_by_id,
+        relations=relations,
+    )
+
+
 def merge_assembly_occurrences(
     index: SelectorIndex,
     descriptor: Mapping[str, Any],
@@ -225,7 +440,8 @@ def merge_assembly_occurrences(
 
 
 def index_with_assembly_occurrences(index: SelectorIndex, artifact: object) -> SelectorIndex:
-    """``merge_assembly_occurrences`` keyed off a ``StepTopologyArtifact``.
+    """The whole instance tree -- occurrences AND their entities -- keyed off a
+    ``StepTopologyArtifact``.
 
     Lives here rather than at either call site because there are TWO of them and they had already
     drifted: ``snapshot_cli.artifact_selector_index`` serves ``--focus``/``--hide``, while
@@ -248,4 +464,5 @@ def index_with_assembly_occurrences(index: SelectorIndex, artifact: object) -> S
     descriptor = read_package_descriptor(package_dir)
     if not isinstance(descriptor, dict):
         return index
-    return merge_assembly_occurrences(index, descriptor, package_dir)
+    merged = merge_assembly_occurrences(index, descriptor, package_dir)
+    return merge_assembly_entities(merged, descriptor, package_dir)
