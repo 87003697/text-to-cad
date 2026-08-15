@@ -390,6 +390,7 @@ def discover_conformance_surface() -> Mapping[str, Any]:
         permitted_symlink_roots=[
             *(Path(root) for root in roots),
             Path("/dev/null"),
+            Path("/dev/shm"),
             Path("/proc/mounts"),
         ],
         permitted_dangling_symlink_roots=[*(Path(root) for root in roots)],
