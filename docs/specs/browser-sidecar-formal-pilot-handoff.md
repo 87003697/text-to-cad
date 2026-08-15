@@ -159,11 +159,11 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Browser-less Broker base:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Final corrected Broker:
-  `sha256:b7058cb6282c67761871806295d981d17294a134b44cffbe3e0a9606bbbfb5b1`
+  `sha256:cdc77541406802bbcfd1b26cf101833fac420889a1f90746afdbf46b240c7e34`
 - Broker OCI revision:
-  `5d4649dbb3afc4e3fb50fb1b483c4d4ef7b5351b`
+  `e4e5f67b275c123b034034a1defb29ec45c3cd57`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:3ead21a56433131ee3d6826dd2fa7bb97ab90b5527353a38cfd90aa4178d445d`
+  `sha256:60a5274143f441556ca8fa7ded30395ee32b3530d76a60e3a17cd01dc422cdac`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with
@@ -218,10 +218,10 @@ Passed for the current review corrections:
 - Exact locked-image extraction, real packaged-client gate, and image-sealed
   surface discovery: **3 tests, OK**.
 - Focused Browser Sidecar, conformance host, sealed-image contract, surface
-  scanner, nested gate, runner, and public renderer suites: **111 tests, OK**
+  scanner, nested gate, runner, and public renderer suites: **116 tests, OK**
   (**3 opt-in image tests skipped** in this non-Docker aggregate and passed
   separately above).
-- Global policy gate: **262 tests, OK**, with the same 3 opt-in image tests
+- Global policy gate: **267 tests, OK**, with the same 3 opt-in image tests
   skipped there and passed separately against the exact locked image.
 - CVM Sidecar prepare/provision/probe suite: **48 tests, OK**, including both
   legacy two-role and Formal three-role provisioning receipts.
@@ -236,11 +236,15 @@ Passed for the current review corrections:
 - `python -m py_compile` for changed Python and focused tests.
 - Full-range `git diff --check`.
 - Clean networkless/no-pull Broker build and exact read-only image inspection.
-- The first cold exact-image aggregate reached the 180-second discovery limit
-  after both earlier tests passed. The same immutable image then completed an
-  independently timed read-only scan in 149.36 seconds, the isolated discovery
-  test in 104.464 seconds, and the final aggregate **3 tests, OK** in 125.201
-  seconds. The cold timeout remains recorded rather than reclassified.
+- Superseded image `02533b89...b0df105` passed once, then two later isolated
+  aggregates reached the same 180-second discovery limit after both earlier
+  tests passed. A same-boundary diagnostic proved the fixed 0.5 CPU allocation
+  was causal: changing only the discovery role to 1 bounded CPU completed the
+  scan in 98.743 seconds. The first corrected image carried a nonexistent
+  expanded revision and was rejected by the commit-existence gate despite
+  passing its exact tests. Final image `cdc77541...0c7e34` then completed the
+  aggregate **3 tests, OK** in 113.840 seconds. Both timeouts remain recorded
+  rather than reclassified.
 
 The conformance-host correction starts with RED commit `9defcace` and GREEN
 commit `fdadf9aa`. Truthful pre-resource absence starts with RED commit
@@ -308,6 +312,24 @@ The next full scan exposed the standard alternatives round-trip
 proves both the inert chain and browser-shaped equivalents; GREEN `5d4649db`
 routes every lexically cross-root hop through the canonical declared-root
 resolver even when the final inode returns to the source root.
+The final Spec/security review then found that the prior canonical resolver
+validated only the final inode, root invocation could grant discovery
+capability to the actual client, cleanup failure could lose terminal
+precedence, and the image-only dangling exception contradicted the strict
+contract. RED `18e307e0` proves all four gaps plus Broker-image sanitization.
+GREEN `974b000f` resolves and validates every intermediate hop, removes the
+dangling bypass and deletes inert dangling links in the immutable Broker build,
+uses an explicit discovery-only capability flag, and makes cleanup failure
+dominate the primary workload result. Real-image tracing then exposed standard
+`/bin`, `/sbin`, `/lib`, and `/lib64` compatibility hops; RED `715d2f1f` fixes
+that exact allowlist while rejecting `/`, and GREEN `0755437b` adds only those
+fixed aliases to the declared closure.
+Two repeat exact-image timeouts then proved that the exhaustive immutable scan
+could not reliably meet its 180-second host bound at 0.5 CPU on the fixed x86
+Colima. RED `5b976731` binds 1 CPU only for the sealed discovery role while
+retaining 0.5 CPU for the actual client; GREEN `e4e5f67b` implements that
+bounded distinction without changing network, filesystem, memory, PID,
+capability, or timeout policy.
 
 Not passed / not complete:
 
@@ -315,8 +337,9 @@ Not passed / not complete:
   lightweight worktree lacks the native octree backend: 26 errors, one skip.
 - Standards and Spec/security both passed clean HEAD `5266c60c`, then its one
   production-shaped conformance job exposed the Mac temp-sharing defect below.
-  Fresh independent review has **not yet been rerun** against the image-sealed
-  discovery correction and exact replacement image.
+  The next independent review found the final four security/provenance gaps
+  above; fresh review has **not yet been rerun** against their corrections and
+  exact replacement image.
 - The failed `5266c60c` conformance receipt is preserved and never retried. A
   successor conformance job remains separately gated on the fresh review and
   renewed run authorization.
@@ -416,9 +439,11 @@ preserved artifact. The same SHA/handle was not rerun.
   `sha256:62574062...9af2c0`, and superseded
   `sha256:915bf400...f751624`, superseded
   `sha256:20dc8256...1ee84c7`, `sha256:dd126e36...dfb1f9a`,
-  `sha256:23294596...16eaed`, and `sha256:41462957...5bf1a2d`, plus final
-  Broker image `sha256:b7058cb6...bfb5b1`, are retained; no image deletion was
-  authorized.
+  `sha256:23294596...16eaed`, `sha256:41462957...5bf1a2d`, and superseded
+  `sha256:b7058cb6...bfb5b1`, plus final Broker image
+  `sha256:02533b89...b0df105`, rejected-provenance
+  `sha256:a286f43f...8b9249`, plus final Broker image
+  `sha256:cdc77541...0c7e34`, are retained; no image deletion was authorized.
   The
   first full-context `fd4a9db9...` build was rejected by byte-parity extraction
   because the legacy builder admitted working-tree bytecode; its image
@@ -437,7 +462,7 @@ Return for full independent Standards and Spec/security review of
 self-approved either axis. If both axes accept the corrections and exact new
 artifact, execute the already bounded one new clean-SHA local conformance
 attempt using Broker
-image `sha256:b7058cb6282c67761871806295d981d17294a134b44cffbe3e0a9606bbbfb5b1`.
+image `sha256:cdc77541406802bbcfd1b26cf101833fac420889a1f90746afdbf46b240c7e34`.
 Do not reuse either failed SHA/handle.
 
 Before paid CVM closure, Formal preparation must supply all three ordered roles:

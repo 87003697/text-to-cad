@@ -33,9 +33,9 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Browser-less Broker base image:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Render Program Broker image:
-  `sha256:b7058cb6282c67761871806295d981d17294a134b44cffbe3e0a9606bbbfb5b1`
+  `sha256:cdc77541406802bbcfd1b26cf101833fac420889a1f90746afdbf46b240c7e34`
 - Broker OCI revision / production implementation commit:
-  `5d4649dbb3afc4e3fb50fb1b483c4d4ef7b5351b`
+  `e4e5f67b275c123b034034a1defb29ec45c3cd57`
 - Image source revision:
   `1abe4c97929906b5c0b28b0f3f38857bd923952f`
 - Residual program SHA-256:
@@ -113,7 +113,10 @@ Before Sidecar startup, the outer runner deterministically packages the fixed
 gate plus exact meshshot runtime into one digest-bound zipapp. Its shared
 surface scanner uses no-follow directory and file descriptors, verifies each
 opened inode against its lstat identity, propagates all inspection errors, and
-resolves every link explicitly without leaving its declared root. Required
+resolves every link hop explicitly without leaving its declared root closure.
+That closure contains only the scanned roots, the fixed `/bin`, `/sbin`,
+`/lib`, and `/lib64` compatibility aliases, and exact `/dev/null`, `/dev/shm`,
+`/proc/mounts`, and `/proc/self/mounts` runtime endpoints. Required
 exact mounts cannot disappear; only an explicitly optional root that was never
 mounted may be absent. Dangling, escaping, cyclic, or uninspectable links close
 the job, while a reachable in-root target is inspected once and contributes a
