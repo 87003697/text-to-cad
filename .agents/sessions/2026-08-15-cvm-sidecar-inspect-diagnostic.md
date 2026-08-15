@@ -58,10 +58,29 @@ and transfer cleanup contract are unchanged.
 - Initial independent review of `c4f1e838..ad370aef`: production behavior had
   no wrong implementation or scope creep; reviewers requested only stronger
   public-command/cleanup coverage and fixture deduplication. Those corrections
-  are `d70858ff`; successor dual review is still required.
-- Docker/CVM/external operations from this worktree: zero.
+  are `d70858ff`.
+- Successor `70473af2ece6b7c6132bea4232253c30d08b6af3`: independent Standards
+  PASS and Spec PASS; full-range diff check PASS; worktree clean.
 
-## Next authorized boundary
+## Fresh CVM terminal result
+
+- `$cvm-push` deployed clean workflow
+  `70473af2ece6b7c6132bea4232253c30d08b6af3` successfully; the remote Git
+  base was `no-git` and is not the deployment identity.
+- Local prepare created fresh handle `cvmsp-9e254ee6ea0f150e3e5dc030` for the
+  unchanged reviewed image pair. The opaque archive is 1,084,572,160 bytes,
+  SHA-256 `2ae8ec5106f642aa38cbb20f649c8dce17c885eb6eb22ea98dbd66dffd357e17`.
+- The handle's sole provision attempt terminated failed at exact check
+  `sidecar-inspect-id-access`. No OS, architecture, revision, or probe command
+  ran after the failed ID-only projection.
+- Terminal operation is `provision`; `retryAllowed:false`.
+- Nonce-scoped abort succeeded with no cleanup errors and
+  `transferAbsenceProved:true`. The archive, remote prepare receipt, and
+  incoming transfer directory are all proved absent.
+- The sealed Chromium probe is `NOT_RUN`; this handle must not be retried,
+  adopted, inspected through raw logs, or cleaned by an ad hoc command.
+
+## Completed authorization boundary
 
 1. Require independent Standards and Spec PASS on one clean successor SHA.
 2. Deploy that SHA once through `$cvm-push`.
@@ -74,3 +93,6 @@ and transfer cleanup contract are unchanged.
    or retry on failure.
 5. If and only if provision succeeds, dispatch the sealed `probe` exactly once
    on that same handle and report its terminal receipt and absence proof.
+
+Steps 1–4 completed. Step 5 was correctly not dispatched because provision
+failed terminally at the first Sidecar ID-addressability predicate.
