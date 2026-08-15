@@ -4,6 +4,7 @@ import ast
 import importlib.util
 import json
 import os
+import re
 import signal
 import socket
 import sqlite3
@@ -151,6 +152,24 @@ class FakeRetryProxy:
 
 class RunnerTests(unittest.TestCase):
     """Validate mandatory tap behavior without bwrap, network, or Venus."""
+
+    def test_handoff_gate_digest_matches_deterministic_artifact(self) -> None:
+        """The formal handoff must publish the current sealed Gate identity."""
+
+        handoff = (
+            REPO_ROOT / "docs/specs/browser-sidecar-formal-pilot-handoff.md"
+        ).read_text(encoding="utf-8")
+        match = re.search(
+            r"Deterministic sealed Browser Gate zipapp for the current scanner source:\n"
+            r"\s+`sha256:([0-9a-f]{64})`",
+            handoff,
+        )
+        self.assertIsNotNone(match)
+        with tempfile.TemporaryDirectory() as temporary:
+            actual = self.supervisor._build_gate_artifact(
+                REPO_ROOT, Path(temporary) / "browser-gate.pyz"
+            )
+        self.assertEqual(match.group(1), actual)
 
     @classmethod
     def setUpClass(cls) -> None:
