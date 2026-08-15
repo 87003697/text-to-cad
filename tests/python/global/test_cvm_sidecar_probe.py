@@ -89,8 +89,17 @@ def write_portable_archive_docker(path: Path) -> None:
                 archive.addfile(member, io.BytesIO(payload))
 
             if sys.argv[1:4] == ["image", "inspect", "--format"]:
+                projection = sys.argv[4]
                 image = sys.argv[5]
-                print("\\t".join([image, "linux", "amd64", {SOURCE_REVISION!r}]))
+                values = {{
+                    "{{{{.Id}}}}": image,
+                    "{{{{.Os}}}}": "linux",
+                    "{{{{.Architecture}}}}": "amd64",
+                    '{{{{index .Config.Labels "org.opencontainers.image.revision"}}}}': {SOURCE_REVISION!r},
+                }}
+                if projection not in values:
+                    raise SystemExit(f"unexpected inspect projection: {{projection}}")
+                print(values[projection])
             elif sys.argv[1:3] == ["image", "save"]:
                 output = pathlib.Path(sys.argv[4])
                 assert sys.argv[5:] == [sidecar, client]
@@ -446,13 +455,13 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             for phase, suffix, message in (
                 (
                     "run",
-                    "inspect-access",
-                    f"{role} fixed image inspection is inaccessible",
+                    "inspect-id-access",
+                    f"{role} fixed image id inspection is inaccessible",
                 ),
                 (
                     "parse",
-                    "inspect-format",
-                    f"{role} fixed image inspection format is invalid",
+                    "inspect-id-format",
+                    f"{role} fixed image id inspection format is invalid",
                 ),
             ):
                 with self.subTest(role=role, phase=phase), tempfile.TemporaryDirectory(
@@ -593,8 +602,15 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     #!/usr/bin/env python3
                     import pathlib, sys
                     if sys.argv[1:4] == ["image", "inspect", "--format"]:
+                        projection = sys.argv[4]
                         image = sys.argv[5]
-                        print("\\t".join([image, "linux", "amd64", {SOURCE_REVISION!r}]))
+                        values = {{
+                            "{{{{.Id}}}}": image,
+                            "{{{{.Os}}}}": "linux",
+                            "{{{{.Architecture}}}}": "amd64",
+                            '{{{{index .Config.Labels "org.opencontainers.image.revision"}}}}': {SOURCE_REVISION!r},
+                        }}
+                        print(values[projection])
                     elif sys.argv[1:3] == ["image", "save"]:
                         pathlib.Path(sys.argv[4]).mkdir()
                         raise SystemExit(7)
@@ -1508,7 +1524,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
 
     def test_remote_provision_classifies_image_load_and_inspect_format(self) -> None:
         for index, expected_check in enumerate(
-            ("image-load", "sidecar-inspect-format"), start=1
+            ("image-load", "sidecar-inspect-id-format"), start=1
         ):
             with self.subTest(expected_check=expected_check), tempfile.TemporaryDirectory(
                 prefix=f"cvm-sidecar-{expected_check}-"
@@ -1573,7 +1589,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             raise cvm_sidecar_probe.ProbeError("load failed")
                         return subprocess.CompletedProcess(arguments, 0, "loaded\n", "")
                     if arguments[1:3] == ["image", "inspect"]:
-                        return subprocess.CompletedProcess(arguments, 0, "[]\n", "")
+                        return subprocess.CompletedProcess(
+                            arguments, 0, "invalid\tfield\n", ""
+                        )
                     raise AssertionError(f"unexpected command: {arguments}")
 
                 enough = type(
@@ -1607,22 +1625,37 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 )
 
     def test_remote_provision_splits_portable_image_attestation_checks(self) -> None:
-        inspect_format = (
-            '{{.Id}}\t{{.Os}}\t{{.Architecture}}\t'
-            '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+        inspect_formats = (
+            ("id", "{{.Id}}"),
+            ("os", "{{.Os}}"),
+            ("architecture", "{{.Architecture}}"),
+            (
+                "revision",
+                '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+            ),
         )
         cases = (
-            ("inspect-access", "inspect-access"),
-            ("inspect-format", "inspect-format"),
-            ("id", "id"),
-            ("platform", "platform"),
-            ("revision", "revision"),
-            ("receipt", "receipt"),
+            ("id", "access", "inspect-id-access"),
+            ("id", "timeout", "inspect-id-timeout"),
+            ("id", "format", "inspect-id-format"),
+            ("id", "identity", "id"),
+            ("os", "access", "inspect-os-access"),
+            ("os", "format", "inspect-os-format"),
+            ("os", "identity", "os"),
+            ("architecture", "access", "inspect-architecture-access"),
+            ("architecture", "format", "inspect-architecture-format"),
+            ("architecture", "identity", "architecture"),
+            ("revision", "access", "inspect-revision-access"),
+            ("revision", "format", "inspect-revision-format"),
+            ("revision", "identity", "revision"),
+            ("receipt", "identity", "receipt"),
         )
         for role, image_id in (("sidecar", SIDECAR_ID), ("client", CLIENT_ID)):
-            for variant, check_suffix in cases:
-                with self.subTest(role=role, variant=variant), tempfile.TemporaryDirectory(
-                    prefix=f"cvm-sidecar-{role}-{variant}-"
+            for field, variant, check_suffix in cases:
+                with self.subTest(
+                    role=role, field=field, variant=variant
+                ), tempfile.TemporaryDirectory(
+                    prefix=f"cvm-sidecar-{role}-{field}-{variant}-"
                 ) as root_text:
                     state_root = Path(root_text) / "state"
                     handle = "cvmsp-" + "6" * 24
@@ -1649,7 +1682,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             "sourceRevision": SOURCE_REVISION,
                         },
                     ]
-                    if variant == "receipt":
+                    if field == "receipt":
                         target = 0 if role == "sidecar" else 1
                         images[target]["configSha256"] = "f" * 64
                     (state / "provision-attempt.json").write_text(
@@ -1697,38 +1730,52 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         inspected_role = (
                             "sidecar" if inspected_id == SIDECAR_ID else "client"
                         )
-                        if inspected_role == role and variant == "inspect-access":
-                            raise cvm_sidecar_probe.ProbeError("opaque inspect failure")
-                        if inspected_role == role and variant == "inspect-format":
-                            output = json.dumps(
-                                [
-                                    {
-                                        "Id": inspected_id,
-                                        "Os": "linux",
-                                        "Architecture": "amd64",
-                                        "Config": {
-                                            "Labels": {
-                                                "org.opencontainers.image.revision": SOURCE_REVISION
-                                            },
-                                            "EngineVersionSpecific": None,
-                                        },
-                                    }
-                                ]
+                        inspected_field = {
+                            projection: name for name, projection in inspect_formats
+                        }.get(arguments[4])
+                        if inspected_field is None:
+                            raise AssertionError(
+                                f"unexpected inspect format: {arguments[4]}"
                             )
+                        if (
+                            inspected_role == role
+                            and inspected_field == field
+                            and variant == "access"
+                        ):
+                            raise cvm_sidecar_probe.ProbeError("opaque inspect failure")
+                        if (
+                            inspected_role == role
+                            and inspected_field == field
+                            and variant == "timeout"
+                        ):
+                            raise cvm_sidecar_probe.ProbeError(
+                                "opaque inspect timeout", check="docker-timeout"
+                            )
+                        if (
+                            inspected_role == role
+                            and inspected_field == field
+                            and variant == "format"
+                        ):
+                            output = "invalid\tfield"
                         else:
-                            output = "\t".join(
-                                [
-                                    "sha256:" + "9" * 64
-                                    if inspected_role == role and variant == "id"
-                                    else inspected_id,
-                                    "windows"
-                                    if inspected_role == role and variant == "platform"
-                                    else "linux",
-                                    "amd64",
-                                    "b" * 40
-                                    if inspected_role == role and variant == "revision"
-                                    else SOURCE_REVISION,
-                                ]
+                            good_values = {
+                                "id": inspected_id,
+                                "os": "linux",
+                                "architecture": "amd64",
+                                "revision": SOURCE_REVISION,
+                            }
+                            identity_failures = {
+                                "id": "sha256:" + "9" * 64,
+                                "os": "windows",
+                                "architecture": "arm64",
+                                "revision": "b" * 40,
+                            }
+                            output = (
+                                identity_failures[inspected_field]
+                                if inspected_role == role
+                                and inspected_field == field
+                                and variant == "identity"
+                                else good_values[inspected_field]
                             )
                         return subprocess.CompletedProcess(
                             arguments, 0, output + "\n", ""
@@ -1761,17 +1808,31 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     self.assertEqual(
                         receipt["errorCheck"], f"{role}-{check_suffix}"
                     )
-                    self.assertTrue(inspect_calls or variant == "receipt")
+                    field_formats = [value for _, value in inspect_formats]
+                    if field == "receipt":
+                        target_formats = []
+                    else:
+                        target_formats = field_formats[
+                            : [name for name, _ in inspect_formats].index(field) + 1
+                        ]
+                    expected_formats = (
+                        target_formats
+                        if role == "sidecar"
+                        else field_formats + target_formats
+                    )
+                    self.assertEqual(
+                        [arguments[4] for arguments in inspect_calls],
+                        expected_formats,
+                    )
                     for arguments in inspect_calls:
-                        self.assertEqual(
-                            arguments[1:],
-                            ["image", "inspect", "--format", inspect_format, arguments[-1]],
-                        )
+                        self.assertEqual(arguments[1:4], ["image", "inspect", "--format"])
 
     def test_remote_provision_uses_older_docker_compatible_projection(self) -> None:
-        portable_format = (
-            '{{.Id}}\t{{.Os}}\t{{.Architecture}}\t'
-            '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+        portable_formats = (
+            "{{.Id}}",
+            "{{.Os}}",
+            "{{.Architecture}}",
+            '{{index .Config.Labels "org.opencontainers.image.revision"}}',
         )
         with tempfile.TemporaryDirectory(
             prefix="cvm-sidecar-older-docker-inspect-"
@@ -1847,13 +1908,19 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     raise cvm_sidecar_probe.ProbeError(
                         "older Docker rejected composite inspect template"
                     )
-                if inspect_format != portable_format:
+                if inspect_format not in portable_formats:
                     raise AssertionError(f"unexpected inspect format: {inspect_format}")
                 inspected_id = arguments[-1]
+                values = {
+                    "{{.Id}}": inspected_id,
+                    "{{.Os}}": "linux",
+                    "{{.Architecture}}": "amd64",
+                    '{{index .Config.Labels "org.opencontainers.image.revision"}}': SOURCE_REVISION,
+                }
                 return subprocess.CompletedProcess(
                     arguments,
                     0,
-                    f"{inspected_id}\tlinux\tamd64\t{SOURCE_REVISION}\n",
+                    values[inspect_format] + "\n",
                     "",
                 )
 
@@ -1877,7 +1944,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             self.assertEqual(
                 receipt["status"], "provisioned", receipt.get("errorCheck")
             )
-            self.assertEqual(inspect_formats, [portable_format, portable_format])
+            self.assertEqual(inspect_formats, list(portable_formats) * 2)
 
     def test_remote_provision_distinguishes_id_only_inspect_access(self) -> None:
         with tempfile.TemporaryDirectory(

@@ -27,18 +27,23 @@ RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 OWNER_NONCE = re.compile(r"[0-9a-f]{32}\Z")
 REMOTE_ROOT = "~/text-to-cad"
 MIN_REMOTE_FREE_BYTES = 3 * 1024 * 1024 * 1024
-IMAGE_INSPECT_FORMAT = (
-    '{{.Id}}\t{{.Os}}\t{{.Architecture}}\t'
-    '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+IMAGE_INSPECT_FIELDS = (
+    ("id", "{{.Id}}"),
+    ("os", "{{.Os}}"),
+    ("architecture", "{{.Architecture}}"),
+    (
+        "revision",
+        '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+    ),
 )
 IMAGE_ATTESTATION_FAILURE_CHECKS = frozenset(
     f"{role}-{suffix}"
     for role in ("sidecar", "client")
     for suffix in (
-        "inspect-access",
-        "inspect-format",
+        *(f"inspect-{field}-{kind}" for field, _ in IMAGE_INSPECT_FIELDS for kind in ("access", "timeout", "format")),
         "id",
-        "platform",
+        "os",
+        "architecture",
         "revision",
         "receipt",
     )
@@ -217,12 +222,7 @@ def _run(
     return completed
 
 
-def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
-    if IMAGE_ID.fullmatch(image_id) is None:
-        raise ProbeError(
-            f"{role} image must be an exact sha256 image ID",
-            check=f"{role}-id",
-        )
+def _inspect_image_field(role: str, image_id: str, field: str, projection: str) -> str:
     try:
         completed = _run(
             [
@@ -230,56 +230,81 @@ def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
                 "image",
                 "inspect",
                 "--format",
-                IMAGE_INSPECT_FORMAT,
+                projection,
                 image_id,
             ],
             cwd=REPO_ROOT,
             timeout=60,
         )
     except ProbeError as exc:
+        check = (
+            f"{role}-inspect-{field}-timeout"
+            if exc.check == "docker-timeout"
+            else f"{role}-inspect-{field}-access"
+        )
         raise ProbeError(
-            f"{role} fixed image inspection is inaccessible",
-            check=f"{role}-inspect-access",
+            f"{role} fixed image {field} inspection is inaccessible",
+            check=check,
         ) from exc
     except BaseException as exc:
         raise ProbeError(
-            f"{role} fixed image inspection is inaccessible",
-            check=f"{role}-inspect-access",
+            f"{role} fixed image {field} inspection is inaccessible",
+            check=f"{role}-inspect-{field}-access",
         ) from exc
     try:
         lines = completed.stdout.splitlines()
-        if len(lines) != 1 or not lines[0]:
+        if len(lines) != 1 or not lines[0] or "\t" in lines[0]:
             raise ProbeError(
-                f"{role} fixed image inspection format is invalid",
-                check=f"{role}-inspect-format",
+                f"{role} fixed image {field} inspection format is invalid",
+                check=f"{role}-inspect-{field}-format",
             )
-        payload = lines[0].split("\t")
     except ProbeError as exc:
         raise ProbeError(
-            f"{role} fixed image inspection format is invalid",
-            check=f"{role}-inspect-format",
+            f"{role} fixed image {field} inspection format is invalid",
+            check=f"{role}-inspect-{field}-format",
         ) from exc
     except BaseException as exc:
         raise ProbeError(
-            f"{role} fixed image inspection format is invalid",
-            check=f"{role}-inspect-format",
+            f"{role} fixed image {field} inspection format is invalid",
+            check=f"{role}-inspect-{field}-format",
         ) from exc
-    if len(payload) != 4:
+    return lines[0]
+
+
+def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
+    if IMAGE_ID.fullmatch(image_id) is None:
         raise ProbeError(
-            f"{role} fixed image inspection format is invalid",
-            check=f"{role}-inspect-format",
+            f"{role} image must be an exact sha256 image ID",
+            check=f"{role}-id",
         )
-    inspected_id, operating_system, architecture, revision = payload
+    projections = dict(IMAGE_INSPECT_FIELDS)
+    inspected_id = _inspect_image_field(
+        role, image_id, "id", projections["id"]
+    )
     if inspected_id != image_id:
         raise ProbeError(
             f"{role} image ID changed during inspection",
             check=f"{role}-id",
         )
-    if operating_system != "linux" or architecture != "amd64":
+    operating_system = _inspect_image_field(
+        role, image_id, "os", projections["os"]
+    )
+    if operating_system != "linux":
         raise ProbeError(
-            f"{role} image is not linux/amd64",
-            check=f"{role}-platform",
+            f"{role} image operating system is not linux",
+            check=f"{role}-os",
         )
+    architecture = _inspect_image_field(
+        role, image_id, "architecture", projections["architecture"]
+    )
+    if architecture != "amd64":
+        raise ProbeError(
+            f"{role} image architecture is not amd64",
+            check=f"{role}-architecture",
+        )
+    revision = _inspect_image_field(
+        role, image_id, "revision", projections["revision"]
+    )
     if not isinstance(revision, str) or SOURCE_REVISION.fullmatch(revision) is None:
         raise ProbeError(
             f"{role} image has no exact source revision",

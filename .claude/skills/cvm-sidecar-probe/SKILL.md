@@ -34,13 +34,15 @@ The workflow has three separate public operations:
    free space of at least `3 GiB + archive bytes`, and verifies an accessible
    `linux/amd64` Docker server. It retains the 3 GiB post-transfer gate,
    verifies the archive hash before `docker image load`, re-inspects the loaded
-   exact IDs/platform/revision labels through one fixed `docker image inspect
-   --format` projection containing exactly four TAB-delimited direct fields,
-   derives the same config digests from the IDs, removes the transfer archive,
-   and intentionally retains the two provisioned images. Missing or empty
-   revision fails the revision check; embedded TAB/newline content or any
-   output other than one line with four fields fails the inspect-format check.
-   Full daemon inspect JSON is neither requested nor accepted.
+   exact IDs/platform/revision labels through four fixed `docker image inspect
+   --format` projections in the order ID, OS, architecture, then revision. A
+   later projection runs only after the preceding field is accessible,
+   single-line, and valid. Each command must return exactly one non-empty field;
+   embedded TAB/newline content fails that field's inspect-format check. Missing
+   or empty revision fails the revision check. The workflow derives the same
+   config digests from the IDs, removes the transfer archive, and intentionally
+   retains the two provisioned images. Full daemon inspect JSON is neither
+   requested nor accepted.
 3. `probe` is a second external CVM write and the only execution dispatch. It
    runs exactly one sealed probe with `--pull=never`, an internal network,
    fixed resource bounds, read-only filesystems, and exact runtime cleanup.
@@ -143,16 +145,19 @@ different destructive operation and requires a separate authorization.
   `remote-disk-gate`, `image-load`, `transfer-cleanup`,
   `deployed-workflow-hash`, `image-attestation-unexpected`, or one role-specific
   image check. For each of `sidecar` and `client`, those checks are exactly
-  `inspect-access`, `inspect-format`, `id`, `platform`, `revision`, and
-  `receipt`, prefixed by the role (for example `client-revision`). Public
+  `inspect-<field>-access`, `inspect-<field>-timeout`, or
+  `inspect-<field>-format` for `<field>` equal to `id`, `os`, `architecture`, or
+  `revision`; plus the identity checks `id`, `os`, `architecture`, `revision`,
+  and `receipt`. Every check is prefixed by the role (for example
+  `client-inspect-architecture-access` or `client-revision`). Public
   provision preserves that exact closed check and the bounded remote receipt
   before the nonce-scoped abort. Raw stderr, paths, errno, full daemon inspect
   JSON, and Docker output are not durable evidence.
 - Image-inspect command launch/socket/permission exceptions are bounded to the
-  exact role's `inspect-access`; unexpected TAB-delimited projection parser
-  exceptions are bounded to the exact role's `inspect-format`. Neither may
-  publish traceback, path, errno, or exception text, including during local
-  prepare before state.
+  exact role and field's `inspect-<field>-access`; command timeouts use
+  `inspect-<field>-timeout`; unexpected single-field projection parser
+  exceptions use `inspect-<field>-format`. Neither may publish traceback, path,
+  errno, or exception text, including during local prepare before state.
 - Probe failure or cleanup failure: preserve the receipt and handle; do not
   rerun, submit a pilot, inspect raw remote state, or invent a cleanup command.
 - Missing or malformed receipt: report the missing structured evidence and
