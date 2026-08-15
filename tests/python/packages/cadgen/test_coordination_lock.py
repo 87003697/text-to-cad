@@ -306,9 +306,9 @@ class _FakeMsvcrt:
 
 class WindowsLockBackendTests(unittest.TestCase):
     """The Windows backend is not importable here, so it is driven with a faithful fake:
-    ``fcntl=None`` + a fake ``msvcrt``. These pin the backend contract -- region locking,
-    no shared mode, the sibling mutex that keeps the sentinel readable, waiting semantics -- which is exactly what
-    the two production modules diverge on."""
+    ``fcntl=None`` + a fake ``msvcrt``. These pin the backend contract -- region locking, no
+    shared mode, the sibling mutex that keeps the sentinel readable, waiting semantics --
+    which is exactly what the two production modules diverge on."""
 
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()

@@ -241,3 +241,48 @@ test("an unreadable sentinel is reported as a read failure, not a lock violation
   await fs.promises.writeFile(sentinel, "a".repeat(32));
   assertWriteLock(packageDir, "a".repeat(32));
 });
+
+test("a missing sentinel is not described as a read failure either", async () => {
+  // Three different things, three different messages: nothing ever held this lock, the
+  // sentinel exists but cannot be read, the id is wrong. The first is where a degraded run
+  // used to land, wearing the second's message and blaming ENOENT for a lock nobody took.
+  const { assertWriteLock } = await import("./assertWriteLock.js");
+  const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "writelock-"));
+  const packageDir = path.join(directory, "part.step.py");
+  await fs.promises.mkdir(packageDir, { recursive: true });
+
+  assert.throws(
+    () => assertWriteLock(packageDir, "a".repeat(32)),
+    (error) => {
+      assert.match(error.message, /no generation lock exists/u);
+      assert.doesNotMatch(error.message, /could not read/u);
+      return true;
+    }
+  );
+});
+
+test("a parent-reported degraded lock skips the check instead of failing the build", async () => {
+  // A filesystem without advisory locks stamps no run id, so this check cannot pass -- and
+  // Python's own policy is that a missing lock must never fail a user's build. Only the
+  // parent knows, so it says so; the child must not turn that into a lock violation.
+  const { assertWriteLock } = await import("./assertWriteLock.js");
+  const directory = await fs.promises.mkdtemp(path.join(os.tmpdir(), "writelock-"));
+  const packageDir = path.join(directory, "part.step.py");
+  await fs.promises.mkdir(packageDir, { recursive: true });
+
+  const warnings = [];
+  const realWarn = console.warn;
+  console.warn = (message) => warnings.push(String(message));
+  try {
+    // No sentinel at all, which is exactly what a degraded run leaves behind.
+    assertWriteLock(packageDir, "a".repeat(32), { degraded: true });
+    assert.equal(warnings.length, 1, "the write is unguarded, so it must say so");
+    assert.match(warnings[0], /without mutual exclusion/u);
+  } finally {
+    console.warn = realWarn;
+  }
+
+  // The flag is the PARENT's report, not a default: without it the same directory still
+  // throws, so a producer that forgets to pass a run id is caught exactly as before.
+  assert.throws(() => assertWriteLock(packageDir, "a".repeat(32)), /no generation lock exists/u);
+});

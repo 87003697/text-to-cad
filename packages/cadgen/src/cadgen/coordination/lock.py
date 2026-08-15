@@ -1,4 +1,4 @@
-"""POSIX advisory locking for artifact coordination.
+"""Kernel-owned file locking for artifact coordination (POSIX ``flock``, Windows ``msvcrt``).
 
 The KERNEL owns the lock state: it is released when the holding file descriptor closes,
 including when the process crashes or is killed. That is the whole reason this is a
@@ -17,9 +17,10 @@ JSON file refreshed by a 1s heartbeat thread, which had three defects a real loc
 no age windows. The kernel is the sole authority on "a run is in flight"; the run id in the
 sentinel is for ATTRIBUTING a status record to a run, never for deciding one is alive.
 
-Sentinels are never unlinked. Unlinking races: a waiter that already opened the file would
-hold a descriptor to an unlinked inode and "acquire" a lock nobody else can see. They are
-zero-to-32-byte files under gitignored ``__cadgen__``.
+Sentinels are never unlinked, and neither is the Windows mutex below. Unlinking races: a
+waiter that already opened the file would hold a descriptor to an unlinked inode and
+"acquire" a lock nobody else can see. They are zero-to-32-byte files under gitignored
+``__cadgen__``.
 
 Readers probe with ``LOCK_SH``, writers take ``LOCK_EX``. That asymmetry matters: ``flock``
 conflicts per open file description, not per process, so two concurrent ``LOCK_EX`` probes
@@ -27,14 +28,26 @@ of an UNHELD sentinel conflict with each other and one of them wrongly reports a
 flight. Measured at ~6% false positives with four threads before this was fixed.
 
 On Windows there is no ``fcntl``; :mod:`msvcrt` provides byte-range locks (``locking``)
-instead. Kernel-ownership on close behaves the same, but the model differs in two ways
-that matter: ``msvcrt.locking`` locks a byte region at the CURRENT file position (not the
-whole descriptor), and it has no shared mode -- every operation, probes included, takes an
-exclusive region lock. A sentinel therefore must hold a byte before it can be locked at
-all, and two concurrent Windows probes of the same sentinel can false-positive "held"
-(the very race the POSIX shared-probe asymmetry exists to avoid). Locking past EOF is an
-error on Windows, so an EMPTY sentinel is reported as degraded rather than held -- a
-crash between ``open()`` and stamping must not wedge every later build forever.
+instead. Kernel-ownership on close behaves the same, but the model differs in three ways
+that matter, and the third is why the Windows lock is not taken on the sentinel at all:
+
+* ``msvcrt.locking`` locks a byte region at the CURRENT file position rather than the whole
+  descriptor, and locking past EOF is an error, so the file must hold a byte to be lockable.
+* It has no shared mode -- every operation, probes included, takes an exclusive region lock,
+  so two concurrent Windows probes of one file can false-positive "held" (the very race the
+  POSIX shared-probe asymmetry above exists to avoid).
+* The lock is MANDATORY, not advisory. Holding byte 0 makes the file unreadable to every
+  other process, which broke every Windows DXF build (issue #269): the sentinel is the file
+  the Node builders must read to prove they were started by the lock holder.
+
+So on Windows the lock lives on a sibling ``.mutex`` that holds no data and that nothing
+reads, while the run id still goes to the unlocked sentinel -- see :func:`mutex_path`.
+POSIX locks the sentinel itself, because advisory locking has no such problem.
+
+That split also simplifies the empty-file rule. An empty MUTEX reads as IDLE: it is padded
+before the lock is taken, so 0 bytes means no run ever held it. The old rule had to report
+UNKNOWN for an empty sentinel instead, because a crash between ``open()`` and stamping left
+one legitimately empty, and a lock-past-EOF error must not wedge every later build forever.
 """
 
 from __future__ import annotations
@@ -265,11 +278,17 @@ def exclusive(
     # read, the sentinel is stamped and stays readable (see mutex_path). On POSIX both names
     # resolve to the same path and this opens it once, as it always did.
     mutex = mutex_path(path)
+    handle = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         handle = mutex.open("a+b")
         stamp_handle = handle if mutex == path else path.open("a+b")
     except OSError:
+        # Two opens now, so the second can fail with the first already open. No lock has been
+        # taken yet, but this module closes what it opens.
+        if handle is not None:
+            with contextlib.suppress(OSError):
+                handle.close()
         yield None
         return
 
