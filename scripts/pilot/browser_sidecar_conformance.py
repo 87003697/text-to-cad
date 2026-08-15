@@ -245,9 +245,10 @@ def _write_atomic(path: Path, payload: object) -> None:
     os.replace(temporary, path)
 
 
-def _fixed_container_isolation() -> list[str]:
-    """Return the identical fixed isolation shared by discovery and execution."""
+def _fixed_container_isolation(*, user: str | None = None) -> list[str]:
+    """Return fixed isolation with an explicit least-authority runtime user."""
 
+    runtime_user = user if user is not None else f"{os.getuid()}:{os.getgid()}"
     return [
         "--pull=never",
         "--platform",
@@ -275,7 +276,7 @@ def _fixed_container_isolation() -> list[str]:
             f"uid={os.getuid()},gid={os.getgid()},mode=700"
         ),
         "--user",
-        f"{os.getuid()}:{os.getgid()}",
+        runtime_user,
     ]
 
 
@@ -406,7 +407,7 @@ def _discover_client_surface(
             "surface",
             container_name,
             [
-                *_fixed_container_isolation(),
+                *_fixed_container_isolation(user="0:0"),
                 "--entrypoint",
                 "python3",
                 BROKER_IMAGE_ID,

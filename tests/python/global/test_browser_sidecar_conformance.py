@@ -441,6 +441,10 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             surface_create,
         )
         self.assertIn(conformance.DISCOVERY_ARTIFACT_PATH, surface_create)
+        self.assertEqual(
+            surface_create[surface_create.index("--user") + 1],
+            "0:0",
+        )
         self.assertFalse(
             any(call[1:3] == ["cp", "-a"] for call in boundary.calls),
             boundary.calls,
