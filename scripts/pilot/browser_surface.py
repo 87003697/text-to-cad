@@ -250,15 +250,62 @@ def _link_destination(
 ) -> tuple[str, ...]:
     """Resolve link text lexically while refusing any declared-root escape."""
 
+    candidate = _absolute_link_destination(
+        source_root, link_relative, link_target, suffix
+    )
+    if not _inside_root(source_root, candidate):
+        raise BrowserSurfaceError("mounted browser surface symlink escapes root")
+    relative = os.path.relpath(candidate, source_root)
+    return () if relative == "." else tuple(Path(relative).parts)
+
+
+def _absolute_link_destination(
+    source_root: str,
+    link_relative: tuple[str, ...],
+    link_target: str,
+    suffix: tuple[str, ...] = (),
+) -> str:
+    """Return one normalized absolute destination without following the link."""
+
     if os.path.isabs(link_target):
         candidate = os.path.normpath(os.path.join(link_target, *suffix))
     else:
         parent = os.path.join(source_root, *link_relative[:-1])
         candidate = os.path.normpath(os.path.join(parent, link_target, *suffix))
-    if not _inside_root(source_root, candidate):
-        raise BrowserSurfaceError("mounted browser surface symlink escapes root")
-    relative = os.path.relpath(candidate, source_root)
-    return () if relative == "." else tuple(Path(relative).parts)
+    return candidate
+
+
+def _resolve_permitted_external_alias(
+    source_root: str,
+    link: _Node,
+    permitted_roots: tuple[str, ...],
+    filesystem: SurfaceFilesystem,
+) -> _Node:
+    """Resolve one immutable cross-root alias into the declared root closure."""
+
+    assert link.link_target is not None
+    candidate = _absolute_link_destination(
+        source_root, link.relative, link.link_target
+    )
+    try:
+        resolved = os.path.realpath(candidate, strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise BrowserSurfaceError(
+            "mounted browser surface external symlink is unresolved"
+        ) from exc
+    if not any(_inside_root(root, resolved) for root in permitted_roots):
+        raise BrowserSurfaceError(
+            "mounted browser surface external symlink escapes declared roots"
+        )
+    try:
+        metadata = filesystem.lstat(resolved)
+    except OSError as exc:
+        raise _closed(exc) from exc
+    if stat.S_ISLNK(metadata.st_mode):
+        raise BrowserSurfaceError(
+            "mounted browser surface external symlink identity changed"
+        )
+    return _Node(link.relative, metadata)
 
 
 def _resolve_link(
@@ -345,6 +392,7 @@ def _walk_mount(
     required: bool,
     filesystem: SurfaceFilesystem,
     findings: list[dict[str, str]],
+    permitted_symlink_roots: tuple[str, ...],
 ) -> None:
     """Walk one declared root with directory descriptors and no implicit links."""
 
@@ -448,6 +496,19 @@ def _walk_mount(
         (path for path, node in nodes.items() if node.link_target is not None)
     ):
         link = nodes[relative]
+        candidate = _absolute_link_destination(
+            source_text, link.relative, link.link_target or ""
+        )
+        if not _inside_root(source_text, candidate):
+            if not permitted_symlink_roots:
+                raise BrowserSurfaceError(
+                    "mounted browser surface symlink escapes root"
+                )
+            alias = _resolve_permitted_external_alias(
+                source_text, link, permitted_symlink_roots, filesystem
+            )
+            _classify(findings, alias, relative, target_root)
+            continue
         target = _resolve_link(source_text, link, nodes)
         resolved_links[relative] = target.relative
         resolved_aliases.append((relative, target))
@@ -524,17 +585,31 @@ def discover_browser_roots(
     mounts: Iterable[tuple[Path, Path, bool]],
     *,
     filesystem: SurfaceFilesystem | None = None,
+    permitted_symlink_roots: Iterable[Path] = (),
 ) -> list[dict[str, str]]:
-    """Return exact masks for required/optional source-to-sandbox mounts."""
+    """Return exact masks, optionally closing immutable cross-root aliases."""
 
     adapter = filesystem or SurfaceFilesystem()
+    permitted = tuple(
+        sorted(
+            {
+                os.path.realpath(os.path.abspath(os.fspath(root)), strict=True)
+                for root in permitted_symlink_roots
+            }
+        )
+    )
     findings: list[dict[str, str]] = []
     for source_root, target_root, required in mounts:
         if not isinstance(required, bool):
             raise BrowserSurfaceError("mounted browser surface requiredness is invalid")
         try:
             _walk_mount(
-                Path(source_root), Path(target_root), required, adapter, findings
+                Path(source_root),
+                Path(target_root),
+                required,
+                adapter,
+                findings,
+                permitted,
             )
         except BrowserSurfaceError:
             raise

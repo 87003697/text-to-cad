@@ -114,6 +114,47 @@ class BrowserSurfaceTests(unittest.TestCase):
             {"vendor-render": 1, "cache-payload": 1},
         )
 
+    def test_declared_read_only_roots_close_cross_root_aliases(self) -> None:
+        """Image roots may cross-link, but aliases and cycles remain closed."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            usr = root / "usr"
+            etc = root / "etc"
+            (usr / "bin").mkdir(parents=True)
+            (etc / "alternatives").mkdir(parents=True)
+            target = etc / "alternatives/vendor-render"
+            target.write_bytes(b"\x7fELF" + b"\0" * 64)
+            target.chmod(0o755)
+            (usr / "bin/chromium").symlink_to(target)
+
+            findings = browser_surface.discover_browser_roots(
+                [(usr, Path("/sandbox/usr"), True), (etc, Path("/sandbox/etc"), True)],
+                permitted_symlink_roots=[usr, etc],
+            )
+
+            self.assertEqual(
+                findings,
+                [
+                    {
+                        "kind": "executable",
+                        "target": "/sandbox/usr/bin/chromium",
+                        "mask": "dev-null",
+                    }
+                ],
+            )
+
+            (usr / "cycle").symlink_to(etc / "cycle")
+            (etc / "cycle").symlink_to(usr / "cycle")
+            with self.assertRaises(browser_surface.BrowserSurfaceError):
+                browser_surface.discover_browser_roots(
+                    [
+                        (usr, Path("/sandbox/usr"), True),
+                        (etc, Path("/sandbox/etc"), True),
+                    ],
+                    permitted_symlink_roots=[usr, etc],
+                )
+
     def test_os_boundary_errors_are_never_suppressed(self) -> None:
         """EACCES from lstat, open, read, or scandir reaches the public closure."""
 
