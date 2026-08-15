@@ -40,6 +40,9 @@ EXPECTED_PUBLIC_PNG_SHA256 = (
 VIEW_ORDER = ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 CONFORMANCE_TIMEOUT_SECONDS = 180
+DISCOVERY_ARTIFACT_PATH = (
+    "/opt/text-to-cad/scripts/pilot/browser-sidecar-discovery.pyz"
+)
 
 
 def _strict_json(raw: bytes, label: str) -> Any:
@@ -408,18 +411,24 @@ def _discover_client_surface(
             container_name,
             [
                 *_fixed_container_isolation(),
-                "--mount",
-                (
-                    f"type=bind,src={artifact},"
-                    f"dst={browser_sidecar.NESTED_GATE['artifactPath']},readonly"
-                ),
                 "--entrypoint",
                 "python3",
                 BROKER_IMAGE_ID,
-                browser_sidecar.NESTED_GATE["artifactPath"],
+                DISCOVERY_ARTIFACT_PATH,
                 "--discover-conformance-surface",
             ],
         )
+        copied = _run_docker(
+            [
+                docker,
+                "cp",
+                "-a",
+                os.fspath(artifact),
+                f"{container_id}:{DISCOVERY_ARTIFACT_PATH}",
+            ]
+        )
+        if copied.returncode != 0:
+            raise RuntimeError("fixed conformance-surface copy failed")
         completed = _run_docker(
             [docker, "start", "-a", container_id],
             timeout=CONFORMANCE_TIMEOUT_SECONDS,

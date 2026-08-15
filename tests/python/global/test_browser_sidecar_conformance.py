@@ -446,7 +446,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             for call in boundary.calls
             if call[1:3] == ["cp", "-a"]
             and call[-1]
-            == f"{SURFACE_ID}:{browser_sidecar.NESTED_GATE['artifactPath']}"
+            == f"{SURFACE_ID}:{conformance.DISCOVERY_ARTIFACT_PATH}"
         )
         self.assertEqual(Path(surface_copy[-2]), Path(surface_copy[-2]).resolve())
         bind_sources = [
@@ -518,7 +518,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
         self.assertEqual(Path(copy[-2]), artifact.resolve())
         self.assertEqual(
             copy[-1],
-            f"{SURFACE_ID}:{browser_sidecar.NESTED_GATE['artifactPath']}",
+            f"{SURFACE_ID}:{conformance.DISCOVERY_ARTIFACT_PATH}",
         )
 
     def test_foreign_surface_collision_is_preserved(self) -> None:
