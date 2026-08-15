@@ -21,15 +21,20 @@ MODULE = REPO_ROOT / "scripts" / "pilot" / "cvm_sidecar_probe.py"
 SOURCE_REVISION = "a" * 40
 SIDECAR_CONFIG_BLOB = b'{"kind":"sidecar","schema":1}'
 CLIENT_CONFIG_BLOB = b'{"kind":"client","schema":1}'
+BROKER_CONFIG_BLOB = b'{"kind":"broker","schema":1}'
 SIDECAR_ID = "sha256:" + hashlib.sha256(SIDECAR_CONFIG_BLOB).hexdigest()
 CLIENT_ID = "sha256:" + hashlib.sha256(CLIENT_CONFIG_BLOB).hexdigest()
+BROKER_ID = "sha256:" + hashlib.sha256(BROKER_CONFIG_BLOB).hexdigest()
+BROKER_SOURCE_REVISION = "b" * 40
 LOADED_SIDECAR_ID = "sha256:" + "e" * 64
 LOADED_CLIENT_ID = "sha256:" + "f" * 64
 FIXED_REFERENCE_NONCE = "9" * 32
 PORTABLE_SIDECAR_CONFIG = SIDECAR_CONFIG_BLOB
 PORTABLE_CLIENT_CONFIG = CLIENT_CONFIG_BLOB
+PORTABLE_BROKER_CONFIG = BROKER_CONFIG_BLOB
 PORTABLE_SIDECAR_ID = SIDECAR_ID
 PORTABLE_CLIENT_ID = CLIENT_ID
+PORTABLE_BROKER_ID = BROKER_ID
 
 
 def archive_reference(handle: str, role: str) -> str:
@@ -154,10 +159,12 @@ def write_portable_archive_docker(path: Path) -> None:
 
             sidecar = {PORTABLE_SIDECAR_ID!r}
             client = {PORTABLE_CLIENT_ID!r}
+            broker = {PORTABLE_BROKER_ID!r}
             tag_state_path = pathlib.Path(__file__).with_suffix(".tags.json")
             blobs = {{
                 sidecar.removeprefix("sha256:") + ".json": {PORTABLE_SIDECAR_CONFIG!r},
                 client.removeprefix("sha256:") + ".json": {PORTABLE_CLIENT_CONFIG!r},
+                broker.removeprefix("sha256:") + ".json": {PORTABLE_BROKER_CONFIG!r},
             }}
 
             def add_bytes(archive, name, payload):
@@ -184,7 +191,11 @@ def write_portable_archive_docker(path: Path) -> None:
                     "{{{{.Id}}}}": canonical_image,
                     "{{{{.Os}}}}": "linux",
                     "{{{{.Architecture}}}}": "amd64",
-                    '{{{{index .Config.Labels "org.opencontainers.image.revision"}}}}': {SOURCE_REVISION!r},
+                    '{{{{index .Config.Labels "org.opencontainers.image.revision"}}}}': (
+                        {BROKER_SOURCE_REVISION!r}
+                        if canonical_image == broker
+                        else {SOURCE_REVISION!r}
+                    ),
                 }}
                 if projection not in values:
                     raise SystemExit(f"unexpected inspect projection: {{projection}}")
@@ -204,7 +215,7 @@ def write_portable_archive_docker(path: Path) -> None:
                 canonical_image = (
                     image if image.startswith("sha256:") else "sha256:" + image
                 )
-                assert canonical_image in {{sidecar, client}}
+                assert canonical_image in {{sidecar, client, broker}}
                 tags[sys.argv[4]] = canonical_image
                 save_tags(tags)
             elif sys.argv[1:3] == ["image", "rm"]:
@@ -216,17 +227,17 @@ def write_portable_archive_docker(path: Path) -> None:
                 output = pathlib.Path(sys.argv[4])
                 tags = load_tags()
                 references = sys.argv[5:]
-                assert [tags[reference] for reference in references] == [sidecar, client]
+                saved = [tags[reference] for reference in references]
+                assert saved in ([sidecar, client], [sidecar, client, broker])
                 if os.environ.get("FAKE_MANIFEST_VARIANT") == "opaque":
                     output.write_bytes(b"opaque fixed docker-save output" + bytes([10]))
                     raise SystemExit(0)
-                sidecar_path, client_path = list(blobs)
                 variant = os.environ.get("FAKE_MANIFEST_VARIANT", "valid")
-                configs = [sidecar_path, client_path]
+                configs = [image.removeprefix("sha256:") + ".json" for image in saved]
                 if variant == "mismatch":
                     configs[0] = "f" * 64 + ".json"
                 elif variant == "duplicate":
-                    configs[1] = sidecar_path
+                    configs[1] = configs[0]
                 elif variant == "missing":
                     configs = configs[:1]
                 elif variant == "traversal":
@@ -746,6 +757,57 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     CLIENT_ID.removeprefix("sha256:"),
                 ],
             )
+
+    def test_prepare_binds_distinct_broker_role_and_revision(self) -> None:
+        """Formal provisioning keeps Agent client and Broker identities distinct."""
+
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-broker-prepare-") as root_text:
+            root = Path(root_text)
+            repo = root / "repo"
+            wrapper = copy_cli(repo)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            docker = fake_bin / "docker"
+            write_image_docker(docker)
+
+            result = subprocess.run(
+                [
+                    wrapper,
+                    "prepare",
+                    "--source-revision",
+                    SOURCE_REVISION,
+                    "--sidecar-image",
+                    SIDECAR_ID,
+                    "--client-image",
+                    CLIENT_ID,
+                    "--broker-source-revision",
+                    BROKER_SOURCE_REVISION,
+                    "--broker-image",
+                    BROKER_ID,
+                ],
+                cwd=repo,
+                env=cli_env(fake_bin),
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            receipt = json.loads(result.stdout)
+
+        self.assertEqual(
+            [
+                (image["role"], image["id"], image["sourceRevision"])
+                for image in receipt["images"]
+            ],
+            [
+                ("sidecar", SIDECAR_ID, SOURCE_REVISION),
+                ("client", CLIENT_ID, SOURCE_REVISION),
+                ("broker", BROKER_ID, BROKER_SOURCE_REVISION),
+            ],
+        )
+        self.assertNotEqual(receipt["images"][1]["id"], receipt["images"][2]["id"])
 
     def test_prepare_rejects_revision_not_bound_by_both_image_configs(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-source-bind-") as root_text:
