@@ -399,6 +399,25 @@ dominate ordinary startup/construction failures while retaining explicit
 signal and positive-retention precedence. The exact rebuilt Broker is
 `sha256:45ae12be...6e49270`.
 
+Dual-reviewed clean HEAD `2dbcd7c17043d7bbd3f57844cd18884815b8387b`
+then consumed its one authorized Colima conformance attempt with exact Broker
+`sha256:45ae12be...6e49270`. Exact Sidecar readiness passed, but the Broker
+exited before readiness with `failureCheck:broker-terminal-evidence`. The
+receipt records zero accepted requests/contexts, exact Sidecar closing and exit
+zero, `absenceProved:true`, and `retryAllowed:false`; labeled container/network
+inventories were empty afterward. Immutable evidence is at
+`/Users/zhiyuanma/.ttc-bs/conformance-2dbcd7c1-20260816.json`, size 1,595 bytes,
+SHA-256 `ae5995f30eecd4c5ac4ba419777a89aa3512d292522a8b2a7aec8e2e0f453830`.
+The SHA and evidence path will not be reused.
+
+A bounded browser-free diagnostic used the same formal uid/image and only the
+dedicated shared root. Python and Playwright import succeeded, but binding the
+Unix socket on the Colima host-shared filesystem failed with `OSError: [Errno
+95] Operation not supported`. The exact empty diagnostic child was removed.
+This proves an environment capability limit, not another image-content defect:
+the current host-to-VM shared-filesystem transport cannot carry the required
+Unix socket. No docs-only SHA is new authority to retry the same design.
+
 Exactly one successor conformance job was run, with no pull, download, source
 mount, external provider, or CVM operation. It used Broker image
 `sha256:10a6fe5d644078205e42ec09bb3ef5cb33e5fd390b87ebc4b7870db87b3302ee`
@@ -514,13 +533,14 @@ preserved artifact. The same SHA/handle was not rerun.
 
 ## Deferred interaction and required next action
 
-Return for full independent Standards and Spec/security review of
-`90bc24cf8860125b158c5f04ddc5dfd65efbcb39..HEAD`. The owner has not
-self-approved either axis. If both axes accept the corrections and exact new
-artifact, execute the already bounded one new clean-SHA local conformance
-attempt using Broker
-image `sha256:45ae12bec861c7432c9dae91c96335ca88bb5e720e136a534f4115a576e49270`.
-Do not reuse either failed SHA/handle.
+Standards and Spec/security both accepted exact implementation HEAD
+`2dbcd7c17043d7bbd3f57844cd18884815b8387b` and Broker
+`sha256:45ae12bec861c7432c9dae91c96335ca88bb5e720e136a534f4115a576e49270`.
+Its one Colima attempt is closed and must not be retried. A future local pass
+requires a separately reviewed transport design that does not place a Unix
+socket on Colima's host-shared filesystem. The next valid unchanged-transport
+boundary is native Linux CVM, where the private capability directory and Unix
+socket share one native filesystem.
 
 Before paid CVM closure, Formal preparation must supply all three ordered roles:
 Sidecar, sealed Agent client, and distinct Broker. The Broker is independently
@@ -531,4 +551,4 @@ authorization remains gated on fresh independent re-review.
 
 No CVM/Venus/provider/model request, push, merge, tracker mutation, dependency
 installation, retained-handle access, unrelated cleanup, or image deletion has
-been performed in this continuation checkpoint.
+been performed through this checkpoint.
