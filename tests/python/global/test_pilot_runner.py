@@ -880,8 +880,8 @@ class RunnerTests(unittest.TestCase):
         terminate.assert_called_once_with(gate_process, signal.SIGTERM)
         close_job.assert_called_once_with(workload_status=1)
         self.assertEqual(receipt["status"], "failed")
-        self.assertFalse(receipt["predicates"]["absenceProved"])
-        self.assertEqual(receipt["failureCheck"], "absence-proof")
+        self.assertTrue(receipt["predicates"]["absenceProved"])
+        self.assertEqual(receipt["failureCheck"], "sidecar-readiness")
 
     def test_nested_gate_channel_is_one_shot_exact_and_bounded(self) -> None:
         """The outer-owned channel rejects absent, malformed, duplicate, and late proof."""

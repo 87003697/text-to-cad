@@ -1039,29 +1039,39 @@ class BrowserSidecarJob:
     def start(self) -> Path:
         """Start one exact Sidecar and publish its bounded sandbox authority."""
 
-        self._check_cancelled()
-        if self.gate_artifact_sha256 is None or self.surface_manifest_sha256 is None:
-            raise BrowserSidecarError(
-                "nested Browser Gate must be sealed before Sidecar startup",
-                check="nested-gate-identity",
-            )
-        self.run_dir.mkdir(parents=True, exist_ok=True)
-        for path, check in (
-            (self.authority_path, "authority-preexisting"),
-            (self.socket_path, "broker-socket-preexisting"),
-            (self.nested_gate_socket_path, "nested-gate-socket-preexisting"),
-        ):
-            if path.exists() or path.is_symlink():
+        try:
+            self._check_cancelled()
+            if (
+                self.gate_artifact_sha256 is None
+                or self.surface_manifest_sha256 is None
+            ):
                 raise BrowserSidecarError(
-                    "job-private capability path already exists",
-                    check=check,
+                    "nested Browser Gate must be sealed before Sidecar startup",
+                    check="nested-gate-identity",
                 )
-        self.docker = shutil.which("docker")
-        if self.docker is None:
-            raise BrowserSidecarError(
-                "Docker is required for the formal Browser Sidecar",
-                check="docker-access",
+            self.run_dir.mkdir(parents=True, exist_ok=True)
+            for path, check in (
+                (self.authority_path, "authority-preexisting"),
+                (self.socket_path, "broker-socket-preexisting"),
+                (self.nested_gate_socket_path, "nested-gate-socket-preexisting"),
+            ):
+                if path.exists() or path.is_symlink():
+                    raise BrowserSidecarError(
+                        "job-private capability path already exists",
+                        check=check,
+                    )
+            self.docker = shutil.which("docker")
+            if self.docker is None:
+                raise BrowserSidecarError(
+                    "Docker is required for the formal Browser Sidecar",
+                    check="docker-access",
+                )
+        except BaseException as exc:
+            self.first_error = (
+                exc.check if isinstance(exc, BrowserSidecarError) else "start-unexpected"
             )
+            self.close(workload_status=None)
+            raise
         try:
             self._check_cancelled()
             self._inspect_image(
@@ -1519,8 +1529,12 @@ class BrowserSidecarJob:
             else {
                 "containers": [],
                 "networks": [],
-                "errors": ["docker-absence"],
-                "proved": False,
+                "errors": [],
+                "proved": (
+                    self.network_id is None
+                    and self.container_id is None
+                    and self.broker_container_id is None
+                ),
             }
         )
         if absence.get("containers") or absence.get("networks"):
