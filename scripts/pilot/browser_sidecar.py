@@ -1006,7 +1006,8 @@ class BrowserSidecarJob:
                 except (OSError, subprocess.TimeoutExpired):
                     pass
                 self.cleanup_errors.append("broker-terminal")
-        terminal: Mapping[str, Any] | None = None
+        terminal_state: Mapping[str, Any] | None = None
+        closing_observed = False
         if self.container_id is not None:
             try:
                 stopped = self._docker(
@@ -1021,6 +1022,38 @@ class BrowserSidecarJob:
             else:
                 if stopped.returncode:
                     self.cleanup_errors.append("sidecar-stop")
+            try:
+                logs = self._docker(
+                    "logs",
+                    "--tail",
+                    "50",
+                    self.container_id,
+                    check=False,
+                )
+            except BrowserSidecarError:
+                self.cleanup_errors.append("sidecar-closing")
+            else:
+                if logs.returncode:
+                    self.cleanup_errors.append("sidecar-closing")
+                else:
+                    try:
+                        records = [
+                            _strict_json(line, "sidecar-terminal-log")
+                            for line in logs.stdout.splitlines()
+                            if line.startswith("{")
+                        ]
+                    except BrowserSidecarError:
+                        self.cleanup_errors.append("sidecar-closing")
+                    else:
+                        closing_observed = any(
+                            isinstance(record, dict)
+                            and record.get("event") == "closing"
+                            and record.get("jobId") == self.job_id
+                            and record.get("reason") == "SIGTERM"
+                            for record in records
+                        )
+                        if not closing_observed:
+                            self.cleanup_errors.append("sidecar-closing")
             try:
                 inspected = self._docker(
                     "container",
@@ -1038,7 +1071,7 @@ class BrowserSidecarJob:
                 else:
                     try:
                         payload = _strict_json(inspected.stdout, "sidecar-terminal")
-                        terminal = payload if isinstance(payload, dict) else None
+                        terminal_state = payload if isinstance(payload, dict) else None
                     except BrowserSidecarError:
                         self.cleanup_errors.append("sidecar-terminal")
             try:
@@ -1078,6 +1111,10 @@ class BrowserSidecarJob:
         )
         if absence.get("proved") is not True:
             self.cleanup_errors.append("retained-resource")
+        terminal = {
+            "state": terminal_state,
+            "closingObserved": closing_observed,
+        }
         for path, error in (
             (self.authority_path, "authority-remove"),
             (self.socket_path, "socket-remove"),
@@ -1096,8 +1133,9 @@ class BrowserSidecarJob:
             self.first_error is None
             and workload_status == 0
             and broker_status == 0
-            and isinstance(terminal, dict)
-            and terminal.get("ExitCode") == 0
+            and closing_observed
+            and isinstance(terminal_state, dict)
+            and terminal_state.get("ExitCode") == 0
             and not self.cleanup_errors
             and absence.get("proved") is True
         )
