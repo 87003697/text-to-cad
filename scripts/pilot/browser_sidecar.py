@@ -702,8 +702,19 @@ class BrowserSidecarJob:
                 dir="/tmp",
             )
         ).resolve()
+        self.broker_capability_dir = self.capability_dir / "broker"
+        self.broker_capability_dir.mkdir(mode=0o700)
         self.authority_path = self.capability_dir / "authority.json"
-        self.socket_path = self.capability_dir / SANDBOX_SOCKET_PATH.name
+        self.socket_path = self.broker_capability_dir / SANDBOX_SOCKET_PATH.name
+        self.public_socket_path = self.capability_dir / SANDBOX_SOCKET_PATH.name
+        self.public_socket_path.symlink_to(
+            Path("broker") / SANDBOX_SOCKET_PATH.name
+        )
+        public_socket_metadata = self.public_socket_path.lstat()
+        self.public_socket_link_identity = (
+            public_socket_metadata.st_dev,
+            public_socket_metadata.st_ino,
+        )
         self.nested_gate_socket_path = (
             self.capability_dir / NESTED_GATE_SOCKET_PATH.name
         )
@@ -966,7 +977,7 @@ class BrowserSidecarJob:
         """Require the exact private socket inode created by the Broker."""
 
         try:
-            parent = self.capability_dir.stat()
+            parent = self.broker_capability_dir.stat()
             socket_state = self.socket_path.lstat()
         except OSError as exc:
             raise BrowserSidecarError(
@@ -1075,6 +1086,27 @@ class BrowserSidecarJob:
                     check="nested-gate-identity",
                 )
             self.run_dir.mkdir(parents=True, exist_ok=True)
+            capability_state = self.capability_dir.stat()
+            broker_capability_state = self.broker_capability_dir.stat()
+            public_socket_state = self.public_socket_path.lstat()
+            if (
+                stat.S_IMODE(capability_state.st_mode) != 0o700
+                or capability_state.st_uid != os.getuid()
+                or stat.S_IMODE(broker_capability_state.st_mode) != 0o700
+                or broker_capability_state.st_uid != os.getuid()
+                or not stat.S_ISLNK(public_socket_state.st_mode)
+                or (
+                    public_socket_state.st_dev,
+                    public_socket_state.st_ino,
+                )
+                != self.public_socket_link_identity
+                or self.public_socket_path.readlink()
+                != Path("broker") / SANDBOX_SOCKET_PATH.name
+            ):
+                raise BrowserSidecarError(
+                    "job-private capability layout is invalid",
+                    check="capability-layout",
+                )
             for path, check in (
                 (self.authority_path, "authority-preexisting"),
                 (self.socket_path, "broker-socket-preexisting"),
@@ -1129,12 +1161,11 @@ class BrowserSidecarJob:
                     "created network identity is invalid",
                     check="network-id",
                 )
-            self.network_id = network_id
             self._verify_resource_owner("network", network_id, "network")
+            self.network_id = network_id
             self._check_cancelled()
-            started = self._docker(
-                "run",
-                "-d",
+            created = self._docker(
+                "create",
                 "--name",
                 self.container_name,
                 "--label",
@@ -1172,20 +1203,20 @@ class BrowserSidecarJob:
                 f"BROWSER_SIDECAR_JOB_ID={self.job_id}",
                 IMAGE_ID,
             )
-            container_id = started.stdout.strip()
+            container_id = created.stdout.strip()
             if RESOURCE_ID.fullmatch(container_id) is None:
                 raise BrowserSidecarError(
                     "created Sidecar identity is invalid",
                     check="container-id",
                 )
-            self.container_id = container_id
             self._verify_resource_owner("container", container_id, "container")
+            self.container_id = container_id
+            self._docker("start", container_id)
             self._check_cancelled()
             self.readiness = self._wait_sidecar_ready()
             self._check_cancelled()
-            broker_started = self._docker(
-                "run",
-                "-d",
+            broker_created = self._docker(
+                "create",
                 "--name",
                 self.broker_container_name,
                 "--label",
@@ -1218,22 +1249,23 @@ class BrowserSidecarJob:
                 "--mount",
                 (
                     "type=bind,src="
-                    f"{self.capability_dir},dst=/run/meshshot-browser"
+                    f"{self.broker_capability_dir},dst=/run/meshshot-browser"
                 ),
                 BROKER_IMAGE_ID,
                 "--job-id",
                 self.job_id,
             )
-            broker_container_id = broker_started.stdout.strip()
+            broker_container_id = broker_created.stdout.strip()
             if RESOURCE_ID.fullmatch(broker_container_id) is None:
                 raise BrowserSidecarError(
                     "created Broker identity is invalid",
                     check="broker-container-id",
                 )
-            self.broker_container_id = broker_container_id
             self._verify_resource_owner(
                 "container", broker_container_id, "broker-container"
             )
+            self.broker_container_id = broker_container_id
+            self._docker("start", broker_container_id)
             self._check_cancelled()
             self._wait_broker_ready()
             self._check_cancelled()
@@ -1585,6 +1617,19 @@ class BrowserSidecarJob:
                     self.socket_path.unlink()
             except OSError:
                 self.cleanup_errors.append("socket-remove")
+        try:
+            public_socket_metadata = self.public_socket_path.lstat()
+            if (
+                public_socket_metadata.st_dev,
+                public_socket_metadata.st_ino,
+            ) != self.public_socket_link_identity:
+                self.cleanup_errors.append("public-socket-identity")
+            else:
+                self.public_socket_path.unlink()
+        except FileNotFoundError:
+            self.cleanup_errors.append("public-socket-remove")
+        except OSError:
+            self.cleanup_errors.append("public-socket-remove")
         for path, identity in self.gate_file_identities.items():
             try:
                 metadata = path.lstat()
@@ -1596,6 +1641,12 @@ class BrowserSidecarJob:
                 pass
             except OSError:
                 self.cleanup_errors.append("nested-gate-file-remove")
+        try:
+            self.broker_capability_dir.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            self.cleanup_errors.append("broker-capability-dir-remove")
         try:
             self.capability_dir.rmdir()
         except FileNotFoundError:

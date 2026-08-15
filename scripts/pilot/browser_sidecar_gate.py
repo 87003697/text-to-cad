@@ -233,9 +233,18 @@ def _browser_processes() -> list[str]:
         try:
             command = (process_dir / "cmdline").read_bytes().replace(b"\0", b" ")
             name = (process_dir / "comm").read_text(encoding="utf-8").strip()
-        except OSError:
-            continue
-        if re.search(r"(?:chromium|chrome)(?:\s|$)", f"{name} {command.decode(errors='replace')}", re.I):
+        except FileNotFoundError as exc:
+            if not process_dir.exists():
+                continue
+            raise ValueError("cannot prove browser process inventory") from exc
+        except OSError as exc:
+            raise ValueError("cannot prove browser process inventory") from exc
+        process_text = f"{name} {command.decode(errors='replace')}"
+        if re.search(
+            r"(?:^|[/\s])(?:chromium(?:-browser)?|google-chrome(?:-(?:stable|beta|unstable))?|chrome(?:-headless-shell|_crashpad_handler)?|headless[_-]shell)(?:\s|$)",
+            process_text,
+            re.I,
+        ):
             found.append(name)
     return found
 

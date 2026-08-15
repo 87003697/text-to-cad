@@ -369,6 +369,7 @@ def _create_owned_container(
     container_id = created.stdout.strip()
     if browser_sidecar.RESOURCE_ID.fullmatch(container_id) is None:
         raise RuntimeError(f"fixed conformance-{role} identity is invalid")
+    _verify_container_owner(docker, container_id, job, role)
     return container_id
 
 
@@ -419,7 +420,6 @@ def _discover_client_surface(
                 "--discover-conformance-surface",
             ],
         )
-        _verify_container_owner(docker, container_id, job, "surface")
         completed = _run_docker(
             [docker, "start", "-a", container_id],
             timeout=CONFORMANCE_TIMEOUT_SECONDS,
@@ -528,7 +528,6 @@ def _run_gate_then_client(
                 "client",
             ],
         )
-        _verify_container_owner(docker, container_id, job, "client")
         process = subprocess.Popen(
             [docker, "start", "-a", container_id],
             stdin=subprocess.DEVNULL,

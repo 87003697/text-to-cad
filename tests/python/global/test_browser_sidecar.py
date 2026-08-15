@@ -102,8 +102,10 @@ class BrowserSidecarJobTests(unittest.TestCase):
 
     def test_success_owns_one_sidecar_and_publishes_terminal_absence(self) -> None:
         calls: list[list[str]] = []
+        broker_source: Path | None = None
 
         def docker(argv, **kwargs):
+            nonlocal broker_source
             command = list(argv)
             calls.append(command)
             if command[1:4] == ["inspect", "--type=image", "--format"]:
@@ -148,16 +150,19 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 1, "", "not found")
             if command[1:3] == ["network", "create"]:
                 return subprocess.CompletedProcess(command, 0, NETWORK_ID + "\n", "")
-            if command[1] == "run":
+            if command[1] == "create":
                 if browser_sidecar.BROKER_IMAGE_ID in command:
                     bind = next(value for value in command if value.startswith("type=bind,"))
-                    source = Path(bind.split("src=", 1)[1].split(",dst=", 1)[0])
-                    created_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    created_socket.bind(str(source / "browser.sock"))
-                    created_socket.close()
-                    (source / "browser.sock").chmod(0o600)
+                    broker_source = Path(bind.split("src=", 1)[1].split(",dst=", 1)[0])
                     return subprocess.CompletedProcess(command, 0, BROKER_CONTAINER_ID + "\n", "")
                 return subprocess.CompletedProcess(command, 0, CONTAINER_ID + "\n", "")
+            if command[1:3] == ["start", BROKER_CONTAINER_ID]:
+                assert broker_source is not None
+                created_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                created_socket.bind(str(broker_source / "browser.sock"))
+                created_socket.close()
+                (broker_source / "browser.sock").chmod(0o600)
+                return subprocess.CompletedProcess(command, 0, BROKER_CONTAINER_ID + "\n", "")
             if command[1] == "logs":
                 if BROKER_CONTAINER_ID in command:
                     records = [
@@ -242,6 +247,13 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     job_id="formal-job-1",
                 )
                 configure_gate(job)
+                self.assertEqual(
+                    job.public_socket_path.readlink(),
+                    Path("broker") / "browser.sock",
+                )
+                self.assertTrue(job.gate_artifact_path.is_file())
+                self.assertFalse((job.broker_capability_dir / "browser-gate.pyz").exists())
+                self.assertFalse((job.broker_capability_dir / "gate-input.json").exists())
                 authority_path = job.start()
                 authority = json.loads(authority_path.read_text(encoding="utf-8"))
                 job.record_nested_gate(nested_gate_proof(nonce=job.gate_nonce))
@@ -642,17 +654,20 @@ class BrowserSidecarJobTests(unittest.TestCase):
     def test_public_job_canonicalizes_capability_bind_source(self) -> None:
         """The Docker bind source uses the host-canonical path across adapters."""
 
-        returned = Path("/tmp") / ".." / "tmp" / "formal-capability"
-        with mock.patch.object(
-            browser_sidecar.tempfile,
-            "mkdtemp",
-            return_value=os.fspath(returned),
-        ):
-            job = browser_sidecar.BrowserSidecarJob(
-                Path("/tmp/formal-exp"),
-                Path("/workspace/repo/outputs/group/exp"),
-                job_id="formal-job-1",
-            )
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            canonical = Path(temp) / "formal-capability"
+            canonical.mkdir()
+            returned = canonical.parent / "missing" / ".." / canonical.name
+            with mock.patch.object(
+                browser_sidecar.tempfile,
+                "mkdtemp",
+                return_value=os.fspath(returned),
+            ):
+                job = browser_sidecar.BrowserSidecarJob(
+                    Path("/tmp/formal-exp"),
+                    Path("/workspace/repo/outputs/group/exp"),
+                    job_id="formal-job-1",
+                )
 
         self.assertEqual(job.capability_dir, returned.resolve())
 
@@ -702,7 +717,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, values[projection] + "\n", "")
             if command[1:3] in (["container", "inspect"], ["network", "inspect"]):
                 return subprocess.CompletedProcess(command, 1, "", "not found")
-            if command[1] == "run":
+            if command[1] == "create":
                 return subprocess.CompletedProcess(command, 0, CONTAINER_ID + "\n", "")
             if command[1:3] in (["container", "ls"], ["network", "ls"]):
                 return subprocess.CompletedProcess(command, 0, "", "")

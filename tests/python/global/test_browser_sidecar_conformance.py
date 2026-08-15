@@ -165,6 +165,25 @@ class DockerBoundary:
                     mount.split("src=", 1)[1].split(",dst=", 1)[0]
                 )
                 return subprocess.CompletedProcess(command, 0, CLIENT_ID + "\n", "")
+            if browser_sidecar.BROKER_IMAGE_ID in command:
+                self.events.append("broker-create")
+                bind = next(value for value in command if value.startswith("type=bind,"))
+                self.broker_source = Path(
+                    bind.split("src=", 1)[1].split(",dst=", 1)[0]
+                )
+                return subprocess.CompletedProcess(command, 0, BROKER_ID + "\n", "")
+            self.events.append("sidecar-create")
+            return subprocess.CompletedProcess(command, 0, SIDECAR_ID + "\n", "")
+        if command[1:3] == ["start", BROKER_ID]:
+            self.events.append("broker-run")
+            created = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            created.bind(os.fspath(self.broker_source / "browser.sock"))
+            created.close()
+            (self.broker_source / "browser.sock").chmod(0o600)
+            return subprocess.CompletedProcess(command, 0, BROKER_ID + "\n", "")
+        if command[1:3] == ["start", SIDECAR_ID]:
+            self.events.append("sidecar-run")
+            return subprocess.CompletedProcess(command, 0, SIDECAR_ID + "\n", "")
         if command[1:3] == ["start", "-a"] and SURFACE_ID in command:
             self.events.append("surface-discovery")
             discovery = {
@@ -205,20 +224,6 @@ class DockerBoundary:
                     + "\n",
                     "",
                 )
-            if "-d" in command:
-                if browser_sidecar.BROKER_IMAGE_ID in command:
-                    self.events.append("broker-run")
-                    bind = next(
-                        value for value in command if value.startswith("type=bind,")
-                    )
-                    source = Path(bind.split("src=", 1)[1].split(",dst=", 1)[0])
-                    created = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    created.bind(os.fspath(source / "browser.sock"))
-                    created.close()
-                    (source / "browser.sock").chmod(0o600)
-                    return subprocess.CompletedProcess(command, 0, BROKER_ID + "\n", "")
-                self.events.append("sidecar-run")
-                return subprocess.CompletedProcess(command, 0, SIDECAR_ID + "\n", "")
             return subprocess.CompletedProcess(
                 command,
                 0,
@@ -548,20 +553,21 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
                 )
             artifact = Path(capability) / "artifact.pyz"
             artifact.write_bytes(b"sealed")
+            def docker(argv):
+                command = list(argv)
+                if command[1] == "create":
+                    return subprocess.CompletedProcess(command, 0, SURFACE_ID + "\n", "")
+                if command[1:3] == ["container", "inspect"]:
+                    if command[-1] == "fixed-surface":
+                        return subprocess.CompletedProcess(command, 1, "", "not found")
+                    return subprocess.CompletedProcess(command, 0, "wrong\n", "")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
             with (
-                mock.patch.object(
-                    conformance,
-                    "_create_owned_container",
-                    return_value=SURFACE_ID,
-                ),
-                mock.patch.object(
-                    conformance,
-                    "_verify_container_owner",
-                    side_effect=RuntimeError("wrong labels"),
-                ),
+                mock.patch.object(conformance, "_run_docker", side_effect=docker),
                 mock.patch.object(conformance, "_remove_owned_container") as remove,
             ):
-                with self.assertRaisesRegex(RuntimeError, "wrong labels"):
+                with self.assertRaisesRegex(RuntimeError, "job label mismatch"):
                     conformance._discover_client_surface(
                         "/usr/bin/docker", job, artifact, "fixed-surface"
                     )
