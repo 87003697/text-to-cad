@@ -203,6 +203,90 @@ class AssemblyEntityRefsTest(AssemblyOccurrenceRefsTest):
         self.assertEqual(flat.single_occurrence_id, merged.single_occurrence_id)
 
 
+class PlacementAgainstAnalyticGeometryTest(AssemblyOccurrenceRefsTest):
+    """Placement checked against geometry we KNOW, not against our own arithmetic.
+
+    The other tests here compare what the merge produced with what `transform_point` says it
+    should be -- which is circular, since the merge calls `transform_point`. They pin that the
+    right matrix reached the right field; they cannot pin the matrix CONVENTION, because both
+    sides of the comparison share it.
+
+    The fixture's boxes are placed by build123d at coordinates chosen here, so their world
+    extents and face centres are known in advance by arithmetic no code in this repo performs.
+    Measured against a column-major misread of the transform: these fail 3 assertions and name
+    the wrong coordinates, where the circular tests fail 1 and only report that two occurrences
+    landed on top of each other. Both notice; only this one says what is wrong.
+    """
+
+    # (label, half-extents, placement) -> the world box build123d must produce.
+    _EXPECTED_BOXES = {
+        "box_a_1": ((5.0, 5.0, 5.0), (0.0, 0.0, 0.0)),
+        "box_a_2": ((5.0, 5.0, 5.0), (40.0, 0.0, 0.0)),
+        "box_b": ((2.0, 3.0, 4.0), (0.0, 40.0, 0.0)),
+    }
+
+    def _expected_box(self, half, centre):
+        return (
+            [centre[axis] - half[axis] for axis in range(3)],
+            [centre[axis] + half[axis] for axis in range(3)],
+        )
+
+    def test_occurrence_extents_match_geometry_placed_by_build123d(self) -> None:
+        rows = {
+            str(row["name"]): row
+            for row in assembly_lookup.assembly_occurrence_rows(self.descriptor, self.package_dir)
+        }
+        checked = 0
+        for label, (half, centre) in self._EXPECTED_BOXES.items():
+            row = rows.get(label)
+            if row is None or not row.get("bbox"):
+                continue
+            low, high = self._expected_box(half, centre)
+            for axis in range(3):
+                self.assertAlmostEqual(
+                    low[axis], row["bbox"]["min"][axis], places=4,
+                    msg=f"{label} min[{axis}] is not where build123d put it",
+                )
+                self.assertAlmostEqual(
+                    high[axis], row["bbox"]["max"][axis], places=4,
+                    msg=f"{label} max[{axis}] is not where build123d put it",
+                )
+            checked += 1
+        self.assertEqual(len(self._EXPECTED_BOXES), checked, "not every fixture box was checked")
+
+    def test_face_centres_land_on_the_box_faces_they_belong_to(self) -> None:
+        """A box's six faces sit at its face midpoints. Those are known numbers, so a placed
+        face centre can be checked without asking the placement code where it should be."""
+        merged = assembly_lookup.merge_assembly_entities(
+            self._flat_index(), self.descriptor, self.package_dir
+        )
+        by_occurrence: dict[str, list] = {}
+        for row in merged.faces:
+            occurrence_id = str(row.get("occurrenceId") or "")
+            if occurrence_id and occurrence_id != "o1":
+                by_occurrence.setdefault(occurrence_id, []).append(row)
+        names = {str(row["id"]): str(row.get("name")) for row in self.descriptor["occurrences"]}
+
+        checked = 0
+        for occurrence_id, faces in by_occurrence.items():
+            expected = self._EXPECTED_BOXES.get(names.get(occurrence_id, ""))
+            if expected is None:
+                continue
+            half, centre = expected
+            wanted = set()
+            for axis in range(3):
+                for sign in (-1, 1):
+                    point = list(centre)
+                    point[axis] = centre[axis] + sign * half[axis]
+                    wanted.add(tuple(round(value, 4) for value in point))
+            found = {tuple(round(value, 4) for value in row["center"]) for row in faces}
+            self.assertEqual(
+                wanted, found, f"{occurrence_id} ({names.get(occurrence_id)}) faces are misplaced"
+            )
+            checked += 1
+        self.assertEqual(len(self._EXPECTED_BOXES), checked, "not every fixture box was checked")
+
+
 class TransformArithmeticTest(unittest.TestCase):
     """A box transformed by its min/max alone keeps its diagonal and loses its extent. Every
     occurrence in a posed assembly is rotated, so this is the failure mode that matters."""
