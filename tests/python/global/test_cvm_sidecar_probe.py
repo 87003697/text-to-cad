@@ -2017,6 +2017,115 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 ],
             )
 
+    def test_remote_provision_streams_bounded_loaded_image_inventory(self) -> None:
+        original_popen = subprocess.Popen
+        cases = (
+            ("exact-limit", 4096, None),
+            ("line-overflow", 4097, "image-inventory-format"),
+            ("oversized-line", None, "image-inventory-format"),
+        )
+        for index, (variant, line_count, expected_check) in enumerate(cases, start=1):
+            with self.subTest(variant=variant), tempfile.TemporaryDirectory(
+                prefix=f"cvm-sidecar-inventory-{variant}-"
+            ) as root_text:
+                root = Path(root_text)
+                handle = "cvmsp-" + str(index) * 24
+                owner = "d" * 32
+                workflow = {"module": "1" * 64, "wrapper": "2" * 64}
+                state_root, state, incoming = write_remote_provision_attempt_fixture(
+                    root, handle, owner, workflow
+                )
+                inventory_path = root / "inventory.bin"
+                if line_count is None:
+                    inventory = b"sha256:" + b"f" * 65 + b"\n"
+                else:
+                    ids = (SIDECAR_ID, CLIENT_ID)
+                    inventory = "".join(
+                        f"{ids[line % len(ids)]}\n" for line in range(line_count)
+                    ).encode("ascii")
+                inventory_path.write_bytes(inventory)
+
+                def fixed_run(
+                    argv: object, **kwargs: object
+                ) -> subprocess.CompletedProcess[str]:
+                    del kwargs
+                    arguments = list(argv)
+                    if arguments[1:3] == ["image", "load"]:
+                        return subprocess.CompletedProcess(
+                            arguments, 0, "loaded\n", ""
+                        )
+                    if arguments[1:] == ["image", "ls", "--no-trunc", "--quiet"]:
+                        raise AssertionError(
+                            "inventory must not use buffering subprocess.run"
+                        )
+                    raise AssertionError(f"unexpected command: {arguments}")
+
+                def streaming_popen(
+                    argv: object, **kwargs: object
+                ) -> subprocess.Popen[bytes]:
+                    arguments = list(argv)
+                    self.assertEqual(
+                        arguments,
+                        ["docker", "image", "ls", "--no-trunc", "--quiet"],
+                    )
+                    return original_popen(
+                        [
+                            sys.executable,
+                            "-c",
+                            (
+                                "import pathlib,sys;"
+                                "sys.stdout.buffer.write(pathlib.Path(sys.argv[1]).read_bytes())"
+                            ),
+                            os.fspath(inventory_path),
+                        ],
+                        **kwargs,
+                    )
+
+                enough = type(
+                    "Usage", (), {"free": 4 * 1024 * 1024 * 1024}
+                )()
+                with (
+                    mock.patch.object(
+                        cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root
+                    ),
+                    mock.patch.object(
+                        cvm_sidecar_probe,
+                        "_workflow_file_hashes",
+                        return_value=workflow,
+                    ),
+                    mock.patch.object(
+                        cvm_sidecar_probe.shutil,
+                        "disk_usage",
+                        return_value=enough,
+                    ),
+                    mock.patch.object(cvm_sidecar_probe, "_run", side_effect=fixed_run),
+                    mock.patch.object(
+                        cvm_sidecar_probe.subprocess,
+                        "Popen",
+                        side_effect=streaming_popen,
+                    ),
+                ):
+                    receipt = cvm_sidecar_probe.remote_provision(handle, owner)
+
+                if expected_check is None:
+                    self.assertEqual(receipt["status"], "provisioned", receipt)
+                else:
+                    self.assertEqual(receipt["status"], "failed", receipt)
+                    self.assertEqual(receipt["errorCheck"], expected_check)
+                self.assertEqual(
+                    receipt["transferCleanup"],
+                    {
+                        "archiveAbsent": True,
+                        "prepareReceiptAbsent": True,
+                        "incomingDirectoryAbsent": True,
+                        "errors": [],
+                    },
+                )
+                self.assertFalse(incoming.exists())
+                self.assertEqual(
+                    json.loads((state / "provision.json").read_text()), receipt
+                )
+
     def test_remote_provision_cleanup_failure_dominates_hash_failure(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-cleanup-dominates-") as root_text:
             root = Path(root_text)
