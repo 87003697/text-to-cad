@@ -27,17 +27,32 @@ RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 OWNER_NONCE = re.compile(r"[0-9a-f]{32}\Z")
 REMOTE_ROOT = "~/text-to-cad"
 MIN_REMOTE_FREE_BYTES = 3 * 1024 * 1024 * 1024
+IMAGE_INSPECT_FORMAT = (
+    '[{{json .Id}},{{json .Os}},{{json .Architecture}},'
+    '{{json (index .Config.Labels "org.opencontainers.image.revision")}}]'
+)
+IMAGE_ATTESTATION_FAILURE_CHECKS = frozenset(
+    f"{role}-{suffix}"
+    for role in ("sidecar", "client")
+    for suffix in (
+        "inspect-access",
+        "inspect-format",
+        "id",
+        "platform",
+        "revision",
+        "receipt",
+    )
+) | {"image-attestation-unexpected"}
 REMOTE_PROVISION_FAILURE_CHECKS = frozenset(
     {
         "prepare-receipt",
         "archive-hash-size",
         "remote-disk-gate",
         "image-load",
-        "image-attestation",
         "transfer-cleanup",
         "deployed-workflow-hash",
     }
-)
+) | IMAGE_ATTESTATION_FAILURE_CHECKS
 REQUEST = {
     "schema": "meshshot.browser-sidecar.render-request/2",
     "program": "probe",
@@ -204,36 +219,61 @@ def _run(
 
 def _inspect_image(role: str, image_id: str) -> Mapping[str, object]:
     if IMAGE_ID.fullmatch(image_id) is None:
-        raise ProbeError(f"{role} image must be an exact sha256 image ID")
-    completed = _run(
-        ["docker", "image", "inspect", image_id],
-        cwd=REPO_ROOT,
-        timeout=60,
-    )
-    try:
-        payload = _strict_json_loads(completed.stdout, f"{role} image inspection")
-    except ProbeError as exc:
-        raise ProbeError(f"{role} image inspection was not JSON") from exc
-    if not isinstance(payload, list) or len(payload) != 1 or not isinstance(payload[0], dict):
-        raise ProbeError(f"{role} image inspection was not singular")
-    image = payload[0]
-    if image.get("Id") != image_id:
-        raise ProbeError(f"{role} image ID changed during inspection")
-    if image.get("Os") != "linux" or image.get("Architecture") != "amd64":
-        raise ProbeError(f"{role} image is not linux/amd64")
-    config = image.get("Config")
-    if not isinstance(config, dict):
-        raise ProbeError(f"{role} image has no immutable config")
-    labels = config.get("Labels")
-    revision = (
-        labels.get("org.opencontainers.image.revision")
-        if isinstance(labels, dict)
-        else None
-    )
-    if not isinstance(revision, str):
         raise ProbeError(
-            f"{role} image has no immutable source revision label",
-            check="image-source-revision",
+            f"{role} image must be an exact sha256 image ID",
+            check=f"{role}-id",
+        )
+    try:
+        completed = _run(
+            [
+                "docker",
+                "image",
+                "inspect",
+                "--format",
+                IMAGE_INSPECT_FORMAT,
+                image_id,
+            ],
+            cwd=REPO_ROOT,
+            timeout=60,
+        )
+    except ProbeError as exc:
+        raise ProbeError(
+            f"{role} fixed image inspection is inaccessible",
+            check=f"{role}-inspect-access",
+        ) from exc
+    lines = completed.stdout.splitlines()
+    if len(lines) != 1 or not lines[0]:
+        raise ProbeError(
+            f"{role} fixed image inspection format is invalid",
+            check=f"{role}-inspect-format",
+        )
+    try:
+        payload = _strict_json_loads(lines[0], f"{role} fixed image inspection")
+    except ProbeError as exc:
+        raise ProbeError(
+            f"{role} fixed image inspection format is invalid",
+            check=f"{role}-inspect-format",
+        ) from exc
+    if not isinstance(payload, list) or len(payload) != 4:
+        raise ProbeError(
+            f"{role} fixed image inspection format is invalid",
+            check=f"{role}-inspect-format",
+        )
+    inspected_id, operating_system, architecture, revision = payload
+    if inspected_id != image_id:
+        raise ProbeError(
+            f"{role} image ID changed during inspection",
+            check=f"{role}-id",
+        )
+    if operating_system != "linux" or architecture != "amd64":
+        raise ProbeError(
+            f"{role} image is not linux/amd64",
+            check=f"{role}-platform",
+        )
+    if not isinstance(revision, str) or SOURCE_REVISION.fullmatch(revision) is None:
+        raise ProbeError(
+            f"{role} image has no exact source revision",
+            check=f"{role}-revision",
         )
     return {
         "role": role,
@@ -798,11 +838,12 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
         _inspect_image("sidecar", args.sidecar_image),
         _inspect_image("client", args.client_image),
     ]
-    if any(image.get("sourceRevision") != args.source_revision for image in images):
-        raise ProbeError(
-            "image source revision label does not match the reviewed revision",
-            check="image-source-revision",
-        )
+    for image in images:
+        if image.get("sourceRevision") != args.source_revision:
+            raise ProbeError(
+                f"{image['role']} image source revision does not match",
+                check=f"{image['role']}-revision",
+            )
     identity = {
         "imageSourceRevision": args.source_revision,
         "workflowSourceRevision": workflow_source_revision,
@@ -1166,14 +1207,37 @@ def remote_abort(handle: str, owner_nonce: str) -> Mapping[str, object]:
     return receipt
 
 
-def _verify_image_receipt(image: Mapping[str, Any]) -> Mapping[str, object]:
-    role = image.get("role")
-    image_id = image.get("id")
-    if role not in {"sidecar", "client"} or not isinstance(image_id, str):
-        raise ProbeError("archive receipt contains an invalid image role")
-    inspected = _inspect_image(role, image_id)
+def _verify_image_receipt(
+    image: object, expected_role: str
+) -> Mapping[str, object]:
+    if (
+        not isinstance(image, dict)
+        or set(image)
+        != {"role", "id", "platform", "configSha256", "sourceRevision"}
+        or image.get("role") != expected_role
+        or not isinstance(image.get("id"), str)
+        or IMAGE_ID.fullmatch(str(image["id"])) is None
+        or image.get("platform") != "linux/amd64"
+        or image.get("configSha256")
+        != str(image["id"]).removeprefix("sha256:")
+        or not isinstance(image.get("sourceRevision"), str)
+        or SOURCE_REVISION.fullmatch(str(image["sourceRevision"])) is None
+    ):
+        raise ProbeError(
+            f"{expected_role} prepare image receipt is invalid",
+            check=f"{expected_role}-receipt",
+        )
+    inspected = _inspect_image(expected_role, str(image["id"]))
+    if inspected.get("sourceRevision") != image.get("sourceRevision"):
+        raise ProbeError(
+            f"loaded {expected_role} image revision changed",
+            check=f"{expected_role}-revision",
+        )
     if inspected != image:
-        raise ProbeError(f"loaded {role} image attestation mismatch")
+        raise ProbeError(
+            f"loaded {expected_role} image receipt changed",
+            check=f"{expected_role}-receipt",
+        )
     return inspected
 
 
@@ -1272,29 +1336,22 @@ def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
             )
         except BaseException as exc:
             raise ProbeError("fixed image load failed", check="image-load") from exc
-        current_check = "image-attestation"
+        current_check = "image-attestation-unexpected"
         images_payload = prepare_receipt.get("images")
-        if not isinstance(images_payload, list) or len(images_payload) != 2:
+        if not isinstance(images_payload, list) or not images_payload:
             raise ProbeError(
-                "prepare receipt does not name exactly two images",
-                check="image-attestation",
+                "prepare receipt has no sidecar image",
+                check="sidecar-receipt",
             )
-        try:
-            images = [
-                _verify_image_receipt(image)
-                for image in images_payload
-                if isinstance(image, dict)
-            ]
-        except BaseException as exc:
+        if len(images_payload) != 2:
             raise ProbeError(
-                "loaded image attestation failed",
-                check="image-attestation",
-            ) from exc
-        if [image["role"] for image in images] != ["sidecar", "client"]:
-            raise ProbeError(
-                "prepare receipt image order is not fixed",
-                check="image-attestation",
+                "prepare receipt does not name exactly one client image",
+                check="client-receipt",
             )
+        images = [
+            _verify_image_receipt(images_payload[0], "sidecar"),
+            _verify_image_receipt(images_payload[1], "client"),
+        ]
         assert free_bytes is not None and verified_files is not None
         receipt_data = {
             "schema": "cvm-sidecar.provision-receipt/1",

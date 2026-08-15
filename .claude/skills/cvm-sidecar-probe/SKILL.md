@@ -34,9 +34,11 @@ The workflow has three separate public operations:
    free space of at least `3 GiB + archive bytes`, and verifies an accessible
    `linux/amd64` Docker server. It retains the 3 GiB post-transfer gate,
    verifies the archive hash before `docker image load`, re-inspects the loaded
-   exact IDs/platform/revision labels, derives the same config digests from the
-   IDs, removes the transfer archive, and intentionally retains the two
-   provisioned images.
+   exact IDs/platform/revision labels through one fixed `docker image inspect
+   --format` four-value JSON projection, derives the same config digests from
+   the IDs, removes the transfer archive, and intentionally retains the two
+   provisioned images. Full daemon inspect JSON is neither requested nor
+   accepted.
 3. `probe` is a second external CVM write and the only execution dispatch. It
    runs exactly one sealed probe with `--pull=never`, an internal network,
    fixed resource bounds, read-only filesystems, and exact runtime cleanup.
@@ -136,10 +138,14 @@ different destructive operation and requires a separate authorization.
   terminal failed receipt, and forbids retry.
 - Remote provision failures emit and persist a fixed receipt whose
   `errorCheck` is one of `prepare-receipt`, `archive-hash-size`,
-  `remote-disk-gate`, `image-load`, `image-attestation`,
-  `transfer-cleanup`, or `deployed-workflow-hash`. Public provision preserves
-  that exact check and the bounded remote receipt before the nonce-scoped
-  abort. Raw stderr, paths, errno, and Docker output are not durable evidence.
+  `remote-disk-gate`, `image-load`, `transfer-cleanup`,
+  `deployed-workflow-hash`, `image-attestation-unexpected`, or one role-specific
+  image check. For each of `sidecar` and `client`, those checks are exactly
+  `inspect-access`, `inspect-format`, `id`, `platform`, `revision`, and
+  `receipt`, prefixed by the role (for example `client-revision`). Public
+  provision preserves that exact closed check and the bounded remote receipt
+  before the nonce-scoped abort. Raw stderr, paths, errno, full daemon inspect
+  JSON, and Docker output are not durable evidence.
 - Probe failure or cleanup failure: preserve the receipt and handle; do not
   rerun, submit a pilot, inspect raw remote state, or invent a cleanup command.
 - Missing or malformed receipt: report the missing structured evidence and

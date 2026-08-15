@@ -88,25 +88,9 @@ def write_portable_archive_docker(path: Path) -> None:
                 member.mode = 0o644
                 archive.addfile(member, io.BytesIO(payload))
 
-            if sys.argv[1:3] == ["image", "inspect"]:
-                image = sys.argv[3]
-                config = {{
-                    "Labels": {{"org.opencontainers.image.revision": {SOURCE_REVISION!r}}},
-                    "Cmd": None,
-                }}
-                if os.environ.get("FAKE_INSPECT_VARIANT") == "empty-extra":
-                    config = {{
-                        "Labels": {{"org.opencontainers.image.revision": {SOURCE_REVISION!r}}},
-                        "Cmd": [],
-                        "Env": [],
-                        "ExposedPorts": {{}},
-                    }}
-                print(json.dumps([{{
-                    "Id": image,
-                    "Architecture": "amd64",
-                    "Os": "linux",
-                    "Config": config,
-                }}]))
+            if sys.argv[1:4] == ["image", "inspect", "--format"]:
+                image = sys.argv[5]
+                print(json.dumps([image, "linux", "amd64", {SOURCE_REVISION!r}]))
             elif sys.argv[1:3] == ["image", "save"]:
                 output = pathlib.Path(sys.argv[4])
                 assert sys.argv[5:] == [sidecar, client]
@@ -513,9 +497,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     f"""\
                     #!/usr/bin/env python3
                     import json, pathlib, sys
-                    if sys.argv[1:3] == ["image", "inspect"]:
-                        image = sys.argv[3]
-                        print(json.dumps([{{"Id": image, "Architecture": "amd64", "Os": "linux", "Config": {{"Labels": {{"org.opencontainers.image.revision": {SOURCE_REVISION!r}}}}}}}]))
+                    if sys.argv[1:4] == ["image", "inspect", "--format"]:
+                        image = sys.argv[5]
+                        print(json.dumps([image, "linux", "amd64", {SOURCE_REVISION!r}]))
                     elif sys.argv[1:3] == ["image", "save"]:
                         pathlib.Path(sys.argv[4]).mkdir()
                         raise SystemExit(7)
@@ -1212,7 +1196,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             "handle": handle,
                             "ownerNonce": owner,
                             "errorOperation": "remote-provision",
-                            "errorCheck": "image-load",
+                            "errorCheck": "client-revision",
                             "transferCleanup": {"archiveAbsent": True, "prepareReceiptAbsent": True, "incomingDirectoryAbsent": True, "errors": []},
                             "retryAllowed": False,
                             "terminalOperation": {"operation": "provision", "handle": handle, "retryAllowed": False},
@@ -1267,7 +1251,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 (repo / ".cvm-sidecar-probes" / handle / "provision.json").read_text()
             )
             self.assertEqual(receipt["status"], "failed")
-            self.assertEqual(receipt["errorCheck"], "image-load")
+            self.assertEqual(receipt["errorCheck"], "client-revision")
             self.assertEqual(receipt["abort"]["status"], "aborted")
             self.assertFalse(receipt["retryAllowed"])
 
@@ -1427,9 +1411,9 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             )
             self.assertEqual(result.stderr, "")
 
-    def test_remote_provision_classifies_image_load_and_attestation(self) -> None:
+    def test_remote_provision_classifies_image_load_and_inspect_format(self) -> None:
         for index, expected_check in enumerate(
-            ("image-load", "image-attestation"), start=1
+            ("image-load", "sidecar-inspect-format"), start=1
         ):
             with self.subTest(expected_check=expected_check), tempfile.TemporaryDirectory(
                 prefix=f"cvm-sidecar-{expected_check}-"
@@ -1463,8 +1447,20 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             "handle": handle,
                             "archive": {"bytes": 1, "sha256": archive_sha},
                             "images": [
-                                {"role": "sidecar", "id": SIDECAR_ID},
-                                {"role": "client", "id": CLIENT_ID},
+                                {
+                                    "role": "sidecar",
+                                    "id": SIDECAR_ID,
+                                    "platform": "linux/amd64",
+                                    "configSha256": SIDECAR_ID.removeprefix("sha256:"),
+                                    "sourceRevision": SOURCE_REVISION,
+                                },
+                                {
+                                    "role": "client",
+                                    "id": CLIENT_ID,
+                                    "platform": "linux/amd64",
+                                    "configSha256": CLIENT_ID.removeprefix("sha256:"),
+                                    "sourceRevision": SOURCE_REVISION,
+                                },
                             ],
                         }
                     ),
