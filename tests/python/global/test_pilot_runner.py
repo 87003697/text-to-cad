@@ -711,6 +711,78 @@ class RunnerTests(unittest.TestCase):
                 self.assertFalse(state.workload_started)
                 wait_workload.assert_not_called()
 
+    def test_surface_proof_mismatch_withholds_exec_and_cleans_gate_process(self) -> None:
+        """A different surface proof cannot release the Agent and is terminated."""
+
+        tap = FakeProcess()
+        gate_process = FakeProcess()
+        state = self.supervisor.LifecycleState()
+        events: list[str] = []
+
+        class FakeSidecar:
+            capability_dir = self.exp_dir
+
+            def record_nested_gate(self, proof):
+                events.append("reject-proof")
+                raise self_error
+
+        class FakeGateChannel:
+            def __init__(self, capability_dir):
+                events.append("open")
+
+            def receive(self, cancelled):
+                events.append("receive")
+                return nested_gate_proof(surface_manifest_sha256="d" * 64)
+
+            def release(self):
+                raise AssertionError("mismatched surface must not release Agent")
+
+            def close(self):
+                events.append("close")
+
+        self_error = self.supervisor.PilotError("nested-gate surface mismatch")
+        with (
+            mock.patch.object(self.supervisor, "resolve_tap", return_value="/fake/tap"),
+            mock.patch.object(
+                self.supervisor, "RetryProxy", return_value=FakeRetryProxy()
+            ),
+            mock.patch.object(self.supervisor, "start_tap", return_value=tap),
+            mock.patch.object(self.supervisor, "wait_ready", return_value=18888),
+            mock.patch.object(
+                self.supervisor,
+                "build_bwrap_argv",
+                return_value=["/fake/bwrap", "--", "/fixed/gate", "--", "/fixed/agent"],
+            ),
+            mock.patch.object(
+                self.supervisor, "NestedGateChannel", FakeGateChannel, create=True
+            ),
+            mock.patch.object(
+                self.supervisor.subprocess, "Popen", return_value=gate_process
+            ),
+            mock.patch.object(self.supervisor, "signal_process_group") as terminate,
+            mock.patch.object(self.supervisor, "wait_workload") as wait_workload,
+            mock.patch.object(self.supervisor, "stop_tap"),
+            mock.patch.object(
+                self.supervisor,
+                "read_trace",
+                side_effect=self.supervisor.TapError("no Agent trace"),
+            ),
+        ):
+            status = self.supervisor.run_supervised(
+                self.exp_dir,
+                [],
+                ["/fixed/agent"],
+                self.environ,
+                state,
+                FakeSidecar(),
+            )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(state.workload_started)
+        self.assertEqual(events, ["open", "receive", "reject-proof", "close"])
+        terminate.assert_called_once_with(gate_process, signal.SIGTERM)
+        wait_workload.assert_not_called()
+
     def test_nested_gate_channel_is_one_shot_exact_and_bounded(self) -> None:
         """The outer-owned channel rejects absent, malformed, duplicate, and late proof."""
 
