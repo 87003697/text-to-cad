@@ -17,6 +17,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
@@ -444,10 +445,13 @@ class BrowserSidecarJob:
         self.sandbox_exp_dir = sandbox_exp_dir
         self.job_id = job_id
         self.run_dir = self.exp_dir / "run"
-        self.authority_path = self.run_dir / "browser-authority.json"
-        self.socket_path = self.run_dir / "browser-sidecar.sock"
         self.receipt_path = self.run_dir / "browser-sidecar-receipt.json"
         self.owner_nonce = secrets.token_hex(16)
+        self.capability_dir = Path(
+            tempfile.mkdtemp(prefix=f"meshshot-browser-{self.owner_nonce[:8]}-")
+        )
+        self.authority_path = self.capability_dir / "authority.json"
+        self.socket_path = self.capability_dir / "browser-sidecar.sock"
         self.prefix = f"ttc-bs-{self.owner_nonce[:12]}"
         self.network_name = f"{self.prefix}-net"
         self.container_name = f"{self.prefix}-sidecar"
@@ -469,7 +473,7 @@ class BrowserSidecarJob:
     def sandbox_authority_path(self) -> Path:
         """Return the fixed authority path visible inside the pilot sandbox."""
 
-        return self.sandbox_exp_dir / "run" / "browser-authority.json"
+        return Path("/run/meshshot-browser/authority.json")
 
     def _docker(
         self,
@@ -755,7 +759,7 @@ class BrowserSidecarJob:
                 "jobId": self.job_id,
                 "imageId": IMAGE_ID,
                 "socketPath": str(
-                    self.sandbox_exp_dir / "run" / "browser-sidecar.sock"
+                    Path("/run/meshshot-browser/browser-sidecar.sock")
                 ),
                 "programs": PROGRAMS,
             }
@@ -910,6 +914,12 @@ class BrowserSidecarJob:
             self.cleanup_errors.append("retained-resource")
         self.authority_path.unlink(missing_ok=True)
         self.socket_path.unlink(missing_ok=True)
+        try:
+            self.capability_dir.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            self.cleanup_errors.append("capability-dir-remove")
         succeeded = (
             self.first_error is None
             and workload_status == 0

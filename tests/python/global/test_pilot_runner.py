@@ -585,7 +585,7 @@ class RunnerTests(unittest.TestCase):
         class FakeSidecar:
             def __init__(self, exp_dir, sandbox_exp_dir, *, job_id):
                 events.append(("construct", exp_dir, sandbox_exp_dir, job_id))
-                self.sandbox_authority_path = sandbox_exp_dir / "run/browser-authority.json"
+                self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
 
             def start(self):
                 events.append("sidecar-start")
@@ -636,7 +636,7 @@ class RunnerTests(unittest.TestCase):
         )
         self.assertEqual(
             events[2][1],
-            self.supervisor.SANDBOX_REPO_ROOT / "outputs/group/exp/run/browser-authority.json",
+            Path("/run/meshshot-browser/authority.json"),
         )
 
 
@@ -1042,6 +1042,7 @@ class ProductionPathContractTests(unittest.TestCase):
             exp_dir.mkdir(parents=True)
             skill_dir.mkdir(parents=True)
             outside_skill.mkdir()
+            (repo_root / "browser-capability").mkdir()
             input_path.parent.mkdir(parents=True)
             gateway.parent.mkdir(parents=True)
             venv.mkdir()
@@ -1122,7 +1123,7 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertIn(
             [
                 "--ro-bind",
-                str(repo_root / "browser-capability"),
+                str((repo_root / "browser-capability").resolve()),
                 "/run/meshshot-browser",
             ],
             triples,

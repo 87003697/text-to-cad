@@ -583,6 +583,7 @@ def build_bwrap_argv(
     input_paths: list[Path],
     workload: list[str],
     environ: Mapping[str, str],
+    browser_capability_dir: Path | None = None,
 ) -> list[str]:
     """Build a least-visibility bwrap argv without placing secrets in it."""
 
@@ -617,6 +618,10 @@ def build_bwrap_argv(
     if not venv.is_dir():
         raise PilotError(f"pilot runtime not found: {venv}")
     upper = prepare_sandbox(exp_dir, skill_dirs)
+    if browser_capability_dir is not None:
+        browser_capability_dir = browser_capability_dir.resolve()
+        if not browser_capability_dir.is_dir():
+            raise PilotError("Browser Sidecar capability directory is unavailable")
     argv = [
         bwrap,
         "--unshare-pid",
@@ -646,6 +651,8 @@ def build_bwrap_argv(
         str(SANDBOX_REPO_ROOT / "skills"),
         "--dir",
         "/home",
+        "--dir",
+        "/run",
         "--dir",
         str(SANDBOX_HOME),
         "--symlink",
@@ -697,6 +704,14 @@ def build_bwrap_argv(
                 str(SANDBOX_CODEX_HOME / "skills" / skill_dir.name),
             ]
         )
+    if browser_capability_dir is not None:
+        argv.extend(
+            [
+                "--ro-bind",
+                str(browser_capability_dir),
+                "/run/meshshot-browser",
+            ]
+        )
     argv.extend(
         [
             "--remount-ro",
@@ -734,6 +749,11 @@ def run_supervised(
         input_paths,
         command,
         environ,
+        (
+            sidecar.capability_dir
+            if sidecar is not None
+            else None
+        ),
     )
     if state is None:
         state = LifecycleState()
