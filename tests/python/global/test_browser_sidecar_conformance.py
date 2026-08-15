@@ -75,6 +75,7 @@ class DockerBoundary:
         self,
         *,
         foreign_surface: bool = False,
+        foreign_client: bool = False,
         surface_output_loss: bool = False,
         client_replaced: bool = False,
     ) -> None:
@@ -82,6 +83,7 @@ class DockerBoundary:
         self.events: list[str] = []
         self.gate_input: dict[str, object] | None = None
         self.foreign_surface = foreign_surface
+        self.foreign_client = foreign_client
         self.surface_output_loss = surface_output_loss
         self.client_replaced = client_replaced
         self.client_capability: Path | None = None
@@ -138,6 +140,8 @@ class DockerBoundary:
                     "",
                 )
             if self.foreign_surface and command[-1].endswith("-surface"):
+                return subprocess.CompletedProcess(command, 0, "foreign\n", "")
+            if self.foreign_client and command[-1].endswith("-client"):
                 return subprocess.CompletedProcess(command, 0, "foreign\n", "")
             return subprocess.CompletedProcess(command, 1, "", "not found")
         if command[1:3] == ["network", "create"]:
@@ -493,6 +497,30 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
         self.assertEqual(evidence["receipt"]["failureCheck"], "retained-resource")
         self.assertFalse(
             any(call[1:4] == ["rm", "-f", surface_name] for call in boundary.calls),
+            boundary.calls,
+        )
+
+    def test_foreign_client_collision_is_preserved(self) -> None:
+        """A client-name collision after Sidecar startup remains foreign state."""
+
+        boundary = DockerBoundary(foreign_client=True)
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = Path(temp) / "conformance.json"
+            with (
+                mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="1" * 32),
+                mock.patch.object(subprocess, "run", side_effect=boundary.run),
+                mock.patch.object(subprocess, "Popen", side_effect=boundary.popen),
+            ):
+                status = conformance.run_host(evidence_path)
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+
+        client_name = "ttc-bs-111111111111-client"
+        self.assertEqual(status, 1)
+        self.assertIn("foreign conformance-client name", evidence["error"])
+        self.assertFalse(
+            any(call[1:4] == ["rm", "-f", client_name] for call in boundary.calls),
             boundary.calls,
         )
 

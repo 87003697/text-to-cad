@@ -131,6 +131,31 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
     def test_locked_image_contains_exact_executable_client_source(self) -> None:
         """Extraction and execution both use the exact locked image and file path."""
 
+        for projection, expected in (
+            ("{{.Id}}", browser_sidecar.BROKER_IMAGE_ID),
+            ("{{.Os}}", "linux"),
+            ("{{.Architecture}}", "amd64"),
+            (
+                '{{index .Config.Labels "org.opencontainers.image.revision"}}',
+                browser_sidecar.BROKER_IMAGE_SOURCE_REVISION,
+            ),
+        ):
+            inspected = subprocess.run(
+                [
+                    self.docker,
+                    "inspect",
+                    "--type=image",
+                    "--format",
+                    projection,
+                    browser_sidecar.BROKER_IMAGE_ID.removeprefix("sha256:"),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(inspected.returncode, 0, inspected.stderr)
+            self.assertEqual(inspected.stdout.splitlines(), [expected])
         name = f"ttc-bs-image-file-{os.getpid()}"
         absent = subprocess.run(
             [self.docker, "container", "inspect", name],

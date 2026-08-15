@@ -122,6 +122,17 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 }
                 return subprocess.CompletedProcess(command, 0, values[projection] + "\n", "")
             if command[1:3] in (["container", "inspect"], ["network", "inspect"]):
+                if "--format" in command and any(
+                    resource in command
+                    for resource in (NETWORK_ID, CONTAINER_ID, BROKER_CONTAINER_ID)
+                ):
+                    projection = command[-1]
+                    if "browser-sidecar-job" in projection:
+                        return subprocess.CompletedProcess(
+                            command, 0, "formal-job-1\n", ""
+                        )
+                    if "browser-sidecar-owner" in projection:
+                        return subprocess.CompletedProcess(command, 0, "1" * 16 + "\n", "")
                 if (
                     (CONTAINER_ID in command or BROKER_CONTAINER_ID in command)
                     and "--format" in command
@@ -709,6 +720,13 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     '{{index .Config.Labels "io.text-to-cad.browser-sidecar-broker-base"}}': browser_sidecar.BROKER_BASE_IMAGE_ID,
                 }
                 return subprocess.CompletedProcess(command, 0, values[projection] + "\n", "")
+            if command[1:3] == ["network", "inspect"] and NETWORK_ID in command:
+                projection = command[-1]
+                values = {
+                    '{{index .Labels "io.text-to-cad.browser-sidecar-job"}}': "formal-job-1",
+                    '{{index .Labels "io.text-to-cad.browser-sidecar-owner"}}': "1" * 16,
+                }
+                return subprocess.CompletedProcess(command, 0, values[projection] + "\n", "")
             if command[1:3] in (["container", "inspect"], ["network", "inspect"]):
                 return subprocess.CompletedProcess(command, 1, "", "not found")
             if command[1:3] == ["network", "create"]:
@@ -722,6 +740,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
             with (
                 mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
                 mock.patch.object(browser_sidecar.subprocess, "run", side_effect=docker),
+                mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="1" * 16),
             ):
                 job = browser_sidecar.BrowserSidecarJob(
                     Path(temp),

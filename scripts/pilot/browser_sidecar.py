@@ -697,7 +697,10 @@ class BrowserSidecarJob:
         self.owner_nonce = secrets.token_hex(16)
         self.gate_nonce = self.owner_nonce
         self.capability_dir = Path(
-            tempfile.mkdtemp(prefix=f"meshshot-browser-{self.owner_nonce[:8]}-")
+            tempfile.mkdtemp(
+                prefix=f"meshshot-browser-{self.owner_nonce[:8]}-",
+                dir="/tmp",
+            )
         ).resolve()
         self.authority_path = self.capability_dir / "authority.json"
         self.socket_path = self.capability_dir / SANDBOX_SOCKET_PATH.name
@@ -857,6 +860,28 @@ class BrowserSidecarJob:
                 f"cannot prove {kind} name absence",
                 check=f"{kind}-name-absence",
             )
+
+    def _verify_resource_owner(self, kind: str, resource_id: str, role: str) -> None:
+        """Require both exact labels on the just-created immutable resource ID."""
+
+        labels_path = ".Labels" if kind == "network" else ".Config.Labels"
+        for label, expected, suffix in (
+            ("io.text-to-cad.browser-sidecar-job", self.job_id, "job-label"),
+            ("io.text-to-cad.browser-sidecar-owner", self.owner_nonce, "owner-label"),
+        ):
+            inspected = self._docker(
+                kind,
+                "inspect",
+                resource_id,
+                "--format",
+                f'{{{{index {labels_path} "{label}"}}}}',
+                check=False,
+            )
+            if inspected.returncode or inspected.stdout.splitlines() != [expected]:
+                raise BrowserSidecarError(
+                    f"created {role} ownership mismatch",
+                    check=f"{role}-{suffix}",
+                )
 
     def _inspect_image(
         self,
@@ -1105,6 +1130,7 @@ class BrowserSidecarJob:
                     check="network-id",
                 )
             self.network_id = network_id
+            self._verify_resource_owner("network", network_id, "network")
             self._check_cancelled()
             started = self._docker(
                 "run",
@@ -1153,6 +1179,7 @@ class BrowserSidecarJob:
                     check="container-id",
                 )
             self.container_id = container_id
+            self._verify_resource_owner("container", container_id, "container")
             self._check_cancelled()
             self.readiness = self._wait_sidecar_ready()
             self._check_cancelled()
@@ -1204,6 +1231,9 @@ class BrowserSidecarJob:
                     check="broker-container-id",
                 )
             self.broker_container_id = broker_container_id
+            self._verify_resource_owner(
+                "container", broker_container_id, "broker-container"
+            )
             self._check_cancelled()
             self._wait_broker_ready()
             self._check_cancelled()
@@ -1695,7 +1725,11 @@ class BrowserSidecarJob:
             ),
             None,
         )
-        failure_check = cleanup_failure or self.first_error or predicate_failure
+        failure_check = (
+            "retained-resource"
+            if cleanup_failure == "retained-resource"
+            else self.first_error or cleanup_failure or predicate_failure
+        )
         succeeded = failure_check is None and all(predicates.values())
         counts = {
             "acceptedRequests": accepted if counts_valid else 0,
