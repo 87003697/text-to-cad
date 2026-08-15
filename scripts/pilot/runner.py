@@ -11,7 +11,9 @@ import os
 import re
 import shutil
 import signal
+import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -31,6 +33,7 @@ try:
         PROGRAMS,
         RECEIPT_PREDICATES,
         RECEIPT_SCHEMA,
+        NESTED_GATE,
         BrowserSidecarJob,
     )
 except ModuleNotFoundError as exc:
@@ -46,6 +49,7 @@ except ModuleNotFoundError as exc:
         PROGRAMS,
         RECEIPT_PREDICATES,
         RECEIPT_SCHEMA,
+        NESTED_GATE,
         BrowserSidecarJob,
     )
 
@@ -62,6 +66,8 @@ ARTIFACT_CONTRACT_STATUS = 4
 MANIFEST_EXCLUDED_ROOTS = {".git"}
 MANIFEST_EXCLUDED_PREFIXES = {"run/.codex-upper"}
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
+SANDBOX_NESTED_GATE_ROOT = Path("/run/meshshot-gate")
+NESTED_GATE_TIMEOUT_SECONDS = 180.0
 SYSTEM_RO_PATHS = (
     Path("/usr"),
     Path("/etc/alternatives"),
@@ -174,6 +180,165 @@ class SignalRelay:
         for signum, handler in self._previous.items():
             signal.signal(signum, handler)
         return False
+
+
+class NestedGateChannel:
+    """Own the one-shot proof/release socket used before Agent exec."""
+
+    def __init__(self, capability_dir: Path, *, timeout: float = NESTED_GATE_TIMEOUT_SECONDS) -> None:
+        """Bind one exact private socket before the bwrap gate starts."""
+
+        self.path = capability_dir.resolve() / Path(NESTED_GATE["socketPath"]).name
+        self.timeout = timeout
+        self.listener: socket.socket | None = None
+        self.connection: socket.socket | None = None
+        self.identity: tuple[int, int] | None = None
+        if self.path.exists() or self.path.is_symlink():
+            raise PilotError("nested-gate socket path already exists")
+        try:
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            listener.bind(os.fspath(self.path))
+            self.path.chmod(0o600)
+            listener.listen(1)
+            metadata = self.path.lstat()
+        except OSError as exc:
+            listener.close() if "listener" in locals() else None
+            raise PilotError("cannot create nested-gate proof channel") from exc
+        if (
+            not stat.S_ISSOCK(metadata.st_mode)
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_uid != os.getuid()
+            or metadata.st_nlink != 1
+        ):
+            listener.close()
+            raise PilotError("nested-gate proof channel identity is invalid")
+        self.listener = listener
+        self.identity = (metadata.st_dev, metadata.st_ino)
+
+    def _unlink_owned(self) -> None:
+        """Unlink only the exact socket inode this channel created."""
+
+        if self.identity is None:
+            return
+        try:
+            metadata = self.path.lstat()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise PilotError("cannot inspect nested-gate proof channel") from exc
+        if (metadata.st_dev, metadata.st_ino) != self.identity:
+            raise PilotError("nested-gate proof channel identity changed")
+        try:
+            self.path.unlink()
+        except OSError as exc:
+            raise PilotError("cannot remove nested-gate proof channel") from exc
+
+    @staticmethod
+    def _decode(raw: bytes) -> Mapping[str, object]:
+        """Decode exactly one bounded duplicate-free proof object."""
+
+        if not raw:
+            raise PilotError("nested-gate proof is missing")
+        if not raw.endswith(b"\n"):
+            raise PilotError("nested-gate proof is malformed")
+        if b"\n" in raw[:-1]:
+            raise PilotError("nested-gate proof is duplicate")
+
+        def unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+            """Reject duplicate keys in the one proof object."""
+
+            result: dict[str, object] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise PilotError("nested-gate proof is malformed")
+                result[key] = value
+            return result
+
+        try:
+            proof = json.loads(raw[:-1], object_pairs_hook=unique)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PilotError("nested-gate proof is malformed") from exc
+        if not isinstance(proof, dict):
+            raise PilotError("nested-gate proof is malformed")
+        return proof
+
+    def receive(self, cancelled: Callable[[], bool]) -> Mapping[str, object]:
+        """Accept the first proof and close the listener before validation."""
+
+        if self.listener is None:
+            raise PilotError("nested-gate proof channel is unavailable")
+        deadline = time.monotonic() + self.timeout
+        self.listener.settimeout(min(0.1, max(self.timeout, 0.001)))
+        while True:
+            if cancelled():
+                raise PilotError("nested-gate proof interrupted")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise PilotError("nested-gate proof timeout")
+            self.listener.settimeout(min(0.1, remaining))
+            try:
+                connection, _ = self.listener.accept()
+                break
+            except TimeoutError:
+                continue
+            except OSError as exc:
+                raise PilotError("nested-gate proof accept failed") from exc
+        self.connection = connection
+        self.listener.close()
+        self.listener = None
+        self._unlink_owned()
+        raw = bytearray()
+        while True:
+            if cancelled():
+                raise PilotError("nested-gate proof interrupted")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise PilotError("nested-gate proof timeout")
+            connection.settimeout(min(0.1, remaining))
+            try:
+                chunk = connection.recv(65536)
+            except TimeoutError:
+                continue
+            except OSError as exc:
+                raise PilotError("nested-gate proof read failed") from exc
+            if not chunk:
+                break
+            raw.extend(chunk)
+            if len(raw) > NESTED_GATE["maxProofBytes"]:
+                raise PilotError("nested-gate proof is malformed")
+        return self._decode(bytes(raw))
+
+    def release(self) -> None:
+        """Release the validated gate to exec the Agent exactly once."""
+
+        if self.connection is None:
+            raise PilotError("nested-gate proof connection is unavailable")
+        try:
+            self.connection.sendall(b"\x01")
+            self.connection.shutdown(socket.SHUT_WR)
+            self.connection.close()
+            self.connection = None
+        except OSError as exc:
+            raise PilotError("nested-gate release failed") from exc
+
+    def close(self) -> None:
+        """Close the proof channel; never remove a replacement inode."""
+
+        errors: list[PilotError] = []
+        for connection in (self.connection, self.listener):
+            if connection is not None:
+                try:
+                    connection.close()
+                except OSError:
+                    errors.append(PilotError("nested-gate channel close failed"))
+        self.connection = None
+        self.listener = None
+        try:
+            self._unlink_owned()
+        except PilotError as exc:
+            errors.append(exc)
+        if errors:
+            raise errors[0]
 
 
 def signal_process_group(process: subprocess.Popen[bytes], signum: int) -> None:
@@ -629,12 +794,16 @@ def build_bwrap_argv(
     relative_exp = exp_dir.relative_to(repo_root)
     sandbox_exp = SANDBOX_REPO_ROOT / relative_exp
     gateway = repo_root / "gateway" / "codex-tap-gpt56"
+    nested_gate_script = repo_root / "scripts/pilot/browser_sidecar_gate.py"
+    nested_gate_package = repo_root / "packages/meshshot/src"
     if not gateway.is_file():
         raise PilotError(f"gateway not found: {gateway}")
     venv = repo_root / ".venv"
     if not venv.is_dir():
         raise PilotError(f"pilot runtime not found: {venv}")
     upper = prepare_sandbox(exp_dir, skill_dirs)
+    if not nested_gate_script.is_file() or not nested_gate_package.is_dir():
+        raise PilotError("fixed nested Browser Gate package is unavailable")
     if browser_capability_dir is not None:
         browser_capability_dir = browser_capability_dir.resolve()
         if not browser_capability_dir.is_dir():
@@ -670,6 +839,8 @@ def build_bwrap_argv(
         "/home",
         "--dir",
         "/run",
+        "--dir",
+        os.fspath(SANDBOX_NESTED_GATE_ROOT),
         "--dir",
         str(SANDBOX_HOME),
         "--symlink",
@@ -731,12 +902,25 @@ def build_bwrap_argv(
         )
     argv.extend(
         [
+            "--ro-bind",
+            os.fspath(nested_gate_script.resolve()),
+            os.fspath(SANDBOX_NESTED_GATE_ROOT / nested_gate_script.name),
+            "--ro-bind",
+            os.fspath(nested_gate_package.resolve()),
+            os.fspath(SANDBOX_NESTED_GATE_ROOT / "meshshot-src"),
+        ]
+    )
+    argv.extend(
+        [
             "--remount-ro",
             "/",
             "--share-net",
             "--die-with-parent",
             "--chdir",
             str(SANDBOX_REPO_ROOT),
+            "--",
+            os.fspath(SANDBOX_REPO_ROOT / ".venv/bin/python"),
+            os.fspath(SANDBOX_NESTED_GATE_ROOT / nested_gate_script.name),
             "--",
             *workload,
         ]
@@ -805,26 +989,63 @@ def run_supervised(
                         environ,
                         tap_url,
                     )
-                    workload = subprocess.Popen(
-                        bwrap_argv,
-                        # Inherit wrapper redirections so Codex continues to write
-                        # run/stderr.log and remains non-interactive exactly as before.
-                        stdin=None,
-                        stdout=None,
-                        stderr=None,
-                        env=child_env,
-                        start_new_session=True,
+                    gate_channel = (
+                        NestedGateChannel(sidecar.capability_dir)
+                        if sidecar is not None
+                        else None
                     )
-                    state.workload_started = True
-                    active_relay.attach(workload)
                     try:
-                        child_status, tap_failed = wait_workload(
-                            workload,
-                            tap,
-                            sidecar,
+                        workload = subprocess.Popen(
+                            bwrap_argv,
+                            # The fixed gate inherits these redirections and then
+                            # execs the Agent in the same process and namespaces.
+                            stdin=None,
+                            stdout=None,
+                            stderr=None,
+                            env=child_env,
+                            start_new_session=True,
                         )
+                        active_relay.attach(workload)
+                        try:
+                            if gate_channel is not None:
+                                proof = gate_channel.receive(
+                                    lambda: active_relay.cancelled
+                                )
+                                sidecar.record_nested_gate(proof)
+                                if active_relay.cancelled:
+                                    raise PilotError(
+                                        "nested-gate release interrupted"
+                                    )
+                                gate_channel.release()
+                            state.workload_started = True
+                            child_status, tap_failed = wait_workload(
+                                workload,
+                                tap,
+                                sidecar,
+                            )
+                        except Exception as exc:
+                            print(
+                                "pilot-runner: nested Browser Gate failed "
+                                f"({type(exc).__name__})",
+                                file=sys.stderr,
+                            )
+                            child_status = 1
+                            tap_failed = True
+                            signal_process_group(workload, signal.SIGTERM)
+                            try:
+                                workload.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                signal_process_group(workload, signal.SIGKILL)
+                                workload.wait(timeout=2)
+                        finally:
+                            active_relay.detach()
                     finally:
-                        active_relay.detach()
+                        if gate_channel is not None:
+                            try:
+                                gate_channel.close()
+                            except PilotError as exc:
+                                print(f"pilot-runner: {exc}", file=sys.stderr)
+                                tap_failed = True
             finally:
                 tap_exited_before_stop = tap.poll() is not None
                 try:
@@ -1044,6 +1265,10 @@ def finalize_pilot(
     """Collect the unique rollout, apply cleanup policy, and choose final status."""
 
     upper = exp_dir / "run/.codex-upper"
+    signal_status = workload_status in {
+        128 + signal.SIGINT,
+        128 + signal.SIGTERM,
+    }
     if not require_rollout:
         final_status = workload_status
         if not publish_artifact_manifest(
@@ -1066,15 +1291,17 @@ def finalize_pilot(
             file=sys.stderr,
         )
         print(f"sandbox preserved for postmortem at {upper}", file=sys.stderr)
-        publish_artifact_manifest(exp_dir, workload_status, 3)
-        return 3
+        final_status = workload_status if signal_status else 3
+        publish_artifact_manifest(exp_dir, workload_status, final_status)
+        return final_status
     try:
         rollouts[0].replace(exp_dir / "run/rollout.jsonl")
     except OSError as exc:
         print(f"cannot collect rollout: {exc}", file=sys.stderr)
         print(f"sandbox preserved for postmortem at {upper}", file=sys.stderr)
-        publish_artifact_manifest(exp_dir, workload_status, 3)
-        return 3
+        final_status = workload_status if signal_status else 3
+        publish_artifact_manifest(exp_dir, workload_status, final_status)
+        return final_status
 
     final_status = workload_status
     if workload_status == 0:

@@ -1,6 +1,23 @@
 {
   "authorityPath": "/run/meshshot-browser/authority.json",
   "authoritySchema": "meshshot.browser-authority/1",
+  "nestedGate": {
+    "maxProofBytes": 16384,
+    "predicates": [
+      "publicResidualParity",
+      "viewerProjectionChanged",
+      "viewerArtifactClean",
+      "browserInventoryEmpty",
+      "browserProcessZero",
+      "sourceHidden",
+      "egressBlocked"
+    ],
+    "profileSha256": "87da3cc3f625cb9c24f51bed41dcdc70402a4d461b2af29eaa19846b1e8f7241",
+    "publicPngSha256": "b498c55c68662989a3a95c4925432d61f979183d30c2cdf593e154c7b0ca9d5b",
+    "schema": "meshshot.browser-sidecar.nested-gate-proof/1",
+    "socketPath": "/run/meshshot-browser/gate.sock",
+    "views": ["+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso"]
+  },
   "programs": {
     "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
     "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b"

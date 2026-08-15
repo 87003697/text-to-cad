@@ -373,6 +373,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     }
                 }
                 job.socket_identity = (1, 1)
+                job.record_nested_gate(nested_gate_proof())
                 with mock.patch.object(
                     browser_sidecar.subprocess,
                     "run",
@@ -635,6 +636,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     "viewerArtifactClean": False,
                 },
             }
+            job.record_nested_gate(nested_gate_proof())
             with mock.patch.object(
                 browser_sidecar.subprocess,
                 "run",
@@ -644,7 +646,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
 
         self.assertEqual(receipt["status"], "failed")
         self.assertEqual(receipt["failureCheck"], "viewer-required")
-        self.assertFalse(receipt["predicates"]["viewerAccepted"])
+        self.assertFalse(receipt["predicates"]["brokerViewerAccepted"])
 
 
 class RegisteredProgramBrokerTests(unittest.TestCase):

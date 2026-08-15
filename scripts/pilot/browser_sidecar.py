@@ -74,19 +74,28 @@ REQUEST_SCHEMA = CONTRACT["requestSchema"]
 RESPONSE_SCHEMA = CONTRACT["responseSchema"]
 SANDBOX_AUTHORITY_PATH = Path(CONTRACT["authorityPath"])
 SANDBOX_SOCKET_PATH = Path(CONTRACT["socketPath"])
+NESTED_GATE = CONTRACT["nestedGate"]
+NESTED_GATE_SCHEMA = NESTED_GATE["schema"]
+NESTED_GATE_SOCKET_PATH = Path(NESTED_GATE["socketPath"])
 RECEIPT_PREDICATES = (
     "sidecarReady",
     "brokerReady",
-    "sourceAliasesHidden",
-    "externalEgressBlocked",
+    "brokerSourceHidden",
+    "brokerEgressBlocked",
     "socketFixed",
-    "residualAccepted",
-    "residualPublicParity",
-    "residualEightView",
-    "viewerAccepted",
-    "viewerProjectionChanged",
-    "viewerArtifactClean",
-    "freshContextsExact",
+    "brokerResidualAccepted",
+    "brokerResidualEightView",
+    "brokerViewerAccepted",
+    "brokerViewerProjectionChanged",
+    "brokerViewerArtifactClean",
+    "brokerFreshContextsExact",
+    "nestedPublicResidualParity",
+    "nestedViewerProjectionChanged",
+    "nestedViewerArtifactClean",
+    "nestedBrowserInventoryEmpty",
+    "nestedBrowserProcessZero",
+    "nestedSourceHidden",
+    "nestedEgressBlocked",
     "brokerTerminalZero",
     "sidecarClosingExact",
     "sidecarTerminalZero",
@@ -179,6 +188,66 @@ def _exact_object(value: Any, keys: set[str], label: str) -> dict[str, Any]:
     return value
 
 
+def validate_nested_gate_proof(value: Any) -> Mapping[str, bool]:
+    """Validate the exact fixed proof produced before Agent exec."""
+
+    proof = _exact_object(
+        value,
+        {"schema", "status", "predicates", "residual", "viewer", "inventory"},
+        "nested-gate-proof",
+    )
+    predicates = _exact_object(
+        proof["predicates"], set(NESTED_GATE["predicates"]), "nested-gate-predicates"
+    )
+    residual = _exact_object(
+        proof["residual"],
+        {"pngSha256", "mode", "size", "profileSha256", "views"},
+        "nested-gate-residual",
+    )
+    viewer = _exact_object(
+        proof["viewer"],
+        {"before", "after", "bodyMentionsFixture", "bodyHasArtifactError"},
+        "nested-gate-viewer",
+    )
+    inventory = _exact_object(
+        proof["inventory"],
+        {"browserExecutables", "browserCaches", "browserProcesses", "sourceAliases"},
+        "nested-gate-inventory",
+    )
+    if (
+        proof["schema"] != NESTED_GATE_SCHEMA
+        or proof["status"] != "succeeded"
+        or any(value is not True for value in predicates.values())
+        or residual
+        != {
+            "pngSha256": NESTED_GATE["publicPngSha256"],
+            "mode": "RGB",
+            "size": [504, 1008],
+            "profileSha256": NESTED_GATE["profileSha256"],
+            "views": NESTED_GATE["views"],
+        }
+        or viewer
+        != {
+            "before": "Display and projection: Solid, Orthographic",
+            "after": "Display and projection: Solid, Perspective",
+            "bodyMentionsFixture": True,
+            "bodyHasArtifactError": False,
+        }
+        or inventory
+        != {
+            "browserExecutables": [],
+            "browserCaches": [],
+            "browserProcesses": [],
+            "sourceAliases": [],
+        }
+    ):
+        raise BrowserSidecarError(
+            "nested Browser Gate proof failed",
+            check="nested-gate-proof",
+        )
+    return dict(predicates)
+
+
 def _geometry(value: Any, label: str) -> dict[str, Any]:
     """Validate one bounded indexed-triangle geometry payload."""
 
@@ -256,7 +325,6 @@ class RegisteredProgramBroker:
         self.request_count = 0
         self.program_counts = {"residual": 0, "viewer": 0}
         self.program_predicates = {
-            "residualPublicParity": False,
             "residualEightView": False,
             "viewerProjectionChanged": False,
             "viewerArtifactClean": False,
@@ -568,7 +636,6 @@ class RegisteredProgramBroker:
                 )
             self.request_count += 1
             self.program_counts["residual"] += 1
-            self.program_predicates["residualPublicParity"] = True
             self.program_predicates["residualEightView"] = True
             return {
                 "schema": RESPONSE_SCHEMA,
@@ -608,6 +675,9 @@ class BrowserSidecarJob:
         ).resolve()
         self.authority_path = self.capability_dir / "authority.json"
         self.socket_path = self.capability_dir / SANDBOX_SOCKET_PATH.name
+        self.nested_gate_socket_path = (
+            self.capability_dir / NESTED_GATE_SOCKET_PATH.name
+        )
         self.prefix = f"ttc-bs-{self.owner_nonce[:12]}"
         self.network_name = f"{self.prefix}-net"
         self.container_name = f"{self.prefix}-sidecar"
@@ -624,6 +694,7 @@ class BrowserSidecarJob:
         self.readiness: Mapping[str, Any] | None = None
         self.broker_readiness: Mapping[str, Any] | None = None
         self.broker_terminal: Mapping[str, Any] | None = None
+        self.nested_gate_predicates: Mapping[str, bool] | None = None
         self.request_count = 0
         self.first_error: str | None = None
         self.cleanup_errors: list[str] = []
@@ -643,6 +714,16 @@ class BrowserSidecarJob:
                 "Browser Sidecar startup was interrupted",
                 check="startup-signal",
             )
+
+    def record_nested_gate(self, proof: Any) -> None:
+        """Record the outer-validated one-shot proof before Agent exec."""
+
+        if self.nested_gate_predicates is not None:
+            raise BrowserSidecarError(
+                "nested Browser Gate proof was already recorded",
+                check="nested-gate-duplicate",
+            )
+        self.nested_gate_predicates = validate_nested_gate_proof(proof)
 
     def _docker(
         self,
@@ -885,6 +966,7 @@ class BrowserSidecarJob:
         for path, check in (
             (self.authority_path, "authority-preexisting"),
             (self.socket_path, "broker-socket-preexisting"),
+            (self.nested_gate_socket_path, "nested-gate-socket-preexisting"),
         ):
             if path.exists() or path.is_symlink():
                 raise BrowserSidecarError(
@@ -1202,7 +1284,6 @@ class BrowserSidecarJob:
                             or not isinstance(program_predicates, dict)
                             or set(program_predicates)
                             != {
-                                "residualPublicParity",
                                 "residualEightView",
                                 "viewerProjectionChanged",
                                 "viewerArtifactClean",
@@ -1403,47 +1484,55 @@ class BrowserSidecarJob:
                 for count in program_counts.values()
             )
         )
+        nested = self.nested_gate_predicates or {}
         predicates = {
             "sidecarReady": self.readiness is not None,
             "brokerReady": self.broker_readiness is not None,
-            "sourceAliasesHidden": (
+            "brokerSourceHidden": (
                 isinstance(self.broker_readiness, dict)
                 and isinstance(self.broker_readiness.get("isolation"), dict)
                 and self.broker_readiness["isolation"].get("sourceAliasesVisible") == []
             ),
-            "externalEgressBlocked": (
+            "brokerEgressBlocked": (
                 isinstance(self.broker_readiness, dict)
                 and isinstance(self.broker_readiness.get("isolation"), dict)
                 and self.broker_readiness["isolation"].get("externalEgressBlocked") is True
             ),
             "socketFixed": self.socket_identity is not None,
-            "residualAccepted": (
+            "brokerResidualAccepted": (
                 counts_valid and program_counts.get("residual", 0) >= 1
             ),
-            "residualPublicParity": (
-                isinstance(program_predicates, dict)
-                and program_predicates.get("residualPublicParity") is True
-            ),
-            "residualEightView": (
+            "brokerResidualEightView": (
                 isinstance(program_predicates, dict)
                 and program_predicates.get("residualEightView") is True
             ),
-            "viewerAccepted": (
+            "brokerViewerAccepted": (
                 counts_valid and program_counts.get("viewer", 0) >= 1
             ),
-            "viewerProjectionChanged": (
+            "brokerViewerProjectionChanged": (
                 isinstance(program_predicates, dict)
                 and program_predicates.get("viewerProjectionChanged") is True
             ),
-            "viewerArtifactClean": (
+            "brokerViewerArtifactClean": (
                 isinstance(program_predicates, dict)
                 and program_predicates.get("viewerArtifactClean") is True
             ),
-            "freshContextsExact": (
+            "brokerFreshContextsExact": (
                 counts_valid
                 and accepted == sum(program_counts.values())
                 and fresh_contexts == accepted + 1
             ),
+            "nestedPublicResidualParity": nested.get("publicResidualParity") is True,
+            "nestedViewerProjectionChanged": (
+                nested.get("viewerProjectionChanged") is True
+            ),
+            "nestedViewerArtifactClean": nested.get("viewerArtifactClean") is True,
+            "nestedBrowserInventoryEmpty": (
+                nested.get("browserInventoryEmpty") is True
+            ),
+            "nestedBrowserProcessZero": nested.get("browserProcessZero") is True,
+            "nestedSourceHidden": nested.get("sourceHidden") is True,
+            "nestedEgressBlocked": nested.get("egressBlocked") is True,
             "brokerTerminalZero": (
                 isinstance(broker_status, int)
                 and not isinstance(broker_status, bool)
@@ -1466,16 +1555,22 @@ class BrowserSidecarJob:
         failure_by_predicate = {
             "sidecarReady": "sidecar-readiness",
             "brokerReady": "broker-readiness",
-            "sourceAliasesHidden": "source-alias",
-            "externalEgressBlocked": "external-egress",
+            "brokerSourceHidden": "broker-source-alias",
+            "brokerEgressBlocked": "broker-external-egress",
             "socketFixed": "broker-socket",
-            "residualAccepted": "residual-required",
-            "residualPublicParity": "residual-public-parity",
-            "residualEightView": "residual-eight-view",
-            "viewerAccepted": "viewer-required",
-            "viewerProjectionChanged": "viewer-projection",
-            "viewerArtifactClean": "viewer-artifact",
-            "freshContextsExact": "fresh-contexts",
+            "brokerResidualAccepted": "residual-required",
+            "brokerResidualEightView": "residual-eight-view",
+            "brokerViewerAccepted": "viewer-required",
+            "brokerViewerProjectionChanged": "viewer-projection",
+            "brokerViewerArtifactClean": "viewer-artifact",
+            "brokerFreshContextsExact": "fresh-contexts",
+            "nestedPublicResidualParity": "nested-public-parity",
+            "nestedViewerProjectionChanged": "nested-viewer-projection",
+            "nestedViewerArtifactClean": "nested-viewer-artifact",
+            "nestedBrowserInventoryEmpty": "nested-browser-inventory",
+            "nestedBrowserProcessZero": "nested-browser-process",
+            "nestedSourceHidden": "nested-source-alias",
+            "nestedEgressBlocked": "nested-external-egress",
             "brokerTerminalZero": "broker-terminal",
             "sidecarClosingExact": "sidecar-closing",
             "sidecarTerminalZero": "sidecar-terminal",

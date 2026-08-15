@@ -858,6 +858,97 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(state.workload_started)
         popen.assert_called_once()
 
+    def test_signal_during_nested_gate_preserves_143_without_agent_exec(self) -> None:
+        """A signal while proof is pending withholds release and keeps signal status."""
+
+        tap = FakeProcess()
+        gate_process = FakeProcess()
+        state = self.supervisor.LifecycleState()
+        supervisor = self.supervisor
+
+        class FakeRelay:
+            signum = None
+            child = None
+
+            @property
+            def cancelled(self):
+                return self.signum is not None
+
+            def attach(self, child):
+                self.child = child
+
+            def detach(self):
+                self.child = None
+
+        relay = FakeRelay()
+
+        class FakeSidecar:
+            capability_dir = self.exp_dir
+
+            def record_nested_gate(self, proof):
+                raise AssertionError("signalled proof must not be recorded")
+
+        class FakeGateChannel:
+            def __init__(self, capability_dir):
+                self.released = False
+
+            def receive(self, cancelled):
+                relay.signum = signal.SIGTERM
+                raise supervisor.PilotError("nested-gate interrupted")
+
+            def release(self):
+                self.released = True
+                raise AssertionError("signalled gate must not release")
+
+            def close(self):
+                return None
+
+        with (
+            mock.patch.object(self.supervisor, "resolve_tap", return_value="/fake/tap"),
+            mock.patch.object(
+                self.supervisor,
+                "RetryProxy",
+                return_value=FakeRetryProxy(),
+            ),
+            mock.patch.object(self.supervisor, "start_tap", return_value=tap),
+            mock.patch.object(self.supervisor, "wait_ready", return_value=18888),
+            mock.patch.object(
+                self.supervisor,
+                "build_bwrap_argv",
+                return_value=["/fake/bwrap", "--", "/fixed/gate"],
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "NestedGateChannel",
+                FakeGateChannel,
+            ),
+            mock.patch.object(
+                self.supervisor.subprocess,
+                "Popen",
+                return_value=gate_process,
+            ),
+            mock.patch.object(self.supervisor, "signal_process_group"),
+            mock.patch.object(self.supervisor, "wait_workload") as wait_workload,
+            mock.patch.object(self.supervisor, "stop_tap"),
+            mock.patch.object(
+                self.supervisor,
+                "read_trace",
+                side_effect=self.supervisor.TapError("missing trace"),
+            ),
+        ):
+            status = self.supervisor.run_supervised(
+                self.exp_dir,
+                [],
+                ["/fixed/agent"],
+                self.environ,
+                state,
+                FakeSidecar(),
+                relay,
+            )
+        self.assertEqual(status, 143)
+        self.assertFalse(state.workload_started)
+        wait_workload.assert_not_called()
+
     def test_run_pilot_owns_sidecar_around_nested_workload(self) -> None:
         events: list[object] = []
         supervisor = self.supervisor
