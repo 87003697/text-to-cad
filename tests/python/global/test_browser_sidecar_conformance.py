@@ -386,6 +386,16 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             "DAC_READ_SEARCH", conformance._fixed_container_isolation(user="0:0")
         )
 
+    def test_surface_discovery_has_one_bounded_cpu(self) -> None:
+        """The exhaustive immutable scan finishes inside the fixed host limit."""
+
+        discovery = conformance._fixed_container_isolation(
+            user="0:0", read_only_discovery=True
+        )
+        workload = conformance._fixed_container_isolation()
+        self.assertEqual(discovery[discovery.index("--cpus") + 1], "1")
+        self.assertEqual(workload[workload.index("--cpus") + 1], "0.5")
+
     def test_cleanup_failure_dominates_discovery_failure(self) -> None:
         """A failed removal remains the terminal discovery classification."""
 
