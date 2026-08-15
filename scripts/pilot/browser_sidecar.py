@@ -1008,48 +1008,64 @@ class BrowserSidecarJob:
                 self.cleanup_errors.append("broker-terminal")
         terminal: Mapping[str, Any] | None = None
         if self.container_id is not None:
-            stopped = self._docker(
-                "stop",
-                "--time",
-                "15",
-                self.container_id,
-                check=False,
-            )
-            if stopped.returncode:
+            try:
+                stopped = self._docker(
+                    "stop",
+                    "--time",
+                    "15",
+                    self.container_id,
+                    check=False,
+                )
+            except BrowserSidecarError:
                 self.cleanup_errors.append("sidecar-stop")
-            inspected = self._docker(
-                "container",
-                "inspect",
-                self.container_id,
-                "--format",
-                "{{json .State}}",
-                check=False,
-            )
-            if inspected.returncode:
+            else:
+                if stopped.returncode:
+                    self.cleanup_errors.append("sidecar-stop")
+            try:
+                inspected = self._docker(
+                    "container",
+                    "inspect",
+                    self.container_id,
+                    "--format",
+                    "{{json .State}}",
+                    check=False,
+                )
+            except BrowserSidecarError:
                 self.cleanup_errors.append("sidecar-terminal")
             else:
-                try:
-                    payload = _strict_json(inspected.stdout, "sidecar-terminal")
-                    terminal = payload if isinstance(payload, dict) else None
-                except BrowserSidecarError:
+                if inspected.returncode:
                     self.cleanup_errors.append("sidecar-terminal")
-            removed = self._docker(
-                "rm",
-                "-f",
-                self.container_id,
-                check=False,
-            )
-            if removed.returncode:
+                else:
+                    try:
+                        payload = _strict_json(inspected.stdout, "sidecar-terminal")
+                        terminal = payload if isinstance(payload, dict) else None
+                    except BrowserSidecarError:
+                        self.cleanup_errors.append("sidecar-terminal")
+            try:
+                removed = self._docker(
+                    "rm",
+                    "-f",
+                    self.container_id,
+                    check=False,
+                )
+            except BrowserSidecarError:
                 self.cleanup_errors.append("container-remove")
+            else:
+                if removed.returncode:
+                    self.cleanup_errors.append("container-remove")
         if self.network_id is not None:
-            removed = self._docker(
-                "network",
-                "rm",
-                self.network_id,
-                check=False,
-            )
-            if removed.returncode:
+            try:
+                removed = self._docker(
+                    "network",
+                    "rm",
+                    self.network_id,
+                    check=False,
+                )
+            except BrowserSidecarError:
                 self.cleanup_errors.append("network-remove")
+            else:
+                if removed.returncode:
+                    self.cleanup_errors.append("network-remove")
         absence = (
             self._prove_absence()
             if self.docker is not None
@@ -1062,8 +1078,14 @@ class BrowserSidecarJob:
         )
         if absence.get("proved") is not True:
             self.cleanup_errors.append("retained-resource")
-        self.authority_path.unlink(missing_ok=True)
-        self.socket_path.unlink(missing_ok=True)
+        for path, error in (
+            (self.authority_path, "authority-remove"),
+            (self.socket_path, "socket-remove"),
+        ):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                self.cleanup_errors.append(error)
         try:
             self.capability_dir.rmdir()
         except FileNotFoundError:
