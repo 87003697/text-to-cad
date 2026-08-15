@@ -6,17 +6,23 @@ Ticket: `browser-sidecar-formal-pilot-integration`
 
 Group: `WEG-1` (singleton; serialized runner/render contracts)
 
-Owner: `/root/browser_sidecar_formal_pilot_owner`
+Owner: `/root` (continuation of `/root/browser_sidecar_formal_pilot_owner`)
 
 ## Git identity
 
 - Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
-- Branch: `codex/browser-sidecar-formal-pilot-20260815`
+- Branch: `codex/browser-sidecar-formal-pilot-resume-20260815`
 - Worktree:
-  `/private/tmp/text-to-cad-browser-sidecar-formal-pilot-20260815`
+  `/private/tmp/text-to-cad-browser-sidecar-formal-pilot-resume-20260815`
 - Review range:
   `90bc24cf8860125b158c5f04ddc5dfd65efbcb39..HEAD`
 - Owner has not self-approved Standards or Spec.
+
+The original ephemeral worktree was cleared by the host after the prior session,
+but its committed HEAD `fd4a9db9...` and branch metadata remained. This
+continuation created the isolated worktree above from that exact commit and
+reconstructed only the uncommitted image-lock/spec patch recorded verbatim in
+the session JSONL. The dirty `develop` root was not used or modified.
 
 ## Implemented checkpoint
 
@@ -193,9 +199,13 @@ wholesale from it.
 
 Passed for the current review corrections:
 
-- Focused Browser Sidecar, conformance host, surface scanner, nested gate,
-  runner, and public renderer suites: **91 tests, OK**.
-- Global policy gate: **241 tests, OK** in two deterministic groups (154 + 87)
+- Exact locked-image extraction and real packaged-client gate: **2 tests, OK**.
+- Focused Browser Sidecar, conformance host, sealed-image contract, surface
+  scanner, nested gate, runner, and public renderer suites: **99 tests, OK**
+  (**2 opt-in image tests skipped** in this non-Docker aggregate and passed
+  separately above).
+- Global policy gate: **249 tests, OK** in two deterministic groups (162 + 87,
+  with the same 2 opt-in image tests skipped in the first group)
   because the combined wrapper exceeds the local command ceiling.
 - Affected meshshot profile/renderer: **11 tests, OK**.
 - Public `mesh-compare` preview CLI: **8 tests, OK**.
@@ -288,20 +298,22 @@ preserved artifact. The same SHA/handle was not rerun.
   inventories were empty and the capability tree was absent.
 - Interrupted build container `16fa5b53...`: exact-owned and removed.
 - Docker build intermediate containers: removed by successful builds.
-- The exact dedicated Docker socket remained live and served Linux/amd64. The
-  Colima CLI profile registry reported the profile stopped, so no profile state
-  mutation was attempted.
+- After host restart, the dedicated Colima profile registry was `Stopped` and
+  the socket absent. Starting the existing profile preserved its disk and
+  images; its VM, guest agent, Docker 29.5.2 socket, and exact locked image all
+  became usable. The CLI registry reports `Broken` because the start frontend
+  was cut off by its execution ceiling after boot completion; no profile
+  rebuild, deletion, or image mutation was performed.
 - Historical reviewed/superseded images and final Broker image
   `sha256:9709c13...e59e5`: retained; no image deletion was authorized. The
   first full-context `fd4a9db9...` build was rejected by byte-parity extraction
   because the legacy builder admitted working-tree bytecode; its image
   `sha256:51137e53...62bb` remains retained and is not an accepted artifact.
-- Byte-parity extraction residue is retained at
-  `/tmp/browser-sidecar-broker-inspect-d2ee3b68.488VjC`. It is an owner-created
-  ordinary directory tree with no symlinks; its Docker-extracted directories
-  and files are read-only. The first exact deletion attempt failed with
-  permission errors. Per the destructive-action boundary it was not chmodded,
-  retried, or reused; cleanup is deferred to the user.
+- The prior byte-parity extraction residue and `fd4a9db9` build contexts under
+  `/tmp` were absent after the host cleared ephemeral storage. This continuation
+  did not chmod, retry deletion, or reuse those paths.
+- Final read-only Docker inventory found no `ttc-bs-*` or Browser Sidecar
+  container/network residue after the exact-image tests.
 - No unrelated Docker resource was adopted, stopped, relabeled, or removed.
 
 ## Deferred interaction and required next action
