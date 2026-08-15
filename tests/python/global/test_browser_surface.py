@@ -127,6 +127,16 @@ class BrowserSurfaceTests(unittest.TestCase):
             target.write_bytes(b"\x7fELF" + b"\0" * 64)
             target.chmod(0o755)
             (usr / "bin/chromium").symlink_to(target)
+            certificate = usr / "share/certs/vendor.pem"
+            certificate.parent.mkdir(parents=True)
+            certificate.write_text("certificate", encoding="utf-8")
+            (etc / "certs").mkdir()
+            (etc / "certs/current").symlink_to(certificate)
+            (etc / "certs/hash.0").symlink_to("current")
+            package_target = etc / "alternatives/vendor-package"
+            package_target.write_text('{"name":"playwright"}', encoding="utf-8")
+            (usr / "lib/vendor").mkdir(parents=True)
+            (usr / "lib/vendor/package.json").symlink_to(package_target)
 
             findings = browser_surface.discover_browser_roots(
                 [(usr, Path("/sandbox/usr"), True), (etc, Path("/sandbox/etc"), True)],
@@ -140,6 +150,11 @@ class BrowserSurfaceTests(unittest.TestCase):
                         "kind": "executable",
                         "target": "/sandbox/usr/bin/chromium",
                         "mask": "dev-null",
+                    },
+                    {
+                        "kind": "package",
+                        "target": "/sandbox/usr/lib/vendor",
+                        "mask": "tmpfs",
                     }
                 ],
             )
