@@ -25,13 +25,20 @@ SIDECAR_ID = "sha256:" + hashlib.sha256(SIDECAR_CONFIG_BLOB).hexdigest()
 CLIENT_ID = "sha256:" + hashlib.sha256(CLIENT_CONFIG_BLOB).hexdigest()
 LOADED_SIDECAR_ID = "sha256:" + "e" * 64
 LOADED_CLIENT_ID = "sha256:" + "f" * 64
+FIXED_REFERENCE_NONCE = "9" * 32
 PORTABLE_SIDECAR_CONFIG = SIDECAR_CONFIG_BLOB
 PORTABLE_CLIENT_CONFIG = CLIENT_CONFIG_BLOB
 PORTABLE_SIDECAR_ID = SIDECAR_ID
 PORTABLE_CLIENT_ID = CLIENT_ID
 
 
-def remote_provision_images() -> list[dict[str, object]]:
+def archive_reference(handle: str, role: str) -> str:
+    return (
+        f"text-to-cad-cvm-sidecar-{role}:{handle}-{FIXED_REFERENCE_NONCE}"
+    )
+
+
+def remote_provision_images(handle: str) -> list[dict[str, object]]:
     return [
         {
             "role": "sidecar",
@@ -39,6 +46,7 @@ def remote_provision_images() -> list[dict[str, object]]:
             "platform": "linux/amd64",
             "configSha256": SIDECAR_ID.removeprefix("sha256:"),
             "sourceRevision": SOURCE_REVISION,
+            "archiveReference": archive_reference(handle, "sidecar"),
         },
         {
             "role": "client",
@@ -46,6 +54,7 @@ def remote_provision_images() -> list[dict[str, object]]:
             "platform": "linux/amd64",
             "configSha256": CLIENT_ID.removeprefix("sha256:"),
             "sourceRevision": SOURCE_REVISION,
+            "archiveReference": archive_reference(handle, "client"),
         },
     ]
 
@@ -64,7 +73,7 @@ def write_remote_provision_attempt_fixture(
     incoming.mkdir(parents=True)
     archive_bytes = b"x"
     archive_sha = hashlib.sha256(archive_bytes).hexdigest()
-    image_receipts = images if images is not None else remote_provision_images()
+    image_receipts = images if images is not None else remote_provision_images(handle)
     (state / "provision-attempt.json").write_text(
         json.dumps(
             {
@@ -271,6 +280,7 @@ def write_verified_local_provision(repo: Path, handle: str) -> dict[str, object]
             "platform": "linux/amd64",
             "configSha256": SIDECAR_ID.removeprefix("sha256:"),
             "sourceRevision": SOURCE_REVISION,
+            "archiveReference": archive_reference(handle, "sidecar"),
         },
         {
             "role": "client",
@@ -278,6 +288,7 @@ def write_verified_local_provision(repo: Path, handle: str) -> dict[str, object]
             "platform": "linux/amd64",
             "configSha256": CLIENT_ID.removeprefix("sha256:"),
             "sourceRevision": SOURCE_REVISION,
+            "archiveReference": archive_reference(handle, "client"),
         },
     ]
     prepare = {
@@ -436,7 +447,14 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     Path(arguments[4]).write_bytes(b"fixed archive")
                 return subprocess.CompletedProcess(arguments, 0, "", "")
 
-            images = remote_provision_images()
+            images = [
+                {
+                    key: value
+                    for key, value in image.items()
+                    if key != "archiveReference"
+                }
+                for image in remote_provision_images("cvmsp-" + "0" * 24)
+            ]
             args = type(
                 "Args",
                 (),
@@ -469,10 +487,17 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 receipt = cvm_sidecar_probe.prepare(args)
 
             handle = str(receipt["handle"])
-            references = [
-                f"text-to-cad-cvm-sidecar-sidecar:{handle}",
-                f"text-to-cad-cvm-sidecar-client:{handle}",
-            ]
+            receipt_images = receipt["images"]
+            self.assertIsInstance(receipt_images, list)
+            references = [str(image["archiveReference"]) for image in receipt_images]
+            self.assertRegex(
+                references[0],
+                rf"^text-to-cad-cvm-sidecar-sidecar:{handle}-[0-9a-f]{{32}}$",
+            )
+            self.assertRegex(
+                references[1],
+                rf"^text-to-cad-cvm-sidecar-client:{handle}-[0-9a-f]{{32}}$",
+            )
             tag_commands = [command for command in commands if command[1:3] == ["image", "tag"]]
             remove_commands = [command for command in commands if command[1:3] == ["image", "rm"]]
             save_command = next(command for command in commands if command[1:3] == ["image", "save"])
@@ -492,6 +517,159 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(local_references, {})
+
+    def test_prepare_never_removes_a_retargeted_foreign_reference(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-retargeted-tag-") as root_text:
+            root = Path(root_text)
+            state_root = root / ".cvm-sidecar-probes"
+            local_references: dict[str, str] = {}
+            removed: list[str] = []
+            foreign_id = "sha256:" + "7" * 64
+
+            def fixed_run(argv: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                del kwargs
+                arguments = list(argv)
+                if arguments[1:3] == ["image", "ls"]:
+                    reference = arguments[-1]
+                    image_id = local_references.get(reference)
+                    return subprocess.CompletedProcess(
+                        arguments, 0, f"{image_id}\n" if image_id else "", ""
+                    )
+                if arguments[1:3] == ["image", "tag"]:
+                    local_references[arguments[4]] = arguments[3]
+                elif arguments[1:3] == ["image", "save"]:
+                    Path(arguments[4]).write_bytes(b"fixed archive")
+                    sidecar_reference = next(
+                        reference
+                        for reference in local_references
+                        if "-sidecar:" in reference
+                    )
+                    local_references[sidecar_reference] = foreign_id
+                elif arguments[1:3] == ["image", "rm"]:
+                    removed.append(arguments[3])
+                    local_references.pop(arguments[3], None)
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+
+            images = [
+                {
+                    key: value
+                    for key, value in image.items()
+                    if key != "archiveReference"
+                }
+                for image in remote_provision_images("cvmsp-" + "0" * 24)
+            ]
+            args = type(
+                "Args",
+                (),
+                {
+                    "source_revision": SOURCE_REVISION,
+                    "sidecar_image": SIDECAR_ID,
+                    "client_image": CLIENT_ID,
+                },
+            )()
+            with (
+                mock.patch.object(cvm_sidecar_probe, "REPO_ROOT", root),
+                mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_inspect_workflow_source",
+                    return_value="b" * 40,
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_workflow_file_hashes",
+                    return_value={"module": "1" * 64, "wrapper": "2" * 64},
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe, "_inspect_image", side_effect=images
+                ),
+                mock.patch.object(cvm_sidecar_probe, "_run", side_effect=fixed_run),
+            ):
+                with self.assertRaises(cvm_sidecar_probe.ProbeError) as error:
+                    cvm_sidecar_probe.prepare(args)
+
+            self.assertEqual(error.exception.check, "prepare-cleanup-absence")
+            sidecar_reference = next(
+                reference for reference in local_references if "-sidecar:" in reference
+            )
+            self.assertEqual(local_references, {sidecar_reference: foreign_id})
+            self.assertNotIn(sidecar_reference, removed)
+            self.assertTrue(all("-client:" in reference for reference in removed))
+
+    def test_prepare_rechecks_every_owned_reference_before_save(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-pre-save-retarget-") as root_text:
+            root = Path(root_text)
+            state_root = root / ".cvm-sidecar-probes"
+            local_references: dict[str, str] = {}
+            save_called = False
+            foreign_id = "sha256:" + "7" * 64
+
+            def fixed_run(argv: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                nonlocal save_called
+                del kwargs
+                arguments = list(argv)
+                if arguments[1:3] == ["image", "ls"]:
+                    reference = arguments[-1]
+                    image_id = local_references.get(reference)
+                    return subprocess.CompletedProcess(
+                        arguments, 0, f"{image_id}\n" if image_id else "", ""
+                    )
+                if arguments[1:3] == ["image", "tag"]:
+                    local_references[arguments[4]] = arguments[3]
+                    if "-client:" in arguments[4]:
+                        sidecar_reference = next(
+                            reference
+                            for reference in local_references
+                            if "-sidecar:" in reference
+                        )
+                        local_references[sidecar_reference] = foreign_id
+                elif arguments[1:3] == ["image", "save"]:
+                    save_called = True
+                    Path(arguments[4]).write_bytes(b"unsafe archive")
+                elif arguments[1:3] == ["image", "rm"]:
+                    local_references.pop(arguments[3], None)
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+
+            images = [
+                {
+                    key: value
+                    for key, value in image.items()
+                    if key != "archiveReference"
+                }
+                for image in remote_provision_images("cvmsp-" + "0" * 24)
+            ]
+            args = type(
+                "Args",
+                (),
+                {
+                    "source_revision": SOURCE_REVISION,
+                    "sidecar_image": SIDECAR_ID,
+                    "client_image": CLIENT_ID,
+                },
+            )()
+            with (
+                mock.patch.object(cvm_sidecar_probe, "REPO_ROOT", root),
+                mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_inspect_workflow_source",
+                    return_value="b" * 40,
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_workflow_file_hashes",
+                    return_value={"module": "1" * 64, "wrapper": "2" * 64},
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe, "_inspect_image", side_effect=images
+                ),
+                mock.patch.object(cvm_sidecar_probe, "_run", side_effect=fixed_run),
+            ):
+                with self.assertRaises(cvm_sidecar_probe.ProbeError) as error:
+                    cvm_sidecar_probe.prepare(args)
+
+            self.assertEqual(error.exception.check, "prepare-cleanup-absence")
+            self.assertFalse(save_called)
 
     def test_public_wrapper_exposes_only_prepare_provision_and_probe(self) -> None:
         result = subprocess.run(
@@ -1858,7 +2036,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     handle = "cvmsp-" + "6" * 24
                     owner = "a" * 32
                     workflow = {"module": "1" * 64, "wrapper": "2" * 64}
-                    images = remote_provision_images()
+                    images = remote_provision_images(handle)
                     if field == "receipt":
                         target = 0 if role == "sidecar" else 1
                         images[target]["configSha256"] = "f" * 64
@@ -1949,10 +2127,13 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
 
             enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
 
-            def missing_sidecar(reference: str) -> frozenset[str]:
-                if "-sidecar:" in reference:
-                    return frozenset()
-                return frozenset({LOADED_CLIENT_ID})
+            inventory_calls: dict[str, int] = {}
+
+            def missing_sidecar(reference: str) -> tuple[str, ...]:
+                inventory_calls[reference] = inventory_calls.get(reference, 0) + 1
+                if inventory_calls[reference] == 1 or "-sidecar:" in reference:
+                    return ()
+                return (LOADED_CLIENT_ID,)
 
             with (
                 mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
@@ -2083,10 +2264,13 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
 
             enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
 
-            def missing_client(reference: str) -> frozenset[str]:
-                if "-client:" in reference:
-                    return frozenset()
-                return frozenset({LOADED_SIDECAR_ID})
+            inventory_calls: dict[str, int] = {}
+
+            def missing_client(reference: str) -> tuple[str, ...]:
+                inventory_calls[reference] = inventory_calls.get(reference, 0) + 1
+                if inventory_calls[reference] == 1 or "-client:" in reference:
+                    return ()
+                return (LOADED_SIDECAR_ID,)
 
             with (
                 mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
@@ -2146,12 +2330,17 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
 
             enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
             role_references = {
-                f"text-to-cad-cvm-sidecar-sidecar:{handle}": LOADED_SIDECAR_ID,
-                f"text-to-cad-cvm-sidecar-client:{handle}": LOADED_CLIENT_ID,
+                archive_reference(handle, "sidecar"): LOADED_SIDECAR_ID,
+                archive_reference(handle, "client"): LOADED_CLIENT_ID,
             }
 
-            def loaded_role_id(reference: str) -> frozenset[str]:
-                return frozenset({role_references[reference]})
+            inventory_calls: dict[str, int] = {}
+
+            def loaded_role_id(reference: str) -> tuple[str, ...]:
+                inventory_calls[reference] = inventory_calls.get(reference, 0) + 1
+                if inventory_calls[reference] == 1:
+                    return ()
+                return (role_references[reference],)
 
             with (
                 mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
@@ -2198,10 +2387,143 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 [LOADED_SIDECAR_ID, LOADED_CLIENT_ID],
             )
 
+    def test_remote_provision_rejects_reference_collision_before_load(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-remote-collision-") as root_text:
+            handle = "cvmsp-" + "d" * 24
+            owner = "e" * 32
+            workflow = {"module": "1" * 64, "wrapper": "2" * 64}
+            state_root, state, incoming = write_remote_provision_attempt_fixture(
+                Path(root_text), handle, owner, workflow
+            )
+            foreign_id = "sha256:" + "7" * 64
+            commands: list[list[str]] = []
+
+            def forbidden_load(argv: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                del kwargs
+                arguments = list(argv)
+                commands.append(arguments)
+                raise AssertionError("docker load must not run after a reference collision")
+
+            def collided_inventory(reference: str) -> tuple[str, ...]:
+                if "-sidecar:" in reference:
+                    return (foreign_id,)
+                return ()
+
+            enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
+            with (
+                mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
+                mock.patch.object(
+                    cvm_sidecar_probe, "_workflow_file_hashes", return_value=workflow
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe.shutil, "disk_usage", return_value=enough
+                ),
+                mock.patch.object(cvm_sidecar_probe, "_run", side_effect=forbidden_load),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_loaded_image_ids",
+                    side_effect=collided_inventory,
+                ),
+            ):
+                receipt = cvm_sidecar_probe.remote_provision(handle, owner)
+
+            self.assertEqual(receipt["status"], "failed")
+            self.assertEqual(receipt["errorCheck"], "sidecar-loaded-id")
+            self.assertEqual(commands, [])
+            self.assertEqual(receipt["transferCleanup"]["errors"], [])
+            self.assertFalse(incoming.exists())
+            self.assertEqual(json.loads((state / "provision.json").read_text()), receipt)
+
+    def test_remote_provision_load_output_loss_never_adopts_a_reference(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-load-output-loss-") as root_text:
+            handle = "cvmsp-" + "e" * 24
+            owner = "f" * 32
+            workflow = {"module": "1" * 64, "wrapper": "2" * 64}
+            state_root, state, incoming = write_remote_provision_attempt_fixture(
+                Path(root_text), handle, owner, workflow
+            )
+            inventory_calls: list[str] = []
+
+            def empty_inventory(reference: str) -> tuple[str, ...]:
+                inventory_calls.append(reference)
+                return ()
+
+            def lost_load(argv: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+                del kwargs
+                arguments = list(argv)
+                if arguments[1:3] == ["image", "load"]:
+                    raise cvm_sidecar_probe.ProbeError("fixed lost load output")
+                raise AssertionError(f"unexpected command: {arguments}")
+
+            enough = type("Usage", (), {"free": 4 * 1024 * 1024 * 1024})()
+            with (
+                mock.patch.object(cvm_sidecar_probe, "LOCAL_STATE_ROOT", state_root),
+                mock.patch.object(
+                    cvm_sidecar_probe, "_workflow_file_hashes", return_value=workflow
+                ),
+                mock.patch.object(
+                    cvm_sidecar_probe.shutil, "disk_usage", return_value=enough
+                ),
+                mock.patch.object(cvm_sidecar_probe, "_run", side_effect=lost_load),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_loaded_image_ids",
+                    side_effect=empty_inventory,
+                ),
+            ):
+                receipt = cvm_sidecar_probe.remote_provision(handle, owner)
+
+            self.assertEqual(receipt["status"], "failed")
+            self.assertEqual(receipt["errorCheck"], "image-load")
+            self.assertEqual(len(inventory_calls), 2)
+            self.assertEqual(receipt["transferCleanup"]["errors"], [])
+            self.assertFalse(incoming.exists())
+            self.assertEqual(json.loads((state / "provision.json").read_text()), receipt)
+
+    def test_loaded_image_inventory_preserves_exact_limit_multiplicity(self) -> None:
+        original_popen = subprocess.Popen
+        with tempfile.TemporaryDirectory(prefix="cvm-sidecar-inventory-multiplicity-") as root_text:
+            inventory_path = Path(root_text) / "inventory.bin"
+            inventory_path.write_bytes(
+                (f"{LOADED_SIDECAR_ID}\n" * 4096).encode("ascii")
+            )
+
+            def streaming_popen(
+                argv: object, **kwargs: object
+            ) -> subprocess.Popen[bytes]:
+                self.assertEqual(
+                    list(argv),
+                    [
+                        "docker",
+                        "image",
+                        "ls",
+                        "--all",
+                        "--no-trunc",
+                        "--quiet",
+                        "fixed-reference",
+                    ],
+                )
+                return original_popen(
+                    [
+                        sys.executable,
+                        "-c",
+                        "import pathlib,sys;sys.stdout.buffer.write(pathlib.Path(sys.argv[1]).read_bytes())",
+                        os.fspath(inventory_path),
+                    ],
+                    **kwargs,
+                )
+
+            with mock.patch.object(
+                cvm_sidecar_probe.subprocess, "Popen", side_effect=streaming_popen
+            ):
+                image_ids = cvm_sidecar_probe._loaded_image_ids("fixed-reference")
+
+            self.assertEqual(len(image_ids), 4096)
+            self.assertEqual(set(image_ids), {LOADED_SIDECAR_ID})
+
     def test_remote_provision_streams_bounded_loaded_image_inventory(self) -> None:
         original_popen = subprocess.Popen
         cases = (
-            ("exact-limit", 4096, None),
             ("line-overflow", 4097, "image-inventory-format"),
             ("oversized-line", None, "image-inventory-format"),
         )
@@ -2300,11 +2622,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 ):
                     receipt = cvm_sidecar_probe.remote_provision(handle, owner)
 
-                if expected_check is None:
-                    self.assertEqual(receipt["status"], "provisioned", receipt)
-                else:
-                    self.assertEqual(receipt["status"], "failed", receipt)
-                    self.assertEqual(receipt["errorCheck"], expected_check)
+                self.assertEqual(receipt["status"], "failed", receipt)
+                self.assertEqual(receipt["errorCheck"], expected_check)
                 self.assertEqual(
                     receipt["transferCleanup"],
                     {
