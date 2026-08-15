@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -323,6 +324,23 @@ class BrowserSidecarJobTests(unittest.TestCase):
             self.assertEqual(job.socket_path.read_text(encoding="utf-8"), "foreign")
 
         self.assertEqual(caught.exception.check, "broker-socket-preexisting")
+
+    def test_public_job_canonicalizes_capability_bind_source(self) -> None:
+        """The Docker bind source uses the host-canonical path across adapters."""
+
+        returned = Path("/tmp") / ".." / "tmp" / "formal-capability"
+        with mock.patch.object(
+            browser_sidecar.tempfile,
+            "mkdtemp",
+            return_value=os.fspath(returned),
+        ):
+            job = browser_sidecar.BrowserSidecarJob(
+                Path("/tmp/formal-exp"),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+            )
+
+        self.assertEqual(job.capability_dir, returned.resolve())
 
 
 class RegisteredProgramBrokerTests(unittest.TestCase):
