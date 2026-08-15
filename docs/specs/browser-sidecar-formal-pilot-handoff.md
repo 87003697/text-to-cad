@@ -159,9 +159,9 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Browser-less Broker base:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Final corrected Broker:
-  `sha256:f84b1ae3e947201e4765f6b46ddb5aec517fc807a44e9b563751cf128dd21432`
+  `sha256:db02c3ff8e5784c253eca924bd48043a4612da52fef0cbc0300f723f18d7e819`
 - Broker OCI revision:
-  `07aa60531b2275256975161ed97906052210a39e`
+  `c197a36047bf628736d639202bfebf612e8bb92d`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
   `sha256:05f4b5b8b99380677c7861e04cb8a9a3c1624206bad59696f825e7f0d4c55c5c`
 - Platform: `linux/amd64`
@@ -194,12 +194,15 @@ then removed.
 - `scripts/pilot/browser_gate_contract.py`
 - `scripts/pilot/browser_sidecar_gate.py`
 - `scripts/pilot/browser_surface.py`
+- `scripts/pilot/cvm_sidecar_probe.py`
 - `scripts/pilot/runner.py`
+- `.claude/skills/cvm-sidecar-probe/SKILL.md`
 - `tests/python/global/test_browser_sidecar.py`
 - `tests/python/global/test_browser_sidecar_conformance.py`
 - `tests/python/global/test_browser_sidecar_broker_image.py`
 - `tests/python/global/test_browser_sidecar_gate.py`
 - `tests/python/global/test_browser_surface.py`
+- `tests/python/global/test_cvm_sidecar_probe.py`
 - `tests/python/global/test_pilot_runner.py`
 - `tests/python/packages/meshshot/test_renderer.py`
 - `tests/python/fixtures/browser_sidecar_image_harness.py`
@@ -214,11 +217,13 @@ Passed for the current review corrections:
 
 - Exact locked-image extraction and real packaged-client gate: **2 tests, OK**.
 - Focused Browser Sidecar, conformance host, sealed-image contract, surface
-  scanner, nested gate, runner, and public renderer suites: **102 tests, OK**
+  scanner, nested gate, runner, and public renderer suites: **103 tests, OK**
   (**2 opt-in image tests skipped** in this non-Docker aggregate and passed
   separately above).
-- Global policy gate: **252 tests, OK**, with the same 2 opt-in image tests
+- Global policy gate: **254 tests, OK**, with the same 2 opt-in image tests
   skipped there and passed separately against the exact locked image.
+- CVM Sidecar prepare/provision/probe suite: **48 tests, OK**, including both
+  legacy two-role and Formal three-role provisioning receipts.
 - Affected meshshot profile/renderer: **11 tests, OK**.
 - Public `mesh-compare` preview CLI: **8 tests, OK**.
 - `npm --prefix packages/meshshot test`.
@@ -236,6 +241,11 @@ headless-shell names, and unreadable `/proc`; GREEN `07aa6053` closes those
 seams. Exact-image RED `f864846d` exposed the old public-socket harness, GREEN
 `9d3a69d6` moves that harness to the private Broker socket, and `9ae6b419`
 models the real sealed Gate files in the lifecycle fixture.
+RED `44c5b1a3` proves partial capability-layout construction is terminal and
+released; GREEN `1afbf9ea` moves layout mutation behind the owned lifecycle.
+RED `c7849b27` proves Formal provisioning cannot conflate the sealed Agent
+client with the Broker; GREEN `c197a360` adds the distinct Broker role and
+per-role revision while preserving the legacy two-role narrow probe.
 
 Not passed / not complete:
 
@@ -324,8 +334,9 @@ preserved artifact. The same SHA/handle was not rerun.
   became usable. The CLI registry reports `Broken` because the start frontend
   was cut off by its execution ceiling after boot completion; no profile
   rebuild, deletion, or image mutation was performed.
-- Historical reviewed/superseded images and final Broker image
-  `sha256:f84b1ae3...21432`: retained; no image deletion was authorized. The
+- Historical reviewed/superseded images, including the provenance-invalid
+  `sha256:f84b1ae3...21432`, and final Broker image
+  `sha256:db02c3ff...7e819`: retained; no image deletion was authorized. The
   first full-context `fd4a9db9...` build was rejected by byte-parity extraction
   because the legacy builder admitted working-tree bytecode; its image
   `sha256:51137e53...62bb` remains retained and is not an accepted artifact.
@@ -343,17 +354,15 @@ Return for full independent Standards and Spec/security review of
 self-approved either axis. If both axes accept the corrections and exact new
 artifact, execute the already bounded one new clean-SHA local conformance
 attempt using Broker
-image `sha256:f84b1ae3e947201e4765f6b46ddb5aec517fc807a44e9b563751cf128dd21432`.
+image `sha256:db02c3ff8e5784c253eca924bd48043a4612da52fef0cbc0300f723f18d7e819`.
 Do not reuse either failed SHA/handle.
 
-Before paid CVM closure, the provisioning receipt must represent the Broker
-without ambiguity. The current fixed role is named `client` and its durable
-semantics describe the sealed Agent client, not the Render Program Broker.
-No CVM provisioning change or run has been performed at this checkpoint. The
-parent's bounded one-run authorization remains gated on an unambiguous Broker
-role; re-review must decide whether to rename/extend the existing exact role or
-add a distinct Broker role. Do not weaken provenance by silently recording the
-Broker as an Agent client.
+Before paid CVM closure, Formal preparation must supply all three ordered roles:
+Sidecar, sealed Agent client, and distinct Broker. The Broker is independently
+bound to its own exact source revision and retained runtime image ID. The legacy
+two-role form remains only for the provider-free narrow capability probe. No CVM
+provisioning or run has been performed at this checkpoint; the bounded one-run
+authorization remains gated on fresh independent re-review.
 
 No CVM/Venus/provider/model request, push, merge, tracker mutation, dependency
 installation, retained-handle access, unrelated cleanup, or image deletion has
