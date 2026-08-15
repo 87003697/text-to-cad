@@ -79,11 +79,12 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 }
                 return subprocess.CompletedProcess(command, 0, values[projection] + "\n", "")
             if command[1:3] in (["container", "inspect"], ["network", "inspect"]):
-                if command[-1] == CONTAINER_ID and "--format" in command:
+                if CONTAINER_ID in command and "--format" in command:
+                    running = not any(call[1] == "stop" for call in calls)
                     return subprocess.CompletedProcess(
                         command,
                         0,
-                        json.dumps({"Running": False, "ExitCode": 0}) + "\n",
+                        json.dumps({"Running": running, "ExitCode": 0}) + "\n",
                         "",
                     )
                 return subprocess.CompletedProcess(command, 1, "", "not found")
