@@ -20,6 +20,8 @@ from scripts.pilot import browser_sidecar_conformance as conformance
 NETWORK_ID = "a" * 64
 SIDECAR_ID = "b" * 64
 BROKER_ID = "c" * 64
+SURFACE_ID = "d" * 64
+CLIENT_ID = "e" * 64
 
 
 def _proof_from_gate_input(value: dict[str, object]) -> dict[str, object]:
@@ -69,10 +71,20 @@ def _proof_from_gate_input(value: dict[str, object]) -> dict[str, object]:
 class DockerBoundary:
     """Fake only the exact Docker/process boundary of the public host action."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        foreign_surface: bool = False,
+        surface_output_loss: bool = False,
+        client_replaced: bool = False,
+    ) -> None:
         self.calls: list[list[str]] = []
         self.events: list[str] = []
         self.gate_input: dict[str, object] | None = None
+        self.foreign_surface = foreign_surface
+        self.surface_output_loss = surface_output_loss
+        self.client_replaced = client_replaced
+        self.client_capability: Path | None = None
 
     def run(self, argv, **kwargs):
         command = list(argv)
@@ -101,6 +113,17 @@ class DockerBoundary:
             }
             return subprocess.CompletedProcess(command, 0, values[projection] + "\n", "")
         if command[1:3] in (["container", "inspect"], ["network", "inspect"]):
+            if "--format" in command and any(
+                resource in command
+                for resource in (NETWORK_ID, SIDECAR_ID, BROKER_ID, SURFACE_ID, CLIENT_ID)
+            ):
+                projection = command[-1]
+                if "browser-sidecar-job" in projection:
+                    return subprocess.CompletedProcess(
+                        command, 0, "formal-local-conformance\n", ""
+                    )
+                if "browser-sidecar-owner" in projection:
+                    return subprocess.CompletedProcess(command, 0, "1" * 32 + "\n", "")
             if "--format" in command and (
                 SIDECAR_ID in command or BROKER_ID in command
             ):
@@ -114,9 +137,48 @@ class DockerBoundary:
                     json.dumps({"Running": running, "ExitCode": 0}) + "\n",
                     "",
                 )
+            if self.foreign_surface and command[-1].endswith("-surface"):
+                return subprocess.CompletedProcess(command, 0, "foreign\n", "")
             return subprocess.CompletedProcess(command, 1, "", "not found")
         if command[1:3] == ["network", "create"]:
             return subprocess.CompletedProcess(command, 0, NETWORK_ID + "\n", "")
+        if command[1] == "create":
+            name = command[command.index("--name") + 1]
+            if name.endswith("-surface"):
+                self.events.append("surface-create")
+                output = "" if self.surface_output_loss else SURFACE_ID + "\n"
+                return subprocess.CompletedProcess(command, 0, output, "")
+            if name.endswith("-client"):
+                self.events.append("client-create")
+                mount = next(
+                    value
+                    for value in command
+                    if value.startswith("type=bind,")
+                    and ",dst=/run/meshshot-browser" in value
+                )
+                self.client_capability = Path(
+                    mount.split("src=", 1)[1].split(",dst=", 1)[0]
+                )
+                return subprocess.CompletedProcess(command, 0, CLIENT_ID + "\n", "")
+        if command[1:3] == ["start", "-a"] and SURFACE_ID in command:
+            self.events.append("surface-discovery")
+            discovery = {
+                "schema": "meshshot.browser-sidecar.conformance-surface/1",
+                "scanRoots": ["/opt", "/usr"],
+                "browserExclusions": [
+                    {
+                        "kind": "package",
+                        "target": "/usr/local/lib/python3/site-packages/playwright",
+                        "mask": "tmpfs",
+                    }
+                ],
+            }
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                json.dumps(discovery, sort_keys=True, separators=(",", ":")) + "\n",
+                "",
+            )
         if command[1] == "run":
             if "--discover-conformance-surface" in command:
                 self.events.append("surface-discovery")
@@ -220,20 +282,27 @@ class DockerBoundary:
                 "",
             )
         if command[1:3] in (["container", "ls"], ["network", "ls"]):
+            if self.surface_output_loss and command[1] == "container":
+                return subprocess.CompletedProcess(command, 0, SURFACE_ID + "\n", "")
             return subprocess.CompletedProcess(command, 0, "", "")
+        if command[1:3] == ["rm", "-f"] and CLIENT_ID in command and self.client_replaced:
+            return subprocess.CompletedProcess(command, 1, "", "no such container")
         return subprocess.CompletedProcess(command, 0, "", "")
 
     def popen(self, argv, **kwargs):
         command = list(argv)
         self.calls.append(command)
         self.events.append("gate-client-popen")
-        mount = next(
-            value
-            for value in command
-            if value.startswith("type=bind,")
-            and ",dst=/run/meshshot-browser" in value
-        )
-        capability = Path(mount.split("src=", 1)[1].split(",dst=", 1)[0])
+        if self.client_capability is None:
+            mount = next(
+                value
+                for value in command
+                if value.startswith("type=bind,")
+                and ",dst=/run/meshshot-browser" in value
+            )
+            capability = Path(mount.split("src=", 1)[1].split(",dst=", 1)[0])
+        else:
+            capability = self.client_capability
         gate_input = json.loads((capability / "gate-input.json").read_text())
         self.gate_input = gate_input
         proof = _proof_from_gate_input(gate_input)
@@ -299,7 +368,6 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
                 mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
                 mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
                 mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="1" * 32),
-                mock.patch.object(tempfile, "tempdir", "/tmp"),
                 mock.patch.object(subprocess, "run", side_effect=boundary.run),
                 mock.patch.object(subprocess, "Popen", side_effect=boundary.popen),
             ):
@@ -350,10 +418,107 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             boundary.events.index("gate-proof-released"),
             boundary.events.index("client-exec-complete"),
         )
+        bind_sources = [
+            value.split("src=", 1)[1].split(",dst=", 1)[0]
+            for call in boundary.calls
+            for value in call
+            if value.startswith("type=bind,") and "src=" in value
+        ]
+        self.assertTrue(bind_sources)
+        self.assertTrue(
+            any(source.startswith("/private/var/") for source in bind_sources),
+            bind_sources,
+        )
+        self.assertTrue(
+            all(Path(source) == Path(source).resolve() for source in bind_sources),
+            bind_sources,
+        )
+        self.assertFalse(
+            any(
+                call[1:3] == ["rm", "-f"]
+                and call[-1].startswith("ttc-bs-")
+                for call in boundary.calls
+            ),
+            boundary.calls,
+        )
         self.assertTrue(any(call[1] == "rm" and BROKER_ID in call for call in boundary.calls))
         self.assertTrue(any(call[1] == "rm" and SIDECAR_ID in call for call in boundary.calls))
         self.assertTrue(
             any(call[1:3] == ["network", "rm"] and NETWORK_ID in call for call in boundary.calls)
+        )
+
+    def test_foreign_surface_collision_is_preserved(self) -> None:
+        """A pre-existing predictable name is never adopted or removed."""
+
+        boundary = DockerBoundary(foreign_surface=True)
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = Path(temp) / "conformance.json"
+            with (
+                mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="1" * 32),
+                mock.patch.object(subprocess, "run", side_effect=boundary.run),
+                mock.patch.object(subprocess, "Popen", side_effect=boundary.popen),
+            ):
+                status = conformance.run_host(evidence_path)
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+
+        surface_name = "ttc-bs-111111111111-surface"
+        self.assertEqual(status, 1)
+        self.assertEqual(evidence["status"], "failed")
+        self.assertIn("foreign conformance-surface name", evidence["error"])
+        self.assertFalse(
+            any(call[1:4] == ["rm", "-f", surface_name] for call in boundary.calls),
+            boundary.calls,
+        )
+
+    def test_surface_create_output_loss_is_retained_without_name_cleanup(self) -> None:
+        """Lost create output cannot authorize deleting whatever later owns the name."""
+
+        boundary = DockerBoundary(surface_output_loss=True)
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = Path(temp) / "conformance.json"
+            with (
+                mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="1" * 32),
+                mock.patch.object(subprocess, "run", side_effect=boundary.run),
+                mock.patch.object(subprocess, "Popen", side_effect=boundary.popen),
+            ):
+                status = conformance.run_host(evidence_path)
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+
+        surface_name = "ttc-bs-111111111111-surface"
+        self.assertEqual(status, 1)
+        self.assertEqual(evidence["receipt"]["failureCheck"], "retained-resource")
+        self.assertFalse(
+            any(call[1:4] == ["rm", "-f", surface_name] for call in boundary.calls),
+            boundary.calls,
+        )
+
+    def test_client_name_replacement_is_preserved_and_fails_closed(self) -> None:
+        """Cleanup targets the returned ID and never a replacement at its old name."""
+
+        boundary = DockerBoundary(client_replaced=True)
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = Path(temp) / "conformance.json"
+            with (
+                mock.patch.object(conformance.shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="1" * 32),
+                mock.patch.object(subprocess, "run", side_effect=boundary.run),
+                mock.patch.object(subprocess, "Popen", side_effect=boundary.popen),
+            ):
+                status = conformance.run_host(evidence_path)
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+
+        client_name = "ttc-bs-111111111111-client"
+        self.assertEqual(status, 1)
+        self.assertEqual(evidence["status"], "failed")
+        self.assertTrue(any(call[1:4] == ["rm", "-f", CLIENT_ID] for call in boundary.calls))
+        self.assertFalse(
+            any(call[1:4] == ["rm", "-f", client_name] for call in boundary.calls),
+            boundary.calls,
         )
 
 

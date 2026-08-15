@@ -540,8 +540,8 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(job.broker_container_name, f"{job.prefix}-broker")
         self.assertNotEqual(job.broker_container_name, job.container_name)
 
-    def test_broker_artifact_contains_only_registered_program_runtime(self) -> None:
-        """Nested public parity lives in the sealed runner gate, not the Broker image."""
+    def test_broker_artifact_contains_fixed_conformance_client(self) -> None:
+        """The gate can release only a reviewed client path present in its image."""
 
         dockerfile = (
             browser_sidecar.REPO_ROOT
@@ -551,7 +551,12 @@ class BrowserSidecarJobTests(unittest.TestCase):
             "COPY packages/meshshot/src/meshshot ./packages/meshshot/src/meshshot",
             dockerfile,
         )
-        self.assertNotIn("browser_sidecar_conformance.py", dockerfile)
+        self.assertIn(
+            "COPY scripts/pilot/browser_sidecar_conformance.py "
+            "./scripts/pilot/browser_sidecar_conformance.py",
+            dockerfile,
+        )
+        self.assertNotIn("COPY scripts/pilot/runner.py", dockerfile)
 
     def test_package_owned_contract_matches_outer_lifecycle(self) -> None:
         """Generated/vendor isolation keeps one package-owned identity source."""
@@ -607,6 +612,79 @@ class BrowserSidecarJobTests(unittest.TestCase):
             )
 
         self.assertEqual(job.capability_dir, returned.resolve())
+
+    def test_created_container_requires_exact_owner_labels_before_readiness(self) -> None:
+        """A returned ID is retained but cannot be adopted with a wrong owner nonce."""
+
+        calls: list[list[str]] = []
+
+        def docker(argv, **kwargs):
+            command = list(argv)
+            calls.append(command)
+            if command[1:4] == ["inspect", "--type=image", "--format"]:
+                projection = command[4]
+                broker = command[5] == browser_sidecar.BROKER_IMAGE_ID.removeprefix(
+                    "sha256:"
+                )
+                values = {
+                    "{{.Id}}": browser_sidecar.BROKER_IMAGE_ID if broker else IMAGE_ID,
+                    "{{.Os}}": "linux",
+                    "{{.Architecture}}": "amd64",
+                    '{{index .Config.Labels "org.opencontainers.image.revision"}}': (
+                        browser_sidecar.BROKER_IMAGE_SOURCE_REVISION
+                        if broker
+                        else SOURCE_REVISION
+                    ),
+                    '{{index .Config.Labels "io.text-to-cad.browser-sidecar-broker-base"}}': (
+                        browser_sidecar.BROKER_BASE_IMAGE_ID
+                    ),
+                }
+                return subprocess.CompletedProcess(command, 0, values[projection] + "\n", "")
+            if command[1:3] == ["network", "create"]:
+                return subprocess.CompletedProcess(command, 0, NETWORK_ID + "\n", "")
+            if command[1:3] == ["network", "inspect"] and NETWORK_ID in command:
+                projection = command[-1]
+                values = {
+                    '{{index .Labels "io.text-to-cad.browser-sidecar-job"}}': "formal-job-1",
+                    '{{index .Labels "io.text-to-cad.browser-sidecar-owner"}}': "1" * 16,
+                }
+                return subprocess.CompletedProcess(command, 0, values[projection] + "\n", "")
+            if command[1:3] == ["container", "inspect"] and CONTAINER_ID in command:
+                projection = command[-1]
+                values = {
+                    '{{index .Config.Labels "io.text-to-cad.browser-sidecar-job"}}': "formal-job-1",
+                    '{{index .Config.Labels "io.text-to-cad.browser-sidecar-owner"}}': "foreign",
+                    "{{json .State}}": json.dumps({"Running": False, "ExitCode": 1}),
+                }
+                return subprocess.CompletedProcess(command, 0, values[projection] + "\n", "")
+            if command[1:3] in (["container", "inspect"], ["network", "inspect"]):
+                return subprocess.CompletedProcess(command, 1, "", "not found")
+            if command[1] == "run":
+                return subprocess.CompletedProcess(command, 0, CONTAINER_ID + "\n", "")
+            if command[1:3] in (["container", "ls"], ["network", "ls"]):
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with tempfile.TemporaryDirectory() as temp:
+            with (
+                mock.patch.object(browser_sidecar.shutil, "which", return_value="/usr/bin/docker"),
+                mock.patch.object(browser_sidecar.subprocess, "run", side_effect=docker),
+                mock.patch.object(browser_sidecar.secrets, "token_hex", return_value="1" * 16),
+            ):
+                job = browser_sidecar.BrowserSidecarJob(
+                    Path(temp),
+                    Path("/workspace/repo/outputs/group/exp"),
+                    job_id="formal-job-1",
+                )
+                configure_gate(job)
+                with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
+                    job.start()
+                receipt = job.close(workload_status=None)
+
+        self.assertEqual(caught.exception.check, "container-owner-label")
+        self.assertEqual(receipt["failureCheck"], "container-owner-label")
+        self.assertTrue(any(call[1:4] == ["rm", "-f", CONTAINER_ID] for call in calls))
+        self.assertFalse(any(call[-1] == job.container_name and call[1] == "rm" for call in calls))
 
     def test_startup_signal_after_network_create_closes_exact_resources(self) -> None:
         """Cancellation at a startup boundary enters the same terminal cleanup."""
