@@ -284,7 +284,7 @@ def _resolve_permitted_external_alias(
     link: _Node,
     permitted_roots: tuple[str, ...],
     filesystem: SurfaceFilesystem,
-) -> _Node:
+) -> tuple[_Node, str]:
     """Resolve one immutable cross-root alias into the declared root closure."""
 
     assert link.link_target is not None
@@ -313,7 +313,7 @@ def _resolve_permitted_external_alias(
         raise BrowserSurfaceError(
             "mounted browser surface external symlink identity changed"
         )
-    return _Node(link.relative, metadata)
+    return _Node(link.relative, metadata), resolved
 
 
 def _resolve_link(
@@ -409,8 +409,18 @@ def _walk_mount(
 ) -> None:
     """Walk one declared root with directory descriptors and no implicit links."""
 
-    source_text = os.path.abspath(os.fspath(source_root))
+    source_argument = os.path.abspath(os.fspath(source_root))
     nodes: dict[tuple[str, ...], _Node] = {}
+
+    try:
+        named_root_metadata = filesystem.lstat(source_argument)
+    except FileNotFoundError:
+        if required:
+            raise
+        return
+    if stat.S_ISLNK(named_root_metadata.st_mode):
+        raise BrowserSurfaceError("declared browser surface root is a symlink")
+    source_text = os.path.realpath(source_argument, strict=True)
 
     def inspect_resolved_file(node: _Node, *, force_complete: bool) -> None:
         """Reopen an already-enumerated target through verified directory fds."""
@@ -492,15 +502,8 @@ def _walk_mount(
             filesystem.close(descriptor)
         return node
 
-    try:
-        root_metadata = filesystem.lstat(source_text)
-    except FileNotFoundError:
-        if required:
-            raise
-        return
+    root_metadata = filesystem.lstat(source_text)
     root = inspect_entry(None, source_text, (), root_metadata)
-    if root.link_target is not None:
-        raise BrowserSurfaceError("declared browser surface root is a symlink")
 
     resolved_links: dict[tuple[str, ...], tuple[str, ...]] = {}
     resolved_aliases: list[tuple[tuple[str, ...], _Node]] = []
@@ -535,19 +538,41 @@ def _walk_mount(
         candidate = _absolute_link_destination(
             source_text, link.relative, link.link_target or ""
         )
-        if not _inside_root(source_text, candidate):
+        try:
+            resolved_candidate = os.path.realpath(candidate, strict=True)
+        except FileNotFoundError as exc:
+            if dangling_alias_is_permitted(link, candidate):
+                continue
+            raise _DanglingSurfaceLink(
+                "mounted browser surface symlink is dangling"
+            ) from exc
+        except (OSError, RuntimeError) as exc:
+            raise BrowserSurfaceError(
+                "mounted browser surface symlink is unresolved"
+            ) from exc
+        if not _inside_root(source_text, resolved_candidate):
             if not permitted_symlink_roots:
                 raise BrowserSurfaceError(
                     "mounted browser surface symlink escapes root"
                 )
-            try:
-                alias = _resolve_permitted_external_alias(
-                    source_text, link, permitted_symlink_roots, filesystem
+            alias, resolved = _resolve_permitted_external_alias(
+                source_text, link, permitted_symlink_roots, filesystem
+            )
+            if stat.S_ISREG(alias.metadata.st_mode):
+                alias_name = relative[-1].casefold()
+                alias_cache = "cache" in {
+                    part.casefold() for part in relative
+                }
+                _inspect_file(
+                    filesystem,
+                    None,
+                    resolved,
+                    alias,
+                    force_complete=(
+                        alias_name in {"metadata", "package.json"}
+                        or alias_cache
+                    ),
                 )
-            except _DanglingSurfaceLink:
-                if dangling_alias_is_permitted(link, candidate):
-                    continue
-                raise
             _classify(findings, alias, relative, target_root)
             continue
         try:
