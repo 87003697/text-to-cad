@@ -244,6 +244,98 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
             broker.execute(malformed)
         self.assertEqual(len(browser.contexts), 1)
 
+    def test_viewer_program_uses_real_registered_projection_control(self) -> None:
+        class FakeKeyboard:
+            def __init__(self) -> None:
+                self.keys: list[str] = []
+
+            def press(self, key):
+                self.keys.append(key)
+
+        class FakeLocator:
+            def inner_text(self):
+                return "browser_sidecar_inspection.step\nLoaded"
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.keyboard = FakeKeyboard()
+                self.evaluations = 0
+
+            def goto(self, url, **kwargs):
+                self.goto_url = url
+
+            def wait_for_timeout(self, timeout):
+                self.wait_timeout = timeout
+
+            def evaluate(self, expression, argument=None):
+                self.evaluations += 1
+                return {
+                    1: "Display and projection: Solid, Orthographic",
+                    2: None,
+                    3: "Display and projection: Solid, Perspective",
+                }[self.evaluations]
+
+            def screenshot(self, **kwargs):
+                return b"registered-viewer-png"
+
+            def title(self):
+                return "CAD Viewer | browser_sidecar_inspection.step"
+
+            def locator(self, selector):
+                self.selector = selector
+                return FakeLocator()
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.page = FakePage()
+                self.closed = False
+
+            def new_page(self):
+                return self.page
+
+            def close(self):
+                self.closed = True
+
+        class FakeBrowser:
+            def __init__(self) -> None:
+                self.contexts: list[FakeContext] = []
+
+            def new_context(self, **kwargs):
+                context = FakeContext()
+                self.contexts.append(context)
+                return context
+
+        browser = FakeBrowser()
+        broker = browser_sidecar.RegisteredProgramBroker(browser, "formal-job-1")
+
+        response = broker.execute(
+            {
+                "schema": "meshshot.browser-sidecar.render-request/2",
+                "jobId": "formal-job-1",
+                "imageId": IMAGE_ID,
+                "program": "viewer",
+                "payload": {
+                    "modelKey": "inspection-step",
+                    "inspectionControl": "toggle-projection",
+                },
+            }
+        )
+
+        self.assertEqual(response["program"], "viewer")
+        self.assertEqual(
+            response["result"]["inspection"],
+            {
+                "control": "toggle-projection",
+                "before": "Display and projection: Solid, Orthographic",
+                "target": "Perspective",
+                "after": "Display and projection: Solid, Perspective",
+                "changed": True,
+            },
+        )
+        self.assertTrue(response["result"]["screenshotDataUrl"].startswith("data:image/png;base64,"))
+        self.assertEqual(browser.contexts[0].page.keyboard.keys, ["Enter", "Enter"])
+        self.assertTrue(browser.contexts[0].closed)
+
 
 if __name__ == "__main__":
     unittest.main()
