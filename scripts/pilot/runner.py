@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -21,10 +22,12 @@ from typing import Callable, Mapping
 
 try:
     from scripts.pilot.venus_retry_proxy import RetryProxy
+    from scripts.pilot.browser_sidecar import BrowserSidecarJob
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
     from venus_retry_proxy import RetryProxy
+    from browser_sidecar import BrowserSidecarJob
 
 
 READY_PATTERN = re.compile(r"listening on http://127\.0\.0\.1:(\d+)")
@@ -321,8 +324,9 @@ def stop_tap(process: subprocess.Popen[bytes], timeout: float) -> None:
 def wait_workload(
     workload: subprocess.Popen[bytes],
     tap: subprocess.Popen[bytes],
+    sidecar: BrowserSidecarJob | None = None,
 ) -> tuple[int, bool]:
-    """Wait for workload while failing closed if the mandatory proxy exits."""
+    """Wait while failing closed if mandatory tap or Sidecar authority exits."""
 
     while True:
         workload_status = workload.poll()
@@ -344,6 +348,23 @@ def wait_workload(
                 signal_process_group(workload, signal.SIGKILL)
                 workload.wait(timeout=2)
             return 1, True
+        if sidecar is not None:
+            try:
+                sidecar_failed = sidecar.poll_failed()
+            except Exception:
+                sidecar_failed = True
+            if sidecar_failed:
+                print(
+                    "pilot-runner: Browser Sidecar exited during workload",
+                    file=sys.stderr,
+                )
+                signal_process_group(workload, signal.SIGTERM)
+                try:
+                    workload.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    signal_process_group(workload, signal.SIGKILL)
+                    workload.wait(timeout=2)
+                return 1, True
         time.sleep(0.1)
 
 
@@ -526,6 +547,7 @@ def existing_system_paths() -> list[Path]:
 def build_sandbox_environment(
     environ: Mapping[str, str],
     tap_url: str,
+    browser_authority_file: str | None = None,
 ) -> dict[str, str]:
     """Return the explicit child environment allowlist for Codex."""
 
@@ -544,15 +566,14 @@ def build_sandbox_environment(
                 f"{SANDBOX_REPO_ROOT}/.venv/bin:"
                 "/usr/local/bin:/usr/bin:/bin"
             ),
-            "PLAYWRIGHT_BROWSERS_PATH": str(
-                SANDBOX_HOME / ".cache" / "ms-playwright"
-            ),
             "PYTHONDONTWRITEBYTECODE": "1",
             "UV_CACHE_DIR": "/tmp/uv-cache",
             "VENUS_TOKEN": environ.get("VENUS_TOKEN", ""),
             "XDG_CACHE_HOME": "/tmp/cache",
         }
     )
+    if browser_authority_file is not None:
+        child_env["MESHSHOT_BROWSER_AUTHORITY_FILE"] = browser_authority_file
     return child_env
 
 
@@ -595,9 +616,6 @@ def build_bwrap_argv(
     venv = repo_root / ".venv"
     if not venv.is_dir():
         raise PilotError(f"pilot runtime not found: {venv}")
-    playwright = Path(host_home_value) / ".cache" / "ms-playwright"
-    if not playwright.is_dir():
-        raise PilotError(f"Playwright runtime not found: {playwright}")
     upper = prepare_sandbox(exp_dir, skill_dirs)
     argv = [
         bwrap,
@@ -630,8 +648,6 @@ def build_bwrap_argv(
         "/home",
         "--dir",
         str(SANDBOX_HOME),
-        "--dir",
-        str(SANDBOX_HOME / ".cache"),
         "--symlink",
         "usr/bin",
         "/bin",
@@ -647,9 +663,6 @@ def build_bwrap_argv(
         "--ro-bind",
         str(venv),
         str(SANDBOX_REPO_ROOT / ".venv"),
-        "--ro-bind",
-        str(playwright),
-        str(SANDBOX_HOME / ".cache" / "ms-playwright"),
         "--ro-bind",
         str(gateway),
         str(SANDBOX_REPO_ROOT / "gateway" / gateway.name),
@@ -705,6 +718,7 @@ def run_supervised(
     command: list[str],
     environ: Mapping[str, str],
     state: LifecycleState | None = None,
+    sidecar: BrowserSidecarJob | None = None,
 ) -> int:
     """Run command behind mandatory tap and return a shell-compatible status."""
 
@@ -748,7 +762,15 @@ def run_supervised(
                 )
                 if port is not None:
                     tap_url = f"http://127.0.0.1:{port}/v1"
-                    child_env = build_sandbox_environment(environ, tap_url)
+                    child_env = build_sandbox_environment(
+                        environ,
+                        tap_url,
+                        (
+                            str(sidecar.sandbox_authority_path)
+                            if sidecar is not None
+                            else None
+                        ),
+                    )
                     workload = subprocess.Popen(
                         bwrap_argv,
                         # Inherit wrapper redirections so Codex continues to write
@@ -762,7 +784,11 @@ def run_supervised(
                     state.workload_started = True
                     relay.attach(workload)
                     try:
-                        child_status, tap_failed = wait_workload(workload, tap)
+                        child_status, tap_failed = wait_workload(
+                            workload,
+                            tap,
+                            sidecar,
+                        )
                     finally:
                         relay.detach()
             finally:
@@ -1069,19 +1095,57 @@ def run_pilot(
 ) -> int:
     """Prepare, supervise, and finalize one complete pilot transaction."""
 
+    exp_dir = validate_exp_dir(REPO_ROOT, exp_dir)
     prepare_exp(exp_dir)
     state = LifecycleState()
+    relative_exp = exp_dir.relative_to(REPO_ROOT.resolve())
+    sandbox_exp = SANDBOX_REPO_ROOT / relative_exp
+    job_id = "pilot-" + hashlib.sha256(
+        relative_exp.as_posix().encode("utf-8")
+    ).hexdigest()[:24]
+    sidecar = BrowserSidecarJob(
+        exp_dir,
+        sandbox_exp,
+        job_id=job_id,
+    )
+    workload_status = 1
     try:
+        sidecar.start()
         workload_status = run_supervised(
             exp_dir,
             input_paths,
             command,
             environ,
             state,
+            sidecar,
         )
     except (OSError, PilotError, TapError, subprocess.SubprocessError) as exc:
         print(f"pilot-runner: {exc}", file=sys.stderr)
         workload_status = 1
+    except Exception as exc:
+        print(
+            f"pilot-runner: Browser Sidecar failed ({type(exc).__name__})",
+            file=sys.stderr,
+        )
+        workload_status = 1
+    finally:
+        try:
+            sidecar_receipt = sidecar.close(workload_status=workload_status)
+        except Exception:
+            sidecar_receipt = {
+                "cleanupErrors": ["receipt-unavailable"],
+                "absenceProof": {"proved": False},
+            }
+        if (
+            sidecar_receipt.get("cleanupErrors")
+            or not isinstance(sidecar_receipt.get("absenceProof"), dict)
+            or sidecar_receipt["absenceProof"].get("proved") is not True
+        ):
+            print(
+                "pilot-runner: Browser Sidecar terminal cleanup failed",
+                file=sys.stderr,
+            )
+            workload_status = 1
     return finalize_pilot(
         exp_dir,
         workload_status,

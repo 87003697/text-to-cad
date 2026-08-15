@@ -21,11 +21,10 @@ from urllib.parse import urlsplit
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MESHSOT_SRC = REPO_ROOT / "packages" / "meshshot" / "src"
-if str(MESHSOT_SRC) not in sys.path:
-    sys.path.insert(0, str(MESHSOT_SRC))
-
-from meshshot.profile import load_profile  # noqa: E402
+PROFILE_PATH = (
+    REPO_ROOT
+    / "packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json"
+)
 
 
 IMAGE_ID = "sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1"
@@ -168,7 +167,22 @@ class RegisteredProgramBroker:
             raise BrowserSidecarError("job identity is invalid", check="job-id")
         self.browser = browser
         self.job_id = job_id
-        self.profile = load_profile().profile
+        try:
+            profile = _strict_json(
+                PROFILE_PATH.read_text(encoding="utf-8"),
+                "residual-profile",
+            )
+        except OSError as exc:
+            raise BrowserSidecarError(
+                "residual profile is unavailable",
+                check="residual-profile",
+            ) from exc
+        if not isinstance(profile, dict):
+            raise BrowserSidecarError(
+                "residual profile is invalid",
+                check="residual-profile",
+            )
+        self.profile = profile
         self.request_count = 0
 
     def _residual_payload(self, value: Any) -> dict[str, Any]:
@@ -326,6 +340,12 @@ class BrowserSidecarJob:
         self.first_error: str | None = None
         self.cleanup_errors: list[str] = []
         self._closed = False
+
+    @property
+    def sandbox_authority_path(self) -> Path:
+        """Return the fixed authority path visible inside the pilot sandbox."""
+
+        return self.sandbox_exp_dir / "run" / "browser-authority.json"
 
     def _docker(
         self,

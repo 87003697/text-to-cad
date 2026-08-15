@@ -1027,7 +1027,7 @@ class ProductionPathContractTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            repo_root = Path(temp) / "repo"
+            repo_root = (Path(temp) / "repo").resolve()
             exp_dir = repo_root / "outputs" / "group" / "exp with spaces"
             skill_dir = repo_root / "skills" / "fake"
             outside_skill = Path(temp) / "outside-skill"
@@ -1160,9 +1160,26 @@ class ProductionPathContractTests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            exp_dir = Path(temp) / "exp"
+            repo_root = Path(temp) / "repo"
+            exp_dir = repo_root / "outputs/group/exp"
             runner = load_runner()
+
+            class FakeSidecar:
+                def __init__(self, *args, **kwargs):
+                    pass
+
+                def start(self):
+                    return None
+
+                def close(self, *, workload_status):
+                    return {
+                        "cleanupErrors": [],
+                        "absenceProof": {"proved": True},
+                    }
+
             with (
+                mock.patch.object(runner, "REPO_ROOT", repo_root),
+                mock.patch.object(runner, "BrowserSidecarJob", FakeSidecar),
                 mock.patch.object(
                     runner,
                     "build_bwrap_argv",
