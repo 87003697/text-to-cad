@@ -93,6 +93,17 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
     across sidecar/client access and parse boundaries. R9 GREEN
     `874ca5e2300241d641150e14b2a9d1db29a7c525` maps them to the existing exact
     role checks without changing lifecycle or receipts.
+13. A new authorized handle at reviewed `df6951ecc51ab71e41160d4bcdfb9ed6a54602aa`
+    ended with exact `errorCheck=sidecar-inspect-access`; transfer cleanup and
+    abort both proved absence. R10 used only those structured facts and did not
+    contact CVM, inspect raw logs, or touch any terminal handle. Its RED test
+    models an older Docker CLI that rejects the composite `json` template while
+    accepting direct fields plus `index`. RED
+    `bba5365be466f7f0d46b807ac0bc1ac8efc4051b` failed in 0.003 seconds with
+    exact `sidecar-inspect-access`; GREEN
+    `209cf6b10e40e2e257b8ce7b4d38c2bec4b44650` replaces only that projection
+    and parser. Lifecycle, receipts, exact identity checks, and no-retry remain
+    unchanged.
 
 ## Session 产出
 
@@ -118,6 +129,8 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
 | `2a65efba2300b42487db1ae05e8b93a7c43d0db5` R8 GREEN | skill, module, tests | Fixed four-field inspect projection; strict compact parse and closed role-specific failure preservation through public receipts. |
 | `b8f8fd7aed355fc3e83b47540dc82087b964a1ff` R9 RED | public prepare CLI matrix | Sidecar/client command-launch and compact-parser unexpected exceptions returned rc1/raw traceback. |
 | `874ca5e2300241d641150e14b2a9d1db29a7c525` R9 GREEN | skill, module | Bound unexpected run exceptions to role `inspect-access` and parser exceptions to role `inspect-format`. |
+| `bba5365be466f7f0d46b807ac0bc1ac8efc4051b` R10 RED | remote-provision compatibility seam | An older-Docker fake rejected the composite `json` template and reproduced exact `sidecar-inspect-access`. |
+| `209cf6b10e40e2e257b8ce7b4d38c2bec4b44650` R10 GREEN | module, tests | Direct-field/index tab projection works without the template `json` helper while retaining strict role checks. |
 
 ### 核心行为
 
@@ -187,10 +200,12 @@ spend money, push Git, merge, mutate a tracker, or remove retained images.
   cleanup, or deployed workflow hash. Public provision accepts such a failure
   only with SSH exit 1, preserves its exact classification, performs the same
   nonce-scoped abort, and never publishes raw stderr/path/errno as evidence.
-- Loaded-image inspection requests only a fixed JSON array of ID, OS,
-  architecture, and OCI revision label; it never requests or accepts full
-  daemon inspect JSON. Sidecar and client independently classify inspect access,
-  compact format, ID, platform, revision, and strict prepare-receipt failures.
+- Loaded-image inspection requests only one fixed tab-delimited projection of
+  ID, OS, architecture, and OCI revision label using direct fields plus
+  `index`; it never requests or accepts full daemon inspect JSON and does not
+  depend on the Docker template `json` helper. Sidecar and client independently
+  classify inspect access, compact format, ID, platform, revision, and strict
+  prepare-receipt failures.
   An unexpected implementation escape uses the sole fixed
   `image-attestation-unexpected` fallback; existing role-specific `ProbeError`
   checks are never blanket-wrapped.
@@ -295,6 +310,20 @@ R9 final validation:
 - `git diff --check` and staged diff check → exit 0.
 - External/CVM operations: **zero**; incremental spend: **$0**.
 
+R10 final validation:
+
+- RED older-Docker compatibility seam → **1 expected failure**, exact
+  `sidecar-inspect-access`, 0.003 seconds.
+- Focused suite → **37 tests, OK**.
+- Global gate with the project virtualenv and local loopback permission →
+  **188 tests, OK**, explicit exit 0.
+- `python3 -m py_compile` for the module and focused test → exit 0.
+- `git diff --check` and staged diff check → exit 0.
+- The first restricted global run was environment-only FAIL: eight loopback
+  bind permission errors plus two missing lightweight-worktree dependencies;
+  the authorized same-code rerun above passed.
+- External/CVM operations: **zero**; incremental spend: **$0**.
+
 The first restricted global run was not accepted as product evidence: it had
 eight loopback-bind permission errors and two missing-worktree-dependency
 errors. It also exposed one real README compatibility assertion introduced by
@@ -347,6 +376,10 @@ all three previously failed handles remain terminal and untouched.
 R9 adds no new external attempt. Its clean implementation review range is
 `c86ce8faf7dfe85cc78f50852b60ff0b846c2b64..874ca5e2300241d641150e14b2a9d1db29a7c525`;
 all three previously failed handles remain terminal and untouched.
+
+R10 adds no new external attempt. Its clean implementation review range is
+`df6951ecc51ab71e41160d4bcdfb9ed6a54602aa..209cf6b10e40e2e257b8ce7b4d38c2bec4b44650`;
+the newly failed handle and every earlier terminal handle remain untouched.
 
 ## 下一步
 
