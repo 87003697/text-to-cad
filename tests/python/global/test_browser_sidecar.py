@@ -117,6 +117,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.check, "capability-layout")
+        self.assertEqual(raised.exception.terminal_receipt, receipt)
         self.assertFalse(capability.exists())
         self.assertEqual(receipt["status"], "failed")
         self.assertEqual(receipt["failureCheck"], "capability-layout")

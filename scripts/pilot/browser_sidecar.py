@@ -135,9 +135,16 @@ MAX_REQUEST_BYTES = 1024 * 1024
 class BrowserSidecarError(RuntimeError):
     """One closed formal-pilot Browser Sidecar lifecycle failure."""
 
-    def __init__(self, message: str, *, check: str) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        check: str,
+        terminal_receipt: Mapping[str, object] | None = None,
+    ) -> None:
         super().__init__(message)
         self.check = check
+        self.terminal_receipt = terminal_receipt
 
 
 def _strict_json(raw: str, label: str) -> Any:
@@ -757,7 +764,7 @@ class BrowserSidecarJob:
         except BaseException as exc:
             job.first_error = "capability-layout"
             try:
-                job.close(workload_status=None)
+                receipt = job.close(workload_status=None)
             except BaseException as cleanup_exc:
                 if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                     raise exc
@@ -770,6 +777,7 @@ class BrowserSidecarJob:
             raise BrowserSidecarError(
                 "Browser Sidecar capability layout failed",
                 check="capability-layout",
+                terminal_receipt=receipt,
             ) from exc
         return job
 

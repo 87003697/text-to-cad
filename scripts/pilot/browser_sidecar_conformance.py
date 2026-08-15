@@ -264,6 +264,17 @@ def _publish_preflight_failure(
     )
     job.first_error = check
     receipt = job.close(workload_status=None)
+    return _publish_terminal_failure(evidence_path, receipt, error=error)
+
+
+def _publish_terminal_failure(
+    evidence_path: Path,
+    receipt: Mapping[str, object],
+    *,
+    error: str,
+) -> int:
+    """Publish one already-closed failure receipt at a trusted target."""
+
     evidence = {
         "schema": "meshshot.browser-sidecar.local-conformance/1",
         "status": "failed",
@@ -658,7 +669,13 @@ def run_host(evidence_path: Path) -> int:
                 job_id="formal-local-conformance",
                 capability_parent=capability_parent,
             )
-        except browser_sidecar.BrowserSidecarError:
+        except browser_sidecar.BrowserSidecarError as exc:
+            if exc.terminal_receipt is not None:
+                return _publish_terminal_failure(
+                    canonical_evidence_path,
+                    exc.terminal_receipt,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
             return 2
         job.docker = docker
         client_name = f"{job.prefix}-client"
