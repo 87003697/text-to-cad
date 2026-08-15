@@ -428,6 +428,27 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             boundary.events.index("gate-proof-released"),
             boundary.events.index("client-exec-complete"),
         )
+        surface_create = next(
+            call
+            for call in boundary.calls
+            if call[1] == "create" and "ttc-bs-111111111111-surface" in call
+        )
+        self.assertFalse(
+            any(
+                value.startswith("type=bind,")
+                and f",dst={browser_sidecar.NESTED_GATE['artifactPath']}" in value
+                for value in surface_create
+            ),
+            surface_create,
+        )
+        surface_copy = next(
+            call
+            for call in boundary.calls
+            if call[1:3] == ["cp", "-a"]
+            and call[-1]
+            == f"{SURFACE_ID}:{browser_sidecar.NESTED_GATE['artifactPath']}"
+        )
+        self.assertEqual(Path(surface_copy[-2]), Path(surface_copy[-2]).resolve())
         bind_sources = [
             value.split("src=", 1)[1].split(",dst=", 1)[0]
             for call in boundary.calls
@@ -457,8 +478,8 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
             any(call[1:3] == ["network", "rm"] and NETWORK_ID in call for call in boundary.calls)
         )
 
-    def test_default_macos_var_artifact_is_canonicalized_before_docker(self) -> None:
-        """A default /var temp alias reaches Docker only as its /private/var inode."""
+    def test_discovery_artifact_is_copied_by_verified_id_without_host_bind(self) -> None:
+        """The daemon need not share the Mac temp path used to build the artifact."""
 
         boundary = DockerBoundary()
         with tempfile.TemporaryDirectory() as temp:
@@ -485,10 +506,20 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
                     job.close(workload_status=None)
 
         create = next(call for call in boundary.calls if call[1] == "create")
-        mount = next(value for value in create if value.startswith("type=bind,"))
-        source = mount.split("src=", 1)[1].split(",dst=", 1)[0]
-        self.assertTrue(source.startswith("/private/var/"), source)
-        self.assertEqual(Path(source), artifact.resolve())
+        self.assertFalse(
+            any(
+                value.startswith("type=bind,")
+                and f",dst={browser_sidecar.NESTED_GATE['artifactPath']}" in value
+                for value in create
+            ),
+            create,
+        )
+        copy = next(call for call in boundary.calls if call[1:3] == ["cp", "-a"])
+        self.assertEqual(Path(copy[-2]), artifact.resolve())
+        self.assertEqual(
+            copy[-1],
+            f"{SURFACE_ID}:{browser_sidecar.NESTED_GATE['artifactPath']}",
+        )
 
     def test_foreign_surface_collision_is_preserved(self) -> None:
         """A pre-existing predictable name is never adopted or removed."""
