@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
 import math
 import os
@@ -243,19 +245,141 @@ class RegisteredProgramBroker:
             request["schema"] != REQUEST_SCHEMA
             or request["jobId"] != self.job_id
             or request["imageId"] != IMAGE_ID
-            or request["program"] != "residual"
+            or request["program"] not in PROGRAMS
         ):
             raise BrowserSidecarError(
                 "render request identity is invalid",
                 check="render-request-identity",
             )
-        payload = self._residual_payload(request["payload"])
+        program = request["program"]
+        if program == "residual":
+            payload = self._residual_payload(request["payload"])
+        else:
+            viewer_payload = _exact_object(
+                request["payload"],
+                {"modelKey", "inspectionControl"},
+                "viewer-payload",
+            )
+            if viewer_payload != {
+                "modelKey": "inspection-step",
+                "inspectionControl": "toggle-projection",
+            }:
+                raise BrowserSidecarError(
+                    "Viewer request is not registered",
+                    check="viewer-payload",
+                )
+            payload = viewer_payload
         context = self.browser.new_context(
-            viewport={"width": 64, "height": 64},
+            viewport=(
+                {"width": 64, "height": 64}
+                if program == "residual"
+                else {"width": 1024, "height": 768}
+            ),
             device_scale_factor=1,
         )
         try:
             page = context.new_page()
+            if program == "viewer":
+                page.goto(
+                    "http://127.0.0.1:4173/?file=browser_sidecar_inspection.step",
+                    wait_until="networkidle",
+                    timeout=60_000,
+                )
+                page.wait_for_timeout(2_000)
+                before = page.evaluate(
+                    """async () => {
+                      const selector = 'button[aria-label^="Display and projection:"]';
+                      const deadline = Date.now() + 25000;
+                      let control = null;
+                      while (Date.now() < deadline) {
+                        control = document.querySelector(selector);
+                        if (control) break;
+                        await new Promise((resolve) => setTimeout(resolve, 50));
+                      }
+                      const label = control?.getAttribute("aria-label") || null;
+                      if (!(control instanceof HTMLButtonElement) ||
+                          label !== "Display and projection: Solid, Orthographic") {
+                        throw new Error(`unexpected projection control: ${label}`);
+                      }
+                      control.focus();
+                      if (document.activeElement !== control) {
+                        throw new Error("projection control did not accept focus");
+                      }
+                      return label;
+                    }"""
+                )
+                target = "Perspective"
+                page.keyboard.press("Enter")
+                page.evaluate(
+                    """async (target) => {
+                      const deadline = Date.now() + 5000;
+                      let item = null;
+                      while (Date.now() < deadline) {
+                        item = [...document.querySelectorAll('[role="menuitem"]')]
+                          .find((element) => element.textContent?.trim().startsWith(target));
+                        if (item) break;
+                        await new Promise((resolve) => setTimeout(resolve, 50));
+                      }
+                      if (!(item instanceof HTMLElement)) throw new Error("menu item missing");
+                      item.focus();
+                      if (document.activeElement !== item) throw new Error("menu focus failed");
+                    }""",
+                    target,
+                )
+                page.keyboard.press("Enter")
+                after = page.evaluate(
+                    """async (target) => {
+                      const selector = 'button[aria-label^="Display and projection:"]';
+                      const expected = `Display and projection: Solid, ${target}`;
+                      const deadline = Date.now() + 5000;
+                      while (Date.now() < deadline) {
+                        const label = document.querySelector(selector)?.getAttribute("aria-label") || null;
+                        if (label === expected) return label;
+                        await new Promise((resolve) => setTimeout(resolve, 50));
+                      }
+                      throw new Error(`projection control did not reach ${expected}`);
+                    }""",
+                    target,
+                )
+                screenshot = page.screenshot(type="png", timeout=120_000)
+                body = page.locator("body").inner_text()
+                title = page.title()
+                if (
+                    title != "CAD Viewer | browser_sidecar_inspection.step"
+                    or "browser_sidecar_inspection.step" not in body
+                    or "STEP artifact missing" in body
+                    or "Generated GLB is missing" in body
+                    or before != "Display and projection: Solid, Orthographic"
+                    or after != "Display and projection: Solid, Perspective"
+                ):
+                    raise BrowserSidecarError(
+                        "Viewer predicates failed",
+                        check="viewer-result",
+                    )
+                result = {
+                    "title": title,
+                    "modelKey": payload["modelKey"],
+                    "programDigest": PROGRAMS["viewer"],
+                    "screenshotDataUrl": "data:image/png;base64,"
+                    + base64.b64encode(screenshot).decode("ascii"),
+                    "screenshotSha256": hashlib.sha256(screenshot).hexdigest(),
+                    "screenshotBytes": len(screenshot),
+                    "inspection": {
+                        "control": payload["inspectionControl"],
+                        "before": before,
+                        "target": target,
+                        "after": after,
+                        "changed": before != after and target in after,
+                    },
+                }
+                self.request_count += 1
+                return {
+                    "schema": RESPONSE_SCHEMA,
+                    "jobId": self.job_id,
+                    "imageId": IMAGE_ID,
+                    "program": "viewer",
+                    "result": result,
+                }
             page.goto(
                 "http://127.0.0.1:4174/render.html",
                 wait_until="load",
