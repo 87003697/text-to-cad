@@ -60,6 +60,38 @@ class BrowserSurfaceTests(unittest.TestCase):
                     [(root, Path("/sandbox"), True)]
                 )
 
+    def test_directory_self_alias_is_inert_unless_browser_shaped(self) -> None:
+        """Distro compatibility aliases do not hide browser-named directories."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "usr"
+            binary = root / "bin"
+            binary.mkdir(parents=True)
+            compatibility = binary / "X11"
+            compatibility.symlink_to(".")
+
+            self.assertEqual(
+                browser_surface.discover_browser_roots(
+                    [(root, Path("/sandbox/usr"), True)]
+                ),
+                [],
+            )
+
+            compatibility.unlink()
+            (binary / "chromium").symlink_to(".")
+            self.assertEqual(
+                browser_surface.discover_browser_roots(
+                    [(root, Path("/sandbox/usr"), True)]
+                ),
+                [
+                    {
+                        "kind": "package",
+                        "target": "/sandbox/usr/bin/chromium",
+                        "mask": "tmpfs",
+                    }
+                ],
+            )
+
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "surface"
             (root / "a").mkdir(parents=True)
