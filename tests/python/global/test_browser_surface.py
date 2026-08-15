@@ -289,8 +289,8 @@ class BrowserSurfaceTests(unittest.TestCase):
                 ],
             )
 
-    def test_immutable_image_roots_allow_only_non_browser_dangling_aliases(self) -> None:
-        """Sealed images tolerate distro doc links, never browser-shaped aliases."""
+    def test_dangling_aliases_always_close(self) -> None:
+        """Sealed and mounted surfaces both reject every dangling alias."""
 
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -307,14 +307,11 @@ class BrowserSurfaceTests(unittest.TestCase):
                     permitted_symlink_roots=[usr, etc],
                 )
 
-            self.assertEqual(
+            with self.assertRaises(browser_surface.BrowserSurfaceError):
                 browser_surface.discover_browser_roots(
                     [(usr, Path("/usr"), True), (etc, Path("/etc"), True)],
                     permitted_symlink_roots=[usr, etc],
-                    permitted_dangling_symlink_roots=[usr, etc],
-                ),
-                [],
-            )
+                )
 
             (usr / "bin").mkdir()
             (usr / "bin/chromium").symlink_to("missing-browser")
@@ -322,7 +319,6 @@ class BrowserSurfaceTests(unittest.TestCase):
                 browser_surface.discover_browser_roots(
                     [(usr, Path("/usr"), True), (etc, Path("/etc"), True)],
                     permitted_symlink_roots=[usr, etc],
-                    permitted_dangling_symlink_roots=[usr, etc],
                 )
 
     def test_os_boundary_errors_are_never_suppressed(self) -> None:

@@ -15,7 +15,8 @@ COPY scripts/pilot/browser_gate_contract.py ./scripts/pilot/browser_gate_contrac
 COPY scripts/pilot/browser_surface.py ./scripts/pilot/browser_surface.py
 COPY packages/meshshot/src/meshshot ./packages/meshshot/src/meshshot
 ENV PYTHONPATH=/opt/text-to-cad:/opt/text-to-cad/packages/meshshot/src
-RUN chmod 0555 ./scripts/pilot/browser_sidecar.py \
+RUN find /etc /home /opt /run /srv /usr /var -xtype l -delete \
+    && chmod 0555 ./scripts/pilot/browser_sidecar.py \
     ./scripts/pilot/browser_sidecar_conformance.py \
     && chmod 0444 ./scripts/pilot/browser_sidecar_gate.py \
     ./scripts/pilot/browser_gate_contract.py \

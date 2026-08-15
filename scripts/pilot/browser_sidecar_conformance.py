@@ -245,7 +245,11 @@ def _write_atomic(path: Path, payload: object) -> None:
     os.replace(temporary, path)
 
 
-def _fixed_container_isolation(*, user: str | None = None) -> list[str]:
+def _fixed_container_isolation(
+    *,
+    user: str | None = None,
+    read_only_discovery: bool = False,
+) -> list[str]:
     """Return fixed isolation with an explicit least-authority runtime user."""
 
     runtime_user = user if user is not None else f"{os.getuid()}:{os.getgid()}"
@@ -261,7 +265,7 @@ def _fixed_container_isolation(*, user: str | None = None) -> list[str]:
         "ALL",
         *(
             ["--cap-add", "DAC_READ_SEARCH"]
-            if runtime_user == "0:0"
+            if read_only_discovery and runtime_user == "0:0"
             else []
         ),
         "--security-opt",
@@ -413,7 +417,9 @@ def _discover_client_surface(
             "surface",
             container_name,
             [
-                *_fixed_container_isolation(user="0:0"),
+                *_fixed_container_isolation(
+                    user="0:0", read_only_discovery=True
+                ),
                 "--entrypoint",
                 "python3",
                 BROKER_IMAGE_ID,
@@ -439,10 +445,10 @@ def _discover_client_surface(
             _remove_owned_container(docker, container_id, "surface")
         except BaseException as exc:
             cleanup = exc
-    if primary is not None:
-        raise primary
     if cleanup is not None:
         raise cleanup
+    if primary is not None:
+        raise primary
     allowed_roots = {
         *CONFORMANCE_REQUIRED_ROOTS,
         *CONFORMANCE_OPTIONAL_ROOTS,
@@ -572,10 +578,10 @@ def _run_gate_then_client(
             _remove_owned_container(docker, container_id, "client")
         except BaseException as exc:
             cleanup = exc
-    if primary is not None:
-        raise primary
     if cleanup is not None:
         raise cleanup
+    if primary is not None:
+        raise primary
     assert outcome is not None
     return outcome
 

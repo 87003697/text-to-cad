@@ -317,9 +317,7 @@ def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, A
             *(Path(root) for root in manifest["scanRoots"]),
             Path("/dev/null"),
             Path("/proc/mounts"),
-        ],
-        permitted_dangling_symlink_roots=[
-            *(Path(root) for root in manifest["scanRoots"]),
+            Path("/proc/self/mounts"),
         ],
     )
     excluded_targets = {item["target"] for item in manifest["browserExclusions"]}
@@ -392,8 +390,8 @@ def discover_conformance_surface() -> Mapping[str, Any]:
             Path("/dev/null"),
             Path("/dev/shm"),
             Path("/proc/mounts"),
+            Path("/proc/self/mounts"),
         ],
-        permitted_dangling_symlink_roots=[*(Path(root) for root in roots)],
     )
     exclusions = canonicalize_browser_masks([*findings, *direct_exclusions])
     return {
