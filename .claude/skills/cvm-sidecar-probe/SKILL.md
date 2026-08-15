@@ -149,9 +149,10 @@ different destructive operation and requires a separate authorization.
   before the nonce-scoped abort. Raw stderr, paths, errno, full daemon inspect
   JSON, and Docker output are not durable evidence.
 - Image-inspect command launch/socket/permission exceptions are bounded to the
-  exact role's `inspect-access`; unexpected compact-JSON parser exceptions are
-  bounded to the exact role's `inspect-format`. Neither may publish traceback,
-  path, errno, or exception text, including during local prepare before state.
+  exact role's `inspect-access`; unexpected TAB-delimited projection parser
+  exceptions are bounded to the exact role's `inspect-format`. Neither may
+  publish traceback, path, errno, or exception text, including during local
+  prepare before state.
 - Probe failure or cleanup failure: preserve the receipt and handle; do not
   rerun, submit a pilot, inspect raw remote state, or invent a cleanup command.
 - Missing or malformed receipt: report the missing structured evidence and
