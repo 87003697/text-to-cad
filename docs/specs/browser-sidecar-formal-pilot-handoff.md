@@ -159,9 +159,9 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Browser-less Broker base:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Final corrected Broker:
-  `sha256:db02c3ff8e5784c253eca924bd48043a4612da52fef0cbc0300f723f18d7e819`
+  `sha256:b7058cb6282c67761871806295d981d17294a134b44cffbe3e0a9606bbbfb5b1`
 - Broker OCI revision:
-  `c197a36047bf628736d639202bfebf612e8bb92d`
+  `5d4649dbb3afc4e3fb50fb1b483c4d4ef7b5351b`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
   `sha256:05f4b5b8b99380677c7861e04cb8a9a3c1624206bad59696f825e7f0d4c55c5c`
 - Platform: `linux/amd64`
@@ -215,12 +215,13 @@ wholesale from it.
 
 Passed for the current review corrections:
 
-- Exact locked-image extraction and real packaged-client gate: **2 tests, OK**.
+- Exact locked-image extraction, real packaged-client gate, and image-sealed
+  surface discovery: **3 tests, OK**.
 - Focused Browser Sidecar, conformance host, sealed-image contract, surface
-  scanner, nested gate, runner, and public renderer suites: **103 tests, OK**
-  (**2 opt-in image tests skipped** in this non-Docker aggregate and passed
+  scanner, nested gate, runner, and public renderer suites: **110 tests, OK**
+  (**3 opt-in image tests skipped** in this non-Docker aggregate and passed
   separately above).
-- Global policy gate: **254 tests, OK**, with the same 2 opt-in image tests
+- Global policy gate: **261 tests, OK**, with the same 3 opt-in image tests
   skipped there and passed separately against the exact locked image.
 - CVM Sidecar prepare/provision/probe suite: **48 tests, OK**, including both
   legacy two-role and Formal three-role provisioning receipts.
@@ -228,9 +229,18 @@ Passed for the current review corrections:
 - Public `mesh-compare` preview CLI: **8 tests, OK**.
 - `npm --prefix packages/meshshot test`.
 - `scripts/dev/setup-symlinks.sh --check`.
+- Lockfile-pinned local dependencies only, followed by current `cad`,
+  `cad-viewer`, `implicit-cad`, `mesh-compare`, plugin, and derived-version
+  bundle checks. No lockfile changed and no unpinned temp dependency was
+  installed.
 - `python -m py_compile` for changed Python and focused tests.
 - Full-range `git diff --check`.
 - Clean networkless/no-pull Broker build and exact read-only image inspection.
+- The first cold exact-image aggregate reached the 180-second discovery limit
+  after both earlier tests passed. The same immutable image then completed an
+  independently timed read-only scan in 149.36 seconds, the isolated discovery
+  test in 104.464 seconds, and the final aggregate **3 tests, OK** in 125.201
+  seconds. The cold timeout remains recorded rather than reclassified.
 
 The conformance-host correction starts with RED commit `9defcace` and GREEN
 commit `fdadf9aa`. Truthful pre-resource absence starts with RED commit
@@ -246,25 +256,73 @@ released; GREEN `1afbf9ea` moves layout mutation behind the owned lifecycle.
 RED `c7849b27` proves Formal provisioning cannot conflate the sealed Agent
 client with the Broker; GREEN `c197a360` adds the distinct Broker role and
 per-role revision while preserving the legacy two-role narrow probe.
+RED `4cccc4b4` proves the Mac conformance host cannot require the Docker daemon
+to share a canonical `/private/*` temp path. GREEN `d1f69669` moved injection
+to an owner-verified stopped container; real-image RED `073fbf49` then proved
+Docker rejects that copy against the read-only root filesystem. GREEN
+`3fdecf50` seals the fixed Gate, contract, and surface scanner directly in the
+revision-bound Broker image, eliminating both host bind and container write.
+GREEN `ab17368e` keeps the fixed image-only scanner in its separately bounded
+root role so it can traverse the sealed read-only Linux surface; the actual
+render client remains the host UID/GID under the same networkless isolation.
+Real-image inspection then exposed standard Linux cross-root aliases such as
+`/usr/lib/ssl` links into `/etc/ssl` and systemd links to `/dev/null`. GREEN
+`ffe3d652` closes those aliases over the complete declared read-only scan-root
+set while preserving the default rejection of undeclared-root escapes and
+cycles. Real-image GREEN then exposed immutable Ubuntu package/document links
+whose targets are intentionally absent. RED `e54a741f` proves the generic
+scanner still rejects dangling links and browser-shaped aliases. GREEN
+`aa09da3e` permits only non-browser dangling aliases whose resolved lexical
+target remains inside the separately declared immutable image-root closure;
+the host/mounted-surface default remains strict. Real-image RED then exposed
+the standard `/etc/mtab -> /proc/mounts` and `/var/run -> /run` aliases. GREEN
+`f7444732` adds `/run` to the independently scanned image closure and permits
+only the exact proc mounts file alongside the already fixed `/dev/null`
+endpoint. RED `2f846bf0` then proves that a same-root link may traverse a second
+link into another declared root and that cross-root `package.json` markers
+must still be read. GREEN `05f00478` resolves the complete immutable chain
+canonically, reopens the final regular inode no-follow for marker inspection,
+and canonicalizes parent aliases without accepting a symlink as the declared
+root itself. The resulting full traversal then exposed the capability-dropped
+root discovery role's fresh `/home/pwuser` tmpfs still owned by the later
+client UID. RED `ecafccaa` proves the fixed role/home mismatch; GREEN
+`ba7a2423` binds the fresh home UID/GID to the selected fixed runtime role while
+leaving the actual client role unchanged.
+The complete image traversal then reached pre-existing private home trees that
+the capability-dropped discovery role could not inspect. RED `d26c5e4a`
+requires only the fixed root discovery role to carry read/search traversal;
+GREEN `f50f2081` grants it only `DAC_READ_SEARCH` while retaining no network,
+a read-only root filesystem, no-new-privileges, and the sealed manifest-only
+entrypoint. The actual client remains capability-free.
+The newly readable runtime surface then exposed Ubuntu's standard
+`/run/shm -> /dev/shm` alias. RED `21258622` proves the declared closure does
+not accept it accidentally; GREEN `39466404` permits only the exact Docker shm
+endpoint and explicitly keeps the broader `/dev` root forbidden.
+The resulting full scan then reached Debian's standard `/usr/bin/X11 -> .`
+compatibility alias. RED `e15b9e42` distinguishes that inert directory alias
+from a browser-shaped alias to the same directory and retains the existing
+real-cycle rejection. GREEN `fb74868a` skips the inert graph edge while still
+emitting an exact mask for a browser-shaped self alias.
+The next full scan exposed the standard alternatives round-trip
+`/usr/bin/awk -> /etc/alternatives/awk -> /usr/bin/mawk`. RED `e2937643`
+proves both the inert chain and browser-shaped equivalents; GREEN `5d4649db`
+routes every lexically cross-root hop through the canonical declared-root
+resolver even when the final inode returns to the source root.
 
 Not passed / not complete:
 
 - The earlier full Python wrapper reached unrelated `meshscope` tests but the
   lightweight worktree lacks the native octree backend: 26 errors, one skip.
-- Bundle freshness remains **NOT VERIFIED**: the check attempted to fetch the
-  missing `esbuild` package and failed DNS. No dependency was installed.
-- The first independent Standards review passed with two nonblocking design
-  notes. The first Spec/security review failed with the three gaps now fixed.
-  Full independent Standards and Spec/security re-review has **not yet been
-  rerun** against the corrected range and exact replacement image.
-- The production-shaped Docker conformance gate was **NOT RERUN** after this
-  correction. Both earlier failed attempts remain preserved; the exact reviewed
-  `4cdbfecf...` attempt is never reused.
-- The Broker was rebuilt because the security correction changes both
-  Dockerfile-copied pilot modules. The build used only the exact existing base,
-  with no pull and no build network. Opt-in inspection/client test containers
-  ran and were removed; no production Broker/Sidecar job or conformance host
-  attempt was launched.
+- Standards and Spec/security both passed clean HEAD `5266c60c`, then its one
+  production-shaped conformance job exposed the Mac temp-sharing defect below.
+  Fresh independent review has **not yet been rerun** against the image-sealed
+  discovery correction and exact replacement image.
+- The failed `5266c60c` conformance receipt is preserved and never retried. A
+  successor conformance job remains separately gated on the fresh review and
+  renewed run authorization.
+- The Broker was rebuilt because the host correction changes the
+  Dockerfile-copied conformance module. The replacement build used only the
+  exact existing base, with no pull and no build network.
 
 ## Preserved production-shaped conformance attempts
 
@@ -298,7 +356,20 @@ Earlier pre-Broker design attempts and their disproven host-port hypothesis
 remain documented in Git history; they are not counted as successor Broker
 conformance executions.
 
-The later, independently reviewed attempt used source HEAD
+The later reviewed `5266c60c` candidate used exact Broker
+`sha256:db02c3ff...7e819`. Its fresh job failed closed before any Docker
+resource was created because the surface-discovery container tried to bind the
+Mac-resolved `/private/tmp/.../browser-gate-discovery.pyz`, which the dedicated
+daemon does not share. The terminal receipt records `absenceProved:true`, zero
+accepted requests/contexts, and `retryAllowed:false`. Its immutable evidence is
+preserved at
+`/tmp/browser-sidecar-formal-pilot-conformance-5266c60c-20260816.json`, size
+1,592 bytes, SHA-256
+`4b6b0aa87e55be0bf52fbc0fabc30a4e823e0a53f23b7190445c2f51d0650c26`.
+Pre/post exact container and network inventories were empty. The same evidence
+path and failed candidate are not reused.
+
+An earlier independently reviewed attempt used source HEAD
 `4cdbfecf93d6ba8e266e02a976c1d7535a9988fa`, exact Sidecar
 `sha256:22ff2413...b146f1`, exact Broker
 `sha256:1167ad37...7ede5e`, and sealed gate
@@ -326,6 +397,8 @@ preserved artifact. The same SHA/handle was not rerun.
   exact owner-label inventory.
 - Exact `4cdbfecf...` attempt resources: none created; pre/post exact Docker
   inventories were empty and the capability tree was absent.
+- Exact `5266c60c...` attempt resources: none created; the terminal receipt and
+  direct post-run inventories both prove absence.
 - Interrupted build container `16fa5b53...`: exact-owned and removed.
 - Docker build intermediate containers: removed by successful builds.
 - After host restart, the dedicated Colima profile registry was `Stopped` and
@@ -335,8 +408,18 @@ preserved artifact. The same SHA/handle was not rerun.
   was cut off by its execution ceiling after boot completion; no profile
   rebuild, deletion, or image mutation was performed.
 - Historical reviewed/superseded images, including the provenance-invalid
-  `sha256:f84b1ae3...21432`, and final Broker image
-  `sha256:db02c3ff...7e819`: retained; no image deletion was authorized. The
+  `sha256:f84b1ae3...21432`, superseded `sha256:db02c3ff...7e819`, and rejected
+  `sha256:79929990...eba23`, and superseded `sha256:7e13037b...ded051`, plus
+  rejected `sha256:a61e62b8...1e6f2`, superseded
+  `sha256:86aaef85...bda261`, and superseded
+  `sha256:34925fd0...f3c628`, and superseded
+  `sha256:62574062...9af2c0`, and superseded
+  `sha256:915bf400...f751624`, superseded
+  `sha256:20dc8256...1ee84c7`, `sha256:dd126e36...dfb1f9a`,
+  `sha256:23294596...16eaed`, and `sha256:41462957...5bf1a2d`, plus final
+  Broker image `sha256:b7058cb6...bfb5b1`, are retained; no image deletion was
+  authorized.
+  The
   first full-context `fd4a9db9...` build was rejected by byte-parity extraction
   because the legacy builder admitted working-tree bytecode; its image
   `sha256:51137e53...62bb` remains retained and is not an accepted artifact.
@@ -354,7 +437,7 @@ Return for full independent Standards and Spec/security review of
 self-approved either axis. If both axes accept the corrections and exact new
 artifact, execute the already bounded one new clean-SHA local conformance
 attempt using Broker
-image `sha256:db02c3ff8e5784c253eca924bd48043a4612da52fef0cbc0300f723f18d7e819`.
+image `sha256:b7058cb6282c67761871806295d981d17294a134b44cffbe3e0a9606bbbfb5b1`.
 Do not reuse either failed SHA/handle.
 
 Before paid CVM closure, Formal preparation must supply all three ordered roles:
