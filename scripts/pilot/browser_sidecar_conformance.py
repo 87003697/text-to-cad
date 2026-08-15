@@ -249,6 +249,7 @@ def _fixed_container_isolation(*, user: str | None = None) -> list[str]:
     """Return fixed isolation with an explicit least-authority runtime user."""
 
     runtime_user = user if user is not None else f"{os.getuid()}:{os.getgid()}"
+    home_uid, home_gid = runtime_user.split(":", 1)
     return [
         "--pull=never",
         "--platform",
@@ -273,7 +274,7 @@ def _fixed_container_isolation(*, user: str | None = None) -> list[str]:
         "--tmpfs",
         (
             "/home/pwuser:rw,nosuid,nodev,size=16m,"
-            f"uid={os.getuid()},gid={os.getgid()},mode=700"
+            f"uid={home_uid},gid={home_gid},mode=700"
         ),
         "--user",
         runtime_user,
