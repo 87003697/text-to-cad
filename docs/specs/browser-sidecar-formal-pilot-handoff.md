@@ -55,6 +55,14 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
   `/run/meshshot-browser/browser-gate.pyz`; there is no live development-source
   bind. The fixed authority and gate input share the exact job ID and fresh
   nonce and bind the artifact and mounted-surface manifest digests.
+- The local production-shaped host now uses that same runner-owned composition
+  instead of starting a job with no gate identity. A fixed sealed discovery
+  role inventories the exact immutable browser-less client-image surface under
+  the same read-only, network-none, fresh-home isolation used by execution.
+  Its canonical exclusions are bound into the job/nonce gate input before
+  Sidecar startup. The one-shot gate proof is validated and released before the
+  fixed Agent-equivalent client is exec'd; Docker/process calls are the only
+  faked boundaries in the public host regression.
 - The gate publishes one exact-key bounded proof over an outer-owned one-shot
   Unix socket. The outer unlinks/closes the listener after the first connection,
   validates that proof, sends the release byte, and closes the accepted channel
@@ -97,6 +105,10 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
   terminal state, closing drift/absence, and terminal timeout are closed
   failures that dominate workload success, and the runner accepts only an
   exact `status:succeeded` receipt with every predicate true.
+- A startup failure before Docker resolution now retains its exact closed check
+  and truthfully proves absence when no network, Sidecar, or Broker handle could
+  have been created. It no longer misclassifies a missing gate identity as an
+  `absence-proof` failure.
 - `finalize_pilot` preserves signal status 130/143 across missing or invalid
   rollout evidence and artifact/manifest collection failures; postmortem
   preservation still runs, but a later publication error cannot mask SIGINT or
@@ -119,20 +131,22 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
 - Browser-less Broker base:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Final corrected Broker:
-  `sha256:1167ad371e18056b0d3fb713e9fcc6bd432bb7de0e3a1e70b81b0127757ede5e`
+  `sha256:45f0655ccb362f01097876d9e6d905139cb48058adcb51621472362cadc593dd`
 - Broker OCI revision:
-  `a67e0a5845a8cff928607e07ef1db97ead75e97d`
+  `d2ee3b689b471e29b1b114a9400144867ff06531`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:87f7a96b95aae3e057feb168cde25f192fc56bb03ec602a04b7603fdd0cb9695`
+  `sha256:05f4b5b8b99380677c7861e04cb8a9a3c1624206bad59696f825e7f0d4c55c5c`
 - Platform: `linux/amd64`
 
-The corrected Broker was built cleanly with
+The corrected Broker was rebuilt cleanly with
 `--pull=false --no-cache --network=none` from the exact sealed-client digest.
 Read-only inspection confirmed image ID, `linux/amd64`, the GREEN source
 revision, base label, fixed entrypoint, and browser-less `pwuser`. No
 conformance container was launched in this review-correction pass. `git
-cat-file` resolves the complete OCI revision as a commit, and every source
-path copied by the Dockerfile is byte-identical to that exact revision.
+cat-file` resolves the complete OCI revision as a commit. Extraction from one
+non-running, network-none inspection container proved every Dockerfile-copied
+source path byte-identical to that exact revision; the inspection container was
+then removed.
 
 ## Changed files
 
@@ -145,11 +159,14 @@ path copied by the Dockerfile is byte-identical to that exact revision.
 - `packages/meshshot/src/meshshot/renderer.py`
 - `scripts/pilot/browser_sidecar.py`
 - `scripts/pilot/browser_sidecar_conformance.py`
+- `scripts/pilot/browser_gate_contract.py`
 - `scripts/pilot/browser_sidecar_gate.py`
 - `scripts/pilot/browser_surface.py`
 - `scripts/pilot/runner.py`
 - `tests/python/global/test_browser_sidecar.py`
+- `tests/python/global/test_browser_sidecar_conformance.py`
 - `tests/python/global/test_browser_sidecar_gate.py`
+- `tests/python/global/test_browser_surface.py`
 - `tests/python/global/test_pilot_runner.py`
 - `tests/python/packages/meshshot/test_renderer.py`
 
@@ -160,9 +177,10 @@ wholesale from it.
 
 Passed for the current review corrections:
 
-- Focused Browser Sidecar, surface scanner, nested gate, runner, and public
-  renderer suites: **89 tests, OK**.
-- Global policy gate: **239 tests, OK**.
+- Focused Browser Sidecar, conformance host, surface scanner, nested gate,
+  runner, and public renderer suites: **91 tests, OK**.
+- Global policy gate: **241 tests, OK** in two deterministic groups (154 + 87)
+  because the combined wrapper exceeds the local command ceiling.
 - Affected meshshot profile/renderer: **11 tests, OK**.
 - Public `mesh-compare` preview CLI: **8 tests, OK**.
 - `npm --prefix packages/meshshot test`.
@@ -171,8 +189,10 @@ Passed for the current review corrections:
 - Full-range `git diff --check`.
 - Clean networkless/no-pull Broker build and exact read-only image inspection.
 
-The current mask/lifecycle correction starts with RED commit `c7586f2e`; its
-GREEN implementation and durable handoff are the current review HEAD.
+The conformance-host correction starts with RED commit `9defcace` and GREEN
+commit `fdadf9aa`. Truthful pre-resource absence starts with RED commit
+`36c72d23` and GREEN commit `d2ee3b68`; the durable handoff and exact artifact
+lock follow those source commits.
 
 Not passed / not complete:
 
@@ -182,13 +202,15 @@ Not passed / not complete:
   missing `esbuild` package and failed DNS. No dependency was installed.
 - Independent Standards and Spec/security review has **not yet been rerun**
   against this corrected range.
-- The production-shaped Docker conformance gate was **NOT RERUN**, per the
-  review boundary. The preserved earlier failed attempt remains the only
-  conformance execution.
-- The Broker image was **NOT REBUILT** because this correction changes only the
-  runner-sealed gate/scanner bytes; no Dockerfile-copied Broker input changed.
+- The production-shaped Docker conformance gate was **NOT RERUN** after this
+  correction. Both earlier failed attempts remain preserved; the exact reviewed
+  `4cdbfecf...` attempt is never reused.
+- The Broker was rebuilt because the truthful pre-resource receipt correction
+  changes its Dockerfile-copied `browser_sidecar.py`. The build used only the
+  exact existing base, with no pull and no build network. No Broker or Sidecar
+  container was run.
 
-## Single production-shaped conformance attempt
+## Preserved production-shaped conformance attempts
 
 Dedicated Colima profile: `browser-sidecar-prototype`, `linux/amd64`, Docker
 socket
@@ -220,15 +242,47 @@ Earlier pre-Broker design attempts and their disproven host-port hypothesis
 remain documented in Git history; they are not counted as successor Broker
 conformance executions.
 
+The later, independently reviewed attempt used source HEAD
+`4cdbfecf93d6ba8e266e02a976c1d7535a9988fa`, exact Sidecar
+`sha256:22ff2413...b146f1`, exact Broker
+`sha256:1167ad37...7ede5e`, and sealed gate
+`sha256:87f7a96b...9695`. Image IDs, `linux/amd64`, full OCI revisions,
+Broker base, repository locks, and empty formal job/name inventories were
+verified with no pull or build. The repository entry then failed exactly once
+before any Docker resource creation because it called `BrowserSidecarJob.start`
+without configuring the nested gate:
+
+`BrowserSidecarError: nested Browser Gate must be sealed before Sidecar startup`
+
+Its immutable evidence remains at
+`/tmp/browser-sidecar-formal-pilot-conformance-4cdbfecf-20260815.json`, size
+1,614 bytes, SHA-256
+`0767bfe051d0427efb7e199f3efeda0be2f03d3d7749df348a927722b099e857`.
+The historical receipt records zero requests/contexts and
+`failureCheck:absence-proof`; direct pre/post exact label and `ttc-bs-*`
+inventories were empty and no new capability directory remained. This
+correction makes future pre-resource receipts truthful but does not rewrite the
+preserved artifact. The same SHA/handle was not rerun.
+
 ## Resource release state
 
 - Exact successor conformance job containers/networks: absent by receipt and
   exact owner-label inventory.
+- Exact `4cdbfecf...` attempt resources: none created; pre/post exact Docker
+  inventories were empty and the capability tree was absent.
 - Interrupted build container `16fa5b53...`: exact-owned and removed.
 - Docker build intermediate containers: removed by successful builds.
-- Dedicated Colima profile: left running because it pre-existed this ticket.
+- The exact dedicated Docker socket remained live and served Linux/amd64. The
+  Colima CLI profile registry reported the profile stopped, so no profile state
+  mutation was attempted.
 - Historical reviewed images and corrected Broker image
-  `sha256:1167ad37...7ede5e`: retained; no image deletion was authorized.
+  `sha256:45f0655c...593dd`: retained; no image deletion was authorized.
+- Byte-parity extraction residue is retained at
+  `/tmp/browser-sidecar-broker-inspect-d2ee3b68.488VjC`. It is an owner-created
+  ordinary directory tree with no symlinks; its Docker-extracted directories
+  and files are read-only. The first exact deletion attempt failed with
+  permission errors. Per the destructive-action boundary it was not chmodded,
+  retried, or reused; cleanup is deferred to the user.
 - No unrelated Docker resource was adopted, stopped, relabeled, or removed.
 
 ## Deferred interaction and required next action
@@ -237,8 +291,8 @@ Return for full independent Standards and Spec/security review of
 `90bc24cf8860125b158c5f04ddc5dfd65efbcb39..HEAD`. The owner has not
 self-approved either axis. If both axes accept the corrections and exact new
 artifact, authorize one new clean-SHA local conformance attempt using Broker
-image `sha256:1167ad371e18056b0d3fb713e9fcc6bd432bb7de0e3a1e70b81b0127757ede5e`.
-Do not reuse the failed job handle.
+image `sha256:45f0655ccb362f01097876d9e6d905139cb48058adcb51621472362cadc593dd`.
+Do not reuse either failed SHA/handle.
 
 Before paid CVM closure, the provisioning receipt must represent the Broker
 without ambiguity. The current fixed role is named `client` and its durable

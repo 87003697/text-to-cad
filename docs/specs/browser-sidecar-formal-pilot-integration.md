@@ -33,9 +33,9 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Browser-less Broker base image:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Render Program Broker image:
-  `sha256:1167ad371e18056b0d3fb713e9fcc6bd432bb7de0e3a1e70b81b0127757ede5e`
+  `sha256:45f0655ccb362f01097876d9e6d905139cb48058adcb51621472362cadc593dd`
 - Broker OCI revision / production implementation commit:
-  `a67e0a5845a8cff928607e07ef1db97ead75e97d`
+  `d2ee3b689b471e29b1b114a9400144867ff06531`
 - Image source revision:
   `1abe4c97929906b5c0b28b0f3f38857bd923952f`
 - Residual program SHA-256:
@@ -43,10 +43,12 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Viewer program SHA-256:
   `e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b`
 
-The corrected Broker was built cleanly from the GREEN implementation with
-`--pull=false --no-cache --network=none`; its exact identity remains subject
-to independent review. Runtime image pulls and browser downloads are
-forbidden. Replacing any accepted identity is a new review decision.
+The corrected Broker was built cleanly from that exact full GREEN commit with
+`--pull=false --no-cache --network=none`. Its Dockerfile-copied files were
+extracted from one non-running inspection container and proved byte-identical
+to the commit; the container was removed. Its exact identity remains subject
+to independent review. Runtime image pulls and browser downloads are forbidden.
+Replacing any accepted identity is a new review decision.
 
 ## Adversarial matrix
 
@@ -134,6 +136,18 @@ closes the channel, and only then releases the gate to `execvpe` the already
 fixed workload argv without shell interpolation. Missing, malformed,
 duplicate, or late proof therefore cannot be replaced by a later Agent ACK.
 
+The production-shaped local host uses the same sealed runner composition. A
+fixed network-none discovery role runs in the exact digest-pinned browser-less
+client image before Sidecar startup and inventories its immutable execution
+surface. The host accepts only its exact schema and fixed root vocabulary,
+canonicalizes the discovered masks through the shared runner operation, and
+binds the resulting manifest, gate artifact, job ID, and fresh nonce before
+`BrowserSidecarJob.start`. The same isolation and masks are then applied while
+the one-shot Browser Gate proves public residual parity, Viewer transition, and
+nested browser inventory/process zero before releasing the fixed
+Agent-equivalent client exactly once. Docker and spawned-process boundaries are
+the only fakes in the host regression.
+
 Source-Hidden and blocked external browser egress remain direct Sidecar facts:
 the Browser and Broker use one Docker `--internal` network, no source mount,
 baked fixed assets, and a browser-context preflight. Agent repository/skill
@@ -147,6 +161,11 @@ broker traffic, and cleanup failure all traverse the same terminal cleanup
 path. There is one attempt per job: no resource adoption, Sidecar replacement,
 retry, pull, download, source mount, egress fallback, host-process browser, or
 legacy browser fallback after formal authority selection.
+
+A failure before Docker resolution still enters terminal publication. Because
+the fresh owner has not created a network or container at that point, its
+receipt records exact absence true and retains the original closed startup
+check rather than manufacturing an `absence-proof` cleanup failure.
 
 ## Validation boundary
 
