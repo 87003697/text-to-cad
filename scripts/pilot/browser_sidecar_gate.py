@@ -279,7 +279,7 @@ def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, A
     if not _exclusions_closed(manifest["browserExclusions"]):
         raise ValueError("nested browser exclusion predicate failed")
     visible = discover_browser_roots(
-        (Path(root), Path(root)) for root in manifest["scanRoots"]
+        (Path(root), Path(root), True) for root in manifest["scanRoots"]
     )
     excluded_targets = {item["target"] for item in manifest["browserExclusions"]}
     visible = [item for item in visible if item["target"] not in excluded_targets]

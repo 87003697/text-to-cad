@@ -60,6 +60,17 @@ class BrowserSurfaceTests(unittest.TestCase):
                     [(root, Path("/sandbox"), True)]
                 )
 
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "surface"
+            (root / "a").mkdir(parents=True)
+            (root / "b").mkdir()
+            (root / "a/to-b").symlink_to("../b")
+            (root / "b/to-a").symlink_to("../a")
+            with self.assertRaises(browser_surface.BrowserSurfaceError):
+                browser_surface.discover_browser_roots(
+                    [(root, Path("/sandbox"), True)]
+                )
+
     def test_browser_alias_and_marker_reached_through_symlink_are_detected(self) -> None:
         """A renamed in-root target cannot hide behind a browser-named link."""
 
@@ -71,8 +82,19 @@ class BrowserSurfaceTests(unittest.TestCase):
             target.chmod(0o755)
             (root / "bin").mkdir()
             (root / "bin/chromium").symlink_to("../libexec/vendor-render")
+            cache_payload = root / "libexec/cache-payload"
+            cache_payload.write_text("Google Chrome cache payload", encoding="utf-8")
+            (root / "cache").mkdir()
+            (root / "cache/renamed-product").symlink_to("../libexec/cache-payload")
 
+            filesystem = _CountingFilesystem(
+                {"vendor-render", "cache-payload"}
+            )
             findings = browser_surface.discover_browser_roots(
+                [(root, Path("/sandbox"), True)],
+                filesystem=filesystem,
+            )
+            repeated = browser_surface.discover_browser_roots(
                 [(root, Path("/sandbox"), True)]
             )
 
@@ -80,11 +102,21 @@ class BrowserSurfaceTests(unittest.TestCase):
             findings,
             [
                 {
+                    "kind": "cache",
+                    "target": "/sandbox/libexec",
+                    "mask": "tmpfs",
+                },
+                {
                     "kind": "executable",
                     "target": "/sandbox/libexec/vendor-render",
                     "mask": "dev-null",
                 }
             ],
+        )
+        self.assertEqual(repeated, findings)
+        self.assertEqual(
+            filesystem.file_opens,
+            {"vendor-render": 1, "cache-payload": 1},
         )
 
     def test_os_boundary_errors_are_never_suppressed(self) -> None:
@@ -94,8 +126,16 @@ class BrowserSurfaceTests(unittest.TestCase):
             root = Path(temp) / "surface"
             root.mkdir()
             (root / "file").write_bytes(b"plain")
+            (root / "file-link").symlink_to("file")
 
-            for operation in ("lstat", "open", "read", "scandir"):
+            for operation in (
+                "lstat",
+                "open",
+                "fstat",
+                "read",
+                "scandir",
+                "readlink",
+            ):
                 with self.subTest(operation=operation):
                     adapter = _DeniedOperationFilesystem(operation)
                     with self.assertRaises(browser_surface.BrowserSurfaceError):
@@ -130,10 +170,33 @@ class _DeniedOperationFilesystem(browser_surface.SurfaceFilesystem):
             self._deny("read")
         return super().read(descriptor, size)
 
+    def fstat(self, descriptor):
+        if self.denied == "fstat":
+            self._deny("fstat")
+        return super().fstat(descriptor)
+
     def scandir(self, descriptor):
         if self.denied == "scandir":
             self._deny("scandir")
         return super().scandir(descriptor)
+
+    def readlink(self, path, *, dir_fd=None):
+        if self.denied == "readlink":
+            self._deny("readlink")
+        return super().readlink(path, dir_fd=dir_fd)
+
+
+class _CountingFilesystem(browser_surface.SurfaceFilesystem):
+    """Count exact regular targets while delegating every operation to the OS."""
+
+    def __init__(self, names: set[str]) -> None:
+        self.file_opens = {name: 0 for name in names}
+
+    def open(self, path, flags, *, dir_fd=None):
+        name = os.fspath(path)
+        if name in self.file_opens:
+            self.file_opens[name] += 1
+        return super().open(path, flags, dir_fd=dir_fd)
 
 
 if __name__ == "__main__":

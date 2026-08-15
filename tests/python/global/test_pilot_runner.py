@@ -1868,7 +1868,7 @@ class ProductionPathContractTests(unittest.TestCase):
             )
             runner = load_runner()
             result = runner.discover_browser_roots(
-                [(source, Path("/usr"))]
+                [(source, Path("/usr"), True)]
             )
 
         self.assertEqual(

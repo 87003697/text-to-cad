@@ -67,6 +67,7 @@ forbidden. Replacing any accepted identity is a new review decision.
 | Authority malformed/unreadable/unreachable after formal selection | `MeshshotError`; no local browser launch or transport fallback | Outer runner still performs terminal Sidecar cleanup |
 | Render request has extra/missing key, wrong program, URL, JS, path, endpoint, browser/Docker arg, invalid geometry/options, or oversized body | Registered-program broker rejects it before browser work | Fresh context is absent or closed; Sidecar remains job-owned |
 | Mounted Agent surface contains a Chromium/Chrome/Playwright package, executable, cache, ELF, or product marker under a renamed/distro path | Before Sidecar startup, the runner scans every exact read-only mount plus writable experiment/Codex state, fails on an uninspectable or writable finding, and masks every maskable read-only browser root | The sealed gate rechecks the exact manifest, empty masks, and zero Chromium processes in the future Agent namespace before exec |
+| Exact mounted root vanishes, an entry cannot be lstat/open/read/scandir inspected, or a link is dangling, escaping, cyclic, or uninspectable | The shared descriptor walker never follows a link implicitly; required roots and every entry fail closed while an explicitly optional absent non-mounted root alone is ignored | No Sidecar starts, or the already-owned job enters terminal cleanup; the Agent is never released on a surface-proof mismatch |
 | Nested Agent attempts browser spawn or inventory | The fixed preflight proves the closed mounted surface has no browser package/executable/cache and zero visible Chromium processes; the later Agent receives no browser lifecycle authority or raw Sidecar endpoint | Nested browser-process inventory remains zero |
 | Sidecar Browser Execution Tree can see a source alias or external egress | The Docker-internal Sidecar/Broker preflight fails closed; this predicate is never inferred from Agent paths or an Agent HTTP request | Sidecar is terminally stopped and absent |
 | Workload exits nonzero | Original workload status is preserved unless lifecycle/cleanup evidence is worse | Sidecar cleanup always runs after process-group terminal state |
@@ -103,11 +104,17 @@ capability directory read-only into bwrap. Nested code cannot remove or
 replace the fixed authority/socket mount.
 
 Before Sidecar startup, the outer runner deterministically packages the fixed
-gate plus exact meshshot runtime into one digest-bound zipapp. It scans every
-exact read-only bwrap execution mount for named or renamed Chromium/Chrome/
-Playwright packages, executables, caches, ELF and product markers; writable
-experiment/Codex state must already be empty of all such findings. Every
-read-only finding becomes one fixed bwrap mask. The fixed authority and
+gate plus exact meshshot runtime into one digest-bound zipapp. Its shared
+surface scanner uses no-follow directory and file descriptors, verifies each
+opened inode against its lstat identity, propagates all inspection errors, and
+resolves every link explicitly without leaving its declared root. Required
+exact mounts cannot disappear; only an explicitly optional root that was never
+mounted may be absent. Dangling, escaping, cyclic, or uninspectable links close
+the job, while a reachable in-root target is inspected once and contributes a
+canonical deterministic mask. The scanner detects named or renamed Chromium/
+Chrome/Playwright packages, executables, caches, ELF and product markers;
+writable experiment/Codex state must already be empty of all such findings.
+Every read-only finding becomes one fixed bwrap mask. The fixed authority and
 read-only gate input bind the same job ID, fresh nonce, artifact digest, and
 exact mounted-surface manifest digest. There is no live meshshot source bind.
 

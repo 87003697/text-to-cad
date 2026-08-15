@@ -771,7 +771,7 @@ def _readonly_surface_mounts(
     exp_dir: Path,
     input_paths: list[Path],
     environ: Mapping[str, str],
-) -> list[tuple[Path, Path]]:
+) -> list[tuple[Path, Path, bool]]:
     """Resolve the exact immutable execution surface later mounted into bwrap."""
 
     host_home_value = environ.get("HOME")
@@ -784,19 +784,19 @@ def _readonly_surface_mounts(
     skills = resolve_installed_skill_dirs(repo_root, host_codex_home)
     gateway = (repo_root / "gateway/codex-tap-gpt56").resolve()
     venv = (repo_root / ".venv").resolve()
-    mounts: list[tuple[Path, Path]] = [
-        (venv, SANDBOX_REPO_ROOT / ".venv"),
-        (gateway, SANDBOX_REPO_ROOT / "gateway" / gateway.name),
+    mounts: list[tuple[Path, Path, bool]] = [
+        (venv, SANDBOX_REPO_ROOT / ".venv", True),
+        (gateway, SANDBOX_REPO_ROOT / "gateway" / gateway.name, True),
     ]
-    mounts.extend((path.resolve(), path) for path in existing_system_paths())
+    mounts.extend((path.resolve(), path, True) for path in existing_system_paths())
     mounts.extend(
-        (path, SANDBOX_REPO_ROOT / path.relative_to(repo_root)) for path in inputs
+        (path, SANDBOX_REPO_ROOT / path.relative_to(repo_root), True) for path in inputs
     )
     for skill in skills:
         mounts.extend(
             (
-                (skill, SANDBOX_REPO_ROOT / "skills" / skill.name),
-                (skill, SANDBOX_CODEX_HOME / "skills" / skill.name),
+                (skill, SANDBOX_REPO_ROOT / "skills" / skill.name, True),
+                (skill, SANDBOX_CODEX_HOME / "skills" / skill.name, True),
             )
         )
     return mounts
@@ -862,8 +862,8 @@ def prepare_nested_browser_gate(
     upper = prepare_sandbox(exp_dir.resolve(), skills)
     relative_exp = exp_dir.resolve().relative_to(repo_root.resolve())
     writable_mounts = [
-        (exp_dir.resolve(), SANDBOX_REPO_ROOT / relative_exp),
-        (upper.resolve(), SANDBOX_CODEX_HOME),
+        (exp_dir.resolve(), SANDBOX_REPO_ROOT / relative_exp, True),
+        (upper.resolve(), SANDBOX_CODEX_HOME, True),
     ]
     try:
         exclusions = discover_browser_roots(mounts)
@@ -873,7 +873,7 @@ def prepare_nested_browser_gate(
     if writable_findings:
         raise PilotError("writable Agent surface contains a browser artifact")
     scan_roots = sorted(
-        {target.as_posix() for _, target in [*mounts, *writable_mounts]}
+        {target.as_posix() for _, target, _ in [*mounts, *writable_mounts]}
     )
     manifest = {
         "schema": NESTED_GATE["surfaceSchema"],
@@ -1003,7 +1003,7 @@ def build_bwrap_argv(
         expected_scan_roots = sorted(
             {
                 target.as_posix()
-                for _, target in _readonly_surface_mounts(
+                for _, target, _ in _readonly_surface_mounts(
                     repo_root, exp_dir, input_paths, environ
                 )
             }

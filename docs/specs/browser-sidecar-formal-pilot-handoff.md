@@ -33,8 +33,12 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
 - Before Sidecar startup, the runner enumerates every exact read-only execution
   mount plus writable experiment/Codex state. It detects named and renamed
   Chromium/Chrome/Playwright packages, executables, caches, ELF and product
-  markers; uninspectable or writable findings fail closed, while read-only
-  findings receive exact bwrap masks that are rechecked in the nested namespace.
+  markers through a shared descriptor/no-follow walker. Every required root and
+  lstat/open/read/scandir result is closed; only an explicitly optional absent
+  non-mounted root is ignored. Every link is resolved explicitly: dangling,
+  escaping, cyclic, or uninspectable targets close, and reachable in-root
+  targets are inspected once. Read-only findings receive canonical deterministic
+  bwrap masks that are rechecked by the same scanner in the nested namespace.
 - Immediately before Agent exec, the runner starts the fixed repository-owned
   Browser Gate inside the exact same bwrap PID/filesystem/network environment.
   The gate calls the real unchanged public residual API with one literal
@@ -106,6 +110,8 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
   `sha256:1167ad371e18056b0d3fb713e9fcc6bd432bb7de0e3a1e70b81b0127757ede5e`
 - Broker OCI revision:
   `a67e0a5845a8cff928607e07ef1db97ead75e97d`
+- Deterministic sealed Browser Gate zipapp for the current scanner source:
+  `sha256:7a7aa0a316dd7cb8aaad7165dd73007999cff4a2a979d340b485ee318d1bb1c2`
 - Platform: `linux/amd64`
 
 The corrected Broker was built cleanly with
@@ -142,9 +148,9 @@ wholesale from it.
 
 Passed for the current review corrections:
 
-- Focused Browser Sidecar, nested gate, runner, and public renderer suites:
-  **79 tests, OK** after the artifact lock update.
-- Global policy gate: **229 tests, OK** after the artifact lock update.
+- Focused Browser Sidecar, surface scanner, nested gate, runner, and public
+  renderer suites: **84 tests, OK**.
+- Global policy gate: **234 tests, OK**.
 - Affected meshshot profile/renderer: **11 tests, OK**.
 - Public `mesh-compare` preview CLI: **8 tests, OK**.
 - `npm --prefix packages/meshshot test`.
@@ -153,7 +159,8 @@ Passed for the current review corrections:
 - Full-range `git diff --check`.
 - Clean networkless/no-pull Broker build and exact read-only image inspection.
 
-The current review-correction RED/GREEN pair is `d242d5d7` / `a67e0a58`.
+The current traversal correction starts with RED commit `d26af173`; its GREEN
+implementation and durable handoff are the current review HEAD.
 
 Not passed / not complete:
 
@@ -166,6 +173,8 @@ Not passed / not complete:
 - The production-shaped Docker conformance gate was **NOT RERUN**, per the
   review boundary. The preserved earlier failed attempt remains the only
   conformance execution.
+- The Broker image was **NOT REBUILT** because this correction changes only the
+  runner-sealed gate/scanner bytes; no Dockerfile-copied Broker input changed.
 
 ## Single production-shaped conformance attempt
 
