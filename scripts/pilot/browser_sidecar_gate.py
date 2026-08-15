@@ -19,6 +19,7 @@ try:
     from scripts.pilot.browser_gate_contract import (
         CONFORMANCE_OPTIONAL_ROOTS,
         CONFORMANCE_REQUIRED_ROOTS,
+        CONFORMANCE_SYSTEM_ALIAS_ROOTS,
         CONFORMANCE_SURFACE_SCHEMA,
         CONFORMANCE_TOP_LEVEL_BROWSER_ROOTS,
     )
@@ -30,6 +31,7 @@ except ModuleNotFoundError:
     from browser_gate_contract import (  # type: ignore[no-redef]
         CONFORMANCE_OPTIONAL_ROOTS,
         CONFORMANCE_REQUIRED_ROOTS,
+        CONFORMANCE_SYSTEM_ALIAS_ROOTS,
         CONFORMANCE_SURFACE_SCHEMA,
         CONFORMANCE_TOP_LEVEL_BROWSER_ROOTS,
     )
@@ -315,6 +317,7 @@ def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, A
         ((Path(root), Path(root), True) for root in manifest["scanRoots"]),
         permitted_symlink_roots=[
             *(Path(root) for root in manifest["scanRoots"]),
+            *(Path(root) for root in CONFORMANCE_SYSTEM_ALIAS_ROOTS),
             Path("/dev/null"),
             Path("/proc/mounts"),
             Path("/proc/self/mounts"),
@@ -387,6 +390,7 @@ def discover_conformance_surface() -> Mapping[str, Any]:
         ((Path(root), Path(root), True) for root in roots),
         permitted_symlink_roots=[
             *(Path(root) for root in roots),
+            *(Path(root) for root in CONFORMANCE_SYSTEM_ALIAS_ROOTS),
             Path("/dev/null"),
             Path("/dev/shm"),
             Path("/proc/mounts"),
