@@ -157,5 +157,93 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(broker_argv[1:3], [str(browser_sidecar.Path(browser_sidecar.__file__)), "broker"])
 
 
+class RegisteredProgramBrokerTests(unittest.TestCase):
+    """Observe exact request validation and fresh contexts at the broker seam."""
+
+    def test_residual_program_uses_one_fresh_context_and_rejects_extra_keys(self) -> None:
+        view_names = ["+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso"]
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.goto_calls: list[tuple[str, dict[str, object]]] = []
+
+            def goto(self, url, **kwargs):
+                self.goto_calls.append((url, kwargs))
+
+            def wait_for_function(self, expression, **kwargs):
+                self.wait_expression = expression
+
+            def evaluate(self, expression, payload):
+                self.expression = expression
+                self.payload = payload
+                return {
+                    "ok": True,
+                    "pngDataUrl": "data:image/png;base64,aGVsbG8=",
+                    "views": [{"name": name} for name in view_names],
+                }
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.page = FakePage()
+                self.closed = False
+
+            def new_page(self):
+                return self.page
+
+            def close(self):
+                self.closed = True
+
+        class FakeBrowser:
+            def __init__(self) -> None:
+                self.contexts: list[FakeContext] = []
+
+            def new_context(self, **kwargs):
+                self.context_kwargs = kwargs
+                context = FakeContext()
+                self.contexts.append(context)
+                return context
+
+        geometry = {
+            "vertices": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            "faces": [[0, 1, 2]],
+        }
+        request = {
+            "schema": "meshshot.browser-sidecar.render-request/2",
+            "jobId": "formal-job-1",
+            "imageId": IMAGE_ID,
+            "program": "residual",
+            "payload": {
+                "reference": geometry,
+                "candidate": geometry,
+                "variant": "step",
+                "exteriorDirections": [],
+                "options": {
+                    "cameraPolicy": "profile-fixed",
+                    "canonicalPostprocess": True,
+                },
+            },
+        }
+        browser = FakeBrowser()
+        broker = browser_sidecar.RegisteredProgramBroker(browser, "formal-job-1")
+
+        response = broker.execute(request)
+
+        self.assertEqual(response["schema"], "meshshot.browser-sidecar.render-response/1")
+        self.assertEqual(response["result"]["views"], [{"name": name} for name in view_names])
+        self.assertEqual(len(browser.contexts), 1)
+        self.assertTrue(browser.contexts[0].closed)
+        self.assertEqual(
+            browser.contexts[0].page.goto_calls[0][0],
+            "http://127.0.0.1:4174/render.html",
+        )
+        self.assertNotIn("options", browser.contexts[0].page.payload)
+
+        malformed = dict(request)
+        malformed["url"] = "https://attacker.invalid/"
+        with self.assertRaisesRegex(browser_sidecar.BrowserSidecarError, "schema"):
+            broker.execute(malformed)
+        self.assertEqual(len(browser.contexts), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
