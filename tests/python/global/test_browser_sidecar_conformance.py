@@ -539,7 +539,10 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
         ]
         self.assertTrue(bind_sources)
         self.assertTrue(
-            any(source.startswith("/private/tmp/") for source in bind_sources),
+            all(
+                Path(temp).resolve() in Path(source).parents
+                for source in bind_sources
+            ),
             bind_sources,
         )
         self.assertTrue(

@@ -728,6 +728,26 @@ class BrowserSidecarJobTests(unittest.TestCase):
 
         self.assertEqual(job.capability_dir, returned.resolve())
 
+    def test_public_job_uses_exact_private_capability_parent(self) -> None:
+        """A trusted host may place the random capability below one shared root."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            parent = root / "daemon-shared"
+            parent.mkdir(mode=0o700)
+            job = browser_sidecar.BrowserSidecarJob.create(
+                root / "exp",
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+                capability_parent=parent,
+            )
+            capability = job.capability_dir
+            self.assertIsNotNone(capability)
+            assert capability is not None
+            self.assertEqual(capability.parent, parent.resolve())
+            job.close(workload_status=None)
+            self.assertFalse(capability.exists())
+
     def test_created_container_requires_exact_owner_labels_before_readiness(self) -> None:
         """A returned ID is untouched until exact labels prove cleanup authority."""
 
