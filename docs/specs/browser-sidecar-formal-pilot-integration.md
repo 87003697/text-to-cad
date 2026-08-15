@@ -33,9 +33,9 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Browser-less Broker base image:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Render Program Broker image:
-  `sha256:8fc448aa192dc9a22d3894eac06fecebc95ef3fc12606ca85bacba7344e0c7ed`
+  `sha256:1167ad371e18056b0d3fb713e9fcc6bd432bb7de0e3a1e70b81b0127757ede5e`
 - Broker OCI revision / production implementation commit:
-  `be7651b524350a0a1a9cfcbe0bde3009ec14da06`
+  `a67e0a5845a8cff928607e07ef1db97ead75e97d`
 - Image source revision:
   `1abe4c97929906b5c0b28b0f3f38857bd923952f`
 - Residual program SHA-256:
@@ -61,20 +61,21 @@ forbidden. Replacing any accepted identity is a new review decision.
 | Readiness absent, malformed, late, or for another job | Nested workload never starts; pilot is terminal failed | Exact owned Sidecar/network are stopped and absent |
 | Broker readiness absent, malformed, late, or for another job | Authority is never published and nested workload never starts | Exact owned Broker, Sidecar, and network are stopped and absent |
 | Broker socket path pre-exists, is not one socket, changes identity, or remains writable to the nested workload | Pilot fails before authority publication | Exact owned Broker, Sidecar, and network are stopped and absent; no foreign path is removed |
-| Nested-gate proof is absent, malformed, duplicated, late, or for a different job | The outer-owned channel rejects it and never releases the gate to exec the Agent workload | Exact owned Broker, Sidecar, and network follow terminal cleanup; the channel is closed and its socket is absent |
+| Nested-gate proof is absent, malformed, duplicated, late, for a different job/nonce, or has the wrong artifact/surface identity | The outer-owned channel rejects it and never releases the gate to exec the Agent workload; a Job A proof cannot satisfy Job B | Exact owned Broker, Sidecar, and network follow terminal cleanup; the channel is closed and its socket is absent |
 | Authority absent outside formal job | Existing local `render_residual_preview` behavior remains selected | Existing local browser cleanup remains unchanged |
 | Caller changes or unsets an authority/socket environment variable, or supplies a conforming temporary authority/socket | It cannot select formal mode, redirect the fixed connection, or trigger a formal-to-legacy fallback | The fixed mount remains the only formal selector |
 | Authority malformed/unreadable/unreachable after formal selection | `MeshshotError`; no local browser launch or transport fallback | Outer runner still performs terminal Sidecar cleanup |
 | Render request has extra/missing key, wrong program, URL, JS, path, endpoint, browser/Docker arg, invalid geometry/options, or oversized body | Registered-program broker rejects it before browser work | Fresh context is absent or closed; Sidecar remains job-owned |
-| Nested Agent attempts browser spawn or inventory | The fixed preflight in the same bwrap/PID/filesystem/network environment proves no browser executable/cache and zero visible Chromium processes before exec; the later Agent still receives no raw Sidecar endpoint | Nested browser-process inventory remains zero |
-| Browser can see source alias or external egress | Formal render and pilot fail closed | Sidecar is terminally stopped and absent |
+| Mounted Agent surface contains a Chromium/Chrome/Playwright package, executable, cache, ELF, or product marker under a renamed/distro path | Before Sidecar startup, the runner scans every exact read-only mount plus writable experiment/Codex state, fails on an uninspectable or writable finding, and masks every maskable read-only browser root | The sealed gate rechecks the exact manifest, empty masks, and zero Chromium processes in the future Agent namespace before exec |
+| Nested Agent attempts browser spawn or inventory | The fixed preflight proves the closed mounted surface has no browser package/executable/cache and zero visible Chromium processes; the later Agent receives no browser lifecycle authority or raw Sidecar endpoint | Nested browser-process inventory remains zero |
+| Sidecar Browser Execution Tree can see a source alias or external egress | The Docker-internal Sidecar/Broker preflight fails closed; this predicate is never inferred from Agent paths or an Agent HTTP request | Sidecar is terminally stopped and absent |
 | Workload exits nonzero | Original workload status is preserved unless lifecycle/cleanup evidence is worse | Sidecar cleanup always runs after process-group terminal state |
 | Supervisor receives SIGINT or SIGTERM at any startup or workload boundary | The relay is installed before Sidecar/Broker mutation; signal status wins and no later startup boundary is entered | Every already-created exact resource follows the same bounded cleanup and exact absence proof |
 | Sidecar exits during workload | Workload group is terminated; pilot fails closed; no replacement Sidecar starts | Exact terminal state is recorded and resource is absent |
 | Broker exits during workload | Workload group is terminated; pilot fails closed; no replacement Broker or host process starts | Exact terminal state is recorded and resource is absent |
 | Broker or Sidecar stop/terminal evidence times out | Cleanup failure dominates workload/render success | Remaining exact owned resources still receive their bounded cleanup attempts; retained proof is closed |
 | Stop/remove/absence proof fails or an owned resource is retained | Cleanup failure dominates any render/workload success | Receipt names the closed predicate; no stronger cleanup or unrelated deletion |
-| Success | One exact Sidecar and one exact browser-less Broker served the whole job; the Broker directly proves raw residual/eight-view and Viewer predicates and exact fresh contexts, while the nested gate separately proves public residual parity, Viewer transition, browser inventory/process zero, hidden sources, and blocked egress before it execs the workload exactly once | Broker/Sidecar/network exact IDs are terminal and removed, label inventory is empty, source/egress predicates are closed, and no browser process remains in the nested workload |
+| Success | One exact Sidecar and one exact browser-less Broker served the whole job; Sidecar preflight directly proves Source-Hidden/no external route, the Broker proves raw registered-program/fresh-context facts, and the nested gate separately proves public residual parity, Viewer transition, and Agent browser inventory/process zero before it execs the workload exactly once | Broker/Sidecar/network exact IDs are terminal and removed, label inventory is empty, Sidecar source/egress predicates are closed, and no browser process is visible at Agent preflight |
 
 ## Evidence and interruption rules
 
@@ -88,30 +89,47 @@ receipt is successful only when every whitelisted predicate is positive,
 both registered programs have at least one accepted request, accepted counts
 sum exactly, and `freshContexts = acceptedRequests + 1`. Broker predicates
 cover only the raw registered programs and lifecycle evidence it observes;
-`residualPublicParity` is not a Broker claim. The separate `nestedGate`
-predicate group covers the unchanged public API, Viewer, inventory/process,
-source, and egress checks observed inside the workload namespace.
+`residualPublicParity` is not a Broker claim. `sidecarSourceHidden` and
+`sidecarEgressBlocked` come only from the Docker-internal Browser/Sidecar
+preflight. The separate `nestedGate` predicate group covers only the unchanged
+public API, Viewer, and Agent browser inventory/process checks. It makes no
+claim about Agent source visibility or Agent egress.
 
 The fixed authority is opened with no-follow semantics and must be one regular
 inode owned by the workload UID, mode `0444`, with link count one and the exact
-authority/job/image/program schema. The runner publishes it only after exact
-Sidecar, Broker, socket, readiness, and isolation checks, then mounts the
-capability directory read-only into bwrap. Nested code cannot remove or replace
-the fixed authority/socket mount.
+authority/job/nonce/image/program schema. The runner publishes it only after
+exact Sidecar, Broker, socket, readiness, and isolation checks, then mounts the
+capability directory read-only into bwrap. Nested code cannot remove or
+replace the fixed authority/socket mount.
 
-Immediately before Agent execution, bwrap starts the fixed, repository-owned
-`scripts/pilot/browser_sidecar_gate.py` in the exact PID, filesystem, and
-network namespace that will contain the Agent. The runner mounts only that
-read-only script and the read-only meshshot package source at fixed paths. The
-gate calls the unchanged public residual API with a literal fixture, makes the
-fixed registered Viewer request, and checks exact PNG hash/mode/size/profile/
-views, Viewer projection/no-artifact state, browser executable/cache and
-process absence, fixed source-alias absence, and blocked egress. It writes one
-exact-key bounded proof to an outer-owned one-shot Unix socket. The outer
+Before Sidecar startup, the outer runner deterministically packages the fixed
+gate plus exact meshshot runtime into one digest-bound zipapp. It scans every
+exact read-only bwrap execution mount for named or renamed Chromium/Chrome/
+Playwright packages, executables, caches, ELF and product markers; writable
+experiment/Codex state must already be empty of all such findings. Every
+read-only finding becomes one fixed bwrap mask. The fixed authority and
+read-only gate input bind the same job ID, fresh nonce, artifact digest, and
+exact mounted-surface manifest digest. There is no live meshshot source bind.
+
+Immediately before Agent execution, bwrap starts that zipapp in the exact PID,
+filesystem, and network namespace that will contain the Agent. It rechecks the
+manifest and empty masks, calls the unchanged public residual API with a
+literal fixture, makes the fixed registered Viewer request, and checks exact
+PNG hash/mode/size/profile/views, Viewer projection/no-artifact state, browser
+package/executable/cache absence, and zero Chromium processes. It writes one
+exact-key identity-bound proof to an outer-owned one-shot Unix socket. The outer
 runner accepts only the first proof, unlinks the listener, validates the proof,
 closes the channel, and only then releases the gate to `execvpe` the already
 fixed workload argv without shell interpolation. Missing, malformed,
 duplicate, or late proof therefore cannot be replaced by a later Agent ACK.
+
+Source-Hidden and blocked external browser egress remain direct Sidecar facts:
+the Browser and Broker use one Docker `--internal` network, no source mount,
+baked fixed assets, and a browser-context preflight. Agent repository/skill
+visibility is required by the pilot and is not evidence about the Browser
+Execution Tree. The historical standalone conformance client is not copied
+into the production Broker artifact; acceptance uses the sealed runner gate,
+so the two principals cannot be conflated by duplicated production checks.
 
 SIGINT/SIGTERM, workload failure, readiness failure, Sidecar exit, malformed
 broker traffic, and cleanup failure all traverse the same terminal cleanup

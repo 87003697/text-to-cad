@@ -1,6 +1,6 @@
 # Browser Sidecar formal-pilot integration handoff
 
-Outcome: **READY_FOR_THIRD_FULL_REVIEW** (not accepted or complete)
+Outcome: **READY_FOR_FULL_DUAL_REVIEW** (not accepted or complete)
 
 Ticket: `browser-sidecar-formal-pilot-integration`
 
@@ -30,13 +30,23 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
   installs the signal relay before any Sidecar/Broker lifecycle mutation,
   removes browser caches/executables from bwrap, and exposes only the read-only
   authority/socket directory at `/run/meshshot-browser`.
+- Before Sidecar startup, the runner enumerates every exact read-only execution
+  mount plus writable experiment/Codex state. It detects named and renamed
+  Chromium/Chrome/Playwright packages, executables, caches, ELF and product
+  markers; uninspectable or writable findings fail closed, while read-only
+  findings receive exact bwrap masks that are rechecked in the nested namespace.
 - Immediately before Agent exec, the runner starts the fixed repository-owned
   Browser Gate inside the exact same bwrap PID/filesystem/network environment.
   The gate calls the real unchanged public residual API with one literal
   fixture, calls the fixed registered Viewer projection program, and proves
   exact public PNG/profile/view parity, Viewer transition/no-artifact state,
-  browser executable/cache and process absence, fixed source-alias absence,
-  and blocked egress.
+  browser package/executable/cache and process absence. It does not claim that
+  Agent source is hidden or that an Agent HTTP probe proves network policy.
+- The gate and exact meshshot runtime are packaged deterministically into one
+  immutable digest-bound zipapp mounted read-only at
+  `/run/meshshot-browser/browser-gate.pyz`; there is no live development-source
+  bind. The fixed authority and gate input share the exact job ID and fresh
+  nonce and bind the artifact and mounted-surface manifest digests.
 - The gate publishes one exact-key bounded proof over an outer-owned one-shot
   Unix socket. The outer unlinks/closes the listener after the first connection,
   validates that proof, sends the release byte, and closes the accepted channel
@@ -57,7 +67,8 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
 - Formal success requires accepted residual and Viewer requests, exact program
   totals, `freshContexts = acceptedRequests + 1`, Broker-observed raw residual/
   eight-view and Viewer predicates, separately observed nested public parity/
-  Viewer/inventory/process/source/egress predicates, zero terminal states,
+  Viewer/inventory/process predicates, directly observed Sidecar Source-Hidden/
+  egress predicates, zero terminal states,
   exact Sidecar closing, workload success, and absence proof. The Broker no
   longer claims `residualPublicParity`.
 - The public receipt is proof-only and exact-keyed. It exposes immutable image,
@@ -76,7 +87,8 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
   SIGTERM.
 - The Broker artifact seals the fixed registered raw residual and Viewer
   programs. Public residual parity and nested namespace isolation belong only
-  to the separate fixed Browser Gate, not to a Broker-reported boolean.
+  to the separate fixed Browser Gate, not to a Broker-reported boolean. The
+  legacy standalone conformance client is no longer copied into the Broker.
 - The successor adversarial matrix covers missing/wrong Broker identity,
   platform/revision/base mismatch, foreign Broker name, malformed/late/wrong
   readiness, pre-existing/non-socket/replaced socket, premature exits, exact
@@ -91,9 +103,9 @@ Owner: `/root/browser_sidecar_formal_pilot_owner`
 - Browser-less Broker base:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Final corrected Broker:
-  `sha256:8fc448aa192dc9a22d3894eac06fecebc95ef3fc12606ca85bacba7344e0c7ed`
+  `sha256:1167ad371e18056b0d3fb713e9fcc6bd432bb7de0e3a1e70b81b0127757ede5e`
 - Broker OCI revision:
-  `be7651b524350a0a1a9cfcbe0bde3009ec14da06`
+  `a67e0a5845a8cff928607e07ef1db97ead75e97d`
 - Platform: `linux/amd64`
 
 The corrected Broker was built cleanly with
@@ -116,6 +128,7 @@ path copied by the Dockerfile is byte-identical to that exact revision.
 - `scripts/pilot/browser_sidecar.py`
 - `scripts/pilot/browser_sidecar_conformance.py`
 - `scripts/pilot/browser_sidecar_gate.py`
+- `scripts/pilot/browser_surface.py`
 - `scripts/pilot/runner.py`
 - `tests/python/global/test_browser_sidecar.py`
 - `tests/python/global/test_browser_sidecar_gate.py`
@@ -129,9 +142,9 @@ wholesale from it.
 
 Passed for the current review corrections:
 
-- Focused Browser Sidecar, nested gate, runner, and public renderer suites
-  after locking the corrected image: **74 tests, OK**.
-- Global policy gate: **224 tests, OK**.
+- Focused Browser Sidecar, nested gate, runner, and public renderer suites:
+  **79 tests, OK** after the artifact lock update.
+- Global policy gate: **229 tests, OK** after the artifact lock update.
 - Affected meshshot profile/renderer: **11 tests, OK**.
 - Public `mesh-compare` preview CLI: **8 tests, OK**.
 - `npm --prefix packages/meshshot test`.
@@ -140,7 +153,7 @@ Passed for the current review corrections:
 - Full-range `git diff --check`.
 - Clean networkless/no-pull Broker build and exact read-only image inspection.
 
-The third review-correction RED/GREEN pair is `dc923779` / `be7651b5`.
+The current review-correction RED/GREEN pair is `d242d5d7` / `a67e0a58`.
 
 Not passed / not complete:
 
@@ -148,8 +161,8 @@ Not passed / not complete:
   lightweight worktree lacks the native octree backend: 26 errors, one skip.
 - Bundle freshness remains **NOT VERIFIED**: the check attempted to fetch the
   missing `esbuild` package and failed DNS. No dependency was installed.
-- The independent Standards and Spec/security reviews have **not yet been
-  rerun for a third time** against this corrected range.
+- Independent Standards and Spec/security review has **not yet been rerun**
+  against this corrected range.
 - The production-shaped Docker conformance gate was **NOT RERUN**, per the
   review boundary. The preserved earlier failed attempt remains the only
   conformance execution.
@@ -194,16 +207,16 @@ conformance executions.
 - Docker build intermediate containers: removed by successful builds.
 - Dedicated Colima profile: left running because it pre-existed this ticket.
 - Historical reviewed images and corrected Broker image
-  `sha256:8fc448aa...4e0c7ed`: retained; no image deletion was authorized.
+  `sha256:1167ad37...7ede5e`: retained; no image deletion was authorized.
 - No unrelated Docker resource was adopted, stopped, relabeled, or removed.
 
 ## Deferred interaction and required next action
 
-Return for the third full independent Standards and Spec/security review of
+Return for full independent Standards and Spec/security review of
 `90bc24cf8860125b158c5f04ddc5dfd65efbcb39..HEAD`. The owner has not
 self-approved either axis. If both axes accept the corrections and exact new
 artifact, authorize one new clean-SHA local conformance attempt using Broker
-image `sha256:8fc448aa192dc9a22d3894eac06fecebc95ef3fc12606ca85bacba7344e0c7ed`.
+image `sha256:1167ad371e18056b0d3fb713e9fcc6bd432bb7de0e3a1e70b81b0127757ede5e`.
 Do not reuse the failed job handle.
 
 Before paid CVM closure, the provisioning receipt must represent the Broker
