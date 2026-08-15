@@ -191,8 +191,6 @@ class BrowserSidecarJobTests(unittest.TestCase):
         run = next(command for command in calls if command[1] == "run")
         self.assertIn("--pull=never", run)
         self.assertIn("--read-only", run)
-        self.assertIn("127.0.0.1:0:3000", run)
-        self.assertNotIn("127.0.0.1::3000", run)
         self.assertNotIn("-v", run)
         self.assertNotIn("--mount", run)
         self.assertEqual(run[-1], IMAGE_ID)

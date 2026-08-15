@@ -824,7 +824,7 @@ class BrowserSidecarJob:
                 "--tmpfs",
                 "/home/pwuser:rw,nosuid,nodev,size=64m,uid=1001,gid=1001,mode=700",
                 "-p",
-                "127.0.0.1:0:3000",
+                "127.0.0.1::3000",
                 "-e",
                 f"BROWSER_SIDECAR_JOB_ID={self.job_id}",
                 IMAGE_ID,
