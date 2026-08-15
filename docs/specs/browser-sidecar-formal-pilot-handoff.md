@@ -531,6 +531,32 @@ preserved artifact. The same SHA/handle was not rerun.
   per-job capability child remained after the failed attempt or unit tests.
 - No unrelated Docker resource was adopted, stopped, relabeled, or removed.
 
+## Git milestone and tracker reconciliation recommendation
+
+No Git remote or tracker mutation is authorized. The precise local milestone
+is:
+
+- baseline: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`;
+- dual-reviewed implementation/docs candidate:
+  `2dbcd7c17043d7bbd3f57844cd18884815b8387b`;
+- locked Broker implementation revision:
+  `091b9d3b95f2b7797c1cac9414f05439923a439c`;
+- immutable Broker image:
+  `sha256:45ae12bec861c7432c9dae91c96335ca88bb5e720e136a534f4115a576e49270`;
+- the evidence-only handoff commits after `2dbcd7c1` are documentation
+  milestones, not new conformance authority.
+
+Recommended tracker reconciliation for
+`browser-sidecar-formal-pilot-integration` is **keep open / Formal blocked by
+environment capability**, not completed and not failed implementation. Record
+the local regression and dual review as passed, attach the immutable Colima
+failure receipt, and record `host-shared Unix socket unsupported` as the local
+environment limitation. Keep CVM three-role prepare/provision/probe, Venus
+pilots, canonical Workspace/CAD/Viewer/eight-view review, and final receipts as
+`Not Run`. A separate follow-up may evaluate a Colima-native Docker-volume or
+network transport, but it must not silently weaken the current private Unix
+socket authority or convert this failed SHA into retry authority.
+
 ## Deferred interaction and required next action
 
 Standards and Spec/security both accepted exact implementation HEAD
