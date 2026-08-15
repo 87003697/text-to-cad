@@ -253,6 +253,12 @@ def _load_step_context(
     else:
         manifest = artifact.selector_bundle.manifest
         selector_index = lookup.build_selector_index(manifest, buffers=artifact.selector_bundle.buffers)
+        # An assembly's selector bundle is extracted from the composed compound and knows one
+        # occurrence; the refs users pick come from the instance tree. Without this, every
+        # `#o1.12` the viewer or `snapshot --mode list` hands out failed to resolve here.
+        from cadgen.assembly_lookup import index_with_assembly_occurrences
+
+        selector_index = index_with_assembly_occurrences(selector_index, artifact)
 
     resolved_kind = _entry_kind_from_manifest(
         manifest,
