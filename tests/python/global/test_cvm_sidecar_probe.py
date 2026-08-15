@@ -1698,6 +1698,13 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     mock.patch.object(
                         cvm_sidecar_probe, "_run", side_effect=fixed_run
                     ),
+                    mock.patch.object(
+                        cvm_sidecar_probe,
+                        "_loaded_image_ids",
+                        side_effect=cvm_sidecar_probe.ProbeError(
+                            "fixed inventory failure", check=expected_check
+                        ),
+                    ),
                 ):
                     receipt = cvm_sidecar_probe.remote_provision(handle, owner)
 
@@ -1823,6 +1830,11 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 mock.patch.object(
                     cvm_sidecar_probe, "_run", side_effect=older_docker_run
                 ),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_loaded_image_ids",
+                    return_value=frozenset({CLIENT_ID}),
+                ),
             ):
                 receipt = cvm_sidecar_probe.remote_provision(handle, owner)
 
@@ -1885,6 +1897,11 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             "run",
                             side_effect=fixed_subprocess_run,
                         ),
+                        mock.patch.object(
+                            cvm_sidecar_probe.subprocess,
+                            "Popen",
+                            side_effect=OSError("fixed inaccessible inventory"),
+                        ),
                     ):
                         receipt = cvm_sidecar_probe.remote_provision(handle, owner)
 
@@ -1943,6 +1960,11 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     "run",
                     side_effect=legacy_docker_run,
                 ),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_loaded_image_ids",
+                    return_value=frozenset({SIDECAR_ID}),
+                ),
             ):
                 receipt = cvm_sidecar_probe.remote_provision(handle, owner)
 
@@ -1995,6 +2017,11 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                     "run",
                     side_effect=inventory_only_docker_run,
                 ),
+                mock.patch.object(
+                    cvm_sidecar_probe,
+                    "_loaded_image_ids",
+                    return_value=frozenset({SIDECAR_ID, CLIENT_ID}),
+                ),
             ):
                 receipt = cvm_sidecar_probe.remote_provision(handle, owner)
 
@@ -2013,7 +2040,6 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                             state_root / handle / "incoming" / "images.tar"
                         ),
                     ],
-                    ["docker", "image", "ls", "--no-trunc", "--quiet"],
                 ],
             )
 
@@ -2044,6 +2070,7 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         f"{ids[line % len(ids)]}\n" for line in range(line_count)
                     ).encode("ascii")
                 inventory_path.write_bytes(inventory)
+                spawned: list[subprocess.Popen[bytes]] = []
 
                 def fixed_run(
                     argv: object, **kwargs: object
@@ -2068,18 +2095,23 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                         arguments,
                         ["docker", "image", "ls", "--no-trunc", "--quiet"],
                     )
-                    return original_popen(
+                    producer = original_popen(
                         [
                             sys.executable,
                             "-c",
                             (
-                                "import pathlib,sys;"
-                                "sys.stdout.buffer.write(pathlib.Path(sys.argv[1]).read_bytes())"
+                                "import pathlib,sys,time;"
+                                "sys.stdout.buffer.write(pathlib.Path(sys.argv[1]).read_bytes());"
+                                "sys.stdout.buffer.flush();"
+                                "time.sleep(float(sys.argv[2]))"
                             ),
                             os.fspath(inventory_path),
+                            "0" if expected_check is None else "10",
                         ],
                         **kwargs,
                     )
+                    spawned.append(producer)
+                    return producer
 
                 enough = type(
                     "Usage", (), {"free": 4 * 1024 * 1024 * 1024}
@@ -2125,6 +2157,8 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
                 self.assertEqual(
                     json.loads((state / "provision.json").read_text()), receipt
                 )
+                self.assertTrue(spawned)
+                self.assertTrue(all(process.poll() is not None for process in spawned))
 
     def test_remote_provision_cleanup_failure_dominates_hash_failure(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-cleanup-dominates-") as root_text:

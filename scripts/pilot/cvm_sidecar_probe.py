@@ -9,6 +9,7 @@ import json
 import os
 import re
 import secrets
+import select
 import shlex
 import shutil
 import subprocess
@@ -27,6 +28,9 @@ RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 OWNER_NONCE = re.compile(r"[0-9a-f]{32}\Z")
 REMOTE_ROOT = "~/text-to-cad"
 MIN_REMOTE_FREE_BYTES = 3 * 1024 * 1024 * 1024
+MAX_IMAGE_INVENTORY_LINES = 4096
+MAX_IMAGE_INVENTORY_LINE_BYTES = len("sha256:") + 64
+IMAGE_INVENTORY_TIMEOUT_SECONDS = 60
 IMAGE_INSPECT_FIELDS = (
     ("id", "{{.Id}}"),
     ("os", "{{.Os}}"),
@@ -1268,33 +1272,134 @@ def _verify_image_receipt(
     return dict(image)
 
 
-def _loaded_image_ids() -> frozenset[str]:
+def _stop_inventory_process(process: subprocess.Popen[bytes]) -> None:
     try:
-        completed = _run(
-            ["docker", "image", "ls", "--no-trunc", "--quiet"],
+        if process.poll() is None:
+            process.terminate()
+    except BaseException:
+        pass
+    try:
+        process.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except BaseException:
+            pass
+        try:
+            process.wait(timeout=1)
+        except BaseException:
+            pass
+    except BaseException:
+        pass
+    try:
+        if process.stdout is not None:
+            process.stdout.close()
+    except BaseException:
+        pass
+
+
+def _loaded_image_ids() -> frozenset[str]:
+    argv = ["docker", "image", "ls", "--no-trunc", "--quiet"]
+    try:
+        process = subprocess.Popen(
+            argv,
             cwd=REPO_ROOT,
-            timeout=60,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
         )
-    except ProbeError as exc:
-        check = (
-            "image-inventory-timeout"
-            if exc.check == "docker-timeout"
-            else "image-inventory-access"
-        )
-        raise ProbeError(
-            "loaded image inventory is inaccessible",
-            check=check,
-        ) from exc
     except BaseException as exc:
         raise ProbeError(
             "loaded image inventory is inaccessible",
             check="image-inventory-access",
         ) from exc
-    try:
-        lines = completed.stdout.splitlines()
-        if not lines or len(lines) > 4096 or any(
-            IMAGE_ID.fullmatch(line) is None for line in lines
+
+    lines: set[str] = set()
+    line_count = 0
+    pending = bytearray()
+    deadline = time.monotonic() + IMAGE_INVENTORY_TIMEOUT_SECONDS
+
+    def record_line(raw_line: bytes) -> None:
+        nonlocal line_count
+        line_count += 1
+        if (
+            line_count > MAX_IMAGE_INVENTORY_LINES
+            or len(raw_line) != MAX_IMAGE_INVENTORY_LINE_BYTES
         ):
+            raise ProbeError(
+                "loaded image inventory format is invalid",
+                check="image-inventory-format",
+            )
+        try:
+            line = raw_line.decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise ProbeError(
+                "loaded image inventory format is invalid",
+                check="image-inventory-format",
+            ) from exc
+        if IMAGE_ID.fullmatch(line) is None:
+            raise ProbeError(
+                "loaded image inventory format is invalid",
+                check="image-inventory-format",
+            )
+        lines.add(line)
+
+    try:
+        if process.stdout is None:
+            raise ProbeError(
+                "loaded image inventory is inaccessible",
+                check="image-inventory-access",
+            )
+        descriptor = process.stdout.fileno()
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProbeError(
+                    "loaded image inventory timed out",
+                    check="image-inventory-timeout",
+                )
+            ready, _, _ = select.select([descriptor], [], [], remaining)
+            if not ready:
+                raise ProbeError(
+                    "loaded image inventory timed out",
+                    check="image-inventory-timeout",
+                )
+            chunk = os.read(descriptor, 4096)
+            if not chunk:
+                break
+            pending.extend(chunk)
+            while True:
+                newline = pending.find(b"\n")
+                if newline < 0:
+                    if len(pending) > MAX_IMAGE_INVENTORY_LINE_BYTES:
+                        raise ProbeError(
+                            "loaded image inventory format is invalid",
+                            check="image-inventory-format",
+                        )
+                    break
+                record_line(bytes(pending[:newline]))
+                del pending[: newline + 1]
+        if pending:
+            record_line(bytes(pending))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ProbeError(
+                "loaded image inventory timed out",
+                check="image-inventory-timeout",
+            )
+        try:
+            returncode = process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as exc:
+            raise ProbeError(
+                "loaded image inventory timed out",
+                check="image-inventory-timeout",
+            ) from exc
+        if returncode != 0:
+            raise ProbeError(
+                "loaded image inventory is inaccessible",
+                check="image-inventory-access",
+            )
+        if line_count == 0:
             raise ProbeError(
                 "loaded image inventory format is invalid",
                 check="image-inventory-format",
@@ -1303,9 +1408,11 @@ def _loaded_image_ids() -> frozenset[str]:
         raise
     except BaseException as exc:
         raise ProbeError(
-            "loaded image inventory format is invalid",
-            check="image-inventory-format",
+            "loaded image inventory is inaccessible",
+            check="image-inventory-access",
         ) from exc
+    finally:
+        _stop_inventory_process(process)
     return frozenset(lines)
 
 

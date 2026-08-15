@@ -37,6 +37,9 @@ The workflow has three separate public operations:
    `docker image ls --no-trunc --quiet` inventory proof. Every inventory entry
    must be a complete canonical `sha256:<64-hex>` image ID, the bounded list may
    contain at most 4096 entries, and both prepared config IDs must be present.
+   The Docker client output is read incrementally with a 71-byte line ceiling;
+   a 4097th entry, an oversized line, invalid ASCII/identity, or the 60-second
+   deadline terminates and reaps the client before returning a closed failure.
    The exact config digest cryptographically binds the OS, architecture, and
    revision already attested by local `prepare`; CVM does not depend on its
    incompatible image-inspect path. The workflow removes the transfer archive
@@ -146,6 +149,9 @@ different destructive operation and requires a separate authorization.
   `deployed-workflow-hash`, `image-attestation-unexpected`,
   `image-inventory-access`, `image-inventory-timeout`,
   `image-inventory-format`, or one role-specific `loaded-id` / `receipt` check.
+  Inventory overflow, oversized lines, and invalid identities are
+  `image-inventory-format`; the fixed read deadline is
+  `image-inventory-timeout`.
   Public provision preserves that exact closed check and bounded remote receipt
   before the nonce-scoped abort. Raw stderr, paths, errno, inventory, full
   daemon JSON, and Docker output are not durable evidence.
