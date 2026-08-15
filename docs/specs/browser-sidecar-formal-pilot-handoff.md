@@ -440,7 +440,7 @@ preserved artifact. The same SHA/handle was not rerun.
   `sha256:915bf400...f751624`, superseded
   `sha256:20dc8256...1ee84c7`, `sha256:dd126e36...dfb1f9a`,
   `sha256:23294596...16eaed`, `sha256:41462957...5bf1a2d`, and superseded
-  `sha256:b7058cb6...bfb5b1`, plus final Broker image
+  `sha256:b7058cb6...bfb5b1`, plus superseded Broker image
   `sha256:02533b89...b0df105`, rejected-provenance
   `sha256:a286f43f...8b9249`, plus final Broker image
   `sha256:cdc77541...0c7e34`, are retained; no image deletion was authorized.
