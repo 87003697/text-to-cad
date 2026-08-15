@@ -33,9 +33,9 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Browser-less Broker base image:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Render Program Broker image:
-  `sha256:a3f0e1033c838bfbd8bbfb1a497a3b624eedbc03d009a573fc786fdb58c92b68`
+  `sha256:45ae12bec861c7432c9dae91c96335ca88bb5e720e136a534f4115a576e49270`
 - Broker OCI revision / production implementation commit:
-  `999d3027e436ed80086f6a65423faf2a4e3a1096`
+  `091b9d3b95f2b7797c1cac9414f05439923a439c`
 - Image source revision:
   `1abe4c97929906b5c0b28b0f3f38857bd923952f`
 - Residual program SHA-256:

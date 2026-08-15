@@ -159,9 +159,9 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Browser-less Broker base:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Final corrected Broker:
-  `sha256:a3f0e1033c838bfbd8bbfb1a497a3b624eedbc03d009a573fc786fdb58c92b68`
+  `sha256:45ae12bec861c7432c9dae91c96335ca88bb5e720e136a534f4115a576e49270`
 - Broker OCI revision:
-  `999d3027e436ed80086f6a65423faf2a4e3a1096`
+  `091b9d3b95f2b7797c1cac9414f05439923a439c`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
   `sha256:60a5274143f441556ca8fa7ded30395ee32b3530d76a60e3a17cd01dc422cdac`
 - Platform: `linux/amd64`
@@ -218,10 +218,10 @@ Passed for the current review corrections:
 - Exact locked-image extraction, real packaged-client gate, and image-sealed
   surface discovery: **3 tests, OK**.
 - Focused Browser Sidecar, conformance host, sealed-image contract, surface
-  scanner, nested gate, runner, and public renderer suites: **122 tests, OK**
+  scanner, nested gate, runner, and public renderer suites: **123 tests, OK**
   (**3 opt-in image tests skipped** in this non-Docker aggregate and passed
   separately above).
-- Global policy gate: **273 tests, OK**, with the same 3 opt-in image tests
+- Global policy gate: **274 tests, OK**, with the same 3 opt-in image tests
   skipped there and passed separately against the exact locked image.
 - CVM Sidecar prepare/provision/probe suite: **48 tests, OK**, including both
   legacy two-role and Formal three-role provisioning receipts.
@@ -247,8 +247,9 @@ Passed for the current review corrections:
   daemon-share gap. Superseded image `7ee52e2f...7b60fc` completed **3 tests,
   OK** in 131.488 seconds. Superseded image `39f1c3bb...e2f7b10` completed **3
   tests, OK** in 116.871 seconds. Superseded image `ccb52638...ae8b5fe`
-  completed **3 tests, OK** in 115.831 seconds. Final image
-  `a3f0e103...8c92b68` completed **3 tests, OK** in 115.607 seconds. Both
+  completed **3 tests, OK** in 115.831 seconds. Superseded image
+  `a3f0e103...8c92b68` completed **3 tests, OK** in 115.607 seconds. Final image
+  `45ae12be...6e49270` completed **3 tests, OK** in 114.295 seconds. Both
   timeouts remain recorded rather than reclassified.
 
 The conformance-host correction starts with RED commit `9defcace` and GREEN
@@ -390,7 +391,13 @@ the temporary experiment tree. RED `63a5fc48` proves that loss; GREEN
 `999d3027` carries the already-closed receipt on the factory error and publishes
 it unchanged at the trusted canonical evidence target, preserving its cleanup
 and absence classification. The exact rebuilt Broker is
-`sha256:a3f0e103...8c92b68`.
+`sha256:a3f0e103...8c92b68`. Spec/lifecycle review then found that an
+ordinary construction error still preceded a simultaneous cleanup error in the
+single failure marker. RED `d208cf22` combines partial construction with failed
+Broker-directory cleanup. GREEN `091b9d3b` makes the first cleanup error
+dominate ordinary startup/construction failures while retaining explicit
+signal and positive-retention precedence. The exact rebuilt Broker is
+`sha256:45ae12be...6e49270`.
 
 Exactly one successor conformance job was run, with no pull, download, source
 mount, external provider, or CVM operation. It used Broker image
@@ -488,8 +495,9 @@ preserved artifact. The same SHA/handle was not rerun.
   `sha256:cdc77541...0c7e34`, superseded Broker image
   `sha256:7ee52e2f...7b60fc`, superseded Broker image
   `sha256:39f1c3bb...e2f7b10`, superseded Broker image
-  `sha256:ccb52638...ae8b5fe`, plus final Broker image
-  `sha256:a3f0e103...8c92b68`, are retained; no image deletion was authorized.
+  `sha256:ccb52638...ae8b5fe`, superseded Broker image
+  `sha256:a3f0e103...8c92b68`, plus final Broker image
+  `sha256:45ae12be...6e49270`, are retained; no image deletion was authorized.
   The
   first full-context `fd4a9db9...` build was rejected by byte-parity extraction
   because the legacy builder admitted working-tree bytecode; its image
@@ -511,7 +519,7 @@ Return for full independent Standards and Spec/security review of
 self-approved either axis. If both axes accept the corrections and exact new
 artifact, execute the already bounded one new clean-SHA local conformance
 attempt using Broker
-image `sha256:a3f0e1033c838bfbd8bbfb1a497a3b624eedbc03d009a573fc786fdb58c92b68`.
+image `sha256:45ae12bec861c7432c9dae91c96335ca88bb5e720e136a534f4115a576e49270`.
 Do not reuse either failed SHA/handle.
 
 Before paid CVM closure, Formal preparation must supply all three ordered roles:
