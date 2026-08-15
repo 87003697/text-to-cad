@@ -33,9 +33,9 @@ Fixed base: `90bc24cf8860125b158c5f04ddc5dfd65efbcb39`
 - Browser-less Broker base image:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Render Program Broker image:
-  `sha256:9709c13a634544c56b2f93cc113cca6c4ad52aae4ebdad72cf5230f55dce59e5`
+  `sha256:f84b1ae3e947201e4765f6b46ddb5aec517fc807a44e9b563751cf128dd21432`
 - Broker OCI revision / production implementation commit:
-  `fd4a9db9a3c98a0c78f1bb838a57d3a3cc38bba0`
+  `07aa60531b2275256975161ed97906052210a39e`
 - Image source revision:
   `1abe4c97929906b5c0b28b0f3f38857bd923952f`
 - Residual program SHA-256:
@@ -65,6 +65,7 @@ Replacing any accepted identity is a new review decision.
 | Docker create output is lost, the returned ID has wrong job/owner labels, or a predictable name is replaced after creation | Pilot fails closed without using the predictable name as cleanup authority | Only a successfully returned, exactly labeled ID may be started or removed; foreign/replacement resources are untouched and retained owner-label proof dominates |
 | Readiness absent, malformed, late, or for another job | Nested workload never starts; pilot is terminal failed | Exact owned Sidecar/network are stopped and absent |
 | Broker readiness absent, malformed, late, or for another job | Authority is never published and nested workload never starts | Exact owned Broker, Sidecar, and network are stopped and absent |
+| Broker can see or write Gate proof, Gate input, authority, or lifecycle evidence | Pilot contract is invalid; only the private Broker socket directory may be writable in the Broker | Gate evidence remains outer-owned and outside the Broker mount |
 | Broker socket path pre-exists, is not one socket, changes identity, or remains writable to the nested workload | Pilot fails before authority publication | Exact owned Broker, Sidecar, and network are stopped and absent; no foreign path is removed |
 | Nested-gate proof is absent, malformed, duplicated, late, for a different job/nonce, or has the wrong artifact/surface identity | The outer-owned channel rejects it and never releases the gate to exec the Agent workload; a Job A proof cannot satisfy Job B | Exact owned Broker, Sidecar, and network follow terminal cleanup; the channel is closed and its socket is absent |
 | Authority absent outside formal job | Existing local `render_residual_preview` behavior remains selected | Existing local browser cleanup remains unchanged |
@@ -152,12 +153,19 @@ Agent-equivalent client exactly once. Docker and spawned-process boundaries are
 the only fakes in the host regression.
 
 Every host-side bind source is resolved to its canonical path before it enters
-Docker argv, including macOS `/var` to `/private/var` aliases. Each conformance
-surface/client container is identified solely by the exact 64-hex ID returned
-from create and immediately validated against both fixed job and fresh owner
-nonce labels. Start, terminal observation, removal, and absence never use the
-planned name; a foreign collision, lost create result, wrong labels, or name
-replacement cannot be adopted or deleted.
+Docker argv, including macOS `/var` to `/private/var` aliases. Network,
+Sidecar, Broker, and conformance containers are created inert, identified solely
+by their exact returned 64-hex ID, and validated against the fixed job and fresh
+owner nonce before start. An unverified ID is never assigned as cleanup
+authority, started, or removed; a foreign collision, lost create result, wrong
+labels, or name replacement cannot be adopted or deleted.
+
+The outer owner creates a separate mode-`0700` Broker socket directory and
+mounts only that directory writable into the Broker. Gate artifact/input,
+authority, proof channel, and lifecycle evidence remain siblings outside the
+Broker mount. The fixed public `browser.sock` is an outer-owned, inode-checked
+relative symlink to the private Broker socket, preserving the public path in the
+read-only Agent mount without giving the Broker write authority over it.
 
 Source-Hidden and blocked external browser egress remain direct Sidecar facts:
 the Browser and Broker use one Docker `--internal` network, no source mount,
@@ -185,5 +193,7 @@ Deterministic tests use the public render API and pilot job boundary while
 faking only operating-system/Docker/Playwright boundaries. The local
 production-shaped gate uses the dedicated reviewed Colima profile, both exact
 reviewed images where required, `--pull=never`, and no external provider. CVM,
-Venus, push, merge, tracker mutation, retained-handle access, and image cleanup
-remain not authorized.
+Venus, and push remain pending the required dual re-review, clean local
+conformance, and an unambiguous Broker provisioning receipt. Merge, tracker
+mutation, retained-handle access, and image cleanup remain outside this
+implementation boundary.

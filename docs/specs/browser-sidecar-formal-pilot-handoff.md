@@ -94,6 +94,19 @@ the session JSONL. The dirty `develop` root was not used or modified.
   OCI revisions, and Broker base identity before resource creation. It rejects
   foreign network/Sidecar/Broker names and uses no pull, host port, host broker,
   egress-capable network, source mount, or arbitrary runtime input.
+- The Broker receives one separate writable `broker/` subdirectory only. Gate
+  proof, gate input, authority, and lifecycle evidence remain outer-owned
+  siblings that are never mounted into the Broker. The public fixed socket is
+  an outer-created, identity-checked relative link to `broker/browser.sock`, so
+  the read-only Agent mount keeps the unchanged public socket path without
+  granting the Broker write authority over the public capability directory.
+- Network, Sidecar, Broker, conformance-surface, and conformance-client
+  resources use `create`, exact returned-ID label verification, then `start`.
+  An unverified ID is never assigned as cleanup authority, started, or removed.
+  Conformance cleanup likewise receives only IDs that passed ownership proof.
+- The nested process scan recognizes Chromium distro aliases, Chrome variants,
+  headless shell, and crashpad names, and fails closed when a live `/proc` entry
+  cannot be inspected except for a PID that demonstrably vanished.
 - The exact browser-less Broker runs beside the Sidecar on one internal Docker
   network, holds the single stable `playwright.connect()` session, and creates
   the job-private Unix socket. The nested workload cannot reach the raw
@@ -146,9 +159,9 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Browser-less Broker base:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Final corrected Broker:
-  `sha256:9709c13a634544c56b2f93cc113cca6c4ad52aae4ebdad72cf5230f55dce59e5`
+  `sha256:f84b1ae3e947201e4765f6b46ddb5aec517fc807a44e9b563751cf128dd21432`
 - Broker OCI revision:
-  `fd4a9db9a3c98a0c78f1bb838a57d3a3cc38bba0`
+  `07aa60531b2275256975161ed97906052210a39e`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
   `sha256:05f4b5b8b99380677c7861e04cb8a9a3c1624206bad59696f825e7f0d4c55c5c`
 - Platform: `linux/amd64`
@@ -201,12 +214,11 @@ Passed for the current review corrections:
 
 - Exact locked-image extraction and real packaged-client gate: **2 tests, OK**.
 - Focused Browser Sidecar, conformance host, sealed-image contract, surface
-  scanner, nested gate, runner, and public renderer suites: **99 tests, OK**
+  scanner, nested gate, runner, and public renderer suites: **102 tests, OK**
   (**2 opt-in image tests skipped** in this non-Docker aggregate and passed
   separately above).
-- Global policy gate: **249 tests, OK** in two deterministic groups (162 + 87,
-  with the same 2 opt-in image tests skipped in the first group)
-  because the combined wrapper exceeds the local command ceiling.
+- Global policy gate: **252 tests, OK**, with the same 2 opt-in image tests
+  skipped there and passed separately against the exact locked image.
 - Affected meshshot profile/renderer: **11 tests, OK**.
 - Public `mesh-compare` preview CLI: **8 tests, OK**.
 - `npm --prefix packages/meshshot test`.
@@ -217,8 +229,13 @@ Passed for the current review corrections:
 
 The conformance-host correction starts with RED commit `9defcace` and GREEN
 commit `fdadf9aa`. Truthful pre-resource absence starts with RED commit
-`36c72d23` and GREEN commit `d2ee3b68`; the durable handoff and exact artifact
-lock follow those source commits.
+`36c72d23` and GREEN commit `d2ee3b68`. The latest independent Spec/security
+review then rejected three authority gaps. RED `deabfaff` proves writable Gate
+proof exposure, start-before-ownership, cleanup of unverified IDs, missed
+headless-shell names, and unreadable `/proc`; GREEN `07aa6053` closes those
+seams. Exact-image RED `f864846d` exposed the old public-socket harness, GREEN
+`9d3a69d6` moves that harness to the private Broker socket, and `9ae6b419`
+models the real sealed Gate files in the lifecycle fixture.
 
 Not passed / not complete:
 
@@ -226,15 +243,18 @@ Not passed / not complete:
   lightweight worktree lacks the native octree backend: 26 errors, one skip.
 - Bundle freshness remains **NOT VERIFIED**: the check attempted to fetch the
   missing `esbuild` package and failed DNS. No dependency was installed.
-- Independent Standards and Spec/security review has **not yet been rerun**
-  against this corrected range.
+- The first independent Standards review passed with two nonblocking design
+  notes. The first Spec/security review failed with the three gaps now fixed.
+  Full independent Standards and Spec/security re-review has **not yet been
+  rerun** against the corrected range and exact replacement image.
 - The production-shaped Docker conformance gate was **NOT RERUN** after this
   correction. Both earlier failed attempts remain preserved; the exact reviewed
   `4cdbfecf...` attempt is never reused.
-- The Broker was rebuilt because the truthful pre-resource receipt correction
-  changes its Dockerfile-copied `browser_sidecar.py`. The build used only the
-  exact existing base, with no pull and no build network. No Broker or Sidecar
-  container was run.
+- The Broker was rebuilt because the security correction changes both
+  Dockerfile-copied pilot modules. The build used only the exact existing base,
+  with no pull and no build network. Opt-in inspection/client test containers
+  ran and were removed; no production Broker/Sidecar job or conformance host
+  attempt was launched.
 
 ## Preserved production-shaped conformance attempts
 
@@ -305,7 +325,7 @@ preserved artifact. The same SHA/handle was not rerun.
   was cut off by its execution ceiling after boot completion; no profile
   rebuild, deletion, or image mutation was performed.
 - Historical reviewed/superseded images and final Broker image
-  `sha256:9709c13...e59e5`: retained; no image deletion was authorized. The
+  `sha256:f84b1ae3...21432`: retained; no image deletion was authorized. The
   first full-context `fd4a9db9...` build was rejected by byte-parity extraction
   because the legacy builder admitted working-tree bytecode; its image
   `sha256:51137e53...62bb` remains retained and is not an accepted artifact.
@@ -321,18 +341,20 @@ preserved artifact. The same SHA/handle was not rerun.
 Return for full independent Standards and Spec/security review of
 `90bc24cf8860125b158c5f04ddc5dfd65efbcb39..HEAD`. The owner has not
 self-approved either axis. If both axes accept the corrections and exact new
-artifact, authorize one new clean-SHA local conformance attempt using Broker
-image `sha256:9709c13a634544c56b2f93cc113cca6c4ad52aae4ebdad72cf5230f55dce59e5`.
+artifact, execute the already bounded one new clean-SHA local conformance
+attempt using Broker
+image `sha256:f84b1ae3e947201e4765f6b46ddb5aec517fc807a44e9b563751cf128dd21432`.
 Do not reuse either failed SHA/handle.
 
 Before paid CVM closure, the provisioning receipt must represent the Broker
 without ambiguity. The current fixed role is named `client` and its durable
 semantics describe the sealed Agent client, not the Render Program Broker.
-No CVM provisioning change or run was authorized here; independent review
-should decide whether to rename/extend that exact role or add a distinct Broker
-role. Do not weaken provenance by silently recording the Broker as an Agent
-client.
+No CVM provisioning change or run has been performed at this checkpoint. The
+parent's bounded one-run authorization remains gated on an unambiguous Broker
+role; re-review must decide whether to rename/extend the existing exact role or
+add a distinct Broker role. Do not weaken provenance by silently recording the
+Broker as an Agent client.
 
 No CVM/Venus/provider/model request, push, merge, tracker mutation, dependency
-installation, retained-handle access, unrelated cleanup, or image deletion was
-performed.
+installation, retained-handle access, unrelated cleanup, or image deletion has
+been performed in this continuation checkpoint.
