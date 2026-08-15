@@ -142,8 +142,10 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(authority["programs"], PROGRAMS)
         self.assertEqual(
             authority["socketPath"],
-            "/workspace/repo/outputs/group/exp/run/browser-sidecar.sock",
+            "/run/meshshot-browser/browser-sidecar.sock",
         )
+        self.assertEqual(job.sandbox_authority_path, Path("/run/meshshot-browser/authority.json"))
+        self.assertFalse(authority_path.parent.exists())
         self.assertEqual(receipt["status"], "succeeded")
         self.assertTrue(receipt["absenceProof"]["proved"])
         self.assertEqual(receipt["cleanupErrors"], [])

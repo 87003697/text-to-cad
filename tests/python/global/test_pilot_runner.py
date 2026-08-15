@@ -1091,6 +1091,7 @@ class ProductionPathContractTests(unittest.TestCase):
                     [input_path],
                     ["/fake/codex", "prompt with spaces"],
                     environ,
+                    browser_capability_dir=repo_root / "browser-capability",
                 )
         triples = [argv[index : index + 3] for index in range(len(argv) - 2)]
         self.assertIn(Path("/etc/crypto-policies"), runner.SYSTEM_RO_PATHS)
@@ -1115,6 +1116,14 @@ class ProductionPathContractTests(unittest.TestCase):
                 "--ro-bind",
                 str(input_path.resolve()),
                 "/workspace/repo/models/toys4k/input.ply",
+            ],
+            triples,
+        )
+        self.assertIn(
+            [
+                "--ro-bind",
+                str(repo_root / "browser-capability"),
+                "/run/meshshot-browser",
             ],
             triples,
         )
