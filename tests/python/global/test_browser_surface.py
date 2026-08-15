@@ -243,6 +243,11 @@ class BrowserSurfaceTests(unittest.TestCase):
                 [
                     {
                         "kind": "executable",
+                        "target": "/sandbox/etc/alternatives/chromium",
+                        "mask": "dev-null",
+                    },
+                    {
+                        "kind": "executable",
                         "target": "/sandbox/usr/bin/chromium",
                         "mask": "dev-null",
                     }

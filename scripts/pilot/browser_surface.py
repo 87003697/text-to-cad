@@ -543,7 +543,10 @@ def _walk_mount(
             raise BrowserSurfaceError(
                 "mounted browser surface symlink is unresolved"
             ) from exc
-        if not _inside_root(source_text, resolved_candidate):
+        if (
+            not _inside_root(source_text, candidate)
+            or not _inside_root(source_text, resolved_candidate)
+        ):
             if not permitted_symlink_roots:
                 raise BrowserSurfaceError(
                     "mounted browser surface symlink escapes root"
