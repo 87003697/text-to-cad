@@ -163,7 +163,7 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Broker OCI revision:
   `5d4649dbb3afc4e3fb50fb1b483c4d4ef7b5351b`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:05f4b5b8b99380677c7861e04cb8a9a3c1624206bad59696f825e7f0d4c55c5c`
+  `sha256:3ead21a56433131ee3d6826dd2fa7bb97ab90b5527353a38cfd90aa4178d445d`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with
@@ -218,10 +218,10 @@ Passed for the current review corrections:
 - Exact locked-image extraction, real packaged-client gate, and image-sealed
   surface discovery: **3 tests, OK**.
 - Focused Browser Sidecar, conformance host, sealed-image contract, surface
-  scanner, nested gate, runner, and public renderer suites: **110 tests, OK**
+  scanner, nested gate, runner, and public renderer suites: **111 tests, OK**
   (**3 opt-in image tests skipped** in this non-Docker aggregate and passed
   separately above).
-- Global policy gate: **261 tests, OK**, with the same 3 opt-in image tests
+- Global policy gate: **262 tests, OK**, with the same 3 opt-in image tests
   skipped there and passed separately against the exact locked image.
 - CVM Sidecar prepare/provision/probe suite: **48 tests, OK**, including both
   legacy two-role and Formal three-role provisioning receipts.
