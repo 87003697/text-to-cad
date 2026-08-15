@@ -15,6 +15,7 @@ from unittest import mock
 
 from scripts.pilot import browser_sidecar
 from scripts.pilot import browser_sidecar_conformance as conformance
+from scripts.pilot.runner import _build_gate_artifact
 
 
 NETWORK_ID = "a" * 64
@@ -430,7 +431,7 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
         ]
         self.assertTrue(bind_sources)
         self.assertTrue(
-            any(source.startswith("/private/var/") for source in bind_sources),
+            any(source.startswith("/private/tmp/") for source in bind_sources),
             bind_sources,
         )
         self.assertTrue(
@@ -450,6 +451,39 @@ class BrowserSidecarConformanceHostTests(unittest.TestCase):
         self.assertTrue(
             any(call[1:3] == ["network", "rm"] and NETWORK_ID in call for call in boundary.calls)
         )
+
+    def test_default_macos_var_artifact_is_canonicalized_before_docker(self) -> None:
+        """A default /var temp alias reaches Docker only as its /private/var inode."""
+
+        boundary = DockerBoundary()
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / "browser-gate-discovery.pyz"
+            if not artifact.as_posix().startswith("/var/"):
+                self.skipTest("default temporary root is not the macOS /var alias")
+            _build_gate_artifact(browser_sidecar.REPO_ROOT, artifact)
+            with (
+                mock.patch.object(
+                    browser_sidecar.secrets, "token_hex", return_value="1" * 32
+                ),
+                mock.patch.object(subprocess, "run", side_effect=boundary.run),
+            ):
+                job = browser_sidecar.BrowserSidecarJob(
+                    Path(temp) / "exp",
+                    Path("/workspace/repo/outputs/conformance/formal"),
+                    job_id="formal-local-conformance",
+                )
+                try:
+                    conformance._discover_client_surface(
+                        "/usr/bin/docker", job, artifact, f"{job.prefix}-surface"
+                    )
+                finally:
+                    job.close(workload_status=None)
+
+        create = next(call for call in boundary.calls if call[1] == "create")
+        mount = next(value for value in create if value.startswith("type=bind,"))
+        source = mount.split("src=", 1)[1].split(",dst=", 1)[0]
+        self.assertTrue(source.startswith("/private/var/"), source)
+        self.assertEqual(Path(source), artifact.resolve())
 
     def test_foreign_surface_collision_is_preserved(self) -> None:
         """A pre-existing predictable name is never adopted or removed."""

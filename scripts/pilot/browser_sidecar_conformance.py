@@ -586,7 +586,10 @@ def run_host(evidence_path: Path) -> int:
     docker = shutil.which("docker")
     if docker is None or not evidence_path.is_absolute():
         return 2
-    with tempfile.TemporaryDirectory(prefix="meshshot-formal-conformance-") as temporary:
+    with tempfile.TemporaryDirectory(
+        prefix="meshshot-formal-conformance-",
+        dir="/tmp",
+    ) as temporary:
         from scripts.pilot.runner import (
             _build_gate_artifact,
             _prepare_nested_browser_gate_from_manifest,

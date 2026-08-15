@@ -201,7 +201,9 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
             )
             self.assertEqual(copied.returncode, 0, copied.stderr.decode(errors="replace"))
             with tarfile.open(fileobj=BytesIO(copied.stdout), mode="r|") as archive:
-                member = next(archive)
+                member = archive.next()
+                self.assertIsNotNone(member)
+                assert member is not None
                 extracted = archive.extractfile(member)
                 self.assertIsNotNone(extracted)
                 assert extracted is not None
@@ -242,7 +244,7 @@ class BrowserSidecarBrokerImageTests(unittest.TestCase):
         rendered = render_residual_preview(
             reference, candidate, variant="step", exterior_directions=[]
         )
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temporary:
             root = Path(temporary).resolve()
             capability = root / "capability"
             capability.mkdir()
