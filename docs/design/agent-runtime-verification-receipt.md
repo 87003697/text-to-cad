@@ -513,11 +513,12 @@ predicate and closed disposition using this exact SAR-003 mapping:
 | `image-identity` | `imageIdentityOuterAttested` |
 | `returned-container-id` | `returnedContainerIdExact` |
 | `container-ownership` | `containerOwnershipExact` |
-| `inert-container` | `inertContainerConfigExact` |
+| `inert-container` | first false of `inertContainerConfigExact`, `readOnlyRoot`, `sourceReadOnly`, `inputReadOnly`, `writableMountAllowlistExact`, `dockerSocketAbsent`, `capabilitiesEmpty`, `noNewPrivileges`, `externalNetworkAbsent` in normative predicate order |
 | `entrypoint-preflight` | `entrypointPreflightExact` |
 | `broker-proof` | `brokerProofIdentityBound` |
+| `workload-release` | `workloadReleasedOnce` |
 | `terminal-publication` | `terminalPublicationExact` |
-| `workload-process-group` | first false of `workloadProcessGroupAbsent`, `descendantResidueFalse` |
+| `workload-process-group` | `descendantResidueFalse` |
 | `workload-interrupted` | `workloadNotInterrupted` |
 | `workload-terminal` | `workloadTerminalZero` |
 | `cleanup-container` | `containerCleanupSucceeded` |
@@ -527,7 +528,25 @@ predicate and closed disposition using this exact SAR-003 mapping:
 | `absence-proof` | first false resource predicate in the same order whose matching disposition is `unproved` |
 
 The child `failureCheck` is always the right-hand selected predicate, never the
-alias. If multiple independent child nodes fail, the root first compares their
+alias. This table is a closed, exact mapping over all 32 lifecycle predicates,
+not a list of examples. For every legal selected `failureCheck` and its required
+condition, a strict consumer must derive exactly one alias. It must reject a
+missing or overlapping mapping, a wildcard or fallback rule, an alias named
+after an otherwise unmapped child predicate, and any child predicate used
+directly as the public alias.
+`workloadReleasedOnce` maps only to `workload-release`; it is neither
+`workload-identity` nor `workload-terminal`.
+
+The five resource-absence predicates have no non-disposition fallback. When
+one is the selected false predicate, its matching closed disposition must be
+`retained` or `unproved`, and it maps only to `retained-resource` or
+`absence-proof`, respectively. A selected false resource-absence predicate
+paired with `absent`, a missing disposition, or any other alias is a schema
+rejection. In particular, `workloadProcessGroupAbsent` is governed only by
+that disposition split; `workload-process-group` names
+`descendantResidueFalse`, not a resource-absence fallback.
+
+If multiple independent child nodes fail, the root first compares their
 selected predicates using the global precedence above and then chooses the
 first tied failed child in root child order. It emits that node's qualified
 predicate or qualified lifecycle alias. `not-run` descendants never outrank the
