@@ -27,6 +27,16 @@ class SourceSnapshotError(EvidenceError):
     """A Source Snapshot violates its closed identity or operation contract."""
 
 
+class SourceSnapshotPublicationError(SourceSnapshotError):
+    """A publication adapter failed with an explicit possible-write state."""
+
+    def __init__(self, message: str, *, stage: str, may_have_written: bool) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.may_have_written = may_have_written
+        self.retry_allowed = False
+
+
 class SourceSnapshotStore(Protocol):
     """Minimal exact-version object-store adapter used by the publisher."""
 
@@ -49,6 +59,37 @@ class SourceSnapshotBuild:
     payload: bytes
     payload_sha256: str
     payload_bytes: int
+
+    def __post_init__(self) -> None:
+        try:
+            frozen = parse_canonical_json(canonical_json_bytes(self.manifest))
+        except EvidenceError as exc:
+            raise SourceSnapshotError("snapshot build manifest is not canonical JSON") from exc
+        if not isinstance(frozen, Mapping):
+            raise SourceSnapshotError("snapshot build manifest must be an object")
+        try:
+            manifest_bytes = bytes(self.manifest_bytes)
+            payload = bytes(self.payload)
+        except (TypeError, ValueError) as exc:
+            raise SourceSnapshotError("snapshot build byte fields are invalid") from exc
+        object.__setattr__(self, "manifest", frozen)
+        object.__setattr__(self, "manifest_bytes", manifest_bytes)
+        object.__setattr__(self, "payload", payload)
+
+
+@dataclass(frozen=True)
+class _GitEntryProof:
+    path: str
+    mode: str
+    size: int
+    sha256: str
+    storage: str
+
+
+@dataclass(frozen=True)
+class _GitSourceProof:
+    commit: str
+    entries: tuple[_GitEntryProof, ...]
 
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -361,7 +402,7 @@ def _typed(kind: str, value: Mapping[str, Any]) -> Mapping[str, Any]:
     return parse_source_snapshot_document(kind, canonical_json_bytes(value))
 
 
-def _default_git_verifier(root: Path, include_paths: tuple[str, ...]) -> str:
+def _default_git_verifier(root: Path, include_paths: tuple[str, ...]) -> _GitSourceProof:
     def run(arguments: list[str]) -> bytes:
         try:
             result = subprocess.run(
@@ -375,14 +416,68 @@ def _default_git_verifier(root: Path, include_paths: tuple[str, ...]) -> str:
         return result.stdout
 
     commit = run(["rev-parse", "--verify", "HEAD^{commit}"]).decode("ascii").strip()
+    if _GIT_COMMIT_RE.fullmatch(commit) is None:
+        raise SourceSnapshotError("Git HEAD is not an exact SHA-1 commit identity")
     status = run(["status", "--porcelain=v1", "-z", "--untracked-files=all"])
     if status:
-        raise SourceSnapshotError("selected source is not clean at the exact Git commit")
-    tracked = run(["ls-files", "-z", "--cached", "--", *include_paths]).split(b"\0")
-    tracked_paths = tuple(sorted(item.decode("ascii") for item in tracked if item))
-    if tracked_paths != include_paths:
-        raise SourceSnapshotError("includePaths are not exactly tracked by the Git commit")
-    return commit
+        raise SourceSnapshotError("source worktree is not clean at the exact Git commit")
+    raw_entries = run(
+        ["ls-tree", "-r", "-z", "--full-tree", commit, "--", *include_paths]
+    ).split(b"\0")
+    tree_entries: dict[str, tuple[str, str]] = {}
+    for raw in raw_entries:
+        if not raw:
+            continue
+        try:
+            metadata, raw_path = raw.split(b"\t", 1)
+            mode, object_type, object_id = metadata.decode("ascii").split(" ")
+            path = raw_path.decode("ascii")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise SourceSnapshotError("Git tree entry is malformed or non-ASCII") from exc
+        if object_type != "blob" or mode not in {"100644", "100755"}:
+            raise SourceSnapshotError("included Git entry is not a regular 100644/100755 blob")
+        if path in tree_entries:
+            raise SourceSnapshotError("Git tree contains a duplicate included path")
+        tree_entries[path] = (mode, object_id)
+    if tuple(sorted(tree_entries)) != include_paths:
+        raise SourceSnapshotError("includePaths are not exactly regular files in the Git commit")
+
+    proofs: list[_GitEntryProof] = []
+    for path in include_paths:
+        mode, object_id = tree_entries[path]
+        blob = run(["cat-file", "blob", object_id])
+        attributes = run(["check-attr", "--cached", "-z", "filter", "--", path]).split(b"\0")
+        if len(attributes) != 4 or attributes[0].decode("ascii") != path or attributes[1] != b"filter":
+            raise SourceSnapshotError("Git filter attribute response is malformed")
+        filter_value = attributes[2]
+        if filter_value == b"lfs":
+            match = re.fullmatch(
+                rb"version https://git-lfs.github.com/spec/v1\n"
+                rb"oid sha256:([0-9a-f]{64})\n"
+                rb"size ([0-9]+)\n",
+                blob,
+            )
+            if match is None:
+                raise SourceSnapshotError("Git LFS blob is not an exact canonical pointer")
+            size = int(match.group(2))
+            if not 0 <= size < 2**63:
+                raise SourceSnapshotError("Git LFS pointer size is outside the closed range")
+            digest_value = "sha256:" + match.group(1).decode("ascii")
+            storage = "git-lfs"
+        else:
+            size = len(blob)
+            digest_value = _sha256(blob)
+            storage = "git-blob"
+        proofs.append(
+            _GitEntryProof(
+                path=path,
+                mode="0755" if mode == "100755" else "0644",
+                size=size,
+                sha256=digest_value,
+                storage=storage,
+            )
+        )
+    return _GitSourceProof(commit=commit, entries=tuple(proofs))
 
 
 def _read_regular_file(
@@ -499,6 +594,128 @@ def _make_payload(files: Sequence[tuple[str, bytes, str]]) -> bytes:
     return output.getvalue()
 
 
+def _tar_octal(field: bytes, label: str) -> int:
+    raw = field.rstrip(b"\0 ").lstrip(b"0") or b"0"
+    if any(byte not in b"01234567" for byte in raw):
+        raise SourceSnapshotError(f"tar {label} is not canonical octal")
+    return int(raw, 8)
+
+
+def _tar_text(field: bytes, label: str) -> str:
+    raw = field.split(b"\0", 1)[0]
+    try:
+        value = raw.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise SourceSnapshotError(f"tar {label} is not ASCII") from exc
+    if field != raw + bytes(len(field) - len(raw)):
+        raise SourceSnapshotError(f"tar {label} has bytes after its first terminator")
+    return value
+
+
+def _tar_octal_bytes(value: int, width: int) -> bytes:
+    rendered = f"{value:0{width - 1}o}".encode("ascii") + b"\0"
+    if len(rendered) != width:
+        raise SourceSnapshotError("tar numeric field exceeds its closed width")
+    return rendered
+
+
+def _parse_pax_path(payload: bytes) -> str:
+    cursor = 0
+    path: str | None = None
+    while cursor < len(payload):
+        space = payload.find(b" ", cursor)
+        if space <= cursor:
+            raise SourceSnapshotError("PAX record length is malformed")
+        raw_length = payload[cursor:space]
+        if not raw_length.isdigit() or raw_length.startswith(b"0"):
+            raise SourceSnapshotError("PAX record length is not canonical decimal")
+        length = int(raw_length)
+        end = cursor + length
+        if end > len(payload) or payload[end - 1 : end] != b"\n":
+            raise SourceSnapshotError("PAX record boundary is malformed")
+        record = payload[space + 1 : end - 1]
+        if not record.startswith(b"path=") or path is not None:
+            raise SourceSnapshotError("PAX headers may contain exactly one path record")
+        try:
+            path = record[5:].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise SourceSnapshotError("PAX path is not ASCII") from exc
+        cursor = end
+    if path is None:
+        raise SourceSnapshotError("PAX header does not establish a path")
+    return _canonical_path(path, "PAX path")
+
+
+def _inspect_tar_payload(payload: bytes) -> tuple[tuple[str, bytes, str], ...]:
+    """Independently parse the exact tar/PAX bytes emitted by this contract."""
+
+    if not isinstance(payload, bytes) or len(payload) < 10240 or len(payload) % 10240:
+        raise SourceSnapshotError("tar-pax-v1 payload has invalid block padding")
+    cursor = 0
+    pending_path: str | None = None
+    entries: list[tuple[str, bytes, str]] = []
+    while cursor + 512 <= len(payload):
+        header = payload[cursor : cursor + 512]
+        if header == bytes(512):
+            if pending_path is not None or any(payload[cursor:]):
+                raise SourceSnapshotError("tar-pax-v1 terminal padding is malformed")
+            if len(payload) - cursor < 1024:
+                raise SourceSnapshotError("tar-pax-v1 lacks two terminal zero blocks")
+            return tuple(entries)
+        stored_checksum = _tar_octal(header[148:156], "checksum")
+        checksum_header = header[:148] + b"        " + header[156:]
+        if (
+            sum(checksum_header) != stored_checksum
+            or header[148:156] != f"{stored_checksum:06o}".encode("ascii") + b"\0 "
+        ):
+            raise SourceSnapshotError("tar header checksum mismatch")
+        mode = _tar_octal(header[100:108], "mode")
+        uid = _tar_octal(header[108:116], "uid")
+        gid = _tar_octal(header[116:124], "gid")
+        size = _tar_octal(header[124:136], "size")
+        mtime = _tar_octal(header[136:148], "mtime")
+        type_flag = header[156:157]
+        name = _tar_text(header[:100], "name")
+        uname = _tar_text(header[265:297], "uname")
+        gname = _tar_text(header[297:329], "gname")
+        prefix = _tar_text(header[345:500], "prefix")
+        if (
+            header[257:265] != b"ustar\x0000"
+            or header[329:345] != bytes(16)
+            or header[100:108] != _tar_octal_bytes(mode, 8)
+            or header[108:116] != _tar_octal_bytes(uid, 8)
+            or header[116:124] != _tar_octal_bytes(gid, 8)
+            or header[124:136] != _tar_octal_bytes(size, 12)
+            or header[136:148] != _tar_octal_bytes(mtime, 12)
+        ):
+            raise SourceSnapshotError("tar header encoding is not canonical ustar")
+        if uid != 0 or gid != 0 or mtime != 0 or uname or gname:
+            raise SourceSnapshotError("tar ownership or timestamp is not normalized")
+        data_start = cursor + 512
+        data_end = data_start + size
+        padded_end = data_start + ((size + 511) // 512) * 512
+        if padded_end > len(payload) or any(payload[data_end:padded_end]):
+            raise SourceSnapshotError("tar entry payload or padding is truncated or nonzero")
+        data = payload[data_start:data_end]
+        if type_flag == b"x":
+            if pending_path is not None or name != "././@PaxHeader" or mode != 0 or prefix:
+                raise SourceSnapshotError("PAX extended header metadata is not normalized")
+            pending_path = _parse_pax_path(data)
+        elif type_flag in {b"0", b"\0"}:
+            if mode not in {0o644, 0o755}:
+                raise SourceSnapshotError("tar regular file mode is not normalized")
+            header_path = f"{prefix}/{name}" if prefix else name
+            path = pending_path or _canonical_path(header_path, "tar path")
+            if pending_path is not None and (prefix or name != path[:100]):
+                raise SourceSnapshotError("PAX backing header path is not deterministic")
+            entries.append((path, data, f"{mode:04o}"))
+            pending_path = None
+        else:
+            raise SourceSnapshotError("tar-pax-v1 contains a non-regular entry")
+        cursor = padded_end
+    raise SourceSnapshotError("tar-pax-v1 has no terminal zero blocks")
+
+
 def _validate_build(built: SourceSnapshotBuild) -> None:
     if not isinstance(built, SourceSnapshotBuild):
         raise SourceSnapshotError("snapshot build must be a typed local result")
@@ -510,36 +727,17 @@ def _validate_build(built: SourceSnapshotBuild) -> None:
         or built.payload_sha256 != _sha256(built.payload)
     ):
         raise SourceSnapshotError("snapshot build identity fields disagree")
-    observed_files: list[tuple[str, bytes, str]] = []
-    try:
-        with tarfile.open(fileobj=io.BytesIO(built.payload), mode="r:") as archive:
-            members = archive.getmembers()
-            if len(members) != manifest["pathCount"]:
-                raise SourceSnapshotError("snapshot payload path count differs from manifest")
-            for member, entry in zip(members, manifest["files"], strict=True):
-                if (
-                    not member.isfile()
-                    or member.name != entry["path"]
-                    or member.mode != int(entry["mode"], 8)
-                    or member.uid != 0
-                    or member.gid != 0
-                    or member.uname != ""
-                    or member.gname != ""
-                    or member.mtime != 0
-                    or member.size != entry["size"]
-                ):
-                    raise SourceSnapshotError("snapshot payload metadata differs from manifest")
-                stream = archive.extractfile(member)
-                if stream is None:
-                    raise SourceSnapshotError("snapshot payload regular file is unreadable")
-                payload = stream.read()
-                if len(payload) != entry["size"] or _sha256(payload) != entry["sha256"]:
-                    raise SourceSnapshotError("snapshot payload bytes differ from manifest")
-                observed_files.append((member.name, payload, entry["mode"]))
-    except SourceSnapshotError:
-        raise
-    except (OSError, tarfile.TarError, ValueError) as exc:
-        raise SourceSnapshotError("snapshot payload is not the closed tar-pax-v1 archive") from exc
+    observed_files = _inspect_tar_payload(built.payload)
+    if len(observed_files) != manifest["pathCount"]:
+        raise SourceSnapshotError("snapshot payload path count differs from manifest")
+    for (path, payload, mode), entry in zip(observed_files, manifest["files"], strict=True):
+        if (
+            path != entry["path"]
+            or mode != entry["mode"]
+            or len(payload) != entry["size"]
+            or _sha256(payload) != entry["sha256"]
+        ):
+            raise SourceSnapshotError("snapshot payload bytes or metadata differ from manifest")
     if _make_payload(observed_files) != built.payload:
         raise SourceSnapshotError("snapshot payload encoding is not deterministic tar-pax-v1")
 
@@ -550,7 +748,8 @@ def _build_source_snapshot(
     include_paths: Sequence[str],
     git_commit: str,
     exclusions: Sequence[str] = (),
-    git_verifier: Callable[[Path, tuple[str, ...]], str] = _default_git_verifier,
+    git_verifier: Callable[[Path, tuple[str, ...]], _GitSourceProof] = _default_git_verifier,
+    after_git_proof: Callable[[Path], None] | None = None,
     after_read: Callable[[str, int], None] | None = None,
 ) -> SourceSnapshotBuild:
     """Internal construction seam with injected observers for adversarial tests."""
@@ -570,9 +769,13 @@ def _build_source_snapshot(
     if not isinstance(git_commit, str) or _GIT_COMMIT_RE.fullmatch(git_commit) is None:
         raise SourceSnapshotError("Git commit must be 40 lowercase hexadecimal characters")
     root_path = Path(root)
-    verified_commit = git_verifier(root_path, normalized)
-    if verified_commit != git_commit:
+    initial_proof = git_verifier(root_path, normalized)
+    if not isinstance(initial_proof, _GitSourceProof) or initial_proof.commit != git_commit:
         raise SourceSnapshotError("observed Git commit does not equal requested commit")
+    if tuple(entry.path for entry in initial_proof.entries) != normalized:
+        raise SourceSnapshotError("Git proof does not cover the exact included path set")
+    if after_git_proof is not None:
+        after_git_proof(root_path)
     try:
         root_fd = os.open(root_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except OSError as exc:
@@ -580,12 +783,18 @@ def _build_source_snapshot(
     entries: list[dict[str, Any]] = []
     payload_files: list[tuple[str, bytes, str]] = []
     try:
-        for path in normalized:
+        for path, git_entry in zip(normalized, initial_proof.entries, strict=True):
             payload, observed = _read_regular_file(root_fd, path, after_read)
             actual_mode = stat.S_IMODE(observed.st_mode)
             if actual_mode not in {0o644, 0o755}:
                 raise SourceSnapshotError("selected source mode is not normalized to 0644 or 0755")
             mode = f"{actual_mode:04o}"
+            if (
+                mode != git_entry.mode
+                or len(payload) != git_entry.size
+                or _sha256(payload) != git_entry.sha256
+            ):
+                raise SourceSnapshotError("captured source bytes or mode do not match the Git commit")
             entries.append(
                 {
                     "mode": mode,
@@ -598,6 +807,9 @@ def _build_source_snapshot(
             payload_files.append((path, payload, mode))
     finally:
         os.close(root_fd)
+    final_proof = git_verifier(root_path, normalized)
+    if final_proof != initial_proof:
+        raise SourceSnapshotError("Git HEAD, clean state, or included tree changed during capture")
     total_bytes = sum(item["size"] for item in entries)
     manifest_value = {
         "cleanPolicy": _CLEAN_POLICY,
@@ -614,7 +826,7 @@ def _build_source_snapshot(
     manifest = _typed("manifest", manifest_value)
     manifest_bytes = canonical_json_bytes(manifest)
     payload = _make_payload(payload_files)
-    return SourceSnapshotBuild(
+    result = SourceSnapshotBuild(
         manifest=manifest,
         manifest_bytes=manifest_bytes,
         manifest_digest=canonical_json_digest(manifest),
@@ -622,6 +834,8 @@ def _build_source_snapshot(
         payload_sha256=_sha256(payload),
         payload_bytes=len(payload),
     )
+    _validate_build(result)
+    return result
 
 
 def build_source_snapshot(
@@ -649,6 +863,46 @@ def _content_key_matches(key: str, payload_digest: str) -> bool:
     )
 
 
+def _validate_publication_request(
+    built: SourceSnapshotBuild,
+    bucket: str,
+    region: str,
+    key: str,
+) -> None:
+    _validate_build(built)
+    if (
+        not isinstance(bucket, str)
+        or _BUCKET_RE.fullmatch(bucket) is None
+        or not isinstance(region, str)
+        or _REGION_RE.fullmatch(region) is None
+        or not isinstance(key, str)
+        or not _content_key_matches(key, built.payload_sha256)
+    ):
+        raise SourceSnapshotError("publication request locator is invalid or not content-addressed")
+
+
+def _version_response(value: Any, *, stage: str, may_have_written: bool) -> tuple[str, str]:
+    if not isinstance(value, tuple) or len(value) != 2:
+        raise SourceSnapshotPublicationError(
+            "object-store version response is malformed",
+            stage=stage,
+            may_have_written=may_have_written,
+        )
+    version_id, etag = value
+    if (
+        not isinstance(version_id, str)
+        or _VERSION_RE.fullmatch(version_id) is None
+        or not isinstance(etag, str)
+        or _ETAG_RE.fullmatch(etag) is None
+    ):
+        raise SourceSnapshotPublicationError(
+            "object-store version identity is malformed",
+            stage=stage,
+            may_have_written=may_have_written,
+        )
+    return version_id, etag
+
+
 def _exact_payload(built: SourceSnapshotBuild, observed: bytes, label: str) -> None:
     if (
         not isinstance(observed, bytes)
@@ -669,40 +923,82 @@ def publish_source_snapshot(
 ) -> Mapping[str, Any]:
     """Create once or exactly reuse, then reread the selected immutable version."""
 
-    _validate_build(built)
-    if store.versioning_status(bucket) != "Enabled":
+    _validate_publication_request(built, bucket, region, key)
+    try:
+        versioning = store.versioning_status(bucket)
+    except Exception as exc:
+        raise SourceSnapshotPublicationError(
+            "bucket versioning preflight failed",
+            stage="versioning-preflight",
+            may_have_written=False,
+        ) from exc
+    if versioning != "Enabled":
         raise SourceSnapshotError("bucket versioning must be Enabled before publication")
-    if not _content_key_matches(key, built.payload_sha256):
-        raise SourceSnapshotError("key is not the exact content-addressed payload key")
-    existing = store.current_version(bucket, key)
+    try:
+        existing = store.current_version(bucket, key)
+    except Exception as exc:
+        raise SourceSnapshotPublicationError(
+            "content-addressed key preflight failed",
+            stage="key-preflight",
+            may_have_written=False,
+        ) from exc
     if existing is None:
-        version_id, etag = store.put_create_only(bucket, key, built.payload)
+        try:
+            response = store.put_create_only(bucket, key, built.payload)
+        except Exception as exc:
+            raise SourceSnapshotPublicationError(
+                "create-only publication failed or has an unresolved response",
+                stage="create-only-put",
+                may_have_written=True,
+            ) from exc
+        version_id, etag = _version_response(
+            response,
+            stage="create-only-put-response",
+            may_have_written=True,
+        )
         disposition = "created"
+        may_have_written = True
     else:
-        version_id, etag = existing
+        version_id, etag = _version_response(
+            existing,
+            stage="existing-version-response",
+            may_have_written=False,
+        )
         disposition = "exact-reuse"
+        may_have_written = False
     try:
         observed = store.get_exact_version(bucket, key, version_id)
     except Exception as exc:
-        raise SourceSnapshotError("S3 exact reread failed") from exc
-    _exact_payload(built, observed, "S3 exact-version")
-    return _typed(
-        "publication",
-        {
-            "bucket": bucket,
-            "disposition": disposition,
-            "etag": etag,
-            "exactVersionReread": True,
-            "key": key,
-            "payloadBytes": built.payload_bytes,
-            "payloadFormat": _PAYLOAD_FORMAT,
-            "payloadSha256": built.payload_sha256,
-            "region": region,
-            "schema": _SCHEMAS["publication"],
-            "sourceManifestDigest": built.manifest_digest,
-            "versionId": version_id,
-        },
-    )
+        raise SourceSnapshotPublicationError(
+            "S3 exact-version reread failed",
+            stage="exact-version-reread",
+            may_have_written=may_have_written,
+        ) from exc
+    try:
+        _exact_payload(built, observed, "S3 exact-version")
+        return _typed(
+            "publication",
+            {
+                "bucket": bucket,
+                "disposition": disposition,
+                "etag": etag,
+                "exactVersionReread": True,
+                "key": key,
+                "payloadBytes": built.payload_bytes,
+                "payloadFormat": _PAYLOAD_FORMAT,
+                "payloadSha256": built.payload_sha256,
+                "region": region,
+                "schema": _SCHEMAS["publication"],
+                "sourceManifestDigest": built.manifest_digest,
+                "versionId": version_id,
+            },
+        )
+    except SourceSnapshotError as exc:
+        raise SourceSnapshotPublicationError(
+            "published version failed exact terminal validation",
+            stage="exact-version-validation",
+            may_have_written=may_have_written,
+        ) from exc
 
 
 def verify_source_snapshot_visibility(
@@ -811,17 +1107,41 @@ def build_source_snapshot_lock(
     return _typed("lock", value)
 
 
-def verify_read_only_mount(
+def _probe_read_only_root(root_fd: int) -> bool:
+    probe_name = ".agent-runtime-read-only-probe"
+    try:
+        descriptor = os.open(
+            probe_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=root_fd,
+        )
+    except OSError as exc:
+        if exc.errno in {errno.EROFS, errno.EACCES, errno.EPERM}:
+            return True
+        raise SourceSnapshotError("read-only mount probe failed ambiguously") from exc
+    os.close(descriptor)
+    try:
+        os.unlink(probe_name, dir_fd=root_fd)
+    except OSError as exc:
+        raise SourceSnapshotError("writable mount probe cleanup failed") from exc
+    raise SourceSnapshotError("Source Snapshot mount accepted a write")
+
+
+def _verify_read_only_mount(
     mount_root: str | os.PathLike[str],
     manifest: Mapping[str, Any],
     *,
-    write_probe: Callable[[], None] | None = None,
+    write_probe: Callable[[int], None] | None = None,
 ) -> bool:
-    """Reobserve the complete manifest and prove the mount rejects a write."""
+    """Internal mount verifier with an injected same-FD probe for adversarial tests."""
 
     _validate_manifest(manifest)
     root = Path(mount_root)
-    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise SourceSnapshotError("read-only mount root is not a no-follow directory") from exc
     try:
         observed_paths = _enumerate_regular_paths(root_fd)
         expected_paths = tuple(entry["path"] for entry in manifest["files"])
@@ -833,34 +1153,43 @@ def verify_read_only_mount(
             if actual_mode not in {0o644, 0o755}:
                 raise SourceSnapshotError("read-only mount file mode is not normalized")
             mode = f"{actual_mode:04o}"
-            if len(payload) != entry["size"] or _sha256(payload) != entry["sha256"] or mode != entry["mode"]:
+            if (
+                len(payload) != entry["size"]
+                or _sha256(payload) != entry["sha256"]
+                or mode != entry["mode"]
+            ):
                 raise SourceSnapshotError("read-only mount content differs from manifest")
-    finally:
-        os.close(root_fd)
-    if write_probe is None:
-        probe = root / ".agent-runtime-read-only-probe"
+        if write_probe is None:
+            return _probe_read_only_root(root_fd)
         try:
-            descriptor = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            write_probe(root_fd)
         except OSError as exc:
             if exc.errno in {errno.EROFS, errno.EACCES, errno.EPERM}:
                 return True
             raise SourceSnapshotError("read-only mount probe failed ambiguously") from exc
-        else:
-            os.close(descriptor)
-            probe.unlink(missing_ok=True)
-            raise SourceSnapshotError("Source Snapshot mount accepted a write")
+        raise SourceSnapshotError("Source Snapshot mount accepted a write")
+    finally:
+        os.close(root_fd)
+
+
+def verify_read_only_mount(
+    mount_root: str | os.PathLike[str],
+    manifest: Mapping[str, Any],
+) -> bool:
+    """Reobserve the complete manifest and prove the same opened root rejects a write."""
+
     try:
-        write_probe()
+        return _verify_read_only_mount(mount_root, manifest)
+    except SourceSnapshotError:
+        raise
     except OSError as exc:
-        if exc.errno in {errno.EROFS, errno.EACCES, errno.EPERM}:
-            return True
-        raise SourceSnapshotError("read-only mount probe failed ambiguously") from exc
-    raise SourceSnapshotError("Source Snapshot mount accepted a write")
+        raise SourceSnapshotError("read-only mount verification failed") from exc
 
 
 __all__ = [
     "SourceSnapshotBuild",
     "SourceSnapshotError",
+    "SourceSnapshotPublicationError",
     "SourceSnapshotStore",
     "build_source_snapshot",
     "build_source_snapshot_lock",
