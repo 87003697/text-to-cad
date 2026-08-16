@@ -2042,6 +2042,59 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertEqual(status, 1)
         sidecar.start.assert_not_called()
 
+    def test_readonly_surface_scan_permits_links_between_declared_roots(self) -> None:
+        """Read-only aliases may cross only within the complete declared closure."""
+
+        runner = load_runner()
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            root = Path(temp)
+            repo_root = root / "repo"
+            exp_dir = repo_root / "outputs/group/exp"
+            source_usr = root / "usr"
+            source_etc = root / "etc"
+            upper = exp_dir / "run/.codex-upper"
+            for path in (exp_dir, source_usr, source_etc, upper):
+                path.mkdir(parents=True, exist_ok=True)
+            mounts = [
+                (source_usr, Path("/usr"), True),
+                (source_etc, Path("/etc"), True),
+            ]
+            sidecar = mock.Mock()
+            with (
+                mock.patch.object(
+                    runner, "_readonly_surface_mounts", return_value=mounts
+                ),
+                mock.patch.object(
+                    runner, "resolve_installed_skill_dirs", return_value=[]
+                ),
+                mock.patch.object(runner, "prepare_sandbox", return_value=upper),
+                mock.patch.object(
+                    runner,
+                    "discover_browser_roots",
+                    side_effect=[[], []],
+                ) as discover,
+                mock.patch.object(
+                    runner, "_prepare_nested_browser_gate_from_manifest"
+                ),
+            ):
+                runner.prepare_nested_browser_gate(
+                    repo_root,
+                    exp_dir,
+                    [],
+                    {"HOME": str(root / "home")},
+                    sidecar,
+                )
+
+        self.assertEqual(discover.call_count, 2)
+        self.assertEqual(discover.call_args_list[0].args, (mounts,))
+        self.assertEqual(
+            discover.call_args_list[0].kwargs,
+            {"permitted_symlink_roots": [source_usr, source_etc]},
+        )
+        self.assertNotIn(
+            "permitted_symlink_roots", discover.call_args_list[1].kwargs
+        )
+
     def test_writable_browser_artifact_fails_actual_gate_preparation(self) -> None:
         """Writable experiment/cache discovery closes before any Sidecar resource."""
 

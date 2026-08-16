@@ -977,7 +977,10 @@ def prepare_nested_browser_gate(
         (upper.resolve(), SANDBOX_CODEX_HOME, True),
     ]
     try:
-        exclusions = discover_browser_roots(mounts)
+        exclusions = discover_browser_roots(
+            mounts,
+            permitted_symlink_roots=[source for source, _, _ in mounts],
+        )
         writable_findings = discover_browser_roots(writable_mounts)
     except BrowserSurfaceError as exc:
         raise PilotError("cannot close mounted Agent browser surface") from exc
