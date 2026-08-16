@@ -99,9 +99,13 @@ s3://arcwm-code-us-west-2/
     verification/roots/sha256/<verified-root-hex>.json
     promotion-authorizations/sha256/<authorization-hex>.json
     channels/cup-formal/current.json
-    reconciliations/<reconciliation-handle>/terminal.json
-    reconciliation-tombstones/<reconciliation-handle>.json
+    reconciliations/by-request/sha256/<request-hex>/sha256/<receipt-hex>.json
+    reconciliation-tombstones/by-request/sha256/<request-hex>/<reconciliation-handle>.json
+    operations/<operation-handle>/stages/<ordinal>-<stage>.json
+    operations/<operation-handle>/stage-outputs/sha256/<output-hex>.json
     operations/<operation-handle>/terminal.json
+    operations/<operation-handle>/cleanup.json
+    operation-tombstones/<operation-handle>.json
 ```
 
 Bucket versioning is a prerequisite. Immutable objects are created with a
@@ -288,7 +292,8 @@ another.
 
 Each operation has a fresh random 256-bit owner nonce and an immutable handle
 of `sarsp-<24 lowercase hex>`. A handle is claimed once and cannot be adopted.
-Every stage reads and validates the exact terminal output of its predecessor.
+Every stage reads and validates the exact immutable **stage receipt** of its
+predecessor. A stage receipt is never an operation terminal.
 
 | Stage | Required success output | Fail-closed rule |
 | --- | --- | --- |
@@ -302,7 +307,70 @@ Every stage reads and validates the exact terminal output of its predecessor.
 | Consume Verified root | strict validation of the exact lock-linked SAR-005 root | Missing, non-verified, cross-subject, or changed bytes close promotion |
 | Deployment conformance | fresh target-host lifecycle and Cup conformance receipt | Required on every promotion, including rollback; does not amend SAR-005 root |
 | Atomic Promote | one conditional versioned channel-state write | CAS conflict leaves prior current authoritative; an unreadable successful write makes state unresolved and blocks execution |
-| Execute | execution admission binds current lock and uses `--pull=never` | Re-resolve current state and all locks; no fallback to tag/predecessor/network |
+| Downstream Execute | a separate execution admission binds current lock and uses `--pull=never` | Re-resolve channel authority and all locks; no fallback to tag/predecessor/network |
+
+The deterministic stage paths are `01-acquire`, `02-admit`,
+`03-offline-build`, `04-prepare`, `05-immutable-s3-publish`, `06-provision`,
+`07-verify-loaded-identity`, `08-consume-verified-root`,
+`09-deployment-conformance`, and `10-atomic-promote`. `Downstream Execute` is a
+separate consumer, not a stage of this supply/promotion operation. Each path is
+create-once and contains exactly this common envelope; `outputDigest` names the
+immutable stage-specific receipt or evidence object under the same handle's
+content-addressed `stage-outputs` namespace:
+
+```json
+{
+  "blockedBy": null,
+  "failureCheck": null,
+  "operationHandle": "sarsp-1234567890abcdef12345678",
+  "ordinal": 1,
+  "outputDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "retryAllowed": false,
+  "schema": "text-to-cad.agent-runtime-supply-stage/1",
+  "stage": "acquire",
+  "status": "succeeded"
+}
+```
+
+Stage status is exactly `succeeded`, `failed`, `not-run`, or `uncertain`.
+`failed` has a closed `failureCheck`; `not-run` has `outputDigest: null` and
+`blockedBy` equal to the first non-succeeded predecessor stage-receipt digest;
+`uncertain` is allowed only for `10-atomic-promote` after a possibly applied
+conditional write and requires reconciliation. Once any stage is not
+`succeeded`, every later stage receives a deterministic `not-run` receipt.
+
+Exactly one create-once `operations/<handle>/terminal.json` closes all ten
+ordered stage receipts. It is the only operation terminal:
+
+```json
+{
+  "failureCheck": null,
+  "operationHandle": "sarsp-1234567890abcdef12345678",
+  "operationRequestId": "sha256:2424242424242424242424242424242424242424242424242424242424242424",
+  "retryAllowed": false,
+  "schema": "text-to-cad.agent-runtime-supply-terminal/1",
+  "scratchDispositionAtTerminal": "retained",
+  "stages": [
+    {"digest": "sha256:0101010101010101010101010101010101010101010101010101010101010101", "ordinal": 1, "stage": "acquire", "status": "succeeded"},
+    {"digest": "sha256:0202020202020202020202020202020202020202020202020202020202020202", "ordinal": 2, "stage": "admit", "status": "succeeded"},
+    {"digest": "sha256:0303030303030303030303030303030303030303030303030303030303030303", "ordinal": 3, "stage": "offline-build", "status": "succeeded"},
+    {"digest": "sha256:0404040404040404040404040404040404040404040404040404040404040404", "ordinal": 4, "stage": "prepare", "status": "succeeded"},
+    {"digest": "sha256:0505050505050505050505050505050505050505050505050505050505050505", "ordinal": 5, "stage": "immutable-s3-publish", "status": "succeeded"},
+    {"digest": "sha256:0606060606060606060606060606060606060606060606060606060606060606", "ordinal": 6, "stage": "provision", "status": "succeeded"},
+    {"digest": "sha256:0707070707070707070707070707070707070707070707070707070707070707", "ordinal": 7, "stage": "verify-loaded-identity", "status": "succeeded"},
+    {"digest": "sha256:0808080808080808080808080808080808080808080808080808080808080808", "ordinal": 8, "stage": "consume-verified-root", "status": "succeeded"},
+    {"digest": "sha256:0909090909090909090909090909090909090909090909090909090909090909", "ordinal": 9, "stage": "deployment-conformance", "status": "succeeded"},
+    {"digest": "sha256:1010101010101010101010101010101010101010101010101010101010101010", "ordinal": 10, "stage": "atomic-promote", "status": "succeeded"}
+  ],
+  "status": "succeeded"
+}
+```
+
+The example is illustrative. A strict terminal consumer requires exactly the
+ten unique ordered entries, re-fetches each stage receipt by deterministic
+path, verifies its digest and repeated fields, resolves every non-null
+`outputDigest` through the deterministic stage-output path, and derives
+terminal status and `failureCheck` rather than trusting them independently.
 
 The order is normative:
 
@@ -392,6 +460,7 @@ not regenerated after an uncertain response.
   },
   "before": {
     "currentLockDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "etag": "illustrative-prior-etag",
     "generation": 7,
     "pointerDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "versionId": "illustrative-prior-version"
@@ -410,15 +479,23 @@ not regenerated after an uncertain response.
 }
 ```
 
-For bootstrap only, all `before` identity fields and
-`after.predecessorLockDigest` are JSON `null`, and `generation` moves from 0 to
-1. Otherwise `after.generation = before.generation + 1`,
-`after.predecessorLockDigest = before.currentLockDigest`, and current and
-predecessor are distinct.
+For bootstrap only, `before.currentLockDigest`, `before.etag`,
+`before.pointerDigest`, `before.versionId`, and
+`after.predecessorLockDigest` are JSON `null`, `before.generation` is 0, and
+`after.generation` is 1. The publisher creates
+`channels/cup-formal/current.json` with `If-None-Match: *`. It does not invent a
+prior VersionId or ETag.
 
-The publisher then conditionally replaces exactly
-`channels/cup-formal/current.json`, using the previously read S3 object
-version/ETag as the compare-and-swap precondition. The new object has exactly:
+For every later generation, the authorization binds the exact previously
+reread current `versionId`, ETag, content digest, current lock, and generation
+as evidence. `after.generation = before.generation + 1`,
+`after.predecessorLockDigest = before.currentLockDigest`, and current and
+predecessor are distinct. The publisher replaces the key with `If-Match` on
+the exact prior ETag. S3 `PutObject` is not claimed to condition on VersionId;
+VersionId and digest are independently bound evidence that the ETag came from
+the intended prior bytes.
+
+Both paths write exactly these channel-state bytes:
 
 ```json
 {
@@ -436,17 +513,22 @@ version/ETag as the compare-and-swap precondition. The new object has exactly:
 
 The conditional write is the atomic promotion. That exact object version is
 both the active pointer and the durable current/predecessor promotion receipt.
-Its S3 VersionId and content digest are recorded in the operation terminal
-receipt. The immutable authorization proves the gates; the channel-state
+On a successful response, the publisher records the returned VersionId and
+ETag, performs an exact-version GET, and requires byte-for-byte equality with
+the intended canonical pointer before it may write a succeeded operation
+terminal. The immutable authorization proves the gates; the channel-state
 version proves which lock actually became current. There is no second mutable
 alias whose update could split authority.
 
-If the service definitively returns a compare-and-swap precondition failure,
-the candidate is not current. The operation records `promotion-conflict`,
-retains its evidence, and does not retry automatically. A lost write response,
-an unreadable returned VersionId, a failed exact S3 reread, or a failed
-post-CAS Mac reread enters reconciliation instead. No client may infer success
-from a candidate tag, authorization, write request, listing, or cached pointer.
+If bootstrap definitively fails `If-None-Match: *`, the key already exists; if
+a later generation definitively fails `If-Match`, the prior ETag is stale. In
+either definite precondition-failure case this request did not promote the
+candidate. The operation records `promotion-conflict`, retains its evidence,
+does not retry automatically, and validates the independently existing current
+pointer before any downstream use. A lost write response, an unreadable
+returned VersionId, a failed exact S3 reread, or a failed post-CAS Mac reread
+enters reconciliation instead. No client may infer success from a candidate
+tag, authorization, write request, listing, or cached pointer.
 
 Mac mount visibility is a pre-promotion gate because operators need the
 canonical archive, lock, and verification graph to be visible through the
@@ -471,8 +553,14 @@ promotion authorization, exact before state, and intended canonical pointer
 bytes. Starting reconciliation is not an automatic retry of promotion: it is a
 new append-only evidence operation that cannot change channel state.
 
-The terminal `text-to-cad.agent-runtime-channel-reconciliation/1` has exactly
-this shape:
+Its canonical receipt digest is not embedded in the receipt. It is published
+create-once under the deterministic namespace formed from the original
+`operationRequestId` and that receipt digest. A caller selects reconciliation
+only by supplying that exact digest; no consumer selects a receipt by handle,
+prefix, timestamp, or listing.
+
+The terminal `text-to-cad.agent-runtime-channel-reconciliation/1` receipt has
+exactly this shape:
 
 ```json
 {
@@ -517,6 +605,11 @@ this shape:
   "outcome": "promoted",
   "promotionOperationHandle": "sarsp-1234567890abcdef12345678",
   "reconciliationHandle": "sarcr-abcdef1234567890abcdef12",
+  "resolvedCurrent": {
+    "digest": "sha256:2525252525252525252525252525252525252525252525252525252525252525",
+    "etag": "illustrative-intended-etag",
+    "versionId": "illustrative-intended-version"
+  },
   "retryAllowed": false,
   "schema": "text-to-cad.agent-runtime-channel-reconciliation/1",
   "status": "terminal",
@@ -535,7 +628,18 @@ candidate VersionIds. Every non-delete version in the bounded chain is fetched
 with an exact-version GET, parsed under the strict channel-state schema, and
 hashed; a delete marker is recorded with JSON `null` for `digest` and `etag`.
 An incomplete, over-limit, changing, or un-fetchable chain cannot be treated as
-absence or success.
+absence or success. `resolvedCurrent` equals `observed.latest` for a resolved
+`promoted` or `not-promoted` outcome; it is JSON `null` when no exact latest
+object can be established. For `promoted`, both must equal the intended pointer
+digest and exact VersionId.
+
+For bootstrap reconciliation the three `before` identity fields are null and
+the bounded chain covers every observed version of the channel key. `promoted`
+then requires exactly one intended version and no other data or delete-marker
+version. `not-promoted` requires that the key remains absent, with
+`resolvedCurrent: null`; the channel remains uninitialized and grants no
+authority. Any existing non-intended version is `ambiguous` for that bootstrap
+request and must instead be consumed under its own originating authority.
 
 The outcome is exactly `promoted`, `not-promoted`, or `ambiguous`:
 
@@ -548,7 +652,9 @@ The outcome is exactly `promoted`, `not-promoted`, or `ambiguous`:
   read-only reconciliation proves visibility.
 - `not-promoted`: no version equals the intended pointer, and the exact before
   VersionId/digest remains the sole latest version with no intervening data or
-  delete-marker version. The prior current remains authoritative.
+  delete-marker version. The prior current remains authoritative under its own
+  originating operation authority; this receipt never authorizes or unfreezes
+  the intended candidate. The bootstrap absence case follows the rule above.
 - `ambiguous`: every other result, including duplicate intended versions,
   intended-but-not-latest, a foreign later version, delete marker, incomplete
   chain, exact-GET failure, or inability to prove intended S3 bytes. The
@@ -563,17 +669,62 @@ cleanup remain blocked. A proof that the before version is still latest and no
 intended version exists resolves to `not-promoted`. Listing alone proves none
 of these outcomes.
 
-The reconciliation terminal record is published append-only at its handle and
+The reconciliation receipt is published create-once at
+`reconciliations/by-request/sha256/<request-hex>/sha256/<receipt-hex>.json` and
 reread exactly. If normal publication fails, an independent append-once
 reconciliation tombstone binds the handle, original request ID, before digest,
 intended pointer digest, last durable observation, and
-`retentionRequired: true`. Failure of both leaves the channel frozen with no
-authoritative reconciliation receipt. A later bounded reconciliation may use
-a new handle and repeat only these reads. Pointer-changing promotion or
-rollback may resume only after `not-promoted`, or after `promoted` with both
-exact S3 and Mac visibility true. It remains frozen for `ambiguous` and for a
-promoted-but-not-visible state. Reconciliation never mutates the pointer to
-manufacture an outcome.
+`retentionRequired: true`. Failure of both leaves the intended operation frozen
+with no authoritative reconciliation receipt. A later bounded reconciliation
+may use a new handle and repeat only these reads. `ambiguous`, `not-promoted`,
+and promoted-but-not-visible receipts never grant authority to the intended
+pointer. Reconciliation never mutates the pointer to manufacture an outcome.
+
+### Deterministic consumption and unfreeze
+
+Every downstream execution, promotion, or rollback validates the operation
+that wrote the exact current pointer. The admission input binds the current
+pointer VersionId and digest and has `reconciliationReceiptDigest`, which is
+JSON `null` on the normal path. The consumer then applies exactly one rule:
+
+1. Fetch `operations/<operationHandle>/terminal.json` at its deterministic
+   path. If it exists, strictly validates, has `status: succeeded`, and its
+   `10-atomic-promote` stage binds the exact current pointer digest and
+   VersionId, the consumer requires `reconciliationReceiptDigest: null`.
+2. If that operation terminal is missing or has
+   `status: reconciliation-required`, the caller must supply one exact
+   reconciliation receipt digest. The consumer derives the content-addressed
+   key from the pointer's `operationRequestId` and the supplied digest, fetches
+   those exact bytes without listing, recomputes the digest, and rejects any
+   other path or object.
+3. That receipt must bind the pointer's operation handle/request ID, original
+   promotion authorization, intended canonical pointer bytes and digest,
+   before digest/VersionId/ETag, exact observed latest digest/VersionId/ETag,
+   and the current pointer digest/VersionId. It must have `outcome: promoted`
+   and all of `exactVersionGetsComplete`, `s3IntendedBytesVisible`, and
+   `macIntendedBytesVisible` true.
+4. Independently of the receipt, the consumer exact-version GETs the supplied
+   current VersionId and hashes its bytes, then fetches current latest without
+   using a listing-selected candidate. Both reads must return those same exact
+   canonical pointer bytes and identify that VersionId as current latest.
+
+Only those two success paths grant authority. A failed original terminal, a
+missing caller-supplied digest, or an `ambiguous`, `not-promoted`, or
+promoted-but-not-visible receipt never unfreezes the intended pointer. Multiple
+receipts for one request are harmless because no receipt is auto-selected: a
+caller supplies one digest, and it grants authority only if it fully validates
+the exact current pointer under the rule above. The prior pointer after a
+`not-promoted` attempt is evaluated through its own originating succeeded
+terminal or its own qualifying resolution, never through the failed attempt's
+receipt.
+
+This also closes CAS-success-before-terminal-publication. If the conditional
+write created the current pointer but the operation terminal was never
+published, a supplied exact `promoted` reconciliation receipt with both
+visibility checks true acts as the immutable terminal resolution for that
+original operation. The consumer still rereads current independently. Neither
+the missing operation terminal nor the pointer is created, amended, or
+backfilled during reconciliation.
 
 ## Rollback is a new promotion
 
@@ -636,34 +787,56 @@ outcome with failed visibility also retains them until a later read-only
 reconciliation proves visibility. Cleanup is scoped to the operation handle
 and must prove absence. Failed operations, unresolved reconciliation,
 publication ambiguity, visibility failure, residue, or missing terminal
-publication retain all scratch and record `cleanupDisposition` without
-attempting broad cleanup.
+publication retain all scratch; any attempted post-terminal cleanup records its
+disposition only in `cleanup.json` without attempting broad cleanup.
+
+Post-terminal cleanup writes at most one create-once
+`operations/<handle>/cleanup.json`. It is an operational cleanup receipt, not a
+stage receipt and not a second operation terminal. It binds the immutable
+operation terminal digest, any required qualifying reconciliation digest,
+exact removed handle-owned paths/references, and absence observations. Failure
+or absence uncertainty is recorded there and retains remaining scratch; it
+never edits the operation terminal.
 
 ## Failure and retry contract
 
-Every stage emits one terminal operation record under its fresh handle with
-status `succeeded`, `failed`, `reconciliation-required`, or
-`publication-failed`. `reconciliation-required` binds the before state,
-intended canonical pointer digest, promotion authorization, operation request
-ID, and any returned write metadata; it grants no execution authority and
-freezes pointer-changing operations. Failure precedence is:
+Each stage emits exactly one immutable stage receipt at its deterministic path.
+After the ten stage receipts exist, the supervisor attempts exactly one
+create-once immutable operation terminal; the path can therefore contain at
+most one. Its status is exactly `succeeded`, `failed`, or
+`reconciliation-required`. The latter requires an `uncertain`
+`10-atomic-promote` receipt and binds the before state, intended canonical
+pointer digest, promotion authorization, operation request ID, and any returned
+write metadata; it grants no downstream authority by itself.
+
+The operation terminal derives its status, ordered stage digest list, and
+failure check from the stage receipts. For a failed operation, precedence is:
 
 1. retained or unproved owned resources;
 2. absence-proof failure;
-3. terminal/publication ambiguity;
-4. cleanup failure;
-5. interrupted operation; then
-6. the first stage predicate in the state-machine order above.
+3. interrupted operation; then
+4. the first failed stage predicate in state-machine order.
 
-All terminal records carry `retryAllowed: false`. This forbids automatic
+Terminal-publication failure cannot appear as a status inside the terminal
+that failed to publish. In that case there is no operation terminal; the
+independent append-once operation tombstone records the attempted terminal
+digest, last durable stage digest, original request ID, and retention required.
+Post-terminal cleanup success or failure appears only in `cleanup.json` and
+never changes terminal status or failure precedence.
+
+All stage receipts and operation terminals carry `retryAllowed: false`. This
+forbids automatic
 re-entry or adoption, not a human-authorized new attempt. A new attempt gets a
 new owner nonce and handle, validates immutable predecessor outputs again, and
 may reuse an already-published content-addressed object only after exact
 VersionId/hash/size reread. It cannot overwrite or amend an earlier receipt.
 
-If both normal terminal publication and an independent append-once tombstone
-fail, there is no authoritative terminal receipt. The supervisor retains
-scratch and external operations must treat the attempt as unresolved.
+If both normal terminal publication and the independent append-once operation
+tombstone fail, there is no authoritative operation terminal or tombstone. The
+supervisor retains scratch and external operations must treat the attempt as
+unresolved. If the pointer write may have succeeded, only the exact
+reconciliation consumption rule above can later authorize that current
+pointer.
 
 ## Exact invariants for implementation tests
 
@@ -683,9 +856,9 @@ An implementation is conformant only if machine tests prove all of these:
    addressing, and predecessor fallback are rejected;
 6. non-bootstrap channel state has one current and one distinct predecessor,
    and each resolves to a valid retained lock/archive/Verified root;
-7. promotion is one conditional pointer write, a definite conflict cannot
-   change the previous authoritative state, and an uncertain write freezes all
-   pointer-changing and execution operations pending append-only reconciliation;
+7. bootstrap promotion uses create-only `If-None-Match: *`; later promotion
+   uses `If-Match` only on the exact prior ETag while binding prior VersionId
+   and digest as evidence; both exact-version reread successful bytes;
 8. rollback is a new promotion with fresh provision, loaded-identity, and
    deployment-conformance receipts;
 9. Source Snapshot identity is separate and cannot change the runtime lock;
@@ -696,8 +869,16 @@ An implementation is conformant only if machine tests prove all of these:
     diagnostics/resources unless exact absence is proved; and
 12. reconciliation classifies exact version chains only as promoted,
     not-promoted, or ambiguous; never mutates the pointer; and cannot infer from
-    a list response alone; and
-13. cleanup and any future GC cannot act on names, tags, unresolved references,
+    a list response alone;
+13. every current-pointer consumer validates the originating succeeded
+    operation terminal or one caller-supplied exact content-addressed promoted
+    reconciliation receipt with both visibility checks true, then independently
+    rereads exact current bytes;
+14. each resolved operation has exactly ten immutable stage receipts and one
+    immutable operation terminal; only terminal-publication failure leaves no
+    terminal, and stage receipts, cleanup receipts, and tombstones are never
+    additional terminals; and
+15. cleanup and any future GC cannot act on names, tags, unresolved references,
     active current/predecessor objects, or historical failure evidence.
 
 Required negative fixtures include archive/lock hash substitution, OCI index or
@@ -707,13 +888,18 @@ cross-subject grafting, portable-manifest-as-local-ID confusion, host-local
 image-ID/config substitution, stale or truncated local ID, execution-time
 re-inspection drift, source-snapshot/runtime conflation, missing predecessor,
 current equal to predecessor, stale-CAS promotion, lost response after a
-successful CAS, confirmed CAS plus post-mount failure, duplicate intended
-versions, intended-but-not-latest, delete markers, incomplete version chains,
-listing-only inference, reconciliation pointer mutation, rollback before
-reconciliation, crash before and after pointer write, Mac mount mismatch,
-rollback without fresh target receipts, tag-only execution, registry fallback,
-handle adoption, terminal-publication failure, cleanup residue, and GC
-reachability mistakes.
+successful CAS, bootstrap create against an existing key, treating VersionId as
+a PUT precondition, CAS success before operation-terminal publication,
+confirmed CAS plus post-mount failure, duplicate intended versions,
+intended-but-not-latest, delete markers, incomplete version chains,
+listing-selected reconciliation, missing or wrong caller-supplied resolution
+digest, a valid receipt for a different current version, reconciliation pointer
+mutation, rollback before reconciliation, missing/extra/reordered stage
+receipts, a stage receipt presented as an operation terminal, duplicate
+operation terminals, terminal-publication failure, crash before and after
+pointer write, Mac mount mismatch, rollback without fresh target receipts,
+tag-only execution, registry fallback, handle adoption, cleanup residue, and
+GC reachability mistakes.
 
 ## Implementation status
 
