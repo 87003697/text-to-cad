@@ -74,3 +74,30 @@ runs a deterministic mock and dual-homed Proxy, verifies 48 attempts plus the
 49th denial, wrong token/route/model denial, timeout reservation retention, and
 terminal cleanup/absence. It never resolves or calls Venus. Failed output paths
 are retained and never overwritten.
+
+## Single real Development job
+
+Only the separately authorized parent task runs the paid launcher. It requires
+one literal `VENUS_TOKEN` from a referenced env file, an existing public prior
+total ledger (an empty regular file for the first job), the reviewed canonical
+workload, and fresh stage/output paths:
+
+```text
+python3 scripts/pilot/agent-runtime-development-real-colima.py \
+  --confirm-paid-development \
+  --secret-env-file ~/.secrets/text-to-cad.env \
+  --prior-total-ledger /absolute/path/to/prior-total-ledger.jsonl \
+  --workload /absolute/path/to/canonical-workload.json \
+  --host-stage /Users/<user>/.../fresh-real-stage \
+  --output outputs/agent-runtime/cup_cup_033/fresh-real-output \
+  --suffix cup033-real-01 \
+  --docker-context colima-sealed-agent-runtime
+```
+
+The launcher performs exactly one outer Agent job and never reruns it. The
+Proxy policy is fixed to 16 upstream attempts, 200,000 request bytes, 40,000
+output tokens, USD 2.45 per-attempt reservation, and USD 39.20 per-job worst
+case. `proxy-evidence/job-ledger.jsonl` is the job ledger and
+`proxy-evidence/total-ledger.jsonl` is the cumulative public ledger to pass to
+any separately authorized later job. `receipt.json` records Git/image/context,
+pricing authority, accounting, Agent terminal status, and exact cleanup.
