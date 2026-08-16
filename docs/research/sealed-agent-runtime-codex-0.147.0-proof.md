@@ -127,9 +127,12 @@ executable signature as an archive signature.
 
 ## Required contract correction
 
-The current closed `codex-admission` predicate
-`publisherSignatureClaimAbsent` cannot represent these facts. The corrected
-contract needs distinct bindings for archive bytes, extracted executable
-bytes, bundle bytes, exact signing identity policy, verifier identity,
-trusted-root acquisition and verification result. Until that correction is
-reviewed and integrated, SAI-004 implementation remains stopped.
+At this proof's observation time, the then-current closed `codex-admission`
+predicate `publisherSignatureClaimAbsent` could not represent these facts, so
+SAI-004 implementation was stopped pending contract correction. The later
+reviewed contract now has distinct archive, executable, bundle, signing-policy,
+verifier, trust-bootstrap, authenticated-retrieval, and verification-result
+bindings; its current normative definition is
+[`agent-runtime-verification-receipt.md`](../design/agent-runtime-verification-receipt.md#codex-01470-signature-policy-and-receipt).
+This historical proof and its machine-readable candidate remain immutable
+observations and are not themselves an admission receipt.

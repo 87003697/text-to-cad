@@ -149,7 +149,11 @@ admit_codex(retrieval, archive, executable, signature_bundle,
 
 SAI-004 owns this producer and the closed Codex signature-policy and
 signature-verification receipt schemas. It consumes only mirrored bytes and
-exact acquisition receipts. It must not use an ambient Sigstore cache, download
+the exact closed `text-to-cad.codex-authenticated-retrieval/1` acquisition
+receipt. The producer verifies its independently provisioned controller key and
+detached channel attestation over the full release/acquisition/redirect/
+transport projection; copied policy values and source-origin hashes are not
+authentication. It must not use an ambient Sigstore cache, download
 trust material during an image build, accept a wildcard certificate identity,
 or substitute a verifier, bundle, trusted-root object, tag, ref, workflow, or
 commit. The producer validates those schema-neutral documents and computes

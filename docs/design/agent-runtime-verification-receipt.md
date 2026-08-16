@@ -562,6 +562,86 @@ the annotated tag object and peels it, then requires the observed object SHA and
 commit to equal both the retrieval receipt and policy; merely copying policy
 expectations is rejected.
 
+That authenticated retrieval receipt has schema literal
+`text-to-cad.codex-authenticated-retrieval/1` and exactly these seven top-level
+keys: `schema`, `issuedAt`, `trustedClockReceiptDigest`, `issuer`,
+`releaseObservation`, `acquisitions`, and `authentication`. `issuedAt` is UTC
+RFC 3339 at whole-second precision and equals the trusted-clock observation;
+`trustedClockReceiptDigest` is its canonical SHA-256 digest. `issuer` has
+exactly `authority` (literal `text-to-cad/SAR-004`), `controllerIdentity`
+(literal `text-to-cad-release-controller`), and `channel` (literal
+`text-to-cad-authenticated-receipt-channel/1`). `releaseObservation` has
+exactly the six keys and values listed in the preceding paragraph.
+
+`acquisitions` has exactly `releaseRecord`, `archive`, `signatureBundle`,
+`verifierBinary`, and `verifierChecksums`. Each is a closed acquisition record
+with exactly these keys:
+
+| Key | Exact grammar |
+| --- | --- |
+| `objectKind` | Its containing key as a string literal |
+| `objectIdentity` | `github-release:366471016`, `github-asset:504450426`, `github-asset:504450400`, `github-asset:196693093`, or `cosign-checksums:v2.4.1`, respectively |
+| `assetId` | The corresponding integer for `archive`, `signatureBundle`, and `verifierBinary`; null only for `releaseRecord` and `verifierChecksums` |
+| `name` | `rust-v0.147.0-release-record.json`, the exact policy archive name, exact policy bundle name, `cosign-darwin-arm64`, or `cosign_checksums.txt`, respectively |
+| `requestedUrl` | Respectively the five fixed source URLs printed immediately below |
+| `redirectChain` | An array, possibly empty, of closed redirect objects below in observed order |
+| `finalUrl` | The final HTTPS URL after exactly that chain |
+| `transport` | The closed transport observation below |
+| `bytes` | Concrete nonnegative integer equal to the received representation length |
+| `digest` | Canonical `sha256:<64 lowercase hex>` of the received representation |
+
+The fixed requested URLs are
+`https://api.github.com/repos/openai/codex/releases/tags/rust-v0.147.0`,
+`https://github.com/openai/codex/releases/download/rust-v0.147.0/codex-x86_64-unknown-linux-musl.tar.gz`,
+`https://github.com/openai/codex/releases/download/rust-v0.147.0/codex-x86_64-unknown-linux-musl.sigstore`,
+`https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign-darwin-arm64`,
+and
+`https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign_checksums.txt`.
+The archive, bundle, verifier binary, and checksums `bytes` and `digest` equal
+policy; the release record is independently parsed to produce the six exact
+`releaseObservation` values.
+
+Each redirect object has exactly `status` (one of 301, 302, 303, 307, 308),
+`fromUrl`, `location`, `toUrl`, and `tlsServerName`. `toUrl` is the RFC 3986
+resolution of `location` against `fromUrl`; every URL is HTTPS with no userinfo
+or fragment. Each hop's host and `tlsServerName` are identical and belong to
+the exact allowlist `api.github.com`, `github.com`,
+`release-assets.githubusercontent.com`, or `objects.githubusercontent.com`.
+The first `fromUrl` equals `requestedUrl`, adjacent hops join exactly, and the
+last `toUrl` equals `finalUrl`; an empty chain requires
+`finalUrl == requestedUrl`.
+
+Each `transport` object has exactly `scheme` (literal `https`), `requestMethod`
+(literal `GET`), `responseStatus` (literal 200), `tlsServerName` (the final URL
+host), `tlsProtocol` (literal `TLSv1.2` or `TLSv1.3`),
+`certificateChainDigest`, `responseHeadersDigest`, and `contentLength`.
+The two digests use canonical SHA-256; `contentLength` equals `bytes`. TLS and
+redirect observations establish what the controller saw but do not replace the
+independent controller attestation below.
+
+`authentication` has exactly `scheme` (literal
+`release-controller-channel-attestation/1`), `controllerIdentity` and `channel`
+(the exact issuer literals), `keyDigest`, `evidenceDigest`, `signedProjection`
+(literal `all-top-level-fields-except-authentication`),
+`independentOfSourceOrigins` (literal true), and `verified` (literal true).
+`keyDigest` must equal a verification key provisioned in the release controller
+configuration independently of GitHub and Sigstore. `evidenceDigest` binds the
+detached authentication evidence. That evidence is a canonical JSON object with
+exactly `schema` (literal
+`text-to-cad.release-controller-channel-attestation/1`), `algorithm` (literal
+`Ed25519`), `keyDigest`, `payloadDigest`, and `signatureBase64`. `keyDigest` is
+the SHA-256 of the raw 32-byte Ed25519 public key and equals the receipt field;
+`payloadDigest` is the canonical SHA-256 of the other six receipt top-level
+fields; `signatureBase64` is canonical padded RFC 4648 base64 encoding of the
+64-byte Ed25519 signature over those canonical projection bytes. The canonical
+digest of this five-key evidence object equals `evidenceDigest`, and the
+signature is verified under the independently provisioned key before the
+receipt is accepted. Neither a copied policy literal, a source-host
+checksum, the receipt's own digest, nor `verified:true` can satisfy this check.
+Unknown or missing keys, an unprovisioned key, unavailable evidence, signature
+failure, source-origin reuse for the controller key, or any acquisition,
+redirect, transport, release, issuer, or clock mismatch rejects the receipt.
+
 The trusted-clock receipt has exactly `schema` (literal
 `text-to-cad.trusted-clock-receipt/1`), `controllerIdentity` (literal
 `text-to-cad-release-controller`), `observedAt` (UTC RFC 3339, whole seconds),

@@ -95,7 +95,10 @@ Docker build:
    `3ed6f04f6bf8b7c46299d1cb1ff99c74ce21a51d` peeled to commit
    `be6e8eac029b183056b7e4402879f15d2c85f61b` in the closed authenticated
    retrieval receipt. Resolve and observe those Git identities independently;
-   copying them from the signature policy is not evidence.
+   copying them from the signature policy is not evidence. The receipt uses the
+   contract's closed `text-to-cad.codex-authenticated-retrieval/1` schema and
+   binds every release/archive/bundle/verifier request, redirect, transport
+   observation, and the independently provisioned controller attestation.
 2. Require the archive and bundle byte lengths and SHA-256 values printed in
    the Decision section. Mirror those unchanged bytes before any image build.
 3. List the archive without following links or extracting paths. Require
