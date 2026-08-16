@@ -25,15 +25,24 @@ import process_group  # noqa: E402
 class FakeGroupAdapter:
     def __init__(
         self, group_states: list[bool], interrupt_on_wait: int | None = None,
+        interrupt_on_spawn: int | None = None,
+        fail_spawn: bool = False,
     ) -> None:
         self.group_states = group_states
         self.calls: list[object] = []
         self.now = 0.0
         self.interrupt_on_wait = interrupt_on_wait
+        self.interrupt_on_spawn = interrupt_on_spawn
+        self.fail_spawn = fail_spawn
         self.handler = None
 
     def spawn(self, argv, cwd, env, stdout, stderr):
         self.calls.append("spawn-session")
+        if self.interrupt_on_spawn is not None:
+            assert self.handler is not None
+            self.handler(self.interrupt_on_spawn, None)
+        if self.fail_spawn:
+            raise RuntimeError("spawn failed")
         return object(), 42
 
     def wait(self, process):
@@ -243,21 +252,29 @@ class AgentRuntimeBoundaryTests(unittest.TestCase):
         self.assertNotIn("write-ack", receipt.calls)
 
     def test_interrupt_is_relayed_and_remaining_group_cannot_succeed(self) -> None:
-        relayed = FakeGroupAdapter([False], interrupt_on_wait=signal.SIGTERM)
+        relayed = FakeGroupAdapter(
+            [False], interrupt_on_spawn=signal.SIGTERM,
+        )
         result = process_group.run_workload_group(
             ("/fixed/workload",), cwd="/fixed", env={},
             stdout=io.BytesIO(), stderr=io.BytesIO(), adapter=relayed,
         )
         self.assertEqual(result.interrupted_signal, signal.SIGTERM)
         self.assertEqual(result.returncode, 128 + signal.SIGTERM)
-        self.assertIn(("signal-group", signal.SIGTERM), relayed.calls)
+        self.assertEqual(
+            relayed.calls.count(("signal-group", signal.SIGTERM)), 1,
+        )
         self.assertLess(
             relayed.calls.index("install-handlers"),
+            relayed.calls.index("spawn-session"),
+        )
+        self.assertLess(
+            relayed.calls.index("spawn-session"),
             relayed.calls.index("restore-handlers"),
         )
 
         remaining = FakeGroupAdapter(
-            [True, True, True, True], interrupt_on_wait=signal.SIGINT,
+            [True, True, True, True], interrupt_on_spawn=signal.SIGINT,
         )
         stuck = process_group.run_workload_group(
             ("/fixed/workload",), cwd="/fixed", env={},
@@ -266,6 +283,17 @@ class AgentRuntimeBoundaryTests(unittest.TestCase):
         )
         self.assertFalse(stuck.group_absent)
         self.assertEqual(stuck.returncode, 125)
+
+        failing = FakeGroupAdapter([], fail_spawn=True)
+        with self.assertRaisesRegex(RuntimeError, "spawn failed"):
+            process_group.run_workload_group(
+                ("/fixed/workload",), cwd="/fixed", env={},
+                stdout=io.BytesIO(), stderr=io.BytesIO(), adapter=failing,
+            )
+        self.assertEqual(
+            failing.calls,
+            ["install-handlers", "spawn-session", "restore-handlers"],
+        )
 
         fixture = self.make_fixture()
         lifecycle = matrix.ScriptedAdapter(fixture.spec)
