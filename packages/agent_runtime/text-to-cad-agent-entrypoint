@@ -4,14 +4,30 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 from pathlib import Path
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
+from typing import NamedTuple
+
+try:
+    from agent_runtime_canonical_json import (
+        EvidenceError,
+        canonical_json_bytes,
+        parse_canonical_json,
+    )
+except ModuleNotFoundError:  # Source-tree tests use the same authoritative seam.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from scripts.pilot.agent_runtime.canonical_json import (
+        EvidenceError,
+        canonical_json_bytes,
+        parse_canonical_json,
+    )
 
 
 CONTROL = Path("/run/text-to-cad-agent/control/manifest.json")
@@ -47,7 +63,7 @@ class GateError(RuntimeError):
 
 
 def _canonical(value: object) -> bytes:
-    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return canonical_json_bytes(value)
 
 
 def _digest(payload: bytes) -> str:
@@ -57,21 +73,21 @@ def _digest(payload: bytes) -> str:
 def _parse_exact(payload: bytes) -> dict[str, object]:
     if len(payload) > 16384 or payload.endswith(b"\n"):
         raise GateError("control record size or terminator is invalid")
-
-    def pairs(values: list[tuple[str, object]]) -> dict[str, object]:
-        result: dict[str, object] = {}
-        for key, value in values:
-            if key in result:
-                raise GateError("duplicate control key")
-            result[key] = value
-        return result
-
     try:
-        value = json.loads(payload, object_pairs_hook=pairs)
-    except (GateError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        parsed = parse_canonical_json(payload)
+        value = _plain(parsed)
+    except (AttributeError, EvidenceError) as error:
         raise GateError("control record is not canonical JSON") from error
-    if not isinstance(value, dict) or _canonical(value) != payload:
+    if _canonical(value) != payload:
         raise GateError("control record is not exact canonical JSON")
+    return value
+
+
+def _plain(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_plain(item) for item in value]
     return value
 
 
@@ -188,57 +204,208 @@ def _read_release() -> dict[str, object]:
     return _parse_exact(line[:-1])
 
 
-def _run_workload(argv: list[str]) -> int:
-    process = subprocess.Popen(
-        argv,
-        cwd=WRITABLE[3],
-        env={
-            "HOME": str(WRITABLE[0]),
-            "LANG": "C.UTF-8",
-            "LC_ALL": "C.UTF-8",
-            "PATH": "/usr/local/bin:/usr/bin:/bin",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "TMPDIR": str(WRITABLE[2]),
-            "TZ": "UTC",
-            "XDG_CACHE_HOME": str(WRITABLE[1]),
-        },
-        stdin=subprocess.DEVNULL,
-        stdout=(WRITABLE[4] / "workload.stdout").open("xb"),
-        stderr=(WRITABLE[4] / "workload.stderr").open("xb"),
-        start_new_session=True,
-    )
-    previous: dict[int, object] = {}
+class GroupResult(NamedTuple):
+    returncode: int
+    descendant_residue: bool
+    group_absent: bool
+    interrupted_signal: int | None
 
-    def relay(signum: int, _frame: object) -> None:
+
+class OsGroupAdapter:
+    def install_handlers(self, handler: object) -> dict[int, object]:
+        previous = {item: signal.getsignal(item) for item in (signal.SIGINT, signal.SIGTERM)}
+        for item in previous:
+            signal.signal(item, handler)
+        return previous
+
+    def restore_handlers(self, previous: dict[int, object]) -> None:
+        for item, handler in previous.items():
+            signal.signal(item, handler)
+
+    def spawn(self, argv: list[str], stdout: object, stderr: object) -> subprocess.Popen[bytes]:
+        return subprocess.Popen(
+            argv,
+            cwd=WRITABLE[3],
+            env={
+                "HOME": str(WRITABLE[0]),
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
+                "PATH": "/usr/local/bin:/usr/bin:/bin",
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "TMPDIR": str(WRITABLE[2]),
+                "TZ": "UTC",
+                "XDG_CACHE_HOME": str(WRITABLE[1]),
+            },
+            stdin=subprocess.DEVNULL,
+            stdout=stdout,
+            stderr=stderr,
+            start_new_session=True,
+        )
+
+    def wait(self, process: subprocess.Popen[bytes]) -> int:
+        return process.wait()
+
+    def group_exists(self, pgid: int) -> bool:
         try:
-            os.killpg(process.pid, signum)
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    def signal_group(self, pgid: int, signum: int) -> None:
+        try:
+            os.killpg(pgid, signum)
         except ProcessLookupError:
             pass
 
+    def monotonic(self) -> float:
+        return time.monotonic()
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+
+def _await_group_absence(adapter: object, pgid: int, timeout: float) -> bool:
+    deadline = adapter.monotonic() + timeout
+    while adapter.group_exists(pgid):
+        if adapter.monotonic() >= deadline:
+            return False
+        adapter.sleep(0.02)
+    return True
+
+
+def _exclusive_output(name: str) -> object:
+    root_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    root_descriptor = os.open(WRITABLE[4], root_flags)
     try:
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            previous[signum] = signal.signal(signum, relay)
-        return_code = process.wait()
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(name, flags, 0o600, dir_fd=root_descriptor)
     finally:
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
+        os.close(root_descriptor)
+    return os.fdopen(descriptor, "wb", closefd=True)
+
+
+def _run_workload(argv: list[str], *, adapter: object | None = None) -> GroupResult:
+    runtime = adapter or OsGroupAdapter()
+    interrupted: int | None = None
+    pgid: int | None = None
+
+    def relay(signum: int, _frame: object) -> None:
+        nonlocal interrupted
+        if interrupted is None:
+            interrupted = signum
+        if pgid is not None:
+            runtime.signal_group(pgid, signum)
+
+    handlers = runtime.install_handlers(relay)
+    stdout = None
+    stderr = None
+    process = None
+    returncode = 125
+    descendant_residue = False
+    absent = True
     try:
-        os.killpg(process.pid, 0)
-    except ProcessLookupError:
-        return return_code
-    for signum, deadline in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 2.0)):
         try:
-            os.killpg(process.pid, signum)
-        except ProcessLookupError:
-            return 125
-        stop = time.monotonic() + deadline
-        while time.monotonic() < stop:
-            try:
-                os.killpg(process.pid, 0)
-            except ProcessLookupError:
-                return 125
-            time.sleep(0.05)
-    raise GateError("workload process group remains present")
+            stdout = _exclusive_output("workload.stdout")
+            stderr = _exclusive_output("workload.stderr")
+            process = runtime.spawn(argv, stdout, stderr)
+            pgid = process.pid
+            if interrupted is not None:
+                runtime.signal_group(pgid, interrupted)
+            returncode = runtime.wait(process)
+        except (OSError, RuntimeError, subprocess.SubprocessError):
+            returncode = 125
+        finally:
+            if stderr is not None:
+                stderr.close()
+            if stdout is not None:
+                stdout.close()
+        if pgid is not None:
+            if interrupted is not None:
+                absent = _await_group_absence(runtime, pgid, 0.25)
+                descendant_residue = not absent
+            else:
+                descendant_residue = runtime.group_exists(pgid)
+                absent = not descendant_residue
+            for signum, timeout in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 2.0)):
+                if absent:
+                    break
+                runtime.signal_group(pgid, signum)
+                absent = _await_group_absence(runtime, pgid, timeout)
+    finally:
+        runtime.restore_handlers(handlers)
+    if not absent or descendant_residue:
+        returncode = 125
+    elif interrupted is not None:
+        returncode = 128 + interrupted
+    return GroupResult(returncode, descendant_residue, absent, interrupted)
+
+
+def _output_digest(root: Path) -> str:
+    records: list[dict[str, object]] = []
+    root_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        root_descriptor = os.open(root, root_flags)
+    except OSError as error:
+        raise GateError("output root is not one no-follow directory") from error
+
+    def identity(info: os.stat_result) -> tuple[int, int, int, int, int, int]:
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+    def walk(directory: int, prefix: str) -> None:
+        for name in sorted(os.listdir(directory)):
+            if not name.isascii() or name in (".", "..") or "/" in name:
+                raise GateError("output path is invalid")
+            path = f"{prefix}/{name}" if prefix else name
+            before = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if stat.S_ISDIR(before.st_mode):
+                child = os.open(name, root_flags, dir_fd=directory)
+                try:
+                    opened = os.fstat(child)
+                    if identity(before) != identity(opened):
+                        raise GateError("output directory changed while opening")
+                    records.append({"kind": "directory", "mode": before.st_mode & 0o777, "path": path})
+                    walk(child, path)
+                    after = os.fstat(child)
+                finally:
+                    os.close(child)
+                named_after = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if identity(opened) != identity(after) or identity(opened) != identity(named_after):
+                    raise GateError("output directory changed during digest")
+            elif stat.S_ISREG(before.st_mode):
+                descriptor = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory)
+                try:
+                    opened = os.fstat(descriptor)
+                    if identity(before) != identity(opened):
+                        raise GateError("output file changed while opening")
+                    digest = hashlib.sha256()
+                    size = 0
+                    while block := os.read(descriptor, 1024 * 1024):
+                        digest.update(block)
+                        size += len(block)
+                    after = os.fstat(descriptor)
+                finally:
+                    os.close(descriptor)
+                named_after = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if identity(opened) != identity(after) or identity(opened) != identity(named_after):
+                    raise GateError("output file changed during digest")
+                records.append({
+                    "bytes": size,
+                    "digest": "sha256:" + digest.hexdigest(),
+                    "kind": "regular",
+                    "mode": before.st_mode & 0o777,
+                    "path": path,
+                })
+            else:
+                raise GateError("output tree contains an unsupported entry")
+
+    try:
+        walk(root_descriptor, "")
+    finally:
+        os.close(root_descriptor)
+    return _digest(_canonical(records))
 
 
 def _contract_self_test() -> int:
@@ -277,14 +444,25 @@ def main() -> int:
     release = _read_release()
     if release != {"schema": "text-to-cad.agent-entrypoint-release/1", "brokerProofDigest": proof_digest, "release": True}:
         raise GateError("outer did not release the exact Broker proof")
-    exit_code = _run_workload(control["workload"])
-    _publish({"schema": "text-to-cad.agent-entrypoint-terminal/1", "exitCode": exit_code, **identity})
-    return exit_code
+    result = _run_workload(control["workload"])
+    if not result.group_absent:
+        raise GateError("workload process group remains present")
+    output_digest = _output_digest(WRITABLE[4])
+    _publish({
+        "schema": "text-to-cad.agent-entrypoint-terminal/1",
+        "workloadStatus": result.returncode,
+        "outputDigest": output_digest,
+        "processGroupAbsent": result.group_absent,
+        "descendantResidue": result.descendant_residue,
+        "interruptedSignal": result.interrupted_signal,
+        **identity,
+    })
+    return result.returncode
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except GateError as error:
+    except (GateError, OSError, ValueError, subprocess.SubprocessError) as error:
         sys.stderr.write(f"agent-entrypoint: {error}\n")
         raise SystemExit(125)

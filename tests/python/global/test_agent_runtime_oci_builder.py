@@ -82,14 +82,15 @@ class AgentRuntimeOciBuilderTests(unittest.TestCase):
             _write_root(root_b)
             request_a = builder.synthetic_test_request(root_a)
             request_b = builder.synthetic_test_request(root_b)
-            first = builder.build_oci_layout(request_a, Path(oa))
-            second = builder.build_oci_layout(request_b, Path(ob))
+            out_a, out_b = Path(oa).resolve() / "layout", Path(ob).resolve() / "layout"
+            first = builder.build_oci_layout(request_a, out_a)
+            second = builder.build_oci_layout(request_b, out_b)
 
             self.assertEqual(first, second)
-            self.assertEqual(builder.directory_bytes(Path(oa)), builder.directory_bytes(Path(ob)))
-            self.assertEqual(builder.audit_oci_layout(Path(oa)), first)
-            archive_a = builder.encode_oci_archive(Path(oa))
-            archive_b = builder.encode_oci_archive(Path(ob))
+            self.assertEqual(builder.directory_bytes(out_a), builder.directory_bytes(out_b))
+            self.assertEqual(builder.audit_oci_layout(out_a), first)
+            archive_a = builder.encode_oci_archive(out_a)
+            archive_b = builder.encode_oci_archive(out_b)
             self.assertEqual(archive_a, archive_b)
             self.assertEqual(builder.audit_oci_archive(archive_a), first)
             self.assertEqual(first["layerMediaType"], "application/vnd.oci.image.layer.v1.tar+gzip")
@@ -105,13 +106,80 @@ class AgentRuntimeOciBuilderTests(unittest.TestCase):
             link.symlink_to(actual, target_is_directory=True)
             request = builder.synthetic_test_request(actual)._replace(rootfs=link)
             with self.assertRaises(builder.BuildInputError):
-                builder.build_oci_layout(request, Path(output))
+                builder.build_oci_layout(request, Path(output).resolve() / "layout")
+
+    def test_builder_rejects_symlink_or_existing_output_without_external_write(self) -> None:
+        builder = _load_builder()
+        with tempfile.TemporaryDirectory() as root_dir, tempfile.TemporaryDirectory() as parent_dir, tempfile.TemporaryDirectory() as external_dir:
+            root = Path(root_dir)
+            _write_root(root)
+            request = builder.synthetic_test_request(root)
+            output = Path(parent_dir) / "layout"
+            output.symlink_to(Path(external_dir), target_is_directory=True)
+            with self.assertRaises(builder.BuildInputError):
+                builder.build_oci_layout(request, output)
+            self.assertEqual(list(Path(external_dir).iterdir()), [])
+            output.unlink()
+            output.mkdir()
+            with self.assertRaises(builder.BuildInputError):
+                builder.build_oci_layout(request, output)
+
+    def test_file_publication_is_exclusive_and_rejects_symlink_ancestors_and_terminal(self) -> None:
+        builder = _load_builder()
+        with tempfile.TemporaryDirectory() as parent_dir, tempfile.TemporaryDirectory() as external_dir:
+            parent = Path(parent_dir).resolve()
+            external = Path(external_dir).resolve()
+            destination = parent / "receipt.json"
+            builder.publish_exclusive_file(destination, b"first", 0o444)
+            self.assertEqual(destination.read_bytes(), b"first")
+            with self.assertRaises(builder.BuildInputError):
+                builder.publish_exclusive_file(destination, b"replacement", 0o444)
+            self.assertEqual(destination.read_bytes(), b"first")
+
+            terminal_link = parent / "linked.json"
+            terminal_link.symlink_to(external / "escaped.json")
+            with self.assertRaises(builder.BuildInputError):
+                builder.publish_exclusive_file(terminal_link, b"escaped", 0o444)
+            self.assertFalse((external / "escaped.json").exists())
+
+            ancestor_link = parent / "linked-parent"
+            ancestor_link.symlink_to(external, target_is_directory=True)
+            with self.assertRaises(builder.BuildInputError):
+                builder.publish_exclusive_file(ancestor_link / "escaped.json", b"escaped", 0o444)
+            self.assertFalse((external / "escaped.json").exists())
+            self.assertEqual(list(parent.glob(".*.stage-*")), [])
+
+    def test_sealed_rootfs_filters_compiler_package_manager_and_ssh_variants(self) -> None:
+        builder = _load_builder()
+        forbidden = (
+            "usr/bin/apt", "usr/bin/apt-get", "usr/bin/ssh", "usr/bin/ssh-agent",
+            "usr/bin/gcc", "usr/bin/g++", "usr/bin/make", "usr/bin/gmake",
+            "usr/bin/x86_64-linux-gnu-readelf", "usr/local/bin/clang++",
+            "usr/local/bin/cmake", "usr/local/include/header.h",
+        )
+        with tempfile.TemporaryDirectory() as root_dir, tempfile.TemporaryDirectory() as output_dir:
+            root = Path(root_dir)
+            _write_root(root)
+            for relative in forbidden:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"forbidden")
+                path.chmod(0o555)
+            alias = root / "usr/local/bin/compiler-alias"
+            alias.symlink_to("/usr/bin/gcc")
+            output = Path(output_dir).resolve() / "layout"
+            record = builder.build_oci_layout(builder.synthetic_test_request(root), output)
+            entries = builder._layout_rootfs_entries(output)
+            for relative in forbidden:
+                self.assertNotIn(relative, entries)
+            self.assertNotIn("usr/local/bin/compiler-alias", entries)
+            self.assertEqual(builder.audit_oci_layout(output), record)
 
     def test_auditor_rejects_descriptor_or_uncompressed_diffid_substitution(self) -> None:
         builder = _load_builder()
         with tempfile.TemporaryDirectory() as root_dir, tempfile.TemporaryDirectory() as output_dir:
             root = Path(root_dir)
-            output = Path(output_dir)
+            output = Path(output_dir).resolve() / "layout"
             _write_root(root)
             record = builder.build_oci_layout(builder.synthetic_test_request(root), output)
             manifest_path = output / "blobs/sha256" / record["manifestDigest"].removeprefix("sha256:")
@@ -135,11 +203,41 @@ class AgentRuntimeOciBuilderTests(unittest.TestCase):
                 with self.assertRaises(builder.RuntimeManifestError):
                     builder.validate_runtime_manifest(changed, root)
 
+    def test_runtime_manifest_rejects_bool_bounds_modes_and_malformed_observations(self) -> None:
+        builder = _load_builder()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_root(root, marker=b"x")
+            manifest = builder.synthetic_test_request(root).runtime_manifest
+            cases = []
+            for field, invalid in (("bytes", True), ("bytes", -1), ("bytes", 2**63), ("mode", True), ("mode", -1), ("mode", 0o1000)):
+                changed = copy.deepcopy(manifest)
+                changed["runtimeFiles"][0][field] = invalid
+                cases.append(changed)
+            for invalid in (b"digest", "sha256:ABC", "sha256:" + "0" * 63):
+                changed = copy.deepcopy(manifest)
+                changed["runtimeFiles"][0]["digest"] = invalid
+                cases.append(changed)
+            for field, invalid in (("name", True), ("name", ""), ("version", "v\N{SNOWMAN}")):
+                changed = copy.deepcopy(manifest)
+                changed["programs"][0][field] = invalid
+                cases.append(changed)
+            changed = copy.deepcopy(manifest)
+            changed["nativeLibraries"] = [{"path": manifest["runtimeFiles"][0]["path"], "soname": True, "digest": manifest["runtimeFiles"][0]["digest"]}]
+            cases.append(changed)
+            for changed in cases:
+                with self.subTest(changed=changed):
+                    with self.assertRaises(builder.RuntimeManifestError):
+                        builder.validate_runtime_manifest(changed, root)
+
     def test_external_artifacts_bind_final_manifest_without_image_self_reference(self) -> None:
         builder = _load_builder()
         with tempfile.TemporaryDirectory() as root_dir, tempfile.TemporaryDirectory() as output_dir:
-            root, output = Path(root_dir), Path(output_dir)
+            root, output = Path(root_dir), Path(output_dir).resolve() / "layout"
             _write_root(root)
+            extra = root / "etc/fixture"
+            extra.parent.mkdir(parents=True)
+            extra.write_bytes(b"outside-runtime-manifest")
             record = builder.build_oci_layout(builder.synthetic_test_request(root), output)
             image_bytes = b"".join(builder.directory_bytes(output).values())
             artifacts = builder.produce_external_artifacts(
@@ -158,6 +256,14 @@ class AgentRuntimeOciBuilderTests(unittest.TestCase):
                 record["manifestDigest"],
             )
             self.assertEqual(artifacts["browserInventory"]["findings"], [])
+            layer_regular = {
+                "/" + path: value
+                for path, value in builder._layout_rootfs_entries(output).items()
+                if value[0] == "regular"
+            }
+            spdx_paths = {item["fileName"] for item in artifacts["sbom"]["files"]}
+            self.assertEqual(spdx_paths, set(layer_regular))
+            self.assertIn("/etc/fixture", spdx_paths)
             for value in artifacts.values():
                 artifact_digest = builder.canonical_json_digest(value).encode("ascii")
                 self.assertNotIn(artifact_digest, image_bytes)
@@ -165,7 +271,7 @@ class AgentRuntimeOciBuilderTests(unittest.TestCase):
     def test_browser_lifecycle_helper_is_filtered_and_browser_payload_is_rejected(self) -> None:
         builder = _load_builder()
         with tempfile.TemporaryDirectory() as root_dir, tempfile.TemporaryDirectory() as output_dir:
-            root, output = Path(root_dir), Path(output_dir)
+            root, output = Path(root_dir), Path(output_dir).resolve() / "layout"
             _write_root(root)
             helper = root / "usr/lib/python3.12/webbrowser.py"
             helper.parent.mkdir(parents=True)
@@ -191,6 +297,38 @@ class AgentRuntimeOciBuilderTests(unittest.TestCase):
             self.assertNotIn("usr/lib/python3.12/webbrowser.py", layer_entries)
             self.assertEqual(artifacts["browserScanReceipt"]["result"], "rejected")
             self.assertGreater(artifacts["browserScanReceipt"]["browserFindingCount"], 0)
+
+    def test_browser_candidate_root_rejects_empty_or_opaque_closure_but_not_adjacent_name(self) -> None:
+        builder = _load_builder()
+        for candidate in ("chromium", "ms-playwright"):
+            with self.subTest(candidate=candidate), tempfile.TemporaryDirectory() as root_dir, tempfile.TemporaryDirectory() as output_dir:
+                root, output = Path(root_dir), Path(output_dir).resolve() / "layout"
+                _write_root(root)
+                browser_root = root / candidate
+                browser_root.mkdir()
+                if candidate == "chromium":
+                    (browser_root / "opaque").write_bytes(b"no markers")
+                record = builder.build_oci_layout(builder.synthetic_test_request(root), output)
+                artifacts = builder.produce_external_artifacts(
+                    output,
+                    agent_manifest_digest=record["manifestDigest"],
+                    license_catalog={"schema": "text-to-cad.spdx-license-catalog/1", "licenseListVersion": "3.28.0", "licenses": ["MIT"], "exceptions": []},
+                    development_test_only=True,
+                )
+                self.assertEqual(artifacts["browserScanReceipt"]["result"], "rejected")
+                self.assertTrue(any(item["matchKind"] == "candidate-root" for item in artifacts["browserInventory"]["findings"]))
+        with tempfile.TemporaryDirectory() as root_dir, tempfile.TemporaryDirectory() as output_dir:
+            root, output = Path(root_dir), Path(output_dir).resolve() / "layout"
+            _write_root(root)
+            (root / "chromium-old").mkdir()
+            record = builder.build_oci_layout(builder.synthetic_test_request(root), output)
+            artifacts = builder.produce_external_artifacts(
+                output,
+                agent_manifest_digest=record["manifestDigest"],
+                license_catalog={"schema": "text-to-cad.spdx-license-catalog/1", "licenseListVersion": "3.28.0", "licenses": ["MIT"], "exceptions": []},
+                development_test_only=True,
+            )
+            self.assertEqual(artifacts["browserScanReceipt"]["result"], "accepted")
 
     def test_fixed_spdx_wheel_derives_the_exact_12540_byte_catalog(self) -> None:
         builder = _load_builder()
@@ -224,6 +362,26 @@ class AgentRuntimeOciBuilderTests(unittest.TestCase):
             bindings["runtimeOsImageId"],
             "sha256:921e5f6de0f7a8b2fdafff4f5f561fc5a797baa0787e89bf3ec7cfe4fe6cf61c",
         )
+
+    def test_spdx_package_inventory_covers_debs_python_projects_node_and_codex(self) -> None:
+        builder = _load_builder()
+        cli = _load_build_cli()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_root(root)
+            manifest = copy.deepcopy(builder.synthetic_test_request(root).runtime_manifest)
+        for path in (
+            "/usr/local/lib/python3.12/dist-packages/meshshot/__init__.py",
+            "/usr/local/lib/text-to-cad/implicitjs/index.js",
+        ):
+            manifest["runtimeFiles"].append({"path": path, "mode": 0o444, "bytes": 1, "digest": "sha256:" + "1" * 64})
+        packages = cli._exact_spdx_packages(manifest)
+        names = {item["name"] for item in packages}
+        self.assertEqual(len(packages), 55)
+        self.assertTrue({"bash", "numpy", "Pillow", "trimesh", "node", "codex", "meshscope", "meshshot", "text-to-cad-implicit-runtime"} <= names)
+        versions = {item["name"]: item["version"] for item in packages}
+        self.assertEqual(versions["node"], "24.13.0")
+        self.assertEqual(versions["codex"], "0.147.0")
 
 
 if __name__ == "__main__":

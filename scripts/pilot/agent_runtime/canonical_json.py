@@ -148,9 +148,9 @@ def _snapshot_item(value: Any, budget: int, depth: int) -> tuple[CanonicalJSONVa
     return value, size
 
 
-def _snapshot(value: Any) -> tuple[CanonicalJSONValue, int]:
+def _snapshot(value: Any, max_document_bytes: int = MAX_DOCUMENT_BYTES) -> tuple[CanonicalJSONValue, int]:
     try:
-        return _snapshot_item(value, MAX_DOCUMENT_BYTES, 1)
+        return _snapshot_item(value, max_document_bytes, 1)
     except EvidenceError:
         raise
     except MemoryError:
@@ -218,12 +218,12 @@ def _plain(value: Any) -> Any:
     return value
 
 
-def parse_canonical_json(payload: bytes) -> CanonicalJSONValue:
+def parse_canonical_json(payload: bytes, *, max_document_bytes: int = MAX_DOCUMENT_BYTES) -> CanonicalJSONValue:
     """Parse one schema-neutral value under the closed canonical JSON grammar."""
 
     if not isinstance(payload, bytes):
         raise EvidenceError("payload must be bytes")
-    if len(payload) > MAX_DOCUMENT_BYTES:
+    if len(payload) > max_document_bytes:
         raise EvidenceError("document exceeds byte limit")
     try:
         if payload.startswith(b"\xef\xbb\xbf"):
@@ -244,16 +244,20 @@ def parse_canonical_json(payload: bytes) -> CanonicalJSONValue:
         raise EvidenceError("JSON nesting depth exceeds limit") from exc
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvidenceError("invalid JSON payload") from exc
-    frozen, _ = _snapshot(value)
-    if canonical_json_bytes(frozen) != stored:
+    frozen, _ = _snapshot(value, max_document_bytes)
+    if canonical_json_bytes(frozen, max_document_bytes=max_document_bytes) != stored:
         raise EvidenceError("non-canonical JSON encoding")
     return frozen
 
 
-def canonical_json_bytes(value: CanonicalJSONInput | CanonicalJSONValue) -> bytes:
+def canonical_json_bytes(
+    value: CanonicalJSONInput | CanonicalJSONValue,
+    *,
+    max_document_bytes: int = MAX_DOCUMENT_BYTES,
+) -> bytes:
     """Encode one schema-neutral canonical JSON value after closed validation."""
 
-    frozen, expected_size = _snapshot(value)
+    frozen, expected_size = _snapshot(value, max_document_bytes)
     _validate_json_value(frozen)
     try:
         encoded = json.dumps(

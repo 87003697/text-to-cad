@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 from pathlib import Path
+import secrets
+import shutil
 import sys
 
 from packages.agent_runtime.oci_builder import (
@@ -18,8 +20,11 @@ from packages.agent_runtime.oci_builder import (
     encode_oci_archive,
     make_runtime_manifest,
     produce_external_artifacts,
+    publish_exclusive_directory,
+    publish_exclusive_file,
     read_exact_regular,
     resolve_elf_closure,
+    spdx_json_bytes,
 )
 from scripts.pilot.agent_runtime import parse_canonical_json
 from scripts.pilot.agent_runtime.external_admission import get_local_cas_artifact_locator
@@ -51,6 +56,7 @@ PROGRAMS = [
 PROJECT_PREFIXES = (
     "/usr/local/lib/python3.12/dist-packages",
     "/usr/local/lib/text-to-cad/implicitjs",
+    "/usr/local/libexec",
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -86,13 +92,32 @@ EXACT_INPUTS = {
         "sha256:903d589bc6f3808849e8521349f4c625b20ecbdf103f0c1fbfe7f672a136d6a8",
     ),
 }
+CANONICAL_SEAM = (
+    REPO_ROOT / "scripts/pilot/agent_runtime/canonical_json.py",
+    9_869,
+    "sha256:aea1933df81469dcb88073e12d67bb5f165a3b4f6b7787a6a45650bb9422bbc3",
+)
 
 
-def _exact_build_inputs(runtime_manifest: dict) -> dict:
+def _validate_installed_canonical_seam(rootfs: Path) -> None:
+    source, size, digest = CANONICAL_SEAM
+    source_bytes = read_exact_regular(source, digest=digest, size=size)
+    installed = rootfs / "usr/local/libexec/agent_runtime_canonical_json.py"
+    installed_bytes = read_exact_regular(installed, digest=digest, size=size)
+    if source_bytes != installed_bytes or installed.lstat().st_mode & 0o777 != 0o444:
+        raise BuildInputError("image canonical JSON seam is not the exact vendored module")
+
+
+def _read_exact_inputs() -> dict:
     records = {}
     for name, (path, size, digest) in EXACT_INPUTS.items():
         payload = read_exact_regular(path, digest=digest, size=size)
         records[name] = parse_canonical_json(payload)
+    return records
+
+
+def _exact_build_inputs(runtime_manifest: dict) -> dict:
+    records = _read_exact_inputs()
     qualified = records["qualifiedLocalRecord"]
     local_cas = records["localCasLocatorManifest"]
     runtime_os = records["runtimeOsBuildReceipt"]
@@ -158,6 +183,55 @@ def _exact_build_inputs(runtime_manifest: dict) -> dict:
     }
 
 
+def _exact_spdx_packages(runtime_manifest: dict) -> list[dict]:
+    records = _read_exact_inputs()
+    result = [
+        {
+            "digest": item["digest"],
+            "fileName": item["localFilename"],
+            "name": item["package"],
+            "version": item["version"],
+        }
+        for item in records["runtimeDebClosure"]["packages"]
+    ]
+    result.extend(
+        {
+            "digest": item["digest"],
+            "fileName": item["filename"],
+            "name": item["distribution"],
+            "version": item["version"],
+        }
+        for item in records["pythonWheelLock"]["runtimeArtifacts"]
+    )
+    artifacts = {item["artifactId"]: item for item in records["localCasLocatorManifest"]["artifacts"]}
+    for artifact_id, name in (("node.archive", "node"), ("codex.executable", "codex")):
+        item = artifacts[artifact_id]
+        result.append({
+            "digest": item["digest"],
+            "fileName": artifact_id,
+            "name": name,
+            "version": item["version"],
+        })
+    qualified = records["qualifiedLocalRecord"]
+    result.append({
+        "digest": qualified["reproducibility"]["wheel"]["sha256"],
+        "fileName": qualified["reproducibility"]["wheel"]["path"],
+        "name": "meshscope",
+        "version": "0.1.0",
+    })
+    for name, prefix in (("meshshot", "/usr/local/lib/python3.12/dist-packages/meshshot"), ("text-to-cad-implicit-runtime", "/usr/local/lib/text-to-cad/implicitjs")):
+        members = [item for item in runtime_manifest["runtimeFiles"] if item["path"] == prefix or item["path"].startswith(prefix + "/")]
+        if not members:
+            raise BuildInputError(f"project package is absent: {name}")
+        result.append({
+            "digest": canonical_json_digest(members),
+            "fileName": prefix,
+            "name": name,
+            "version": "0.1.0",
+        })
+    return sorted(result, key=lambda item: (item["name"], item["version"], item["digest"]))
+
+
 def _project_elf_paths(rootfs: Path) -> list[str]:
     result = [path for _name, path, _version in PROGRAMS]
     for prefix in PROJECT_PREFIXES:
@@ -190,51 +264,78 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--receipt", type=Path, required=True)
     args = parser.parse_args(argv)
-    libraries = resolve_elf_closure(args.rootfs, _project_elf_paths(args.rootfs))
-    runtime_manifest = make_runtime_manifest(
-        args.rootfs,
-        programs=PROGRAMS,
-        native_libraries=libraries,
-        project_prefixes=PROJECT_PREFIXES,
+    transaction_layout = args.output.with_name(
+        f".{args.output.name}.transaction-{secrets.token_hex(8)}"
     )
-    build_inputs = _exact_build_inputs(runtime_manifest)
-    build = build_oci_layout(BuildRequest(args.rootfs, runtime_manifest), args.output)
-    archive_bytes = encode_oci_archive(args.output)
     archive_path = args.output.with_name(args.output.name + ".oci.tar")
-    archive_path.write_bytes(archive_bytes)
-    archive_path.chmod(0o444)
-    if audit_oci_archive(archive_bytes) != build:
-        raise BuildInputError("OCI archive does not reproduce the audited layout")
-    build = {
-        **build,
-        "archiveBytes": len(archive_bytes),
-        "archiveDigest": "sha256:" + hashlib.sha256(archive_bytes).hexdigest(),
-    }
-    artifacts = produce_external_artifacts(
-        args.output,
-        agent_manifest_digest=build["manifestDigest"],
-        license_catalog=_exact_catalog(),
-    )
-    if artifacts["browserScanReceipt"]["result"] != "accepted":
-        raise BuildInputError("browser-deny scan rejected the Agent rootfs")
-    receipt = {
-        "agentRuntimeVerified": False,
-        "artifacts": {
-            "browserInventoryDigest": "sha256:" + hashlib.sha256(canonical_json_bytes(artifacts["browserInventory"])).hexdigest(),
-            "browserScanReceiptDigest": "sha256:" + hashlib.sha256(canonical_json_bytes(artifacts["browserScanReceipt"])).hexdigest(),
-            "sbomDigest": "sha256:" + hashlib.sha256(canonical_json_bytes(artifacts["sbom"])).hexdigest(),
-        },
-        "blockers": ["external-formal-admission", "immutable-mirror-visibility", "sbom-license-conclusions"],
-        "build": build,
-        "buildInputs": build_inputs,
-        "formalAdmission": False,
-        "immutableMirrorVisible": False,
-        "schema": "text-to-cad.agent-runtime-development-oci-build-receipt/1",
-        "status": "development-build",
-    }
-    args.receipt.write_bytes(canonical_json_bytes(receipt))
-    args.receipt.chmod(0o444)
-    sys.stdout.buffer.write(canonical_json_bytes(receipt) + b"\n")
+    published_layout = False
+    published_archive = False
+    published_receipt = False
+    try:
+        _validate_installed_canonical_seam(args.rootfs)
+        libraries = resolve_elf_closure(args.rootfs, _project_elf_paths(args.rootfs))
+        runtime_manifest = make_runtime_manifest(
+            args.rootfs,
+            programs=PROGRAMS,
+            native_libraries=libraries,
+            project_prefixes=PROJECT_PREFIXES,
+        )
+        build_inputs = _exact_build_inputs(runtime_manifest)
+        build = build_oci_layout(BuildRequest(args.rootfs, runtime_manifest), transaction_layout)
+        archive_bytes = encode_oci_archive(transaction_layout)
+        if audit_oci_archive(archive_bytes) != build:
+            raise BuildInputError("OCI archive does not reproduce the audited layout")
+        build = {
+            **build,
+            "archiveBytes": len(archive_bytes),
+            "archiveDigest": "sha256:" + hashlib.sha256(archive_bytes).hexdigest(),
+        }
+        artifacts = produce_external_artifacts(
+            transaction_layout,
+            agent_manifest_digest=build["manifestDigest"],
+            license_catalog=_exact_catalog(),
+            package_inventory=_exact_spdx_packages(runtime_manifest),
+        )
+        if artifacts["browserScanReceipt"]["result"] != "accepted":
+            raise BuildInputError("browser-deny scan rejected the Agent rootfs")
+        receipt = {
+            "agentRuntimeVerified": False,
+            "artifacts": {
+                "browserInventoryDigest": "sha256:" + hashlib.sha256(canonical_json_bytes(artifacts["browserInventory"])).hexdigest(),
+                "browserScanReceiptDigest": "sha256:" + hashlib.sha256(canonical_json_bytes(artifacts["browserScanReceipt"])).hexdigest(),
+                "sbomDigest": "sha256:" + hashlib.sha256(spdx_json_bytes(artifacts["sbom"])).hexdigest(),
+            },
+            "blockers": ["external-formal-admission", "immutable-mirror-visibility", "sbom-license-conclusions"],
+            "build": build,
+            "buildInputs": build_inputs,
+            "formalAdmission": False,
+            "immutableMirrorVisible": False,
+            "schema": "text-to-cad.agent-runtime-development-oci-build-receipt/1",
+            "status": "development-build",
+        }
+        receipt_bytes = canonical_json_bytes(receipt)
+    except Exception:
+        if transaction_layout.exists() and not transaction_layout.is_symlink():
+            shutil.rmtree(transaction_layout)
+        raise
+    try:
+        publish_exclusive_directory(transaction_layout, args.output)
+        published_layout = True
+        publish_exclusive_file(archive_path, archive_bytes, 0o444)
+        published_archive = True
+        publish_exclusive_file(args.receipt, receipt_bytes, 0o444)
+        published_receipt = True
+    except Exception:
+        if published_receipt:
+            args.receipt.unlink()
+        if published_archive:
+            archive_path.unlink()
+        if published_layout:
+            shutil.rmtree(args.output)
+        if transaction_layout.exists() and not transaction_layout.is_symlink():
+            shutil.rmtree(transaction_layout)
+        raise
+    sys.stdout.buffer.write(receipt_bytes + b"\n")
     return 0
 
 
