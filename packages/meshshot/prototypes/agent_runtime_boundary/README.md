@@ -131,7 +131,10 @@ OCI run. It adopts the following first-release **Agent Concurrency Contract**:
   Executions. Larger mesh-to-cad batches remain in a FIFO queue. Capacity is
   released only after the complete lifecycle operation returns, including
   cleanup and independent absence observations; workload exit alone does not
-  release a slot.
+  release a slot. Before admission, a queued item holds only its bounded
+  immutable request metadata, execution ID, release control, and observation
+  event. Authority claim, private filesystem tree, Broker volume, adapter, and
+  processes materialize inside the active operation, never in the queue.
 - Executions may share only immutable Agent image manifest/config, runtime
   manifest, Cup capability manifest, verification plan, Source/input content,
   Broker protocol definition, and fixed workload identities. Every admitted
@@ -157,27 +160,34 @@ and proves both processes absent before admission capacity is released. A
 `finally` path performs the same bounded stop if a test assertion itself fails.
 
 The fifth-job case first holds four lifecycle operations at their terminal
-boundary, proves the fifth identity is queued with no processes, releases
-exactly one slot only after that job's processes and volume are absent, observes
-the fifth become active without a peak above four, then finishes all receipts
-and absence checks. A second concurrent case leaves one failed job's real tree
-behind while proving the other three trees and every subprocess absent.
+boundary, proves the fifth request has no authority marker, job tree, Broker
+volume, adapter/process, or receipt, releases exactly one slot only after that
+job's processes and volume are absent, then proves the fifth materializes while
+active without a peak above four. It finally completes all receipts and absence
+checks. A second concurrent case leaves one failed job's real tree behind while
+proving the other three trees and every subprocess absent.
 
 The outer test supervisor independently digests the actual output tree, captures
 the actual terminal protocol record, validates its observed identity and
-`outputDigest`, and creates one job-private immutable (`0400`, exclusive-create)
-receipt outside the cleanup tree. It never derives the observed terminal
-identity from the expected identity. The closed substitution matrix rejects
-cross-job owner, secret, challenge, Broker volume, source, input, output path,
+`outputDigest`, and creates one job-private receipt outside the cleanup tree in
+a supervisor-owned `0700` directory. This local harness proves exclusive first
+publication (`O_EXCL`), exact content digest, and `0400` read-only mode. It does
+not prove immutability against the same host UID. The supervisor never derives
+the observed terminal identity from the expected identity. The closed
+substitution matrix rejects cross-job owner, secret, challenge, Broker volume,
+source, input, output path,
 terminal subject, terminal output digest, and supervisor receipt path while
 preserving the foreign receipt and output.
 
 All test authority bytes are labelled
 `SYNTHETIC_DETERMINISTIC_TEST_ONLY` and are pseudonymized in committed evidence;
 the harness does not claim to sample cryptographic randomness. Five grants use
-one persistent supervisor `FileAuthorityStore`, and replaying a consumed grant
-is rejected before admission or resource start. Production freshness remains
-the SAR-003 cryptographic allocator decision.
+one persistent supervisor `FileAuthorityStore`. Replaying a consumed grant is
+currently rejected after it enters an active slot but before any lifecycle or
+private subprocess resource starts; it may briefly consume capacity. A future
+implementation may add a sound non-consuming pre-admission check, but this
+prototype does not pretend SAR-003's one-shot consume is such a check.
+Production freshness remains the SAR-003 cryptographic allocator decision.
 
 This evidence is also constrained by the SAR-005 verification authority design
 at commit `16fb4288192e645b91b23e4f724b1420e085b24a`, specifically the exact
@@ -207,7 +217,8 @@ process signals, four actual containers, image-layer sharing, or host cleanup
 after daemon/process failure. Those facts remain `NOT_RUN` until the exact
 admitted image and SAR-005 verification plan run on both Colima and CVM. The
 harness does not establish **Agent Runtime Verified** or Formal Pilot
-Integrated.
+Integrated. SAR-005/S3 content-addressed immutable receipt publication is also
+`NOT_RUN`; local `O_EXCL` plus mode `0400` is not a substitute.
 
 ### SAR-007 rejected alternatives
 

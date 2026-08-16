@@ -63,6 +63,18 @@ class Fixture:
     receipt_path: Path
 
 
+@dataclass(frozen=True)
+class PendingExecution:
+    """Bounded immutable request metadata; no per-execution allocation."""
+
+    root: Path
+    index: int
+    request: ExecutionRequest
+    release: threading.Event
+    at_terminal: threading.Event
+    residual_preview: bool = False
+
+
 def authority_group(root: Path) -> tuple[FileAuthorityStore, Path]:
     store_root = (root / "authority-store").resolve()
     receipt_root = (root / "supervisor-receipts").resolve()
@@ -71,25 +83,42 @@ def authority_group(root: Path) -> tuple[FileAuthorityStore, Path]:
     return FileAuthorityStore(store_root), receipt_root
 
 
-def fixture(
-    root: Path, index: int, store: FileAuthorityStore, receipt_root: Path,
-) -> Fixture:
-    root.mkdir()
-    root = root.resolve(strict=True)
-    staging_source = root / "staging-source"
-    staging_input = root / "staging-input"
-    staging_source.mkdir()
-    staging_input.mkdir()
-    (staging_source / "source.txt").write_text("source", encoding="utf-8")
-    (staging_input / "input.bin").write_bytes(b"input")
+def _single_file_tree_digest(name: str, content: bytes) -> Digest:
+    value = hashlib.sha256()
+    value.update(
+        b"f\0" + name.encode("utf-8") + b"\0" + b"0o644\0"
+        + str(len(content)).encode("ascii") + b"\0" + content
+    )
+    return Digest("sha256:" + value.hexdigest())
+
+
+def pending_execution(
+    root: Path, index: int, residual_preview: bool = False,
+) -> PendingExecution:
     workload = ("/opt/text-to-cad/bin/agent", "--fixed")
     request = ExecutionRequest(
         f"job-{index}", Digest("sha256:" + "1" * 64),
         Digest("sha256:" + "2" * 64), Digest("sha256:" + "3" * 64),
-        canonical_tree_digest(staging_source), canonical_tree_digest(staging_input),
+        _single_file_tree_digest("source.txt", b"source"),
+        _single_file_tree_digest("input.bin", b"input"),
         Digest("sha256:" + "4" * 64), workload,
     )
-    grant = AuthorityAllocator(Tokens(format(index + 1, "x"))).allocate(request)
+    return PendingExecution(
+        root, index, request, threading.Event(), threading.Event(),
+        residual_preview,
+    )
+
+
+def materialize_fixture(
+    pending: PendingExecution, store: FileAuthorityStore, receipt_root: Path,
+) -> Fixture:
+    root = pending.root
+    index = pending.index
+    root.mkdir()
+    root = root.resolve(strict=True)
+    grant = AuthorityAllocator(Tokens(format(index + 1, "x"))).allocate(
+        pending.request,
+    )
     claimed = store.claim(grant)
     job_root = root / boundary.resource_stem(grant.identity)
     job_root.mkdir(mode=0o700)
@@ -104,6 +133,8 @@ def fixture(
         path.mkdir()
     (paths["source"] / "source.txt").write_text("source", encoding="utf-8")
     (paths["input"] / "input.bin").write_bytes(b"input")
+    assert canonical_tree_digest(paths["source"]) == pending.request.source_digest
+    assert canonical_tree_digest(paths["input"]) == pending.request.input_digest
     identity = grant.identity
     image = boundary.ImageExpectation(
         "example.invalid/agent@" + identity.agent_image_digest.value,
@@ -113,7 +144,7 @@ def fixture(
     spec = boundary.JobSpec(
         claimed, image, boundary.JobPaths(**paths),
         boundary.resource_stem(identity),
-        boundary.resource_stem(identity) + "-broker", workload,
+        boundary.resource_stem(identity) + "-broker", pending.request.workload,
     )
     volume_root = root / (spec.broker_volume + "-volume")
     volume_root.mkdir(mode=0o700)
@@ -127,6 +158,7 @@ class FilesystemAdapter(ScriptedAdapter):
     def __init__(
         self, fixture_value: Fixture, release: threading.Event | None = None,
         residual_preview: bool = False, retain_tree: bool = False,
+        terminal_event: threading.Event | None = None,
     ) -> None:
         super().__init__(fixture_value.spec)
         self.fixture = fixture_value
@@ -143,7 +175,7 @@ class FilesystemAdapter(ScriptedAdapter):
         self.output_tree_digest: str | None = None
         self.observed_terminal_identity_digest: str | None = None
         self.receipt_bytes: bytes | None = None
-        self.at_terminal = threading.Event()
+        self.at_terminal = terminal_event or threading.Event()
         self.terminal_identity_override: ExecutionIdentity | None = None
         self.challenge_override: str | None = None
         self.output_digest_override: str | None = None
@@ -358,6 +390,17 @@ def _shared_subject(spec: boundary.JobSpec) -> dict[str, str]:
     }
 
 
+def _second_exclusive_create_rejected(path: Path) -> bool:
+    try:
+        descriptor = os.open(
+            path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400,
+        )
+    except FileExistsError:
+        return True
+    os.close(descriptor)  # pragma: no cover - contract failure
+    return False
+
+
 def _execution_result(
     fixture_value: Fixture, adapter: FilesystemAdapter,
     receipt: boundary.LifecycleReceipt,
@@ -381,9 +424,12 @@ def _execution_result(
         "outputTreeDigest": adapter.output_tree_digest,
         "receiptOutputTreeDigest": receipt_document["observedOutputTreeDigest"],
         "receiptDigest": "sha256:" + hashlib.sha256(receipt_bytes).hexdigest(),
-        "receiptImmutableMode": oct(stat.S_IMODE(
+        "receiptReadOnlyMode": oct(stat.S_IMODE(
             fixture_value.receipt_path.stat().st_mode,
         )),
+        "receiptSecondExclusiveCreateRejected": (
+            _second_exclusive_create_rejected(fixture_value.receipt_path)
+        ),
         "receiptSupervisorOwned": (
             fixture_value.receipt_path.stat().st_uid == os.getuid()
             and fixture_value.receipt_path.parent.stat().st_uid == os.getuid()
@@ -415,36 +461,44 @@ def _execution_result(
 
 def admission_case(root: Path) -> dict[str, object]:
     store, receipt_root = authority_group(root)
-    fixtures = [
-        fixture(root / f"execution-{index}", index, store, receipt_root)
+    pending = [
+        pending_execution(
+            root / f"execution-{index}", index,
+            residual_preview=index in (1, 4),
+        )
         for index in range(5)
     ]
     controller = concurrency.AdmissionController()
-    releases = [threading.Event() for _ in fixtures]
-    adapters = [
-        FilesystemAdapter(item, releases[index], residual_preview=index in (1, 4))
-        for index, item in enumerate(fixtures)
-    ]
+    fixtures: list[Fixture | None] = [None] * 5
+    adapters: list[FilesystemAdapter | None] = [None] * 5
+
+    def execute(index: int) -> boundary.LifecycleReceipt:
+        request = pending[index]
+        fixture_value = materialize_fixture(request, store, receipt_root)
+        adapter = FilesystemAdapter(
+            fixture_value, request.release, request.residual_preview,
+            terminal_event=request.at_terminal,
+        )
+        fixtures[index] = fixture_value
+        adapters[index] = adapter
+        return boundary.run_job(fixture_value.spec, adapter, store)
+
     futures: list[Future[boundary.LifecycleReceipt]] = []
     with ThreadPoolExecutor(max_workers=5) as pool:
         try:
             for index in range(4):
                 futures.append(pool.submit(
-                    controller.run, fixtures[index].spec.identity.job_id,
-                    lambda index=index: boundary.run_job(
-                        fixtures[index].spec, adapters[index], store,
-                    ),
+                    controller.run, pending[index].request.job_id,
+                    lambda index=index: execute(index),
                 ))
                 controller.wait_until(
                     lambda state, index=index: len(state.active) == index + 1,
                 )
-                if not adapters[index].at_terminal.wait(timeout=10):
+                if not pending[index].at_terminal.wait(timeout=10):
                     raise TimeoutError("active execution did not reach terminal gate")
             futures.append(pool.submit(
-                controller.run, fixtures[4].spec.identity.job_id,
-                lambda: boundary.run_job(
-                    fixtures[4].spec, adapters[4], store,
-                ),
+                controller.run, pending[4].request.job_id,
+                lambda: execute(4),
             ))
             controller.wait_until(lambda state: state.queued == ("job-4",))
             fifth_queued_at_cap = (
@@ -452,56 +506,93 @@ def admission_case(root: Path) -> dict[str, object]:
                     ("job-0", "job-1", "job-2", "job-3"), ("job-4",), 4,
                 )
             )
-            queued_fifth_has_no_process = (
-                not adapters[4].resource_processes
-                and not adapters[4].broker_started
-                and not adapters[4].sidecar_started
+            queued_fifth_observation = {
+                "authorityNotGeneratedOrClaimed": fixtures[4] is None,
+                "groupClaimedMarkerCountZero": not list(
+                    store.root.glob("*.claimed"),
+                ),
+                "groupConsumedMarkerCountStillFour": len(list(
+                    store.root.glob("*.consumed"),
+                )) == 4,
+                "jobTreeAbsent": not pending[4].root.exists(),
+                "brokerVolumeAbsent": not list(root.rglob("*job-4*broker*")),
+                "adapterAndProcessAbsent": adapters[4] is None,
+                "receiptAbsent": not (
+                    receipt_root / "job-4.terminal.json"
+                ).exists(),
+            }
+            queued_fifth_zero_mutable_allocation = all(
+                queued_fifth_observation.values(),
             )
-            releases[0].set()
+            pending[0].release.set()
             controller.wait_until(lambda state: "job-4" in state.active)
-            if not adapters[4].at_terminal.wait(timeout=10):
+            if not pending[4].at_terminal.wait(timeout=10):
                 raise TimeoutError("fifth execution did not reach terminal gate")
+            assert fixtures[0] is not None and adapters[0] is not None
+            assert fixtures[4] is not None and adapters[4] is not None
             released_slot_after_absence = (
                 adapters[0].broker_process_absent is True
                 and adapters[0].sidecar_process_absent is True
                 and not fixtures[0].volume_root.exists()
             )
-            for release in releases[1:]:
-                release.set()
+            fifth_materialized_after_release = (
+                pending[4].root.exists()
+                and fixtures[4].volume_root.exists()
+                and adapters[4].broker_started
+                and len(list(store.root.glob("*.consumed"))) == 5
+            )
+            for request in pending[1:]:
+                request.release.set()
             receipts = [future.result(timeout=10) for future in futures]
         finally:
-            for release in releases:
-                release.set()
+            for request in pending:
+                request.release.set()
             for adapter in adapters:
-                adapter.force_stop_resources()
-    shared = _shared_subject(fixtures[0].spec)
-    shared_only = all(_shared_subject(item.spec) == shared for item in fixtures)
-    private_authority = all(len(set(values)) == len(fixtures) for values in (
-        [item.spec.identity.owner_nonce for item in fixtures],
-        [item.spec.broker_secret for item in fixtures],
-        [item.spec.challenge for item in fixtures],
-        [str(item.spec.paths.source.parent) for item in fixtures],
-        [item.spec.broker_volume for item in fixtures],
+                if adapter is not None:
+                    adapter.force_stop_resources()
+    materialized = [item for item in fixtures if item is not None]
+    live_adapters = [item for item in adapters if item is not None]
+    assert len(materialized) == 5 and len(live_adapters) == 5
+    shared = _shared_subject(materialized[0].spec)
+    shared_only = all(_shared_subject(item.spec) == shared for item in materialized)
+    private_authority = all(len(set(values)) == len(materialized) for values in (
+        [item.spec.identity.owner_nonce for item in materialized],
+        [item.spec.broker_secret for item in materialized],
+        [item.spec.challenge for item in materialized],
+        [str(item.spec.paths.source.parent) for item in materialized],
+        [item.spec.broker_volume for item in materialized],
     )) and len({
-        str(path) for item in fixtures for path in item.spec.paths.all_paths()
-    }) == len(fixtures) * 8
+        str(path) for item in materialized for path in item.spec.paths.all_paths()
+    }) == len(materialized) * 8
     results = sorted(
         (_execution_result(item, adapter, receipt)
-         for item, adapter, receipt in zip(fixtures, adapters, receipts)),
+         for item, adapter, receipt in zip(materialized, live_adapters, receipts)),
         key=lambda value: str(value["jobId"]),
     )
-    replay_adapter = FilesystemAdapter(fixtures[0])
-    replay_receipt = boundary.run_job(fixtures[0].spec, replay_adapter, store)
-    replay_before_admission_or_resource = (
+    replay_adapter = FilesystemAdapter(materialized[0])
+    replay_occupied_slot = False
+
+    def replay_operation() -> boundary.LifecycleReceipt:
+        nonlocal replay_occupied_slot
+        replay_occupied_slot = "job-replay" in controller.snapshot().active
+        return boundary.run_job(materialized[0].spec, replay_adapter, store)
+
+    replay_receipt = controller.run("job-replay", replay_operation)
+    replay_after_admission_before_lifecycle_process = (
         replay_receipt.failure_check == "authority-replay"
         and replay_adapter.calls == ["prove-owner-label-absence"]
         and not replay_adapter.resource_processes
+        and replay_occupied_slot
     )
     return {
         "case": "five-job-admission",
         "activeCap": concurrency.FIRST_RELEASE_ACTIVE_CAP,
         "fifthQueuedAtCap": fifth_queued_at_cap,
-        "queuedFifthHasNoProcess": queued_fifth_has_no_process,
+        "queuedFifthZeroPreAdmissionAllocation": (
+            queued_fifth_zero_mutable_allocation
+        ),
+        "queuedFifthPreAdmissionObservation": queued_fifth_observation,
+        "fifthMaterializedOnlyAfterSlotRelease": fifth_materialized_after_release,
         "slotReleasedAfterProcessAbsence": released_slot_after_absence,
         "observedPeak": controller.snapshot().observed_peak,
         "sharedImmutableIdentitiesOnly": shared_only,
@@ -511,14 +602,18 @@ def admission_case(root: Path) -> dict[str, object]:
             and result["executionSubjectDigest"]
             == result["terminalReceiptSubjectDigest"]
             and result["outputTreeDigest"] == result["receiptOutputTreeDigest"]
-            and result["receiptImmutableMode"] == "0o400"
+            and result["receiptReadOnlyMode"] == "0o400"
+            and result["receiptSecondExclusiveCreateRejected"] is True
             and result["receiptSupervisorOwned"] is True
             and all(result["outerTerminalValidation"].values())
             for receipt, result in zip(receipts, results)
         ),
-        "replayRejectedBeforeAdmissionOrResource": replay_before_admission_or_resource,
+        "consumedReplayRejectedAfterAdmissionBeforeLifecycleProcessStart": (
+            replay_after_admission_before_lifecycle_process
+        ),
+        "replayMayBrieflyOccupyActiveSlot": replay_occupied_slot,
         "sharedAuthorityStoreClosed": (
-            len({str(item.store.root) for item in fixtures}) == 1
+            len({str(item.store.root) for item in materialized}) == 1
             and len(list(store.root.glob("*.consumed"))) == 5
             and not list(store.root.glob("*.claimed"))
         ),
@@ -529,40 +624,52 @@ def admission_case(root: Path) -> dict[str, object]:
 
 def failure_isolation_case(root: Path) -> dict[str, object]:
     store, receipt_root = authority_group(root)
-    fixtures = [
-        fixture(root / f"failure-{index}", index + 6, store, receipt_root)
+    pending = [
+        pending_execution(root / f"failure-{index}", index + 6)
         for index in range(4)
     ]
-    releases = [threading.Event() for _ in fixtures]
-    adapters = [
-        FilesystemAdapter(item, releases[index], retain_tree=index == 0)
-        for index, item in enumerate(fixtures)
-    ]
-    adapters[0].terminal_status = 9
+    fixtures: list[Fixture | None] = [None] * 4
+    adapters: list[FilesystemAdapter | None] = [None] * 4
+
+    def execute(index: int) -> boundary.LifecycleReceipt:
+        request = pending[index]
+        fixture_value = materialize_fixture(request, store, receipt_root)
+        adapter = FilesystemAdapter(
+            fixture_value, request.release, retain_tree=index == 0,
+            terminal_event=request.at_terminal,
+        )
+        if index == 0:
+            adapter.terminal_status = 9
+        fixtures[index] = fixture_value
+        adapters[index] = adapter
+        return boundary.run_job(fixture_value.spec, adapter, store)
+
     controller = concurrency.AdmissionController()
     with ThreadPoolExecutor(max_workers=4) as pool:
         try:
             futures = [pool.submit(
-                controller.run, item.spec.identity.job_id,
-                lambda index=index: boundary.run_job(
-                    fixtures[index].spec, adapters[index], store,
-                ),
-            ) for index, item in enumerate(fixtures)]
+                controller.run, request.request.job_id,
+                lambda index=index: execute(index),
+            ) for index, request in enumerate(pending)]
             controller.wait_until(lambda state: len(state.active) == 4)
-            for adapter in adapters:
-                if not adapter.at_terminal.wait(timeout=10):
+            for request in pending:
+                if not request.at_terminal.wait(timeout=10):
                     raise TimeoutError("failure-isolation job missed terminal gate")
-            for release in releases:
-                release.set()
+            for request in pending:
+                request.release.set()
             receipts = [future.result(timeout=10) for future in futures]
         finally:
-            for release in releases:
-                release.set()
+            for request in pending:
+                request.release.set()
             for adapter in adapters:
-                adapter.force_stop_resources()
-    failed_root = fixtures[0].spec.paths.source.parent
-    other_roots = [item.spec.paths.source.parent for item in fixtures[1:]]
-    receipt_bytes = [item.receipt_path.read_bytes() for item in fixtures]
+                if adapter is not None:
+                    adapter.force_stop_resources()
+    materialized = [item for item in fixtures if item is not None]
+    live_adapters = [item for item in adapters if item is not None]
+    assert len(materialized) == 4 and len(live_adapters) == 4
+    failed_root = materialized[0].spec.paths.source.parent
+    other_roots = [item.spec.paths.source.parent for item in materialized[1:]]
+    receipt_bytes = [item.receipt_path.read_bytes() for item in materialized]
     receipt_documents = [json.loads(value) for value in receipt_bytes]
     receipt_hashes = [hashlib.sha256(value).hexdigest() for value in receipt_bytes]
     receipt_mappings_exact = all(
@@ -572,11 +679,11 @@ def failure_isolation_case(root: Path) -> dict[str, object]:
         and document["terminal"]["outputDigest"] == adapter.output_tree_digest
         and all(document["outerValidation"].values())
         for document, item, adapter in zip(
-            receipt_documents, fixtures, adapters,
+            receipt_documents, materialized, live_adapters,
         )
     )
-    exclusive_rewrite_rejected = True
-    for item in fixtures:
+    second_exclusive_create_rejected = True
+    for item in materialized:
         try:
             descriptor = os.open(
                 item.receipt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400,
@@ -585,31 +692,33 @@ def failure_isolation_case(root: Path) -> dict[str, object]:
             continue
         else:  # pragma: no cover - contract failure
             os.close(descriptor)
-            exclusive_rewrite_rejected = False
+            second_exclusive_create_rejected = False
     return {
         "case": "one-residue-does-not-falsify-peers",
         "failedJobFailureCheck": receipts[0].failure_check,
         "failedJobRetained": failed_root.exists(),
         "peerStatuses": [receipt.status for receipt in receipts[1:]],
         "peerRootsAbsent": all(not path.exists() for path in other_roots),
-        "allProcessesAbsent": all(adapter.processes_absent() for adapter in adapters),
+        "allProcessesAbsent": all(
+            adapter.processes_absent() for adapter in live_adapters
+        ),
         "durableReceiptCount": len(receipt_bytes),
         "durableReceiptsDistinct": len(set(receipt_hashes)) == 4,
-        "durableReceiptsImmutable": (
-            exclusive_rewrite_rejected and all(
+        "durableReceiptsExclusiveCreateReadOnly": (
+            second_exclusive_create_rejected and all(
                 stat.S_IMODE(item.receipt_path.stat().st_mode) == 0o400
-                for item in fixtures
+                for item in materialized
             )
         ),
         "durableReceiptsSupervisorOwned": all(
             item.receipt_path.stat().st_uid == os.getuid()
             and item.receipt_path.parent.stat().st_uid == os.getuid()
             and stat.S_IMODE(item.receipt_path.parent.stat().st_mode) == 0o700
-            for item in fixtures
+            for item in materialized
         ),
         "receiptOutputMappingsExact": receipt_mappings_exact,
         "retainedOutputStillMatchesReceipt": (
-            canonical_tree_digest(fixtures[0].spec.paths.output).value
+            canonical_tree_digest(materialized[0].spec.paths.output).value
             == receipt_documents[0]["observedOutputTreeDigest"]
         ),
         "observedPeak": controller.snapshot().observed_peak,
@@ -633,13 +742,15 @@ def substitutions_case(root: Path) -> dict[str, object]:
         "receipt-path": "terminal-publication",
     }
     for index, name in enumerate(names):
-        left = fixture(
-            root / f"substitution-{index}-left", index + 10,
-            store, receipt_root,
+        left = materialize_fixture(
+            pending_execution(
+                root / f"substitution-{index}-left", index + 10,
+            ), store, receipt_root,
         )
-        right = fixture(
-            root / f"substitution-{index}-right", index + 30,
-            store, receipt_root,
+        right = materialize_fixture(
+            pending_execution(
+                root / f"substitution-{index}-right", index + 30,
+            ), store, receipt_root,
         )
         (right.spec.paths.output / "foreign-output.txt").write_text(
             "foreign-output", encoding="utf-8",
@@ -717,12 +828,18 @@ def matrix() -> dict[str, object]:
     checks = {
         "hardCapFour": admission["observedPeak"] == 4,
         "fifthQueuedUntilRelease": admission["fifthQueuedAtCap"] is True,
-        "queuedExecutionHasNoLiveResource": admission["queuedFifthHasNoProcess"] is True,
+        "queuedExecutionZeroPreAdmissionAllocation": (
+            admission["queuedFifthZeroPreAdmissionAllocation"] is True
+            and admission["fifthMaterializedOnlyAfterSlotRelease"] is True
+        ),
         "slotReleaseFollowsResourceAbsence": (
             admission["slotReleasedAfterProcessAbsence"] is True
         ),
-        "authorityReplayRejectedBeforeAdmission": (
-            admission["replayRejectedBeforeAdmissionOrResource"] is True
+        "consumedReplayRejectedAfterAdmissionBeforeLifecycleProcessStart": (
+            admission[
+                "consumedReplayRejectedAfterAdmissionBeforeLifecycleProcessStart"
+            ] is True
+            and admission["replayMayBrieflyOccupyActiveSlot"] is True
             and admission["sharedAuthorityStoreClosed"] is True
         ),
         "onlyImmutableIdentitiesShared": admission["sharedImmutableIdentitiesOnly"] is True,
@@ -751,7 +868,7 @@ def matrix() -> dict[str, object]:
             and failure["allProcessesAbsent"] is True
             and failure["durableReceiptCount"] == 4
             and failure["durableReceiptsDistinct"] is True
-            and failure["durableReceiptsImmutable"] is True
+            and failure["durableReceiptsExclusiveCreateReadOnly"] is True
             and failure["durableReceiptsSupervisorOwned"] is True
             and failure["receiptOutputMappingsExact"] is True
             and failure["retainedOutputStillMatchesReceipt"] is True
