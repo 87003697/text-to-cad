@@ -43,6 +43,7 @@ STAGE_SOURCE_EXCLUDES = (
     "/.codex/",
     "/.DS_Store",
     "/.cvm-jobs/",
+    "/.cvm-agent-jobs/",
     "/outputs/",
     "/models/",
     "/docs/",

@@ -18,4 +18,5 @@ docs/
 worktrees/
 tmp/
 .cvm-jobs/
+.cvm-agent-jobs/
 /.cvm-sidecar-probes/

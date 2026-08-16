@@ -19,6 +19,7 @@ class CvmAgentTests(unittest.TestCase):
         self.repo = self.root / "repo"
         self.state = self.root / "state"
         self.scratch = self.root / "scratch"
+        self.scratch.mkdir()
         self.prompt = self.repo / "scripts/pilot/cvm_agent_surface_prompt.md"
         self.prompt.parent.mkdir(parents=True)
         self.prompt.write_text("fixed surface task\n", encoding="utf-8")
@@ -40,6 +41,7 @@ class CvmAgentTests(unittest.TestCase):
             mock.patch.object(cvm_agent, "STATE_ROOT", self.state),
             mock.patch.object(cvm_agent, "SCRATCH_ROOT", self.scratch),
             mock.patch.object(cvm_agent, "PROMPT_PATH", self.prompt),
+            mock.patch.object(cvm_agent, "_require_secure_scratch_root"),
         ]
         for patch in self.patches:
             patch.start()
@@ -225,7 +227,10 @@ class CvmAgentTests(unittest.TestCase):
             )
             events.write_text(
                 json.dumps(
-                    {"type": "turn.completed", "usage": {"input_tokens": 10}}
+                    {
+                        "type": "turn.completed",
+                        "usage": {"input_tokens": 10, "output_tokens": 2},
+                    }
                 )
                 + "\n",
                 encoding="utf-8",
@@ -249,7 +254,9 @@ class CvmAgentTests(unittest.TestCase):
         self.assertEqual(result["state"], "succeeded")
         self.assertEqual(result["resultStatus"], "proposed-change")
         self.assertEqual(result["changedPaths"], ["scripts/pilot/runner.py"])
-        self.assertEqual(result["usage"], {"input_tokens": 10})
+        self.assertEqual(
+            result["usage"], {"input_tokens": 10, "output_tokens": 2}
+        )
         value = cvm_agent._load(handle)
         exp = self.repo / "outputs" / value["group"] / value["exp"]
         self.assertTrue((exp / "candidate.patch").is_file())
@@ -257,6 +264,10 @@ class CvmAgentTests(unittest.TestCase):
         self.assertIn("diff --git a/scripts/pilot/runner.py b/scripts/pilot/runner.py", patch)
         self.assertTrue((exp / "report.json").is_file())
         self.assertTrue((exp / "run/venus-proxy-audit.jsonl").is_file())
+        manifest = json.loads(
+            (exp / "artifact_manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(all("sha256" in item for item in manifest["files"]))
         self.assertFalse((self.scratch / f"{handle}.private").exists())
         self.assertFalse((self.scratch / f"{handle}.worker").exists())
 
@@ -267,7 +278,8 @@ class CvmAgentTests(unittest.TestCase):
         def fake_runner(workspace, control, events, _prompt, _audit):
             (workspace / "AGENTS.md").write_text("changed\n", encoding="utf-8")
             events.write_text(
-                '{"usage":{"input_tokens":1}}\n', encoding="utf-8"
+                '{"usage":{"input_tokens":1,"output_tokens":1}}\n',
+                encoding="utf-8",
             )
             (control / "last-message.json").write_text(
                 json.dumps(
@@ -296,7 +308,10 @@ class CvmAgentTests(unittest.TestCase):
 
         def fake_runner(workspace, control, events, _prompt, _audit):
             (workspace / "scripts/pilot/runner.py").unlink()
-            events.write_text('{"usage":{"input_tokens":1}}\n', encoding="utf-8")
+            events.write_text(
+                '{"usage":{"input_tokens":1,"output_tokens":1}}\n',
+                encoding="utf-8",
+            )
             (control / "last-message.json").write_text(
                 json.dumps(
                     {
@@ -338,6 +353,39 @@ class CvmAgentTests(unittest.TestCase):
         result = cvm_agent.supervise(handle)
         self.assertEqual(result["state"], "failed")
         self.assertEqual(result["errorCheck"], "copied source digest mismatch")
+
+    def test_output_publication_failure_closes_the_handle(self) -> None:
+        submitted = self.submit()
+        handle = str(submitted["handle"])
+
+        def fake_runner(workspace, control, events, _prompt, _audit):
+            events.write_text(
+                '{"usage":{"input_tokens":1,"output_tokens":1}}\n',
+                encoding="utf-8",
+            )
+            (control / "last-message.json").write_text(
+                json.dumps(
+                    {
+                        "summary": "diagnosis",
+                        "diagnosis": "surface",
+                        "changed_paths": [],
+                        "tests": [],
+                        "risks": [],
+                        "review_request": "review diagnosis",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return 0
+
+        with mock.patch.object(
+            cvm_agent,
+            "_artifact_manifest",
+            side_effect=OSError("disk full"),
+        ):
+            result = cvm_agent.supervise(handle, runner=fake_runner)
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["errorCheck"], "agent-output-publication")
 
     def test_skill_and_wrapper_keep_parent_review_as_terminal_gate(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]

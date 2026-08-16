@@ -25,7 +25,7 @@ from scripts.pilot.venus_retry_proxy import RetryProxy
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE_ROOT = REPO_ROOT / ".cvm-agent-jobs"
-SCRATCH_ROOT = Path("/tmp/text-to-cad-cvm-agent")
+SCRATCH_ROOT = Path("/var/lib/text-to-cad-cvm-agent")
 PROMPT_PATH = REPO_ROOT / "scripts/pilot/cvm_agent_surface_prompt.md"
 MODEL = "gpt-5.6-sol"
 TASKS = frozenset({"surface-adaptation"})
@@ -180,6 +180,40 @@ def _state_path(handle: str) -> Path:
     if not HANDLE.fullmatch(handle):
         raise AgentError("invalid CVM agent handle")
     return STATE_ROOT / f"{handle}.json"
+
+
+def _require_secure_scratch_root() -> None:
+    """Create one non-replaceable root authority with worker traversal only."""
+
+    created = False
+    try:
+        SCRATCH_ROOT.mkdir(mode=0o710)
+        created = True
+    except FileExistsError:
+        pass
+    except OSError as exc:
+        raise AgentError("secure CVM agent scratch root is unavailable") from exc
+    try:
+        descriptor = os.open(
+            SCRATCH_ROOT,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+    except OSError as exc:
+        raise AgentError("secure CVM agent scratch root is unavailable") from exc
+    try:
+        if created:
+            os.fchown(descriptor, 0, NOBODY_GID)
+            os.fchmod(descriptor, 0o710)
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != 0
+            or metadata.st_gid != NOBODY_GID
+            or stat.S_IMODE(metadata.st_mode) != 0o710
+        ):
+            raise AgentError("secure CVM agent scratch root is invalid")
+    finally:
+        os.close(descriptor)
 
 
 def _load(handle: str) -> dict[str, Any]:
@@ -537,12 +571,25 @@ def _usage(events: Path) -> dict[str, int] | None:
             if isinstance(current, dict):
                 usage = current.get("usage")
                 if isinstance(usage, dict):
-                    normalized = {
-                        str(key): item
-                        for key, item in usage.items()
-                        if isinstance(item, int) and not isinstance(item, bool)
+                    allowed = {
+                        "input_tokens",
+                        "cached_input_tokens",
+                        "output_tokens",
+                        "total_tokens",
                     }
-                    if normalized:
+                    normalized = {
+                        str(key): item for key, item in usage.items()
+                        if key in allowed
+                        and isinstance(item, int)
+                        and not isinstance(item, bool)
+                        and item >= 0
+                    }
+                    if {"input_tokens", "output_tokens"} <= normalized.keys():
+                        total = normalized.get("total_tokens")
+                        if total is not None and total != (
+                            normalized["input_tokens"] + normalized["output_tokens"]
+                        ):
+                            continue
                         latest = normalized
                 candidates.extend(current.values())
             elif isinstance(current, list):
@@ -664,6 +711,7 @@ def _artifact_manifest(exp_dir: Path, final_status: int) -> None:
                 {
                     "path": path.relative_to(exp_dir).as_posix(),
                     "size_bytes": path.stat().st_size,
+                    "sha256": _sha256(path),
                 }
             )
     _atomic_json(
@@ -709,7 +757,8 @@ def supervise(
     usage: dict[str, int] | None = None
     result_status: str | None = None
     try:
-        private_scratch.mkdir(parents=True, mode=0o700)
+        _require_secure_scratch_root()
+        private_scratch.mkdir(mode=0o700)
         worker_scratch.mkdir(mode=0o700)
         control.mkdir(mode=0o700)
         exp_dir.mkdir(parents=True)
@@ -770,9 +819,14 @@ def supervise(
         "authorizationCeilingUsd": AUTHORIZATION_CEILING_USD,
         "upstreamAttemptLimit": MAX_UPSTREAM_ATTEMPTS,
     }
-    exp_dir.mkdir(parents=True, exist_ok=True)
-    _atomic_json(exp_dir / "report.json", report)
-    _artifact_manifest(exp_dir, final_status)
+    try:
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        _atomic_json(exp_dir / "report.json", report)
+        _artifact_manifest(exp_dir, final_status)
+    except Exception:
+        final_status = 1
+        error_check = "agent-output-publication"
+        result_status = None
     state_name = "succeeded" if final_status == 0 else "failed"
     updated = _transition(
         handle,
