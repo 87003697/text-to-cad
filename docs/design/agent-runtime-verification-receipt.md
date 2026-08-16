@@ -355,7 +355,7 @@ leaves the owned Agent container present, the final child retains both
 `agent-lifecycle:<environment>.retained-resource`; the preflight failure remains
 auditable and is not overwritten.
 
-The four resource-absence predicates are independent. Labels are inventory
+The five resource-absence predicates are independent. Labels are inventory
 evidence and never deletion authority. Only the exact returned and
 owner-attested container ID authorizes removal. A positive observation of any
 owned residue maps to `retained-resource`; inability to establish all required
