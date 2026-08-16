@@ -326,18 +326,49 @@ and no truthy substitute is accepted.
 | `source-snapshot` | `manifestSchemaExact`, `pathSetClosed`, `regularFilesOnly`, `fileModesBound`, `fileSizesBound`, `fileDigestsBound`, `treeDigestMatchesObservation`, `readOnlyMountEligible` |
 | `verification-plan` | `planSchemaExact`, `planDigestExact`, `scannerApproved`, `sourceSnapshotApproved`, `sourceManifestApproved`, `inputSnapshotApproved`, `cupFixtureApproved`, `routerManifestApproved`, `expectedOutputApproved`, `conformanceFixtureApproved`, `lifecycleHarnessApproved`, `entrypointApproved`, `receiptSchemaApproved`, `agentConfigApproved`, `brokerAuthorityApproved`, `workloadApproved` |
 
-For the `sbom` node, `licensesRecorded:true` has one exact meaning. Every SPDX
+For the `sbom` node, the only admitted License/Exception identifier authority
+is the canonical local catalog with schema
+`text-to-cad.spdx-license-catalog/1`, `licenseListVersion` literal `3.28.0`, a
+`licenses` array containing the 727 SPDX 3.28.0 License List identifiers in
+strict ASCII order, and an `exceptions` array containing the 84 SPDX 3.28.0
+License Exception List identifiers in strict ASCII order. Those are its exact
+four top-level keys; both arrays contain unique non-empty ASCII strings. Its
+canonical byte length is 12,540 and digest is
+`sha256:5865e5d860a9278d30d22eb5522952f85eb620b2a6a3e68e02a5df7449835a31`.
+The catalog is derived offline from the admitted
+[`spdx-license-list==3.28.0`](https://pypi.org/project/spdx-license-list/3.28.0/)
+wheel with SHA-256
+`4470ca5de095d04e4172d8776e245d629a99abf0d08741261dd014559b746534`,
+whose `LICENSES` and `EXCEPTIONS` data source is the fixed
+[SPDX License List 3.28.0](https://github.com/spdx/license-list-data/releases/tag/v3.28.0).
+
+SAI-005's SBOM producer and SAI-011's typed `sbom` validator each load the
+canonical catalog from the admitted local artifact mirror, independently
+recompute its digest/count/order/version, and require the literal identity
+above. An ambient Python/npm package, host catalog, network lookup, moving SPDX
+page, unpinned later list, or producer-supplied identifier set is rejected and
+cannot make `licensesRecorded` true.
+
+`licensesRecorded:true` then has one exact meaning. Every SPDX
 `packages` entry and every SPDX `files` entry must have a `licenseConcluded`
 that parses as an SPDX 2.3 license expression and contains neither
 `NOASSERTION` nor `NONE`. Each identifier in the expression must be either an
 SPDX License List identifier or a case-sensitive `LicenseRef-<id>` using only
 one or more ASCII letters, digits, `.`, or `-` after the prefix. Every referenced
-`LicenseRef-<id>` must have exactly one matching `hasExtractedLicensingInfo`
+`LicenseRef-<id>` must have exactly one matching `hasExtractedLicensingInfos`
 entry whose `licenseId` is identical, whose `extractedText` is non-empty, and
 whose `comment` is exactly
 `evidenceDigest=sha256:<64 lowercase hex>`, where that digest is the SHA-256 of
 the UTF-8 `extractedText` bytes. Duplicate or unused extracted-license entries
 are rejected.
+
+The expression operator `WITH <exception-id>` is accepted only when the left
+operand is one admitted License List identifier and `<exception-id>` is an
+exact member of the fixed catalog's `exceptions` array. A `LicenseRef`, bare
+unknown token, deprecated alias not present in the catalog, or producer-defined
+identifier is never an exception. Every other license identifier in an
+expression must be an exact member of `licenses` or the resolved `LicenseRef`
+form above.
 
 This rule applies independently to packages and files; a package license does
 not cover a file field and vice versa. A missing/empty field, parse failure,

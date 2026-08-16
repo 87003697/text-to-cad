@@ -284,6 +284,17 @@ outputs and insert the existing two nodes into the 15-node graph. Neither
 ticket may create an additional node or move either external artifact into the
 image.
 
+The SBOM producer and typed validator share no ambient SPDX registry. Each
+consumes the admitted local
+`text-to-cad.spdx-license-catalog/1` version 3.28.0 bytes fixed by the receipt
+contract (12,540 canonical bytes,
+`sha256:5865e5d860a9278d30d22eb5522952f85eb620b2a6a3e68e02a5df7449835a31`),
+recomputes the catalog independently, and applies the exact License List,
+Exception List, `WITH`, `LicenseRef`, and `NOASSERTION` rules there. The
+SAI-005 build-input closure binds this catalog and its admitted source wheel;
+SAI-011 validates against the same literal catalog identity. Neither performs a
+network refresh or imports a host-installed catalog.
+
 ### Artifact supply
 
 ```text
