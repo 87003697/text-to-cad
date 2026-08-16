@@ -7,6 +7,7 @@ protocol whose entire job is to survive being observed by another process.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import subprocess
@@ -17,6 +18,7 @@ import time
 import unittest
 import warnings
 from pathlib import Path
+from unittest import mock
 
 from tests.python.support.paths import add_repo_path
 
@@ -258,6 +260,76 @@ class WriteLockGuardTest(CoordinationTestCase):
             warnings.simplefilter("always")
             self.assertFalse(require_write_lock(self.out))
         self.assertTrue(any(issubclass(w.category, RuntimeWarning) for w in caught))
+
+
+class DegradedLockTest(CoordinationTestCase):
+    """A filesystem that refuses advisory locks must not fail the build -- on EITHER side.
+
+    Python's policy has always been "a missing lock must never be the reason a user's build
+    fails", and `artifact_build` honours it by minting a run id and carrying on. But that id
+    is never stamped into the sentinel, because nothing was locked to stamp it under, so the
+    Node builders (DXF, implicit) compared it against an empty sentinel and threw -- reporting
+    a lock violation for a filesystem that simply cannot lock. The run now carries the fact
+    across the boundary so the child can tell the two apart.
+    """
+
+    def _no_locks(self):
+        """`exclusive()` degrades on ENOLCK/EOPNOTSUPP: NFS, some SMB mounts, some binds."""
+
+        def refuse(handle, path, **kwargs):
+            raise OSError(errno.ENOLCK, "no locks available")
+
+        return mock.patch("cadgen.coordination.lock._acquire", refuse)
+
+    def test_a_degraded_run_says_so_and_still_builds(self):
+        with self._no_locks():
+            with artifact_build(STEP_PACKAGE, self.out, is_current=lambda: False) as run:
+                self.assertTrue(run.degraded)
+                # Still a usable run: progress needs an id to attribute records to.
+                self.assertTrue(run.run_id)
+                # ...and that id is NOT in the sentinel, which is the whole problem.
+                self.assertEqual(b"", write_lock_path(self.out).read_bytes())
+
+    def test_a_normal_run_is_not_degraded(self):
+        with artifact_build(STEP_PACKAGE, self.out, is_current=lambda: False) as run:
+            self.assertFalse(run.degraded)
+            stamped = write_lock_path(self.out).read_bytes()[:32].decode("ascii").strip()
+            self.assertEqual(run.run_id, stamped)
+
+    def test_the_degradation_reaches_the_node_child(self):
+        # The producers are the only things that can tell the child, so the flag has to
+        # survive the argv construction -- assert on the argv itself, not on the intent.
+        from cadgen._internal import drawing_package
+
+        seen = {}
+
+        def fake_builder(script, args, *, run, stdin_text=None, **kwargs):
+            seen["args"] = list(args)
+            # Stands in for the Node child. The producer checks what the payload CLAIMS
+            # against what is on disk, so the fake has to leave the file behind too.
+            self.out.mkdir(parents=True, exist_ok=True)
+            (self.out / "geometry.json").write_text("{}", encoding="utf-8")
+            return {
+                "ok": True,
+                "runId": run.run_id,
+                "geometryFile": "geometry.json",
+                "profile": "drawing",
+            }
+
+        with mock.patch.object(drawing_package, "run_node_builder", fake_builder):
+            with self._no_locks():
+                with artifact_build(STEP_PACKAGE, self.out, is_current=lambda: False) as run:
+                    drawing_package.build_drawing_preview(
+                        self.out, dxf_text="0\nSECTION\n", run=run
+                    )
+            self.assertIn("--lock-degraded", seen["args"])
+
+            # And a healthy run does NOT claim degradation -- otherwise the escape hatch
+            # would be permanently open and the boundary would check nothing.
+            seen.clear()
+            with artifact_build(STEP_PACKAGE, self.out, is_current=lambda: False) as run:
+                drawing_package.build_drawing_preview(self.out, dxf_text="0\nSECTION\n", run=run)
+            self.assertNotIn("--lock-degraded", seen["args"])
 
 
 class ProbeConcurrencyTest(CoordinationTestCase):
