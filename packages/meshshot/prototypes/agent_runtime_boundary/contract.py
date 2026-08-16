@@ -24,6 +24,17 @@ IDENTITY_KEYS = (
     "runtimeManifestDigest", "sourceDigest", "inputDigest",
     "brokerAuthorityDigest", "workloadDigest",
 )
+WORKLOAD_ENVIRONMENT = (
+    ("HOME", "/run/agent-job/home"),
+    ("CODEX_HOME", "/run/agent-job/home/.codex"),
+    ("XDG_CACHE_HOME", "/run/agent-job/cache"),
+    ("TMPDIR", "/run/agent-job/tmp"),
+    ("LANG", "C.UTF-8"),
+    ("LC_ALL", "C.UTF-8"),
+    ("TZ", "UTC"),
+    ("GIT_TERMINAL_PROMPT", "0"),
+    ("PYTHONDONTWRITEBYTECODE", "1"),
+)
 
 
 class ContractError(RuntimeError):
@@ -84,6 +95,33 @@ class ExecutionIdentity:
             input_digest=Digest(str(value["inputDigest"])),
             broker_authority_digest=Digest(str(value["brokerAuthorityDigest"])),
             workload_digest=Digest(str(value["workloadDigest"])),
+        )
+
+
+@dataclass(frozen=True)
+class ExecutionRequest:
+    """Authority-free immutable request presented to the outer allocator."""
+
+    job_id: str
+    agent_image_digest: Digest
+    agent_config_digest: Digest
+    runtime_manifest_digest: Digest
+    source_digest: Digest
+    input_digest: Digest
+    broker_authority_digest: Digest
+    workload: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not JOB_RE.fullmatch(self.job_id):
+            raise ContractError("invalid job identity")
+        workload_digest(self.workload)
+
+    def allocate_identity(self, owner_nonce: str) -> ExecutionIdentity:
+        return ExecutionIdentity(
+            self.job_id, owner_nonce, self.agent_image_digest,
+            self.agent_config_digest, self.runtime_manifest_digest,
+            self.source_digest, self.input_digest,
+            self.broker_authority_digest, workload_digest(self.workload),
         )
 
 

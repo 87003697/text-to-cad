@@ -14,7 +14,8 @@ from typing import Mapping
 import browser_surface
 from contract import (
     ContractError, Digest, ExecutionIdentity, IDENTITY_KEYS,
-    canonical_tree_digest, require_exact_record, workload_digest,
+    WORKLOAD_ENVIRONMENT, canonical_tree_digest, require_exact_record,
+    workload_digest,
 )
 from process_group import run_workload_group
 
@@ -177,20 +178,19 @@ def main() -> int:
         result = run_workload_group(
             workload, cwd=str(WRITABLE[-2]), stdout=stdout, stderr=stderr,
             env={
-                "HOME": str(WRITABLE[0]), "CODEX_HOME": str(WRITABLE[0] / ".codex"),
-                "XDG_CACHE_HOME": str(WRITABLE[1]), "TMPDIR": str(WRITABLE[2]),
-                "PATH": os.environ.get("PATH", ""), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
-                "TZ": "UTC", "GIT_TERMINAL_PROMPT": "0", "PYTHONDONTWRITEBYTECODE": "1",
+                **dict(WORKLOAD_ENVIRONMENT),
+                "PATH": os.environ.get("PATH", ""),
             },
         )
     if not result.group_absent:
         raise GateError("workload process group remains")
     _publish({
-        "schema": "meshshot.agent-boundary.terminal/3", **identity.as_json(),
+        "schema": "meshshot.agent-boundary.terminal/4", **identity.as_json(),
         "workloadStatus": result.returncode,
         "outputDigest": canonical_tree_digest(WRITABLE[-1]).value,
         "processGroupAbsent": result.group_absent,
         "descendantResidue": result.descendant_residue,
+        "interruptedSignal": result.interrupted_signal,
     })
     ack = _read_record()
     require_exact_record(ack, "meshshot.agent-boundary.ack/1", identity)
