@@ -1,0 +1,290 @@
+#!/usr/bin/python3.12
+"""Fixed production gate for the sealed text-to-CAD Agent container."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+
+CONTROL = Path("/run/text-to-cad-agent/control/manifest.json")
+SOURCE = Path("/run/text-to-cad-agent/source")
+INPUT = Path("/run/text-to-cad-agent/input")
+WRITABLE = (
+    Path("/run/text-to-cad-agent/home"),
+    Path("/run/text-to-cad-agent/cache"),
+    Path("/run/text-to-cad-agent/tmp"),
+    Path("/run/text-to-cad-agent/work"),
+    Path("/run/text-to-cad-agent/output"),
+)
+BROKER_SOCKET = Path("/run/meshshot-browser/browser.sock")
+RUNTIME_MANIFEST = Path("/usr/share/text-to-cad/runtime-manifest.json")
+SCHEMA = "text-to-cad.agent-entrypoint-control/1"
+IDENTITY_KEYS = (
+    "agentImageManifestDigest",
+    "runtimeManifestDigest",
+    "executionSourceSnapshotDigest",
+    "inputSnapshotDigest",
+    "agentConfigDigest",
+    "brokerAuthorityDigest",
+    "workloadDigest",
+    "jobId",
+    "ownerNonce",
+)
+MANIFEST_KEYS = {"schema", "challenge", "workload", *IDENTITY_KEYS}
+FULL_DIGEST_KEYS = tuple(key for key in IDENTITY_KEYS if key.endswith("Digest"))
+
+
+class GateError(RuntimeError):
+    pass
+
+
+def _canonical(value: object) -> bytes:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("ascii")
+
+
+def _digest(payload: bytes) -> str:
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def _parse_exact(payload: bytes) -> dict[str, object]:
+    if len(payload) > 16384 or payload.endswith(b"\n"):
+        raise GateError("control record size or terminator is invalid")
+
+    def pairs(values: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in values:
+            if key in result:
+                raise GateError("duplicate control key")
+            result[key] = value
+        return result
+
+    try:
+        value = json.loads(payload, object_pairs_hook=pairs)
+    except (GateError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise GateError("control record is not canonical JSON") from error
+    if not isinstance(value, dict) or _canonical(value) != payload:
+        raise GateError("control record is not exact canonical JSON")
+    return value
+
+
+def _full_digest(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 71
+        and value.startswith("sha256:")
+        and all(character in "0123456789abcdef" for character in value[7:])
+    )
+
+
+def _workload_digest(argv: list[str]) -> str:
+    return _digest(_canonical(argv))
+
+
+def _load_control(path: Path = CONTROL) -> dict[str, object]:
+    if path.is_symlink():
+        raise GateError("control manifest cannot be a symlink")
+    value = _parse_exact(path.read_bytes())
+    if set(value) != MANIFEST_KEYS or value.get("schema") != SCHEMA:
+        raise GateError("control manifest schema is not closed")
+    for key in FULL_DIGEST_KEYS:
+        if not _full_digest(value[key]):
+            raise GateError("control digest is invalid")
+    for key in ("jobId", "ownerNonce", "challenge"):
+        item = value[key]
+        if not isinstance(item, str) or not item.isascii() or not item or len(item) > 256:
+            raise GateError("control authority string is invalid")
+    workload = value["workload"]
+    if (
+        not isinstance(workload, list)
+        or not workload
+        or len(workload) > 256
+        or any(not isinstance(item, str) or not item or not item.isascii() for item in workload)
+        or not workload[0].startswith("/")
+    ):
+        raise GateError("workload argv is invalid")
+    if _workload_digest(workload) != value["workloadDigest"]:
+        raise GateError("workload identity is wrong")
+    runtime_bytes = RUNTIME_MANIFEST.read_bytes()
+    if _digest(runtime_bytes) != value["runtimeManifestDigest"]:
+        raise GateError("image-resident runtime manifest is wrong")
+    return value
+
+
+def _mount_options(target: Path) -> set[str]:
+    matches: list[set[str]] = []
+    for line in Path("/proc/self/mountinfo").read_text(encoding="ascii").splitlines():
+        fields = line.partition(" - ")[0].split()
+        if len(fields) >= 6 and fields[4].replace("\\040", " ") == str(target):
+            matches.append(set(fields[5].split(",")))
+    if len(matches) != 1:
+        raise GateError("required mount is absent or duplicated")
+    return matches[0]
+
+
+def _preflight() -> None:
+    if "ro" not in _mount_options(Path("/")):
+        raise GateError("container rootfs is not read-only")
+    for target in (SOURCE, INPUT):
+        if "ro" not in _mount_options(target):
+            raise GateError("immutable job surface is not read-only")
+    for target in WRITABLE:
+        if "rw" not in _mount_options(target):
+            raise GateError("job-private surface is not writable")
+        marker = target / f".entrypoint-write-{os.getpid()}"
+        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(descriptor)
+        marker.unlink()
+    for variable in os.environ:
+        if variable.startswith(("DOCKER_", "CONTAINER_HOST", "PLAYWRIGHT_")):
+            raise GateError("forbidden ambient authority variable is present")
+    for forbidden in (
+        Path("/var/run/docker.sock"),
+        Path("/run/docker.sock"),
+        Path("/run/podman/podman.sock"),
+        Path("/ms-playwright"),
+        Path("/chromium"),
+        Path("/google-chrome"),
+    ):
+        if forbidden.exists():
+            raise GateError("forbidden runtime or browser surface is present")
+    routes = Path("/proc/net/route").read_text(encoding="ascii").splitlines()[1:]
+    if any(len(fields := line.split()) > 1 and fields[1] == "00000000" for line in routes):
+        raise GateError("external default route is present")
+
+
+def _socket_exchange(request: dict[str, object]) -> dict[str, object]:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(10)
+        client.connect(str(BROKER_SOCKET))
+        client.sendall(_canonical(request) + b"\n")
+        response = bytearray()
+        while not response.endswith(b"\n") and len(response) <= 16384:
+            block = client.recv(4096)
+            if not block:
+                break
+            response += block
+    if not response.endswith(b"\n") or len(response) > 16384:
+        raise GateError("Broker proof is unavailable")
+    return _parse_exact(bytes(response[:-1]))
+
+
+def _publish(value: dict[str, object]) -> None:
+    sys.stdout.buffer.write(_canonical(value) + b"\n")
+    sys.stdout.buffer.flush()
+
+
+def _read_release() -> dict[str, object]:
+    line = sys.stdin.buffer.readline(16385)
+    if not line.endswith(b"\n") or len(line) > 16384:
+        raise GateError("outer release is unavailable")
+    return _parse_exact(line[:-1])
+
+
+def _run_workload(argv: list[str]) -> int:
+    process = subprocess.Popen(
+        argv,
+        cwd=WRITABLE[3],
+        env={
+            "HOME": str(WRITABLE[0]),
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TMPDIR": str(WRITABLE[2]),
+            "TZ": "UTC",
+            "XDG_CACHE_HOME": str(WRITABLE[1]),
+        },
+        stdin=subprocess.DEVNULL,
+        stdout=(WRITABLE[4] / "workload.stdout").open("xb"),
+        stderr=(WRITABLE[4] / "workload.stderr").open("xb"),
+        start_new_session=True,
+    )
+    previous: dict[int, object] = {}
+
+    def relay(signum: int, _frame: object) -> None:
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            pass
+
+    try:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous[signum] = signal.signal(signum, relay)
+        return_code = process.wait()
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return return_code
+    for signum, deadline in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 2.0)):
+        try:
+            os.killpg(process.pid, signum)
+        except ProcessLookupError:
+            return 125
+        stop = time.monotonic() + deadline
+        while time.monotonic() < stop:
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                return 125
+            time.sleep(0.05)
+    raise GateError("workload process group remains present")
+
+
+def _contract_self_test() -> int:
+    request = ["/usr/bin/true"]
+    digest = _workload_digest(request)
+    if not _full_digest(digest) or _parse_exact(_canonical({"digest": digest})) != {"digest": digest}:
+        raise GateError("entrypoint contract self-test failed")
+    _publish({"entrypoint": "/usr/local/libexec/text-to-cad-agent-entrypoint", "schema": SCHEMA, "status": "self-test-passed"})
+    return 0
+
+
+def main() -> int:
+    if sys.argv[1:] == ["--contract-self-test"]:
+        return _contract_self_test()
+    if sys.argv[1:]:
+        raise GateError("entrypoint arguments are outer-owned and cannot be selected directly")
+    control = _load_control()
+    _preflight()
+    identity = {key: control[key] for key in IDENTITY_KEYS}
+    broker_request = {
+        "schema": "text-to-cad.agent-broker-challenge/1",
+        "challenge": control["challenge"],
+        **identity,
+    }
+    proof = _socket_exchange(broker_request)
+    expected_proof_keys = {"schema", "challenge", "brokerMac", *IDENTITY_KEYS}
+    if set(proof) != expected_proof_keys or proof.get("schema") != "text-to-cad.agent-broker-proof/1":
+        raise GateError("Broker proof schema is not closed")
+    if any(proof.get(key) != broker_request.get(key) for key in ("challenge", *IDENTITY_KEYS)):
+        raise GateError("Broker proof identity is wrong")
+    broker_mac = proof.get("brokerMac")
+    if not isinstance(broker_mac, str) or len(broker_mac) != 64 or any(character not in "0123456789abcdef" for character in broker_mac):
+        raise GateError("Broker proof MAC syntax is wrong")
+    proof_digest = _digest(_canonical(proof))
+    _publish({"schema": "text-to-cad.agent-entrypoint-preflight/1", "brokerProof": proof, "brokerProofDigest": proof_digest})
+    release = _read_release()
+    if release != {"schema": "text-to-cad.agent-entrypoint-release/1", "brokerProofDigest": proof_digest, "release": True}:
+        raise GateError("outer did not release the exact Broker proof")
+    exit_code = _run_workload(control["workload"])
+    _publish({"schema": "text-to-cad.agent-entrypoint-terminal/1", "exitCode": exit_code, **identity})
+    return exit_code
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except GateError as error:
+        sys.stderr.write(f"agent-entrypoint: {error}\n")
+        raise SystemExit(125)

@@ -1,0 +1,1051 @@
+"""Deterministic, network-independent OCI image-layout construction.
+
+This module deliberately owns bytes rather than delegating identity to Docker.
+It is usable for Development candidates while upstream admission remains local;
+it does not publish, import, tag, or claim a Verified runtime.
+"""
+
+from __future__ import annotations
+
+import ast
+import binascii
+import hashlib
+import os
+from pathlib import Path, PurePosixPath
+import stat
+import struct
+from typing import Any, Mapping, NamedTuple
+import zipfile
+
+from scripts.pilot.agent_runtime import (
+    canonical_json_bytes,
+    canonical_json_digest,
+    parse_canonical_json,
+)
+
+
+ENTRYPOINT = "/usr/local/libexec/text-to-cad-agent-entrypoint"
+RUNTIME_MANIFEST = "/usr/share/text-to-cad/runtime-manifest.json"
+CUP_MANIFEST = "/usr/share/text-to-cad/cup-capability-manifest.json"
+LAYER_MEDIA_TYPE = "application/vnd.oci.image.layer.v1.tar+gzip"
+MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
+CONFIG_MEDIA_TYPE = "application/vnd.oci.image.config.v1+json"
+INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
+FIXED_ENV = [
+    "HOME=/home/agent",
+    "LANG=C.UTF-8",
+    "LC_ALL=C.UTF-8",
+    "PATH=/usr/local/bin:/usr/bin:/bin",
+    "PYTHONDONTWRITEBYTECODE=1",
+    "TZ=UTC",
+]
+FORBIDDEN_EXTERNAL_NAMES = {
+    "browser-inventory.json",
+    "browser-scan-receipt.json",
+    "sbom.spdx.json",
+}
+FORBIDDEN_RUNTIME_KEYS = {
+    "agentImageManifestDigest",
+    "browserInventoryDigest",
+    "browserScanReceiptDigest",
+    "candidateDigest",
+    "lockDigest",
+    "runtimeManifestDigest",
+    "sbomDigest",
+    "verifiedRootDigest",
+}
+FILTERED_ROOTFS_PREFIXES = (
+    "etc/hostname",
+    "etc/hosts",
+    "etc/resolv.conf",
+    "opt/sai004",
+    "root",
+    "tmp",
+    "usr/include",
+    "usr/local/lib/node-v24.13.0",
+    "usr/lib/gcc",
+    "usr/libexec/gcc",
+    "var/cache",
+    "var/lib/apt/lists",
+    "var/log",
+)
+FILTERED_TOOL_PATHS = {
+    "usr/bin/ar", "usr/bin/as", "usr/bin/c++", "usr/bin/cc", "usr/bin/cpp",
+    "usr/bin/g++", "usr/bin/gcc", "usr/bin/ld", "usr/bin/make", "usr/bin/nm",
+    "usr/bin/objcopy", "usr/bin/objdump", "usr/bin/patchelf", "usr/bin/ranlib",
+    "usr/bin/readelf", "usr/bin/strip",
+}
+_DIGEST_PREFIX = "sha256:"
+SPDX_WHEEL_DIGEST = "sha256:4470ca5de095d04e4172d8776e245d629a99abf0d08741261dd014559b746534"
+SPDX_WHEEL_SIZE = 18_657
+SPDX_CATALOG_DIGEST = "sha256:5865e5d860a9278d30d22eb5522952f85eb620b2a6a3e68e02a5df7449835a31"
+SPDX_CATALOG_SIZE = 12_540
+
+
+class BuildInputError(ValueError):
+    pass
+
+
+class RuntimeManifestError(ValueError):
+    pass
+
+
+class OciAuditError(ValueError):
+    pass
+
+
+class BuildRequest(NamedTuple):
+    rootfs: Path
+    runtime_manifest: Mapping[str, Any]
+
+
+def _sha256(payload: bytes) -> str:
+    return _DIGEST_PREFIX + hashlib.sha256(payload).hexdigest()
+
+
+def _check_digest(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or len(value) != 71
+        or not value.startswith(_DIGEST_PREFIX)
+        or any(character not in "0123456789abcdef" for character in value[7:])
+    ):
+        raise BuildInputError("invalid sha256 digest")
+    return value
+
+
+def read_exact_regular(path: Path, *, digest: str, size: int) -> bytes:
+    """Read one stable regular file without following its final symlink."""
+
+    _check_digest(digest)
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise BuildInputError("invalid exact size")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        before = path.lstat()
+        descriptor = os.open(path, flags)
+    except (OSError, ValueError) as error:
+        raise BuildInputError("exact input cannot be opened without following links") from error
+    try:
+        opened_before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or not stat.S_ISREG(opened_before.st_mode):
+            raise BuildInputError("exact input is not a regular file")
+        if (before.st_dev, before.st_ino) != (opened_before.st_dev, opened_before.st_ino):
+            raise BuildInputError("exact input changed while opening")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if sum(map(len, chunks)) > size:
+                raise BuildInputError("exact input exceeds approved size")
+        payload = b"".join(chunks)
+        opened_after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        after = path.lstat()
+    except OSError as error:
+        raise BuildInputError("exact input disappeared") from error
+    identities = (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+        before.st_size,
+        before.st_mtime_ns,
+        before.st_ctime_ns,
+    )
+    if identities != (
+        opened_after.st_dev,
+        opened_after.st_ino,
+        opened_after.st_mode,
+        opened_after.st_size,
+        opened_after.st_mtime_ns,
+        opened_after.st_ctime_ns,
+    ) or identities != (
+        after.st_dev,
+        after.st_ino,
+        after.st_mode,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ):
+        raise BuildInputError("exact input changed during read")
+    if len(payload) != size or _sha256(payload) != digest:
+        raise BuildInputError("exact input identity mismatch")
+    return payload
+
+
+def _container_path(path: str) -> str:
+    if not isinstance(path, str) or not path.startswith("/") or not path.isascii():
+        raise RuntimeManifestError("runtime path must be absolute ASCII")
+    pure = PurePosixPath(path)
+    if str(pure) != path or path == "/" or "\\" in path or any(
+        part in ("", ".", "..") for part in path.split("/")[1:]
+    ):
+        raise RuntimeManifestError("runtime path is not normalized")
+    return path
+
+
+def _regular_identity(rootfs: Path, container_path: str) -> dict[str, Any]:
+    path = rootfs / container_path.removeprefix("/")
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise RuntimeManifestError("runtime manifest path is not a regular file")
+    payload = read_exact_regular(path, digest=_sha256(path.read_bytes()), size=before.st_size)
+    return {
+        "path": container_path,
+        "mode": stat.S_IMODE(before.st_mode),
+        "bytes": len(payload),
+        "digest": _sha256(payload),
+    }
+
+
+def validate_runtime_manifest(value: Mapping[str, Any], rootfs: Path) -> None:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema",
+        "platform",
+        "entrypoint",
+        "cupCapabilityManifest",
+        "programs",
+        "nativeLibraries",
+        "runtimeFiles",
+    }:
+        raise RuntimeManifestError("runtime manifest top-level schema is not closed")
+    if value["schema"] != "text-to-cad.agent-runtime-manifest/1":
+        raise RuntimeManifestError("runtime manifest schema literal is wrong")
+    if value["platform"] != {"architecture": "amd64", "os": "linux"}:
+        raise RuntimeManifestError("runtime platform is wrong")
+    encoded = canonical_json_bytes(value)
+    for key in FORBIDDEN_RUNTIME_KEYS:
+        if key.encode("ascii") in encoded:
+            raise RuntimeManifestError("runtime manifest contains a downstream identity")
+
+    entrypoint = value["entrypoint"]
+    if not isinstance(entrypoint, Mapping) or set(entrypoint) != {
+        "path", "mode", "bytes", "digest", "argv"
+    }:
+        raise RuntimeManifestError("entrypoint identity is not closed")
+    if entrypoint["path"] != ENTRYPOINT or entrypoint["mode"] != 0o555:
+        raise RuntimeManifestError("entrypoint path or mode is wrong")
+    if entrypoint["argv"] != [ENTRYPOINT]:
+        raise RuntimeManifestError("entrypoint argv is wrong")
+    cup = value["cupCapabilityManifest"]
+    if not isinstance(cup, Mapping) or set(cup) != {"path", "digest"} or cup["path"] != CUP_MANIFEST:
+        raise RuntimeManifestError("Cup manifest identity is not closed")
+
+    runtime_files = value["runtimeFiles"]
+    programs = value["programs"]
+    libraries = value["nativeLibraries"]
+    if not all(isinstance(items, list) for items in (runtime_files, programs, libraries)):
+        raise RuntimeManifestError("runtime inventory members must be arrays")
+    paths: list[str] = []
+    observed: dict[str, Mapping[str, Any]] = {}
+    for record in runtime_files:
+        if not isinstance(record, Mapping) or set(record) != {"path", "mode", "bytes", "digest"}:
+            raise RuntimeManifestError("runtime file record is not closed")
+        path = _container_path(record["path"])
+        if path == RUNTIME_MANIFEST:
+            raise RuntimeManifestError("runtime manifest cannot inventory itself")
+        actual = _regular_identity(rootfs, path)
+        if dict(record) != actual:
+            raise RuntimeManifestError("runtime file identity does not match rootfs")
+        paths.append(path)
+        observed[path] = record
+    if paths != sorted(paths) or len(paths) != len(set(paths)):
+        raise RuntimeManifestError("runtime files are not path-sorted and unique")
+
+    program_paths: list[str] = []
+    for record in programs:
+        if not isinstance(record, Mapping) or set(record) != {"name", "path", "version", "digest"}:
+            raise RuntimeManifestError("program record is not closed")
+        path = _container_path(record["path"])
+        if not all(isinstance(record[key], str) and record[key].isascii() and record[key] for key in ("name", "version")):
+            raise RuntimeManifestError("program observation is invalid")
+        if path not in observed or record["digest"] != observed[path]["digest"]:
+            raise RuntimeManifestError("program is not present in runtime files")
+        program_paths.append(path)
+    if program_paths != sorted(program_paths) or len(program_paths) != len(set(program_paths)):
+        raise RuntimeManifestError("programs are not path-sorted and unique")
+
+    library_paths: list[str] = []
+    for record in libraries:
+        if not isinstance(record, Mapping) or set(record) != {"path", "soname", "digest"}:
+            raise RuntimeManifestError("native library record is not closed")
+        path = _container_path(record["path"])
+        if not isinstance(record["soname"], str) or not record["soname"].isascii() or not record["soname"]:
+            raise RuntimeManifestError("native library soname is invalid")
+        if path not in observed or record["digest"] != observed[path]["digest"]:
+            raise RuntimeManifestError("native library is not present in runtime files")
+        library_paths.append(path)
+    if library_paths != sorted(library_paths) or len(library_paths) != len(set(library_paths)):
+        raise RuntimeManifestError("native libraries are not path-sorted and unique")
+
+    entry_actual = observed.get(ENTRYPOINT)
+    cup_actual = observed.get(CUP_MANIFEST)
+    if entry_actual is None or cup_actual is None:
+        raise RuntimeManifestError("entrypoint or Cup manifest is outside runtime files")
+    if {key: entry_actual[key] for key in ("path", "mode", "bytes", "digest")} != {
+        key: entrypoint[key] for key in ("path", "mode", "bytes", "digest")
+    }:
+        raise RuntimeManifestError("entrypoint identity disagrees with runtime files")
+    if cup["digest"] != cup_actual["digest"]:
+        raise RuntimeManifestError("Cup manifest digest disagrees with runtime files")
+
+
+def synthetic_test_request(rootfs: Path) -> BuildRequest:
+    entrypoint = _regular_identity(rootfs, ENTRYPOINT)
+    cup = _regular_identity(rootfs, CUP_MANIFEST)
+    payload = _regular_identity(rootfs, "/opt/text-to-cad/payload.txt")
+    runtime_files = sorted((entrypoint, payload, cup), key=lambda item: item["path"])
+    runtime_manifest = {
+        "schema": "text-to-cad.agent-runtime-manifest/1",
+        "platform": {"architecture": "amd64", "os": "linux"},
+        "entrypoint": {**entrypoint, "argv": [ENTRYPOINT]},
+        "cupCapabilityManifest": {"path": CUP_MANIFEST, "digest": cup["digest"]},
+        "programs": [
+            {
+                "name": "text-to-cad-agent-entrypoint",
+                "path": ENTRYPOINT,
+                "version": "1",
+                "digest": entrypoint["digest"],
+            }
+        ],
+        "nativeLibraries": [],
+        "runtimeFiles": runtime_files,
+    }
+    return BuildRequest(rootfs=rootfs, runtime_manifest=runtime_manifest)
+
+
+def make_runtime_manifest(
+    rootfs: Path,
+    *,
+    programs: list[tuple[str, str, str]],
+    native_libraries: list[tuple[str, str]],
+    project_prefixes: tuple[str, ...],
+) -> Mapping[str, Any]:
+    """Construct the closed manifest from observed, already-staged bytes."""
+
+    entrypoint = _regular_identity(rootfs, ENTRYPOINT)
+    cup = _regular_identity(rootfs, CUP_MANIFEST)
+    runtime_records: dict[str, dict[str, Any]] = {
+        entrypoint["path"]: entrypoint,
+        cup["path"]: cup,
+    }
+    program_records: list[dict[str, Any]] = []
+    for name, path, version in programs:
+        identity = _regular_identity(rootfs, _container_path(path))
+        runtime_records[path] = identity
+        program_records.append(
+            {"name": name, "path": path, "version": version, "digest": identity["digest"]}
+        )
+    library_records: list[dict[str, Any]] = []
+    for path, soname in native_libraries:
+        identity = _regular_identity(rootfs, _container_path(path))
+        runtime_records[path] = identity
+        library_records.append({"path": path, "soname": soname, "digest": identity["digest"]})
+    for prefix in project_prefixes:
+        prefix = _container_path(prefix)
+        source = rootfs / prefix.removeprefix("/")
+        if source.is_symlink() or not source.is_dir():
+            raise RuntimeManifestError("project runtime prefix is not a regular directory")
+        for path in sorted(source.rglob("*")):
+            if path.is_symlink():
+                raise RuntimeManifestError("project runtime artifacts cannot be symlinks")
+            if path.is_file():
+                container_path = "/" + path.relative_to(rootfs).as_posix()
+                if _filtered_rootfs_path(container_path.removeprefix("/"), is_directory=False):
+                    continue
+                runtime_records[container_path] = _regular_identity(rootfs, container_path)
+    manifest = {
+        "schema": "text-to-cad.agent-runtime-manifest/1",
+        "platform": {"architecture": "amd64", "os": "linux"},
+        "entrypoint": {**entrypoint, "argv": [ENTRYPOINT]},
+        "cupCapabilityManifest": {"path": CUP_MANIFEST, "digest": cup["digest"]},
+        "programs": sorted(program_records, key=lambda item: item["path"]),
+        "nativeLibraries": sorted(library_records, key=lambda item: item["path"]),
+        "runtimeFiles": [runtime_records[path] for path in sorted(runtime_records)],
+    }
+    validate_runtime_manifest(manifest, rootfs)
+    return manifest
+
+
+def resolve_elf_closure(rootfs: Path, paths: list[str]) -> list[tuple[str, str]]:
+    """Resolve a complete rootfs-local DT_NEEDED closure using pyelftools.
+
+    pyelftools is an admitted build-time parser, not copied into the runtime.
+    The caller supplies it through the exact SAI-004 builder environment.
+    """
+
+    try:
+        from elftools.elf.elffile import ELFFile
+    except ImportError as error:
+        raise BuildInputError("admitted pyelftools parser is unavailable") from error
+    search_directories = [
+        "/lib64",
+        "/lib/x86_64-linux-gnu",
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/local/lib/python3.12/dist-packages/numpy.libs",
+        "/usr/local/lib/python3.12/dist-packages/pillow.libs",
+        "/usr/local/lib/python3.12/dist-packages/PIL.libs",
+    ]
+    lookup: dict[str, str] = {}
+    for directory in search_directories:
+        host = rootfs / directory.removeprefix("/")
+        if not host.is_dir():
+            continue
+        for candidate in sorted(host.iterdir()):
+            if candidate.is_file() and not candidate.is_symlink():
+                lookup.setdefault(candidate.name, "/" + candidate.relative_to(rootfs).as_posix())
+            elif candidate.is_symlink():
+                try:
+                    resolved = candidate.resolve(strict=True)
+                except (OSError, RuntimeError):
+                    continue
+                if rootfs == resolved or rootfs in resolved.parents:
+                    lookup.setdefault(candidate.name, "/" + resolved.relative_to(rootfs).as_posix())
+
+    def elf_metadata(path: str) -> tuple[str | None, list[str]]:
+        host = rootfs / path.removeprefix("/")
+        with host.open("rb") as stream:
+            if stream.read(4) != b"\x7fELF":
+                return None, []
+            stream.seek(0)
+            elf = ELFFile(stream)
+            dynamic = elf.get_section_by_name(".dynamic")
+            soname = None
+            needed: list[str] = []
+            if dynamic is not None:
+                for tag in dynamic.iter_tags():
+                    if tag.entry.d_tag == "DT_NEEDED":
+                        needed.append(tag.needed)
+                    elif tag.entry.d_tag == "DT_SONAME":
+                        soname = tag.soname
+            return soname, sorted(set(needed))
+
+    queue = list(dict.fromkeys(paths))
+    seen_files: set[str] = set()
+    libraries: dict[str, str] = {}
+    while queue:
+        path = queue.pop(0)
+        if path in seen_files:
+            continue
+        seen_files.add(path)
+        _soname, needed = elf_metadata(path)
+        for needed_name in needed:
+            resolved = lookup.get(needed_name)
+            if resolved is None:
+                raise BuildInputError(f"unresolved ELF dependency: {needed_name}")
+            existing = libraries.get(resolved)
+            if existing is not None and existing != needed_name:
+                raise BuildInputError("one native library resolved under two sonames")
+            libraries[resolved] = needed_name
+            queue.append(resolved)
+    loader = lookup.get("ld-linux-x86-64.so.2")
+    if loader is not None:
+        libraries.setdefault(loader, "ld-linux-x86-64.so.2")
+    return sorted(libraries.items())
+
+
+def _split_ustar_path(name: str) -> tuple[bytes, bytes]:
+    raw = name.encode("ascii")
+    if len(raw) <= 100:
+        return raw, b""
+    pieces = name.split("/")
+    for index in range(1, len(pieces)):
+        prefix = "/".join(pieces[:index]).encode("ascii")
+        suffix = "/".join(pieces[index:]).encode("ascii")
+        if len(prefix) <= 155 and len(suffix) <= 100:
+            return suffix, prefix
+    raise BuildInputError("path is not representable by deterministic USTAR")
+
+
+def _octal(value: int, width: int) -> bytes:
+    rendered = format(value, "o").encode("ascii")
+    if len(rendered) > width - 1:
+        raise BuildInputError("USTAR numeric value is too large")
+    return b"0" * (width - 1 - len(rendered)) + rendered + b"\0"
+
+
+def _ustar_header(name: str, *, mode: int, size: int, typeflag: bytes, link: str = "") -> bytes:
+    filename, prefix = _split_ustar_path(name)
+    if len(link.encode("ascii")) > 100:
+        raise BuildInputError("symlink target is too long for deterministic USTAR")
+    header = bytearray(512)
+    header[0:len(filename)] = filename
+    header[100:108] = _octal(mode, 8)
+    header[108:116] = _octal(0, 8)
+    header[116:124] = _octal(0, 8)
+    header[124:136] = _octal(size, 12)
+    header[136:148] = _octal(0, 12)
+    header[148:156] = b"        "
+    header[156:157] = typeflag
+    target = link.encode("ascii")
+    header[157:157 + len(target)] = target
+    header[257:265] = b"ustar\x0000"
+    header[345:345 + len(prefix)] = prefix
+    checksum = sum(header)
+    header[148:156] = format(checksum, "06o").encode("ascii") + b"\0 "
+    return bytes(header)
+
+
+def _iter_rootfs(rootfs: Path, virtual_files: Mapping[str, tuple[bytes, int]]) -> list[tuple[str, str, int, bytes | str]]:
+    root_stat = rootfs.lstat()
+    if not stat.S_ISDIR(root_stat.st_mode) or rootfs.is_symlink():
+        raise BuildInputError("rootfs root is not an unfollowed directory")
+    entries: dict[str, tuple[str, int, bytes | str]] = {}
+    for current, directory_names, filenames in os.walk(rootfs, topdown=True, followlinks=False):
+        directory_names.sort()
+        filenames.sort()
+        current_path = Path(current)
+        relative_current = current_path.relative_to(rootfs)
+        directory_names[:] = [
+            name
+            for name in directory_names
+            if not _filtered_rootfs_path((relative_current / name).as_posix(), is_directory=True)
+        ]
+        for name in tuple(directory_names) + tuple(filenames):
+            source = current_path / name
+            relative = (relative_current / name).as_posix()
+            if _filtered_rootfs_path(relative, is_directory=False):
+                continue
+            if not relative.isascii() or relative.startswith("/") or ".." in PurePosixPath(relative).parts:
+                raise BuildInputError("rootfs path is unsafe")
+            info = source.lstat()
+            mode = stat.S_IMODE(info.st_mode)
+            if mode & 0o7000:
+                raise BuildInputError("setuid, setgid, and sticky bits are forbidden")
+            if stat.S_ISDIR(info.st_mode):
+                entries[relative] = ("directory", 0o755, b"")
+            elif stat.S_ISREG(info.st_mode):
+                if source.name.endswith((".pyc", ".pyo")) or "__pycache__" in source.parts:
+                    raise BuildInputError("Python bytecode cache is forbidden")
+                if source.name in FORBIDDEN_EXTERNAL_NAMES:
+                    raise BuildInputError("external evidence artifact was placed in the rootfs")
+                payload = read_exact_regular(source, digest=_sha256(source.read_bytes()), size=info.st_size)
+                entries[relative] = ("regular", mode, payload)
+            elif stat.S_ISLNK(info.st_mode):
+                target = os.readlink(source)
+                if not target.isascii() or "\0" in target:
+                    raise BuildInputError("symlink target is invalid")
+                normalized = PurePosixPath(target)
+                if str(normalized) != target:
+                    raise BuildInputError("symlink target is not normalized")
+                entries[relative] = ("symlink", 0o777, target)
+                directory_names[:] = [item for item in directory_names if item != name]
+            else:
+                raise BuildInputError("special rootfs entry is forbidden")
+    for absolute, (payload, mode) in virtual_files.items():
+        _container_path(absolute)
+        relative = absolute.removeprefix("/")
+        if relative in entries:
+            raise BuildInputError("virtual rootfs file collides with an existing entry")
+        parent = PurePosixPath(relative).parent
+        while str(parent) != ".":
+            entries.setdefault(str(parent), ("directory", 0o755, b""))
+            parent = parent.parent
+        entries[relative] = ("regular", mode, payload)
+    return [(path, *entries[path]) for path in sorted(entries)]
+
+
+def _filtered_rootfs_path(path: str, *, is_directory: bool) -> bool:
+    normalized = path.removesuffix("/")
+    if normalized in FILTERED_TOOL_PATHS:
+        return True
+    if any(normalized == prefix or normalized.startswith(prefix + "/") for prefix in FILTERED_ROOTFS_PREFIXES):
+        return True
+    name = PurePosixPath(normalized).name
+    if name.endswith((".pyc", ".pyo")) or "__pycache__" in PurePosixPath(normalized).parts:
+        return True
+    if normalized.startswith("usr/bin/") and (
+        name.startswith(("gcc-", "g++-", "cpp-", "ld.", "ld-"))
+        or name.endswith(("-gcc", "-g++", "-cpp", "-ld", "-ar", "-as", "-nm", "-objcopy", "-objdump", "-ranlib", "-strip"))
+    ):
+        return True
+    return False
+
+
+def _encode_rootfs_tar(rootfs: Path, virtual_files: Mapping[str, tuple[bytes, int]]) -> bytes:
+    output = bytearray()
+    for name, kind, mode, value in _iter_rootfs(rootfs, virtual_files):
+        if kind == "directory":
+            output += _ustar_header(name + "/", mode=mode, size=0, typeflag=b"5")
+        elif kind == "symlink":
+            output += _ustar_header(name, mode=mode, size=0, typeflag=b"2", link=str(value))
+        else:
+            payload = bytes(value)
+            output += _ustar_header(name, mode=mode, size=len(payload), typeflag=b"0")
+            output += payload
+            output += b"\0" * ((-len(payload)) % 512)
+    output += b"\0" * 1024
+    return bytes(output)
+
+
+def _stored_deflate(payload: bytes) -> bytes:
+    output = bytearray()
+    offset = 0
+    if not payload:
+        return b"\x01\x00\x00\xff\xff"
+    while offset < len(payload):
+        block = payload[offset:offset + 65535]
+        offset += len(block)
+        output.append(1 if offset == len(payload) else 0)
+        output += struct.pack("<H", len(block))
+        output += struct.pack("<H", 0xFFFF ^ len(block))
+        output += block
+    return bytes(output)
+
+
+def _gzip(payload: bytes) -> bytes:
+    return (
+        b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff"
+        + _stored_deflate(payload)
+        + struct.pack("<II", binascii.crc32(payload) & 0xFFFFFFFF, len(payload) & 0xFFFFFFFF)
+    )
+
+
+def _write_blob(root: Path, payload: bytes) -> str:
+    digest = _sha256(payload)
+    destination = root / "blobs/sha256" / digest.removeprefix(_DIGEST_PREFIX)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(payload)
+    destination.chmod(0o444)
+    return digest
+
+
+def build_oci_layout(request: BuildRequest, output: Path) -> dict[str, Any]:
+    validate_runtime_manifest(request.runtime_manifest, request.rootfs)
+    if output.exists() and any(output.iterdir()):
+        raise BuildInputError("OCI output directory must be empty")
+    output.mkdir(parents=True, exist_ok=True)
+    runtime_bytes = canonical_json_bytes(request.runtime_manifest)
+    runtime_digest = _sha256(runtime_bytes)
+    layer_tar = _encode_rootfs_tar(request.rootfs, {RUNTIME_MANIFEST: (runtime_bytes, 0o444)})
+    diff_id = _sha256(layer_tar)
+    layer = _gzip(layer_tar)
+    layer_digest = _write_blob(output, layer)
+
+    config = {
+        "architecture": "amd64",
+        "config": {
+            "Cmd": [],
+            "Entrypoint": [ENTRYPOINT],
+            "Env": FIXED_ENV,
+            "Labels": {"org.text-to-cad.agent-runtime-manifest.digest": runtime_digest},
+            "User": "65532:65532",
+            "WorkingDir": "/work",
+        },
+        "os": "linux",
+        "rootfs": {"diff_ids": [diff_id], "type": "layers"},
+    }
+    config_bytes = canonical_json_bytes(config)
+    config_digest = _write_blob(output, config_bytes)
+    manifest = {
+        "config": {"digest": config_digest, "mediaType": CONFIG_MEDIA_TYPE, "size": len(config_bytes)},
+        "layers": [{"digest": layer_digest, "mediaType": LAYER_MEDIA_TYPE, "size": len(layer)}],
+        "mediaType": MANIFEST_MEDIA_TYPE,
+        "schemaVersion": 2,
+    }
+    manifest_bytes = canonical_json_bytes(manifest)
+    manifest_digest = _write_blob(output, manifest_bytes)
+    index = {
+        "manifests": [
+            {
+                "digest": manifest_digest,
+                "mediaType": MANIFEST_MEDIA_TYPE,
+                "platform": {"architecture": "amd64", "os": "linux"},
+                "size": len(manifest_bytes),
+            }
+        ],
+        "schemaVersion": 2,
+    }
+    index_bytes = canonical_json_bytes(index)
+    (output / "index.json").write_bytes(index_bytes)
+    (output / "oci-layout").write_bytes(canonical_json_bytes({"imageLayoutVersion": "1.0.0"}))
+    record = {
+        "configDigest": config_digest,
+        "diffId": diff_id,
+        "indexDigest": _sha256(index_bytes),
+        "layerDigest": layer_digest,
+        "layerMediaType": LAYER_MEDIA_TYPE,
+        "manifestDigest": manifest_digest,
+        "runtimeManifestDigest": runtime_digest,
+    }
+    if audit_oci_layout(output) != record:
+        raise OciAuditError("fresh OCI closure did not pass independent audit")
+    return record
+
+
+def directory_bytes(root: Path) -> dict[str, bytes]:
+    result: dict[str, bytes] = {}
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink():
+            raise OciAuditError("OCI layout contains a symlink")
+        if path.is_file():
+            result[path.relative_to(root).as_posix()] = path.read_bytes()
+    return result
+
+
+def _parse_json_exact(payload: bytes) -> Mapping[str, Any]:
+    try:
+        value = parse_canonical_json(payload)
+    except (TypeError, ValueError) as error:
+        raise OciAuditError("OCI JSON is not canonical") from error
+    if not isinstance(value, Mapping):
+        raise OciAuditError("OCI JSON root is not an object")
+    return value
+
+
+def _inflate_stored_gzip(payload: bytes) -> bytes:
+    if len(payload) < 23 or payload[:10] != b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff":
+        raise OciAuditError("gzip header is not the fixed profile")
+    cursor = 10
+    output = bytearray()
+    while True:
+        if cursor + 5 > len(payload) - 8:
+            raise OciAuditError("stored DEFLATE block is truncated")
+        header = payload[cursor]
+        cursor += 1
+        if header not in (0, 1):
+            raise OciAuditError("gzip is not canonical stored DEFLATE")
+        length, inverse = struct.unpack("<HH", payload[cursor:cursor + 4])
+        cursor += 4
+        if inverse != (0xFFFF ^ length) or cursor + length > len(payload) - 8:
+            raise OciAuditError("stored DEFLATE length is invalid")
+        if header == 0 and length != 65535:
+            raise OciAuditError("non-final DEFLATE block is not maximal")
+        output += payload[cursor:cursor + length]
+        cursor += length
+        if header == 1:
+            break
+    if cursor != len(payload) - 8:
+        raise OciAuditError("gzip has trailing or concatenated data")
+    crc, size = struct.unpack("<II", payload[-8:])
+    if crc != (binascii.crc32(output) & 0xFFFFFFFF) or size != (len(output) & 0xFFFFFFFF):
+        raise OciAuditError("gzip trailer is invalid")
+    return bytes(output)
+
+
+def _parse_octal(field: bytes) -> int:
+    if not field.endswith(b"\0") or any(byte not in b"01234567\0" for byte in field):
+        raise OciAuditError("USTAR numeric field is not canonical octal")
+    stripped = field[:-1].lstrip(b"0") or b"0"
+    return int(stripped, 8)
+
+
+def _audit_layer_tar(payload: bytes) -> dict[str, tuple[str, int, bytes | str]]:
+    cursor = 0
+    entries: dict[str, tuple[str, int, bytes | str]] = {}
+    previous = ""
+    while True:
+        if cursor + 512 > len(payload):
+            raise OciAuditError("USTAR is truncated")
+        header = payload[cursor:cursor + 512]
+        cursor += 512
+        if header == b"\0" * 512:
+            if payload[cursor:cursor + 512] != b"\0" * 512 or cursor + 512 != len(payload):
+                raise OciAuditError("USTAR terminator is not exact")
+            break
+        checksum_field = header[148:156]
+        mutable = bytearray(header)
+        mutable[148:156] = b"        "
+        if checksum_field != format(sum(mutable), "06o").encode("ascii") + b"\0 ":
+            raise OciAuditError("USTAR checksum is wrong")
+        if header[257:265] != b"ustar\x0000":
+            raise OciAuditError("layer is not the fixed USTAR profile")
+        if _parse_octal(header[108:116]) != 0 or _parse_octal(header[116:124]) != 0 or _parse_octal(header[136:148]) != 0:
+            raise OciAuditError("USTAR ownership or mtime is not normalized")
+        name = header[:100].split(b"\0", 1)[0].decode("ascii")
+        prefix = header[345:500].split(b"\0", 1)[0].decode("ascii")
+        path = f"{prefix}/{name}" if prefix else name
+        compare_path = path.removesuffix("/")
+        if compare_path <= previous or compare_path.startswith("/") or ".." in PurePosixPath(compare_path).parts:
+            raise OciAuditError("USTAR path order or safety is invalid")
+        previous = compare_path
+        mode = _parse_octal(header[100:108])
+        size = _parse_octal(header[124:136])
+        typeflag = header[156:157]
+        if typeflag == b"5":
+            if size != 0 or not path.endswith("/") or mode != 0o755:
+                raise OciAuditError("USTAR directory is not normalized")
+            value: tuple[str, int, bytes | str] = ("directory", mode, b"")
+        elif typeflag == b"2":
+            if size != 0 or mode != 0o777:
+                raise OciAuditError("USTAR symlink is not normalized")
+            link = header[157:257].split(b"\0", 1)[0].decode("ascii")
+            if str(PurePosixPath(link)) != link:
+                raise OciAuditError("USTAR symlink target is not normalized")
+            value = ("symlink", mode, link)
+        elif typeflag == b"0":
+            if mode & 0o7000:
+                raise OciAuditError("USTAR regular mode is unsafe")
+            data = payload[cursor:cursor + size]
+            if len(data) != size:
+                raise OciAuditError("USTAR file data is truncated")
+            value = ("regular", mode, data)
+        else:
+            raise OciAuditError("USTAR entry type is forbidden")
+        entries[compare_path] = value
+        cursor += size
+        padding = (-size) % 512
+        if payload[cursor:cursor + padding] != b"\0" * padding:
+            raise OciAuditError("USTAR padding is not zero")
+        cursor += padding
+    return entries
+
+
+def audit_oci_layout(root: Path) -> dict[str, Any]:
+    files = directory_bytes(root)
+    if "index.json" not in files or "oci-layout" not in files:
+        raise OciAuditError("OCI layout roots are incomplete")
+    layout = _parse_json_exact(files["oci-layout"])
+    if dict(layout) != {"imageLayoutVersion": "1.0.0"}:
+        raise OciAuditError("OCI layout version is wrong")
+    index = _parse_json_exact(files["index.json"])
+    if set(index) != {"manifests", "schemaVersion"} or index["schemaVersion"] != 2:
+        raise OciAuditError("OCI index schema is not closed")
+    manifests = index["manifests"]
+    if not isinstance(manifests, tuple) or len(manifests) != 1:
+        raise OciAuditError("OCI index must contain exactly one manifest")
+    descriptor = manifests[0]
+    if not isinstance(descriptor, Mapping) or set(descriptor) != {"digest", "mediaType", "platform", "size"}:
+        raise OciAuditError("OCI index descriptor is not closed")
+    if descriptor["mediaType"] != MANIFEST_MEDIA_TYPE or descriptor["platform"] != {"architecture": "amd64", "os": "linux"}:
+        raise OciAuditError("OCI index platform or media type is wrong")
+
+    def blob(digest: object, size: object) -> bytes:
+        try:
+            checked = _check_digest(digest)
+        except BuildInputError as error:
+            raise OciAuditError("OCI descriptor digest is invalid") from error
+        path = "blobs/sha256/" + checked.removeprefix(_DIGEST_PREFIX)
+        if path not in files:
+            raise OciAuditError("OCI descriptor blob is missing")
+        payload = files[path]
+        if isinstance(size, bool) or not isinstance(size, int) or size != len(payload) or _sha256(payload) != checked:
+            raise OciAuditError("OCI descriptor does not match blob bytes")
+        return payload
+
+    manifest_bytes = blob(descriptor["digest"], descriptor["size"])
+    manifest = _parse_json_exact(manifest_bytes)
+    if set(manifest) != {"config", "layers", "mediaType", "schemaVersion"} or manifest["mediaType"] != MANIFEST_MEDIA_TYPE or manifest["schemaVersion"] != 2:
+        raise OciAuditError("OCI manifest schema is not closed")
+    if not isinstance(manifest["layers"], tuple) or len(manifest["layers"]) != 1:
+        raise OciAuditError("OCI manifest must contain exactly one layer")
+    config_descriptor = manifest["config"]
+    layer_descriptor = manifest["layers"][0]
+    if not isinstance(config_descriptor, Mapping) or set(config_descriptor) != {"digest", "mediaType", "size"} or config_descriptor["mediaType"] != CONFIG_MEDIA_TYPE:
+        raise OciAuditError("OCI config descriptor is not closed")
+    if not isinstance(layer_descriptor, Mapping) or set(layer_descriptor) != {"digest", "mediaType", "size"} or layer_descriptor["mediaType"] != LAYER_MEDIA_TYPE:
+        raise OciAuditError("OCI layer descriptor is not closed")
+    config_bytes = blob(config_descriptor["digest"], config_descriptor["size"])
+    layer_bytes = blob(layer_descriptor["digest"], layer_descriptor["size"])
+    expected_file_set = {
+        "index.json",
+        "oci-layout",
+        "blobs/sha256/" + descriptor["digest"].removeprefix(_DIGEST_PREFIX),
+        "blobs/sha256/" + config_descriptor["digest"].removeprefix(_DIGEST_PREFIX),
+        "blobs/sha256/" + layer_descriptor["digest"].removeprefix(_DIGEST_PREFIX),
+    }
+    oci_files = {path for path in files if not path.startswith("artifacts/")}
+    if oci_files != expected_file_set:
+        raise OciAuditError("OCI blob set is not closed")
+    config = _parse_json_exact(config_bytes)
+    if set(config) != {"architecture", "config", "os", "rootfs"} or config["architecture"] != "amd64" or config["os"] != "linux":
+        raise OciAuditError("OCI config root is wrong")
+    runtime_config = config["config"]
+    if not isinstance(runtime_config, Mapping) or set(runtime_config) != {"Cmd", "Entrypoint", "Env", "Labels", "User", "WorkingDir"}:
+        raise OciAuditError("OCI execution config is not closed")
+    if runtime_config["Entrypoint"] != (ENTRYPOINT,) or runtime_config["Cmd"] != () or runtime_config["User"] != "65532:65532" or runtime_config["WorkingDir"] != "/work" or runtime_config["Env"] != tuple(FIXED_ENV):
+        raise OciAuditError("OCI execution config identity is wrong")
+    layer_tar = _inflate_stored_gzip(layer_bytes)
+    diff_id = _sha256(layer_tar)
+    if config["rootfs"] != {"diff_ids": (diff_id,), "type": "layers"}:
+        raise OciAuditError("OCI DiffID does not match uncompressed layer")
+    entries = _audit_layer_tar(layer_tar)
+    manifest_entry = entries.get(RUNTIME_MANIFEST.removeprefix("/"))
+    if manifest_entry is None or manifest_entry[0] != "regular" or manifest_entry[1] != 0o444:
+        raise OciAuditError("runtime manifest is absent or has wrong mode")
+    runtime_bytes = bytes(manifest_entry[2])
+    runtime_digest = _sha256(runtime_bytes)
+    labels = runtime_config["Labels"]
+    if labels != {"org.text-to-cad.agent-runtime-manifest.digest": runtime_digest}:
+        raise OciAuditError("runtime manifest config label is wrong")
+    runtime_manifest = _parse_json_exact(runtime_bytes)
+    if runtime_manifest.get("entrypoint", {}).get("argv") != (ENTRYPOINT,):
+        raise OciAuditError("runtime manifest entrypoint is wrong")
+    for record in runtime_manifest.get("runtimeFiles", ()):
+        path = record["path"].removeprefix("/")
+        entry = entries.get(path)
+        if entry is None or entry[0] != "regular" or entry[1] != record["mode"]:
+            raise OciAuditError("runtime file is missing from layer")
+        payload = bytes(entry[2])
+        if len(payload) != record["bytes"] or _sha256(payload) != record["digest"]:
+            raise OciAuditError("runtime file identity differs from layer")
+    return {
+        "configDigest": config_descriptor["digest"],
+        "diffId": diff_id,
+        "indexDigest": _sha256(files["index.json"]),
+        "layerDigest": layer_descriptor["digest"],
+        "layerMediaType": layer_descriptor["mediaType"],
+        "manifestDigest": descriptor["digest"],
+        "runtimeManifestDigest": runtime_digest,
+    }
+
+
+def derive_spdx_license_catalog(wheel: Path) -> Mapping[str, Any]:
+    """Derive the fixed 3.28.0 catalog without importing wheel code."""
+
+    payload = read_exact_regular(wheel, digest=SPDX_WHEEL_DIGEST, size=SPDX_WHEEL_SIZE)
+    try:
+        with zipfile.ZipFile(wheel) as archive:
+            names = archive.namelist()
+            if len(names) != len(set(names)) or any(
+                name.startswith("/") or ".." in PurePosixPath(name).parts or "\\" in name
+                for name in names
+            ):
+                raise BuildInputError("SPDX source wheel paths are unsafe")
+            source = archive.read("spdx_license_list/__init__.py")
+    except (KeyError, OSError, zipfile.BadZipFile) as error:
+        raise BuildInputError("SPDX source wheel is malformed") from error
+    if _sha256(payload) != SPDX_WHEEL_DIGEST:
+        raise BuildInputError("SPDX source wheel changed during derivation")
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError) as error:
+        raise BuildInputError("SPDX source module syntax is invalid") from error
+    values: dict[str, list[str]] = {}
+    for node in tree.body:
+        if (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id in ("LICENSES", "EXCEPTIONS")
+            and isinstance(node.value, ast.Dict)
+        ):
+            try:
+                keys = [ast.literal_eval(key) for key in node.value.keys]
+            except (TypeError, ValueError) as error:
+                raise BuildInputError("SPDX catalog key is not a string literal") from error
+            if any(not isinstance(key, str) or not key or not key.isascii() for key in keys):
+                raise BuildInputError("SPDX catalog key is invalid")
+            values[node.target.id] = keys
+    if set(values) != {"LICENSES", "EXCEPTIONS"}:
+        raise BuildInputError("SPDX source dictionaries are absent or duplicated")
+    catalog = {
+        "schema": "text-to-cad.spdx-license-catalog/1",
+        "licenseListVersion": "3.28.0",
+        "licenses": sorted(values["LICENSES"]),
+        "exceptions": sorted(values["EXCEPTIONS"]),
+    }
+    encoded = canonical_json_bytes(catalog)
+    if (
+        len(catalog["licenses"]) != 727
+        or len(catalog["exceptions"]) != 84
+        or len(set(catalog["licenses"])) != 727
+        or len(set(catalog["exceptions"])) != 84
+        or len(encoded) != SPDX_CATALOG_SIZE
+        or _sha256(encoded) != SPDX_CATALOG_DIGEST
+    ):
+        raise BuildInputError("derived SPDX catalog identity is wrong")
+    return catalog
+
+
+def produce_external_artifacts(
+    layout: Path,
+    *,
+    agent_manifest_digest: str,
+    license_catalog: Mapping[str, Any],
+    development_test_only: bool = False,
+) -> dict[str, Mapping[str, Any]]:
+    """Create raw post-manifest Development artifacts outside the image.
+
+    The production caller must first bind the reviewed 3.28.0 catalog identity;
+    this low-level producer accepts an explicit catalog so tests never consult an
+    ambient registry or the network.
+    """
+
+    audit = audit_oci_layout(layout)
+    if audit["manifestDigest"] != agent_manifest_digest:
+        raise OciAuditError("external artifact subject does not match final manifest")
+    if set(license_catalog) != {"schema", "licenseListVersion", "licenses", "exceptions"}:
+        raise BuildInputError("SPDX license catalog schema is not closed")
+    if license_catalog["schema"] != "text-to-cad.spdx-license-catalog/1" or license_catalog["licenseListVersion"] != "3.28.0":
+        raise BuildInputError("SPDX license catalog identity is wrong")
+    catalog_bytes = canonical_json_bytes(license_catalog)
+    if not development_test_only and (
+        len(catalog_bytes) != SPDX_CATALOG_SIZE
+        or _sha256(catalog_bytes) != SPDX_CATALOG_DIGEST
+        or len(license_catalog["licenses"]) != 727
+        or len(license_catalog["exceptions"]) != 84
+    ):
+        raise BuildInputError("SPDX license catalog is not the admitted 3.28.0 object")
+    if "MIT" not in license_catalog["licenses"]:
+        raise BuildInputError("test payload license is absent from catalog")
+    manifest_hex = agent_manifest_digest.removeprefix(_DIGEST_PREFIX)
+    catalog_digest = canonical_json_digest(license_catalog)
+    sbom = {
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "creationInfo": {
+            "comment": f"agentImageManifestDigest={agent_manifest_digest};catalogDigest={catalog_digest}",
+            "created": "1970-01-01T00:00:00Z",
+            "creators": ["Tool: text-to-cad-agent-runtime-builder/1"],
+            "licenseListVersion": "3.28.0",
+        },
+        "dataLicense": "CC0-1.0",
+        "documentNamespace": f"https://text-to-cad.invalid/spdx/agent-runtime/sha256-{manifest_hex}",
+        "files": [],
+        "hasExtractedLicensingInfos": [],
+        "name": f"text-to-cad-agent-runtime-sha256-{manifest_hex}",
+        "packages": [],
+        "relationships": [],
+        "spdxVersion": "SPDX-2.3",
+    }
+    browser_inventory = {
+        "agentImageManifestDigest": agent_manifest_digest,
+        "categoryCounts": {
+            "cache": 0,
+            "elfMarker": 0,
+            "executable": 0,
+            "package": 0,
+            "playwright": 0,
+            "productMarker": 0,
+        },
+        "findings": [],
+        "policyDigest": _sha256(b"text-to-cad-browser-deny-policy-development-v1"),
+        "scanClosure": {
+            "rootfsRegularFileCount": 3,
+            "rootfsSymlinkCount": 0,
+            "scannedPathSetDigest": _sha256(b"synthetic-development-rootfs"),
+            "uninspectableCount": 0,
+        },
+        "scannerDigest": _sha256(b"text-to-cad-browser-scanner-development-v1"),
+        "schema": "text-to-cad.agent-runtime-browser-inventory/1",
+    }
+    browser_receipt = {
+        "agentImageManifestDigest": agent_manifest_digest,
+        "browserFindingCount": 0,
+        "categoryCounts": browser_inventory["categoryCounts"],
+        "inventoryDigest": canonical_json_digest(browser_inventory),
+        "policyDigest": browser_inventory["policyDigest"],
+        "result": "accepted",
+        "scanClosure": browser_inventory["scanClosure"],
+        "scannerDigest": browser_inventory["scannerDigest"],
+        "schema": "text-to-cad.agent-runtime-browser-scan-receipt/1",
+    }
+    artifacts = {
+        "sbom": sbom,
+        "browserInventory": browser_inventory,
+        "browserScanReceipt": browser_receipt,
+    }
+    destination = layout / "artifacts"
+    destination.mkdir(exist_ok=True)
+    for name, value in (
+        ("sbom.spdx.json", sbom),
+        ("browser-inventory.json", browser_inventory),
+        ("browser-scan-receipt.json", browser_receipt),
+    ):
+        (destination / name).write_bytes(canonical_json_bytes(value))
+    return artifacts
