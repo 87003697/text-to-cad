@@ -29,6 +29,26 @@ prove that the hidden or omitted path is not needed by the nested workload and
 cannot hide a browser package, executable, or cache that remains reachable in
 the sandbox.
 
+## Parent decision for the next adaptation pass
+
+The broader runtime-surface redesign is authorized. Produce a candidate patch,
+not another restatement of the known diagnosis, unless a new concrete blocker
+makes implementation impossible. Do not mutate or normalize the shared CVM
+host filesystem, and do not weaken EACCES, dangling-link, symlink-cycle,
+identity-change, or undeclared-root rejection.
+
+Prefer removing `/sys` if provider-free evidence shows the nested Python,
+Codex, CAD, and TLS workload does not require it. Replace the broad `/usr` and
+certificate mounts with an explicit, reviewable runtime surface derived from
+the actual executable and shared-library closure plus required data files.
+Account for `/usr/local/bin`, Python, the repository virtualenv, dynamic loader,
+timezone, name resolution, CA certificates, and the pilot gateway. The result
+must remain closed under every symlink reachable from a declared root. Add
+focused contract tests that prove excluded host-management trees are not
+mounted, required runtime paths are mounted, and browser artifacts on every
+remaining declared root are still found and masked. Use read-only CVM probes
+to justify the allowlist; do not run a formal or provider-backed pilot.
+
 If source changes are justified, make the smallest fail-closed correction and
 add focused regression tests. Preserve undeclared-root escape, dangling-link,
 cycle, identity-change, uninspectable-entry, writable-browser-artifact, and
