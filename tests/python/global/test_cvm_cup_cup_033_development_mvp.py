@@ -77,7 +77,7 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
                 path = exp / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(payload)
-            (exp / "run/stderr.log").touch()
+            (exp / "run/codex-stderr.txt").touch()
             module.validate_outputs(exp)
             (exp / "review.md").write_bytes(b"")
             with self.assertRaisesRegex(module.MvpError, "review.md"):
@@ -100,6 +100,8 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             exp = Path(directory)
             (exp / "receipt.json").write_text("{}", encoding="utf-8")
+            (exp / "run").mkdir()
+            (exp / "run/codex-stderr.txt").write_bytes(b"diagnostic\n")
             module.write_artifact_manifest(exp, 0, "a" * 40)
             manifest = json.loads((exp / "artifact_manifest.json").read_text(encoding="utf-8"))
             self.assertIs(type(manifest["final_status"]), int)
@@ -113,6 +115,10 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
             self.assertEqual(manifest["build_command"][-5:], [
                 "--resolution", "64", "--max-cells", "1000000", "--json",
             ])
+            self.assertIn(
+                "run/codex-stderr.txt",
+                [item["path"] for item in manifest["files"]],
+            )
             self.assertEqual(manifest["files"][0]["path"], "receipt.json")
 
     def test_run_plan_rejects_existing_output_and_wrong_fixed_input_digest(self):
@@ -254,6 +260,44 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
             self.assertEqual(value["tools"]["exportCommand"], command)
             self.assertEqual(value["tools"]["versions"]["node"], "v22.test")
             self.assertEqual(value["tools"]["versions"]["trimesh"], "4.test")
+
+    def test_stderr_evidence_exactly_copies_bytes_and_reports_transfer_metadata(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            source = run / "stderr.log"
+            target = run / "codex-stderr.txt"
+            payload = b"diagnostic: failure\n\x00tail"
+            source.write_bytes(payload)
+            evidence = module.publish_stderr_evidence(
+                source, target, forbidden_values=("upstream-secret", "client-secret"),
+            )
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(evidence, {
+                "path": "run/codex-stderr.txt",
+                "sha256": module.sha256(target),
+                "bytes": len(payload),
+                "transferPolicy": "included-canonical-byte-copy; run/stderr.log default-excluded",
+            })
+
+    def test_empty_stderr_is_preserved_and_secret_capability_blocks_transfer(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            run = Path(directory)
+            source = run / "stderr.log"
+            target = run / "codex-stderr.txt"
+            source.touch()
+            evidence = module.publish_stderr_evidence(source, target, forbidden_values=("secret",))
+            self.assertEqual(evidence["bytes"], 0)
+            self.assertEqual(target.read_bytes(), b"")
+            target.unlink()
+            source.write_bytes(b"prefix forbidden-token suffix")
+            with self.assertRaisesRegex(module.MvpError, "forbidden capability"):
+                module.publish_stderr_evidence(
+                    source, target, forbidden_values=("forbidden-token",),
+                )
+            self.assertFalse(target.exists())
 
 
 if __name__ == "__main__":

@@ -182,6 +182,40 @@ def run_process_group(
         return process.returncode, timed_out, group_absent
 
 
+def publish_stderr_evidence(
+    source: Path, target: Path, *, forbidden_values: Sequence[str] = (),
+) -> dict[str, object]:
+    """Publish the closed stderr stream without placing its contents in JSON."""
+
+    if source.is_symlink() or not source.is_file():
+        raise MvpError("Codex stderr source must be one regular file")
+    if target.exists() or target.is_symlink():
+        raise MvpError("Codex stderr evidence target must be fresh")
+    payload = source.read_bytes()
+    for value in forbidden_values:
+        if value and value.encode("utf-8") in payload:
+            raise MvpError("Codex stderr contains a forbidden capability")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        target.chmod(0o600)
+        if target.read_bytes() != payload:
+            raise MvpError("Codex stderr evidence byte copy mismatch")
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
+    return {
+        "path": "run/codex-stderr.txt",
+        "sha256": sha256(target),
+        "bytes": len(payload),
+        "transferPolicy": "included-canonical-byte-copy; run/stderr.log default-excluded",
+    }
+
+
 def outer_export_command(repo_root: Path, working_source: Path, glb_path: Path) -> list[str]:
     return [
         "node", os.fspath(repo_root / "packages/implicitjs/scripts/export.mjs"),
@@ -284,9 +318,9 @@ def validate_outputs(exp_dir: Path) -> None:
     )
     for relative in required:
         _regular_nonempty(exp_dir / relative, relative)
-    stderr = exp_dir / "run/stderr.log"
+    stderr = exp_dir / "run/codex-stderr.txt"
     if stderr.is_symlink() or not stderr.is_file():
-        raise MvpError("run/stderr.log must be a regular file")
+        raise MvpError("run/codex-stderr.txt must be a regular file")
     try:
         measurement = json.loads((exp_dir / "measurement/numeric-measurement.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
@@ -445,6 +479,10 @@ def execute(
                 "parameters": {"format": "glb", "resolution": 64, "maxCells": 1_000_000},
                 "timeoutSeconds": OUTER_BUILD_SECONDS,
             },
+            "stderrEvidence": {
+                "path": "run/codex-stderr.txt", "sha256": None, "bytes": None,
+                "transferPolicy": "not-run; paid dispatch zero before Codex",
+            },
             "paidDispatchCount": 0,
             "accounting": {
                 "jobCount": 0, "attemptCount": 0,
@@ -513,6 +551,18 @@ def execute(
             config.unlink(missing_ok=True)
     private_absent = not Path(private_name).exists()
 
+    try:
+        stderr_evidence = publish_stderr_evidence(
+            run_dir / "stderr.log", run_dir / "codex-stderr.txt",
+            forbidden_values=(upstream_token, client_token),
+        )
+    except MvpError as error:
+        failure = failure or {"stage": "stderr-evidence", "category": type(error).__name__}
+        stderr_evidence = {
+            "path": "run/codex-stderr.txt", "sha256": None, "bytes": None,
+            "transferPolicy": "blocked; source absent, unsafe, or contained a capability",
+        }
+
     events = run_dir / "codex-events.jsonl"
     if events.is_file():
         shutil.copyfile(events, run_dir / "stdout.log")
@@ -548,6 +598,7 @@ def execute(
         "buildOwnership": "outer-deterministic-provider-free",
         "gptRole": "review-only",
         "outerBuild": outer_build,
+        "stderrEvidence": stderr_evidence,
         "policy": {"maxJobs": 1, "maxAttempts": 16, "maxRequestBytes": 200000,
                    "maxOutputTokens": 40000, "maxJobSeconds": MAX_SECONDS,
                    "worstCaseAttemptUsd": "2.450000", "worstCaseJobUsd": "39.200000",
