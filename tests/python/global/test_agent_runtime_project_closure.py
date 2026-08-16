@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import base64
+import csv
 import hashlib
 import importlib.util
+from io import StringIO
 import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -15,6 +19,14 @@ import zipfile
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PROJECT_CLOSURE = REPO_ROOT / "packages" / "agent_runtime" / "project_closure.py"
+
+
+def _digest(label: str) -> str:
+    return hashlib.sha256(label.encode("ascii")).hexdigest()
+
+
+def _canonical_digest(label: str) -> str:
+    return f"sha256:{_digest(label)}"
 
 
 def _load_project_closure():
@@ -27,7 +39,63 @@ def _load_project_closure():
     return module
 
 
+def _rewrite_wheel(
+    source: Path,
+    destination: Path,
+    *,
+    replacements: dict[str, bytes] | None = None,
+    extra: tuple[str, bytes] | None = None,
+    duplicate: str | None = None,
+    executable: str | None = None,
+    record_without: str | None = None,
+    rebuild_record: bool = False,
+) -> None:
+    replacements = replacements or {}
+    with zipfile.ZipFile(source) as archive:
+        entries = [(info, archive.read(info.filename)) for info in archive.infolist()]
+    values = {info.filename: replacements.get(info.filename, payload) for info, payload in entries}
+    record_name = next(name for name in values if name.endswith(".dist-info/RECORD"))
+    if extra is not None:
+        values[extra[0]] = extra[1]
+    if rebuild_record:
+        rows = []
+        for name, payload in values.items():
+            if name == record_name or name == record_without:
+                continue
+            digest = (
+                base64.urlsafe_b64encode(hashlib.sha256(payload).digest())
+                .rstrip(b"=")
+                .decode("ascii")
+            )
+            rows.append((name, f"sha256={digest}", str(len(payload))))
+        rows.append((record_name, "", ""))
+        stream = StringIO(newline="")
+        csv.writer(stream, lineterminator="\n").writerows(rows)
+        values[record_name] = stream.getvalue().encode("utf-8")
+    with zipfile.ZipFile(destination, "w") as output:
+        for original, _ in entries:
+            info = zipfile.ZipInfo(original.filename, original.date_time)
+            info.compress_type = original.compress_type
+            info.external_attr = original.external_attr
+            info.create_system = original.create_system
+            if executable == original.filename:
+                info.external_attr = (stat.S_IFREG | 0o755) << 16
+            output.writestr(info, values[original.filename])
+        if extra is not None:
+            info = zipfile.ZipInfo(extra[0], entries[0][0].date_time)
+            info.external_attr = (stat.S_IFREG | 0o644) << 16
+            output.writestr(info, extra[1])
+        if duplicate is not None:
+            output.writestr(duplicate, values[duplicate])
+
+
 class AgentRuntimeProjectClosureTests(unittest.TestCase):
+    def test_project_closure_uses_the_single_shared_canonical_json_seam(self) -> None:
+        closure = _load_project_closure()
+        from scripts.pilot.agent_runtime import canonical_json_bytes
+
+        self.assertIs(closure.canonical_json_bytes, canonical_json_bytes)
+
     def test_browser_free_meshshot_is_a_real_closed_distribution(self) -> None:
         closure = _load_project_closure()
         with tempfile.TemporaryDirectory(prefix="meshshot-agent-runtime-") as directory:
@@ -88,15 +156,19 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                         "SOURCE_DATE_EPOCH": "1755302400",
                         "PYTHONHASHSEED": "0",
                     },
-                    check=True,
+                    check=False,
                     capture_output=True,
                     text=True,
                 )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
                 self.assertIn("Successfully built", completed.stdout)
                 wheel_paths.append(next(wheel_dir.glob("meshshot_agent_runtime-*.whl")))
             self.assertEqual(wheel_paths[0].read_bytes(), wheel_paths[1].read_bytes())
             wheel = wheel_paths[0]
-            wheel_record = closure.audit_meshshot_wheel(wheel)
+            record = closure.parse_canonical_json(
+                closure.canonical_json_bytes(record)
+            )
+            wheel_record = closure.audit_meshshot_wheel(wheel, record)
             self.assertEqual(
                 wheel_record["wheelSha256"],
                 hashlib.sha256(wheel.read_bytes()).hexdigest(),
@@ -168,6 +240,38 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
             )
             self.assertEqual(fail_closed.stderr, "")
 
+            attacks = {
+                "rogue member": {"extra": ("meshshot/rogue.py", b"pass\n")},
+                "duplicate member": {"duplicate": "meshshot/profile.py"},
+                "executable member": {"executable": "meshshot/profile.py"},
+                "stale RECORD": {
+                    "replacements": {"meshshot/profile.py": b"tampered = True\n"}
+                },
+                "incomplete RECORD": {
+                    "record_without": "meshshot/profile.py",
+                    "rebuild_record": True,
+                },
+            }
+            for label, options in attacks.items():
+                with self.subTest(attack=label):
+                    attacked = output / f"{label.replace(' ', '-')}.whl"
+                    _rewrite_wheel(wheel, attacked, **options)
+                    attacked = attacked.with_name(wheel.name)
+                    shutil.move(output / f"{label.replace(' ', '-')}.whl", attacked)
+                    with self.assertRaises(closure.ProjectClosureError):
+                        closure.audit_meshshot_wheel(attacked, record)
+                    attacked.unlink()
+
+            bound_tamper = output / wheel.name
+            _rewrite_wheel(
+                wheel,
+                bound_tamper,
+                replacements={"meshshot/profile.py": b"tampered = True\n"},
+                rebuild_record=True,
+            )
+            with self.assertRaisesRegex(closure.ProjectClosureError, "source"):
+                closure.audit_meshshot_wheel(bound_tamper, record)
+
     def test_canonical_implicit_subset_is_exact_and_executes_cup_build(self) -> None:
         closure = _load_project_closure()
         with tempfile.TemporaryDirectory(prefix="implicit-agent-runtime-") as directory:
@@ -208,9 +312,17 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            expected = json.loads((REPO_ROOT / "models/agent-runtime/cup_cup_033/canonical-build-record.json").read_bytes())
+            expected = json.loads(
+                (
+                    REPO_ROOT
+                    / "models/agent-runtime/cup_cup_033/canonical-build-record.json"
+                ).read_bytes()
+            )
             build = json.loads((workspace / "built/build.json").read_bytes())
-            self.assertEqual(build["files"][1]["sha256"], expected["measurementGlbDigest"].removeprefix("sha256:"))
+            self.assertEqual(
+                build["files"][1]["sha256"],
+                expected["measurementGlbDigest"].removeprefix("sha256:"),
+            )
 
     def test_meshscope_audit_rejects_non_linux_or_non_native_wheels(self) -> None:
         closure = _load_project_closure()
@@ -227,20 +339,39 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
             with self.assertRaisesRegex(closure.ProjectClosureError, "cp312"):
                 closure.audit_meshscope_wheel(pure)
 
+    def test_meshscope_source_enumeration_rejects_unexpected_and_symlink_entries(self) -> None:
+        closure = _load_project_closure()
+        for attack in ("unexpected", "symlink"):
+            with self.subTest(attack=attack), tempfile.TemporaryDirectory(
+                prefix="meshscope-source-closure-"
+            ) as directory:
+                repo = Path(directory)
+                target = repo / "packages/meshscope"
+                shutil.copytree(REPO_ROOT / "packages/meshscope", target)
+                if attack == "unexpected":
+                    (target / "dist").mkdir()
+                    (target / "dist/rogue.whl").write_bytes(b"rogue")
+                else:
+                    (target / "src/meshscope/rogue.py").symlink_to("io.py")
+                with self.assertRaises(closure.ProjectClosureError):
+                    closure.meshscope_source_record(repo)
+
     def test_project_manifest_closes_all_project_artifacts(self) -> None:
         closure = _load_project_closure()
         with tempfile.TemporaryDirectory(prefix="agent-project-closure-") as directory:
             output = Path(directory)
-            meshshot = closure.generate_meshshot_distribution(REPO_ROOT, output)
+            meshshot_source = closure.generate_meshshot_distribution(REPO_ROOT, output)
             implicit = closure.generate_implicit_runtime(REPO_ROOT, output)
             meshshot = closure.assemble_python_artifact(
-                meshshot,
+                meshshot_source,
                 {
                     "distribution": "meshshot-agent-runtime",
                     "version": "0.1.0",
                     "wheelPath": "wheels/meshshot_agent_runtime-0.1.0-py3-none-any.whl",
-                    "wheelSha256": "e" * 64,
+                    "wheelSha256": _digest("meshshot-wheel"),
                     "wheelBytes": 456,
+                    "sourceTreeDigest": meshshot_source["sourceTreeDigest"],
+                    "fileManifestDigest": meshshot_source["fileManifestDigest"],
                     "browserInventoryEmpty": True,
                     "browserDenial": {
                         "playwrightPackageOrImportAbsent": True,
@@ -256,21 +387,76 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                     "distribution": "meshscope",
                     "version": "0.1.0",
                     "wheelPath": "wheels/meshscope-0.1.0-cp312-cp312-linux_x86_64.whl",
-                    "wheelSha256": "a" * 64,
+                    "wheelSha256": _digest("meshscope-wheel"),
                     "wheelBytes": 123,
-                    "sourceTreeDigest": "b" * 64,
-                    "fileManifestDigest": "c" * 64,
-                    "nativeAuditDigest": "d" * 64,
-                    "nativeConformanceDigest": "f" * 64,
+                    "sourceTreeDigest": _canonical_digest("meshscope-source"),
+                    "fileManifestDigest": _canonical_digest("meshscope-source"),
+                    "nativeAuditDigest": _canonical_digest("meshscope-audit"),
+                    "nativeConformanceDigest": _canonical_digest("meshscope-conformance"),
                     "needed": ["libc.so.6", "libgcc_s.so.1", "libstdc++.so.6"],
                 },
                 implicit=implicit,
             )
-            self.assertEqual(set(manifest), {"schema", "platform", "pythonArtifacts", "implicitRuntime"})
-            self.assertEqual(manifest["platform"], {"architecture": "amd64", "os": "linux", "pythonAbi": "cp312"})
-            self.assertEqual([item["distribution"] for item in manifest["pythonArtifacts"]], ["meshscope", "meshshot-agent-runtime"])
+            self.assertEqual(
+                set(manifest),
+                {"schema", "platform", "pythonArtifacts", "implicitRuntime"},
+            )
+            self.assertEqual(
+                manifest["platform"],
+                {"architecture": "amd64", "os": "linux", "pythonAbi": "cp312"},
+            )
+            self.assertEqual(
+                [item["distribution"] for item in manifest["pythonArtifacts"]],
+                ["meshscope", "meshshot-agent-runtime"],
+            )
             encoded = closure.canonical_json_bytes(manifest)
             self.assertEqual(encoded, closure.canonical_json_bytes(json.loads(encoded)))
+            closure.validate_project_manifest(closure.parse_canonical_json(encoded))
+
+            mutations = []
+            placeholder = json.loads(encoded)
+            placeholder["pythonArtifacts"][0]["wheelSha256"] = "a" * 64
+            mutations.append(placeholder)
+            escaping = json.loads(encoded)
+            escaping["pythonArtifacts"][1]["wheelPath"] = "../escape.whl"
+            mutations.append(escaping)
+            boolean_size = json.loads(encoded)
+            boolean_size["pythonArtifacts"][0]["wheelBytes"] = True
+            mutations.append(boolean_size)
+            implicit_extra = json.loads(encoded)
+            implicit_extra["implicitRuntime"]["rogue"] = True
+            mutations.append(implicit_extra)
+            implicit_digest = json.loads(encoded)
+            implicit_digest["implicitRuntime"]["fileManifestDigest"] = "0" * 64
+            mutations.append(implicit_digest)
+            implicit_file = json.loads(encoded)
+            implicit_file["implicitRuntime"]["files"][0]["sha256"] = _digest(
+                "substituted-implicit-file"
+            )
+            mutations.append(implicit_file)
+            for index, mutated in enumerate(mutations):
+                with self.subTest(invalid_manifest=index), self.assertRaises(
+                    closure.ProjectClosureError
+                ):
+                    closure.validate_project_manifest(mutated)
+
+            mismatched_source = dict(meshshot_source)
+            mismatched_source["sourceTreeDigest"] = _canonical_digest("wrong-source")
+            with self.assertRaisesRegex(closure.ProjectClosureError, "source"):
+                closure.assemble_python_artifact(
+                    mismatched_source,
+                    {
+                        "distribution": "meshshot-agent-runtime",
+                        "version": "0.1.0",
+                        "wheelPath": meshshot["wheelPath"],
+                        "wheelSha256": meshshot["wheelSha256"],
+                        "wheelBytes": meshshot["wheelBytes"],
+                        "sourceTreeDigest": meshshot_source["sourceTreeDigest"],
+                        "fileManifestDigest": meshshot_source["fileManifestDigest"],
+                        "browserInventoryEmpty": True,
+                        "browserDenial": meshshot["browserDenial"],
+                    },
+                )
 
 
 if __name__ == "__main__":
