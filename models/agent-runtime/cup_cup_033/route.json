@@ -1,0 +1,1 @@
+{"consideredAlternative":{"rejectedBecause":"The numeric topology rule matches before machinable-feature or agent-judgment rules.","route":"cad"},"matchedRule":"topology-not-occ-clean","observations":{"degenerateFaces":0,"eulerNumber":144,"faceCount":3764,"watertight":false},"route":"implicit-cad","schema":"text-to-cad.numeric-route/1"}
