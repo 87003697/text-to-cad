@@ -28,7 +28,7 @@ def _load_entrypoint():
 
 class ProductionAgentEntrypointTests(unittest.TestCase):
     def test_fixed_entrypoint_bytes_are_executable_and_self_test_without_ambient_authority(self) -> None:
-        self.assertEqual(ENTRYPOINT.stat().st_mode & 0o777, 0o555)
+        self.assertEqual(ENTRYPOINT.stat().st_mode & 0o111, 0o111)
         completed = subprocess.run(
             [sys.executable, str(ENTRYPOINT), "--contract-self-test"],
             check=False,
@@ -98,6 +98,13 @@ class ProductionAgentEntrypointTests(unittest.TestCase):
         payload = ENTRYPOINT.read_bytes()
         self.assertNotIn(b"import json", payload)
         self.assertIn(b"agent_runtime_canonical_json", payload)
+
+    def test_non_object_control_records_are_normalized_to_gate_error(self) -> None:
+        entrypoint = _load_entrypoint()
+        for value in ([], True, 1, "record", None):
+            with self.subTest(value=value):
+                with self.assertRaises(entrypoint.GateError):
+                    entrypoint._parse_exact(entrypoint._canonical(value))
 
     def test_signal_is_latched_before_spawn_and_replayed_to_the_process_group(self) -> None:
         entrypoint = _load_entrypoint()

@@ -78,6 +78,8 @@ def _parse_exact(payload: bytes) -> dict[str, object]:
         value = _plain(parsed)
     except (AttributeError, EvidenceError) as error:
         raise GateError("control record is not canonical JSON") from error
+    if not isinstance(value, dict):
+        raise GateError("control record root is not an object")
     if _canonical(value) != payload:
         raise GateError("control record is not exact canonical JSON")
     return value

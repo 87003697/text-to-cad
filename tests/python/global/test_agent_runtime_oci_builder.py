@@ -95,6 +95,10 @@ class AgentRuntimeOciBuilderTests(unittest.TestCase):
             self.assertEqual(builder.audit_oci_archive(archive_a), first)
             self.assertEqual(first["layerMediaType"], "application/vnd.oci.image.layer.v1.tar+gzip")
             self.assertNotEqual(first["layerDigest"], first["diffId"])
+            entrypoint = builder._layout_rootfs_entries(out_a)[
+                "usr/local/libexec/text-to-cad-agent-entrypoint"
+            ]
+            self.assertEqual(entrypoint[:2], ("regular", 0o555))
 
     def test_builder_rejects_a_symlink_rootfs(self) -> None:
         builder = _load_builder()
