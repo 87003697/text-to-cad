@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .contracts import (
@@ -21,6 +22,8 @@ from .contracts import (
 
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+MAX_DOCUMENT_BYTES = 1024 * 1024
+MAX_JSON_DEPTH = 64
 _SUBJECT_KEYS = {
     "agentImageManifestDigest", "agentImageConfigDigest", "platform",
     "runtimeManifestDigest", "cupRuntimeCapabilityManifestDigest",
@@ -39,7 +42,7 @@ def _parse_integer(raw: str) -> int:
     return value
 
 
-def _require_keys(value: dict[str, Any], expected: set[str], label: str) -> None:
+def _require_keys(value: Mapping[str, Any], expected: set[str], label: str) -> None:
     if set(value) != expected:
         raise EvidenceError(f"{label} has unexpected keys")
 
@@ -49,7 +52,7 @@ def _require_digest(value: Any, label: str) -> None:
         raise EvidenceError(f"{label} is not a canonical sha256 digest")
 
 
-def _validate_subject(value: dict[str, Any]) -> None:
+def _validate_subject(value: Mapping[str, Any]) -> None:
     _require_keys(value, _SUBJECT_KEYS, "subject")
     for key in _SUBJECT_KEYS - {"platform"}:
         _require_digest(value[key], f"subject.{key}")
@@ -63,7 +66,7 @@ def _require_ascii(value: Any, label: str) -> None:
 
 
 def _validate_reference(value: Any, label: str) -> tuple[str, str | None, str]:
-    if not isinstance(value, dict):
+    if not isinstance(value, Mapping):
         raise EvidenceError(f"{label} must be an object")
     _require_keys(value, {"kind", "environment", "digest"}, label)
     role = (value["kind"], value["environment"])
@@ -74,7 +77,7 @@ def _validate_reference(value: Any, label: str) -> tuple[str, str | None, str]:
 
 
 def _validate_child_subject(kind: str, subject: Any, status: str) -> None:
-    if not isinstance(subject, dict):
+    if not isinstance(subject, Mapping):
         raise EvidenceError("evidence subject must be an object")
     _require_keys(subject, set(SUBJECT_FIELDS[kind]), f"{kind} subject")
     nullable = {
@@ -105,13 +108,13 @@ def _validate_child_subject(kind: str, subject: Any, status: str) -> None:
         elif key == "format" and item != "spdx-json-2.3":
             raise EvidenceError("SBOM format is not closed")
         elif key == "resourceDisposition":
-            if not isinstance(item, dict):
+            if not isinstance(item, Mapping):
                 raise EvidenceError("resourceDisposition must be an object")
             _require_keys(item, set(LIFECYCLE_RESOURCE_FIELDS), "resourceDisposition")
             if any(v not in {"absent", "retained", "unproved"} for v in item.values()):
                 raise EvidenceError("resourceDisposition value is invalid")
         elif key == "cleanupDisposition":
-            if not isinstance(item, dict):
+            if not isinstance(item, Mapping):
                 raise EvidenceError("cleanupDisposition must be an object")
             _require_keys(item, set(LIFECYCLE_CLEANUP_FIELDS), "cleanupDisposition")
             if any(v not in {"succeeded", "failed", "not-required"} for v in item.values()):
@@ -120,7 +123,7 @@ def _validate_child_subject(kind: str, subject: Any, status: str) -> None:
             _require_ascii(item, f"{kind}.subject.{key}")
 
 
-def _select_lifecycle_failure(value: dict[str, Any]) -> str:
+def _select_lifecycle_failure(value: Mapping[str, Any]) -> str:
     predicates = value["predicates"]
     dispositions = value["subject"]["resourceDisposition"]
     resource_checks = (
@@ -147,7 +150,7 @@ def _select_lifecycle_failure(value: dict[str, Any]) -> str:
     raise EvidenceError("failed lifecycle has no false predicate")
 
 
-def _validate_evidence(value: dict[str, Any]) -> None:
+def _validate_evidence(value: Mapping[str, Any]) -> None:
     _require_keys(value, {"blockedBy", "dependsOn", "environment", "failureCheck", "kind", "predicates", "retryAllowed", "schema", "status", "subject", "subjectDigest"}, "evidence")
     if value["schema"] != "text-to-cad.agent-runtime-evidence/1" or value["retryAllowed"] is not False:
         raise EvidenceError("evidence terminal envelope is invalid")
@@ -158,17 +161,18 @@ def _validate_evidence(value: dict[str, Any]) -> None:
     if status not in {"succeeded", "failed", "not-run"}:
         raise EvidenceError("evidence status is invalid")
     _require_digest(value["subjectDigest"], "evidence.subjectDigest")
-    if not isinstance(value["dependsOn"], list):
+    if not isinstance(value["dependsOn"], Sequence) or isinstance(value["dependsOn"], str):
         raise EvidenceError("dependsOn must be an array")
     for item in value["dependsOn"]:
         _require_digest(item, "dependsOn item")
-    if not isinstance(value["predicates"], dict):
+    if not isinstance(value["predicates"], Mapping):
         raise EvidenceError("predicates must be an object")
     _require_keys(value["predicates"], set(PREDICATES[value["kind"]]), "predicates")
     predicates = [value["predicates"][key] for key in PREDICATES[value["kind"]]]
     if any(item is not True and item is not False and item is not None for item in predicates):
         raise EvidenceError("predicates must contain only Boolean or null")
     _validate_child_subject(value["kind"], value["subject"], status)
+    _validate_observations(value)
     if value["kind"] == "agent-lifecycle" and status != "not-run":
         _validate_lifecycle_dispositions(value)
     if status == "succeeded":
@@ -198,6 +202,8 @@ def _validate_evidence(value: dict[str, Any]) -> None:
                     item is not None for item in primary[first_false + 1 :]
                 ):
                     raise EvidenceError("lifecycle primary phase does not stop at first failure")
+            elif any(item is not True for item in primary):
+                raise EvidenceError("lifecycle primary phase must be complete before suffix failure")
             if value["failureCheck"] != _select_lifecycle_failure(value):
                 raise EvidenceError("lifecycle failureCheck is not dominant")
         else:
@@ -206,7 +212,7 @@ def _validate_evidence(value: dict[str, Any]) -> None:
                 raise EvidenceError("failed evidence does not stop at first failure")
 
 
-def _validate_root(value: dict[str, Any]) -> None:
+def _validate_root(value: Mapping[str, Any]) -> None:
     _require_keys(value, {"schema", "status", "subject", "graph", "failureCheck", "retryAllowed"}, "verification root")
     if value["schema"] != "text-to-cad.agent-runtime-verification/1" or value["retryAllowed"] is not False:
         raise EvidenceError("verification terminal envelope is invalid")
@@ -214,10 +220,10 @@ def _validate_root(value: dict[str, Any]) -> None:
         raise EvidenceError("verification status is invalid")
     _validate_subject(value["subject"])
     graph = value["graph"]
-    if not isinstance(graph, dict):
+    if not isinstance(graph, Mapping):
         raise EvidenceError("graph must be an object")
     _require_keys(graph, {"algorithm", "children", "subjectDigest"}, "graph")
-    if graph["algorithm"] != "sha256-canonical-json-v1" or not isinstance(graph["children"], list):
+    if graph["algorithm"] != "sha256-canonical-json-v1" or not isinstance(graph["children"], Sequence) or isinstance(graph["children"], str):
         raise EvidenceError("graph header is invalid")
     _require_digest(graph["subjectDigest"], "graph.subjectDigest")
     for index, reference in enumerate(graph["children"]):
@@ -228,7 +234,7 @@ def _validate_root(value: dict[str, Any]) -> None:
         raise EvidenceError("failed root needs a closed failureCheck")
 
 
-def _validate_tombstone_shape(value: dict[str, Any]) -> None:
+def _validate_tombstone_shape(value: Mapping[str, Any]) -> None:
     _require_keys(value, {"attemptAuthorityDigest", "failureCheck", "lastDurableStage", "retentionRequired", "retryAllowed", "schema", "status", "subjectDigest"}, "verification tombstone")
     if value["schema"] != "text-to-cad.agent-runtime-verification-attempt/1" or value["status"] != "publication-failed" or value["retentionRequired"] is not True or value["retryAllowed"] is not False:
         raise EvidenceError("verification tombstone terminal envelope is invalid")
@@ -243,21 +249,13 @@ def _validate_tombstone_shape(value: dict[str, Any]) -> None:
         raise EvidenceError("tombstone failure/stage pairing is invalid")
 
 
-def _validate_lifecycle_dispositions(value: dict[str, Any]) -> None:
+def _validate_lifecycle_dispositions(value: Mapping[str, Any]) -> None:
     subject = value["subject"]
     predicates = value["predicates"]
     resources = subject["resourceDisposition"]
     cleanup = subject["cleanupDisposition"]
-    if resources is None and cleanup is None:
-        resource_predicates = (
-            "workloadProcessGroupAbsent", "agentContainerAbsent",
-            "ownerLabelsAbsent", "brokerVolumeAbsent", "jobPrivateTreeAbsent",
-        )
-        if any(predicates[predicate] is False for predicate in resource_predicates):
-            raise EvidenceError("false lifecycle absence needs a closed disposition")
-        return
     if resources is None or cleanup is None:
-        raise EvidenceError("lifecycle dispositions must be both present or both null")
+        raise EvidenceError("succeeded or failed lifecycle needs concrete dispositions")
     resource_predicates = {
         "agentContainer": "agentContainerAbsent",
         "ownerLabels": "ownerLabelsAbsent",
@@ -278,6 +276,83 @@ def _validate_lifecycle_dispositions(value: dict[str, Any]) -> None:
         expected = cleanup[resource] in {"succeeded", "not-required"}
         if predicates[predicate] is not expected:
             raise EvidenceError("lifecycle cleanup disposition contradicts predicate")
+
+
+def _observation_state(
+    value: Mapping[str, Any], field: str, predicate: str, label: str
+) -> tuple[Any, bool | None]:
+    observation = value["subject"][field]
+    established = value["predicates"][predicate]
+    if (observation is None) != (established is None):
+        raise EvidenceError(f"{label} null state contradicts establishing predicate")
+    return observation, established
+
+
+def _validate_observations(value: Mapping[str, Any]) -> None:
+    kind = value["kind"]
+    subject = value["subject"]
+    predicates = value["predicates"]
+    if kind == "browser-deny":
+        inventory, inventory_state = _observation_state(
+            value, "inventoryDigest", "packageInventoryEmpty", "browser observation"
+        )
+        finding_count, _ = _observation_state(
+            value, "browserFindingCount", "packageInventoryEmpty", "browser observation"
+        )
+        process_count, process_state = _observation_state(
+            value, "chromiumProcessCount", "chromiumProcessZero", "browser observation"
+        )
+        inventory_predicates = (
+            "packageInventoryEmpty", "executableInventoryEmpty", "cacheInventoryEmpty",
+            "elfMarkerInventoryEmpty", "productMarkerInventoryEmpty",
+            "playwrightInventoryEmpty",
+        )
+        if inventory_state is not None:
+            _require_digest(inventory, "browser-deny.subject.inventoryDigest")
+            any_false = any(predicates[key] is False for key in inventory_predicates)
+            all_true = all(predicates[key] is True for key in inventory_predicates)
+            if (any_false and finding_count < 1) or (all_true and finding_count != 0):
+                raise EvidenceError("browser observation count contradicts inventory predicates")
+        if process_state is True and process_count != 0:
+            raise EvidenceError("browser observation process count contradicts predicate")
+        if process_state is False and process_count < 1:
+            raise EvidenceError("browser observation process count contradicts predicate")
+    elif kind == "cup-golden":
+        checks = (
+            ("faceCount", "faceCount3764", 3764, lambda item: item != 3764),
+            ("watertight", "watertightFalse", False, lambda item: item is True),
+            ("eulerNumber", "eulerNumber144", 144, lambda item: item != 144),
+        )
+        for field, predicate, success_value, false_rule in checks:
+            observation, state = _observation_state(
+                value, field, predicate, "Cup observation"
+            )
+            if state is True and observation != success_value:
+                raise EvidenceError("Cup observation contradicts true predicate")
+            if state is False and not false_rule(observation):
+                raise EvidenceError("Cup observation contradicts false predicate")
+        observed, state = _observation_state(
+            value, "observedOutputDigest", "outputDigestRepeatable", "Cup observation"
+        )
+        if state is True and observed != subject["expectedOutputDigest"]:
+            raise EvidenceError("Cup observation output contradicts true predicate")
+    elif kind == "capability-conformance":
+        observed, state = _observation_state(
+            value, "observedOutputDigest", "outputDigestBound",
+            "conformance observation",
+        )
+        expected = subject["expectedOutputDigest"]
+        if state is True and observed != expected:
+            raise EvidenceError("conformance observation contradicts true predicate")
+        if state is False and observed == expected:
+            raise EvidenceError("conformance observation contradicts false predicate")
+    elif kind == "source-snapshot":
+        for field, predicate in (
+            ("sourceManifestDigest", "treeDigestMatchesObservation"),
+            ("pathCount", "pathSetClosed"),
+            ("totalBytes", "fileSizesBound"),
+        ):
+            _observation_state(value, field, predicate, "Source Snapshot observation")
 
 
 def _validate_selected(kind: str, value: dict[str, Any]) -> None:
@@ -303,11 +378,33 @@ def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
+def _check_depth(value: Any) -> None:
+    stack = [(value, 1)]
+    while stack:
+        item, depth = stack.pop()
+        if depth > MAX_JSON_DEPTH:
+            raise EvidenceError("JSON nesting depth exceeds limit")
+        if isinstance(item, Mapping):
+            stack.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, (list, tuple)):
+            stack.extend((child, depth + 1) for child in item)
+
+
+def _plain(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(item) for item in value]
+    return value
+
+
 def parse_strict(kind: str, payload: bytes) -> EvidenceDocument:
     """Parse one canonical UTF-8 JSON document under a selected schema."""
 
     if not isinstance(payload, bytes):
         raise EvidenceError("payload must be bytes")
+    if len(payload) > MAX_DOCUMENT_BYTES:
+        raise EvidenceError("document exceeds byte limit")
     try:
         if payload.startswith(b"\xef\xbb\xbf"):
             raise EvidenceError("byte-order mark is forbidden")
@@ -324,8 +421,11 @@ def parse_strict(kind: str, payload: bytes) -> EvidenceDocument:
         )
     except EvidenceError:
         raise
+    except RecursionError as exc:
+        raise EvidenceError("JSON nesting depth exceeds limit") from exc
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvidenceError("invalid JSON payload") from exc
+    _check_depth(value)
     if not isinstance(value, dict):
         raise EvidenceError("document must be a JSON object")
     _validate_selected(kind, value)
@@ -338,10 +438,11 @@ def parse_strict(kind: str, payload: bytes) -> EvidenceDocument:
 def canonical_bytes(document: EvidenceDocument) -> bytes:
     if not isinstance(document, EvidenceDocument):
         raise EvidenceError("canonical encoder accepts only typed documents")
+    _check_depth(document.value)
     _validate_selected(document.kind, document.value)
     try:
         return json.dumps(
-            document.value,
+            _plain(document.value),
             ensure_ascii=False,
             allow_nan=False,
             sort_keys=True,
@@ -415,7 +516,7 @@ def validate_graph(
 
     for role, value in child_by_role.items():
         expected = [digest_for_role(child_by_role, dependency) for dependency in DEPENDENCIES[role]]
-        if value["dependsOn"] != expected:
+        if tuple(value["dependsOn"]) != tuple(expected):
             raise EvidenceError("dependency list or dependency order is invalid")
         failed_dependencies = [
             dependency for dependency in DEPENDENCIES[role]
@@ -618,7 +719,11 @@ def _lifecycle_alias(value: dict[str, Any]) -> str:
             return "retained-resource"
         if disposition == "unproved":
             return "absence-proof"
-    return _LIFECYCLE_ALIAS.get(selected, selected)
+        raise EvidenceError("resource failure has no exact disposition alias")
+    try:
+        return _LIFECYCLE_ALIAS[selected]
+    except KeyError as exc:
+        raise EvidenceError("lifecycle failure has no exact alias") from exc
 
 
 def _root_failure(children: dict[tuple[str, str | None], dict[str, Any]]) -> str:
