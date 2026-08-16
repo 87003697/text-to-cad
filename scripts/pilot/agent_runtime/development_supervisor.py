@@ -610,11 +610,16 @@ class _DockerWritableVolumes:
                 self.engine._run(
                     "run", "--rm", "--pull", "never", "--read-only",
                     "--user", "0:0", "--network", "none", "--cap-drop", "ALL",
+                    "--cap-add", "CHOWN", "--cap-add", "FOWNER",
                     "--security-opt", "no-new-privileges",
                     "--label", f"org.text-to-cad.owner-nonce={self.owner_nonce}",
                     "--mount", f"type=volume,src={home_volume},dst=/home",
-                    "--entrypoint", "/usr/bin/chmod", self.image_id,
-                    "0700", "/home/.codex",
+                    "--entrypoint", "/usr/bin/python3.12", self.image_id, "-c",
+                    (
+                        "import os,pathlib; p=pathlib.Path('/home/.codex'); "
+                        "f=p/'config.toml'; os.chown(p,65532,65532); "
+                        "os.chown(f,65532,65532); f.chmod(0o600); p.chmod(0o700)"
+                    ),
                 )
         except BaseException:
             for name in created:

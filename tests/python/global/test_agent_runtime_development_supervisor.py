@@ -186,6 +186,16 @@ class DevelopmentSupervisorTests(unittest.TestCase):
         self.assertIn("65532:65532", seed.args)
         self.assertIn("--interactive", seed.args)
         self.assertNotIn("os.chown", " ".join(seed.args))
+        finalize = next(
+            call for call in execute.call_args_list
+            if "--cap-add" in call.args
+        )
+        self.assertIn("CHOWN", finalize.args)
+        self.assertIn("FOWNER", finalize.args)
+        command = " ".join(finalize.args)
+        self.assertIn("os.chown", command)
+        self.assertIn("0o700", command)
+        self.assertIn("0o600", command)
 
     def test_attach_failure_does_not_signal_an_already_exited_process_group(self) -> None:
         process = mock.Mock()

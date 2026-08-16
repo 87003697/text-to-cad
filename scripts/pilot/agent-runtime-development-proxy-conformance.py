@@ -168,7 +168,18 @@ def main(argv=None) -> int:
         events.append({"event": "proxy-start", "containerId": proxy_id})
         stage = "agent-capability-supervisor"
         workload_path = args.host_stage / "workload.json"
-        workload_path.write_bytes(b'["/usr/bin/true"]')
+        capability_check = (
+            "import os,pathlib,stat; p=pathlib.Path(os.environ['HOME'])/'.codex'; "
+            "f=p/'config.toml'; ps=p.stat(); fs=f.stat(); "
+            "assert (ps.st_uid,ps.st_gid,stat.S_IMODE(ps.st_mode))==(65532,65532,0o700); "
+            "assert (fs.st_uid,fs.st_gid,stat.S_IMODE(fs.st_mode))==(65532,65532,0o600); "
+            "v=f.read_text(encoding='utf-8'); assert 'model_provider = \"venus\"' in v; "
+            "assert 'wire_api = \"responses\"' in v; assert 'experimental_bearer_token' in v"
+        )
+        workload_path.write_bytes(json.dumps(
+            ["/usr/bin/python3.12", "-c", capability_check],
+            separators=(",", ":"),
+        ).encode())
         agent_output = args.host_stage / "agent-capability-supervisor"
         agent_output.mkdir(mode=0o700)
         agent_request = fixed_candidate_request(
