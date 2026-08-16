@@ -92,6 +92,8 @@ namespace:
 s3://arcwm-code-us-west-2/
   ericzyma/text-to-cad/runtime/agent/v1/
     archives/sha256/<archive-hex>.oci.tar
+    candidates/sha256/<candidate-hex>.json
+    candidate-publications/sha256/<candidate-hex>.json
     locks/sha256/<lock-hex>.json
     sbom/sha256/<sbom-hex>.spdx.json
     provenance/sha256/<provenance-hex>.json
@@ -120,6 +122,32 @@ version, an unversioned GET, a prefix listing, and a Mac-mounted pathname are
 not substitutes.
 
 ## Agent Runtime Lock
+
+### Pre-verification candidate descriptor
+
+The verification workflow cannot consume the final lock because the final lock
+contains the Verified root produced by that workflow. It instead consumes a
+canonical, immutable `text-to-cad.agent-runtime-candidate/1` descriptor. The
+candidate has exactly the lock's `agentImage`, `archive`, `build`, `codex`,
+`outerImporter`, `manifests`, and `sbom` values and has no `verification` value.
+Its canonical digest is recorded by the candidate publication,
+candidate-bound provision/loaded-identity, and Workflow A Verify Candidate
+receipts. The exact-key SAR-005 root and child schemas are unchanged and never
+gain a `candidateDigest` field.
+
+Only the verification orchestrator and its target provisioner accept the
+candidate. It is not a supply lock, channel value, downstream execution
+authority, rollback target, or paid-pilot authority. The provisioner still
+fetches exact immutable objects, uses the admitted importer, and produces the
+portable-to-host-local identity proof required below.
+
+After the strict graph is published, an outer cross-binding receipt checks the
+exact overlap projection plus independent supply-only predicates described
+below. The finalizer consumes that receipt, adds only the exact
+`verification` object, and emits the canonical Agent Runtime Lock. Changing
+any candidate field requires a new candidate, new environment evidence, and a
+new Verified root. This is the only bootstrap path; final lock authority is not
+weakened.
 
 An Agent Runtime Lock has exactly the following top-level keys. `lockDigest`
 is intentionally absent because it is the digest of these canonical bytes and
@@ -288,111 +316,95 @@ Agent Runtime Lock digest, execution Source Snapshot Lock digest, input
 snapshot digest, and exact Broker/Sidecar locks. None may be inferred from
 another.
 
-## Closed supply state machine
+## Closed construction, verification, and promotion workflows
 
-Each operation has a fresh random 256-bit owner nonce and an immutable handle
-of `sarsp-<24 lowercase hex>`. A handle is claimed once and cannot be adopted.
-Every stage reads and validates the exact immutable **stage receipt** of its
-predecessor. A stage receipt is never an operation terminal.
+There is no monolithic operation that refers to a final lock before verification.
+Two closed workflows meet at one immutable final-lock publication.
+
+### Workflow A: candidate construction and artifact verification
+
+A fresh `sarcv-<24 lowercase hex>` handle owns these ordered create-once stage
+receipts:
 
 | Stage | Required success output | Fail-closed rule |
 | --- | --- | --- |
-| Acquire | exact external/build input objects plus retrieval receipts | No mutable URLs, tags, or ambient caches become admitted inputs |
-| Admit | closed build-input set, Codex admission, dependency locks, and expected hashes | Any missing byte/hash/signature-policy result stops before build |
-| Offline Build | linux/amd64 OCI index/manifest/config/layers and build provenance | Network must be disabled; an undeclared cache hit or fetch fails the build |
-| Prepare | deterministic OCI image-layout tar, closed blob set, archive hash/size, SBOM, candidate lock bytes | Any missing/extra/re-encoded OCI object or importer admission gap fails preparation |
-| Immutable S3 Publish | archive, lock, SBOM/provenance references, and exact S3 VersionIds | Create-only or exact-byte reuse; reread mismatch retains scratch |
-| Provision | target-owned provision receipt for exact lock/archive/importer | Fetch exact VersionId, use only the admitted outer importer, no registry pull, no attempt adoption |
-| Verify loaded identity | loaded-identity receipt mapping portable OCI bytes to one full host-local image ID/config observation | Missing, non-unique, truncated, tag-derived, or inconsistent host mapping closes the attempt |
-| Consume Verified root | strict validation of the exact lock-linked SAR-005 root | Missing, non-verified, cross-subject, or changed bytes close promotion |
-| Deployment conformance | fresh target-host lifecycle and Cup conformance receipt | Required on every promotion, including rollback; does not amend SAR-005 root |
-| Atomic Promote | one conditional versioned channel-state write | CAS conflict leaves prior current authoritative; an unreadable successful write makes state unresolved and blocks execution |
-| Downstream Execute | a separate execution admission binds current lock and uses `--pull=never` | Re-resolve channel authority and all locks; no fallback to tag/predecessor/network |
+| Acquire | exact external/build input objects plus retrieval receipts | No mutable URL, tag, or ambient cache is admitted |
+| Admit | closed build-input set, dependency and Codex admission | Any missing byte/hash/policy result stops before build |
+| Offline Build | linux/amd64 OCI index/manifest/config/layers and provenance | Network is disabled; undeclared cache/fetch fails |
+| Publish Build Objects | archive, SBOM and provenance exact S3 VersionIds after exact reread | No candidate exists before these locators are fixed |
+| Construct Candidate | canonical candidate descriptor containing those exact object locators and every non-verification lock field | Any missing or changed locator/identity fails construction |
+| Publish Candidate | create-once content-addressed candidate plus publication receipt and exact VersionId/hash/size reread | Listing, latest-key reads, or Mac path alone are not authority |
+| Candidate Provision | candidate-bound provision receipt on each verification target | Purpose is exactly `artifact-verification`; no channel/general/paid execution |
+| Verify Loaded Identity | candidate-bound loaded-identity receipt for each target | Missing/non-unique/truncated/tag-derived mapping fails |
+| Verify Candidate | strict external cross-binding receipt for the candidate and exact 15-node SAR-005 root | Colima/CVM plan, overlap projection, or supply-only identity drift fails |
+| Finalize Lock | add only the exact verification object, publish the content-addressed final lock, and exact-reread its VersionId/hash/size | Any recomputation or candidate/root mismatch fails |
 
-The deterministic stage paths are `01-acquire`, `02-admit`,
-`03-offline-build`, `04-prepare`, `05-immutable-s3-publish`, `06-provision`,
-`07-verify-loaded-identity`, `08-consume-verified-root`,
-`09-deployment-conformance`, and `10-atomic-promote`. `Downstream Execute` is a
-separate consumer, not a stage of this supply/promotion operation. Each path is
-create-once and contains exactly this common envelope; `outputDigest` names the
-immutable stage-specific receipt or evidence object under the same handle's
-content-addressed `stage-outputs` namespace:
+The candidate publication receipt schema is
+`text-to-cad.agent-runtime-candidate-publication/1`. It binds candidate
+digest, bucket, region, content-addressed key, VersionId, byte count, SHA-256,
+the archive/SBOM/provenance exact locators repeated inside the candidate, and
+the create-only-or-exact-reuse reread result. Mac visibility is a separate
+operational predicate and cannot replace exact-version reread.
 
-```json
-{
-  "blockedBy": null,
-  "failureCheck": null,
-  "operationHandle": "sarsp-1234567890abcdef12345678",
-  "ordinal": 1,
-  "outputDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-  "retryAllowed": false,
-  "schema": "text-to-cad.agent-runtime-supply-stage/1",
-  "stage": "acquire",
-  "status": "succeeded"
-}
-```
+The Verify Candidate stage output is exactly
+`text-to-cad.agent-runtime-candidate-verification-binding/1`. It contains
+`candidateDigest`, `candidatePublicationReceiptDigest`, `verifiedRootDigest`,
+`verifiedSubjectDigest`, and closed predicates for every shared projection:
+OCI manifest/config/platform, base/builder/build-input/recipe/project-runtime,
+Codex, runtime/Cup manifests, and SBOM. The binding also requires the root's
+strict graph validator, including its verification-plan identity, to pass;
+that plan identity is not falsely presented as a candidate field. Separate predicates
+verify candidate-only archive/index/layer locators, admitted outer importer,
+and exact candidate-bound provision/loaded-identity receipt digests for Colima
+and CVM. It derives these observations from strict documents; it does not add a
+field to or amend the root, any child, or raw lifecycle/capability evidence.
+Negative fixtures must reject a grafted root, candidate, publication receipt,
+archive/importer identity, or environment provision receipt.
 
-Stage status is exactly `succeeded`, `failed`, `not-run`, or `uncertain`.
-`failed` has a closed `failureCheck`; `not-run` has `outputDigest: null` and
-`blockedBy` equal to the first non-succeeded predecessor stage-receipt digest;
-`uncertain` is allowed only for `10-atomic-promote` after a possibly applied
-conditional write and requires reconciliation. Once any stage is not
-`succeeded`, every later stage receives a deterministic `not-run` receipt.
+The finalizer does not rebuild, re-encode, import, or rerun verification. It
+strictly rereads the candidate, Verified root, and external binding receipt,
+recomputes every closed projection/predicate, adds only `verification`,
+canonicalizes the final lock, publishes
+it create-once, and exact-rereads the returned/reused VersionId. Only this final
+lock may become a channel value or general execution authority.
 
-Exactly one create-once `operations/<handle>/terminal.json` closes all ten
-ordered stage receipts. It is the only operation terminal:
+### Workflow B: final-lock promotion or rollback
 
-```json
-{
-  "failureCheck": null,
-  "operationHandle": "sarsp-1234567890abcdef12345678",
-  "operationRequestId": "sha256:2424242424242424242424242424242424242424242424242424242424242424",
-  "retryAllowed": false,
-  "schema": "text-to-cad.agent-runtime-supply-terminal/1",
-  "scratchDispositionAtTerminal": "retained",
-  "stages": [
-    {"digest": "sha256:0101010101010101010101010101010101010101010101010101010101010101", "ordinal": 1, "stage": "acquire", "status": "succeeded"},
-    {"digest": "sha256:0202020202020202020202020202020202020202020202020202020202020202", "ordinal": 2, "stage": "admit", "status": "succeeded"},
-    {"digest": "sha256:0303030303030303030303030303030303030303030303030303030303030303", "ordinal": 3, "stage": "offline-build", "status": "succeeded"},
-    {"digest": "sha256:0404040404040404040404040404040404040404040404040404040404040404", "ordinal": 4, "stage": "prepare", "status": "succeeded"},
-    {"digest": "sha256:0505050505050505050505050505050505050505050505050505050505050505", "ordinal": 5, "stage": "immutable-s3-publish", "status": "succeeded"},
-    {"digest": "sha256:0606060606060606060606060606060606060606060606060606060606060606", "ordinal": 6, "stage": "provision", "status": "succeeded"},
-    {"digest": "sha256:0707070707070707070707070707070707070707070707070707070707070707", "ordinal": 7, "stage": "verify-loaded-identity", "status": "succeeded"},
-    {"digest": "sha256:0808080808080808080808080808080808080808080808080808080808080808", "ordinal": 8, "stage": "consume-verified-root", "status": "succeeded"},
-    {"digest": "sha256:0909090909090909090909090909090909090909090909090909090909090909", "ordinal": 9, "stage": "deployment-conformance", "status": "succeeded"},
-    {"digest": "sha256:1010101010101010101010101010101010101010101010101010101010101010", "ordinal": 10, "stage": "atomic-promote", "status": "succeeded"}
-  ],
-  "status": "succeeded"
-}
-```
+A fresh `sarsp-<24 lowercase hex>` handle owns these ordered create-once stage
+receipts:
 
-The example is illustrative. A strict terminal consumer requires exactly the
-ten unique ordered entries, re-fetches each stage receipt by deterministic
-path, verifies its digest and repeated fields, resolves every non-null
-`outputDigest` through the deterministic stage-output path, and derives
-terminal status and `failureCheck` rather than trusting them independently.
+| Stage | Required success output | Fail-closed rule |
+| --- | --- | --- |
+| Resolve Final Lock | exact final-lock VersionId/hash/size plus candidate and Verified-root closure | Candidate alone is rejected |
+| Provision Final Lock | fresh target-owned lock-bound provision receipt | Exact archive/importer only; no registry pull or attempt adoption |
+| Verify Loaded Identity | fresh lock-bound portable-to-host identity receipt | Any local mapping drift fails |
+| Consume Verified Root | strict validation of the exact lock-linked root | Missing, non-verified or cross-subject root fails |
+| Release Qualification | fresh target lifecycle/Cup conformance plus required first-release concurrency receipt | Does not rewrite the Verified root |
+| Atomic Promote | one conditional versioned channel-state write | Conflict retains prior current; uncertain write requires reconciliation |
 
-The order is normative:
+Rollback uses the same Workflow B with a previous final lock and entirely fresh
+target provision, identity and release-qualification receipts. Downstream
+execution is a separate consumer that resolves the authoritative channel,
+validates the final lock and its successful promotion terminal or supplied
+reconciliation receipt, then uses the freshly inspected full host-local ID with
+`--pull=never`.
 
-```text
-Acquire -> Admit -> Offline Build -> Prepare -> Immutable S3 Publish
-        -> Provision -> Verify loaded identity -> Consume Verified root
-        -> Deployment conformance -> Atomic Promote -> --pull=never Execute
-```
-
-No stage can “repair” an earlier missing proof. In particular, a successful
-paid Formal Pilot cannot substitute for artifact admission or promotion.
-
-The lock-linked SAR-005 root is produced by the separate artifact-verification
-workflow before the lock is finalized. `Consume Verified root` above means the
-supply operation strictly rereads and revalidates that existing root after
-host identity is known; it does not create, rewrite, or extend the root.
+Both workflows use the common stage envelope
+`text-to-cad.agent-runtime-supply-stage/1`. Status is exactly
+`succeeded|failed|not-run|uncertain`; `uncertain` is allowed only for the
+possibly applied Atomic Promote write. Every later stage after a non-success is
+a deterministic `not-run` bound to the first non-succeeded predecessor.
+Exactly one create-once terminal closes all ordered stage receipts for its
+workflow. Stage, cleanup, reconciliation and tombstone documents are not
+operation terminals. Terminal publication failure cannot self-report and uses
+the independent tombstone already defined below.
 
 ## Provision and loaded-identity receipts
 
 `text-to-cad.agent-runtime-provision/1` is terminal and exact. On success it
 binds operation handle/owner digest, target environment and host fingerprint,
-lock digest, archive S3 locator/hash/size, Docker server OS/architecture, exact
+`subjectKind: candidate|lock`, the matching canonical `subjectDigest`, archive
+S3 locator/hash/size, Docker server OS/architecture, exact
 outer-importer admission and selected platform-artifact digests, portable OCI
 index/manifest/config/ordered-layer observations, the full 64-hex host-local
 loaded image ID, its independently inspected local config mapping,
@@ -402,9 +414,12 @@ disposition. On failure it records the first ordered `failureCheck`,
 validated abort receipt.
 
 `text-to-cad.agent-runtime-loaded-identity/1` is a smaller child receipt that
-binds the successful provision receipt digest to exact inspected host-local
+binds the same subject kind/digest and successful provision receipt digest to
+exact inspected host-local
 image ID/config/platform/runtime-manifest/Cup-manifest values. The runtime lock
-consumer recomputes every equality. A Docker image ID that happens to be
+or verification candidate consumer recomputes every equality. A candidate
+subject is valid only for `artifact-verification`; a lock subject is required
+for promotion, rollback and downstream execution. A Docker image ID that happens to be
 present on one host is not portable authority; the receipt proves how this
 particular imported host representation resolves to the OCI identities in the
 lock. The receipt must not assume that the portable manifest digest equals a
@@ -523,12 +538,12 @@ alias whose update could split authority.
 If bootstrap definitively fails `If-None-Match: *`, the key already exists; if
 a later generation definitively fails `If-Match`, the prior ETag is stale. In
 either definite precondition-failure case this request did not promote the
-candidate. The operation records `promotion-conflict`, retains its evidence,
+promotion target lock. The operation records `promotion-conflict`, retains its evidence,
 does not retry automatically, and validates the independently existing current
 pointer before any downstream use. A lost write response, an unreadable
 returned VersionId, a failed exact S3 reread, or a failed post-CAS Mac reread
-enters reconciliation instead. No client may infer success from a candidate
-tag, authorization, write request, listing, or cached pointer.
+enters reconciliation instead. No client may infer success from an image tag,
+intended final-lock request, authorization, listing, or cached pointer.
 
 Mac mount visibility is a pre-promotion gate because operators need the
 canonical archive, lock, and verification graph to be visible through the
@@ -624,7 +639,7 @@ exactly this shape:
 fields may be null after a lost response. `observed.versionChain` is ordered
 newest to oldest and covers every channel-state version from current latest
 through the exact `before.versionId`, inclusive. Listing is used only to find
-candidate VersionIds. Every non-delete version in the bounded chain is fetched
+channel-state VersionIds. Every non-delete version in the bounded chain is fetched
 with an exact-version GET, parsed under the strict channel-state schema, and
 hashed; a delete marker is recorded with JSON `null` for `digest` and `etag`.
 An incomplete, over-limit, changing, or un-fetchable chain cannot be treated as
@@ -654,7 +669,7 @@ The outcome is exactly `promoted`, `not-promoted`, or `ambiguous`:
   VersionId/digest remains the sole latest version with no intervening data or
   delete-marker version. The prior current remains authoritative under its own
   originating operation authority; this receipt never authorizes or unfreezes
-  the intended candidate. The bootstrap absence case follows the rule above.
+  the intended final-lock pointer. The bootstrap absence case follows the rule above.
 - `ambiguous`: every other result, including duplicate intended versions,
   intended-but-not-latest, a foreign later version, delete marker, incomplete
   chain, exact-GET failure, or inability to prove intended S3 bytes. The
@@ -689,7 +704,7 @@ JSON `null` on the normal path. The consumer then applies exactly one rule:
 
 1. Fetch `operations/<operationHandle>/terminal.json` at its deterministic
    path. If it exists, strictly validates, has `status: succeeded`, and its
-   `10-atomic-promote` stage binds the exact current pointer digest and
+   `06-atomic-promote` stage binds the exact current pointer digest and
    VersionId, the consumer requires `reconciliationReceiptDigest: null`.
 2. If that operation terminal is missing or has
    `status: reconciliation-required`, the caller must supply one exact
@@ -705,7 +720,7 @@ JSON `null` on the normal path. The consumer then applies exactly one rule:
    `macIntendedBytesVisible` true.
 4. Independently of the receipt, the consumer exact-version GETs the supplied
    current VersionId and hashes its bytes, then fetches current latest without
-   using a listing-selected candidate. Both reads must return those same exact
+   using a listing-selected channel version. Both reads must return those same exact
    canonical pointer bytes and identify that VersionId as current latest.
 
 Only those two success paths grant authority. A failed original terminal, a
@@ -730,7 +745,7 @@ backfilled during reconciliation.
 
 Rollback never mutates a lock, rewrites `current`, retags an image, or merely
 chooses the predecessor at execution time. It starts a fresh operation whose
-candidate is the exact `predecessorLockDigest` from the current channel state.
+promotion target lock is the exact `predecessorLockDigest` from current state.
 
 The rollback operation must:
 
@@ -748,7 +763,7 @@ The immutable SAR-005 Verified root may be reused only because the bytes and
 lock-bound identities are unchanged. Fresh host receipts prove this deployment
 and do not mint a new artifact identity. A changed archive, lock, manifest,
 config, runtime manifest, Cup manifest, build-input set, or verification root
-is a new candidate, not a rollback.
+creates a new runtime artifact and final lock; it is not a rollback.
 
 The same CAS conflict and no-auto-retry rules apply. An operator who wants to
 retry after any terminal failure creates a new operation handle, rereads
@@ -782,7 +797,7 @@ terminal operation receipt, every immutable S3 object, exact S3 rereads, atomic
 channel state, and Mac mount visibility are all verified. An initially
 uncertain conditional write additionally requires a `promoted` reconciliation
 whose exact S3 and Mac visibility checks are true. `not-promoted` and
-`ambiguous` outcomes retain the original candidate and scratch; a `promoted`
+`ambiguous` outcomes retain the intended final-lock operation and scratch; a `promoted`
 outcome with failed visibility also retains them until a later read-only
 reconciliation proves visibility. Cleanup is scoped to the operation handle
 and must prove absence. Failed operations, unresolved reconciliation,
@@ -801,11 +816,12 @@ never edits the operation terminal.
 ## Failure and retry contract
 
 Each stage emits exactly one immutable stage receipt at its deterministic path.
-After the ten stage receipts exist, the supervisor attempts exactly one
+After all receipts for the selected workflow exist (ten for Workflow A, six
+for Workflow B), the supervisor attempts exactly one
 create-once immutable operation terminal; the path can therefore contain at
 most one. Its status is exactly `succeeded`, `failed`, or
 `reconciliation-required`. The latter requires an `uncertain`
-`10-atomic-promote` receipt and binds the before state, intended canonical
+`06-atomic-promote` receipt and binds the before state, intended canonical
 pointer digest, promotion authorization, operation request ID, and any returned
 write metadata; it grants no downstream authority by itself.
 
@@ -846,8 +862,9 @@ An implementation is conformant only if machine tests prove all of these:
 2. the lock closes archive, OCI index/manifest/config/ordered layers/platform,
    outer importer, build inputs, Codex, runtime/Cup manifests, SBOM, and exact
    Verified root;
-3. archive and lock publication is create-only or exact-byte reuse by S3
-   VersionId, size, and SHA-256;
+3. archive/SBOM/provenance publication precedes candidate construction;
+   candidate and final-lock publication are separately create-only or
+   exact-byte reuse by S3 VersionId, size, and SHA-256;
 4. provisioning uses the exact OCI image-layout archive and admitted importer,
    validates the portable-to-host-local identity mapping, and never pulls;
 5. execution resolves current once, binds the fresh provision receipt,
@@ -862,7 +879,7 @@ An implementation is conformant only if machine tests prove all of these:
 8. rollback is a new promotion with fresh provision, loaded-identity, and
    deployment-conformance receipts;
 9. Source Snapshot identity is separate and cannot change the runtime lock;
-10. pre-promotion Mac visibility of immutable candidate objects blocks CAS,
+10. pre-promotion Mac visibility of immutable promotion-target objects blocks CAS,
     while post-CAS pointer visibility blocks execution and triggers
     reconciliation; neither can create runtime evidence;
 11. failed attempts never auto-retry, never adopt a handle, and retain
@@ -874,8 +891,9 @@ An implementation is conformant only if machine tests prove all of these:
     operation terminal or one caller-supplied exact content-addressed promoted
     reconciliation receipt with both visibility checks true, then independently
     rereads exact current bytes;
-14. each resolved operation has exactly ten immutable stage receipts and one
-    immutable operation terminal; only terminal-publication failure leaves no
+14. each resolved Workflow A operation has exactly ten immutable stage
+    receipts, each resolved Workflow B operation has exactly six, and each has
+    one immutable operation terminal; only terminal-publication failure leaves no
     terminal, and stage receipts, cleanup receipts, and tombstones are never
     additional terminals; and
 15. cleanup and any future GC cannot act on names, tags, unresolved references,
