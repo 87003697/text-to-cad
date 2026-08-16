@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import importlib.util
 import json
 from pathlib import Path
@@ -14,16 +14,19 @@ from typing import Mapping
 
 
 HERE = Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+REPO = HERE.parents[3]
+PROTOTYPE = REPO / "packages/meshshot/prototypes/agent_runtime_boundary"
+if str(PROTOTYPE) not in sys.path:
+    sys.path.insert(0, str(PROTOTYPE))
+from authority import AuthorityAllocator, FileAuthorityStore  # noqa: E402
 import boundary  # noqa: E402
 from contract import (  # noqa: E402
-    Digest, ExecutionIdentity, broker_mac, canonical_tree_digest,
-    workload_digest,
+    Digest, ExecutionIdentity, ExecutionRequest, broker_mac,
+    canonical_tree_digest,
 )
 
 
-RECEIPT_SCHEMA = "meshshot.agent-boundary.prototype-matrix/3"
+RECEIPT_SCHEMA = "meshshot.agent-boundary.prototype-matrix/4"
 
 
 def record(
@@ -78,6 +81,7 @@ class ScriptedAdapter:
         self.terminal_status = 0
         self.process_group_absent = True
         self.descendant_residue = False
+        self.interrupted_signal: int | None = None
         self.challenge: str | None = None
         self.container_absent = True
         self.owner_absent = True
@@ -129,11 +133,12 @@ class ScriptedAdapter:
             )
         if phase == "terminal":
             return record(
-                "meshshot.agent-boundary.terminal/3", self.spec.identity,
+                "meshshot.agent-boundary.terminal/4", self.spec.identity,
                 workloadStatus=self.terminal_status,
                 outputDigest="sha256:" + "f" * 64,
                 processGroupAbsent=self.process_group_absent,
                 descendantResidue=self.descendant_residue,
+                interruptedSignal=self.interrupted_signal,
             )
         raise AssertionError(phase)
 
@@ -146,9 +151,6 @@ class ScriptedAdapter:
 
     def remove_exact(self, owned_id: str) -> None:
         self.calls.append("remove-exact")
-
-    def cleanup_owner_labeled(self, owner_nonce: str) -> None:
-        self.calls.append("cleanup-owner-labeled")
 
     def cleanup_broker_volume(self, volume: str, owner_nonce: str) -> None:
         self.calls.append("cleanup-broker-volume")
@@ -175,16 +177,44 @@ class ScriptedAdapter:
         return self.tree_absent
 
 
-def fixture_spec(root: Path) -> boundary.JobSpec:
+@dataclass(frozen=True)
+class Fixture:
+    spec: boundary.JobSpec
+    store: FileAuthorityStore
+
+
+class DeterministicTokens:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, size: int) -> str:
+        self.calls += 1
+        marker = {1: "b", 2: "d", 3: "c"}[self.calls]
+        return marker * (size * 2)
+
+
+def fixture_spec(root: Path) -> Fixture:
     root = root.resolve(strict=True)
     workload = ("/opt/text-to-cad/bin/agent", "--fixed")
-    seed = ExecutionIdentity(
-        "job-a", "b" * 32, Digest("sha256:" + "1" * 64),
+    staging_source = root / "staging-source"
+    staging_input = root / "staging-input"
+    staging_source.mkdir()
+    staging_input.mkdir()
+    (staging_source / "source.txt").write_text("source", encoding="utf-8")
+    (staging_input / "input.bin").write_bytes(b"input")
+    request = ExecutionRequest(
+        "job-a", Digest("sha256:" + "1" * 64),
         Digest("sha256:" + "2" * 64), Digest("sha256:" + "3" * 64),
-        Digest("sha256:" + "0" * 64), Digest("sha256:" + "0" * 64),
-        Digest("sha256:" + "4" * 64), workload_digest(workload),
+        canonical_tree_digest(staging_source), canonical_tree_digest(staging_input),
+        Digest("sha256:" + "4" * 64), workload,
     )
-    job_root = root / boundary.resource_stem(seed)
+    grant = AuthorityAllocator(DeterministicTokens()).allocate(request)
+    store_root = root / "authority-store"
+    store_root.mkdir(mode=0o700)
+    store = FileAuthorityStore(store_root)
+    claimed = store.claim(grant)
+    identity = grant.identity
+    job_root = root / boundary.resource_stem(identity)
     job_root.mkdir(mode=0o700)
     paths = {
         name: job_root / name
@@ -197,22 +227,27 @@ def fixture_spec(root: Path) -> boundary.JobSpec:
         path.mkdir()
     (paths["source"] / "source.txt").write_text("source", encoding="utf-8")
     (paths["input"] / "input.bin").write_bytes(b"input")
-    identity = replace(
-        seed,
-        source_digest=canonical_tree_digest(paths["source"]),
-        input_digest=canonical_tree_digest(paths["input"]),
-    )
+    assert canonical_tree_digest(paths["source"]) == identity.source_digest
+    assert canonical_tree_digest(paths["input"]) == identity.input_digest
     image = boundary.ImageExpectation(
         "example.invalid/agent@" + identity.agent_image_digest.value,
         identity.agent_image_digest, identity.agent_config_digest,
         identity.runtime_manifest_digest,
     )
-    return boundary.JobSpec(
-        identity, image, boundary.JobPaths(**paths),
+    return Fixture(boundary.JobSpec(
+        claimed, image, boundary.JobPaths(**paths),
         boundary.resource_stem(identity),
         boundary.resource_stem(identity) + "-broker",
-        b"k" * 32, "c" * 64, workload,
-    )
+        workload,
+    ), store)
+
+
+def reclaim_identity(
+    fixture: Fixture, identity: ExecutionIdentity,
+) -> Fixture:
+    grant = replace(fixture.spec.authority.grant, identity=identity)
+    claimed = fixture.store.claim(grant)
+    return Fixture(replace(fixture.spec, authority=claimed), fixture.store)
 
 
 def unsafe_red(adapter: ScriptedAdapter) -> tuple[str, ...]:
@@ -225,7 +260,7 @@ def unsafe_red(adapter: ScriptedAdapter) -> tuple[str, ...]:
 
 
 def discover_browser_artifacts(roots: tuple[Path, ...]) -> list[dict[str, str]]:
-    scanner_path = HERE.parents[3] / "scripts/pilot/browser_surface.py"
+    scanner_path = REPO / "scripts/pilot/browser_surface.py"
     spec = importlib.util.spec_from_file_location("sar003_browser_surface", scanner_path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -238,6 +273,7 @@ def discover_browser_artifacts(roots: tuple[Path, ...]) -> list[dict[str, str]]:
 CASES = (
     "success", "wrong_image_digest", "missing_image_digest",
     "wrong_image_config_digest", "returned_id_substitution",
+    "lost_create_output", "authority_replay",
     "wrong_source_digest", "missing_source_digest", "invalid_workload",
     "substituted_workload", "writable_root", "writable_source",
     "writable_input", "docker_socket_exposure", "extra_network_route",
@@ -246,7 +282,7 @@ CASES = (
     "terminal_publication_failure", "container_residue", "owner_label_residue",
     "broker_volume_residue", "private_tree_residue",
     "cross_job_authority_substitution", "renamed_browser_artifact",
-    "descendant_process_residue",
+    "descendant_process_residue", "interrupted_workload",
 )
 
 
@@ -256,13 +292,15 @@ def matrix() -> dict[str, object]:
         for index, case in enumerate(CASES):
             case_root = Path(temporary) / str(index)
             case_root.mkdir()
-            spec = fixture_spec(case_root)
+            fixture = fixture_spec(case_root)
+            spec, store = fixture.spec, fixture.store
             adapter = ScriptedAdapter(spec)
             expected_failure: str | None = None
             expected_release = case in {
                 "success", "terminal_publication_failure", "container_residue",
                 "owner_label_residue", "broker_volume_residue",
                 "private_tree_residue", "descendant_process_residue",
+                "interrupted_workload",
             }
             if case == "wrong_image_digest":
                 adapter.image = replace(
@@ -281,13 +319,23 @@ def matrix() -> dict[str, object]:
             elif case == "returned_id_substitution":
                 adapter.container = replace(adapter.container, resource_id="d" * 64)
                 expected_failure = "container-ownership"
+            elif case == "lost_create_output":
+                adapter.returned_id = "lost"
+                adapter.owner_absent = False
+                expected_failure = "retained-resource"
+            elif case == "authority_replay":
+                first = boundary.run_job(spec, ScriptedAdapter(spec), store)
+                assert first.status == "succeeded"
+                expected_failure = "authority-replay"
             elif case == "wrong_source_digest":
-                spec = replace(
-                    spec,
-                    identity=replace(
-                        spec.identity, source_digest=Digest("sha256:" + "9" * 64),
+                fixture = reclaim_identity(
+                    fixture,
+                    replace(
+                        spec.identity,
+                        source_digest=Digest("sha256:" + "9" * 64),
                     ),
                 )
+                spec, store = fixture.spec, fixture.store
                 adapter = ScriptedAdapter(spec)
                 expected_failure = "snapshot-identity"
             elif case == "missing_source_digest":
@@ -365,21 +413,26 @@ def matrix() -> dict[str, object]:
                 renamed.write_bytes(b"\x7fELF" + b"HeadlessChrome")
                 renamed.chmod(0o755)
                 assert discover_browser_artifacts((spec.paths.source,))
-                spec = replace(
-                    spec,
-                    identity=replace(
+                fixture = reclaim_identity(
+                    fixture,
+                    replace(
                         spec.identity,
                         source_digest=canonical_tree_digest(spec.paths.source),
                     ),
                 )
+                spec, store = fixture.spec, fixture.store
                 adapter = ScriptedAdapter(spec)
                 adapter.browser_scan_roots = (spec.paths.source,)
                 expected_failure = "browser-deny"
             elif case == "descendant_process_residue":
                 adapter.descendant_residue = True
                 expected_failure = "workload-process-group"
+            elif case == "interrupted_workload":
+                adapter.interrupted_signal = 15
+                adapter.terminal_status = 143
+                expected_failure = "workload-interrupted"
             red_calls = unsafe_red(ScriptedAdapter(spec))
-            receipt = boundary.run_job(spec, adapter)
+            receipt = boundary.run_job(spec, adapter, store)
             passed = (
                 receipt.failure_check == expected_failure
                 and receipt.status == ("succeeded" if case == "success" else "failed")

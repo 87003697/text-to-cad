@@ -10,9 +10,14 @@ Verified**.
 
 ## Decision
 
-Adopt a two-stage, outer-owned protocol:
+Adopt an outer-owned allocation and two-stage execution protocol:
 
-1. The outer authority admits the exact Agent OCI manifest digest, image-config
+1. An authority-free immutable request contains no nonce, Broker secret, or
+   challenge. The outer allocator generates all three with cryptographic
+   randomness. A durable store atomically claims the complete identity and
+   challenge; lifecycle execution consumes that claim once before create, so a
+   prior valid identity/MAC cannot be replayed.
+2. The outer authority admits the exact Agent OCI manifest digest, image-config
    digest, runtime manifest, Source Snapshot, input, fixed workload argv, and
    Broker-authority identities. It compares both OCI identities with outer
    `image inspect` evidence and validates the nonempty absolute workload argv
@@ -21,11 +26,13 @@ Adopt a two-stage, outer-owned protocol:
    read-only root, read-only
    source/input/control mounts, `--network none`, no capabilities, no Docker
    socket, and job-private writable home/cache/tmp/work/output mounts.
-2. The returned ID remains an untrusted candidate while the outer authority
+3. The returned ID remains an untrusted candidate while the outer authority
    inspects it. Only an exact 64-hex ID plus matching owner/job labels creates
    exact-ID start/delete authority. A substituted foreign ID is never adopted
-   or deleted; owner-label cleanup and absence proof are the only safe fallback.
-3. The fixed image entrypoint is the only process allowed before release. It
+   or deleted. Labels are read-only inventory/absence evidence, never delete
+   authority. Lost create output therefore fails closed and reports any
+   owner-labelled residue without deleting by label or name.
+4. The fixed image entrypoint is the only process allowed before release. It
    rechecks the bound job/nonce/digests (including the image-resident runtime
    manifest), read-only surfaces, writable allowlist,
    browser/Docker denial, zero external route, and job-private Broker handshake.
@@ -34,14 +41,18 @@ Adopt a two-stage, outer-owned protocol:
    secret is supplied by the outer authority only to that job's Broker and is
    never mounted into the Agent. The entrypoint relays the proof over the
    attached container's protocol-only stdout and waits for release on stdin.
-4. Only an exact accepted proof releases the identity-bound workload. The
+5. Only an exact accepted proof releases the identity-bound workload. The
    entrypoint starts it in a new process group, waits for the leader, and tests
    group absence. Any descendant residue triggers bounded `TERM`, then `KILL`;
    residue forces status 125 even if cleanup succeeds, and a group that remains
-   after both bounds prevents terminal publication. Terminal/output digest are
+   after both bounds prevents terminal publication. Main-thread `SIGINT` and
+   `SIGTERM` handlers are installed only for the workload interval, relay the
+   signal to the complete process group, and are restored afterward. Interrupt,
+   descendant, and group-absence state have explicit failure precedence.
+   Terminal/output digest are
    published only after group absence. Workload stdout/stderr are files in
    job-private output, so they cannot impersonate protocol records.
-5. Workload success is provisional until terminal publication, exact-ID removal,
+6. Workload success is provisional until terminal publication, exact-ID removal,
    owner-label absence, Broker-volume absence, and exact job-private-tree absence
    all succeed independently. Cleanup never receives a source or user-data path
    outside the admitted owned job root. Cleanup failure or any retained-resource
@@ -61,22 +72,26 @@ the host-bwrap machinery into the container.
 - `process_group.py`: bounded standard-library workload process-group
   supervision shared by the fixed entrypoint and executable tests.
 - `contract.py`: single shared immutable identity, tree-digest, and Broker-MAC
-  authority copied into the image.
+  authority plus canonical workload environment copied into the image.
+- `authority.py`: outer cryptographic allocator and durable atomic one-shot
+  claim/consume store; Broker secret is never persisted or mounted in Agent.
 - `boundary.py`: production-shaped outer lifecycle contract with injectable
   adapters and no canned matrix results.
-- `matrix.py`: test/evidence-only scripted adapter, unsafe RED comparator, and
-  executable adversarial matrix CLI.
 - `scripts/pilot/browser_surface.py`: the existing formal descriptor/no-follow
   scanner is copied into the image; this prototype does not weaken it to names.
 - `tests/python/packages/meshshot/test_agent_runtime_boundary_prototype.py`:
   provider-free production-shaped lifecycle tests.
+- `tests/python/packages/meshshot/agent_runtime_boundary_matrix.py`:
+  test/evidence-only scripted adapter, unsafe RED comparator, and executable
+  adversarial matrix CLI.
 - `evidence-summary.json`: committed result of the deterministic matrix and the
   current Colima limitation.
 
 ## Run
 
 ```sh
-./.venv/bin/python packages/meshshot/prototypes/agent_runtime_boundary/matrix.py matrix
+./.venv/bin/python \
+  tests/python/packages/meshshot/agent_runtime_boundary_matrix.py matrix
 ./.venv/bin/python -m unittest \
   tests.python.packages.meshshot.test_agent_runtime_boundary_prototype -v
 ```
@@ -97,8 +112,9 @@ from a mutable tag or substituting the Browser Sidecar image would answer a
 different question and is rejected.
 
 The executable adapter tests mutate observations and failures behind the public
-seam; they establish ordering, candidate-versus-owned identity, immutable
-workload binding, release/terminal precedence, process-group handling, and four
+seam; they establish freshness/replay rejection, ordering,
+candidate-versus-owned identity, immutable workload binding, signal relay,
+release/terminal precedence, process-group handling, and four
 independent cleanup/absence predicates. They also reuse the formal browser
 scanner's renamed/distro/product/ELF-marker semantics. They do not establish the
 complete SAR-005 scanner, image, SBOM, Colima, CVM, or receipt verification set.
@@ -107,6 +123,10 @@ complete SAR-005 scanner, image, SBOM, Colima, CVM, or receipt verification set.
 
 - Docker socket or Docker CLI inside the Agent: collapses outer lifecycle and
   cleanup ownership.
+- Name/label deletion after lost or substituted create output: could delete a
+  foreign object; only the admitted exact returned ID is destructive authority.
+- Caller-selected nonce, secret, or challenge: makes a prior valid proof
+  replayable; capability material must come from the outer allocator and claim.
 - Entrypoint-only verification: permits a wrong image/source/configuration to
   start before the outer authority has checked the inert object.
 - Outer-only verification: cannot prove the final namespace, Broker identity,

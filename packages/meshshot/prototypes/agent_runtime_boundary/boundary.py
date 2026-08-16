@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
+import signal
 import stat
 import sys
 from typing import Mapping, Protocol
@@ -15,21 +16,18 @@ from typing import Mapping, Protocol
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
+from authority import AuthorityError, AuthorityStore, ClaimedExecution  # noqa: E402
 from contract import (  # noqa: E402
     ContractError, Digest, ExecutionIdentity, canonical_tree_digest,
     require_exact_record, verify_broker_mac, workload_digest,
+    WORKLOAD_ENVIRONMENT,
 )
 
 
 RESOURCE_ID_RE = re.compile(r"^[0-9a-f]{64}$")
 OWNER_LABEL = "io.text-to-cad.agent-boundary-owner"
 JOB_LABEL = "io.text-to-cad.agent-boundary-job"
-AGENT_ENV = (
-    "HOME=/run/agent-job/home", "CODEX_HOME=/run/agent-job/home/.codex",
-    "XDG_CACHE_HOME=/run/agent-job/cache", "TMPDIR=/run/agent-job/tmp",
-    "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "TZ=UTC",
-    "GIT_TERMINAL_PROMPT=0", "PYTHONDONTWRITEBYTECODE=1",
-)
+AGENT_ENV = tuple(f"{key}={value}" for key, value in WORKLOAD_ENVIRONMENT)
 
 
 class BoundaryFailure(RuntimeError):
@@ -104,14 +102,24 @@ class ContainerObservation:
 
 @dataclass(frozen=True)
 class JobSpec:
-    identity: ExecutionIdentity
+    authority: ClaimedExecution
     image: ImageExpectation
     paths: JobPaths
     container_name: str
     broker_volume: str
-    broker_secret: bytes
-    challenge: str
     workload: tuple[str, ...]
+
+    @property
+    def identity(self) -> ExecutionIdentity:
+        return self.authority.grant.identity
+
+    @property
+    def broker_secret(self) -> bytes:
+        return self.authority.grant.broker_secret
+
+    @property
+    def challenge(self) -> str:
+        return self.authority.grant.challenge
 
 
 @dataclass(frozen=True)
@@ -145,7 +153,6 @@ class LifecycleAdapter(Protocol):
     def read_record(self, owned_id: str, phase: str) -> Mapping[str, object]: ...
     def write_record(self, owned_id: str, phase: str, value: Mapping[str, object]) -> None: ...
     def remove_exact(self, owned_id: str) -> None: ...
-    def cleanup_owner_labeled(self, owner_nonce: str) -> None: ...
     def cleanup_broker_volume(self, volume: str, owner_nonce: str) -> None: ...
     def cleanup_private_tree(self, root: Path, owner_nonce: str) -> None: ...
     def prove_container_absence(self, owned_id: str, owner_nonce: str) -> bool: ...
@@ -317,7 +324,9 @@ def record(schema: str, identity: ExecutionIdentity, **extra: object) -> dict[st
     return {"schema": schema, **identity.as_json(), **extra}
 
 
-def run_job(spec: JobSpec, adapter: LifecycleAdapter) -> LifecycleReceipt:
+def run_job(
+    spec: JobSpec, adapter: LifecycleAdapter, authority_store: AuthorityStore,
+) -> LifecycleReceipt:
     owned_id: str | None = None
     job_root: Path | None = None
     broker_owned = False
@@ -327,6 +336,10 @@ def run_job(spec: JobSpec, adapter: LifecycleAdapter) -> LifecycleReceipt:
     cleanup_failed = False
     container_absent = owner_absent = broker_absent = tree_absent = False
     try:
+        try:
+            authority_store.consume(spec.authority)
+        except AuthorityError as exc:
+            raise BoundaryFailure("authority-replay") from exc
         job_root = admit_job_root(spec)
         validate_job_spec(spec)
         argv = build_create_argv(spec)
@@ -370,10 +383,20 @@ def run_job(spec: JobSpec, adapter: LifecycleAdapter) -> LifecycleReceipt:
         terminal = adapter.read_record(owned_id, "terminal")
         try:
             require_exact_record(
-                terminal, "meshshot.agent-boundary.terminal/3", spec.identity,
-                ("workloadStatus", "outputDigest", "processGroupAbsent", "descendantResidue"),
+                terminal, "meshshot.agent-boundary.terminal/4", spec.identity,
+                (
+                    "workloadStatus", "outputDigest", "processGroupAbsent",
+                    "descendantResidue", "interruptedSignal",
+                ),
             )
             Digest(str(terminal.get("outputDigest")))
+            interrupted_signal = terminal.get("interruptedSignal")
+            if interrupted_signal is not None and (
+                not isinstance(interrupted_signal, int)
+                or isinstance(interrupted_signal, bool)
+                or interrupted_signal not in (signal.SIGINT, signal.SIGTERM)
+            ):
+                raise ContractError("terminal interrupt is invalid")
         except ContractError as exc:
             raise BoundaryFailure("terminal-publication") from exc
         value = terminal.get("workloadStatus")
@@ -382,6 +405,8 @@ def run_job(spec: JobSpec, adapter: LifecycleAdapter) -> LifecycleReceipt:
             raise BoundaryFailure("workload-process-group")
         if terminal.get("descendantResidue") is not False:
             raise BoundaryFailure("workload-process-group")
+        if interrupted_signal is not None:
+            raise BoundaryFailure("workload-interrupted")
         adapter.write_record(
             owned_id, "ack", record("meshshot.agent-boundary.ack/1", spec.identity),
         )
@@ -397,10 +422,6 @@ def run_job(spec: JobSpec, adapter: LifecycleAdapter) -> LifecycleReceipt:
                 adapter.remove_exact(owned_id)
             except Exception:
                 cleanup_failed = True
-        try:
-            adapter.cleanup_owner_labeled(spec.identity.owner_nonce)
-        except Exception:
-            cleanup_failed = True
         if broker_owned:
             try:
                 adapter.cleanup_broker_volume(

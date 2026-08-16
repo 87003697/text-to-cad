@@ -8,7 +8,7 @@ import os
 import signal
 import subprocess
 import time
-from typing import BinaryIO, Mapping, Protocol
+from typing import BinaryIO, Callable, Mapping, Protocol
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,7 @@ class GroupResult:
     returncode: int
     descendant_residue: bool
     group_absent: bool
+    interrupted_signal: int | None
 
 
 class GroupAdapter(Protocol):
@@ -26,6 +27,10 @@ class GroupAdapter(Protocol):
     def wait(self, process: object) -> int: ...
     def group_exists(self, pgid: int) -> bool: ...
     def signal_group(self, pgid: int, signum: int) -> None: ...
+    def install_handlers(
+        self, handler: Callable[[int, object], None],
+    ) -> object: ...
+    def restore_handlers(self, token: object) -> None: ...
     def monotonic(self) -> float: ...
     def sleep(self, seconds: float) -> None: ...
 
@@ -60,6 +65,22 @@ class OsGroupAdapter:
         except ProcessLookupError:
             pass
 
+    def install_handlers(
+        self, handler: Callable[[int, object], None],
+    ) -> object:
+        previous = {
+            signum: signal.getsignal(signum)
+            for signum in (signal.SIGINT, signal.SIGTERM)
+        }
+        for signum in previous:
+            signal.signal(signum, handler)
+        return previous
+
+    def restore_handlers(self, token: object) -> None:
+        assert isinstance(token, dict)
+        for signum, handler in token.items():
+            signal.signal(signum, handler)
+
     def monotonic(self) -> float:
         return time.monotonic()
 
@@ -85,18 +106,40 @@ def run_workload_group(
     """Run one new session; residue forces TERM/KILL and a failed result."""
     runtime = adapter or OsGroupAdapter()
     process, pgid = runtime.spawn(argv, cwd, env, stdout, stderr)
-    returncode = runtime.wait(process)
-    residue = runtime.group_exists(pgid)
-    if residue:
-        runtime.signal_group(pgid, signal.SIGTERM)
-        absent = _await_absence(runtime, pgid, terminate_timeout)
-        if not absent:
-            runtime.signal_group(pgid, signal.SIGKILL)
+    interrupted: int | None = None
+
+    def relay(signum: int, frame: object) -> None:
+        nonlocal interrupted
+        if interrupted is None:
+            interrupted = signum
+        runtime.signal_group(pgid, signum)
+
+    handlers = runtime.install_handlers(relay)
+    try:
+        returncode = runtime.wait(process)
+        if interrupted is not None:
             absent = _await_absence(runtime, pgid, terminate_timeout)
+            residue = not absent
+        else:
+            residue = runtime.group_exists(pgid)
+            absent = not residue
+        if not absent:
+            runtime.signal_group(pgid, signal.SIGTERM)
+            absent = _await_absence(runtime, pgid, terminate_timeout)
+            if not absent:
+                runtime.signal_group(pgid, signal.SIGKILL)
+                absent = _await_absence(runtime, pgid, terminate_timeout)
+    finally:
+        runtime.restore_handlers(handlers)
+    if not absent or residue:
+        final_status = 125
+    elif interrupted is not None:
+        final_status = 128 + interrupted
     else:
-        absent = True
+        final_status = returncode
     return GroupResult(
-        returncode=125 if residue else returncode,
+        returncode=final_status,
         descendant_residue=residue,
         group_absent=absent,
+        interrupted_signal=interrupted,
     )
