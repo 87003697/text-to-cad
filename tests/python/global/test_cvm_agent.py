@@ -26,8 +26,15 @@ class CvmAgentTests(unittest.TestCase):
             "VALUE = 1\n", encoding="utf-8"
         )
         (self.repo / "tests/python/global").mkdir(parents=True)
-        (self.repo / "docs/specs").mkdir(parents=True)
+        (self.repo / "tests/python/global/test_runner.py").write_text(
+            "VALUE = 1\n", encoding="utf-8"
+        )
         (self.repo / "packages/meshshot").mkdir(parents=True)
+        (self.repo / "packages/meshshot/module.py").write_text(
+            "VALUE = 1\n", encoding="utf-8"
+        )
+        (self.repo / "AGENTS.md").write_text("instructions\n", encoding="utf-8")
+        (self.repo / "CONTRIBUTING.md").write_text("standards\n", encoding="utf-8")
         self.patches = [
             mock.patch.object(cvm_agent, "REPO_ROOT", self.repo),
             mock.patch.object(cvm_agent, "STATE_ROOT", self.state),
@@ -72,6 +79,11 @@ class CvmAgentTests(unittest.TestCase):
         self.assertEqual(result["state"], "failed")
         self.assertEqual(result["errorCheck"], "supervisor-launch")
 
+    def test_submit_refuses_a_second_active_handle(self) -> None:
+        self.submit()
+        with self.assertRaisesRegex(cvm_agent.AgentError, "already active"):
+            self.submit()
+
     def test_submit_rejects_stale_remote_workflow_before_state(self) -> None:
         with self.assertRaisesRegex(cvm_agent.AgentError, "module digest mismatch"):
             cvm_agent.submit(
@@ -92,8 +104,8 @@ class CvmAgentTests(unittest.TestCase):
         self.assertTrue((destination / "scripts/pilot/runner.py").is_file())
         self.assertFalse((destination / "outputs").exists())
 
-        (self.repo / "escape").symlink_to(self.root)
-        with self.assertRaisesRegex(cvm_agent.AgentError, "contains a symlink"):
+        (self.repo / "scripts/pilot/escape").symlink_to(self.root)
+        with self.assertRaisesRegex(cvm_agent.AgentError, "special file"):
             cvm_agent._copy_source(self.root / "rejected")
 
     def test_codex_command_keeps_token_out_of_process_arguments(self) -> None:
@@ -122,9 +134,11 @@ class CvmAgentTests(unittest.TestCase):
                 *,
                 upstream_bearer_token,
                 required_client_bearer_token,
+                max_upstream_attempts,
             ):
                 observed["proxy_token"] = upstream_bearer_token
                 observed["client_token"] = required_client_bearer_token
+                observed["attempt_limit"] = max_upstream_attempts
 
             def __enter__(self):
                 return self
@@ -142,24 +156,56 @@ class CvmAgentTests(unittest.TestCase):
             mock.patch.dict(os.environ, {"VENUS_TOKEN": "sensitive-value"}),
         ):
             status = cvm_agent._run_codex(
-                workspace, control, events, b"prompt"
+                workspace, control, events, b"prompt", self.root / "audit.jsonl"
             )
 
         self.assertEqual(status, 0)
         self.assertNotIn("sensitive-value", " ".join(observed["command"]))
+        self.assertNotIn("--approve-for-me", observed["command"])
+        self.assertIn('approval_policy="never"', observed["command"])
         self.assertNotIn("sensitive-value", json.dumps(observed["env"]))
         self.assertEqual(observed["proxy_token"], "sensitive-value")
         self.assertNotEqual(observed["client_token"], "sensitive-value")
+        self.assertEqual(
+            observed["attempt_limit"], cvm_agent.MAX_UPSTREAM_ATTEMPTS
+        )
         config = control / "home/.codex/config.toml"
         self.assertNotIn("sensitive-value", observed["config"])
         self.assertIn(str(observed["client_token"]), observed["config"])
         self.assertFalse(config.exists())
 
+    def test_normal_codex_exit_still_terminates_the_process_group(self) -> None:
+        process = mock.Mock(pid=321, returncode=0)
+        process.communicate.return_value = (None, None)
+        with (
+            mock.patch.object(cvm_agent.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                cvm_agent.os,
+                "killpg",
+                side_effect=[None, ProcessLookupError()],
+            ) as killpg,
+        ):
+            status = cvm_agent._run_process_group(
+                ["codex"],
+                cwd=self.repo,
+                prompt=b"prompt",
+                stream=mock.Mock(),
+                environment={},
+            )
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            killpg.call_args_list,
+            [mock.call(321, cvm_agent.signal.SIGTERM), mock.call(321, 0)],
+        )
+
     def test_supervisor_publishes_review_only_patch_and_usage(self) -> None:
         submitted = self.submit()
         handle = str(submitted["handle"])
 
-        def fake_runner(workspace, control, events, _prompt):
+        def fake_runner(workspace, control, events, _prompt, audit):
+            self.assertTrue(audit.parent.name.endswith(".private"))
+            self.assertNotEqual(audit.parent, workspace.parent)
+            audit.write_text('{"attempt":1,"status":200}\n', encoding="utf-8")
             (workspace / "scripts/pilot/runner.py").write_text(
                 "VALUE = 2\n", encoding="utf-8"
             )
@@ -193,7 +239,10 @@ class CvmAgentTests(unittest.TestCase):
         value = cvm_agent._load(handle)
         exp = self.repo / "outputs" / value["group"] / value["exp"]
         self.assertTrue((exp / "candidate.patch").is_file())
+        patch = (exp / "candidate.patch").read_text(encoding="utf-8")
+        self.assertIn("diff --git a/scripts/pilot/runner.py b/scripts/pilot/runner.py", patch)
         self.assertTrue((exp / "report.json").is_file())
+        self.assertTrue((exp / "run/venus-proxy-audit.jsonl").is_file())
         self.assertFalse((self.scratch / f"{handle}.private").exists())
         self.assertFalse((self.scratch / f"{handle}.worker").exists())
 
@@ -201,7 +250,7 @@ class CvmAgentTests(unittest.TestCase):
         submitted = self.submit()
         handle = str(submitted["handle"])
 
-        def fake_runner(workspace, control, events, _prompt):
+        def fake_runner(workspace, control, events, _prompt, _audit):
             (workspace / "AGENTS.md").write_text("changed\n", encoding="utf-8")
             events.write_text(
                 '{"usage":{"input_tokens":1}}\n', encoding="utf-8"
@@ -227,6 +276,37 @@ class CvmAgentTests(unittest.TestCase):
         self.assertTrue((self.scratch / f"{handle}.private").is_dir())
         self.assertTrue((self.scratch / f"{handle}.worker").is_dir())
 
+    def test_deleting_an_unsafe_path_cannot_evade_changed_path_policy(self) -> None:
+        submitted = self.submit()
+        handle = str(submitted["handle"])
+
+        def fake_runner(workspace, control, events, _prompt, _audit):
+            (workspace / "scripts/pilot/runner.py").unlink()
+            events.write_text('{"usage":{"input_tokens":1}}\n', encoding="utf-8")
+            (control / "last-message.json").write_text(
+                json.dumps(
+                    {
+                        "summary": "candidate",
+                        "diagnosis": "surface",
+                        "changed_paths": [],
+                        "tests": [],
+                        "risks": [],
+                        "review_request": "review patch",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            return 0
+
+        with mock.patch.object(
+            cvm_agent,
+            "ALLOWED_CHANGED_PREFIXES",
+            ("tests/python/global/",),
+        ):
+            result = cvm_agent.supervise(handle, runner=fake_runner)
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["errorCheck"], "candidate changed an unsafe path")
+
     def test_handle_can_only_be_supervised_once(self) -> None:
         submitted = self.submit()
         handle = str(submitted["handle"])
@@ -234,6 +314,16 @@ class CvmAgentTests(unittest.TestCase):
         (self.state / "claims" / handle).write_text("", encoding="utf-8")
         with self.assertRaisesRegex(cvm_agent.AgentError, "already claimed"):
             cvm_agent.supervise(handle)
+
+    def test_supervisor_rejects_source_drift_after_submission(self) -> None:
+        submitted = self.submit()
+        handle = str(submitted["handle"])
+        (self.repo / "scripts/pilot/runner.py").write_text(
+            "VALUE = 99\n", encoding="utf-8"
+        )
+        result = cvm_agent.supervise(handle)
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["errorCheck"], "copied source digest mismatch")
 
     def test_skill_and_wrapper_keep_parent_review_as_terminal_gate(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]
@@ -243,9 +333,13 @@ class CvmAgentTests(unittest.TestCase):
         wrapper = (repo_root / "scripts/pilot/cvm-agent.sh").read_text(
             encoding="utf-8"
         )
+        remote_wrapper = (
+            repo_root / "scripts/pilot/cvm-agent-remote.sh"
+        ).read_text(encoding="utf-8")
         self.assertIn("Apply nothing until the parent reviewer", instructions)
         self.assertIn("source worktree must be clean", wrapper)
         self.assertIn("ssh -n cvm", wrapper)
+        self.assertIn(".secrets/text-to-cad.env", remote_wrapper)
 
 
 if __name__ == "__main__":

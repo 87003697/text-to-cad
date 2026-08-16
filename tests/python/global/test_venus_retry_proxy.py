@@ -139,6 +139,29 @@ class VenusRetryProxyTests(unittest.TestCase):
         self.assertEqual(response.status, 401)
         self.assertEqual(upstream.requests, [])
 
+    def test_request_budget_rejects_calls_before_they_reach_upstream(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            audit_path = Path(temp) / "venus-retry.jsonl"
+            with ScriptedUpstream([(200, b"{}")]) as upstream:
+                from scripts.pilot.venus_retry_proxy import RetryProxy
+
+                with RetryProxy(
+                    upstream.url, audit_path, max_upstream_attempts=1
+                ) as proxy:
+                    statuses = []
+                    for _ in range(2):
+                        connection = http.client.HTTPConnection(
+                            "127.0.0.1", proxy.port, timeout=2
+                        )
+                        connection.request("POST", "/v1/responses", body=b"{}")
+                        response = connection.getresponse()
+                        response.read()
+                        statuses.append(response.status)
+                        connection.close()
+
+        self.assertEqual(statuses, [200, 429])
+        self.assertEqual(len(upstream.requests), 1)
+
     def test_empty_400_retries_only_encrypted_reasoning_continuation(self) -> None:
         request_body = json.dumps(
             {

@@ -34,14 +34,20 @@ explicitly authorized.
 
 ## Boundary
 
-The remote Codex runs as the unprivileged `nobody` identity inside a fresh
-`/tmp` source copy with `workspace-write`. It cannot write the shared checkout
-or use the root-owned Docker socket. The fixed prompt forbids networked tool
-commands, Docker mutation, formal pilots, dependency installation, and nested
-model calls. The supervisor alone copies review artifacts into `outputs/`.
+The remote Codex runs as the unprivileged `nobody` identity inside a fresh,
+digest-bound `/tmp` source subset with `workspace-write`. Its root-private
+baseline and Venus audit are separate from the worker-owned tree. It cannot
+write the shared checkout or use the root-owned Docker socket. The fixed prompt
+forbids networked tool commands, Docker mutation, formal pilots, dependency
+installation, and nested model calls. The supervisor alone copies review
+artifacts into `outputs/`.
 
-One handle is one terminal attempt. Retain failures. Missing structured output,
-unsafe changed paths, workflow-hash mismatch, timeout, or unavailable usage
-evidence closes the handle; never reinterpret it as success. The public result
-must name the exact deployed source revision, workflow hashes, model, task,
-usage, changed paths, and output experiment.
+One handle is one terminal attempt. Only one may be active, the authorization
+ledger permits at most ten handles, and each handle permits at most 48 Venus
+upstream attempts within 45 minutes. No automatic resubmission is allowed;
+parent review is required before any fresh handle. Retain failures. Missing
+structured output, unsafe changed paths, workflow-hash mismatch, timeout, or
+unavailable usage evidence closes the handle; never reinterpret it as success.
+The public result must name the exact deployed source revision and digest,
+workflow hashes, model, task, authorization ceiling, upstream-attempt limit, usage,
+changed paths, and output experiment.

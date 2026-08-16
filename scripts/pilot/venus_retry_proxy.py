@@ -42,6 +42,7 @@ class _ProxyServer(ThreadingHTTPServer):
         upstream_timeout: float,
         upstream_bearer_token: str | None,
         required_client_bearer_token: str | None,
+        max_upstream_attempts: int | None,
     ) -> None:
         """Bind loopback on a dynamic port and retain retry policy."""
 
@@ -60,6 +61,11 @@ class _ProxyServer(ThreadingHTTPServer):
         self.upstream_timeout = upstream_timeout
         self.upstream_bearer_token = upstream_bearer_token
         self.required_client_bearer_token = required_client_bearer_token
+        if max_upstream_attempts is not None and max_upstream_attempts <= 0:
+            raise ValueError("max_upstream_attempts must be positive")
+        self.max_upstream_attempts = max_upstream_attempts
+        self.upstream_attempt_count = 0
+        self.request_lock = threading.Lock()
         self.audit_lock = threading.Lock()
         super().__init__(("127.0.0.1", 0), _ProxyHandler)
 
@@ -90,8 +96,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         """Forward a Responses request, preserving its bytes across attempts."""
 
-        content_length = int(self.headers.get("Content-Length", "0"))
-        body = self.rfile.read(content_length)
         required_token = self.server.required_client_bearer_token
         if required_token is not None and self.headers.get("Authorization") != (
             f"Bearer {required_token}"
@@ -103,6 +107,15 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 response,
             )
             return
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self._respond(400, [("Content-Type", "application/json")], b"{}")
+            return
+        if content_length < 0:
+            self._respond(400, [("Content-Type", "application/json")], b"{}")
+            return
+        body = self.rfile.read(content_length)
         excluded_headers = HOP_BY_HOP_HEADERS | {
             "host",
             "content-length",
@@ -125,6 +138,22 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         forwarded_headers[VENUS_CODEX_ROUTING_HEADER] = "true"
 
         for attempt in range(1, len(self.server.backoffs) + 2):
+            with self.server.request_lock:
+                if (
+                    self.server.max_upstream_attempts is not None
+                    and self.server.upstream_attempt_count
+                    >= self.server.max_upstream_attempts
+                ):
+                    response = (
+                        b'{"error":{"code":"proxy_request_budget_exhausted"}}'
+                    )
+                    self._respond(
+                        429,
+                        [("Content-Type", "application/json")],
+                        response,
+                    )
+                    return
+                self.server.upstream_attempt_count += 1
             status, headers, response_body = self._forward(
                 body,
                 forwarded_headers,
@@ -249,6 +278,7 @@ class RetryProxy:
         upstream_timeout: float = 180,
         upstream_bearer_token: str | None = None,
         required_client_bearer_token: str | None = None,
+        max_upstream_attempts: int | None = None,
     ) -> None:
         """Configure a maximum of one initial attempt plus the backoffs."""
 
@@ -259,6 +289,7 @@ class RetryProxy:
             upstream_timeout,
             upstream_bearer_token,
             required_client_bearer_token,
+            max_upstream_attempts,
         )
         self._thread = threading.Thread(
             target=self._server.serve_forever,

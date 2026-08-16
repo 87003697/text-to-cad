@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -36,33 +37,17 @@ NOBODY_GID = 65534
 ALLOWED_CHANGED_PREFIXES = (
     "scripts/pilot/",
     "tests/python/global/",
-    "docs/specs/",
 )
 SOURCE_INPUT_PREFIXES = (
-    "docs/specs",
     "packages/meshshot",
     "scripts/pilot",
     "tests/python/global",
 )
-EXCLUDED_DIRS = frozenset(
-    {
-        ".agents",
-        ".claude",
-        ".codex",
-        ".cvm-agent-jobs",
-        ".cvm-jobs",
-        ".git",
-        ".mypy_cache",
-        ".next",
-        ".pytest_cache",
-        ".venv",
-        "__pycache__",
-        "models",
-        "node_modules",
-        "outputs",
-        "tmp",
-    }
-)
+SOURCE_INPUT_FILES = ("AGENTS.md", "CONTRIBUTING.md")
+SOURCE_EXCLUDED_NAMES = frozenset({"__pycache__", "node_modules", ".pytest_cache"})
+MAX_HANDLES = 10
+MAX_UPSTREAM_ATTEMPTS = 48
+AUTHORIZATION_CEILING_USD = 1000
 
 
 class AgentError(RuntimeError):
@@ -79,27 +64,43 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _source_digest() -> str:
-    """Bind the task's complete readable source surface after deployment."""
-
-    digest = hashlib.sha256()
+def _source_files(root: Path) -> list[Path]:
+    files: list[Path] = []
+    for relative in SOURCE_INPUT_FILES:
+        path = root / relative
+        if not path.is_file() or path.is_symlink():
+            raise AgentError("source input file is unavailable")
+        files.append(path)
     for prefix in SOURCE_INPUT_PREFIXES:
-        root = REPO_ROOT / prefix
-        if not root.is_dir() or root.is_symlink():
+        path_root = root / prefix
+        if not path_root.is_dir() or path_root.is_symlink():
             raise AgentError("source input tree is unavailable")
-        for path in sorted(root.rglob("*")):
-            if "__pycache__" in path.parts or path.name == ".DS_Store":
+        for path in sorted(path_root.rglob("*")):
+            relative_parts = path.relative_to(path_root).parts
+            if (
+                any(part in SOURCE_EXCLUDED_NAMES for part in relative_parts)
+                or path.name == ".DS_Store"
+            ):
                 continue
             metadata = path.lstat()
             if stat.S_ISDIR(metadata.st_mode):
                 continue
             if not stat.S_ISREG(metadata.st_mode):
                 raise AgentError("source input tree contains a special file")
-            relative = path.relative_to(REPO_ROOT).as_posix().encode()
-            digest.update(len(relative).to_bytes(8, "big"))
-            digest.update(relative)
-            file_digest = bytes.fromhex(_sha256(path))
-            digest.update(file_digest)
+            files.append(path)
+    return sorted(files, key=lambda path: path.relative_to(root).as_posix())
+
+
+def _source_digest(root: Path | None = None) -> str:
+    """Bind the task's complete readable source surface after deployment."""
+
+    root = REPO_ROOT if root is None else root
+    digest = hashlib.sha256()
+    for path in _source_files(root):
+        relative = path.relative_to(root).as_posix().encode()
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(bytes.fromhex(_sha256(path)))
     return digest.hexdigest()
 
 
@@ -171,6 +172,8 @@ def _public(value: dict[str, Any]) -> dict[str, Any]:
         "changedPaths",
         "errorCheck",
         "retryAllowed",
+        "authorizationCeilingUsd",
+        "upstreamAttemptLimit",
     )
     return {key: value.get(key) for key in keys}
 
@@ -202,33 +205,48 @@ def submit(
     _verify_workflow(module_sha256, prompt_sha256)
     if not SHA256.fullmatch(source_digest) or _source_digest() != source_digest:
         raise AgentError("deployed source digest mismatch")
-    handle = "cvma-" + secrets.token_hex(12)
-    stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    group = f"{stamp}-cvm-agent"
-    exp = f"{stamp}-{task}-{handle.removeprefix('cvma-')}"
-    now = time.time()
-    value = {
-        "schema": "text-to-cad.cvm-agent-job/1",
-        "handle": handle,
-        "state": "submitted",
-        "task": task,
-        "model": MODEL,
-        "sourceRevision": source_revision,
-        "sourceDigest": source_digest,
-        "moduleSha256": module_sha256,
-        "promptSha256": prompt_sha256,
-        "group": group,
-        "exp": exp,
-        "submittedAt": now,
-        "updatedAt": now,
-        "resultStatus": None,
-        "processExitCode": None,
-        "usage": None,
-        "changedPaths": [],
-        "errorCheck": None,
-        "retryAllowed": False,
-    }
-    _atomic_json(_state_path(handle), value)
+    STATE_ROOT.mkdir(parents=True, exist_ok=True)
+    with (STATE_ROOT / "budget.lock").open("a", encoding="utf-8") as ledger:
+        fcntl.flock(ledger.fileno(), fcntl.LOCK_EX)
+        existing = tuple(STATE_ROOT.glob("cvma-*.json"))
+        if len(existing) >= MAX_HANDLES:
+            raise AgentError("CVM agent handle budget is exhausted")
+        for state_path in existing:
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8")).get("state")
+            except (AttributeError, OSError, json.JSONDecodeError) as exc:
+                raise AgentError("CVM agent budget ledger is invalid") from exc
+            if state in {"submitted", "running"}:
+                raise AgentError("a CVM agent handle is already active")
+        handle = "cvma-" + secrets.token_hex(12)
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        group = f"{stamp}-cvm-agent"
+        exp = f"{stamp}-{task}-{handle.removeprefix('cvma-')}"
+        now = time.time()
+        value = {
+            "schema": "text-to-cad.cvm-agent-job/1",
+            "handle": handle,
+            "state": "submitted",
+            "task": task,
+            "model": MODEL,
+            "sourceRevision": source_revision,
+            "sourceDigest": source_digest,
+            "moduleSha256": module_sha256,
+            "promptSha256": prompt_sha256,
+            "group": group,
+            "exp": exp,
+            "submittedAt": now,
+            "updatedAt": now,
+            "resultStatus": None,
+            "processExitCode": None,
+            "usage": None,
+            "changedPaths": [],
+            "errorCheck": None,
+            "retryAllowed": False,
+            "authorizationCeilingUsd": AUTHORIZATION_CEILING_USD,
+            "upstreamAttemptLimit": MAX_UPSTREAM_ATTEMPTS,
+        }
+        _atomic_json(_state_path(handle), value)
     command = [sys.executable, "-m", "scripts.pilot.cvm_agent", "supervise", handle]
     try:
         if detach is None:
@@ -252,28 +270,13 @@ def submit(
 
 
 def _copy_source(destination: Path) -> None:
-    """Copy deployed source without private, state, artifact, or dependency trees."""
+    """Copy exactly the source bytes covered by the deployment digest."""
 
     destination.mkdir(parents=True, mode=0o700)
-    for root, directories, files in os.walk(REPO_ROOT, followlinks=False):
-        root_path = Path(root)
-        relative_root = root_path.relative_to(REPO_ROOT)
-        kept_directories: list[str] = []
-        for name in sorted(directories):
-            path = root_path / name
-            if name in EXCLUDED_DIRS:
-                continue
-            if path.is_symlink():
-                raise AgentError("deployed source contains a symlink")
-            kept_directories.append(name)
-        directories[:] = kept_directories
-        target_root = destination / relative_root
-        target_root.mkdir(parents=True, exist_ok=True)
-        for name in sorted(files):
-            source = root_path / name
-            if source.is_symlink():
-                raise AgentError("deployed source contains a symlink")
-            shutil.copy2(source, target_root / name)
+    for source in _source_files(REPO_ROOT):
+        target = destination / source.relative_to(REPO_ROOT)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
 
 
 def _chown_tree(path: Path, uid: int, gid: int) -> None:
@@ -313,11 +316,12 @@ def _codex_command(workspace: Path, last_message: Path, schema: Path) -> list[st
         raise AgentError("codex executable is unavailable")
     return [
         codex,
+        "-c", 'approval_policy="never"',
         "-m", MODEL,
         "exec",
+        "--strict-config",
         "--ephemeral",
         "--skip-git-repo-check",
-        "--approve-for-me",
         "--sandbox", "workspace-write",
         "--json",
         "--output-schema", os.fspath(schema),
@@ -367,23 +371,31 @@ def _run_process_group(
         group=NOBODY_GID,
         extra_groups=[],
     )
-    try:
-        process.communicate(input=prompt, timeout=MAX_SECONDS)
-    except subprocess.TimeoutExpired:
+    def terminate_group() -> None:
         try:
             os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
-            pass
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
+            return
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                os.killpg(process.pid, 0)
             except ProcessLookupError:
-                pass
-            process.wait()
+                return
+            time.sleep(0.05)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
+
+    try:
+        process.communicate(input=prompt, timeout=MAX_SECONDS)
+    except subprocess.TimeoutExpired:
+        terminate_group()
         raise
-    return process.returncode
+    return_code = process.returncode
+    terminate_group()
+    return return_code
 
 
 def _run_codex(
@@ -391,6 +403,7 @@ def _run_codex(
     control: Path,
     events: Path,
     prompt: bytes,
+    proxy_audit: Path,
 ) -> int:
     _require_closed_docker_socket()
     last_message = control / "last-message.json"
@@ -406,13 +419,13 @@ def _run_codex(
     _chown_tree(control, NOBODY_UID, NOBODY_GID)
     _chown_tree(workspace, NOBODY_UID, NOBODY_GID)
     os.chown(workspace.parent, NOBODY_UID, NOBODY_GID)
-    audit = control / "venus-proxy-audit.jsonl"
     client_token = secrets.token_urlsafe(32)
     with RetryProxy(
         "http://v2.open.venus.oa.com/llmproxy/v1",
-        audit,
+        proxy_audit,
         upstream_bearer_token=token,
         required_client_bearer_token=client_token,
+        max_upstream_attempts=MAX_UPSTREAM_ATTEMPTS,
     ) as proxy:
         config = (
             'model_provider = "venus"\n'
@@ -481,32 +494,71 @@ def _candidate_patch(baseline: Path, workspace: Path, destination: Path) -> list
             stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode)
         ):
             raise AgentError("candidate workspace contains a special file")
-    with destination.open("wb") as stream:
-        completed = subprocess.run(
-            [
-                "git", "diff", "--no-index", "--binary", "--no-ext-diff",
-                "--src-prefix=a/", "--dst-prefix=b/", os.fspath(baseline),
-                os.fspath(workspace),
-            ],
-            stdout=stream,
-            stderr=subprocess.PIPE,
-            timeout=60,
-            check=False,
-        )
-    if completed.returncode not in {0, 1}:
-        raise AgentError("candidate diff failed")
-    if destination.stat().st_size > 16 * 1024 * 1024:
-        raise AgentError("candidate patch exceeds the review bound")
-    patch = destination.read_bytes()
+    names = subprocess.run(
+        [
+            "git", "diff", "--no-index", "--no-renames", "--name-status", "-z",
+            os.fspath(baseline), os.fspath(workspace),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=60,
+        check=False,
+    )
+    if names.returncode not in {0, 1}:
+        raise AgentError("candidate changed-path inventory failed")
+    fields = names.stdout.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    if len(fields) % 2:
+        raise AgentError("candidate changed-path inventory is invalid")
     changed: set[str] = set()
-    for raw in patch.splitlines():
-        if not raw.startswith(b"+++ b/"):
-            continue
-        text = raw[len(b"+++ b/") :].decode("utf-8", errors="strict")
-        marker = "/workspace/"
-        changed.add(text.split(marker, 1)[-1] if marker in text else text)
+    for offset in range(0, len(fields), 2):
+        status_code, raw_path = fields[offset : offset + 2]
+        if status_code not in {b"A", b"D", b"M", b"T"}:
+            raise AgentError("candidate changed-path inventory is invalid")
+        try:
+            path = Path(raw_path.decode("utf-8", errors="strict"))
+            if status_code == b"A":
+                relative = path.relative_to(workspace)
+            else:
+                relative = path.relative_to(baseline)
+        except (UnicodeDecodeError, ValueError):
+            raise AgentError("candidate changed-path inventory is invalid") from None
+        text = relative.as_posix()
+        if not re.fullmatch(r"[A-Za-z0-9._/-]+", text):
+            raise AgentError("candidate path is not review-safe")
+        changed.add(text)
     if any(not path.startswith(ALLOWED_CHANGED_PREFIXES) for path in changed):
         raise AgentError("candidate changed an unsafe path")
+    completed = subprocess.run(
+        [
+            "git", "diff", "--no-index", "--no-renames", "--binary",
+            "--no-ext-diff", os.fspath(baseline), os.fspath(workspace),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=60,
+        check=False,
+    )
+    if completed.returncode not in {0, 1}:
+        raise AgentError("candidate diff failed")
+    patch = completed.stdout
+    if len(patch) > 16 * 1024 * 1024:
+        raise AgentError("candidate patch exceeds the review bound")
+    baseline_prefix = os.fsencode(baseline).lstrip(b"/") + b"/"
+    workspace_prefix = os.fsencode(workspace).lstrip(b"/") + b"/"
+    rewritten: list[bytes] = []
+    in_hunk = False
+    for line in patch.splitlines(keepends=True):
+        if line.startswith(b"diff --git "):
+            in_hunk = False
+        elif line.startswith(b"@@ ") or line == b"GIT binary patch\n":
+            in_hunk = True
+        if not in_hunk:
+            line = line.replace(b"a/" + baseline_prefix, b"a/")
+            line = line.replace(b"b/" + workspace_prefix, b"b/")
+        rewritten.append(line)
+    destination.write_bytes(b"".join(rewritten))
     return sorted(changed)
 
 
@@ -565,7 +617,7 @@ def _artifact_manifest(exp_dir: Path, final_status: int) -> None:
 def supervise(
     handle: str,
     *,
-    runner: Callable[[Path, Path, Path, bytes], int] = _run_codex,
+    runner: Callable[[Path, Path, Path, bytes, Path], int] = _run_codex,
 ) -> dict[str, Any]:
     _state_path(handle)
     claim = STATE_ROOT / "claims" / handle
@@ -600,12 +652,17 @@ def supervise(
         exp_dir.mkdir(parents=True)
         run_dir.mkdir()
         _copy_source(baseline)
+        if _source_digest(baseline) != value["sourceDigest"]:
+            raise AgentError("copied source digest mismatch")
         shutil.copytree(baseline, workspace)
         prompt = PROMPT_PATH.read_bytes()
         (run_dir / "prompt.txt").write_bytes(prompt)
         events = control / "codex-events.jsonl"
-        process_status = runner(workspace, control, events, prompt)
+        proxy_audit = private_scratch / "venus-proxy-audit.jsonl"
+        process_status = runner(workspace, control, events, prompt, proxy_audit)
         shutil.copy2(events, run_dir / "codex-events.jsonl")
+        if proxy_audit.is_file():
+            shutil.copy2(proxy_audit, run_dir / "venus-proxy-audit.jsonl")
         last_message = control / "last-message.json"
         if not last_message.is_file():
             raise AgentError("structured Codex response is missing")
@@ -642,6 +699,8 @@ def supervise(
         "changedPaths": changed,
         "errorCheck": error_check,
         "retryAllowed": False,
+        "authorizationCeilingUsd": AUTHORIZATION_CEILING_USD,
+        "upstreamAttemptLimit": MAX_UPSTREAM_ATTEMPTS,
     }
     exp_dir.mkdir(parents=True, exist_ok=True)
     _atomic_json(exp_dir / "report.json", report)

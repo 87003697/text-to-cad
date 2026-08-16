@@ -23,7 +23,7 @@ case "$mode" in
         prompt_sha="$(sha256_file scripts/pilot/cvm_agent_surface_prompt.md)"
         source_digest="$(python3 -m scripts.pilot.cvm_agent source-digest)"
         exec ssh -n cvm \
-            "cd ~/text-to-cad && python3 -m scripts.pilot.cvm_agent submit surface-adaptation --source-revision '$source_revision' --module-sha256 '$module_sha' --prompt-sha256 '$prompt_sha' --source-digest '$source_digest'"
+            "cd ~/text-to-cad && scripts/pilot/cvm-agent-remote.sh submit surface-adaptation --source-revision '$source_revision' --module-sha256 '$module_sha' --prompt-sha256 '$prompt_sha' --source-digest '$source_digest'"
         ;;
     monitor)
         shift
@@ -34,7 +34,7 @@ case "$mode" in
         fi
         [[ $# -eq 1 && "$1" =~ ^cvma-[0-9a-f]{24}$ ]] || usage
         exec ssh -n cvm \
-            "cd ~/text-to-cad && python3 -m scripts.pilot.cvm_agent monitor $wait_flag '$1'"
+            "cd ~/text-to-cad && scripts/pilot/cvm-agent-remote.sh monitor $wait_flag '$1'"
         ;;
     *) usage ;;
 esac

@@ -44,6 +44,7 @@ tmp/
 outputs
 outputs/
 .cvm-jobs/
+.cvm-agent-jobs/
 
 # Local printer credentials
 /bambu-printers.json

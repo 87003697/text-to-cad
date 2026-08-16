@@ -20,7 +20,6 @@ Allowed source paths are limited to:
 
 - `scripts/pilot/`
 - `tests/python/global/`
-- `docs/specs/`
 
 Treat Docker, S3, SSH, Git remotes, the shared checkout, formal pilots, and
 other model calls as unavailable. Inspect Docker-related source if useful, but
