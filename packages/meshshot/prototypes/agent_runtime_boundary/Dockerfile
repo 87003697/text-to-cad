@@ -7,7 +7,7 @@ ARG RUNTIME_MANIFEST_DIGEST
 LABEL org.opencontainers.image.title="text-to-cad-agent-runtime-boundary-prototype" \
       org.opencontainers.image.revision="${PROTOTYPE_SOURCE_REVISION}" \
       io.text-to-cad.throwaway="true" \
-      io.text-to-cad.agent-boundary-schema="meshshot.agent-boundary/2" \
+      io.text-to-cad.agent-boundary-schema="meshshot.agent-boundary/3" \
       io.text-to-cad.runtime-manifest-digest="${RUNTIME_MANIFEST_DIGEST}" \
       io.text-to-cad.browser-deny="required" \
       io.text-to-cad.docker-authority="absent"
@@ -16,6 +16,8 @@ COPY --chmod=0555 packages/meshshot/prototypes/agent_runtime_boundary/entrypoint
   /opt/text-to-cad/agent-boundary-entrypoint
 COPY --chmod=0444 packages/meshshot/prototypes/agent_runtime_boundary/contract.py \
   /opt/text-to-cad/contract.py
+COPY --chmod=0444 packages/meshshot/prototypes/agent_runtime_boundary/process_group.py \
+  /opt/text-to-cad/process_group.py
 COPY --chmod=0444 scripts/pilot/browser_surface.py \
   /opt/text-to-cad/browser_surface.py
 
