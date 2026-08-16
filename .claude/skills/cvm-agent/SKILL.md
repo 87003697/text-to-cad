@@ -35,7 +35,8 @@ explicitly authorized.
 ## Boundary
 
 The remote Codex runs as the unprivileged `nobody` identity inside a fresh,
-digest-bound `/tmp` source subset with `workspace-write`. Its root-private
+digest-bound `/var/lib/text-to-cad-cvm-agent` source subset with
+`workspace-write`. Its root-private
 baseline and Venus audit are separate from the worker-owned tree. It cannot
 write the shared checkout or use the root-owned Docker socket. The fixed prompt
 forbids networked tool commands, Docker mutation, formal pilots, dependency

@@ -227,6 +227,41 @@ class CvmAgentTests(unittest.TestCase):
             [mock.call(321, cvm_agent.signal.SIGTERM), mock.call(321, 0)],
         )
 
+    def test_stubborn_process_group_is_absent_after_sigkill(self) -> None:
+        process = mock.Mock(pid=654, returncode=0)
+        process.communicate.return_value = (None, None)
+        with (
+            mock.patch.object(cvm_agent.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                cvm_agent.os,
+                "killpg",
+                side_effect=[None, None, None, ProcessLookupError()],
+            ) as killpg,
+            mock.patch.object(
+                cvm_agent.time,
+                "monotonic",
+                side_effect=[0, 0, 6, 6, 6],
+            ),
+            mock.patch.object(cvm_agent.time, "sleep"),
+        ):
+            status = cvm_agent._run_process_group(
+                ["codex"],
+                cwd=self.repo,
+                prompt=b"prompt",
+                stream=mock.Mock(),
+                environment={},
+            )
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                mock.call(654, cvm_agent.signal.SIGTERM),
+                mock.call(654, 0),
+                mock.call(654, cvm_agent.signal.SIGKILL),
+                mock.call(654, 0),
+            ],
+        )
+
     def test_supervisor_publishes_review_only_patch_and_usage(self) -> None:
         submitted = self.submit()
         handle = str(submitted["handle"])
@@ -391,14 +426,27 @@ class CvmAgentTests(unittest.TestCase):
             )
             return 0
 
-        with mock.patch.object(
-            cvm_agent,
-            "_artifact_manifest",
-            side_effect=OSError("disk full"),
-        ):
+        real_atomic_bytes = cvm_agent._atomic_bytes
+        attempts = 0
+
+        def fail_once(path, value):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise OSError("disk full")
+            return real_atomic_bytes(path, value)
+
+        with mock.patch.object(cvm_agent, "_atomic_bytes", side_effect=fail_once):
             result = cvm_agent.supervise(handle, runner=fake_runner)
         self.assertEqual(result["state"], "failed")
         self.assertEqual(result["errorCheck"], "agent-output-publication")
+        value = cvm_agent._load(handle)
+        report = json.loads(
+            (
+                self.repo / "outputs" / value["group"] / value["exp"] / "report.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(report["status"], "failed")
 
     def test_skill_and_wrapper_keep_parent_review_as_terminal_gate(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]

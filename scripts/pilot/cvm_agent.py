@@ -178,6 +178,26 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def _json_bytes(value: dict[str, Any]) -> bytes:
+    return (
+        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+
+
+def _atomic_bytes(path: Path, value: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def _state_path(handle: str) -> Path:
     if not HANDLE.fullmatch(handle):
         raise AgentError("invalid CVM agent handle")
@@ -486,6 +506,14 @@ def _run_process_group(
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             return
+        kill_deadline = time.monotonic() + 1
+        while time.monotonic() < kill_deadline:
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.05)
+        raise AgentError("Codex process group did not terminate")
 
     try:
         process.communicate(input=prompt, timeout=MAX_SECONDS)
@@ -703,7 +731,12 @@ def _validate_last_message(path: Path) -> dict[str, Any]:
     return value
 
 
-def _artifact_manifest(exp_dir: Path, final_status: int) -> None:
+def _artifact_manifest(
+    exp_dir: Path,
+    final_status: int,
+    *,
+    pending: dict[str, bytes] | None = None,
+) -> None:
     files = []
     for path in sorted(exp_dir.rglob("*")):
         if path.is_symlink():
@@ -716,6 +749,14 @@ def _artifact_manifest(exp_dir: Path, final_status: int) -> None:
                     "sha256": _sha256(path),
                 }
             )
+    for relative, value in sorted((pending or {}).items()):
+        files.append(
+            {
+                "path": relative,
+                "size_bytes": len(value),
+                "sha256": hashlib.sha256(value).hexdigest(),
+            }
+        )
     _atomic_json(
         exp_dir / "artifact_manifest.json",
         {
@@ -725,6 +766,28 @@ def _artifact_manifest(exp_dir: Path, final_status: int) -> None:
             "files": files,
         },
     )
+
+
+def _publish_terminal_artifacts(
+    exp_dir: Path,
+    report: dict[str, Any],
+    final_status: int,
+) -> None:
+    report_bytes = _json_bytes(report)
+    manifest_path = exp_dir / "artifact_manifest.json"
+    report_path = exp_dir / "report.json"
+    manifest_path.unlink(missing_ok=True)
+    report_path.unlink(missing_ok=True)
+    _artifact_manifest(
+        exp_dir,
+        final_status,
+        pending={"report.json": report_bytes},
+    )
+    try:
+        _atomic_bytes(report_path, report_bytes)
+    except Exception:
+        manifest_path.unlink(missing_ok=True)
+        raise
 
 
 def supervise(
@@ -774,7 +837,10 @@ def supervise(
         except AgentError:
             raise AgentError("copied source digest mismatch")
         shutil.copytree(baseline, workspace)
-        prompt = PROMPT_PATH.read_bytes()
+        prompt_path = baseline / PROMPT_PATH.relative_to(REPO_ROOT)
+        if _sha256(prompt_path) != value["promptSha256"]:
+            raise AgentError("copied prompt digest mismatch")
+        prompt = prompt_path.read_bytes()
         (run_dir / "prompt.txt").write_bytes(prompt)
         events = control / "codex-events.jsonl"
         proxy_audit = private_scratch / "venus-proxy-audit.jsonl"
@@ -823,12 +889,20 @@ def supervise(
     }
     try:
         exp_dir.mkdir(parents=True, exist_ok=True)
-        _atomic_json(exp_dir / "report.json", report)
-        _artifact_manifest(exp_dir, final_status)
+        _publish_terminal_artifacts(exp_dir, report, final_status)
     except Exception:
         final_status = 1
         error_check = "agent-output-publication"
         result_status = None
+        report.update(
+            status="failed",
+            resultStatus=None,
+            errorCheck=error_check,
+        )
+        try:
+            _publish_terminal_artifacts(exp_dir, report, final_status)
+        except Exception:
+            pass
     state_name = "succeeded" if final_status == 0 else "failed"
     updated = _transition(
         handle,
