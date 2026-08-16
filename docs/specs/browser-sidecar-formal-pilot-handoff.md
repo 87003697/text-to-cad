@@ -626,6 +626,24 @@ until the retained postmortem can be reviewed without violating its retention
 boundary or a separately reviewed provisioning-receipt-to-runner binding closes
 that ambiguity.
 
+The default pull contract exposed a tooling gap: it could either skip the
+failed experiment or upload it and clean the CVM source, but could not publish
+the postmortem for review while retaining the failure authority. Commits
+`e06fa886`, `8aaf15d2`, `62e45b14`, and `91a82591` add and seal explicit
+`--include-byproducts --retain-cvm-source`. The final range
+`fce23038...91a82591` passed 28 focused/contract tests plus independent
+Standards and Spec/security review with zero findings. It rejects aliased
+outputs/group/exp roots before manifest access, never follows or counts child
+symlinks, distinguishes uploaded from verified-existing S3 state, proves mount
+visibility, reports retained CVM source separately, and never enters cleanup
+under the retain policy.
+
+The first real retained-postmortem publication was rejected before execution by
+the external-action gate because the failed-run payload and exact S3 destination
+need a fresh specific authorization. Therefore the failed exp remains only on
+CVM, its S3 output prefix was not created by this operation, and the new pull
+path has not yet been exercised against external state.
+
 No merge, Git push, tracker mutation, dependency installation, unrelated
 cleanup, historical image deletion, or second paid submission has been
 performed through this checkpoint.
