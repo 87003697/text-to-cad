@@ -72,8 +72,10 @@ Parse request → Discover plan → Qualify terminal/postmortem
   `--include-byproducts` 同时使用。它执行同一 upload、CVM/S3 文件计数验证和 mount
   可见性检查，但跳过 CVM cleanup；已有完整 S3 prefix 仍重新对照不可变 CVM 源。
 - **CVM symlink 不得成为上传入口**：upload 固定使用 `--no-follow-symlinks`，CVM
-  计数只包含 `lstat` 证明的普通文件。符号链接本身不上传、不计数，也不能把 exp
-  以外的数据带进固定 S3 prefix。
+  计数只包含 `lstat` 证明的普通文件。读取 manifest 前，固定 outputs root、group 和
+  exp 三层都必须由 `lstat` 证明为真实目录；任一 symlink/缺失/非目录以 exit 7
+  拒绝。子树符号链接本身不上传、不计数，也不能把 exp 以外的数据带进固定 S3
+  prefix。
 - **不得擅自 discard postmortem**：调用 `--discard-postmortem` 前必须向用户列出
   将受影响的失败 exp 并取得明确授权；普通“拉结果”只使用默认安全模式。
 - **terminal manifest 是独立硬门**：每个候选都必须有合法且含整数

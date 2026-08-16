@@ -118,11 +118,13 @@ class PullPlanTests(unittest.TestCase):
         workflow = self.workflow(runner)
         payloads = {
             "group/complete": {
+                "path_safe": True,
                 "complete": True,
                 "final_status": 0,
                 "has_postmortem": False,
             },
             "group/incomplete": {
+                "path_safe": True,
                 "complete": False,
                 "final_status": None,
                 "has_postmortem": False,
@@ -152,21 +154,48 @@ class PullPlanTests(unittest.TestCase):
         self.assertIn("isinstance(manifest, dict)", source)
         self.assertIn("value = None", source)
 
+    def test_inspection_rejects_symlinked_output_ancestor_before_manifest(self) -> None:
+        runner = FakeRunner()
+        runner.respond(
+            "python3 -c",
+            stdout=json.dumps(
+                {
+                    "path_safe": False,
+                    "complete": False,
+                    "final_status": None,
+                    "has_postmortem": False,
+                }
+            ),
+        )
+        workflow = self.workflow(runner)
+        with self.assertRaisesRegex(
+            cvm_pull.PullError,
+            "Unsafe CVM exp path",
+        ) as error:
+            workflow._inspect_exp("group/exp")
+        self.assertEqual(error.exception.status, 7)
+        command = runner.remote_commands[-1]
+        self.assertIn("path.lstat().st_mode", command)
+        self.assertIn("stat.S_ISDIR", command)
+
     def test_qualify_preserves_every_nonzero_integer_and_postmortem(self) -> None:
         runner = FakeRunner()
         workflow = self.workflow(runner)
         payloads = {
             "group/success": {
+                "path_safe": True,
                 "complete": True,
                 "final_status": 0,
                 "has_postmortem": False,
             },
             "group/negative": {
+                "path_safe": True,
                 "complete": True,
                 "final_status": -9,
                 "has_postmortem": False,
             },
             "group/upper": {
+                "path_safe": True,
                 "complete": True,
                 "final_status": 0,
                 "has_postmortem": True,
@@ -336,6 +365,17 @@ class PullPlanTests(unittest.TestCase):
         self.assertEqual(result.uploaded, ())
         self.assertEqual(result.verified_existing, ("group/failed",))
         self.assertEqual(result.retained_source, ("group/failed",))
+
+        with mock.patch.object(workflow, "_log") as log:
+            workflow.report(result)
+        messages = [call.args[0] for call in log.call_args_list]
+        self.assertTrue(
+            any(
+                message.startswith("Existing S3 prefix verified")
+                for message in messages
+            )
+        )
+        self.assertIn("Retained CVM source:", messages)
 
     def test_publish_resumes_cleanup_for_verified_existing_s3_prefix(self) -> None:
         runner = FakeRunner()

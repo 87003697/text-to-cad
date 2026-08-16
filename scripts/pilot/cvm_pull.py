@@ -309,9 +309,27 @@ class CvmPull:
         script = """
 import json
 import pathlib
+import stat
 import sys
 
-exp = pathlib.Path.home() / "text-to-cad/outputs" / sys.argv[1]
+root = pathlib.Path.home() / "text-to-cad/outputs"
+group, child = sys.argv[1].split("/", 1)
+exp = root / group / child
+try:
+    path_safe = all(
+        stat.S_ISDIR(path.lstat().st_mode)
+        for path in (root, root / group, exp)
+    )
+except OSError:
+    path_safe = False
+if not path_safe:
+    print(json.dumps({
+        "path_safe": False,
+        "complete": False,
+        "final_status": None,
+        "has_postmortem": False,
+    }, separators=(",", ":")))
+    raise SystemExit(0)
 try:
     manifest = json.loads((exp / "artifact_manifest.json").read_text())
     value = manifest.get("final_status") if isinstance(manifest, dict) else None
@@ -319,6 +337,7 @@ except (OSError, json.JSONDecodeError):
     value = None
 complete = type(value) is int
 print(json.dumps({
+    "path_safe": True,
     "complete": complete,
     "final_status": value if complete else None,
     "has_postmortem": (exp / "run/.codex-upper").is_dir(),
@@ -339,6 +358,8 @@ print(json.dumps({
             payload = json.loads(result.stdout)
         except json.JSONDecodeError as error:
             raise PullError(f"Invalid CVM inspection result: {exp}", 4) from error
+        if payload.get("path_safe") is not True:
+            raise PullError(f"Unsafe CVM exp path: {exp}", 7)
         return ExpInspection(
             exp=exp,
             complete=payload.get("complete") is True,
@@ -513,16 +534,9 @@ print(count)
                 if complete:
                     count = local_count
                     verified_existing.append(exp)
-                    if retain_source:
-                        self._log(
-                            f"  existing S3 prefix verified ({count} files); "
-                            "retaining CVM source"
-                        )
-                    else:
-                        self._log(
-                            f"  existing S3 prefix verified ({count} files); "
-                            "resuming cleanup"
-                        )
+                    self._log(
+                        f"  existing S3 prefix verified ({count} files)"
+                    )
                 elif s3_count <= local_count:
                     self._log(
                         "  existing S3 prefix is incomplete "
@@ -617,27 +631,22 @@ print(count)
             self._log("Done. No exp uploaded; preserved postmortem:")
         else:
             if result.uploaded:
-                action = (
-                    "CVM source retained"
-                    if result.retained_source
-                    else "cleaned"
-                )
-                self._log(
-                    f"Done. Uploaded + verified + {action} + mount-visible:"
-                )
+                self._log("Done. Uploaded + verified + mount-visible:")
                 for exp in result.uploaded:
                     self._log(f"  {exp}")
             if result.verified_existing:
-                action = (
-                    "CVM source retained"
-                    if result.retained_source
-                    else "cleaned"
-                )
                 self._log(
-                    "Existing S3 prefix verified + "
-                    f"{action} + mount-visible:"
+                    "Existing S3 prefix verified + mount-visible:"
                 )
                 for exp in result.verified_existing:
+                    self._log(f"  {exp}")
+            if result.retained_source:
+                self._log("Retained CVM source:")
+                for exp in result.retained_source:
+                    self._log(f"  {exp}")
+            else:
+                self._log("Cleaned CVM source:")
+                for exp in result.mount_targets:
                     self._log(f"  {exp}")
         if result.preserved:
             if result.mount_targets:
