@@ -43,7 +43,11 @@ def valid_graph(*, failed_role=None, failed_predicate=None, root_failure=None, s
                 value[field] = {"architecture": "amd64", "os": "linux"} if kind == "image-identity" else "x86_64-unknown-linux-musl"
             elif field == "format":
                 value[field] = "spdx-json-2.3"
-            elif field in {"pathCount", "totalBytes", "browserFindingCount", "chromiumProcessCount", "faceCount", "eulerNumber"}:
+            elif field == "faceCount":
+                value[field] = 3764
+            elif field == "eulerNumber":
+                value[field] = 144
+            elif field in {"pathCount", "totalBytes", "browserFindingCount", "chromiumProcessCount"}:
                 value[field] = 0
             elif field == "watertight":
                 value[field] = False
@@ -98,6 +102,31 @@ def valid_graph(*, failed_role=None, failed_predicate=None, root_failure=None, s
                 subject[field] = None
         if role == failed_role and subject_changes:
             subject.update(subject_changes)
+        if status == "failed":
+            observation_bindings = {
+                "browser-deny": {
+                    "inventoryDigest": "packageInventoryEmpty",
+                    "browserFindingCount": "packageInventoryEmpty",
+                    "chromiumProcessCount": "chromiumProcessZero",
+                },
+                "cup-golden": {
+                    "observedOutputDigest": "outputDigestRepeatable",
+                    "faceCount": "faceCount3764",
+                    "watertight": "watertightFalse",
+                    "eulerNumber": "eulerNumber144",
+                },
+                "source-snapshot": {
+                    "sourceManifestDigest": "treeDigestMatchesObservation",
+                    "pathCount": "pathSetClosed",
+                    "totalBytes": "fileSizesBound",
+                },
+                "capability-conformance": {
+                    "observedOutputDigest": "outputDigestBound",
+                },
+            }.get(role[0], {})
+            for field, predicate in observation_bindings.items():
+                if predicate_values[predicate] is None:
+                    subject[field] = None
         value = {
             "blockedBy": blocked_by,
             "dependsOn": [digest(item) for item in dependencies],
@@ -238,6 +267,38 @@ def dual_lifecycle_failure_graph(colima_check, cvm_check, root_failure):
 
 
 class AgentRuntimeEvidenceTests(unittest.TestCase):
+    def test_typed_document_is_deeply_immutable_and_digest_stable(self) -> None:
+        from scripts.pilot.agent_runtime import canonical_bytes, digest, parse_strict
+
+        document = parse_strict("subject", SUBJECT)
+        before = digest(document)
+        before_bytes = canonical_bytes(document)
+        with self.assertRaises(TypeError):
+            document.value["platform"]["os"] = "other"
+        self.assertEqual(digest(document), before)
+        self.assertEqual(canonical_bytes(document), before_bytes)
+
+        _, children = valid_graph()
+        evidence = children[0]
+        before = digest(evidence)
+        with self.assertRaises(TypeError):
+            evidence.value["dependsOn"][0] = D
+        with self.assertRaises(TypeError):
+            evidence.value._values["status"] = "failed"
+        with self.assertRaises(TypeError):
+            evidence.value._values = {}
+        self.assertEqual(digest(evidence), before)
+
+    def test_parser_bounds_bytes_depth_and_normalizes_recursion(self) -> None:
+        from scripts.pilot.agent_runtime import EvidenceError, parse_strict
+
+        with self.assertRaisesRegex(EvidenceError, "byte limit"):
+            parse_strict("subject", b" " * (1024 * 1024 + 1))
+        with self.assertRaisesRegex(EvidenceError, "nesting depth"):
+            parse_strict("subject", b"[" * 65 + b"0" + b"]" * 65)
+        with self.assertRaises(EvidenceError):
+            parse_strict("subject", b"[" * 2000 + b"0" + b"]" * 2000)
+
     def test_strict_parser_rejects_duplicate_json_keys(self) -> None:
         from scripts.pilot.agent_runtime import EvidenceError, parse_strict
 
@@ -332,6 +393,7 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         root, children = valid_graph()
         changed_value = copy.deepcopy(children[5].value)
         changed_value["subject"]["expectedOutputDigest"] = "sha256:" + "c" * 64
+        changed_value["subject"]["observedOutputDigest"] = "sha256:" + "c" * 64
         changed = typed("evidence", changed_value)
         children[5] = changed
         root_value = copy.deepcopy(root.value)
@@ -426,19 +488,15 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
             failed_role=("source-snapshot", "colima"),
             failed_predicate="readOnlyMountEligible",
             root_failure="source-snapshot:colima.readOnlyMountEligible",
-            subject_changes={"sourceManifestDigest": mismatch},
         )
-        with self.assertRaisesRegex(EvidenceError, "source manifest observation"):
-            validate_graph(root, children)
+        self.assertEqual(validate_graph(root, children).status, "failed")
 
         root, children = valid_graph(
             failed_role=("source-snapshot", "colima"),
             failed_predicate="fileDigestsBound",
             root_failure="source-snapshot:colima.fileDigestsBound",
-            subject_changes={"sourceManifestDigest": mismatch},
         )
-        with self.assertRaisesRegex(EvidenceError, "source manifest observation"):
-            validate_graph(root, children)
+        self.assertEqual(validate_graph(root, children).status, "failed")
 
     def test_verified_root_rejects_false_null_failed_and_not_run(self) -> None:
         from scripts.pilot.agent_runtime import EvidenceError, digest, validate_graph
@@ -449,6 +507,7 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         child["failureCheck"] = "runtimeManifestBound"
         child["predicates"] = {key: None for key in child["predicates"]}
         child["predicates"]["runtimeManifestBound"] = False
+        child["subject"]["observedOutputDigest"] = None
         failed = typed("evidence", child)
         changed = children[:]
         changed[5] = failed
@@ -489,8 +548,133 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
             "agent-lifecycle:colima.absence-proof",
         )
 
+    def test_lifecycle_primary_and_disposition_states_are_closed(self) -> None:
+        from scripts.pilot.agent_runtime import EvidenceError
+
+        _, children = valid_graph()
+        suffix_failure = copy.deepcopy(children[0].value)
+        suffix_failure["status"] = "failed"
+        suffix_failure["failureCheck"] = "descendantResidueFalse"
+        suffix_failure["predicates"]["authorityFresh"] = None
+        suffix_failure["predicates"]["descendantResidueFalse"] = False
+        with self.assertRaisesRegex(EvidenceError, "primary phase"):
+            typed("evidence", suffix_failure)
+
+        missing_dispositions = copy.deepcopy(children[0].value)
+        missing_dispositions["status"] = "failed"
+        missing_dispositions["failureCheck"] = "containerCleanupSucceeded"
+        missing_dispositions["predicates"]["containerCleanupSucceeded"] = False
+        missing_dispositions["subject"]["resourceDisposition"] = None
+        missing_dispositions["subject"]["cleanupDisposition"] = None
+        with self.assertRaisesRegex(EvidenceError, "disposition"):
+            typed("evidence", missing_dispositions)
+
+        cleanup_mismatch = copy.deepcopy(children[0].value)
+        cleanup_mismatch["status"] = "failed"
+        cleanup_mismatch["failureCheck"] = "containerCleanupSucceeded"
+        cleanup_mismatch["predicates"]["containerCleanupSucceeded"] = False
+        with self.assertRaisesRegex(EvidenceError, "cleanup disposition"):
+            typed("evidence", cleanup_mismatch)
+
+        absence_mismatch = copy.deepcopy(children[0].value)
+        absence_mismatch["status"] = "failed"
+        absence_mismatch["failureCheck"] = "agentContainerAbsent"
+        absence_mismatch["predicates"]["agentContainerAbsent"] = False
+        with self.assertRaisesRegex(EvidenceError, "resource disposition"):
+            typed("evidence", absence_mismatch)
+
+    def test_observation_bindings_reject_null_and_scalar_substitution(self) -> None:
+        from scripts.pilot.agent_runtime import EvidenceError
+        from scripts.pilot.agent_runtime.contracts import PREDICATES
+
+        _, children = valid_graph()
+        browser = copy.deepcopy(children[2].value)
+        browser["subject"]["browserFindingCount"] = 1
+        with self.assertRaisesRegex(EvidenceError, "browser observation"):
+            typed("evidence", browser)
+
+        browser = copy.deepcopy(children[2].value)
+        browser["status"] = "failed"
+        browser["failureCheck"] = "packageInventoryEmpty"
+        browser["predicates"] = {
+            key: False if key == "packageInventoryEmpty" else None
+            for key in browser["predicates"]
+        }
+        browser["subject"]["browserFindingCount"] = 0
+        browser["subject"]["chromiumProcessCount"] = None
+        with self.assertRaisesRegex(EvidenceError, "browser observation"):
+            typed("evidence", browser)
+        browser["subject"]["browserFindingCount"] = 1
+        self.assertEqual(typed("evidence", browser).value["status"], "failed")
+
+        cup = copy.deepcopy(children[8].value)
+        cup["subject"]["faceCount"] = 0
+        with self.assertRaisesRegex(EvidenceError, "Cup observation"):
+            typed("evidence", cup)
+
+        cup = copy.deepcopy(children[8].value)
+        cup["status"] = "failed"
+        cup["failureCheck"] = "faceCount3764"
+        order = list(PREDICATES["cup-golden"])
+        cup["predicates"] = {
+            key: True if order.index(key) < 2 else False if key == "faceCount3764" else None
+            for key in order
+        }
+        cup["subject"]["faceCount"] = None
+        cup["subject"]["watertight"] = None
+        cup["subject"]["eulerNumber"] = None
+        cup["subject"]["observedOutputDigest"] = None
+        with self.assertRaisesRegex(EvidenceError, "Cup observation"):
+            typed("evidence", cup)
+        cup["subject"]["faceCount"] = 0
+        self.assertEqual(typed("evidence", cup).value["status"], "failed")
+
+        conformance = copy.deepcopy(children[5].value)
+        conformance["status"] = "failed"
+        conformance["failureCheck"] = "outputDigestBound"
+        order = list(PREDICATES["capability-conformance"])
+        conformance["predicates"] = {
+            key: True if order.index(key) < 18 else False if key == "outputDigestBound" else None
+            for key in order
+        }
+        with self.assertRaisesRegex(EvidenceError, "conformance observation"):
+            typed("evidence", conformance)
+        conformance["subject"]["observedOutputDigest"] = "sha256:" + "c" * 64
+        self.assertEqual(typed("evidence", conformance).value["status"], "failed")
+
+    def test_source_count_observations_follow_establishing_predicates(self) -> None:
+        from scripts.pilot.agent_runtime import EvidenceError
+
+        _, children = valid_graph()
+        source = copy.deepcopy(children[12].value)
+        source["status"] = "failed"
+        source["failureCheck"] = "manifestSchemaExact"
+        source["predicates"] = {
+            key: False if key == "manifestSchemaExact" else None
+            for key in source["predicates"]
+        }
+        source["subject"]["sourceManifestDigest"] = None
+        source["subject"]["pathCount"] = 0
+        source["subject"]["totalBytes"] = None
+        with self.assertRaisesRegex(EvidenceError, "Source Snapshot observation"):
+            typed("evidence", source)
+
+        source = copy.deepcopy(children[12].value)
+        source["status"] = "failed"
+        source["failureCheck"] = "pathSetClosed"
+        source["predicates"] = {
+            key: True if key == "manifestSchemaExact" else False if key == "pathSetClosed" else None
+            for key in source["predicates"]
+        }
+        source["subject"]["sourceManifestDigest"] = None
+        source["subject"]["pathCount"] = 17
+        source["subject"]["totalBytes"] = None
+        self.assertEqual(typed("evidence", source).value["status"], "failed")
+
     def test_lifecycle_alias_table_is_closed_and_exact(self) -> None:
         from scripts.pilot.agent_runtime import validate_graph
+        from scripts.pilot.agent_runtime.contracts import PREDICATES
+        from scripts.pilot.agent_runtime.evidence import _LIFECYCLE_ALIAS
 
         cases = {
             "adapterOperationsClosed": "adapter-failure",
@@ -521,6 +705,14 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
             "brokerVolumeCleanupSucceeded": "cleanup-broker-volume",
             "jobPrivateTreeCleanupSucceeded": "cleanup-private-tree",
         }
+        resource_predicates = {
+            "workloadProcessGroupAbsent", "agentContainerAbsent", "ownerLabelsAbsent",
+            "brokerVolumeAbsent", "jobPrivateTreeAbsent",
+        }
+        self.assertEqual(
+            set(_LIFECYCLE_ALIAS),
+            set(PREDICATES["agent-lifecycle"]) - resource_predicates,
+        )
         for predicate, alias in cases.items():
             with self.subTest(predicate=predicate):
                 expected = f"agent-lifecycle:colima.{alias}"
