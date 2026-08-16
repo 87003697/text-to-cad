@@ -425,17 +425,56 @@ published terminal state. There is no published `pending` child.
 
 For `failed` and `not-run`, request-bound identity fields in `subject` remain
 exact. A field copied from the root, a direct dependency, or the immutable
-attempt request is request-bound and never `null`. Observations are bound as
-follows: browser scan predicates bind `inventoryDigest` and both counts; Cup
-predicates bind `observedOutputDigest` and its three metrics; Source Snapshot
-closure binds its manifest digest and counts; lifecycle cleanup/absence binds
-the two disposition objects; conformance output binds
-`observedOutputDigest`. An observation is `null` exactly when its establishing
-predicate is `null`; an observed mismatch remains a concrete value alongside a
-false predicate. A succeeded node therefore forbids `null`. A not-run node has
-all observation fields `null`. A failed lifecycle node uses its closed
-disposition objects after any resource mutation and otherwise uses `null`.
-Null observations cannot satisfy predicates.
+attempt request is request-bound and never `null`.
+
+For every observation below, the establishing predicate is `null` if and only
+if the observation is `null`. A `true` or `false` establishing predicate
+therefore requires a concrete observation, and a concrete false observation is
+retained rather than erased. A succeeded node forbids null observations; a
+not-run node has every observation field `null`. The Source Snapshot manifest
+and count rules remain exactly as specified under verification authority and
+cross-field equality above. A failed lifecycle node uses its closed disposition
+objects after any resource mutation and otherwise uses `null`.
+
+The remaining observation map is closed:
+
+| Node and observation | Establishing predicate | Exact concrete value rule |
+| --- | --- | --- |
+| `browser-deny.inventoryDigest` | `packageInventoryEmpty` | Full digest of the one complete closed inventory scan, whether the predicate is `true` or `false` |
+| `browser-deny.browserFindingCount` | `packageInventoryEmpty` | `0` when all six inventory predicates are `true`; at least `1` when any of them is `false` |
+| `browser-deny.chromiumProcessCount` | `chromiumProcessZero` | `0` when `true`; at least `1` when `false` |
+| `cup-golden.faceCount` | `faceCount3764` | `3764` when `true`; any permitted nonnegative integer other than `3764` when `false` |
+| `cup-golden.watertight` | `watertightFalse` | literal `false` when `true`; literal `true` when `false` |
+| `cup-golden.eulerNumber` | `eulerNumber144` | `144` when `true`; any signed 64-bit integer other than `144` when `false` |
+| `cup-golden.observedOutputDigest` | `outputDigestRepeatable` | Equal to `expectedOutputDigest` when `true`; any concrete full digest when `false`, including the expected digest |
+| `capability-conformance.observedOutputDigest` | `outputDigestBound` | Equal to `expectedOutputDigest` when `true`; a concrete full digest different from `expectedOutputDigest` when `false` |
+
+The six Browser inventory predicates are, in order,
+`packageInventoryEmpty`, `executableInventoryEmpty`, `cacheInventoryEmpty`,
+`elfMarkerInventoryEmpty`, `productMarkerInventoryEmpty`, and
+`playwrightInventoryEmpty`. Evaluating the first predicate establishes the one
+complete closed inventory scan, its `inventoryDigest`, and its aggregate
+`browserFindingCount`; the later five predicates query that same scan and never
+replace or partially re-run it. A Browser failure at any inventory predicate
+occurs before `chromiumProcessZero`, so `chromiumProcessCount` remains `null`.
+A succeeded Browser node has a concrete `inventoryDigest` and both counts equal
+to `0`.
+
+A strict consumer rejects any observation that violates the null equivalence or
+concrete value rule in the table. In particular, it rejects a Browser inventory
+digest or finding count without an evaluated `packageInventoryEmpty`, a null
+scan result after that predicate was evaluated, a zero aggregate count when an
+inventory predicate is false, a nonzero aggregate count when all six are true,
+a process count whose nullness disagrees with `chromiumProcessZero`, or a
+process count inconsistent with that Boolean. It rejects a null Cup metric or
+output after its establishing predicate was evaluated, any Cup metric value
+inconsistent with its Boolean, a true Cup output digest unequal to expected, a
+null conformance output after `outputDigestBound` was evaluated, a true
+conformance output unequal to expected, or a false conformance output equal to
+expected. It does not reject a false `outputDigestRepeatable` merely because
+the one retained Cup output digest equals expected: repeatability can fail even
+when that observed run produced the expected bytes. Null observations cannot
+satisfy predicates.
 
 The supervisor processes the dependency DAG in the root child order, while
 independent ready nodes may execute concurrently. Before starting a node it
