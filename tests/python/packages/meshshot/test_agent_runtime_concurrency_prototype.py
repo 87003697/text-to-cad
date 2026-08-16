@@ -24,7 +24,11 @@ class AgentRuntimeConcurrencyTests(unittest.TestCase):
         admission = self.result["admission"]
         self.assertEqual(admission["activeCap"], 4)
         self.assertTrue(admission["fifthQueuedAtCap"])
-        self.assertTrue(admission["queuedFifthHasNoProcess"])
+        self.assertTrue(admission["queuedFifthZeroPreAdmissionAllocation"])
+        self.assertTrue(all(
+            admission["queuedFifthPreAdmissionObservation"].values(),
+        ))
+        self.assertTrue(admission["fifthMaterializedOnlyAfterSlotRelease"])
         self.assertTrue(admission["slotReleasedAfterProcessAbsence"])
         self.assertEqual(admission["observedPeak"], 4)
         self.assertEqual(
@@ -64,7 +68,8 @@ class AgentRuntimeConcurrencyTests(unittest.TestCase):
         self.assertTrue(all(
             row["executionSubjectDigest"] == row["terminalReceiptSubjectDigest"]
             and row["outputTreeDigest"] == row["receiptOutputTreeDigest"]
-            and row["receiptImmutableMode"] == "0o400"
+            and row["receiptReadOnlyMode"] == "0o400"
+            and row["receiptSecondExclusiveCreateRejected"] is True
             and row["receiptSupervisorOwned"] is True
             and all(row["outerTerminalValidation"].values())
             and row["cleanupAbsence"] is True
@@ -97,14 +102,19 @@ class AgentRuntimeConcurrencyTests(unittest.TestCase):
         self.assertTrue(result["allProcessesAbsent"])
         self.assertEqual(result["durableReceiptCount"], 4)
         self.assertTrue(result["durableReceiptsDistinct"])
-        self.assertTrue(result["durableReceiptsImmutable"])
+        self.assertTrue(result["durableReceiptsExclusiveCreateReadOnly"])
         self.assertTrue(result["durableReceiptsSupervisorOwned"])
         self.assertTrue(result["receiptOutputMappingsExact"])
         self.assertTrue(result["retainedOutputStillMatchesReceipt"])
 
-    def test_replay_is_rejected_before_admission_or_resource_start(self) -> None:
+    def test_consumed_replay_occupies_slot_but_starts_no_lifecycle_resource(self) -> None:
         self.assertTrue(
-            self.result["admission"]["replayRejectedBeforeAdmissionOrResource"],
+            self.result["admission"][
+                "consumedReplayRejectedAfterAdmissionBeforeLifecycleProcessStart"
+            ],
+        )
+        self.assertTrue(
+            self.result["admission"]["replayMayBrieflyOccupyActiveSlot"],
         )
         self.assertTrue(
             self.result["admission"]["sharedAuthorityStoreClosed"],
