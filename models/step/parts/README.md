@@ -70,6 +70,13 @@ because the structured fixtures above already carry richer versions.
   compounds of touching solids rather than single fused bodies, so each
   material region stays inspectable. They share the MX plate socket cutter
   from `mx_switch_socket.py`.
+- `print_in_place_hinge.step.py`: print-in-place barrel hinge (two bored end
+  knuckles interleaved with a solid center knuckle and a captive headed pin),
+  authored flat in its 180-degree-open print pose with FDM clearances.
+- `print_in_place_multi_pivot_phone_holder.step.py`: four-link print-in-place
+  holder (base plate, two arms, phone cradle) on three of the same barrel
+  pivots, printed flat as one 94 x 248 mm job and articulating after printing;
+  the cradle width regenerates for phones or small tablets.
 - `research_humanoid.step.py`: a single-body GPT-5.6 humanoid concept
   (originally from `models/experiments/gpt-5.6-sol/`). The other two
   humanoid concepts from that set (`compact_humanoid`, `sculpted_humanoid`)

@@ -160,6 +160,7 @@ def _make_base():
         _barrel(Y_J1, *END_KN_X2),
     )
     base = base - holes
+    base = base - [_bore_tool(Y_J1, *END_KN_X1), _bore_tool(Y_J1, *END_KN_X2)]
     base = base - _notch_tool(-1.0, Y_J1, *CENTER_KN_X)
     base.label = "base_mount_plate"
     base.color = srgb("#5B6B7A")

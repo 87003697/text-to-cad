@@ -1,11 +1,11 @@
 # motorbike — retro step-through scooter
 
-An original, unbranded CAD interpretation of the reference image
-(`../../../ref/motorbike.png` — Honda Giorno-class scooter model kit in
-exploded view): cream body panels, brown saddle, black underbone frame,
-silver unit engine, chrome trim. Real-scooter scale from public Giorno-class
-figures (wheelbase ~1190 mm, seat height ~735 mm, 10 in cast wheels) treated
-as design intent. No logos, badges, or wordmarks.
+An original, unbranded CAD interpretation of a reference photo of a Honda
+Giorno-class scooter model kit in exploded view (cream body panels, brown
+saddle, black underbone frame, silver unit engine, chrome trim — reference
+image kept locally, not part of the tree). Real-scooter scale from public
+Giorno-class figures (wheelbase ~1190 mm, seat height ~735 mm, 10 in cast
+wheels) treated as design intent. No logos, badges, or wordmarks.
 
 ## Layout
 

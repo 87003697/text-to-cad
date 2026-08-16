@@ -12,6 +12,11 @@ Single-tube coilover damper in its static design pose.
 * Fixed root: the damper body module. The piston-rod cartridge carries a
   native linear joint along Z (the damper stroke axis); the coil spring is
   seated face-to-face on both spring perches.
+
+`inspect interfere` reports overlaps at every threaded/blind joint (collar
+on tube, gland cap, eye shank, rod entering the tube, spring ends on the
+seats). Those are accepted static-assembly interpenetrations, not defects;
+the only moving joint (rod stroke along Z) stays coaxial and clear.
 """
 
 from __future__ import annotations
