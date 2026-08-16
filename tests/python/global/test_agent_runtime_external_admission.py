@@ -25,6 +25,14 @@ PYTHON_WHEEL_LOCK = (
     / "python"
     / "python-wheel-lock.json"
 )
+PYTHON_CANDIDATE = (
+    REPO_ROOT
+    / "packages"
+    / "agent_runtime"
+    / "external"
+    / "python"
+    / "python-wheel-admission-candidate.json"
+)
 NODE_CANDIDATE = (
     REPO_ROOT
     / "packages"
@@ -181,6 +189,20 @@ class ExternalAdmissionContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ExternalAdmissionError, "unexpected keys"):
             parse_external_strict("python-wheel-lock", canonical_json_bytes(extended))
+
+    def test_python_wheel_candidate_binds_offline_import_and_auditwheel(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import parse_external_strict
+
+        document = parse_external_strict(
+            "python-wheel-admission-candidate", PYTHON_CANDIDATE.read_bytes()
+        )
+        self.assertEqual(document.value["offlineImport"]["numpy"], "2.4.6")
+        self.assertEqual(document.value["offlineImport"]["trimesh"], "4.12.2")
+        self.assertEqual(document.value["offlineImport"]["Pillow"], "12.2.0")
+        self.assertEqual(document.value["auditwheel"]["numpy"]["platformTag"], "manylinux_2_27_x86_64")
+        self.assertEqual(document.value["auditwheel"]["Pillow"]["platformTag"], "manylinux_2_17_x86_64")
+        self.assertEqual(document.value["auditwheel"]["trimesh"]["kind"], "pure-python")
+        self.assertFalse(document.value["claims"]["formalAdmission"])
 
     def test_local_cas_rejects_symlinks_mismatch_and_existing_substitution(self) -> None:
         from scripts.pilot.agent_runtime.external_admission import (
@@ -346,6 +368,68 @@ class ExternalAdmissionContractTests(unittest.TestCase):
         self.assertTrue(document.value["probes"]["noninteractiveParserSmoke"])
         self.assertFalse(document.value["claims"]["formalSignatureReceipt"])
         self.assertFalse(document.value["claims"]["formalAdmission"])
+
+    def test_codex_legacy_offline_plan_is_deny_proxy_and_has_three_negatives(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import build_codex_offline_plan
+
+        plan = build_codex_offline_plan(
+            verifier=Path("/mirror/cosign"),
+            bundle=Path("/mirror/bundle"),
+            executable=Path("/mirror/executable"),
+            archive=Path("/mirror/archive"),
+            ca_root=Path("/trust/root.pem"),
+            ca_intermediate=Path("/trust/intermediate.pem"),
+            rekor_key=Path("/trust/rekor.pem"),
+            ct_key=Path("/trust/ctfe.pem"),
+        )
+        self.assertIn("--offline", plan.positive_args)
+        self.assertNotIn("--trusted-root", plan.positive_args)
+        self.assertEqual(plan.positive_environment["HTTPS_PROXY"], "http://127.0.0.1:9")
+        self.assertEqual(plan.positive_environment["SIGSTORE_NO_CACHE"], "1")
+        self.assertEqual(plan.wrong_artifact_args[-1], "/mirror/archive")
+        self.assertTrue(any("rust-v0.147.1" in item for item in plan.wrong_identity_args))
+        self.assertEqual(
+            plan.wrong_rekor_environment["SIGSTORE_REKOR_PUBLIC_KEY"], "/trust/ctfe.pem"
+        )
+
+    def test_codex_offline_replay_returns_only_proof_and_requires_all_negatives(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            ExternalAdmissionError,
+            build_codex_offline_plan,
+            replay_codex_offline_plan,
+        )
+
+        plan = build_codex_offline_plan(
+            verifier=Path("/mirror/cosign"), bundle=Path("/mirror/bundle"),
+            executable=Path("/mirror/executable"), archive=Path("/mirror/archive"),
+            ca_root=Path("/trust/root.pem"), ca_intermediate=Path("/trust/intermediate.pem"),
+            rekor_key=Path("/trust/rekor.pem"), ct_key=Path("/trust/ctfe.pem"),
+        )
+        results = iter(
+            [(0, "Verified OK"), (1, "payload mismatch"), (1, "identity mismatch"), (1, "rekor key not found")]
+        )
+        proof = replay_codex_offline_plan(plan, lambda _args, _env: next(results))
+        self.assertEqual(proof.value["result"], "proof-only")
+
+        bad_results = iter(
+            [(0, "Verified OK"), (1, "payload mismatch"), (1, "identity mismatch"), (0, "Verified OK")]
+        )
+        with self.assertRaisesRegex(ExternalAdmissionError, "wrong Rekor key"):
+            replay_codex_offline_plan(plan, lambda _args, _env: next(bad_results))
+
+    def test_trust_extraction_rejects_any_unapproved_root_before_output(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            ExternalAdmissionError,
+            extract_codex_trust_material,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            substituted = root / "trusted-root.json"
+            substituted.write_text("{}", encoding="ascii")
+            with self.assertRaisesRegex(ExternalAdmissionError, "byte length"):
+                extract_codex_trust_material(substituted, root / "out")
+            self.assertFalse((root / "out").exists())
 
 
 if __name__ == "__main__":

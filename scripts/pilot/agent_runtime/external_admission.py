@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import base64
+import json
 import os
 from pathlib import Path
 import stat
@@ -32,6 +34,27 @@ class ExternalAdmissionDocument:
 
     kind: str
     value: Mapping[str, CanonicalJSONValue]
+
+
+@dataclass(frozen=True)
+class CodexOfflineVerificationPlan:
+    """Exact offline Cosign replay plus its three adversarial controls."""
+
+    positive_args: tuple[str, ...]
+    positive_environment: Mapping[str, str]
+    wrong_artifact_args: tuple[str, ...]
+    wrong_identity_args: tuple[str, ...]
+    wrong_rekor_environment: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class CodexTrustMaterial:
+    """PEM files deterministically derived from the approved trusted root."""
+
+    ca_root: Path
+    ca_intermediate: Path
+    rekor_key: Path
+    ct_key: Path
 
 
 class ExternalMirrorStore(Protocol):
@@ -342,6 +365,41 @@ _CODEX_CANDIDATE: dict[str, CanonicalJSONInput] = {
     "version": "0.147.0",
     "versionOutput": "codex-cli 0.147.0",
 }
+_PYTHON_WHEEL_CANDIDATE: dict[str, CanonicalJSONInput] = {
+    "auditwheel": {
+        "Pillow": {
+            "kind": "native",
+            "platformTag": "manylinux_2_17_x86_64",
+            "versionedLibraries": [
+                "libc.so.6", "libdl.so.2", "libjpeg-02b4d8cf.so.62.4.0",
+                "liblzma-d41bb66c.so.5.8.3", "libm.so.6",
+                "libpng16-1ff02007.so.16.56.0", "libpthread.so.0",
+                "libtiff-56c1bbc6.so.6.2.0", "libz.so.1",
+            ],
+        },
+        "numpy": {
+            "kind": "native",
+            "platformTag": "manylinux_2_27_x86_64",
+            "versionedLibraries": [
+                "libc.so.6", "libgcc_s.so.1", "libgfortran-040039e1-0352e75f.so.5.0.0",
+                "libm.so.6", "libpthread.so.0", "libquadmath-96973f99-934c22de.so.0.0.0",
+                "libstdc++.so.6",
+            ],
+        },
+        "trimesh": {"kind": "pure-python", "platformTag": "any", "versionedLibraries": []},
+    },
+    "claims": {"formalAdmission": False, "immutableMirrorVisible": False},
+    "offlineImport": {
+        "Pillow": "12.2.0",
+        "network": "none",
+        "numpy": "2.4.6",
+        "sourceFallback": False,
+        "trimesh": "4.12.2",
+    },
+    "schema": "text-to-cad.agent-runtime-python-wheel-admission-candidate/1",
+    "status": "local-candidate",
+    "wheelLockDigest": "sha256:375f63e4cd6b89325bfc6cceac7806208902fa41599b969e4fe949d539870f8f",
+}
 _RFC3339_SECONDS_RE = re.compile(
     r"[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])"
     r"T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z\Z"
@@ -566,6 +624,13 @@ def _validate(kind: str, value: Mapping[str, Any]) -> None:
         if value != expected:
             raise ExternalAdmissionError("Codex admission candidate does not equal observed bytes")
         return
+    if kind == "python-wheel-admission-candidate":
+        expected = _freeze_mapping(_PYTHON_WHEEL_CANDIDATE)
+        if set(value) != set(expected):
+            raise ExternalAdmissionError("Python wheel candidate has unexpected keys")
+        if value != expected:
+            raise ExternalAdmissionError("Python wheel candidate does not equal observed evidence")
+        return
     raise ExternalAdmissionError("unknown external admission kind")
 
 
@@ -624,6 +689,189 @@ def load_codex_signature_proof() -> ExternalAdmissionDocument:
     return parse_external_strict(
         "codex-signature-verification", canonical_json_bytes(_PROOF_RECEIPT)
     )
+
+
+def build_codex_offline_plan(
+    *,
+    verifier: Path,
+    bundle: Path,
+    executable: Path,
+    archive: Path,
+    ca_root: Path,
+    ca_intermediate: Path,
+    rekor_key: Path,
+    ct_key: Path,
+) -> CodexOfflineVerificationPlan:
+    """Build the fixed legacy-bundle replay without an ambient TUF cache."""
+
+    identity = (
+        "https://github.com/openai/codex/.github/workflows/"
+        "rust-release.yml@refs/tags/rust-v0.147.0"
+    )
+    args = (
+        str(verifier), "verify-blob", "--offline", "--bundle", str(bundle),
+        "--ca-roots", str(ca_root), "--ca-intermediates", str(ca_intermediate),
+        "--certificate-identity", identity,
+        "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com",
+        "--certificate-github-workflow-name", "rust-release",
+        "--certificate-github-workflow-ref", "refs/tags/rust-v0.147.0",
+        "--certificate-github-workflow-repository", "openai/codex",
+        "--certificate-github-workflow-sha", "be6e8eac029b183056b7e4402879f15d2c85f61b",
+        "--certificate-github-workflow-trigger", "push", str(executable),
+    )
+    environment = {
+        "ALL_PROXY": "http://127.0.0.1:9",
+        "HTTP_PROXY": "http://127.0.0.1:9",
+        "HTTPS_PROXY": "http://127.0.0.1:9",
+        "NO_PROXY": "",
+        "SIGSTORE_CT_LOG_PUBLIC_KEY_FILE": str(ct_key),
+        "SIGSTORE_NO_CACHE": "1",
+        "SIGSTORE_REKOR_PUBLIC_KEY": str(rekor_key),
+    }
+    wrong_identity = identity.replace("rust-v0.147.0", "rust-v0.147.1")
+    wrong_identity_args = tuple(wrong_identity if item == identity else item for item in args)
+    wrong_rekor_environment = dict(environment)
+    wrong_rekor_environment["SIGSTORE_REKOR_PUBLIC_KEY"] = str(ct_key)
+    return CodexOfflineVerificationPlan(
+        positive_args=args,
+        positive_environment=_freeze_string_mapping(environment),
+        wrong_artifact_args=args[:-1] + (str(archive),),
+        wrong_identity_args=wrong_identity_args,
+        wrong_rekor_environment=_freeze_string_mapping(wrong_rekor_environment),
+    )
+
+
+def _pem_bytes(label: str, payload: bytes) -> bytes:
+    encoded = base64.b64encode(payload)
+    lines = [encoded[index:index + 64] for index in range(0, len(encoded), 64)]
+    return (
+        f"-----BEGIN {label}-----\n".encode("ascii")
+        + b"\n".join(lines)
+        + f"\n-----END {label}-----\n".encode("ascii")
+    )
+
+
+def _decode_approved(raw: Any, expected_digest: str, label: str) -> bytes:
+    if not isinstance(raw, str) or not raw.isascii():
+        raise ExternalAdmissionError(f"approved {label} is not base64 text")
+    try:
+        payload = base64.b64decode(raw, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ExternalAdmissionError(f"approved {label} is not strict base64") from exc
+    digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+    if digest != expected_digest:
+        raise ExternalAdmissionError(f"approved {label} digest mismatch")
+    return payload
+
+
+def _write_read_only(path: Path, payload: bytes) -> None:
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o400)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(path, 0o444)
+    except OSError as exc:
+        raise ExternalAdmissionError("trust output must be new and private") from exc
+
+
+def extract_codex_trust_material(
+    trusted_root: Path, output_directory: Path
+) -> CodexTrustMaterial:
+    """Extract only fixed Fulcio, Rekor, and CT keys from approved root bytes."""
+
+    digest, size = _file_identity(trusted_root)
+    if size != 6787:
+        raise ExternalAdmissionError("approved trusted root byte length mismatch")
+    if digest != _TRUSTED_ROOT_DIGEST:
+        raise ExternalAdmissionError("approved trusted root digest mismatch")
+    try:
+        root = json.loads(trusted_root.read_bytes())
+        intermediate_raw = root["certificateAuthorities"][1]["certChain"]["certificates"][0]["rawBytes"]
+        ca_root_raw = root["certificateAuthorities"][1]["certChain"]["certificates"][1]["rawBytes"]
+        rekor_raw = root["tlogs"][0]["publicKey"]["rawBytes"]
+        ct_raw = root["ctlogs"][1]["publicKey"]["rawBytes"]
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise ExternalAdmissionError("approved trusted root structure is invalid") from exc
+    intermediate = _decode_approved(
+        intermediate_raw,
+        "sha256:15d795348226b4649f750f5802592c393bee7cc53c3b86982175b7ad087efe47",
+        "Fulcio intermediate",
+    )
+    ca_root_der = _decode_approved(
+        ca_root_raw,
+        "sha256:3ba7b6cc4e95469d4d334b49cb257ad8537076fa84b0ca87ff4ecfe6a54680c1",
+        "Fulcio root",
+    )
+    rekor = _decode_approved(
+        rekor_raw,
+        "sha256:" + cast(Mapping[str, Any], _POLICY["transparencyLog"])["logId"],
+        "Rekor key",
+    )
+    ct_key = _decode_approved(
+        ct_raw,
+        "sha256:dd3d306ac6c7113263191e1c99673702a24a5eb8de3cadff878a72802f29ee8e",
+        "CT key",
+    )
+    try:
+        output_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except OSError as exc:
+        raise ExternalAdmissionError("trust output directory must be new") from exc
+    material = CodexTrustMaterial(
+        ca_root=output_directory / "fulcio-root.pem",
+        ca_intermediate=output_directory / "fulcio-intermediate.pem",
+        rekor_key=output_directory / "rekor.pem",
+        ct_key=output_directory / "ctfe.pem",
+    )
+    _write_read_only(material.ca_root, _pem_bytes("CERTIFICATE", ca_root_der))
+    _write_read_only(material.ca_intermediate, _pem_bytes("CERTIFICATE", intermediate))
+    _write_read_only(material.rekor_key, _pem_bytes("PUBLIC KEY", rekor))
+    _write_read_only(material.ct_key, _pem_bytes("PUBLIC KEY", ct_key))
+    expected_pem_digests = {
+        material.ca_root: "sha256:dcf166eebe7cbd9760947a88213d94e656349c647d439569dc76a275f05b7159",
+        material.ca_intermediate: "sha256:ac5a60ca80f473f8b7742111f9eb49bf7dbd8f03f41a5b39d58b62b6f0de4d0f",
+        material.rekor_key: "sha256:dce5ef715502ec9f3cdfd11f8cc384b31a6141023d3e7595e9908a81cb6241bd",
+        material.ct_key: "sha256:270488a309d22e804eeb245493e87c667658d749006b9fee9cc614572d4fbbdc",
+    }
+    for path, expected_digest in expected_pem_digests.items():
+        actual_digest, _ = _file_identity(path)
+        if actual_digest != expected_digest:
+            raise ExternalAdmissionError("derived trust PEM digest mismatch")
+    return material
+
+
+def _freeze_string_mapping(value: Mapping[str, str]) -> Mapping[str, str]:
+    from types import MappingProxyType
+
+    return MappingProxyType(dict(value))
+
+
+def replay_codex_offline_plan(
+    plan: CodexOfflineVerificationPlan,
+    runner: Any,
+) -> ExternalAdmissionDocument:
+    """Replay exact offline controls and return only the reviewed proof receipt."""
+
+    positive_code, positive_output = runner(plan.positive_args, plan.positive_environment)
+    if positive_code != 0 or "Verified OK" not in positive_output:
+        raise ExternalAdmissionError("Codex deny-proxy offline verification failed")
+    artifact_code, artifact_output = runner(
+        plan.wrong_artifact_args, plan.positive_environment
+    )
+    if artifact_code != 1 or "payload" not in artifact_output.lower():
+        raise ExternalAdmissionError("Codex wrong artifact control did not reject")
+    identity_code, identity_output = runner(
+        plan.wrong_identity_args, plan.positive_environment
+    )
+    if identity_code != 1 or "identit" not in identity_output.lower():
+        raise ExternalAdmissionError("Codex wrong identity control did not reject")
+    rekor_code, rekor_output = runner(
+        plan.positive_args, plan.wrong_rekor_environment
+    )
+    if rekor_code != 1 or "rekor" not in rekor_output.lower():
+        raise ExternalAdmissionError("Codex wrong Rekor key control did not reject")
+    return load_codex_signature_proof()
 
 
 def _file_identity(path: Path) -> tuple[str, int]:
