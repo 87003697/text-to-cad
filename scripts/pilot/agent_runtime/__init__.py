@@ -1,6 +1,7 @@
 """Canonical public seam for sealed Agent runtime evidence."""
 
 from .canonical_json import (
+    CanonicalJSONInput,
     CanonicalJSONValue,
     canonical_json_bytes,
     canonical_json_digest,
@@ -22,6 +23,7 @@ __all__ = [
     "EvidenceDocument",
     "EvidenceError",
     "GraphValidation",
+    "CanonicalJSONInput",
     "CanonicalJSONValue",
     "canonical_bytes",
     "canonical_json_bytes",

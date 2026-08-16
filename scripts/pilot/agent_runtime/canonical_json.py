@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from types import MappingProxyType
 from typing import Any, TypeAlias
 
@@ -12,16 +12,8 @@ from typing import Any, TypeAlias
 MAX_DOCUMENT_BYTES = 1024 * 1024
 MAX_JSON_DEPTH = 64
 
-CanonicalJSONValue: TypeAlias = (
-    None
-    | bool
-    | int
-    | str
-    | Mapping[str, "CanonicalJSONValue"]
-    | Sequence["CanonicalJSONValue"]
-)
-
 __all__ = [
+    "CanonicalJSONInput",
     "CanonicalJSONValue",
     "EvidenceError",
     "canonical_json_bytes",
@@ -34,7 +26,7 @@ class EvidenceError(ValueError):
     """Canonical JSON or typed public evidence violates its closed contract."""
 
 
-class _FrozenMapping(Mapping[str, Any]):
+class _FrozenJSONMapping(Mapping[str, Any]):
     """Recursively immutable mapping with an explicit mutable-copy escape hatch."""
 
     __slots__ = ("_values",)
@@ -48,7 +40,7 @@ class _FrozenMapping(Mapping[str, Any]):
     def __getitem__(self, key: str) -> Any:
         return self._values[key]
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         return iter(self._values)
 
     def __len__(self) -> int:
@@ -60,7 +52,7 @@ class _FrozenMapping(Mapping[str, Any]):
         return {key: copy.deepcopy(value, memo) for key, value in self._values.items()}
 
 
-class _FrozenSequence(tuple):
+class _FrozenJSONSequence(tuple):
     """Immutable canonical JSON array with explicit mutable-copy support."""
 
     def __deepcopy__(self, memo: dict[int, Any]) -> list[Any]:
@@ -69,19 +61,106 @@ class _FrozenSequence(tuple):
         return [copy.deepcopy(value, memo) for value in self]
 
 
-def _freeze(value: Any) -> CanonicalJSONValue:
-    if isinstance(value, Mapping):
-        return _FrozenMapping({key: _freeze(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return _FrozenSequence(_freeze(item) for item in value)
-    return value
+CanonicalJSONValue: TypeAlias = (
+    None | bool | int | str | _FrozenJSONMapping | _FrozenJSONSequence
+)
+CanonicalJSONInput: TypeAlias = (
+    None
+    | bool
+    | int
+    | str
+    | dict[str, "CanonicalJSONInput"]
+    | list["CanonicalJSONInput"]
+    | tuple["CanonicalJSONInput", ...]
+    | CanonicalJSONValue
+)
 
 
-def _snapshot(value: Any) -> CanonicalJSONValue:
+def _string_size(value: str, budget: int) -> int:
+    size = 2
+    if size > budget:
+        raise EvidenceError("document exceeds byte limit")
+    for character in value:
+        codepoint = ord(character)
+        if codepoint > 0x7F:
+            raise EvidenceError("JSON string values must be ASCII")
+        if character in {'"', "\\", "\b", "\f", "\n", "\r", "\t"}:
+            size += 2
+        elif codepoint < 0x20:
+            size += 6
+        else:
+            size += 1
+        if size > budget:
+            raise EvidenceError("document exceeds byte limit")
+    return size
+
+
+def _snapshot_item(value: Any, budget: int, depth: int) -> tuple[CanonicalJSONValue, int]:
+    value_type = type(value)
+    if value_type is dict or value_type is _FrozenJSONMapping:
+        if depth > MAX_JSON_DEPTH:
+            raise EvidenceError("JSON nesting depth exceeds limit")
+        frozen: dict[str, CanonicalJSONValue] = {}
+        size = 2
+        if size > budget:
+            raise EvidenceError("document exceeds byte limit")
+        for index, (key, child) in enumerate(value.items()):
+            if type(key) is not str or not key.isascii():
+                raise EvidenceError("JSON object keys must be ASCII strings")
+            separator_size = 1 if index else 0
+            key_size = _string_size(key, budget - size - separator_size)
+            size += separator_size + key_size + 1
+            if size > budget:
+                raise EvidenceError("document exceeds byte limit")
+            frozen_child, child_size = _snapshot_item(child, budget - size, depth + 1)
+            size += child_size
+            frozen[key] = frozen_child
+        return _FrozenJSONMapping(frozen), size
+    if value_type in {list, tuple, _FrozenJSONSequence}:
+        if depth > MAX_JSON_DEPTH:
+            raise EvidenceError("JSON nesting depth exceeds limit")
+        frozen_items: list[CanonicalJSONValue] = []
+        size = 2
+        if size > budget:
+            raise EvidenceError("document exceeds byte limit")
+        for index, child in enumerate(value):
+            size += 1 if index else 0
+            if size > budget:
+                raise EvidenceError("document exceeds byte limit")
+            frozen_child, child_size = _snapshot_item(child, budget - size, depth + 1)
+            size += child_size
+            frozen_items.append(frozen_child)
+        return _FrozenJSONSequence(frozen_items), size
+    if value_type is str:
+        return value, _string_size(value, budget)
+    if value is None:
+        size = 4
+    elif value_type is bool:
+        size = 4 if value else 5
+    elif value_type is int:
+        if not -(2**63) <= value < 2**63:
+            raise EvidenceError("JSON integer is outside signed 64-bit range")
+        size = len(str(value))
+    else:
+        raise EvidenceError("value is not canonical JSON")
+    if size > budget:
+        raise EvidenceError("document exceeds byte limit")
+    return value, size
+
+
+def _snapshot(value: Any) -> tuple[CanonicalJSONValue, int]:
     try:
-        return _freeze(value)
-    except (RecursionError, RuntimeError, TypeError) as exc:
+        return _snapshot_item(value, MAX_DOCUMENT_BYTES, 1)
+    except EvidenceError:
+        raise
+    except MemoryError:
+        raise
+    except Exception as exc:
         raise EvidenceError("value cannot be snapshotted as canonical JSON") from exc
+
+
+def _freeze(value: Any) -> CanonicalJSONValue:
+    return _snapshot(value)[0]
 
 
 def _reject_number(_: str) -> None:
@@ -165,16 +244,16 @@ def parse_canonical_json(payload: bytes) -> CanonicalJSONValue:
         raise EvidenceError("JSON nesting depth exceeds limit") from exc
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvidenceError("invalid JSON payload") from exc
-    frozen = _snapshot(value)
+    frozen, _ = _snapshot(value)
     if canonical_json_bytes(frozen) != stored:
         raise EvidenceError("non-canonical JSON encoding")
     return frozen
 
 
-def canonical_json_bytes(value: CanonicalJSONValue) -> bytes:
+def canonical_json_bytes(value: CanonicalJSONInput | CanonicalJSONValue) -> bytes:
     """Encode one schema-neutral canonical JSON value after closed validation."""
 
-    frozen = _snapshot(value)
+    frozen, expected_size = _snapshot(value)
     _validate_json_value(frozen)
     try:
         encoded = json.dumps(
@@ -184,14 +263,16 @@ def canonical_json_bytes(value: CanonicalJSONValue) -> bytes:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("ascii")
-    except (UnicodeEncodeError, TypeError, ValueError) as exc:
+    except MemoryError:
+        raise
+    except Exception as exc:
         raise EvidenceError("value is not canonical JSON") from exc
-    if len(encoded) > MAX_DOCUMENT_BYTES:
-        raise EvidenceError("document exceeds byte limit")
+    if len(encoded) != expected_size:
+        raise EvidenceError("canonical JSON size accounting mismatch")
     return encoded
 
 
-def canonical_json_digest(value: CanonicalJSONValue) -> str:
+def canonical_json_digest(value: CanonicalJSONInput | CanonicalJSONValue) -> str:
     """Digest only the single canonical encoding of a schema-neutral value."""
 
     return "sha256:" + hashlib.sha256(canonical_json_bytes(value)).hexdigest()
