@@ -102,6 +102,7 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
             (exp / "receipt.json").write_text("{}", encoding="utf-8")
             (exp / "run").mkdir()
             (exp / "run/codex-stderr.txt").write_bytes(b"diagnostic\n")
+            (exp / "run/stderr.log").write_bytes(b"default-excluded byproduct\n")
             module.write_artifact_manifest(exp, 0, "a" * 40)
             manifest = json.loads((exp / "artifact_manifest.json").read_text(encoding="utf-8"))
             self.assertIs(type(manifest["final_status"]), int)
@@ -117,6 +118,10 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
             ])
             self.assertIn(
                 "run/codex-stderr.txt",
+                [item["path"] for item in manifest["files"]],
+            )
+            self.assertNotIn(
+                "run/stderr.log",
                 [item["path"] for item in manifest["files"]],
             )
             self.assertEqual(manifest["files"][0]["path"], "receipt.json")

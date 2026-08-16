@@ -390,9 +390,12 @@ def write_artifact_manifest(exp_dir: Path, final_status: int, source_revision: s
     for path in sorted(exp_dir.rglob("*")):
         if path.is_symlink():
             raise MvpError("output contains a symlink")
+        relative = path.relative_to(exp_dir).as_posix()
+        if relative == "run/stderr.log":
+            continue
         if path.is_file() and path.name not in {"artifact_manifest.json", ".artifact_manifest.json.tmp"}:
             files.append({
-                "path": path.relative_to(exp_dir).as_posix(),
+                "path": relative,
                 "size_bytes": path.stat().st_size,
                 "sha256": sha256(path),
             })
