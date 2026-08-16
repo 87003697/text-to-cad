@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Sequence
 
@@ -34,15 +35,22 @@ class PullError(RuntimeError):
         self.status = status
 
 
+class PostmortemPolicy(Enum):
+    """One validated publication and cleanup policy for terminal postmortems."""
+
+    DEFAULT = "default"
+    INCLUDE_CLEAN = "include-clean"
+    INCLUDE_RETAIN = "include-retain"
+    DISCARD_CLEAN = "discard-clean"
+
+
 @dataclass(frozen=True)
 class PullRequest:
     """Validated scope and postmortem policy supplied by the caller."""
 
     exp: str | None
     group: str | None
-    include_byproducts: bool
-    discard_postmortem: bool
-    retain_cvm_source: bool = False
+    postmortem_policy: PostmortemPolicy
 
 
 @dataclass(frozen=True)
@@ -72,7 +80,14 @@ class PublishResult:
 
     uploaded: tuple[str, ...]
     preserved: tuple[ExpInspection, ...]
+    verified_existing: tuple[str, ...] = ()
     retained_source: tuple[str, ...] = ()
+
+    @property
+    def mount_targets(self) -> tuple[str, ...]:
+        """Return every verified S3 experiment that must be mount-visible."""
+
+        return self.uploaded + self.verified_existing
 
 
 def is_safe_component(value: str) -> bool:
@@ -116,12 +131,20 @@ def parse_request(argv: Sequence[str]) -> PullRequest:
             "--retain-cvm-source requires --include-byproducts",
             2,
         )
+    if args.include_byproducts:
+        postmortem_policy = (
+            PostmortemPolicy.INCLUDE_RETAIN
+            if args.retain_cvm_source
+            else PostmortemPolicy.INCLUDE_CLEAN
+        )
+    elif args.discard_postmortem:
+        postmortem_policy = PostmortemPolicy.DISCARD_CLEAN
+    else:
+        postmortem_policy = PostmortemPolicy.DEFAULT
     return PullRequest(
         exp=args.exp,
         group=args.group,
-        include_byproducts=args.include_byproducts,
-        discard_postmortem=args.discard_postmortem,
-        retain_cvm_source=args.retain_cvm_source,
+        postmortem_policy=postmortem_policy,
     )
 
 
@@ -348,8 +371,7 @@ print(json.dumps({
         preserve: list[ExpInspection] = []
         for item in inspections:
             should_preserve = (
-                not self.request.include_byproducts
-                and not self.request.discard_postmortem
+                self.request.postmortem_policy is PostmortemPolicy.DEFAULT
                 and (item.final_status != 0 or item.has_postmortem)
             )
             if should_preserve:
@@ -365,7 +387,10 @@ print(json.dumps({
         )
 
     def _load_excludes(self) -> tuple[str, ...]:
-        if self.request.include_byproducts:
+        if self.request.postmortem_policy in {
+            PostmortemPolicy.INCLUDE_CLEAN,
+            PostmortemPolicy.INCLUDE_RETAIN,
+        }:
             return ()
         path = REPO_ROOT / ".cvmignore.pull"
         if not path.is_file():
@@ -381,7 +406,7 @@ print(json.dumps({
             f"--exclude {shlex.quote(pattern)}" for pattern in self.excludes
         )
         command = (
-            "aws s3 cp --recursive "
+            "aws s3 cp --recursive --no-follow-symlinks "
             f"~/text-to-cad/outputs/{exp}/ {S3_PREFIX}/{exp}/"
         )
         if exclude_args:
@@ -394,19 +419,24 @@ print(json.dumps({
         script = """
 import fnmatch
 import json
+import os
 import pathlib
+import stat
 import sys
 
 root = pathlib.Path.home() / "text-to-cad/outputs" / sys.argv[1]
 patterns = json.loads(sys.argv[2])
 count = 0
-for path in root.rglob("*"):
-    if not path.is_file():
-        continue
-    relative = path.relative_to(root).as_posix()
-    if any(fnmatch.fnmatch(relative, pattern) for pattern in patterns):
-        continue
-    count += 1
+for directory, _dirnames, filenames in os.walk(root, followlinks=False):
+    parent = pathlib.Path(directory)
+    for name in filenames:
+        path = parent / name
+        if not stat.S_ISREG(path.lstat().st_mode):
+            continue
+        relative = path.relative_to(root).as_posix()
+        if any(fnmatch.fnmatch(relative, pattern) for pattern in patterns):
+            continue
+        count += 1
 print(count)
 """.strip()
         command = " ".join(
@@ -470,7 +500,11 @@ print(count)
         """Module 4: run upload -> verify -> precise cleanup per exp."""
 
         uploaded: list[str] = []
+        verified_existing: list[str] = []
         retained_source: list[str] = []
+        retain_source = (
+            self.request.postmortem_policy is PostmortemPolicy.INCLUDE_RETAIN
+        )
         for index, exp in enumerate(plan.publish, start=1):
             self._log(f"=== [{index}/{len(plan.publish)}] {exp} ===")
             count: int
@@ -478,10 +512,17 @@ print(count)
                 complete, local_count, s3_count = self._existing_s3_is_complete(exp)
                 if complete:
                     count = local_count
-                    self._log(
-                        f"  existing S3 prefix verified ({count} files); "
-                        "resuming cleanup"
-                    )
+                    verified_existing.append(exp)
+                    if retain_source:
+                        self._log(
+                            f"  existing S3 prefix verified ({count} files); "
+                            "retaining CVM source"
+                        )
+                    else:
+                        self._log(
+                            f"  existing S3 prefix verified ({count} files); "
+                            "resuming cleanup"
+                        )
                 elif s3_count <= local_count:
                     self._log(
                         "  existing S3 prefix is incomplete "
@@ -489,6 +530,7 @@ print(count)
                     )
                     self._upload_exp(exp)
                     count = self._verify_exp(exp)
+                    uploaded.append(exp)
                 else:
                     raise PullError(
                         "VERIFY FAILED "
@@ -499,17 +541,18 @@ print(count)
             else:
                 self._upload_exp(exp)
                 count = self._verify_exp(exp)
-            if self.request.retain_cvm_source:
+                uploaded.append(exp)
+            if retain_source:
                 self._log(f"  verify OK ({count} files); retaining CVM source")
                 retained_source.append(exp)
             else:
                 self._log(f"  verify OK ({count} files); cleaning CVM local...")
                 self._cleanup_exp(exp)
-            uploaded.append(exp)
         return PublishResult(
-            tuple(uploaded),
-            plan.preserve,
-            tuple(retained_source),
+            uploaded=tuple(uploaded),
+            preserved=plan.preserve,
+            verified_existing=tuple(verified_existing),
+            retained_source=tuple(retained_source),
         )
 
     def _refresh_dir(self, directory: str) -> None:
@@ -531,16 +574,17 @@ print(count)
     def expose(self, result: PublishResult) -> None:
         """Module 5: refresh parent -> group -> exp and prove visibility."""
 
-        if not result.uploaded:
+        targets = result.mount_targets
+        if not targets:
             return
         self._refresh_dir("ericzyma/text-to-cad/outputs")
-        for group in sorted({exp.split("/", 1)[0] for exp in result.uploaded}):
+        for group in sorted({exp.split("/", 1)[0] for exp in targets}):
             self._refresh_dir(f"ericzyma/text-to-cad/outputs/{group}")
-        for exp in result.uploaded:
+        for exp in targets:
             self._refresh_dir(f"ericzyma/text-to-cad/outputs/{exp}")
 
         invisible: list[str] = []
-        for exp in result.uploaded:
+        for exp in targets:
             for _attempt in range(5):
                 if (self.mount_path / exp).is_dir():
                     break
@@ -569,20 +613,34 @@ print(count)
     def report(self, result: PublishResult) -> None:
         """Module 6: print the concise result and audit handoff."""
 
-        if not result.uploaded:
+        if not result.mount_targets:
             self._log("Done. No exp uploaded; preserved postmortem:")
-        elif result.retained_source:
-            self._log(
-                "Done. Uploaded + verified + CVM source retained + mount-visible:"
-            )
-            for exp in result.uploaded:
-                self._log(f"  {exp}")
         else:
-            self._log("Done. Uploaded + verified + cleaned + mount-visible:")
-            for exp in result.uploaded:
-                self._log(f"  {exp}")
-        if result.preserved:
             if result.uploaded:
+                action = (
+                    "CVM source retained"
+                    if result.retained_source
+                    else "cleaned"
+                )
+                self._log(
+                    f"Done. Uploaded + verified + {action} + mount-visible:"
+                )
+                for exp in result.uploaded:
+                    self._log(f"  {exp}")
+            if result.verified_existing:
+                action = (
+                    "CVM source retained"
+                    if result.retained_source
+                    else "cleaned"
+                )
+                self._log(
+                    "Existing S3 prefix verified + "
+                    f"{action} + mount-visible:"
+                )
+                for exp in result.verified_existing:
+                    self._log(f"  {exp}")
+        if result.preserved:
+            if result.mount_targets:
                 self._log("Preserved postmortem on CVM:")
             for item in result.preserved:
                 self._log(

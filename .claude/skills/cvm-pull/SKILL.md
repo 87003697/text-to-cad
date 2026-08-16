@@ -71,6 +71,9 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - **保留源模式仍须完整验证**：`--retain-cvm-source` 仅能与
   `--include-byproducts` 同时使用。它执行同一 upload、CVM/S3 文件计数验证和 mount
   可见性检查，但跳过 CVM cleanup；已有完整 S3 prefix 仍重新对照不可变 CVM 源。
+- **CVM symlink 不得成为上传入口**：upload 固定使用 `--no-follow-symlinks`，CVM
+  计数只包含 `lstat` 证明的普通文件。符号链接本身不上传、不计数，也不能把 exp
+  以外的数据带进固定 S3 prefix。
 - **不得擅自 discard postmortem**：调用 `--discard-postmortem` 前必须向用户列出
   将受影响的失败 exp 并取得明确授权；普通“拉结果”只使用默认安全模式。
 - **terminal manifest 是独立硬门**：每个候选都必须有合法且含整数
@@ -125,6 +128,8 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - 上传的新 exp dir 清单（本轮 uploaded + cleaned）
 - 使用 `--retain-cvm-source` 时，分别报告 uploaded + verified + mount-visible 与
   retained-on-CVM 清单；不得称为 cleaned
+- 已存在且与 CVM 源计数一致的 S3 prefix 单独报告为 verified-existing，不得称为
+  本轮 uploaded；保留源模式不得使用 `resuming cleanup` 文案
 - 因失败态/postmortem 默认保留在 CVM 的 exp 清单
 - 每 exp artifact 存在性 check（从 mount 侧读）：`workspace.json` /
   `step_index.json` / `notes.md` / `final/manifest.json` / `run/rollout.jsonl`

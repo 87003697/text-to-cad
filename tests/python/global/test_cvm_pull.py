@@ -87,8 +87,10 @@ class PullRequestTests(unittest.TestCase):
             request.exp,
             "20260805-170000-audit/20260805-170001-airplane",
         )
-        self.assertTrue(request.include_byproducts)
-        self.assertTrue(request.retain_cvm_source)
+        self.assertIs(
+            request.postmortem_policy,
+            cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
+        )
 
         with self.assertRaisesRegex(
             cvm_pull.PullError,
@@ -102,7 +104,11 @@ class PullRequestTests(unittest.TestCase):
 
 class PullPlanTests(unittest.TestCase):
     def workflow(self, runner: FakeRunner):
-        request = cvm_pull.PullRequest(None, None, False, False)
+        request = cvm_pull.PullRequest(
+            None,
+            None,
+            cvm_pull.PostmortemPolicy.DEFAULT,
+        )
         workflow = cvm_pull.CvmPull(request, runner)
         workflow.mount_path = Path("/nonexistent-test-mount")
         return workflow
@@ -189,7 +195,11 @@ class PullPlanTests(unittest.TestCase):
         runner = FakeRunner()
         runner.respond("test -d", status=0)
         workflow = cvm_pull.CvmPull(
-            cvm_pull.PullRequest("group/exp", None, False, False),
+            cvm_pull.PullRequest(
+                "group/exp",
+                None,
+                cvm_pull.PostmortemPolicy.DEFAULT,
+            ),
             runner,
         )
         workflow.mount_path = Path("/tmp/cvm-pull-test-mount")
@@ -261,9 +271,7 @@ class PullPlanTests(unittest.TestCase):
         request = cvm_pull.PullRequest(
             None,
             None,
-            True,
-            False,
-            retain_cvm_source=True,
+            cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
         )
         workflow = cvm_pull.CvmPull(request, runner)
         plan = cvm_pull.PullPlan(
@@ -294,6 +302,39 @@ class PullPlanTests(unittest.TestCase):
             result = workflow.publish(plan)
         self.assertEqual(events, ["upload", "verify"])
         self.assertEqual(result.uploaded, ("group/failed",))
+        self.assertEqual(result.retained_source, ("group/failed",))
+
+    def test_existing_verified_postmortem_is_not_reported_as_uploaded(self) -> None:
+        runner = FakeRunner()
+        workflow = cvm_pull.CvmPull(
+            cvm_pull.PullRequest(
+                None,
+                None,
+                cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
+            ),
+            runner,
+        )
+        plan = cvm_pull.PullPlan(
+            cvm_exps=("group/failed",),
+            candidates=("group/failed",),
+            s3_exps=frozenset({"group/failed"}),
+            publish=("group/failed",),
+            preserve=(),
+        )
+        with (
+            mock.patch.object(
+                workflow,
+                "_existing_s3_is_complete",
+                return_value=(True, 7, 7),
+            ),
+            mock.patch.object(workflow, "_upload_exp") as upload,
+            mock.patch.object(workflow, "_cleanup_exp") as cleanup,
+        ):
+            result = workflow.publish(plan)
+        upload.assert_not_called()
+        cleanup.assert_not_called()
+        self.assertEqual(result.uploaded, ())
+        self.assertEqual(result.verified_existing, ("group/failed",))
         self.assertEqual(result.retained_source, ("group/failed",))
 
     def test_publish_resumes_cleanup_for_verified_existing_s3_prefix(self) -> None:
@@ -397,6 +438,13 @@ class PullPlanTests(unittest.TestCase):
         command = runner.remote_commands[-1]
         self.assertIn("path.relative_to(root).as_posix()", command)
         self.assertIn("fnmatch.fnmatch(relative, pattern)", command)
+        self.assertIn("stat.S_ISREG(path.lstat().st_mode)", command)
+
+    def test_upload_never_follows_cvm_symlinks(self) -> None:
+        runner = FakeRunner()
+        workflow = self.workflow(runner)
+        workflow._upload_exp("group/exp")
+        self.assertIn("--no-follow-symlinks", runner.remote_commands[-1])
 
     def test_s3_count_uses_pipefail(self) -> None:
         runner = FakeRunner()
