@@ -40,6 +40,8 @@ class _ProxyServer(ThreadingHTTPServer):
         audit_path: Path,
         backoffs: tuple[float, ...],
         upstream_timeout: float,
+        upstream_bearer_token: str | None,
+        required_client_bearer_token: str | None,
     ) -> None:
         """Bind loopback on a dynamic port and retain retry policy."""
 
@@ -56,6 +58,8 @@ class _ProxyServer(ThreadingHTTPServer):
         self.audit_path = audit_path
         self.backoffs = backoffs
         self.upstream_timeout = upstream_timeout
+        self.upstream_bearer_token = upstream_bearer_token
+        self.required_client_bearer_token = required_client_bearer_token
         self.audit_lock = threading.Lock()
         super().__init__(("127.0.0.1", 0), _ProxyHandler)
 
@@ -88,14 +92,34 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
         content_length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(content_length)
+        required_token = self.server.required_client_bearer_token
+        if required_token is not None and self.headers.get("Authorization") != (
+            f"Bearer {required_token}"
+        ):
+            response = b'{"error":{"code":"proxy_authentication_failed"}}'
+            self._respond(
+                401,
+                [("Content-Type", "application/json")],
+                response,
+            )
+            return
+        excluded_headers = HOP_BY_HOP_HEADERS | {
+            "host",
+            "content-length",
+            VENUS_CODEX_ROUTING_HEADER.lower(),
+        }
+        if self.server.upstream_bearer_token is not None:
+            excluded_headers.add("authorization")
         forwarded_headers = {
             name: value
             for name, value in self.headers.items()
-            if name.lower()
-            not in HOP_BY_HOP_HEADERS
-            | {"host", "content-length", VENUS_CODEX_ROUTING_HEADER.lower()}
+            if name.lower() not in excluded_headers
         }
         forwarded_headers["Content-Length"] = str(len(body))
+        if self.server.upstream_bearer_token is not None:
+            forwarded_headers["Authorization"] = (
+                f"Bearer {self.server.upstream_bearer_token}"
+            )
         # Venus documents this header as required for Codex encrypted
         # reasoning so every continuation stays on one resource provider.
         forwarded_headers[VENUS_CODEX_ROUTING_HEADER] = "true"
@@ -223,6 +247,8 @@ class RetryProxy:
         *,
         backoffs: tuple[float, ...] = (0.2, 0.5),
         upstream_timeout: float = 180,
+        upstream_bearer_token: str | None = None,
+        required_client_bearer_token: str | None = None,
     ) -> None:
         """Configure a maximum of one initial attempt plus the backoffs."""
 
@@ -231,6 +257,8 @@ class RetryProxy:
             audit_path,
             backoffs,
             upstream_timeout,
+            upstream_bearer_token,
+            required_client_bearer_token,
         )
         self._thread = threading.Thread(
             target=self._server.serve_forever,

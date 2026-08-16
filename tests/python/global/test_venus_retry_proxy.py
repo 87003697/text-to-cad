@@ -80,6 +80,65 @@ class ScriptedUpstream:
 class VenusRetryProxyTests(unittest.TestCase):
     """Verify the retry proxy through its loopback HTTP interface."""
 
+    def test_root_side_token_replaces_untrusted_client_authorization(self) -> None:
+        success = b'{"id":"response-ok"}'
+        with tempfile.TemporaryDirectory() as temp:
+            audit_path = Path(temp) / "venus-retry.jsonl"
+            with ScriptedUpstream([(200, success)]) as upstream:
+                from scripts.pilot.venus_retry_proxy import RetryProxy
+
+                with RetryProxy(
+                    upstream.url,
+                    audit_path,
+                    upstream_bearer_token="root-held-token",
+                    required_client_bearer_token="one-time-client-token",
+                ) as proxy:
+                    connection = http.client.HTTPConnection(
+                        "127.0.0.1", proxy.port, timeout=2
+                    )
+                    connection.request(
+                        "POST",
+                        "/v1/responses",
+                        body=b"{}",
+                        headers={
+                            "Authorization": "Bearer one-time-client-token"
+                        },
+                    )
+                    response = connection.getresponse()
+                    response.read()
+                    connection.close()
+
+        self.assertEqual(response.status, 200)
+        self.assertEqual(upstream.requests[0][2], "Bearer root-held-token")
+
+    def test_root_side_proxy_rejects_an_unrecognized_local_client(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            audit_path = Path(temp) / "venus-retry.jsonl"
+            with ScriptedUpstream([(200, b"{}")]) as upstream:
+                from scripts.pilot.venus_retry_proxy import RetryProxy
+
+                with RetryProxy(
+                    upstream.url,
+                    audit_path,
+                    upstream_bearer_token="root-held-token",
+                    required_client_bearer_token="one-time-client-token",
+                ) as proxy:
+                    connection = http.client.HTTPConnection(
+                        "127.0.0.1", proxy.port, timeout=2
+                    )
+                    connection.request(
+                        "POST",
+                        "/v1/responses",
+                        body=b"{}",
+                        headers={"Authorization": "Bearer wrong"},
+                    )
+                    response = connection.getresponse()
+                    response.read()
+                    connection.close()
+
+        self.assertEqual(response.status, 401)
+        self.assertEqual(upstream.requests, [])
+
     def test_empty_400_retries_only_encrypted_reasoning_continuation(self) -> None:
         request_body = json.dumps(
             {
