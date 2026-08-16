@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import csv
 import hashlib
 import importlib.util
@@ -516,8 +517,16 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                 dependencies.append(path)
 
             def run(command, **kwargs):
+                expected_environment = {
+                    "PATH", "LANG", "LC_ALL", "TZ", "PYTHONDONTWRITEBYTECODE",
+                    "PYTHONNOUSERSITE",
+                }
                 if "install" in command:
+                    self.assertEqual(set(kwargs["env"]), expected_environment)
                     return subprocess.CompletedProcess(command, 0, "", "")
+                self.assertEqual(
+                    set(kwargs["env"]), expected_environment | {"PYTHONPATH"}
+                )
                 cup_root = Path(command[-1])
                 target = Path(kwargs["env"]["PYTHONPATH"])
                 native = (
@@ -580,7 +589,10 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                 452682,
             )
             self.assertNotIn("surface_error_rate", result["measurement"]["depthEight"])
-            self.assertEqual(result["providerDispatchCount"], 0)
+            self.assertEqual(
+                result["providerExecution"],
+                {"mode": "no-provider-configured", "dispatchCount": 0},
+            )
             self.assertTrue(result["nativeConformanceDigest"].startswith("sha256:"))
 
     def test_meshscope_development_evidence_reassembles_and_rejects_mutation(self) -> None:
@@ -608,11 +620,135 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
             closure.canonical_json_bytes(candidate) + b"\n",
             (root / "candidate.json").read_bytes(),
         )
-        conformance["providerDispatchCount"] = 1
+        conformance["providerExecution"]["dispatchCount"] = 1
         with self.assertRaises(closure.ProjectClosureError):
             closure.assemble_meshscope_development_candidate(
                 builds, audit, conformance
             )
+
+    def test_meshscope_candidate_rejects_build_context_and_toolchain_substitution(self) -> None:
+        closure = _load_project_closure()
+        root = REPO_ROOT / "models/agent-runtime/cup_cup_033/meshscope-development"
+        builds = tuple(
+            json.loads((root / name).read_bytes())
+            for name in ("build-1.json", "build-2.json", "build-alternate-root.json")
+        )
+        audit = json.loads((root / "wheel-audit.json").read_bytes())
+        conformance = json.loads((root / "cup-native-conformance.json").read_bytes())
+
+        mutations = []
+        compiler = copy.deepcopy(builds)
+        compiler[0]["toolchain"]["compiler"] = "arbitrary compiler"
+        mutations.append(compiler)
+        platform = copy.deepcopy(builds)
+        platform[0]["platform"]["architecture"] = "arm64"
+        mutations.append(platform)
+        environment = copy.deepcopy(builds)
+        environment[0]["environment"]["TZ"] = "local"
+        mutations.append(environment)
+        for command_index in (0, 1):
+            command = copy.deepcopy(builds)
+            command[0]["commands"][command_index] += " -funsafe-math-optimizations"
+            mutations.append(command)
+        epoch = copy.deepcopy(builds)
+        epoch[0]["sourceDateEpoch"] = 1
+        mutations.append(epoch)
+        source = copy.deepcopy(builds)
+        source[0]["source"]["sourceTreeDigest"] = "sha256:" + "0" * 64
+        mutations.append(source)
+        wheel = copy.deepcopy(builds)
+        wheel[0]["wheel"]["sha256"] = "sha256:" + "0" * 64
+        mutations.append(wheel)
+        launch = copy.deepcopy(builds)
+        launch[0]["executionContext"]["launchSpec"]["networkMode"] = "bridge"
+        mutations.append(launch)
+        duplicate = copy.deepcopy(builds)
+        duplicate = (duplicate[0], duplicate[0], duplicate[2])
+        mutations.append(duplicate)
+        for index, mutated in enumerate(mutations):
+            with self.subTest(mutation=index), self.assertRaises(
+                closure.ProjectClosureError
+            ):
+                closure.assemble_meshscope_development_candidate(
+                    mutated, audit, conformance
+                )
+
+    def test_meshscope_candidate_rejects_audit_and_conformance_substitution(self) -> None:
+        closure = _load_project_closure()
+        root = REPO_ROOT / "models/agent-runtime/cup_cup_033/meshscope-development"
+        builds = tuple(
+            json.loads((root / name).read_bytes())
+            for name in ("build-1.json", "build-2.json", "build-alternate-root.json")
+        )
+        audit = json.loads((root / "wheel-audit.json").read_bytes())
+        conformance = json.loads((root / "cup-native-conformance.json").read_bytes())
+
+        audit_mutations = []
+        for path, value in (
+            (("files",), audit["files"][:-1]),
+            (("nativePath",), "meshscope/arbitrary.so"),
+            (("nativeSha256",), "sha256:" + "0" * 64),
+            (("wheelRecordDigest",), "sha256:" + "0" * 64),
+            (("auditwheelReportDigest",), "sha256:" + "0" * 64),
+            (("elfReportsDigest",), "sha256:" + "0" * 64),
+            (("auditwheelPlatformTag",), "linux_x86_64"),
+            (("needed",), ["libc.so.6"]),
+            (("versionRequirements",), ["GLIBC_2.2.5"]),
+            (("resolvedLibraries", 0, "path"), "/arbitrary/loader"),
+        ):
+            attacked = copy.deepcopy(audit)
+            target = attacked
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            without_digest = dict(attacked)
+            without_digest.pop("nativeAuditDigest")
+            attacked["nativeAuditDigest"] = closure.canonical_json_digest(
+                without_digest
+            )
+            audit_mutations.append((path, attacked))
+        for path, attacked in audit_mutations:
+            with self.subTest(audit_path=path), self.assertRaises(
+                closure.ProjectClosureError
+            ):
+                closure.assemble_meshscope_development_candidate(
+                    builds, attacked, conformance
+                )
+
+        for path, value in (
+            ("dependencyWheels", [{"path": "arbitrary.whl", "sha256": "sha256:" + "0" * 64, "bytes": 1}] * 3),
+            ("imports", ["meshscope"]),
+            ("meshscopeWheel", {"path": "arbitrary.whl", "sha256": "sha256:" + "0" * 64, "bytes": 1}),
+            ("fixture.id", "arbitrary"),
+            ("fixture.inputTriangleCount", 1),
+            ("nativeModuleBasename", "arbitrary.so"),
+            ("nativeModuleSha256", "sha256:" + "0" * 64),
+            ("nativeBackendCallable", False),
+            ("measurement.depthEight.depth", 7),
+            ("measurement.depthEight.reference_surface_count", 1),
+            ("measurement.depthEight.missing_surface_count", 1),
+            ("measurement.summarySha256", "sha256:" + "0" * 64),
+            ("measurement.objectiveFacts.global_depth_8_zero", False),
+            ("providerExecution.mode", "network-denied"),
+            ("providerExecution.dispatchCount", 1),
+        ):
+            attacked = copy.deepcopy(conformance)
+            target = attacked
+            parts = path.split(".")
+            for key in parts[:-1]:
+                target = target[key]
+            target[parts[-1]] = value
+            without_digest = dict(attacked)
+            without_digest.pop("nativeConformanceDigest")
+            attacked["nativeConformanceDigest"] = closure.canonical_json_digest(
+                without_digest
+            )
+            with self.subTest(path=path), self.assertRaises(
+                closure.ProjectClosureError
+            ):
+                closure.assemble_meshscope_development_candidate(
+                    builds, audit, attacked
+                )
 
     def test_project_manifest_closes_all_project_artifacts(self) -> None:
         closure = _load_project_closure()

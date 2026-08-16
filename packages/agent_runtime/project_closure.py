@@ -28,6 +28,15 @@ class ProjectClosureError(ValueError):
     """A project artifact is incomplete, mutable, or outside the Cup surface."""
 
 
+def _exact_json(value: Any, expected: Any) -> bool:
+    """Compare closed JSON values through the one shared canonical encoder."""
+
+    try:
+        return canonical_json_bytes(value) == canonical_json_bytes(expected)
+    except (TypeError, ValueError):
+        return False
+
+
 _MESHSCOPE_WHEEL = re.compile(
     r"meshscope-0\.1\.0-cp312-cp312-(?:manylinux[^-]*_x86_64|linux_x86_64)\.whl\Z"
 )
@@ -134,6 +143,115 @@ _MESHSCOPE_VERSION_REQUIREMENTS = (
 )
 _CUP_INPUT_SHA256 = "3d4c7ca9118ef8a6d4ae3e7af3117250ca824ad5b8de36dcfa2c66cece47ae67"
 _CUP_INPUT_BYTES = 190_047
+_MESHSCOPE_BUILDER_IMAGE_ID = (
+    "sha256:49de767070e9a205a5424860162e409c8ff4268e0567effb8d9265fc553a1ee2"
+)
+_MESHSCOPE_SOURCE_TREE_DIGEST = (
+    "sha256:97e7354fa2a50a49e4f2ad2dce10d9e2ae0f0336e67803c8ccd52279d80334d8"
+)
+_MESHSCOPE_WHEEL_IDENTITY = {
+    "path": "meshscope-0.1.0-cp312-cp312-linux_x86_64.whl",
+    "sha256": "sha256:bbe81df7b0b7c7d72163e13d6a09df2bca223bc09f1b909a6fcda23a478bbe2b",
+    "bytes": 74_192,
+}
+_MESHSCOPE_PLATFORM = {"architecture": "amd64", "os": "linux", "pythonAbi": "cp312"}
+_MESHSCOPE_BUILD_ENVIRONMENT = {
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "TZ": "UTC",
+    "SOURCE_DATE_EPOCH": "1755302400",
+    "PYTHONHASHSEED": "0",
+    "PYTHONDONTWRITEBYTECODE": "1",
+}
+_MESHSCOPE_TOOLCHAIN = {
+    "python": "3.12.3",
+    "pythonCacheTag": "cpython-312",
+    "extensionSuffix": ".cpython-312-x86_64-linux-gnu.so",
+    "configuredCc": "x86_64-linux-gnu-gcc",
+    "configuredCxx": "x86_64-linux-gnu-g++",
+    "configuredLdshared": "x86_64-linux-gnu-gcc -shared -Wl,-O1 -Wl,-Bsymbolic-functions -Wl,-Bsymbolic-functions  -Wl,-z,relro -g -fwrapv -O2   ",
+    "pip": "26.2.1",
+    "setuptools": "82.0.1",
+    "wheel": "0.48.0",
+    "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "compilerVersion": "13.3.0",
+    "linker": "GNU ld (GNU Binutils for Ubuntu) 2.42",
+    "readelf": "GNU readelf (GNU Binutils for Ubuntu) 2.42",
+}
+_MESHSCOPE_COMMANDS = (
+    "x86_64-linux-gnu-g++ -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -fPIC -I/opt/sai004/venv/include -I/usr/include/python3.12 -c src/meshscope/voxblame/_native.cpp -o build/temp.linux-x86_64-cpython-312/src/meshscope/voxblame/_native.o -O3 -std=c++17 -g0",
+    "x86_64-linux-gnu-g++ -fno-strict-overflow -Wsign-compare -DNDEBUG -g -O2 -Wall -shared -Wl,-O1 -Wl,-Bsymbolic-functions build/temp.linux-x86_64-cpython-312/src/meshscope/voxblame/_native.o -L/usr/lib/x86_64-linux-gnu -o build/lib.linux-x86_64-cpython-312/meshscope/voxblame/_native.cpython-312-x86_64-linux-gnu.so",
+)
+_MESHSCOPE_EXECUTION_CONTEXTS = {
+    "ordinary-1": ("ordinary-root", "/work"),
+    "ordinary-2": ("ordinary-root", "/work"),
+    "alternate-root": ("alternate-root", "/alternate-work"),
+}
+_MESHSCOPE_DEPENDENCY_WHEELS = (
+    {
+        "path": "numpy-2.4.6-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+        "sha256": "sha256:90f9849678c75fe7afa2d348ac842c168b0a4d3d61919687216dfc547976d853",
+        "bytes": 16_645_538,
+    },
+    {
+        "path": "pillow-12.2.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+        "sha256": "sha256:b86024e52a1b269467a802258c25521e6d742349d760728092e1bc2d135b4d76",
+        "bytes": 8_094_744,
+    },
+    {
+        "path": "trimesh-4.12.2-py3-none-any.whl",
+        "sha256": "sha256:b5b5afa63c5272345f2858f7676bc8c217dc8a89f4fadf6193fe10a81b5ff2aa",
+        "bytes": 741_043,
+    },
+)
+_MESHSCOPE_NATIVE_SHA256 = (
+    "sha256:cf11f7d01b788a21b9219c1da64f6bc906adde4755b09f55f5341369b184f6e0"
+)
+_MESHSCOPE_RESOLVED_LIBRARIES = (
+    {
+        "soname": "ld-linux-x86-64.so.2",
+        "path": "/lib64/ld-linux-x86-64.so.2",
+        "sha256": "sha256:cd4df4f3c7b83673d61189bf2eaebd33ca4f2853ab9772b8a25e025ef99b1e81",
+        "bytes": 236_616,
+    },
+    {
+        "soname": "libc.so.6",
+        "path": "/lib/x86_64-linux-gnu/libc.so.6",
+        "sha256": "sha256:8db37cf3f2169f59a0f07ef1fea308c35656668c64c8ff294e1860f4121eb161",
+        "bytes": 2_125_328,
+    },
+    {
+        "soname": "libgcc_s.so.1",
+        "path": "/lib/x86_64-linux-gnu/libgcc_s.so.1",
+        "sha256": "sha256:d93224d2b0dab4247598be683adca02f5cf00586f99c187579cd7e92058fb7cb",
+        "bytes": 183_024,
+    },
+    {
+        "soname": "libm.so.6",
+        "path": "/lib/x86_64-linux-gnu/libm.so.6",
+        "sha256": "sha256:e9c4b28d340e415b8137480ec442662f981e1399386c5931dae0e886e3639e91",
+        "bytes": 952_616,
+    },
+    {
+        "soname": "libstdc++.so.6",
+        "path": "/lib/x86_64-linux-gnu/libstdc++.so.6",
+        "sha256": "sha256:1fd75fe70354a416d75aef22bcae68c47bd25d20e2d0568c30b1a9838cf62f11",
+        "bytes": 2_592_224,
+    },
+)
+_MESHSCOPE_WHEEL_RECORD_DIGEST = (
+    "sha256:099cff0084d0cdea62ccde3c32bf5d3cd052cbefed0057f96111dda027ec3f20"
+)
+_MESHSCOPE_AUDITWHEEL_REPORT_DIGEST = (
+    "sha256:d94abce4aab3bc6fa472fd1ae42ec3eb52401842b4a6e7b34c6c3cd46a328c24"
+)
+_MESHSCOPE_ELF_REPORTS_DIGEST = (
+    "sha256:87f862fcd406342c2a123386e26a56258daaadeb54f7b305638aa910d2d04778"
+)
+_CUP_SUMMARY_SHA256 = (
+    "sha256:c81623b5f386cacade2c5cff8f8e7bec76b0664040d0a95123d3292b5f715492"
+)
 
 
 def _validate_archive_names(names: list[str], label: str) -> None:
@@ -857,6 +975,7 @@ def build_meshscope_wheel(
     python: str = "python3.12",
     source_date_epoch: int = 1_755_302_400,
     builder_image_id: str | None = None,
+    launch_receipt: Mapping[str, Any] | None = None,
     record_path: Path | None = None,
 ) -> Path:
     """Build the native wheel inside an already-admitted linux/amd64 builder.
@@ -870,6 +989,11 @@ def build_meshscope_wheel(
         r"sha256:[0-9a-f]{64}", builder_image_id or ""
     ):
         raise ProjectClosureError("meshscope build record requires an exact image ID")
+    execution_context = None
+    if record_path is not None:
+        execution_context = _validate_meshscope_launch_receipt(
+            launch_receipt, repo_root.resolve(), builder_image_id
+        )
     source = meshscope_source_record(repo_root)
     probe = subprocess.run(
         [
@@ -941,6 +1065,7 @@ def build_meshscope_wheel(
             "schema": "text-to-cad.meshscope-build-candidate/1",
             "status": "development-candidate",
             "builderImageId": builder_image_id,
+            "executionContext": execution_context,
             "platform": {"architecture": "amd64", "os": "linux", "pythonAbi": "cp312"},
             "source": source,
             "sourceDateEpoch": source_date_epoch,
@@ -956,6 +1081,46 @@ def build_meshscope_wheel(
         }
         _write_record(record_path, build_record)
     return wheels[0]
+
+
+def _validate_meshscope_launch_receipt(
+    receipt: Mapping[str, Any] | None,
+    resolved_source_root: Path,
+    builder_image_id: str | None,
+) -> dict[str, Any]:
+    if not isinstance(receipt, Mapping) or set(receipt) != {
+        "schema",
+        "invocationId",
+        "sourceRootPseudonym",
+        "resolvedSourceRoot",
+        "launchSpec",
+        "evidenceBasis",
+    }:
+        raise ProjectClosureError("meshscope launch receipt shape is invalid")
+    invocation_id = receipt.get("invocationId")
+    if invocation_id not in _MESHSCOPE_EXECUTION_CONTEXTS:
+        raise ProjectClosureError("meshscope launch invocation identity is invalid")
+    pseudonym, expected_root = _MESHSCOPE_EXECUTION_CONTEXTS[invocation_id]
+    if (
+        receipt.get("schema") != "text-to-cad.meshscope-launch-receipt/1"
+        or receipt.get("sourceRootPseudonym") != pseudonym
+        or receipt.get("resolvedSourceRoot") != expected_root
+        or str(resolved_source_root) != expected_root
+        or receipt.get("evidenceBasis") != "host-launch-command-and-image-inspect"
+        or not _exact_json(
+            receipt.get("launchSpec"),
+            {
+                "imageId": _MESHSCOPE_BUILDER_IMAGE_ID,
+                "imagePullPolicy": "never",
+                "networkMode": "none",
+                "platform": "linux/amd64",
+                "removeAfterExit": True,
+            },
+        )
+        or builder_image_id != _MESHSCOPE_BUILDER_IMAGE_ID
+    ):
+        raise ProjectClosureError("meshscope launch receipt is not the fixed invocation")
+    return dict(receipt)
 
 
 def _meshscope_toolchain_record(python: str) -> dict[str, Any]:
@@ -1030,7 +1195,6 @@ def verify_meshscope_native_install(
 ) -> dict[str, Any]:
     """Offline-install candidate bytes and run real Cup native measurement."""
 
-    import os
     import tempfile
 
     fixture_payload = fixture_input.read_bytes()
@@ -1042,6 +1206,14 @@ def verify_meshscope_native_install(
 
     with tempfile.TemporaryDirectory(prefix="meshscope-native-install-") as directory:
         target = Path(directory) / "site-packages"
+        clean_environment = {
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "TZ": "UTC",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONNOUSERSITE": "1",
+        }
         subprocess.run(
             [
                 python,
@@ -1056,13 +1228,7 @@ def verify_meshscope_native_install(
                 *(str(path) for path in dependency_wheels),
             ],
             check=True,
-            env={
-                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                "LANG": "C.UTF-8",
-                "LC_ALL": "C.UTF-8",
-                "TZ": "UTC",
-                "PYTHONDONTWRITEBYTECODE": "1",
-            },
+            env=clean_environment,
         )
         probe = '''from pathlib import Path
 import sys
@@ -1096,11 +1262,7 @@ print("meshscope-cup-native-ok")
             check=True,
             capture_output=True,
             text=True,
-            env={
-                **os.environ,
-                "PYTHONPATH": str(target),
-                "PYTHONDONTWRITEBYTECODE": "1",
-            },
+            env={**clean_environment, "PYTHONPATH": str(target)},
         )
         if completed.stdout != "meshscope-cup-native-ok\n" or completed.stderr:
             raise ProjectClosureError("meshscope native import/backend conformance failed")
@@ -1187,7 +1349,10 @@ print("meshscope-cup-native-ok")
             "depthEight": depth_eight_evidence,
             "objectiveFacts": summary["objective_facts"],
         },
-        "providerDispatchCount": 0,
+        "providerExecution": {
+            "mode": "no-provider-configured",
+            "dispatchCount": 0,
+        },
     }
     result["nativeConformanceDigest"] = canonical_json_digest(result)
     return result
@@ -1206,6 +1371,7 @@ def assemble_meshscope_development_candidate(
         "schema",
         "status",
         "builderImageId",
+        "executionContext",
         "platform",
         "source",
         "sourceDateEpoch",
@@ -1218,6 +1384,7 @@ def assemble_meshscope_development_candidate(
     wheel_identities = []
     source_digests = []
     builder_ids = []
+    execution_contexts = []
     for build in builds:
         if set(build) != expected_build_keys or (
             build.get("schema"), build.get("status"), build.get("sourceDateEpoch")
@@ -1231,29 +1398,71 @@ def assemble_meshscope_development_candidate(
         if not isinstance(source, Mapping):
             raise ProjectClosureError("meshscope build source record is invalid")
         _validate_meshscope_source_record(source)
+        if source.get("sourceTreeDigest") != _MESHSCOPE_SOURCE_TREE_DIGEST:
+            raise ProjectClosureError("meshscope build source identity is not exact")
         wheel_identity = build.get("wheel")
         if not isinstance(wheel_identity, Mapping) or set(wheel_identity) != {
             "path", "sha256", "bytes"
         }:
             raise ProjectClosureError("meshscope build wheel identity is invalid")
         if (
-            wheel_identity.get("path")
-            != "meshscope-0.1.0-cp312-cp312-linux_x86_64.whl"
-            or not _is_digest(wheel_identity.get("sha256"), prefixed=True)
-            or type(wheel_identity.get("bytes")) is not int
-            or wheel_identity["bytes"] <= 0
+            not _exact_json(wheel_identity, _MESHSCOPE_WHEEL_IDENTITY)
         ):
             raise ProjectClosureError("meshscope build wheel identity is invalid")
         if not _is_digest(build.get("buildLogSha256"), prefixed=True):
             raise ProjectClosureError("meshscope build log identity is invalid")
+        context = build.get("executionContext")
+        if not isinstance(context, Mapping):
+            raise ProjectClosureError("meshscope build execution context is invalid")
+        invocation_id = context.get("invocationId")
+        expected_context_identity = _MESHSCOPE_EXECUTION_CONTEXTS.get(
+            invocation_id
+        )
+        if expected_context_identity is None:
+            raise ProjectClosureError("meshscope build invocation identity is invalid")
+        pseudonym, resolved_root = expected_context_identity
+        if (
+            set(context)
+            != {
+                "schema", "invocationId", "sourceRootPseudonym",
+                "resolvedSourceRoot", "launchSpec", "evidenceBasis",
+            }
+            or context.get("schema") != "text-to-cad.meshscope-launch-receipt/1"
+            or context.get("sourceRootPseudonym") != pseudonym
+            or context.get("resolvedSourceRoot") != resolved_root
+            or context.get("evidenceBasis")
+            != "host-launch-command-and-image-inspect"
+            or not _exact_json(
+                context.get("launchSpec"),
+                {
+                    "imageId": _MESHSCOPE_BUILDER_IMAGE_ID,
+                    "imagePullPolicy": "never",
+                    "networkMode": "none",
+                    "platform": "linux/amd64",
+                    "removeAfterExit": True,
+                },
+            )
+            or build.get("builderImageId") != _MESHSCOPE_BUILDER_IMAGE_ID
+            or not _exact_json(build.get("platform"), _MESHSCOPE_PLATFORM)
+            or not _exact_json(
+                build.get("environment"), _MESHSCOPE_BUILD_ENVIRONMENT
+            )
+            or not _exact_json(build.get("toolchain"), _MESHSCOPE_TOOLCHAIN)
+            or not _exact_json(build.get("commands"), list(_MESHSCOPE_COMMANDS))
+        ):
+            raise ProjectClosureError("meshscope build execution closure is invalid")
         wheel_identities.append(dict(wheel_identity))
         source_digests.append(source["sourceTreeDigest"])
         builder_ids.append(build.get("builderImageId"))
+        execution_contexts.append(dict(context))
     if (
         len({canonical_json_digest(item) for item in wheel_identities}) != 1
         or len(set(source_digests)) != 1
         or len(set(builder_ids)) != 1
         or not _is_digest(builder_ids[0], prefixed=True)
+        or [item["invocationId"] for item in execution_contexts]
+        != ["ordinary-1", "ordinary-2", "alternate-root"]
+        or len({canonical_json_digest(build) for build in builds}) != 3
     ):
         raise ProjectClosureError("meshscope builds are not reproducibly cross-bound")
 
@@ -1273,7 +1482,9 @@ def assemble_meshscope_development_candidate(
         raise ProjectClosureError("meshscope native audit digest is invalid")
     wheel_identity = wheel_identities[0]
     if (
-        audit.get("wheelPath") != wheel_identity["path"]
+        (audit.get("distribution"), audit.get("version"))
+        != ("meshscope", "0.1.0")
+        or audit.get("wheelPath") != wheel_identity["path"]
         or f"sha256:{audit.get('wheelSha256')}" != wheel_identity["sha256"]
         or audit.get("wheelBytes") != wheel_identity["bytes"]
         or audit.get("sourceTreeDigest") != source_digests[0]
@@ -1283,23 +1494,37 @@ def assemble_meshscope_development_candidate(
         or audit.get("rpathAbsent") is not True
         or audit.get("runpathAbsent") is not True
         or audit.get("auditwheelPlatformTag") != "manylinux_2_24_x86_64"
+        or audit.get("fileManifestDigest") != source_digests[0]
+        or audit.get("wheelRecordDigest") != _MESHSCOPE_WHEEL_RECORD_DIGEST
+        or audit.get("nativePath") != _MESHSCOPE_NATIVE_FILE
+        or audit.get("nativeSha256") != _MESHSCOPE_NATIVE_SHA256
+        or not _exact_json(
+            audit.get("resolvedLibraries"), list(_MESHSCOPE_RESOLVED_LIBRARIES)
+        )
+        or audit.get("auditwheelReportDigest")
+        != _MESHSCOPE_AUDITWHEEL_REPORT_DIGEST
+        or audit.get("elfReportsDigest") != _MESHSCOPE_ELF_REPORTS_DIGEST
+        or not _exact_json(audit.get("files"), sorted(_MESHSCOPE_WHEEL_FILES))
     ):
         raise ProjectClosureError("meshscope audit is not bound to the build")
 
     expected_conformance_keys = {
         "schema", "status", "imports", "dependencyWheels", "meshscopeWheel",
         "fixture", "nativeModuleBasename", "nativeModuleSha256",
-        "nativeBackendCallable", "measurement", "providerDispatchCount",
-        "nativeConformanceDigest",
+        "nativeBackendCallable", "measurement",
+        "nativeConformanceDigest", "providerExecution",
     }
-    if set(conformance) != expected_conformance_keys or (
-        conformance.get("schema"),
-        conformance.get("status"),
-        conformance.get("providerDispatchCount"),
-    ) != (
-        "text-to-cad.meshscope-native-conformance-candidate/1",
-        "development-candidate",
-        0,
+    if (
+        set(conformance) != expected_conformance_keys
+        or (conformance.get("schema"), conformance.get("status"))
+        != (
+            "text-to-cad.meshscope-native-conformance-candidate/1",
+            "development-candidate",
+        )
+        or not _exact_json(
+            conformance.get("providerExecution"),
+            {"mode": "no-provider-configured", "dispatchCount": 0},
+        )
     ):
         raise ProjectClosureError("meshscope conformance record shape is invalid")
     conformance_without_digest = dict(conformance)
@@ -1309,49 +1534,53 @@ def assemble_meshscope_development_candidate(
     if conformance_digest != canonical_json_digest(conformance_without_digest):
         raise ProjectClosureError("meshscope native conformance digest is invalid")
     dependencies = conformance.get("dependencyWheels")
-    if not isinstance(dependencies, (list, tuple)) or len(dependencies) != 3:
+    if not _exact_json(dependencies, list(_MESHSCOPE_DEPENDENCY_WHEELS)):
         raise ProjectClosureError("meshscope dependency candidate set is invalid")
-    dependency_names = []
-    for dependency in dependencies:
-        if not isinstance(dependency, Mapping) or set(dependency) != {
-            "path", "sha256", "bytes"
-        }:
-            raise ProjectClosureError("meshscope dependency candidate is invalid")
-        if (
-            not _is_digest(dependency.get("sha256"), prefixed=True)
-            or type(dependency.get("bytes")) is not int
-            or dependency["bytes"] <= 0
-            or PurePosixPath(str(dependency.get("path"))).name
-            != dependency.get("path")
-        ):
-            raise ProjectClosureError("meshscope dependency candidate is invalid")
-        dependency_names.append(dependency["path"])
-    if dependency_names != sorted(dependency_names, key=str.lower):
-        raise ProjectClosureError("meshscope dependency candidates are not ordered")
     measurement = conformance.get("measurement")
     fixture = conformance.get("fixture")
     if (
         list(conformance.get("imports", ()))
         != ["PIL", "meshscope", "meshscope.voxblame._native", "numpy", "trimesh"]
-        or not isinstance(fixture, Mapping)
-        or fixture.get("sha256") != f"sha256:{_CUP_INPUT_SHA256}"
-        or fixture.get("bytes") != _CUP_INPUT_BYTES
-        or fixture.get("inputTriangleCount") != 3764
-        or fixture.get("canonicalTriangleCount") != 3764
-        or not isinstance(measurement, Mapping)
-        or measurement.get("maxDepth") != 8
-        or measurement.get("step") != 0
-        or measurement.get("objectiveFacts")
-        != {
-            "global_depth_8_zero": True,
-            "out_of_frame_clear": True,
-            "no_evidence_conflict": True,
-        }
+        or not _exact_json(
+            fixture,
+            {
+                "id": "cup_cup_033",
+                "path": "models/agent-runtime/cup_cup_033/input/cup_cup_033.ply",
+                "sha256": f"sha256:{_CUP_INPUT_SHA256}",
+                "bytes": _CUP_INPUT_BYTES,
+                "inputTriangleCount": 3764,
+                "canonicalTriangleCount": 3764,
+            },
+        )
+        or not _exact_json(
+            measurement,
+            {
+                "summarySha256": _CUP_SUMMARY_SHA256,
+                "maxDepth": 8,
+                "step": 0,
+                "depthEight": {
+                    "depth": 8,
+                    "reference_surface_count": 452682,
+                    "candidate_surface_count": 452682,
+                    "missing_surface_count": 0,
+                    "excess_surface_count": 0,
+                    "union_surface_count": 452682,
+                    "surface_error_count": 0,
+                },
+                "objectiveFacts": {
+                    "global_depth_8_zero": True,
+                    "out_of_frame_clear": True,
+                    "no_evidence_conflict": True,
+                },
+            },
+        )
     ):
         raise ProjectClosureError("meshscope Cup conformance facts are invalid")
     if (
-        conformance.get("meshscopeWheel") != wheel_identity
+        not _exact_json(conformance.get("meshscopeWheel"), wheel_identity)
         or conformance.get("nativeModuleSha256") != audit.get("nativeSha256")
+        or conformance.get("nativeModuleBasename")
+        != "_native.cpython-312-x86_64-linux-gnu.so"
         or conformance.get("nativeBackendCallable") is not True
         or conformance.get("fixture", {}).get("sha256")
         != f"sha256:{_CUP_INPUT_SHA256}"
@@ -1374,6 +1603,14 @@ def assemble_meshscope_development_candidate(
         "reproducibility": {
             "buildCount": 3,
             "absoluteBuildRootVariation": True,
+            "sourceRootPattern": [
+                {
+                    "invocationId": item["invocationId"],
+                    "sourceRootPseudonym": item["sourceRootPseudonym"],
+                    "resolvedSourceRoot": item["resolvedSourceRoot"],
+                }
+                for item in execution_contexts
+            ],
             "byteIdentical": True,
             "wheel": wheel_identity,
         },
@@ -1572,6 +1809,7 @@ def main(argv: list[str] | None = None) -> int:
     meshscope_build.add_argument("--output", type=Path, required=True)
     meshscope_build.add_argument("--python", default="python3.12")
     meshscope_build.add_argument("--builder-image-id")
+    meshscope_build.add_argument("--launch-receipt", type=Path)
     meshscope_build.add_argument("--record", type=Path)
     meshscope_audit = subparsers.add_parser("audit-meshscope")
     meshscope_audit.add_argument("--wheel", type=Path, required=True)
@@ -1613,11 +1851,17 @@ def main(argv: list[str] | None = None) -> int:
         source = _read_record(args.source_record, "meshshot source record")
         _write_record(args.record, audit_meshshot_wheel(args.wheel, source))
     elif args.command == "build-meshscope":
+        launch_receipt = (
+            _read_record(args.launch_receipt, "meshscope launch receipt")
+            if args.launch_receipt is not None
+            else None
+        )
         wheel = build_meshscope_wheel(
             args.repo_root.resolve(),
             args.output,
             python=args.python,
             builder_image_id=args.builder_image_id,
+            launch_receipt=launch_receipt,
             record_path=args.record,
         )
         print(wheel)
