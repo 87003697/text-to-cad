@@ -267,6 +267,107 @@ def dual_lifecycle_failure_graph(colima_check, cvm_check, root_failure):
 
 
 class AgentRuntimeEvidenceTests(unittest.TestCase):
+    def test_schema_neutral_canonical_json_seam_is_public_and_immutable(self) -> None:
+        from scripts.pilot.agent_runtime.canonical_json import (
+            canonical_json_bytes,
+            canonical_json_digest,
+            parse_canonical_json,
+        )
+
+        payload = b'{"a":[1,true,null,"x"],"z":{}}'
+        value = parse_canonical_json(payload + b"\n")
+        self.assertEqual(canonical_json_bytes(value), payload)
+        self.assertEqual(
+            canonical_json_digest(value),
+            "sha256:3d78d041b34c0bba6cd9983614d7a15920dfe7025e285dd02b420c905cfbb130",
+        )
+        with self.assertRaises(TypeError):
+            value["a"][0] = 2
+
+    def test_schema_neutral_canonical_json_grammar_is_closed(self) -> None:
+        from scripts.pilot.agent_runtime import (
+            EvidenceError,
+            canonical_json_bytes,
+            parse_canonical_json,
+        )
+
+        self.assertEqual(parse_canonical_json(b"null"), None)
+        self.assertEqual(canonical_json_bytes({"z": 0, "a": 1}), b'{"a":1,"z":0}')
+        self.assertEqual(canonical_json_bytes(-(2**63)), b"-9223372036854775808")
+        self.assertEqual(canonical_json_bytes(2**63 - 1), b"9223372036854775807")
+        exact_limit = b'"' + b"x" * (1024 * 1024 - 2) + b'"'
+        self.assertEqual(len(canonical_json_bytes(parse_canonical_json(exact_limit))), 1024 * 1024)
+        depth_64 = b"[" * 64 + b"0" + b"]" * 64
+        self.assertEqual(canonical_json_bytes(parse_canonical_json(depth_64)), depth_64)
+
+        malformed = {
+            "duplicate": b'{"a":1,"a":2}',
+            "whitespace": b'{"a": 1}',
+            "key-order": b'{"z":0,"a":1}',
+            "bom": b"\xef\xbb\xbfnull",
+            "two-newlines": b"null\n\n",
+            "trailing-value": b"null true",
+            "float": b"1.0",
+            "constant": b"NaN",
+            "integer-overflow": b"9223372036854775808",
+            "non-ascii-string": '"é"'.encode(),
+            "escaped-non-ascii-string": b'"\\u00e9"',
+            "non-ascii-key": '{"é":0}'.encode(),
+            "byte-limit": b'"' + b"x" * (1024 * 1024 - 1) + b'"',
+            "depth-limit": b"[" * 65 + b"0" + b"]" * 65,
+        }
+        for label, payload in malformed.items():
+            with self.subTest(label=label), self.assertRaises(EvidenceError):
+                parse_canonical_json(payload)
+
+        for value in (1.5, 2**63, {"é": 0}, {"a": "é"}, {"a": object()}):
+            with self.subTest(value=repr(value)), self.assertRaises(EvidenceError):
+                canonical_json_bytes(value)
+        with self.assertRaisesRegex(EvidenceError, "byte limit"):
+            canonical_json_bytes("x" * (1024 * 1024 - 1))
+
+    def test_typed_wrappers_delegate_without_accepting_raw_json(self) -> None:
+        from scripts.pilot.agent_runtime import (
+            EvidenceError,
+            canonical_bytes,
+            canonical_json_bytes,
+            canonical_json_digest,
+            digest,
+            parse_canonical_json,
+            parse_strict,
+            validate_graph,
+        )
+
+        raw = parse_canonical_json(SUBJECT)
+        document = parse_strict("subject", SUBJECT)
+        self.assertEqual(canonical_bytes(document), canonical_json_bytes(raw))
+        self.assertEqual(digest(document), canonical_json_digest(raw))
+        for operation in (
+            lambda: canonical_bytes(raw),
+            lambda: digest(raw),
+            lambda: validate_graph(raw, []),
+            lambda: canonical_json_bytes(document),
+            lambda: canonical_json_digest(SUBJECT),
+            lambda: canonical_json_digest(document),
+        ):
+            with self.subTest(operation=operation), self.assertRaises(EvidenceError):
+                operation()
+        with self.assertRaisesRegex(EvidenceError, "unknown document kind"):
+            parse_strict("supply-manifest", SUBJECT)
+
+    def test_canonical_encoder_snapshots_mutable_input_before_validation(self) -> None:
+        from scripts.pilot.agent_runtime import canonical_json_bytes
+
+        class ChangesAfterFirstRead(dict):
+            reads = 0
+
+            def items(self):
+                self.reads += 1
+                return {"a": self.reads}.items()
+
+        self.assertEqual(canonical_json_bytes(ChangesAfterFirstRead()), b'{"a":1}')
+        self.assertEqual(canonical_json_bytes([{"b": 2, "a": 1}]), b'[{"a":1,"b":2}]')
+
     def test_typed_document_is_deeply_immutable_and_digest_stable(self) -> None:
         from scripts.pilot.agent_runtime import canonical_bytes, digest, parse_strict
 
@@ -308,8 +409,13 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
     def test_schema_rejects_unknown_and_missing_keys(self) -> None:
         from scripts.pilot.agent_runtime import EvidenceError, parse_strict
 
+        unknown = json.loads(SUBJECT)
+        unknown["secret"] = "raw"
         with self.assertRaisesRegex(EvidenceError, "unexpected keys"):
-            parse_strict("subject", SUBJECT[:-1] + b',"secret":"raw"}')
+            parse_strict(
+                "subject",
+                json.dumps(unknown, sort_keys=True, separators=(",", ":")).encode("ascii"),
+            )
         with self.assertRaisesRegex(EvidenceError, "unexpected keys"):
             parse_strict(
                 "subject",

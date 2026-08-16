@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from .canonical_json import (
+    canonical_json_bytes,
+    canonical_json_digest,
+    parse_canonical_json,
+)
 from .contracts import (
     DEPENDENCIES,
     LIFECYCLE_CLEANUP_FIELDS,
@@ -22,24 +25,11 @@ from .contracts import (
 
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
-MAX_DOCUMENT_BYTES = 1024 * 1024
-MAX_JSON_DEPTH = 64
 _SUBJECT_KEYS = {
     "agentImageManifestDigest", "agentImageConfigDigest", "platform",
     "runtimeManifestDigest", "cupRuntimeCapabilityManifestDigest",
     "buildInputSetDigest", "verificationPlanDigest",
 }
-
-
-def _reject_number(_: str) -> None:
-    raise EvidenceError("JSON numbers must be signed 64-bit integers")
-
-
-def _parse_integer(raw: str) -> int:
-    value = int(raw)
-    if not -(2**63) <= value < 2**63:
-        raise EvidenceError("JSON integer is outside signed 64-bit range")
-    return value
 
 
 def _require_keys(value: Mapping[str, Any], expected: set[str], label: str) -> None:
@@ -369,91 +359,28 @@ def _validate_selected(kind: str, value: dict[str, Any]) -> None:
         raise EvidenceError(f"unknown document kind: {kind}")
 
 
-def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise EvidenceError(f"duplicate JSON key: {key}")
-        result[key] = value
-    return result
-
-
-def _check_depth(value: Any) -> None:
-    stack = [(value, 1)]
-    while stack:
-        item, depth = stack.pop()
-        if depth > MAX_JSON_DEPTH:
-            raise EvidenceError("JSON nesting depth exceeds limit")
-        if isinstance(item, Mapping):
-            stack.extend((child, depth + 1) for child in item.values())
-        elif isinstance(item, (list, tuple)):
-            stack.extend((child, depth + 1) for child in item)
-
-
-def _plain(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {key: _plain(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_plain(item) for item in value]
-    return value
-
-
 def parse_strict(kind: str, payload: bytes) -> EvidenceDocument:
-    """Parse one canonical UTF-8 JSON document under a selected schema."""
+    """Parse canonical JSON and validate it under one selected evidence schema."""
 
-    if not isinstance(payload, bytes):
-        raise EvidenceError("payload must be bytes")
-    if len(payload) > MAX_DOCUMENT_BYTES:
-        raise EvidenceError("document exceeds byte limit")
-    try:
-        if payload.startswith(b"\xef\xbb\xbf"):
-            raise EvidenceError("byte-order mark is forbidden")
-        stored = payload[:-1] if payload.endswith(b"\n") else payload
-        if stored.endswith(b"\n"):
-            raise EvidenceError("only one trailing newline is permitted")
-        text = stored.decode("utf-8")
-        value = json.loads(
-            text,
-            object_pairs_hook=_unique_object,
-            parse_float=_reject_number,
-            parse_int=_parse_integer,
-            parse_constant=_reject_number,
-        )
-    except EvidenceError:
-        raise
-    except RecursionError as exc:
-        raise EvidenceError("JSON nesting depth exceeds limit") from exc
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EvidenceError("invalid JSON payload") from exc
-    _check_depth(value)
-    if not isinstance(value, dict):
+    value = parse_canonical_json(payload)
+    if not isinstance(value, Mapping):
         raise EvidenceError("document must be a JSON object")
     _validate_selected(kind, value)
-    document = EvidenceDocument(kind=kind, value=value)
-    if canonical_bytes(document) != stored:
-        raise EvidenceError("non-canonical JSON encoding")
-    return document
+    return EvidenceDocument(kind=kind, value=value)
 
 
 def canonical_bytes(document: EvidenceDocument) -> bytes:
     if not isinstance(document, EvidenceDocument):
         raise EvidenceError("canonical encoder accepts only typed documents")
-    _check_depth(document.value)
     _validate_selected(document.kind, document.value)
-    try:
-        return json.dumps(
-            _plain(document.value),
-            ensure_ascii=False,
-            allow_nan=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("ascii")
-    except (UnicodeEncodeError, TypeError, ValueError) as exc:
-        raise EvidenceError("public proof strings must be ASCII") from exc
+    return canonical_json_bytes(document.value)
 
 
 def digest(document: EvidenceDocument) -> str:
-    return "sha256:" + hashlib.sha256(canonical_bytes(document)).hexdigest()
+    if not isinstance(document, EvidenceDocument):
+        raise EvidenceError("digest accepts only typed documents")
+    _validate_selected(document.kind, document.value)
+    return canonical_json_digest(document.value)
 
 
 def validate_graph(

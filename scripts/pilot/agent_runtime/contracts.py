@@ -4,47 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Any
 
-
-class EvidenceError(ValueError):
-    """The public proof does not satisfy the closed evidence contract."""
-
-
-class _FrozenMapping(Mapping[str, Any]):
-    """Recursively immutable mapping with an explicit mutable-copy escape hatch."""
-
-    __slots__ = ("_values",)
-
-    def __init__(self, values: Mapping[str, Any]) -> None:
-        object.__setattr__(self, "_values", MappingProxyType(dict(values)))
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        raise TypeError("evidence mappings are immutable")
-
-    def __getitem__(self, key: str) -> Any:
-        return self._values[key]
-
-    def __iter__(self):
-        return iter(self._values)
-
-    def __len__(self) -> int:
-        return len(self._values)
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> dict[str, Any]:
-        import copy
-
-        return {key: copy.deepcopy(value, memo) for key, value in self._values.items()}
-
-
-class _FrozenSequence(tuple):
-    """Immutable JSON array whose explicit deep copy is mutable for fixture editing."""
-
-    def __deepcopy__(self, memo: dict[int, Any]) -> list[Any]:
-        import copy
-
-        return [copy.deepcopy(value, memo) for value in self]
+from .canonical_json import EvidenceError, _freeze
 
 
 @dataclass(frozen=True)
@@ -65,14 +27,6 @@ class GraphValidation:
     status: str
     failure_check: str | None
     root_digest: str
-
-
-def _freeze(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return _FrozenMapping({key: _freeze(item) for key, item in value.items()})
-    if isinstance(value, (list, tuple)):
-        return _FrozenSequence(_freeze(item) for item in value)
-    return value
 
 
 ROOT_ROLES = (
