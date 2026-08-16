@@ -293,6 +293,8 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
 
         self.assertEqual(parse_canonical_json(b"null"), None)
         self.assertEqual(canonical_json_bytes({"z": 0, "a": 1}), b'{"a":1,"z":0}')
+        self.assertEqual(canonical_json_bytes('\x00"\n\\'), b'"\\u0000\\"\\n\\\\"')
+        self.assertEqual(canonical_json_bytes({"\n": '"\\'}), b'{"\\n":"\\"\\\\"}')
         self.assertEqual(canonical_json_bytes(-(2**63)), b"-9223372036854775808")
         self.assertEqual(canonical_json_bytes(2**63 - 1), b"9223372036854775807")
         exact_limit = b'"' + b"x" * (1024 * 1024 - 2) + b'"'
@@ -355,18 +357,36 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "unknown document kind"):
             parse_strict("supply-manifest", SUBJECT)
 
-    def test_canonical_encoder_snapshots_mutable_input_before_validation(self) -> None:
-        from scripts.pilot.agent_runtime import canonical_json_bytes
+    def test_canonical_encoder_bounds_snapshot_before_materializing(self) -> None:
+        from scripts.pilot.agent_runtime import EvidenceError, canonical_json_bytes
+
+        huge_string = "x" * 100_000_000
+        with self.assertRaisesRegex(EvidenceError, "byte limit"):
+            canonical_json_bytes(huge_string)
+        with self.assertRaisesRegex(EvidenceError, "byte limit"):
+            canonical_json_bytes({"a": huge_string, "b": object()})
+
+        exact_null_array = [None] * 209_715
+        self.assertEqual(len(canonical_json_bytes(exact_null_array)), 1024 * 1024)
+        exact_null_array.extend((None, object()))
+        with self.assertRaisesRegex(EvidenceError, "byte limit"):
+            canonical_json_bytes(exact_null_array)
+
+    def test_canonical_encoder_rejects_undeclared_containers_and_normalizes_errors(self) -> None:
+        from scripts.pilot.agent_runtime import EvidenceError, canonical_json_bytes
 
         class ChangesAfterFirstRead(dict):
-            reads = 0
-
             def items(self):
-                self.reads += 1
-                return {"a": self.reads}.items()
+                raise KeyError("must not leak")
 
-        self.assertEqual(canonical_json_bytes(ChangesAfterFirstRead()), b'{"a":1}')
+        class BrokenList(list):
+            def __iter__(self):
+                raise RuntimeError("mutated during iteration")
+
         self.assertEqual(canonical_json_bytes([{"b": 2, "a": 1}]), b'[{"a":1,"b":2}]')
+        for value in (ChangesAfterFirstRead(), BrokenList(), range(3), {"a": range(1)}):
+            with self.subTest(value=type(value).__name__), self.assertRaises(EvidenceError):
+                canonical_json_bytes(value)
 
     def test_typed_document_is_deeply_immutable_and_digest_stable(self) -> None:
         from scripts.pilot.agent_runtime import canonical_bytes, digest, parse_strict
