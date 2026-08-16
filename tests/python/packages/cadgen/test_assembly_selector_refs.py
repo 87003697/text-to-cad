@@ -21,7 +21,7 @@ from tests.python.support.paths import add_repo_path
 
 add_repo_path("packages/cadgen/src")
 
-from build123d import Box, Compound, Pos  # noqa: E402
+from build123d import Box, Compound, Pos, Rot  # noqa: E402
 
 from cadgen import assembly_lookup, lookup  # noqa: E402
 from cadgen._internal import component_package  # noqa: E402
@@ -30,14 +30,23 @@ from cadgen.coordination.paths import write_lock_path  # noqa: E402
 
 
 def _demo_compound() -> Compound:
-    """Two identical boxes placed apart plus a distinct one: 3 occurrences over 2 components."""
+    """Two identical boxes placed apart, a distinct one, and one ROTATED.
+
+    The rotated occurrence is not decoration. Every other part here is placed by translation
+    alone, and under a translation a box's face normals stay axis-aligned whatever the rotation
+    code does -- so a transposed or dropped rotation passes unnoticed. `box_rot` is turned 90
+    degrees about Z, which swaps its X and Y extents and sends its +X normal to +Y, both of
+    which are wrong in a checkable way if the rotation is mishandled.
+    """
     first = Pos(0, 0, 0) * Box(10, 10, 10)
     first.label = "box_a_1"
     second = Pos(40, 0, 0) * Box(10, 10, 10)
     second.label = "box_a_2"
     third = Pos(0, 40, 0) * Box(4, 6, 8)
     third.label = "box_b"
-    assembly = Compound(children=[first, second, third])
+    rotated = Pos(0, -40, 0) * Rot(0, 0, 90) * Box(4, 6, 8)
+    rotated.label = "box_rot"
+    assembly = Compound(children=[first, second, third, rotated])
     assembly.label = "demo"
     return assembly
 
@@ -223,6 +232,8 @@ class PlacementAgainstAnalyticGeometryTest(AssemblyOccurrenceRefsTest):
         "box_a_1": ((5.0, 5.0, 5.0), (0.0, 0.0, 0.0)),
         "box_a_2": ((5.0, 5.0, 5.0), (40.0, 0.0, 0.0)),
         "box_b": ((2.0, 3.0, 4.0), (0.0, 40.0, 0.0)),
+        # rotated 90 deg about Z: the 4 mm X extent and 6 mm Y extent trade places.
+        "box_rot": ((3.0, 2.0, 4.0), (0.0, -40.0, 0.0)),
     }
 
     def _expected_box(self, half, centre):
