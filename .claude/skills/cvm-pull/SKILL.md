@@ -34,6 +34,8 @@ Parse request → Discover plan → Qualify terminal/postmortem
 
 1. 解析 flags：
    - `--include-byproducts`：上传 `run/.codex-upper` 等副产物后才清理失败实验；
+   - `--include-byproducts --retain-cvm-source`：上传并验证完整失败实验，刷新
+     Mac mount，但保留 CVM 源；用于需要审阅 postmortem 且清理未获授权的情况；
    - `--discard-postmortem`：显式丢弃未上传的 postmortem 后清理失败实验；
    - `--exp <group>/<exp>`：只处理一个 child handle；
    - `--group <group>`：处理一个 batch group；
@@ -44,7 +46,7 @@ Parse request → Discover plan → Qualify terminal/postmortem
    `$cvm-monitor` 返回 handle `<group>/<exp>` 时原样传给 `--exp`；`--group` 用于
    显式处理同一 group 下的多个独立 pilot，不依赖 batch job handle。
 2. 调脚本：用 Bash tool 跑
-   `scripts/pilot/cvm-pull.sh [--exp <handle>|--group <group>] [--include-byproducts|--discard-postmortem]`，
+   `scripts/pilot/cvm-pull.sh [--exp <handle>|--group <group>] [--include-byproducts [--retain-cvm-source]|--discard-postmortem]`，
    把 `run_in_background` 设为 `true`。记下 log 路径。
 3. arm Monitor tool tail log：
    `tail -F <log> | grep -E --line-buffered '(===|verify|Complete|upload:|cleaning|preserving|visible|error|failed)'`
@@ -66,6 +68,9 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - **失败态默认不清理**：Runner 为非零状态保留 `run/.codex-upper`。默认 pull 检测
   `artifact_manifest.json.final_status != 0` 或 `run/.codex-upper` 后跳过该 exp；
   只有显式 `--include-byproducts` 或 `--discard-postmortem` 才能越过。
+- **保留源模式仍须完整验证**：`--retain-cvm-source` 仅能与
+  `--include-byproducts` 同时使用。它执行同一 upload、CVM/S3 文件计数验证和 mount
+  可见性检查，但跳过 CVM cleanup；已有完整 S3 prefix 仍重新对照不可变 CVM 源。
 - **不得擅自 discard postmortem**：调用 `--discard-postmortem` 前必须向用户列出
   将受影响的失败 exp 并取得明确授权；普通“拉结果”只使用默认安全模式。
 - **terminal manifest 是独立硬门**：每个候选都必须有合法且含整数
@@ -118,6 +123,8 @@ Parse request → Discover plan → Qualify terminal/postmortem
 
 脚本退出后回给用户：
 - 上传的新 exp dir 清单（本轮 uploaded + cleaned）
+- 使用 `--retain-cvm-source` 时，分别报告 uploaded + verified + mount-visible 与
+  retained-on-CVM 清单；不得称为 cleaned
 - 因失败态/postmortem 默认保留在 CVM 的 exp 清单
 - 每 exp artifact 存在性 check（从 mount 侧读）：`workspace.json` /
   `step_index.json` / `notes.md` / `final/manifest.json` / `run/rollout.jsonl`

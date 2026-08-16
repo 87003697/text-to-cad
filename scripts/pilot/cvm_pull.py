@@ -42,6 +42,7 @@ class PullRequest:
     group: str | None
     include_byproducts: bool
     discard_postmortem: bool
+    retain_cvm_source: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,7 @@ class PublishResult:
 
     uploaded: tuple[str, ...]
     preserved: tuple[ExpInspection, ...]
+    retained_source: tuple[str, ...] = ()
 
 
 def is_safe_component(value: str) -> bool:
@@ -93,7 +95,8 @@ def parse_request(argv: Sequence[str]) -> PullRequest:
         prog="scripts/pilot/cvm-pull.sh",
         usage=(
             "%(prog)s [--exp <group>/<exp> | --group <group>] "
-            "[--include-byproducts | --discard-postmortem]"
+            "[--include-byproducts [--retain-cvm-source] "
+            "| --discard-postmortem]"
         ),
     )
     scope = parser.add_mutually_exclusive_group()
@@ -102,16 +105,23 @@ def parse_request(argv: Sequence[str]) -> PullRequest:
     policy = parser.add_mutually_exclusive_group()
     policy.add_argument("--include-byproducts", action="store_true")
     policy.add_argument("--discard-postmortem", action="store_true")
+    parser.add_argument("--retain-cvm-source", action="store_true")
     args = parser.parse_args(argv)
     if args.exp is not None and not is_safe_exp(args.exp):
         raise PullError(f"Unsafe --exp handle: {args.exp}", 7)
     if args.group is not None and not is_safe_component(args.group):
         raise PullError(f"Unsafe --group: {args.group}", 7)
+    if args.retain_cvm_source and not args.include_byproducts:
+        raise PullError(
+            "--retain-cvm-source requires --include-byproducts",
+            2,
+        )
     return PullRequest(
         exp=args.exp,
         group=args.group,
         include_byproducts=args.include_byproducts,
         discard_postmortem=args.discard_postmortem,
+        retain_cvm_source=args.retain_cvm_source,
     )
 
 
@@ -460,6 +470,7 @@ print(count)
         """Module 4: run upload -> verify -> precise cleanup per exp."""
 
         uploaded: list[str] = []
+        retained_source: list[str] = []
         for index, exp in enumerate(plan.publish, start=1):
             self._log(f"=== [{index}/{len(plan.publish)}] {exp} ===")
             count: int
@@ -488,10 +499,18 @@ print(count)
             else:
                 self._upload_exp(exp)
                 count = self._verify_exp(exp)
-            self._log(f"  verify OK ({count} files); cleaning CVM local...")
-            self._cleanup_exp(exp)
+            if self.request.retain_cvm_source:
+                self._log(f"  verify OK ({count} files); retaining CVM source")
+                retained_source.append(exp)
+            else:
+                self._log(f"  verify OK ({count} files); cleaning CVM local...")
+                self._cleanup_exp(exp)
             uploaded.append(exp)
-        return PublishResult(tuple(uploaded), plan.preserve)
+        return PublishResult(
+            tuple(uploaded),
+            plan.preserve,
+            tuple(retained_source),
+        )
 
     def _refresh_dir(self, directory: str) -> None:
         result = self.runner.run(
@@ -530,8 +549,13 @@ print(count)
                 invisible.append(exp)
         if invisible:
             joined = "\n".join(f"  {exp}" for exp in invisible)
+            source_state = (
+                "CVM source retained"
+                if result.retained_source
+                else "CVM source cleaned"
+            )
             raise PullError(
-                "S3 upload verified and CVM source cleaned, "
+                f"S3 upload verified and {source_state}, "
                 f"but mount visibility is pending:\n{joined}",
                 6,
             )
@@ -547,6 +571,12 @@ print(count)
 
         if not result.uploaded:
             self._log("Done. No exp uploaded; preserved postmortem:")
+        elif result.retained_source:
+            self._log(
+                "Done. Uploaded + verified + CVM source retained + mount-visible:"
+            )
+            for exp in result.uploaded:
+                self._log(f"  {exp}")
         else:
             self._log("Done. Uploaded + verified + cleaned + mount-visible:")
             for exp in result.uploaded:

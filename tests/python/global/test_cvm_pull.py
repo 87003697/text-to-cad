@@ -80,6 +80,7 @@ class PullRequestTests(unittest.TestCase):
                 "--exp",
                 "20260805-170000-audit/20260805-170001-airplane",
                 "--include-byproducts",
+                "--retain-cvm-source",
             ]
         )
         self.assertEqual(
@@ -87,6 +88,13 @@ class PullRequestTests(unittest.TestCase):
             "20260805-170000-audit/20260805-170001-airplane",
         )
         self.assertTrue(request.include_byproducts)
+        self.assertTrue(request.retain_cvm_source)
+
+        with self.assertRaisesRegex(
+            cvm_pull.PullError,
+            "--retain-cvm-source requires --include-byproducts",
+        ):
+            cvm_pull.parse_request(["--exp", "group/exp", "--retain-cvm-source"])
 
         with self.assertRaisesRegex(cvm_pull.PullError, "Unsafe --exp"):
             cvm_pull.parse_request(["--exp", "../escape"])
@@ -247,6 +255,46 @@ class PullPlanTests(unittest.TestCase):
             with self.assertRaises(cvm_pull.PullError):
                 workflow.publish(plan)
         self.assertEqual(events, ["upload"])
+
+    def test_publish_can_verify_postmortem_without_cleaning_cvm_source(self) -> None:
+        runner = FakeRunner()
+        request = cvm_pull.PullRequest(
+            None,
+            None,
+            True,
+            False,
+            retain_cvm_source=True,
+        )
+        workflow = cvm_pull.CvmPull(request, runner)
+        plan = cvm_pull.PullPlan(
+            cvm_exps=("group/failed",),
+            candidates=("group/failed",),
+            s3_exps=frozenset(),
+            publish=("group/failed",),
+            preserve=(),
+        )
+        events: list[str] = []
+        with (
+            mock.patch.object(
+                workflow,
+                "_upload_exp",
+                side_effect=lambda _exp: events.append("upload"),
+            ),
+            mock.patch.object(
+                workflow,
+                "_verify_exp",
+                side_effect=lambda _exp: events.append("verify") or 7,
+            ),
+            mock.patch.object(
+                workflow,
+                "_cleanup_exp",
+                side_effect=lambda _exp: events.append("cleanup"),
+            ),
+        ):
+            result = workflow.publish(plan)
+        self.assertEqual(events, ["upload", "verify"])
+        self.assertEqual(result.uploaded, ("group/failed",))
+        self.assertEqual(result.retained_source, ("group/failed",))
 
     def test_publish_resumes_cleanup_for_verified_existing_s3_prefix(self) -> None:
         runner = FakeRunner()
