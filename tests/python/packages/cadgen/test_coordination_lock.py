@@ -17,6 +17,7 @@ import textwrap
 import threading
 import time
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -357,10 +358,22 @@ class RealBackendRegressionTests(unittest.TestCase):
             proc.wait(timeout=30)
 
 
+# The errno the real CRT reports for a region another handle holds. Taken from the module
+# under test on purpose: if the backend ever stops treating this value as contention, these
+# tests must move with it rather than quietly keep testing a value nothing produces.
+WINDOWS_LOCK_CONTENTION_ERRNO = lock.WINDOWS_LOCK_CONTENTION_ERRNO
+
+
 class _FakeMsvcrt:
     """In-process stand-in for ``msvcrt.locking``: a 1-byte region lock keyed by file
-    identity (dev+inode), non-blocking acquire raising ``EACCES`` when another handle
-    holds the region -- the exact contract the Windows backend relies on."""
+    identity (dev+inode), non-blocking acquire raising the CONTENTION errno when another
+    handle holds the region -- the exact contract the Windows backend relies on.
+
+    That errno used to be EACCES here, and EACCES is what made this fake useless for the one
+    thing it exists to catch. The real ``_locking`` reports contention as EDEADLOCK, which was
+    missing from the backend's busy set, so on Windows the loser of a race fell through to the
+    degradation branch and ran with no lock at all. Every test passed, because the fake was
+    faithful to everything except the errno that decides which branch is taken."""
 
     LK_NBLCK = 1
     LK_UNLCK = 2
@@ -374,12 +387,49 @@ class _FakeMsvcrt:
         key = (info.st_dev, info.st_ino)
         if mode == self.LK_NBLCK:
             if key in self._held:
-                raise OSError(errno.EACCES, "file being used by another process")
+                raise OSError(WINDOWS_LOCK_CONTENTION_ERRNO, "Resource deadlock avoided")
             self._held.add(key)
         elif mode == self.LK_UNLCK:
             self._held.discard(key)
         else:
             raise AssertionError(f"unexpected msvcrt mode {mode}")
+
+
+class DegradationIsAnnouncedTest(unittest.TestCase):
+    """Degrading to no lock must never be silent again.
+
+    The Windows contention errno was missing from the busy set, so a contended acquire fell
+    through to the degradation branch and the build ran unserialized. Nothing said so -- not a
+    log line, not a warning -- which is why it presented as "the lock does not work on Windows"
+    with no way to tell that from "the lock was never taken". The errno in the message is the
+    difference between those two, and it is what makes the next unrecognised one self-naming.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.lock_path = write_lock_path(Path(self._tmp.name) / "__cadgen__" / "models" / "p.step.py")
+
+    def test_an_unrecognised_lock_error_warns_and_names_the_errno(self):
+        def refuse(handle, path, **kwargs):
+            raise OSError(errno.ENOLCK, "no locks available")
+
+        with mock.patch.object(lock, "_acquire", refuse):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                with exclusive(self.lock_path) as run_id:
+                    self.assertIsNone(run_id, "a degraded acquire yields no run id")
+        messages = [str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)]
+        self.assertTrue(messages, "degrading to no mutual exclusion said nothing")
+        self.assertIn("ENOLCK", messages[0], "the warning must name the errno")
+        self.assertIn("not serialized", messages[0])
+
+    def test_a_successful_acquire_is_quiet(self):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with exclusive(self.lock_path) as run_id:
+                self.assertTrue(run_id)
+        self.assertEqual([], [w for w in caught if issubclass(w.category, RuntimeWarning)])
 
 
 class WindowsLockBackendTests(unittest.TestCase):
