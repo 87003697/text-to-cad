@@ -12,9 +12,11 @@ Verified**.
 
 Adopt a two-stage, outer-owned protocol:
 
-1. The outer authority admits exact `sha256:` Agent image, runtime manifest,
-   Source Snapshot, input, and Broker-authority identities. It creates one
-   inert container by exact image ID with a read-only root, read-only
+1. The outer authority admits the exact Agent OCI manifest digest, image-config
+   digest, runtime manifest, Source Snapshot, input, and Broker-authority
+   identities. It compares both OCI identities with outer `image inspect`
+   evidence, then creates one inert container by immutable reference with a
+   read-only root, read-only
    source/input/control mounts, `--network none`, no capabilities, no Docker
    socket, and job-private writable home/cache/tmp/work/output mounts.
 2. The outer authority inspects the returned immutable container ID and exact
@@ -24,8 +26,11 @@ Adopt a two-stage, outer-owned protocol:
    rechecks the bound job/nonce/digests (including the image-resident runtime
    manifest), read-only surfaces, writable allowlist,
    browser/Docker denial, zero external route, and job-private Broker handshake.
-   It sends an identity-bound preflight proof over the attached container's
-   protocol-only stdout and waits for one release record on stdin.
+   The outer gives a random challenge to the entrypoint; the Broker returns an
+   HMAC bound to that challenge and complete immutable job identity. The HMAC
+   secret is supplied by the outer authority only to that job's Broker and is
+   never mounted into the Agent. The entrypoint relays the proof over the
+   attached container's protocol-only stdout and waits for release on stdin.
 4. Only an exact accepted proof releases the already-fixed workload. The
    entrypoint supervises that workload, publishes an identity-bound terminal
    proof and output digest over the same attach channel, and waits for the outer
@@ -44,21 +49,25 @@ the host-bwrap machinery into the container.
 
 - `Dockerfile`: OCI wrapper for an already admitted browser-free Agent runtime
   base, supplied only by digest.
-- `entrypoint.py`: fixed two-proof gate; it never calls Docker and never launches
-  a browser.
-- `boundary.py`: pure outer-authority contract, create-argv construction, and
-  adversarial RED/GREEN decision model.
-- `tests/test_boundary.py`: provider-free contract matrix.
+- `entrypoint.py`: fixed two-proof gate; it never receives the Broker HMAC
+  secret, calls Docker, or launches a browser.
+- `contract.py`: single shared immutable identity, tree-digest, and Broker-MAC
+  authority copied into the image.
+- `boundary.py`: executable outer lifecycle with injectable adapters plus the
+  adversarial RED/GREEN harness.
+- `scripts/pilot/browser_surface.py`: the existing formal descriptor/no-follow
+  scanner is copied into the image; this prototype does not weaken it to names.
+- `tests/python/packages/meshshot/test_agent_runtime_boundary_prototype.py`:
+  provider-free production-shaped lifecycle tests.
 - `evidence-summary.json`: committed result of the deterministic matrix and the
   current Colima limitation.
 
 ## Run
 
 ```sh
-python3 packages/meshshot/prototypes/agent_runtime_boundary/boundary.py matrix
-python3 -m unittest discover \
-  -s packages/meshshot/prototypes/agent_runtime_boundary/tests \
-  -p 'test_*.py' -v
+./.venv/bin/python packages/meshshot/prototypes/agent_runtime_boundary/boundary.py matrix
+./.venv/bin/python -m unittest \
+  tests.python.packages.meshshot.test_agent_runtime_boundary_prototype -v
 ```
 
 The Dockerfile intentionally has no default base. A future real-image run must
@@ -75,6 +84,11 @@ docker build --pull=false --network=none \
 No such admitted Agent Runtime Artifact exists at this ticket boundary. Building
 from a mutable tag or substituting the Browser Sidecar image would answer a
 different question and is rejected.
+
+The executable adapter tests establish the SAR-003 public lifecycle and reuse
+the formal browser scanner's renamed/distro/product/ELF-marker semantics. They
+do not establish the complete SAR-005 scanner, image, SBOM, Colima, CVM, or
+receipt verification set.
 
 ## Rejected alternatives
 
