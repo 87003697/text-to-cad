@@ -321,6 +321,119 @@ class GCodeToolTests(unittest.TestCase):
         self.assertEqual(result["errors"], [])
         self.assertGreaterEqual(result["stats"]["extrusion_moves"], 1)
 
+    def test_gcode_validation_does_not_count_retraction_as_extrusion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile = gcode.load_profile(write_profile(root))
+            toolpath = root / "retraction_only.gcode"
+            toolpath.write_text(
+                "\n".join(
+                    [
+                        "M104 S220",
+                        "M140 S65",
+                        "G90",
+                        "M83",
+                        "G1 X10 Y10 Z0.2 F1800",
+                        "G1 X15 Y10 E0 F1200",
+                        "G1 X20 Y10 E-1 F1200",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = gcode.validate_gcode_file(toolpath, profile)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["stats"]["extrusion_moves"], 0)
+        self.assertIn("No extrusion moves found.", result["errors"])
+
+    def test_gcode_validation_tracks_extruder_position_and_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile = gcode.load_profile(write_profile(root))
+            toolpath = root / "mixed_extrusion_modes.gcode"
+            toolpath.write_text(
+                "\n".join(
+                    [
+                        "M104 S220",
+                        "M140 S65",
+                        "G92 E10",
+                        "M83",
+                        "G90",
+                        "G1 X10 Y10 Z0.2 E9 F1800",
+                        "G91",
+                        "G1 X1 E-1 F1200",
+                        "M82",
+                        "G1 X1 E7.5 F1200",
+                        "M83",
+                        "G2 X1 Y1 I0.5 J0 E0.2 F1200",
+                        "G1 X1 E0.1 F1200",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            result = gcode.validate_gcode_file(toolpath, profile)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["stats"]["extrusion_moves"], 2)
+
+    def test_gcode_validation_counts_forward_extrusion_for_each_motion_command(self) -> None:
+        commands = {
+            "G0": "G0 X10 E-9 F1200",
+            "G1": "G1 X10 E-9 F1200",
+            "G2": "G2 X10 Y10 I5 J0 E-9 F1200",
+            "G3": "G3 X10 Y10 I5 J0 E-9 F1200",
+        }
+        for command, movement in commands.items():
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                profile = gcode.load_profile(write_profile(root))
+                toolpath = root / f"{command.lower()}_extrusion.gcode"
+                toolpath.write_text(
+                    "\n".join(
+                        [
+                            "M104 S220",
+                            "M140 S65",
+                            "M82",
+                            "G92 E-10",
+                            movement,
+                        ]
+                    ),
+                    encoding="utf-8",
+                )
+
+                result = gcode.validate_gcode_file(toolpath, profile)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["stats"]["extrusion_moves"], 1)
+
+    def test_gcode_validation_does_not_treat_decimal_subcodes_as_positioning_modes(self) -> None:
+        cases = {
+            "relative_extrusion_after_g90_1": (
+                ["G92 E10", "M83", "G90.1", "G2 X10 Y10 I5 J0 E0.2 F1200"],
+                True,
+                1,
+            ),
+            "absolute_retraction_after_g91_1": (
+                ["G92 E10", "M82", "G91.1", "G2 X10 Y10 I5 J0 E9 F1200"],
+                False,
+                0,
+            ),
+        }
+        for name, (commands, expected_ok, expected_extrusion_moves) in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                profile = gcode.load_profile(write_profile(root))
+                toolpath = root / f"{name}.gcode"
+                toolpath.write_text("\n".join(["M104 S220", "M140 S65", *commands]), encoding="utf-8")
+
+                result = gcode.validate_gcode_file(toolpath, profile)
+
+                self.assertEqual(result["ok"], expected_ok)
+                self.assertEqual(result["stats"]["extrusion_moves"], expected_extrusion_moves)
+
     def test_gcode_validation_reports_empty_no_extrusion_and_out_of_bounds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
