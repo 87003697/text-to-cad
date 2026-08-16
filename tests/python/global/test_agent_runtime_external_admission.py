@@ -77,6 +77,29 @@ class FakeMirrorStore:
 
 
 class ExternalAdmissionContractTests(unittest.TestCase):
+    def test_codex_evidence_contract_matches_reviewed_subject_and_predicates(self) -> None:
+        from scripts.pilot.agent_runtime.contracts import PREDICATES, SUBJECT_FIELDS
+
+        self.assertEqual(
+            SUBJECT_FIELDS["codex-admission"],
+            (
+                "codexVersion", "platform", "retrievalReceiptDigest", "archiveDigest",
+                "executableDigest", "signatureBundleDigest", "signaturePolicyDigest",
+                "signatureVerificationReceiptDigest", "elfClosureDigest",
+            ),
+        )
+        self.assertEqual(
+            PREDICATES["codex-admission"],
+            (
+                "versionExact", "platformArtifactExact", "retrievalMetadataRecorded",
+                "archiveDigestExact", "executableDigestExact", "archiveSingleExecutableExact",
+                "signatureBundleDigestExact", "signaturePolicyExact", "signatureVerified",
+                "certificateIdentityExact", "certificateIssuerExact", "transparencyLogVerified",
+                "elfClosureClosed", "nodeAbsentSmokePassed", "noninteractiveSmokePassed",
+                "immutableMirrorVisible",
+            ),
+        )
+
     def test_codex_normative_approval_and_policy_are_exact(self) -> None:
         from scripts.pilot.agent_runtime.external_admission import (
             CODEX_APPROVAL_DIGEST,
