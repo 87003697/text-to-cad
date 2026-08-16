@@ -5,6 +5,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,13 +13,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE_ROOT = REPO_ROOT / "models" / "agent-runtime" / "cup_cup_033"
-
-
-def canonical(value: object) -> bytes:
-    return json.dumps(
-        value, ensure_ascii=True, allow_nan=False, sort_keys=True, separators=(",", ":")
-    ).encode("ascii")
-
 
 class AgentRuntimeManifestTests(unittest.TestCase):
     def test_checked_in_cup_manifest_is_exactly_reproduced(self) -> None:
@@ -47,6 +41,7 @@ class AgentRuntimeManifestTests(unittest.TestCase):
             canonical_manifest_bytes,
             parse_manifest_strict,
         )
+        from scripts.pilot.agent_runtime import canonical_json_bytes
 
         payload = (FIXTURE_ROOT / "cup-capability-manifest.json").read_bytes()
         document = parse_manifest_strict("cup-capability", payload)
@@ -61,7 +56,7 @@ class AgentRuntimeManifestTests(unittest.TestCase):
         value = copy.deepcopy(document.value)
         value["secret"] = "must-not-pass"
         with self.assertRaisesRegex(ManifestError, "unexpected keys"):
-            parse_manifest_strict("cup-capability", canonical(value))
+            parse_manifest_strict("cup-capability", canonical_json_bytes(value))
         with self.assertRaisesRegex(ManifestError, "non-canonical"):
             parse_manifest_strict("cup-capability", b"{ " + payload[1:])
         with self.assertRaisesRegex(ManifestError, "numbers"):
@@ -73,14 +68,21 @@ class AgentRuntimeManifestTests(unittest.TestCase):
         )
         expected_output["providerDispatchCount"] = False
         with self.assertRaisesRegex(ManifestError, "dispatch count"):
-            parse_manifest_strict("cup-expected-output", canonical(expected_output))
+            parse_manifest_strict(
+                "cup-expected-output", canonical_json_bytes(expected_output)
+            )
         route = json.loads((FIXTURE_ROOT / "route.json").read_bytes())
         route["observations"]["degenerateFaces"] = False
         with self.assertRaisesRegex(ManifestError, "must be an integer"):
-            parse_manifest_strict("numeric-route", canonical(route))
+            parse_manifest_strict("numeric-route", canonical_json_bytes(route))
+        route = json.loads((FIXTURE_ROOT / "route.json").read_bytes())
+        route["consideredAlternative"]["rejectedBecause"] = "Different prose."
+        with self.assertRaisesRegex(ManifestError, "alternative"):
+            parse_manifest_strict("numeric-route", canonical_json_bytes(route))
 
     def test_verification_plan_binds_exact_closed_inputs_without_self_hash(self) -> None:
         from scripts.pilot.agent_runtime.manifests import (
+            ManifestError,
             VERIFICATION_PLAN_FIELDS,
             VERIFICATION_PLAN_EXTERNAL_FIELDS,
             build_verification_plan,
@@ -122,12 +124,80 @@ class AgentRuntimeManifestTests(unittest.TestCase):
 
         missing = dict(bindings)
         missing.pop("scannerDigest")
-        with self.assertRaisesRegex(ValueError, "exactly"):
+        with self.assertRaisesRegex(ManifestError, "exactly"):
             build_verification_plan(missing, REPO_ROOT)
         substitution = dict(bindings)
         substitution["routerManifestDigest"] = "sha256:" + "f" * 64
-        with self.assertRaisesRegex(ValueError, "exactly"):
+        with self.assertRaisesRegex(ManifestError, "exactly"):
             build_verification_plan(substitution, REPO_ROOT)
+
+    def test_verification_plan_rejects_incoherent_fixture_regeneration(self) -> None:
+        from scripts.pilot.agent_runtime import canonical_json_bytes
+        from scripts.pilot.agent_runtime.manifests import (
+            ManifestError,
+            VERIFICATION_PLAN_EXTERNAL_FIELDS,
+            build_cup_capability_manifest,
+            build_verification_plan,
+            canonical_manifest_bytes,
+            manifest_digest,
+            parse_manifest_strict,
+        )
+
+        bindings = {
+            field: "sha256:" + f"{index:064x}"
+            for index, field in enumerate(VERIFICATION_PLAN_EXTERNAL_FIELDS, start=1)
+        }
+
+        def regenerate_outer_bindings(root: Path) -> None:
+            fixture = root / "models" / "agent-runtime" / "cup_cup_033"
+            capability = build_cup_capability_manifest(root)
+            (fixture / "cup-capability-manifest.json").write_bytes(
+                canonical_manifest_bytes(capability) + b"\n"
+            )
+            conformance = copy.deepcopy(parse_manifest_strict(
+                "cup-conformance-fixture",
+                (fixture / "conformance-fixture.json").read_bytes(),
+            ).value)
+            capability_fixture = capability.value["fixture"]
+            conformance.update({
+                "canonicalSourceDigest": capability_fixture["sourceDigest"],
+                "cupCapabilityManifestDigest": manifest_digest(capability),
+                "cupFixtureDigest": capability_fixture["inputDigest"],
+                "expectedOutputDigest": capability_fixture["expectedOutputDigest"],
+                "numericInspectionDigest": capability_fixture["numericInspectionDigest"],
+                "routerManifestDigest": capability_fixture["routeManifestDigest"],
+            })
+            (fixture / "conformance-fixture.json").write_bytes(
+                canonical_json_bytes(conformance) + b"\n"
+            )
+
+        with tempfile.TemporaryDirectory(prefix="cup-fixture-graph-") as directory:
+            root = Path(directory)
+            fixture = root / "models" / "agent-runtime" / "cup_cup_033"
+            fixture.parent.mkdir(parents=True)
+            shutil.copytree(FIXTURE_ROOT, fixture)
+            source_path = fixture / "source" / "cup_cup_033.implicit.js"
+            source_path.write_bytes(source_path.read_bytes() + b"// stale change\n")
+            regenerate_outer_bindings(root)
+            with self.assertRaisesRegex(
+                ManifestError, "expected output canonicalSourceDigest substitution"
+            ):
+                build_verification_plan(bindings, root)
+
+        with tempfile.TemporaryDirectory(prefix="cup-fixture-graph-") as directory:
+            root = Path(directory)
+            fixture = root / "models" / "agent-runtime" / "cup_cup_033"
+            fixture.parent.mkdir(parents=True)
+            shutil.copytree(FIXTURE_ROOT, fixture)
+            inspection_path = fixture / "numeric-inspection.json"
+            inspection = json.loads(inspection_path.read_bytes())
+            inspection["eulerNumber"] = 145
+            inspection_path.write_bytes(canonical_json_bytes(inspection) + b"\n")
+            regenerate_outer_bindings(root)
+            with self.assertRaisesRegex(
+                ManifestError, "route observations do not bind numeric inspection"
+            ):
+                build_verification_plan(bindings, root)
 
     def test_numeric_inspection_routes_cup_to_implicit_without_browser_data(self) -> None:
         from scripts.pilot.agent_runtime.manifests import (
@@ -136,21 +206,30 @@ class AgentRuntimeManifestTests(unittest.TestCase):
             inspect_numeric_route,
             parse_manifest_strict,
         )
+        from scripts.pilot.agent_runtime import canonical_json_bytes
 
         expected_inspection = parse_manifest_strict(
             "numeric-inspection", (FIXTURE_ROOT / "numeric-inspection.json").read_bytes()
         )
+        input_path = FIXTURE_ROOT / "input" / "cup_cup_033.ply"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "skills" / "mesh-inspect" / "scripts" / "mesh-inspect"),
+                str(input_path),
+                "--quiet",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        observed = json.loads(completed.stdout)
+        self.assertEqual(observed["stats"]["faces"], 3764)
+        self.assertIs(observed["quality"]["watertight"], False)
+        self.assertEqual(observed["quality"]["euler_number"], 144)
         inspection = build_numeric_inspection(
-            "sha256:3d4c7ca9118ef8a6d4ae3e7af3117250ca824ad5b8de36dcfa2c66cece47ae67",
-            {
-                "ok": True,
-                "stats": {"faces": 3764},
-                "quality": {
-                    "degenerate_faces": 0,
-                    "euler_number": 144,
-                    "watertight": False,
-                },
-            },
+            "sha256:" + hashlib.sha256(input_path.read_bytes()).hexdigest(),
+            observed,
         )
         self.assertEqual(inspection, expected_inspection)
         route = inspect_numeric_route(inspection)
@@ -169,8 +248,17 @@ class AgentRuntimeManifestTests(unittest.TestCase):
         clean_topology["eulerNumber"] = 2
         with self.assertRaisesRegex(ManifestError, "does not select"):
             inspect_numeric_route(parse_manifest_strict(
-                "numeric-inspection", canonical(clean_topology)
+                "numeric-inspection", canonical_json_bytes(clean_topology)
             ))
+        wrong_stats = copy.deepcopy(observed)
+        wrong_stats["stats"]["faces"] = 3765
+        with self.assertRaisesRegex(ManifestError, "admitted Cup values"):
+            inspect_numeric_route(build_numeric_inspection(
+                inspection.value["inputDigest"], wrong_stats
+            ))
+        wrong_input = build_numeric_inspection("sha256:" + "f" * 64, observed)
+        with self.assertRaisesRegex(ManifestError, "admitted Cup fixture"):
+            inspect_numeric_route(wrong_input)
 
     def test_durable_fixture_bytes_and_expected_output_are_digest_bound(self) -> None:
         from scripts.pilot.agent_runtime.manifests import (

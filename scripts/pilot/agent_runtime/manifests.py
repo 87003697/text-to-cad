@@ -7,9 +7,11 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 from .canonical_json import (
+    CanonicalJSONInput,
+    CanonicalJSONValue,
     canonical_json_bytes,
     canonical_json_digest,
     parse_canonical_json,
@@ -25,7 +27,7 @@ class ManifestDocument:
     """An immutable canonical JSON value tagged with its selected schema."""
 
     kind: str
-    value: Mapping[str, Any]
+    value: Mapping[str, CanonicalJSONValue]
 
     def __post_init__(self) -> None:
         try:
@@ -34,7 +36,11 @@ class ManifestDocument:
             raise ManifestError(str(exc)) from exc
         if not isinstance(frozen, Mapping):
             raise ManifestError("manifest must be a JSON object")
-        object.__setattr__(self, "value", frozen)
+        object.__setattr__(
+            self,
+            "value",
+            cast(Mapping[str, CanonicalJSONValue], frozen),
+        )
 
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -126,6 +132,10 @@ _OBSERVATIONS = {
     "faceCount": 3764,
     "watertight": False,
 }
+_ROUTE_REJECTION_REASON = (
+    "The numeric topology rule matches before machinable-feature or "
+    "agent-judgment rules."
+)
 
 
 def _require_keys(value: Any, expected: set[str], label: str) -> Mapping[str, Any]:
@@ -202,8 +212,10 @@ def _validate_numeric_route(value: Mapping[str, Any]) -> None:
         value["consideredAlternative"], {"route", "rejectedBecause"},
         "numeric route alternative",
     )
-    reason = alternative["rejectedBecause"]
-    if alternative["route"] != "cad" or not isinstance(reason, str) or not reason:
+    if (
+        alternative["route"] != "cad"
+        or alternative["rejectedBecause"] != _ROUTE_REJECTION_REASON
+    ):
         raise ManifestError("numeric route alternative is invalid")
 
 
@@ -389,15 +401,28 @@ def manifest_digest(document: ManifestDocument) -> str:
         raise ManifestError(str(exc)) from exc
 
 
+def _file_bytes(path: Path, label: str) -> bytes:
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise ManifestError(f"{label} must be a regular file")
+        return path.read_bytes()
+    except ManifestError:
+        raise
+    except OSError as exc:
+        raise ManifestError(f"cannot read {label}") from exc
+
+
 def _file_digest(path: Path) -> str:
-    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    return "sha256:" + hashlib.sha256(_file_bytes(path, str(path))).hexdigest()
 
 
 def _manifest_file_digest(kind: str, path: Path) -> str:
-    return manifest_digest(parse_manifest_strict(kind, path.read_bytes()))
+    return manifest_digest(
+        parse_manifest_strict(kind, _file_bytes(path, f"{kind} manifest"))
+    )
 
 
-def _typed(kind: str, value: Mapping[str, Any]) -> ManifestDocument:
+def _typed(kind: str, value: Mapping[str, CanonicalJSONInput]) -> ManifestDocument:
     try:
         payload = canonical_json_bytes(value)
     except ValueError as exc:
@@ -405,11 +430,17 @@ def _typed(kind: str, value: Mapping[str, Any]) -> ManifestDocument:
     return parse_manifest_strict(kind, payload)
 
 
-def _approved_cup_plan_bindings(repo_root: Path) -> dict[str, str]:
+def validate_cup_fixture_graph(repo_root: Path) -> dict[str, str]:
+    """Validate every durable Cup edge before returning plan-owned bindings."""
+
     root = Path(repo_root).resolve()
+    fixture_root = root / _FIXTURE_ROOT
     capability = parse_manifest_strict(
         "cup-capability",
-        (root / _FIXTURE_ROOT / "cup-capability-manifest.json").read_bytes(),
+        _file_bytes(
+            fixture_root / "cup-capability-manifest.json",
+            "stored Cup capability manifest",
+        ),
     )
     produced_capability = build_cup_capability_manifest(root)
     if canonical_manifest_bytes(capability) != canonical_manifest_bytes(
@@ -418,9 +449,64 @@ def _approved_cup_plan_bindings(repo_root: Path) -> dict[str, str]:
         raise ManifestError("stored Cup capability manifest substitution")
     conformance = parse_manifest_strict(
         "cup-conformance-fixture",
-        (root / _CONFORMANCE_FIXTURE_PATH).read_bytes(),
+        _file_bytes(
+            root / _CONFORMANCE_FIXTURE_PATH,
+            "stored Cup conformance fixture",
+        ),
+    )
+    numeric = parse_manifest_strict(
+        "numeric-inspection",
+        _file_bytes(
+            root / _FIXTURE_PATHS["numericInspectionPath"],
+            "stored Cup numeric inspection",
+        ),
+    )
+    route = parse_manifest_strict(
+        "numeric-route",
+        _file_bytes(
+            root / _FIXTURE_PATHS["routeManifestPath"],
+            "stored Cup route manifest",
+        ),
+    )
+    expected_output = parse_manifest_strict(
+        "cup-expected-output",
+        _file_bytes(
+            root / _FIXTURE_PATHS["expectedOutputPath"],
+            "stored Cup expected output",
+        ),
     )
     expected = capability.value["fixture"]
+    numeric_digest = manifest_digest(numeric)
+    route_digest = manifest_digest(route)
+    expected_output_digest = manifest_digest(expected_output)
+    if numeric.value["inputDigest"] != expected["inputDigest"]:
+        raise ManifestError("numeric inspection inputDigest substitution")
+    numeric_observations = {
+        field: numeric.value[field] for field in _OBSERVATIONS
+    }
+    if dict(route.value["observations"]) != numeric_observations:
+        raise ManifestError("route observations do not bind numeric inspection")
+    if expected_output.value["canonicalSourceDigest"] != expected["sourceDigest"]:
+        raise ManifestError(
+            "expected output canonicalSourceDigest substitution"
+        )
+    if expected_output.value["numericInspectionDigest"] != numeric_digest:
+        raise ManifestError(
+            "expected output numericInspectionDigest substitution"
+        )
+    if expected_output.value["routeManifestDigest"] != route_digest:
+        raise ManifestError("expected output routeManifestDigest substitution")
+    if expected_output.value["route"] != route.value["route"]:
+        raise ManifestError("expected output route substitution")
+    if dict(expected_output.value["observations"]) != numeric_observations:
+        raise ManifestError("expected output observations do not bind numeric inspection")
+    for field, observed_digest in (
+        ("numericInspectionDigest", numeric_digest),
+        ("routeManifestDigest", route_digest),
+        ("expectedOutputDigest", expected_output_digest),
+    ):
+        if expected[field] != observed_digest:
+            raise ManifestError(f"Cup capability {field} substitution")
     bindings = {
         "cupFixtureDigest": expected["inputDigest"],
         "routerManifestDigest": expected["routeManifestDigest"],
@@ -445,10 +531,10 @@ def build_verification_plan(
     bindings: Mapping[str, str], repo_root: Path
 ) -> ManifestDocument:
     if set(bindings) != set(VERIFICATION_PLAN_EXTERNAL_FIELDS):
-        raise ValueError(
+        raise ManifestError(
             "verification plan external bindings must contain exactly the closed fields"
         )
-    all_bindings = {**bindings, **_approved_cup_plan_bindings(repo_root)}
+    all_bindings = {**bindings, **validate_cup_fixture_graph(repo_root)}
     return _typed("verification-plan", {
         "schema": "text-to-cad.agent-runtime-verification-plan/1",
         **{field: all_bindings[field] for field in VERIFICATION_PLAN_FIELDS},
@@ -459,11 +545,13 @@ def build_cup_capability_manifest(repo_root: Path) -> ManifestDocument:
     """Produce the Cup allowlist from durable fixture bytes, never observations."""
 
     root = Path(repo_root).resolve()
+    input_path = root / _FIXTURE_PATHS["inputPath"]
+    input_bytes = _file_bytes(input_path, "Cup input fixture")
     fixture = {
         "id": "cup_cup_033",
         "inputPath": _FIXTURE_PATHS["inputPath"].as_posix(),
-        "inputDigest": _file_digest(root / _FIXTURE_PATHS["inputPath"]),
-        "inputBytes": (root / _FIXTURE_PATHS["inputPath"]).stat().st_size,
+        "inputDigest": "sha256:" + hashlib.sha256(input_bytes).hexdigest(),
+        "inputBytes": len(input_bytes),
         "sourcePath": _FIXTURE_PATHS["sourcePath"].as_posix(),
         "sourceDigest": _file_digest(root / _FIXTURE_PATHS["sourcePath"]),
         "numericInspectionPath": _FIXTURE_PATHS["numericInspectionPath"].as_posix(),
@@ -544,10 +632,7 @@ def inspect_numeric_route(inspection: ManifestDocument) -> ManifestDocument:
         raise ManifestError("numeric Cup topology does not select implicit-cad")
     return _typed("numeric-route", {
         "consideredAlternative": {
-            "rejectedBecause": (
-                "The numeric topology rule matches before machinable-feature or "
-                "agent-judgment rules."
-            ),
+            "rejectedBecause": _ROUTE_REJECTION_REASON,
             "route": "cad",
         },
         "matchedRule": "topology-not-occ-clean",
