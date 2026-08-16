@@ -90,11 +90,12 @@ trust material, then verified offline. The exact observed chain was:
 
 The target URL is the consistent-snapshot object
 `https://tuf-repo-cdn.sigstore.dev/targets/6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66.trusted_root.json`.
-The formal admission should mirror these exact bytes and bind the verifier,
-trusted-root target and TUF acquisition receipt. It must not read an ambient
-`~/.sigstore` cache. The short-lived timestamp makes this observation
-time-bounded; this note is not a permanent substitute for an authenticated
-admission operation.
+At observation time these files documented the TUF acquisition chain. The
+current formal contract instead requires the exact version-2 normative approval
+that binds these bytes, the verifier, and the trusted-root target; it does not
+accept a separate TUF acquisition receipt as authority. The verifier must not
+read an ambient `~/.sigstore` cache. This historical observation is not a
+substitute for mirrored approved bytes and a formal admission receipt.
 
 ## Exact replay and negative control
 
