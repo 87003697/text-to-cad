@@ -48,7 +48,7 @@ has been emitted.
 
 ## Exact root subject
 
-The root has exactly six keys, in the following semantic shape:
+The root has exactly six top-level keys, in the following semantic shape:
 
 | Key | Exact requirement |
 | --- | --- |
@@ -69,14 +69,16 @@ The root has exactly six keys, in the following semantic shape:
 | `runtimeManifestDigest` | Digest of the image-resident sealed runtime manifest |
 | `cupRuntimeCapabilityManifestDigest` | Digest of the closed first-release Cup capability manifest |
 | `buildInputSetDigest` | Digest of the closed offline build-input set: recipe, base, dependency locks, and project runtime artifacts |
+| `verificationPlanDigest` | Digest of the independently approved, immutable provider-free verification plan |
 
 Every digest is exactly `sha256:` plus 64 lowercase hexadecimal characters.
 `buildInputSetDigest` is an artifact-construction identity, not a Source
 Snapshot. A **Source Snapshot** is the separately identified project source
 mounted read-only for one Agent Execution. Changing an execution Source
 Snapshot or its revision does not rebuild or rename the sealed runtime. Each
-environment-qualified verification execution binds its own Source Snapshot
-below; none is part of the artifact root subject.
+environment-qualified verification execution binds the same plan-approved
+Source Snapshot below; none is a production Source Snapshot or part of the
+artifact build-input identity.
 
 The digest of canonical `subject` is `subjectDigest`. Every child repeats that
 digest, not the subject fields, so a child from another artifact, configuration,
@@ -94,7 +96,7 @@ capability manifest, or build-input lock cannot be grafted into the graph.
 }
 ```
 
-`children` contains exactly the fourteen role/environment references in the
+`children` contains exactly the fifteen role/environment references in the
 table below, sorted first by `kind` and then by `environment` (`null` sorts
 before strings). Each reference has exactly `kind`, `environment`, and
 `digest`. No pair may repeat and no digest may repeat. An environment-neutral
@@ -102,20 +104,21 @@ node uses JSON `null`; environment-qualified nodes use only `colima` or `cvm`.
 
 | `kind` | `environment` | Required direct dependencies |
 | --- | --- | --- |
-| `agent-lifecycle` | `colima` | `image-identity`, `browser-deny`, matching `source-snapshot` |
-| `agent-lifecycle` | `cvm` | `image-identity`, `browser-deny`, matching `source-snapshot` |
-| `browser-deny` | `null` | `image-identity` |
+| `agent-lifecycle` | `colima` | `image-identity`, `browser-deny`, matching `source-snapshot`, `verification-plan` |
+| `agent-lifecycle` | `cvm` | `image-identity`, `browser-deny`, matching `source-snapshot`, `verification-plan` |
+| `browser-deny` | `null` | `image-identity`, `verification-plan` |
 | `build-input-set` | `null` | none |
 | `build-provenance` | `null` | `build-input-set` |
-| `capability-conformance` | `colima` | matching `agent-lifecycle`, `cup-golden` |
-| `capability-conformance` | `cvm` | matching `agent-lifecycle`, `cup-golden` |
+| `capability-conformance` | `colima` | matching `agent-lifecycle`, `cup-golden`, `verification-plan` |
+| `capability-conformance` | `cvm` | matching `agent-lifecycle`, `cup-golden`, `verification-plan` |
 | `codex-admission` | `null` | `dependency-admission` |
-| `cup-golden` | `null` | `image-identity` |
+| `cup-golden` | `null` | `image-identity`, `verification-plan` |
 | `dependency-admission` | `null` | `build-input-set` |
 | `image-identity` | `null` | `build-provenance`, `sbom` |
 | `sbom` | `null` | `build-provenance` |
-| `source-snapshot` | `colima` | none |
-| `source-snapshot` | `cvm` | none |
+| `source-snapshot` | `colima` | `verification-plan` |
+| `source-snapshot` | `cvm` | `verification-plan` |
+| `verification-plan` | `null` | none |
 
 Each referenced document has exactly:
 
@@ -142,9 +145,9 @@ cannot self-attest with an unbound boolean map.
 
 `dependsOn` is the sorted list of the direct child document digests required by
 the table. A node's own digest is the SHA-256 of its canonical document. The
-root lists every node, not only leaves. A graph is closed only if all fourteen
+root lists every node, not only leaves. A graph is closed only if all fifteen
 documents exist, every reference digest matches bytes, every `dependsOn`
-reference resolves within those fourteen documents, all nodes share the root
+reference resolves within those fifteen documents, all nodes share the root
 `subjectDigest`, dependencies match the table exactly, and the graph is
 acyclic. Unreachable, duplicate, additional, or externally referenced nodes
 are rejection conditions.
@@ -169,8 +172,9 @@ The exact `subject` keys are:
 | `browser-deny` | `agentImageManifestDigest`, `scannerDigest`, `inventoryDigest`, `browserFindingCount`, `chromiumProcessCount` |
 | `cup-golden` | `agentImageManifestDigest`, `fixtureDigest`, `routerManifestDigest`, `expectedOutputDigest`, `observedOutputDigest`, `faceCount`, `watertight`, `eulerNumber` |
 | `source-snapshot` | `executionSourceSnapshotDigest`, `sourceManifestDigest`, `pathCount`, `totalBytes` |
-| `agent-lifecycle` | `agentImageManifestDigest`, `agentImageConfigDigest`, `runtimeManifestDigest`, `executionSourceSnapshotDigest`, `inputSnapshotDigest`, `agentConfigDigest`, `brokerAuthorityDigest`, `workloadDigest`, `resourceDisposition`, `cleanupDisposition` |
-| `capability-conformance` | `agentImageManifestDigest`, `runtimeManifestDigest`, `cupRuntimeCapabilityManifestDigest`, `executionSourceSnapshotDigest`, `inputSnapshotDigest`, `conformanceFixtureDigest`, `observedOutputDigest` |
+| `agent-lifecycle` | `agentImageManifestDigest`, `agentImageConfigDigest`, `runtimeManifestDigest`, `executionSourceSnapshotDigest`, `inputSnapshotDigest`, `agentConfigDigest`, `brokerAuthorityDigest`, `workloadDigest`, `lifecycleHarnessDigest`, `entrypointDigest`, `lifecycleReceiptSchemaDigest`, `resourceDisposition`, `cleanupDisposition` |
+| `capability-conformance` | `agentImageManifestDigest`, `runtimeManifestDigest`, `cupRuntimeCapabilityManifestDigest`, `executionSourceSnapshotDigest`, `inputSnapshotDigest`, `conformanceFixtureDigest`, `expectedOutputDigest`, `observedOutputDigest` |
+| `verification-plan` | `verificationPlanDigest`, `scannerDigest`, `verificationSourceSnapshotDigest`, `verificationSourceManifestDigest`, `verificationInputSnapshotDigest`, `cupFixtureDigest`, `routerManifestDigest`, `expectedOutputDigest`, `conformanceFixtureDigest`, `lifecycleHarnessDigest`, `entrypointDigest`, `lifecycleReceiptSchemaDigest`, `agentConfigDigest`, `brokerAuthorityDigest`, `workloadDigest` |
 
 All non-null fields ending in `Digest` use the full digest grammar. `pathCount`,
 `totalBytes`, `browserFindingCount`, `chromiumProcessCount`, `faceCount`, and
@@ -187,13 +191,59 @@ subject value.
 `succeeded`, `failed`, or `not-required`. These closed observations distinguish
 positive residue from failure to prove absence without exposing IDs or paths.
 
+### Verification authority and cross-field equality
+
+The environment-neutral `verification-plan` is approved before either host
+attempt and is immutable by `verificationPlanDigest`. Its producer only proves
+the closed predicates below; it cannot fill the plan from runtime observations.
+The plan artifact is the canonical object containing all verification-plan
+subject fields except `verificationPlanDigest`; that digest is SHA-256 of those
+bytes. The evidence node then copies the digest and fields, so neither the plan
+nor the evidence node hashes itself.
+Colima and CVM therefore run the same verifier bytes and inputs. The strict
+consumer enforces every equality in this matrix:
+
+| Plan field | Must equal |
+| --- | --- |
+| `verificationPlanDigest` | root `subject.verificationPlanDigest`; `verification-plan.subject.verificationPlanDigest` |
+| `scannerDigest` | `browser-deny.subject.scannerDigest` |
+| `verificationSourceSnapshotDigest` | both `source-snapshot.subject.executionSourceSnapshotDigest`; both lifecycle and both conformance `executionSourceSnapshotDigest` |
+| `verificationSourceManifestDigest` | both `source-snapshot.subject.sourceManifestDigest` |
+| `verificationInputSnapshotDigest` | both lifecycle and both conformance `inputSnapshotDigest` |
+| `cupFixtureDigest` | `cup-golden.subject.fixtureDigest` |
+| `routerManifestDigest` | `cup-golden.subject.routerManifestDigest` |
+| `expectedOutputDigest` | `cup-golden.subject.expectedOutputDigest`; both conformance `expectedOutputDigest` |
+| `conformanceFixtureDigest` | both conformance `conformanceFixtureDigest` |
+| `lifecycleHarnessDigest` | both lifecycle `lifecycleHarnessDigest` |
+| `entrypointDigest` | both lifecycle `entrypointDigest` |
+| `lifecycleReceiptSchemaDigest` | both lifecycle `lifecycleReceiptSchemaDigest` |
+| `agentConfigDigest` | both lifecycle `agentConfigDigest` |
+| `brokerAuthorityDigest` | both lifecycle `brokerAuthorityDigest` |
+| `workloadDigest` | both lifecycle `workloadDigest` |
+
+In addition, root image/runtime/Cup identities equal every same-named child
+field, and `cup-golden.observedOutputDigest` plus each conformance
+`observedOutputDigest` must equal the plan's `expectedOutputDigest` on success.
+The two Source Snapshot node subjects must be byte-for-byte equal, including
+counts, after environment is excluded. A producer-selected scanner, harness,
+entrypoint, receipt schema, fixture, input, router, expected output, or
+verification Source Snapshot is a schema rejection.
+
+This plan controls verification only. A later production Agent Execution may
+mount a different Source Snapshot by its own execution identity without
+changing the sealed image, `buildInputSetDigest`, or existing artifact-level
+Verified receipt.
+
 ## Closed predicates
 
 The following arrays are normative order. A node's `predicates` object has
 exactly its listed keys. Successful nodes contain literal `true` for every key.
-Failed nodes contain `true` for completed earlier checks, literal `false` for
-the one selected `failureCheck`, and `null` for checks not established after
-that failure. For a failed node, `failureCheck` is exactly that one false
+Failed admission/conformance nodes stop at their first failure: they contain
+`true` for completed earlier checks, literal `false` for the one selected
+`failureCheck`, and `null` for checks not established after that failure. The
+environment-qualified `agent-lifecycle` node is explicitly specialized below:
+it preserves every executed false observation and may contain multiple false
+predicates. In either form, `failureCheck` is exactly one dominant false
 predicate key; aliases and arbitrary error strings are forbidden. A `not-run`
 node has every predicate `null`, `failureCheck: "dependency-failed"`, and the
 deterministic `blockedBy` reference defined above. Booleans are not integers
@@ -212,6 +262,7 @@ and no truthy substitute is accepted.
 | `browser-deny` | `packageInventoryEmpty`, `executableInventoryEmpty`, `cacheInventoryEmpty`, `elfMarkerInventoryEmpty`, `productMarkerInventoryEmpty`, `playwrightInventoryEmpty`, `chromiumProcessZero`, `browserLifecycleAuthorityAbsent` |
 | `cup-golden` | `fixtureDigestExact`, `formalRouterImplicitOnly`, `faceCount3764`, `watertightFalse`, `eulerNumber144`, `nodeImplicitSubsetExact`, `meshscopeAccepted`, `voxBlameAccepted`, `residualBrokerPreviewAccepted`, `outputDigestRepeatable` |
 | `source-snapshot` | `manifestSchemaExact`, `pathSetClosed`, `regularFilesOnly`, `fileModesBound`, `fileSizesBound`, `fileDigestsBound`, `treeDigestMatchesObservation`, `readOnlyMountEligible` |
+| `verification-plan` | `planSchemaExact`, `planDigestExact`, `scannerApproved`, `sourceSnapshotApproved`, `sourceManifestApproved`, `inputSnapshotApproved`, `cupFixtureApproved`, `routerManifestApproved`, `expectedOutputApproved`, `conformanceFixtureApproved`, `lifecycleHarnessApproved`, `entrypointApproved`, `receiptSchemaApproved`, `agentConfigApproved`, `brokerAuthorityApproved`, `workloadApproved` |
 
 `publisherSignatureClaimAbsent` is intentionally positive only when the receipt
 does **not** claim upstream publisher signing for the Codex executable. Hash and
@@ -256,6 +307,54 @@ vocabulary and order:
 31. `brokerVolumeAbsent`
 32. `jobPrivateTreeAbsent`
 
+The lifecycle phases are exact:
+
+| Phase | Predicates | Rule after the node starts |
+| --- | --- | --- |
+| primary/startup | 1-20 | Execute in order until primary failure; retain every Boolean already observed |
+| terminal/workload | 21-25 | Mandatory observation suffix; inspect every applicable terminal/process/interrupt/workload fact even after primary failure |
+| cleanup | 26-28 | Mandatory bounded cleanup suffix for every possibly owned resource; `not-required` makes its predicate true |
+| absence | 29-32, plus process-group absence at 22 | Mandatory independent absence observation after cleanup |
+
+The lifecycle producer never applies generic stop-at-first-false to the
+mandatory suffix. It appends each fact it actually establishes and never
+changes an earlier `false` to `null` or `true`. A terminal/workload predicate is
+`null` only when the corresponding fact genuinely cannot exist or be observed;
+for example, `workloadTerminalZero` is null if no workload was released.
+Cleanup and resource-absence predicates are never null after any lifecycle
+resource mutation: a cleanup action is succeeded/failed, and absence is
+absent/retained/unproved. When no matching resource was ever allocated,
+cleanup is `not-required`/true and absence is `absent`/true. An unexpected
+adapter exception sets `adapterOperationsClosed:false` but still enters every
+safe mandatory suffix.
+
+After all phases, the lifecycle child selects one of its observed false
+predicates without deleting any others:
+
+1. first resource predicate in `workloadProcessGroupAbsent`,
+   `agentContainerAbsent`, `ownerLabelsAbsent`, `brokerVolumeAbsent`,
+   `jobPrivateTreeAbsent` order whose disposition is `retained`;
+2. first false resource predicate in that order whose disposition is
+   `unproved`;
+3. `terminalPublicationExact` if false;
+4. first false cleanup predicate in container, Broker volume, private tree
+   order;
+5. `workloadNotInterrupted` if false;
+6. otherwise the first false predicate in the complete normative lifecycle
+   order.
+
+That selected predicate alone is `failureCheck`; every other executed false
+remains in `predicates`. The root maps the selected predicate plus its closed
+disposition to the environment-qualified SAR-003 alias table below.
+
+For example, if `entrypointPreflightExact:false` is recorded and cleanup later
+leaves the owned Agent container present, the final child retains both
+`entrypointPreflightExact:false` and `agentContainerAbsent:false`, records
+`resourceDisposition.agentContainer:"retained"`, and selects
+`failureCheck:"agentContainerAbsent"`. The root failure is
+`agent-lifecycle:<environment>.retained-resource`; the preflight failure remains
+auditable and is not overwritten.
+
 The four resource-absence predicates are independent. Labels are inventory
 evidence and never deletion authority. Only the exact returned and
 owner-attested container ID authorizes removal. A positive observation of any
@@ -297,7 +396,7 @@ published terminal state. There is no published `pending` child.
 | Status | `blockedBy` | `failureCheck` | Predicates | Execution rule |
 | --- | --- | --- | --- | --- |
 | `succeeded` | `null` | `null` | all `true` | All direct dependencies succeeded; producer executed every check |
-| `failed` | `null` | exactly the selected false predicate key | earlier `true`, selected `false`, later `null` | All direct dependencies succeeded; producer attempted this node |
+| `failed` | `null` | exactly the selected dominant false predicate key | generic nodes stop after one false; lifecycle preserves every executed Boolean and uses null only for unexecuted/unestablished checks | All direct dependencies succeeded; producer attempted this node |
 | `not-run` | first non-succeeded direct dependency reference | literal `dependency-failed` | all `null` | Producer must not execute this node |
 
 For `failed` and `not-run`, request-bound identity fields in `subject` remain
@@ -321,7 +420,7 @@ first non-succeeded dependency deterministically produces `not-run`; downstream
 nodes repeat this rule, so the cascade terminates without executing through a
 failed gate. Environment-matching dependencies never cross from `colima` to
 `cvm` or vice versa. A `verified` root forbids `failed` and `not-run`. A
-complete `failed` root requires all fourteen terminal documents, including
+complete `failed` root requires all fifteen terminal documents, including
 truthful not-run descendants.
 
 ## Canonical JSON and strict consumption
@@ -397,13 +496,12 @@ uses this global precedence:
 6. the first false identity, admission, lifecycle, or conformance predicate in
    the normative node/predicate order above.
 
-For case 6 the root `failureCheck` is exactly
+For a failed non-lifecycle node the root `failureCheck` is exactly
 `<kind>[:<environment>].<predicate>`, omitting the environment and colon for an
-environment-neutral node. The only root failure values outside that grammar
-are the precedence aliases in items 1-5. Child documents never contain these
-aliases. The SAR-003 adapter has this exact alias-to-child mapping; when an
-alias covers several predicates, the first false predicate in the printed
-order is selected:
+environment-neutral node. For lifecycle, it is exactly
+`agent-lifecycle:<environment>.<alias>`. Child documents never contain aliases.
+The root derives the alias from the lifecycle child's already selected
+predicate and closed disposition using this exact SAR-003 mapping:
 
 | SAR-003/public alias | Exact `agent-lifecycle` child predicate or condition |
 | --- | --- |
@@ -428,11 +526,13 @@ order is selected:
 | `retained-resource` | first false resource predicate in `workloadProcessGroupAbsent`, `agentContainerAbsent`, `ownerLabelsAbsent`, `brokerVolumeAbsent`, `jobPrivateTreeAbsent` order whose matching disposition is `retained` |
 | `absence-proof` | first false resource predicate in the same order whose matching disposition is `unproved` |
 
-The child `failureCheck` is always the right-hand predicate, never the alias.
-If multiple independent child nodes fail, the root first applies the global
-precedence above and then chooses the first failed child in root child order and
-its one false predicate. `not-run` descendants never outrank the failed ancestor
-that blocked them. Arbitrary error text is restricted diagnostic material.
+The child `failureCheck` is always the right-hand selected predicate, never the
+alias. If multiple independent child nodes fail, the root first compares their
+selected predicates using the global precedence above and then chooses the
+first tied failed child in root child order. It emits that node's qualified
+predicate or qualified lifecycle alias. `not-run` descendants never outrank the
+failed ancestor that blocked them. Arbitrary error text is restricted
+diagnostic material.
 
 ### Publication-failure tombstone
 
@@ -484,8 +584,9 @@ resource.
 `Agent Runtime Verified` is an artifact-level statement about the exact root
 subject. A rollback may reuse its immutable Verified receipt only when the
 Agent image manifest/config bytes, runtime manifest, Cup capability manifest,
-and build-input-set lock are unchanged. A changed execution Source Snapshot
-does not invalidate this artifact receipt. Reuse does not attest a new
+build-input-set lock, and approved verification-plan digest are unchanged. A
+changed production execution Source Snapshot does not invalidate this artifact
+receipt. Reuse does not attest a new
 machine: each rollback target must produce fresh host provision and
 environment-qualified lifecycle/conformance evidence before execution. Those
 deployment receipts refer to the existing Verified root digest; they do not
@@ -505,7 +606,7 @@ The following values are syntactically machine-checkable examples only. The
 repeated placeholder digests do not assert that evidence exists.
 
 ```json
-{"failureCheck":null,"graph":{"algorithm":"sha256-canonical-json-v1","children":[{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","environment":"colima","kind":"agent-lifecycle"},{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","environment":"cvm","kind":"agent-lifecycle"},{"digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","environment":null,"kind":"browser-deny"},{"digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","environment":null,"kind":"build-input-set"},{"digest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","environment":null,"kind":"build-provenance"},{"digest":"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","environment":"colima","kind":"capability-conformance"},{"digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","environment":"cvm","kind":"capability-conformance"},{"digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","environment":null,"kind":"codex-admission"},{"digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","environment":null,"kind":"cup-golden"},{"digest":"sha256:4444444444444444444444444444444444444444444444444444444444444444","environment":null,"kind":"dependency-admission"},{"digest":"sha256:5555555555555555555555555555555555555555555555555555555555555555","environment":null,"kind":"image-identity"},{"digest":"sha256:6666666666666666666666666666666666666666666666666666666666666666","environment":null,"kind":"sbom"},{"digest":"sha256:7777777777777777777777777777777777777777777777777777777777777777","environment":"colima","kind":"source-snapshot"},{"digest":"sha256:8888888888888888888888888888888888888888888888888888888888888888","environment":"cvm","kind":"source-snapshot"}],"subjectDigest":"sha256:9999999999999999999999999999999999999999999999999999999999999999"},"retryAllowed":false,"schema":"text-to-cad.agent-runtime-verification/1","status":"verified","subject":{"agentImageConfigDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","agentImageManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","buildInputSetDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","cupRuntimeCapabilityManifestDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","platform":{"architecture":"amd64","os":"linux"},"runtimeManifestDigest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"}}
+{"failureCheck":null,"graph":{"algorithm":"sha256-canonical-json-v1","children":[{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","environment":"colima","kind":"agent-lifecycle"},{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","environment":"cvm","kind":"agent-lifecycle"},{"digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","environment":null,"kind":"browser-deny"},{"digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","environment":null,"kind":"build-input-set"},{"digest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","environment":null,"kind":"build-provenance"},{"digest":"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","environment":"colima","kind":"capability-conformance"},{"digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","environment":"cvm","kind":"capability-conformance"},{"digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","environment":null,"kind":"codex-admission"},{"digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","environment":null,"kind":"cup-golden"},{"digest":"sha256:4444444444444444444444444444444444444444444444444444444444444444","environment":null,"kind":"dependency-admission"},{"digest":"sha256:5555555555555555555555555555555555555555555555555555555555555555","environment":null,"kind":"image-identity"},{"digest":"sha256:6666666666666666666666666666666666666666666666666666666666666666","environment":null,"kind":"sbom"},{"digest":"sha256:7777777777777777777777777777777777777777777777777777777777777777","environment":"colima","kind":"source-snapshot"},{"digest":"sha256:8888888888888888888888888888888888888888888888888888888888888888","environment":"cvm","kind":"source-snapshot"},{"digest":"sha256:abababababababababababababababababababababababababababababababab","environment":null,"kind":"verification-plan"}],"subjectDigest":"sha256:9999999999999999999999999999999999999999999999999999999999999999"},"retryAllowed":false,"schema":"text-to-cad.agent-runtime-verification/1","status":"verified","subject":{"agentImageConfigDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","agentImageManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","buildInputSetDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","cupRuntimeCapabilityManifestDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","platform":{"architecture":"amd64","os":"linux"},"runtimeManifestDigest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","verificationPlanDigest":"sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}
 ```
 
 Example succeeded environment-neutral child:
@@ -517,7 +618,7 @@ Example succeeded environment-neutral child:
 Example downstream node that truthfully did not run:
 
 ```json
-{"blockedBy":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","environment":"colima","kind":"agent-lifecycle"},"dependsOn":["sha256:3333333333333333333333333333333333333333333333333333333333333333","sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"environment":"colima","failureCheck":"dependency-failed","kind":"capability-conformance","predicates":{"brokerAuthorityJobPrivate":null,"browserInventoryEmpty":null,"browserProcessZero":null,"canonicalImplicitSubsetExact":null,"codexExecutableExact":null,"credentialSurfaceEmpty":null,"cupGoldenAccepted":null,"cupManifestBound":null,"dockerAuthorityAbsent":null,"inputSnapshotBound":null,"meshscopeCallable":null,"nodeRuntimeExact":null,"outputDigestBound":null,"providerNetworkDenied":null,"python312Exact":null,"residualPublicParity":null,"runtimeManifestBound":null,"sourceSnapshotBound":null,"terminalAndCleanupBound":null,"voxBlameCallable":null},"retryAllowed":false,"schema":"text-to-cad.agent-runtime-evidence/1","status":"not-run","subject":{"agentImageManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","conformanceFixtureDigest":"sha256:6666666666666666666666666666666666666666666666666666666666666666","cupRuntimeCapabilityManifestDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","executionSourceSnapshotDigest":"sha256:7777777777777777777777777777777777777777777777777777777777777777","inputSnapshotDigest":"sha256:8888888888888888888888888888888888888888888888888888888888888888","observedOutputDigest":null,"runtimeManifestDigest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},"subjectDigest":"sha256:9999999999999999999999999999999999999999999999999999999999999999"}
+{"blockedBy":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","environment":"colima","kind":"agent-lifecycle"},"dependsOn":["sha256:3333333333333333333333333333333333333333333333333333333333333333","sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sha256:abababababababababababababababababababababababababababababababab"],"environment":"colima","failureCheck":"dependency-failed","kind":"capability-conformance","predicates":{"brokerAuthorityJobPrivate":null,"browserInventoryEmpty":null,"browserProcessZero":null,"canonicalImplicitSubsetExact":null,"codexExecutableExact":null,"credentialSurfaceEmpty":null,"cupGoldenAccepted":null,"cupManifestBound":null,"dockerAuthorityAbsent":null,"inputSnapshotBound":null,"meshscopeCallable":null,"nodeRuntimeExact":null,"outputDigestBound":null,"providerNetworkDenied":null,"python312Exact":null,"residualPublicParity":null,"runtimeManifestBound":null,"sourceSnapshotBound":null,"terminalAndCleanupBound":null,"voxBlameCallable":null},"retryAllowed":false,"schema":"text-to-cad.agent-runtime-evidence/1","status":"not-run","subject":{"agentImageManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","conformanceFixtureDigest":"sha256:6666666666666666666666666666666666666666666666666666666666666666","cupRuntimeCapabilityManifestDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","executionSourceSnapshotDigest":"sha256:7777777777777777777777777777777777777777777777777777777777777777","expectedOutputDigest":"sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","inputSnapshotDigest":"sha256:8888888888888888888888888888888888888888888888888888888888888888","observedOutputDigest":null,"runtimeManifestDigest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},"subjectDigest":"sha256:9999999999999999999999999999999999999999999999999999999999999999"}
 ```
 
 The example root is not a valid Verified receipt until each displayed digest
@@ -532,6 +633,7 @@ strict parser/canonicalizer, schema and graph validator, evidence producers,
 immutable publication/visibility and independent tombstone operations,
 restricted diagnostic index, rollback deployment receipt, fixtures for
 duplicate/extra/missing/cyclic, cross-subject substitution, failed/not-run
-cascade, alias mapping, and double-publication failure, plus independent
-Colima/CVM provider-free runs. A
+cascade, lifecycle multi-failure/mandatory-suffix precedence, verification-plan
+cross-host substitution, alias mapping, and double-publication failure, plus
+independent Colima/CVM provider-free runs. A
 real paid pilot and `Formal Pilot Integrated` remain separate later work.
