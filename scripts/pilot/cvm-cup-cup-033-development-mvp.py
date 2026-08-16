@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import NamedTuple, Sequence
+from typing import Any, Callable, NamedTuple, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +36,7 @@ FIXED_INPUT_SHA256 = "3d4c7ca9118ef8a6d4ae3e7af3117250ca824ad5b8de36dcfa2c66cece
 MODEL = "gpt-5.6-sol"
 CODEX_VERSION = "0.142.1"
 MAX_SECONDS = 45 * 60
+OUTER_BUILD_SECONDS = 10 * 60
 PRICING_AUTHORITY = "iWiki-4020336897-v54-2026-08-14"
 COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
@@ -106,30 +107,27 @@ def codex_config(proxy_url: str, client_token: str) -> str:
     )
 
 
-def build_prompt(input_path: Path, working_source: Path) -> str:
-    return f"""You are running exactly one Development/MVP CAD reconstruction job.
+def build_prompt(working_source: Path, measurement_path: Path, glb_path: Path) -> str:
+    return f"""You are running exactly one Development/MVP CAD review job.
 This is not Sealed, not Formal, not Verified, and not a production completion.
 
-Use only the bounded local tools described below. The fixed mesh input is:
-{input_path}
-The repository root is:
-{input_path.parents[2]}
-The runner has already made the fixed working source copy at:
+The outer deterministic build has already produced the fixed source copy at:
 {working_source}
+It produced numeric measurement evidence at:
+{measurement_path}
+It also produced this GLB, which you must not open or parse:
+{glb_path}
 
-Edit only that working source copy. Use the repository's local source execution
-tool, meshscope, and trimesh only as needed to generate and numerically measure
-the candidate and fixed mesh. Write these exact reviewable results:
-- source/cup_cup_033.implicit.js (the edited complete reproducible source)
-- artifacts/cup_cup_033.glb (nonempty GLB exported with meshscope or trimesh)
-- measurement/numeric-measurement.json (numeric bounds, extents, volume/area
-  when defined, vertex/face counts, and numeric candidate-versus-input metrics)
-- review.md (what was changed, commands/tests, limitations, and Development/MVP label)
+Your role is GPT-5.6 Sol review only. Read only the small source text and the
+small measurement JSON. Review their geometry, numeric evidence, provenance,
+and limitations; write only review.md, explicitly labeling the result as
+"outer deterministic build + GPT-5.6 Sol review" and Development/MVP. Then stop.
 
 Keep context bounded. Do not run git. Do not run find. Do not use head.
 Do not use snapshot. Do not use a browser. Do not use matplotlib.
 Do not run canonical-build. Do not read binary files as text or dump their
-bytes; load the PLY/GLB only through meshscope or trimesh.
+bytes. Do not open the PLY or GLB. Do not rebuild or export anything.
+Do not modify the source. Do not run long commands or tests.
 Do not recursively inspect the repo.
 Do not access credentials or network configuration. Do not call this work Sealed,
 Formal, Verified, or production complete. End with a concise result summary.
@@ -182,6 +180,96 @@ def run_process_group(
         except subprocess.TimeoutExpired:
             group_absent = False
         return process.returncode, timed_out, group_absent
+
+
+def outer_export_command(repo_root: Path, working_source: Path, glb_path: Path) -> list[str]:
+    return [
+        "node", os.fspath(repo_root / "packages/implicitjs/scripts/export.mjs"),
+        "--input", os.fspath(working_source),
+        "--output", os.fspath(glb_path),
+        "--format", "glb", "--resolution", "64", "--max-cells", "1000000",
+        "--json",
+    ]
+
+
+def _mesh_facts(path: Path, trimesh_module: Any) -> dict[str, object]:
+    mesh = trimesh_module.load(path, force="mesh", process=False)
+    if not hasattr(mesh, "vertices") and hasattr(mesh, "geometry"):
+        mesh = trimesh_module.util.concatenate(tuple(mesh.geometry.values()))
+    bounds_value = mesh.bounds.tolist() if hasattr(mesh.bounds, "tolist") else mesh.bounds
+    bounds = [[float(value) for value in row] for row in bounds_value]
+    return {
+        "sha256": sha256(path), "bytes": path.stat().st_size,
+        "vertices": len(mesh.vertices), "faces": len(mesh.faces),
+        "bounds": bounds, "watertight": bool(mesh.is_watertight),
+    }
+
+
+def numeric_measurement(
+    input_path: Path, glb_path: Path, export_command: Sequence[str], *,
+    node_version: str, trimesh_module: Any | None = None,
+) -> dict[str, object]:
+    if trimesh_module is None:
+        import trimesh as trimesh_module  # type: ignore[no-redef]
+    return {
+        "schema": "text-to-cad.cup-cup-033-numeric-measurement/1",
+        "ownership": "outer-deterministic-provider-free",
+        "input": _mesh_facts(input_path, trimesh_module),
+        "glb": _mesh_facts(glb_path, trimesh_module),
+        "tools": {
+            "exportCommand": list(export_command),
+            "exportParameters": {"format": "glb", "resolution": 64, "maxCells": 1_000_000},
+            "measurementCommand": "trimesh.load(path, force='mesh', process=False)",
+            "versions": {
+                "node": node_version,
+                "python": sys.version.split()[0],
+                "trimesh": str(trimesh_module.__version__),
+            },
+        },
+    }
+
+
+def outer_deterministic_build(plan: RunPlan, working_source: Path, run_dir: Path) -> dict[str, object]:
+    artifact = plan.exp_dir / "artifacts/cup_cup_033.glb"
+    artifact.parent.mkdir()
+    measurement_path = plan.exp_dir / "measurement/numeric-measurement.json"
+    measurement_path.parent.mkdir()
+    command = outer_export_command(plan.repo_root, working_source, artifact)
+    environment = {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME": os.environ.get("HOME", "/tmp"),
+        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+    }
+    status, timed_out, group_absent = run_process_group(
+        command, cwd=plan.repo_root, prompt=b"",
+        stdout_path=run_dir / "outer-build.stdout.log",
+        stderr_path=run_dir / "outer-build.stderr.log",
+        environment=environment, timeout=OUTER_BUILD_SECONDS,
+    )
+    if timed_out or status != 0 or not group_absent:
+        raise MvpError("outer deterministic GLB export failed")
+    _regular_nonempty(artifact, "outer deterministic GLB")
+    try:
+        node_version = subprocess.run(
+            ["node", "--version"], check=True, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, env=environment, timeout=10,
+        ).stdout.decode("ascii").strip()
+        measurement = numeric_measurement(
+            plan.input_path, artifact, command, node_version=node_version,
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError, ValueError) as error:
+        raise MvpError("outer deterministic numeric measurement failed") from error
+    _atomic_json(measurement_path, measurement)
+    return {
+        "ownership": "outer-deterministic-provider-free",
+        "exportCommand": command,
+        "parameters": {"format": "glb", "resolution": 64, "maxCells": 1_000_000},
+        "timeoutSeconds": OUTER_BUILD_SECONDS,
+        "exitCode": status, "timedOut": timed_out,
+        "processGroupAbsent": group_absent,
+        "glbSha256": sha256(artifact),
+        "measurementSha256": sha256(measurement_path),
+    }
 
 
 def validate_outputs(exp_dir: Path) -> None:
@@ -277,6 +365,15 @@ def write_artifact_manifest(exp_dir: Path, final_status: int, source_revision: s
     _atomic_json(exp_dir / "artifact_manifest.json", {
         "schema_version": 1, "workload_status": final_status,
         "final_status": final_status, "source_revision": source_revision,
+        "build_ownership": "outer-deterministic-provider-free",
+        "build_command": outer_export_command(
+            REPO_ROOT, exp_dir / "source/cup_cup_033.implicit.js",
+            exp_dir / "artifacts/cup_cup_033.glb",
+        ),
+        "build_parameters": {
+            "format": "glb", "resolution": 64, "max_cells": 1_000_000,
+        },
+        "gpt_role": "review-only",
         "files": files,
     })
 
@@ -300,13 +397,16 @@ def seed_working_source(plan: RunPlan) -> Path:
     return working_source
 
 
-def execute(plan: RunPlan, *, codex: str = "codex", prior_total_ledger: Path | None = None) -> int:
+def execute(
+    plan: RunPlan, *, codex: str = "codex",
+    prior_total_ledger: Path | None = None,
+    outer_builder: Callable[[RunPlan, Path, Path], dict[str, object]] = outer_deterministic_build,
+    provider_factory: Callable[..., Any] = DevelopmentProxy,
+) -> int:
     plan.exp_dir.mkdir(parents=True, mode=0o700)
     run_dir = plan.exp_dir / "run"
     run_dir.mkdir()
     working_source = seed_working_source(plan)
-    prompt = build_prompt(plan.input_path, working_source).encode()
-    (run_dir / "prompt.txt").write_bytes(prompt)
     job_ledger = run_dir / "job-ledger.jsonl"
     total_ledger = run_dir / "total-ledger.jsonl"
     if prior_total_ledger is not None:
@@ -318,6 +418,56 @@ def execute(plan: RunPlan, *, codex: str = "codex", prior_total_ledger: Path | N
         total_ledger.write_bytes(payload)
     else:
         total_ledger.touch()
+
+    try:
+        outer_build = outer_builder(plan, working_source, run_dir)
+    except BaseException as error:
+        job_ledger.touch(exist_ok=True)
+        receipt = {
+            "schema": "text-to-cad.cvm-cup-cup-033-development-mvp/1",
+            "classification": CLASSIFICATION,
+            "status": "development-mvp-failed",
+            "notSealed": True, "notFormal": True, "notVerified": True,
+            "fixtureId": "cup_cup_033", "sourceRevision": plan.source_revision,
+            "launcherSha256": sha256(Path(__file__)),
+            "runtime": {"environment": "CVM", "docker": False, "codexVersion": None},
+            "model": MODEL, "wireApi": "responses", "codeMode": False,
+            "pricingAuthority": PRICING_AUTHORITY,
+            "buildOwnership": "outer-deterministic-provider-free",
+            "gptRole": "review-only-not-run",
+            "outerBuild": {
+                "status": "failed",
+                "ownership": "outer-deterministic-provider-free",
+                "exportCommand": outer_export_command(
+                    plan.repo_root, working_source,
+                    plan.exp_dir / "artifacts/cup_cup_033.glb",
+                ),
+                "parameters": {"format": "glb", "resolution": 64, "maxCells": 1_000_000},
+                "timeoutSeconds": OUTER_BUILD_SECONDS,
+            },
+            "paidDispatchCount": 0,
+            "accounting": {
+                "jobCount": 0, "attemptCount": 0,
+                "mayHaveReachedAttemptCount": 0,
+                "usage": {"inputTokens": 0, "cachedInputTokens": 0, "outputTokens": 0},
+                "settledCostUpperBoundUsd": "0.000000",
+                "unresolvedReservedUsd": "0.000000", "actualUsd": None,
+                "actualUsdUnavailableReason": "paid_dispatch_zero_outer_build_failed",
+            },
+            "policy": {"maxJobs": 1, "maxAttempts": 16, "maxRequestBytes": 200000,
+                       "maxOutputTokens": 40000, "maxJobSeconds": MAX_SECONDS,
+                       "worstCaseAttemptUsd": "2.450000", "worstCaseJobUsd": "39.200000",
+                       "automaticWholeJobRetry": False},
+            "failure": {"stage": "outer-deterministic-build", "category": type(error).__name__},
+        }
+        _atomic_json(plan.exp_dir / "receipt.json", receipt)
+        write_artifact_manifest(plan.exp_dir, 1, plan.source_revision)
+        return 1
+
+    measurement_path = plan.exp_dir / "measurement/numeric-measurement.json"
+    glb_path = plan.exp_dir / "artifacts/cup_cup_033.glb"
+    prompt = build_prompt(working_source, measurement_path, glb_path).encode()
+    (run_dir / "prompt.txt").write_bytes(prompt)
 
     upstream_token = os.environ.get("VENUS_TOKEN")
     if not upstream_token or "\n" in upstream_token or "\r" in upstream_token:
@@ -341,7 +491,7 @@ def execute(plan: RunPlan, *, codex: str = "codex", prior_total_ledger: Path | N
         codex_home.mkdir(mode=0o700)
         config = codex_home / "config.toml"
         try:
-            with DevelopmentProxy(
+            with provider_factory(
                 VENUS_BASE_URL, job_ledger, upstream_token=upstream_token,
                 client_token=client_token, job_id=f"cup_cup_033-{plan.exp_dir.name}",
                 policy=policy, total_ledger_path=total_ledger,
@@ -395,11 +545,17 @@ def execute(plan: RunPlan, *, codex: str = "codex", prior_total_ledger: Path | N
         "input": {"path": str(FIXED_INPUT), "sha256": plan.input_sha256},
         "initialSource": {"path": os.fspath(plan.initial_source), "sha256": plan.source_sha256,
                           "identityPolicy": "explicit MVP input; digest may differ from prior candidates"},
+        "buildOwnership": "outer-deterministic-provider-free",
+        "gptRole": "review-only",
+        "outerBuild": outer_build,
         "policy": {"maxJobs": 1, "maxAttempts": 16, "maxRequestBytes": 200000,
                    "maxOutputTokens": 40000, "maxJobSeconds": MAX_SECONDS,
                    "worstCaseAttemptUsd": "2.450000", "worstCaseJobUsd": "39.200000",
                    "automaticWholeJobRetry": False},
         "accounting": accounting,
+        "paidDispatchCount": (
+            accounting.get("mayHaveReachedAttemptCount") if accounting else None
+        ),
         "process": {"exitCode": process_status, "timedOut": timed_out,
                     "processGroupAbsent": process_group_absent},
         "cleanup": {"proxyListenerAbsent": accounting.get("listenerAbsent") if accounting else None,

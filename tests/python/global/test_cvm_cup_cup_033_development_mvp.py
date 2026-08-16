@@ -31,19 +31,18 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
     def test_prompt_fixes_input_and_requests_all_reviewable_outputs(self):
         module = load_module()
         prompt = module.build_prompt(
-            Path("/repo/models/toys4k/cup_cup_033.ply"),
             Path("/exp/source/cup_cup_033.implicit.js"),
+            Path("/exp/measurement/numeric-measurement.json"),
+            Path("/exp/artifacts/cup_cup_033.glb"),
         )
         for expected in (
-            "/repo/models/toys4k/cup_cup_033.ply",
             "/exp/source/cup_cup_033.implicit.js",
-            "source/cup_cup_033.implicit.js",
             "artifacts/cup_cup_033.glb",
             "measurement/numeric-measurement.json",
             "review.md",
-            "local tools",
-            "meshscope",
-            "trimesh",
+            "outer deterministic build",
+            "GPT-5.6 Sol review",
+            "write only review.md",
         ):
             self.assertIn(expected, prompt)
         for forbidden in (
@@ -55,6 +54,9 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
             "Do not use matplotlib",
             "Do not run canonical-build",
             "Do not read binary files as text",
+            "Do not rebuild or export",
+            "Do not modify the source",
+            "Do not run long commands",
         ):
             self.assertIn(forbidden, prompt)
 
@@ -103,6 +105,14 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
             self.assertIs(type(manifest["final_status"]), int)
             self.assertEqual(manifest["final_status"], 0)
             self.assertEqual(manifest["source_revision"], "a" * 40)
+            self.assertEqual(manifest["build_ownership"], "outer-deterministic-provider-free")
+            self.assertEqual(manifest["gpt_role"], "review-only")
+            self.assertEqual(manifest["build_parameters"], {
+                "format": "glb", "resolution": 64, "max_cells": 1_000_000,
+            })
+            self.assertEqual(manifest["build_command"][-5:], [
+                "--resolution", "64", "--max-cells", "1000000", "--json",
+            ])
             self.assertEqual(manifest["files"][0]["path"], "receipt.json")
 
     def test_run_plan_rejects_existing_output_and_wrong_fixed_input_digest(self):
@@ -155,6 +165,95 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
             self.assertEqual(working, plan.exp_dir / "source/cup_cup_033.implicit.js")
             self.assertEqual(working.read_bytes(), b"fixed source bytes\n")
             self.assertEqual(initial.read_bytes(), b"fixed source bytes\n")
+
+    def test_outer_export_command_is_fixed_and_bounded(self):
+        module = load_module()
+        command = module.outer_export_command(
+            Path("/repo"), Path("/exp/source/cup_cup_033.implicit.js"),
+            Path("/exp/artifacts/cup_cup_033.glb"),
+        )
+        self.assertEqual(command, [
+            "node", "/repo/packages/implicitjs/scripts/export.mjs",
+            "--input", "/exp/source/cup_cup_033.implicit.js",
+            "--output", "/exp/artifacts/cup_cup_033.glb",
+            "--format", "glb", "--resolution", "64", "--max-cells", "1000000",
+            "--json",
+        ])
+
+    def test_outer_build_failure_returns_zero_paid_dispatch_without_reaching_provider(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "initial.js"
+            source.write_text("source\n", encoding="utf-8")
+            input_path = root / "input.ply"
+            input_path.write_bytes(b"ply\n")
+            plan = module.RunPlan(
+                root, root / "outputs/g/e", input_path, source,
+                module.sha256(input_path), module.sha256(source), "d" * 40,
+            )
+            called = False
+
+            def fail_build(_plan, _working, _run):
+                raise module.MvpError("deterministic export failed")
+
+            class ForbiddenProvider:
+                def __init__(self, *_args, **_kwargs):
+                    nonlocal called
+                    called = True
+
+            status = module.execute(
+                plan, outer_builder=fail_build, provider_factory=ForbiddenProvider,
+            )
+            self.assertEqual(status, 1)
+            self.assertFalse(called)
+            receipt = json.loads((plan.exp_dir / "receipt.json").read_text(encoding="utf-8"))
+            self.assertEqual(receipt["paidDispatchCount"], 0)
+            self.assertEqual(receipt["accounting"]["attemptCount"], 0)
+            self.assertEqual(receipt["failure"]["stage"], "outer-deterministic-build")
+            self.assertEqual(receipt["outerBuild"]["parameters"]["resolution"], 64)
+            self.assertIn("packages/implicitjs/scripts/export.mjs", receipt["outerBuild"]["exportCommand"][1])
+            manifest = json.loads((plan.exp_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["final_status"], 1)
+
+    def test_numeric_measurement_binds_input_glb_geometry_and_tool_versions(self):
+        module = load_module()
+
+        class Mesh:
+            def __init__(self, vertices, faces, bounds, watertight):
+                self.vertices = [None] * vertices
+                self.faces = [None] * faces
+                self.bounds = bounds
+                self.is_watertight = watertight
+
+        class FakeTrimesh:
+            __version__ = "4.test"
+
+            @staticmethod
+            def load(path, **kwargs):
+                self.assertEqual(kwargs, {"force": "mesh", "process": False})
+                return Mesh(10, 20, [[0, 0, 0], [1, 2, 3]], path.suffix == ".glb")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            input_path = root / "input.ply"
+            glb_path = root / "candidate.glb"
+            input_path.write_bytes(b"ply")
+            glb_path.write_bytes(b"glTF")
+            command = ["node", "export.mjs", "--resolution", "64"]
+            value = module.numeric_measurement(
+                input_path, glb_path, command, node_version="v22.test",
+                trimesh_module=FakeTrimesh,
+            )
+            self.assertEqual(value["ownership"], "outer-deterministic-provider-free")
+            self.assertEqual(value["input"]["bytes"], 3)
+            self.assertEqual(value["glb"]["sha256"], module.sha256(glb_path))
+            self.assertEqual(value["glb"]["vertices"], 10)
+            self.assertEqual(value["glb"]["faces"], 20)
+            self.assertTrue(value["glb"]["watertight"])
+            self.assertEqual(value["tools"]["exportCommand"], command)
+            self.assertEqual(value["tools"]["versions"]["node"], "v22.test")
+            self.assertEqual(value["tools"]["versions"]["trimesh"], "4.test")
 
 
 if __name__ == "__main__":
