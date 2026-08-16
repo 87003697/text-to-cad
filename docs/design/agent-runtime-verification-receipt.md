@@ -166,7 +166,7 @@ The exact `subject` keys are:
 | `build-input-set` | `buildInputSetDigest`, `buildRecipeDigest`, `baseImageManifestDigest`, `ubuntuSnapshotManifestDigest`, `dependencyLockDigest`, `projectRuntimeArtifactSetDigest` |
 | `build-provenance` | `buildInputSetDigest`, `builderImageManifestDigest`, `buildRecipeDigest`, `baseImageManifestDigest`, `outputImageManifestDigest`, `outputImageConfigDigest` |
 | `dependency-admission` | `buildInputSetDigest`, `dependencyLockDigest`, `aptClosureManifestDigest`, `pythonWheelManifestDigest`, `nodeArtifactDigest`, `implicitBundleDigest` |
-| `codex-admission` | `codexVersion` (literal `0.147.0`), `platform` (literal `x86_64-unknown-linux-musl`), `retrievalReceiptDigest`, `archiveDigest`, `executableDigest`, `elfClosureDigest` |
+| `codex-admission` | `codexVersion` (literal `0.147.0`), `platform` (literal `x86_64-unknown-linux-musl`), `retrievalReceiptDigest`, `archiveDigest`, `executableDigest`, `signatureBundleDigest`, `signaturePolicyDigest`, `signatureVerificationReceiptDigest`, `elfClosureDigest` |
 | `sbom` | `agentImageManifestDigest`, `sbomDigest`, `format` (literal `spdx-json-2.3`) |
 | `image-identity` | `agentImageManifestDigest`, `agentImageConfigDigest`, `runtimeManifestDigest`, `cupRuntimeCapabilityManifestDigest`, `platform` |
 | `browser-deny` | `agentImageManifestDigest`, `scannerDigest`, `inventoryDigest`, `browserFindingCount`, `chromiumProcessCount` |
@@ -288,7 +288,7 @@ and no truthy substitute is accepted.
 | `build-input-set` | `manifestSchemaExact`, `recipeBound`, `baseManifestBound`, `ubuntuSnapshotBound`, `dependencyLockBound`, `projectRuntimeArtifactsBound`, `pathSetClosed`, `fileDigestsBound`, `immutableObjectVisible` |
 | `build-provenance` | `builderIdentityExact`, `buildRecipeDigestExact`, `baseManifestDigestExact`, `platformLinuxAmd64`, `buildInputSetBound`, `networkDisabled`, `pullDisabled`, `cleanContextAllowlisted`, `outputManifestDigestExact`, `outputConfigDigestExact` |
 | `dependency-admission` | `ubuntuSnapshotPinned`, `ubuntuMetadataAuthenticated`, `debClosureComplete`, `pythonWheelClosureComplete`, `nativeMeshscopeWheelAdmitted`, `browserFreeMeshshotWheelAdmitted`, `nodeArtifactAdmitted`, `canonicalImplicitBundleClosed`, `runtimeFilesByteLocked`, `offlineRebuildSucceeded` |
-| `codex-admission` | `versionExact`, `platformArtifactExact`, `retrievalMetadataRecorded`, `archiveDigestExact`, `executableDigestExact`, `elfClosureClosed`, `nodeAbsentSmokePassed`, `noninteractiveSmokePassed`, `immutableMirrorVisible`, `publisherSignatureClaimAbsent` |
+| `codex-admission` | `versionExact`, `platformArtifactExact`, `retrievalMetadataRecorded`, `archiveDigestExact`, `executableDigestExact`, `archiveSingleExecutableExact`, `signatureBundleDigestExact`, `signaturePolicyExact`, `signatureVerified`, `certificateIdentityExact`, `certificateIssuerExact`, `transparencyLogVerified`, `elfClosureClosed`, `nodeAbsentSmokePassed`, `noninteractiveSmokePassed`, `immutableMirrorVisible` |
 | `sbom` | `formatExact`, `subjectManifestDigestExact`, `allRuntimeFilesCovered`, `packageVersionsExact`, `nativeLibrariesCovered`, `licensesRecorded`, `sbomDigestBound` |
 | `image-identity` | `immutableReferenceExact`, `manifestDigestObserved`, `configDigestObserved`, `runtimeManifestInsideImageExact`, `cupManifestInsideImageExact`, `osLinux`, `architectureAmd64`, `entrypointExact`, `userNonRoot`, `noMutableTagAuthority` |
 | `browser-deny` | `packageInventoryEmpty`, `executableInventoryEmpty`, `cacheInventoryEmpty`, `elfMarkerInventoryEmpty`, `productMarkerInventoryEmpty`, `playwrightInventoryEmpty`, `chromiumProcessZero`, `browserLifecycleAuthorityAbsent` |
@@ -296,10 +296,223 @@ and no truthy substitute is accepted.
 | `source-snapshot` | `manifestSchemaExact`, `pathSetClosed`, `regularFilesOnly`, `fileModesBound`, `fileSizesBound`, `fileDigestsBound`, `treeDigestMatchesObservation`, `readOnlyMountEligible` |
 | `verification-plan` | `planSchemaExact`, `planDigestExact`, `scannerApproved`, `sourceSnapshotApproved`, `sourceManifestApproved`, `inputSnapshotApproved`, `cupFixtureApproved`, `routerManifestApproved`, `expectedOutputApproved`, `conformanceFixtureApproved`, `lifecycleHarnessApproved`, `entrypointApproved`, `receiptSchemaApproved`, `agentConfigApproved`, `brokerAuthorityApproved`, `workloadApproved` |
 
-`publisherSignatureClaimAbsent` is intentionally positive only when the receipt
-does **not** claim upstream publisher signing for the Codex executable. Hash and
-retrieval provenance are admissible; an unavailable publisher signature cannot
-be synthesized.
+The Codex signature predicates bind a signature over the extracted executable,
+not over the archive. `archiveSingleExecutableExact` requires the exact archive
+digest and byte length, exactly one regular member with the fixed executable
+name/digest/byte length, no link, and no path traversal. `signatureVerified`
+then verifies that executable against the fixed bundle and policy. A producer
+must not infer or claim that the `.tar.gz` itself was signed.
+
+#### Codex 0.147.0 signature policy and receipt
+
+The version-specific policy is the following exact closed object. Its canonical
+digest is
+`sha256:283a3458787b25f5d18b86b8967f81147b255c63d15dae2a432d3a6db7e77b29`,
+which is the only admitted `signaturePolicyDigest` for this Codex version and
+platform:
+
+```json
+{
+  "archive": {
+    "assetId": 504450426,
+    "bytes": 98970270,
+    "digest": "sha256:0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36",
+    "linksAllowed": false,
+    "memberCount": 1,
+    "memberName": "codex-x86_64-unknown-linux-musl",
+    "memberType": "regular-file",
+    "name": "codex-x86_64-unknown-linux-musl.tar.gz",
+    "pathTraversalAllowed": false,
+    "signedDirectly": false
+  },
+  "certificate": {
+    "chainIssuer": "O=sigstore.dev,CN=sigstore-intermediate",
+    "fingerprintDigest": "sha256:0cd70c48dbbb777f1910538d62604b16be271028b8195325bb8eae58fcf255c8",
+    "notAfter": "2026-08-07T01:12:23Z",
+    "notBefore": "2026-08-07T01:02:23Z",
+    "oidcIssuer": "https://token.actions.githubusercontent.com",
+    "sanUri": "https://github.com/openai/codex/.github/workflows/rust-release.yml@refs/tags/rust-v0.147.0"
+  },
+  "codexVersion": "0.147.0",
+  "executable": {
+    "bytes": 258278208,
+    "digest": "sha256:cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
+    "name": "codex-x86_64-unknown-linux-musl",
+    "platform": "x86_64-unknown-linux-musl"
+  },
+  "githubWorkflow": {
+    "linuxSigningActionDigest": "sha256:4e5fa040cf838f087ce4a0c585f651e90111b4a02973458b926d6938a24108e5",
+    "name": "rust-release",
+    "ref": "refs/tags/rust-v0.147.0",
+    "repository": "openai/codex",
+    "sha": "be6e8eac029b183056b7e4402879f15d2c85f61b",
+    "trigger": "push",
+    "wildcardsAllowed": false,
+    "workflowDigest": "sha256:62367daacaabcc8972b6f0a60d2f964bd957e7ec68cab5d62756fd494041d183"
+  },
+  "release": {
+    "annotatedTagObjectSha": "3ed6f04f6bf8b7c46299d1cb1ff99c74ce21a51d",
+    "commitSha": "be6e8eac029b183056b7e4402879f15d2c85f61b",
+    "repository": "openai/codex",
+    "tag": "rust-v0.147.0"
+  },
+  "schema": "text-to-cad.agent-runtime-codex-signature-policy/1",
+  "signatureBundle": {
+    "assetId": 504450400,
+    "bytes": 8585,
+    "digest": "sha256:8ea31ab792fe0cfc7ba55c9dfc1836edf166dabf2d564ed7391eed6c7d422b3d",
+    "name": "codex-x86_64-unknown-linux-musl.sigstore",
+    "payloadDigest": "sha256:cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40"
+  },
+  "transparencyLog": {
+    "integratedTime": "2026-08-07T01:02:25Z",
+    "logId": "c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d",
+    "logIndex": 2363083279
+  },
+  "trustedRoot": {
+    "rootBytes": 5630,
+    "rootDigest": "sha256:73747011d0857ada15479a16c4cae0f3ed03aac698b523b97e1de314ac9d9ca8",
+    "rootExpires": "2026-11-20T13:58:18Z",
+    "rootVersion": 15,
+    "snapshotBytes": 1760,
+    "snapshotDigest": "sha256:8f784ab614ec62bfdd5f568eb2a2e3011668449ba235ed4eb7befa99f8469933",
+    "snapshotExpires": "2036-05-15T08:09:16Z",
+    "snapshotVersion": 165,
+    "targetsBytes": 4942,
+    "targetsDigest": "sha256:6a697f7f8908c8ab26c11786ecb490b54acec97fa8c802e399f065f8a0cc1acd",
+    "targetsExpires": "2036-05-09T09:00:52Z",
+    "targetsVersion": 14,
+    "timestampBytes": 449,
+    "timestampDigest": "sha256:367992e4f09fbdb98f05cbf4433a3e6d3830d34c230eebd955fb20ccb5c0a956",
+    "timestampExpires": "2026-08-23T01:53:11Z",
+    "timestampVersion": 757,
+    "trustedRootBytes": 6787,
+    "trustedRootDigest": "sha256:6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66"
+  },
+  "verifier": {
+    "assetId": 196693093,
+    "binaryBytes": 108805570,
+    "binaryDigest": "sha256:13343856b69f70388c4fe0b986a31dde5958e444b41be22d785d3dc5e1a9cc62",
+    "checksumsBytes": 3906,
+    "checksumsDigest": "sha256:5020625e52f7041b9e4a21ee7ef4e2d085d767e72f86e2458443b012b0200362",
+    "commitSha": "9a4cfe1aae777984c07ce373d97a65428bbff734",
+    "name": "cosign",
+    "platform": "darwin/arm64",
+    "releaseId": 178267850,
+    "sourcePackaging": "raw-executable-no-archive",
+    "tagObjectSha": "531befdf6581582e22eda7cda084565bb106efa6",
+    "version": "2.4.1"
+  }
+}
+```
+
+The signature verification producer emits the following exact proof-only
+object after offline verification. Its canonical digest is
+`sha256:beca82ea9864536e5200b837b2f136620dcefab1b1c3cc3e58087ad133d98d00`,
+the required `signatureVerificationReceiptDigest`:
+
+```json
+{
+  "archive": {
+    "bytes": 98970270,
+    "digest": "sha256:0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36",
+    "linksAllowed": false,
+    "memberBytes": 258278208,
+    "memberCount": 1,
+    "memberDigest": "sha256:cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
+    "memberName": "codex-x86_64-unknown-linux-musl",
+    "memberType": "regular-file",
+    "pathTraversalAllowed": false,
+    "signedDirectly": false
+  },
+  "archiveNegativeControl": {
+    "bundlePayloadDigest": "sha256:cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
+    "exitCode": 1,
+    "result": "rejected-payload-mismatch",
+    "testedPayloadDigest": "sha256:0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36"
+  },
+  "certificate": {
+    "chainIssuer": "O=sigstore.dev,CN=sigstore-intermediate",
+    "fingerprintDigest": "sha256:0cd70c48dbbb777f1910538d62604b16be271028b8195325bb8eae58fcf255c8",
+    "notAfter": "2026-08-07T01:12:23Z",
+    "notBefore": "2026-08-07T01:02:23Z",
+    "oidcIssuer": "https://token.actions.githubusercontent.com",
+    "sanUri": "https://github.com/openai/codex/.github/workflows/rust-release.yml@refs/tags/rust-v0.147.0"
+  },
+  "githubWorkflow": {
+    "linuxSigningActionDigest": "sha256:4e5fa040cf838f087ce4a0c585f651e90111b4a02973458b926d6938a24108e5",
+    "name": "rust-release",
+    "ref": "refs/tags/rust-v0.147.0",
+    "repository": "openai/codex",
+    "sha": "be6e8eac029b183056b7e4402879f15d2c85f61b",
+    "trigger": "push",
+    "wildcardsAllowed": false,
+    "workflowDigest": "sha256:62367daacaabcc8972b6f0a60d2f964bd957e7ec68cab5d62756fd494041d183"
+  },
+  "result": "verified",
+  "schema": "text-to-cad.agent-runtime-codex-signature-verification/1",
+  "signatureBundleDigest": "sha256:8ea31ab792fe0cfc7ba55c9dfc1836edf166dabf2d564ed7391eed6c7d422b3d",
+  "signaturePolicyDigest": "sha256:283a3458787b25f5d18b86b8967f81147b255c63d15dae2a432d3a6db7e77b29",
+  "signedPayloadDigest": "sha256:cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
+  "transparencyLog": {
+    "integratedTime": "2026-08-07T01:02:25Z",
+    "logId": "c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d",
+    "logIndex": 2363083279
+  },
+  "trustedRoot": {
+    "rootDigest": "sha256:73747011d0857ada15479a16c4cae0f3ed03aac698b523b97e1de314ac9d9ca8",
+    "snapshotDigest": "sha256:8f784ab614ec62bfdd5f568eb2a2e3011668449ba235ed4eb7befa99f8469933",
+    "targetsDigest": "sha256:6a697f7f8908c8ab26c11786ecb490b54acec97fa8c802e399f065f8a0cc1acd",
+    "timestampDigest": "sha256:367992e4f09fbdb98f05cbf4433a3e6d3830d34c230eebd955fb20ccb5c0a956",
+    "trustedRootDigest": "sha256:6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66"
+  },
+  "verifier": {
+    "binaryDigest": "sha256:13343856b69f70388c4fe0b986a31dde5958e444b41be22d785d3dc5e1a9cc62",
+    "checksumsDigest": "sha256:5020625e52f7041b9e4a21ee7ef4e2d085d767e72f86e2458443b012b0200362",
+    "commitSha": "9a4cfe1aae777984c07ce373d97a65428bbff734",
+    "name": "cosign",
+    "platform": "darwin/arm64",
+    "tagObjectSha": "531befdf6581582e22eda7cda084565bb106efa6",
+    "version": "2.4.1"
+  }
+}
+```
+
+For this version/platform, a `codex-admission` subject must carry exactly the
+archive, executable, bundle, policy, and verification-receipt digests printed
+above; `retrievalReceiptDigest` and `elfClosureDigest` bind the separately
+produced acquisition/mirror and Noble ELF observations. The signature checks
+have these exact meanings:
+
+| Predicate | Exact success condition |
+| --- | --- |
+| `archiveSingleExecutableExact` | The receipt's complete `archive` object equals the policy, the raw archive matches `archiveDigest`, and safe listing/extraction proves its one fixed regular member equals `executableDigest`; both `linksAllowed` and `pathTraversalAllowed` are false and `signedDirectly` is false |
+| `signatureBundleDigestExact` | The raw 8,585-byte bundle digest equals subject, policy, and receipt `signatureBundleDigest`, and its payload digest equals `executableDigest` |
+| `signaturePolicyExact` | The policy has exactly the closed object above and its independently recomputed digest equals subject and receipt `signaturePolicyDigest` |
+| `signatureVerified` | The fixed verifier and trusted-root closure verify the fixed bundle over `executableDigest` with result `verified`; the archive negative control is exactly `rejected-payload-mismatch` with exit code `1` |
+| `certificateIdentityExact` | Certificate SAN plus repository, workflow name/ref/SHA/trigger, upstream workflow digest, Linux signing-action digest, release tag object, and peeled commit equal the policy literals, with `wildcardsAllowed:false` |
+| `certificateIssuerExact` | OIDC issuer, certificate-chain issuer, certificate fingerprint, and certificate validity bounds equal the policy literals |
+| `transparencyLogVerified` | The bundle inclusion verifies under the fixed TUF/trusted-root digests and equals the fixed Rekor log ID, index, and integrated time; that time is within the fixed certificate validity interval |
+
+The policy and verification receipt are immutable inputs to the
+`codex-admission` child, not additional graph nodes. The child subject copies
+the raw bundle digest and the two canonical document digests above. A strict
+consumer requires exact equality between those subject fields and the policy
+and receipt, checks every nested key/literal/digest, and rejects an ambient
+verifier or trust cache, wildcard identity, alternate tag/ref/workflow/commit,
+missing or substituted Rekor entry, trust material or an acquisition receipt
+inconsistent with the fixed TUF identities, versions, or expiry metadata,
+archive-as-signed claim, multi-entry/link/traversal archive, or signature over
+bytes other than `executableDigest`.
+
+The proof-only receipt fixes the observed verification facts. Formal admission
+additionally requires `retrievalReceiptDigest` to bind authenticated acquisition
+of the exact verifier and trust bytes while their signed metadata was valid. The
+committed proof candidate is not that admission receipt.
+
+The seven signature predicates are evaluated in their printed order. Each is a
+normal admission predicate under the generic stop-at-first-false grammar; no
+signature-specific retry, alias, status, or sixteenth graph node exists.
 
 ### Environment-qualified nodes
 

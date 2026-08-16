@@ -139,6 +139,33 @@ weaken artifact identity, authority, state-transition, failure/retry,
 publication/visibility, promotion, rollback, or reconciliation semantics. No
 producer may implement another canonical encoder.
 
+### External-byte admission
+
+```text
+admit_codex(retrieval, archive, executable, signature_bundle,
+            signature_policy, verifier, trusted_root) -> codex-admission evidence
+```
+
+SAI-004 owns this producer and the closed Codex signature-policy and
+signature-verification receipt schemas. It consumes only mirrored bytes and
+exact acquisition receipts. It must not use an ambient Sigstore cache, download
+trust material during an image build, accept a wildcard certificate identity,
+or substitute a verifier, bundle, trusted-root object, tag, ref, workflow, or
+commit. The producer validates those schema-neutral documents and computes
+their digests through the one canonical JSON seam before constructing the typed
+`codex-admission` evidence child.
+
+For Codex 0.147.0, the fixed Sigstore bundle signs the single extracted
+`x86_64-unknown-linux-musl` executable. The producer separately proves that the
+fixed archive contains exactly that one regular member with the expected name,
+byte length, and digest and no link or traversal. It records and enforces the
+negative archive verification control; it never calls the archive signed or
+allows a valid executable signature to stand in for the archive-member binding.
+The committed research proof fixes the policy inputs but is not itself an
+admission result: immutable mirroring, ELF closure, Node-absent and
+noninteractive smoke, and the complete successful evidence child remain
+mandatory.
+
 ### Artifact builder
 
 ```text
