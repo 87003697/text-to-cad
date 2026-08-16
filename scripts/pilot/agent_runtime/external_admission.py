@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import tempfile
 from urllib.parse import urlsplit
 from collections.abc import Mapping
@@ -70,13 +71,25 @@ class ExternalMirrorStore(Protocol):
 
 
 CODEX_APPROVAL_DIGEST = (
-    "sha256:caad11a590c6f7f2e1c892fe5001e0a171155e3bd07cceb1de573ebd8ad50ca9"
+    "sha256:85bf8165e3ded898ec4892c8ae3ab48172566d871c79add02c96f389f663d5c4"
 )
 CODEX_POLICY_DIGEST = (
-    "sha256:92e0fa99ae181916f2570bbf17ed8d8ae2ea016fdd87309e0f1db84cf60d3f76"
+    "sha256:8bfd47abc5c13845f82a218fe79ac2378adb29c4cb302a8b9a41eb631f3451d2"
 )
 CODEX_PROOF_RECEIPT_DIGEST = (
-    "sha256:5a44a295d99cb15842b90fa8da1d6206922876bd748815782d66ae357ad0c994"
+    "sha256:ee8632e8d7e9610014e0d59e0b074414540e6e6b5e8feca04d2ef519db488e84"
+)
+CODEX_FORMAL_RECEIPT_DIGEST = (
+    "sha256:9a310c7a26bb8037af9647e93cdfa279855ad3644f31ae307a38f575fa20f0f2"
+)
+CODEX_RETRIEVAL_RECEIPT_DIGEST = (
+    "sha256:8441d9ab8c6b0b75703fba5da1b6ccb16aea28f431ef1a8c963583d7a4c6e331"
+)
+NOBLE_DEB_CLOSURE_DIGEST = (
+    "sha256:53729fdf0db8bfac5a722db686a19bc073240de175eadb7509326f4fcf2c91b2"
+)
+BUILDER_REPRODUCIBILITY_DIAGNOSTIC_DIGEST = (
+    "sha256:a8c99137e96c6e520be9ce2d3a50c8d6976891f37111d28e13e0742d1068b024"
 )
 
 _ARCHIVE_DIGEST = "sha256:0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36"
@@ -90,7 +103,15 @@ _SNAPSHOT_DIGEST = "sha256:8f784ab614ec62bfdd5f568eb2a2e3011668449ba235ed4eb7bef
 _TARGETS_DIGEST = "sha256:6a697f7f8908c8ab26c11786ecb490b54acec97fa8c802e399f065f8a0cc1acd"
 _TRUSTED_ROOT_DIGEST = "sha256:6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66"
 
+_LEGACY_TRUST_MATERIAL: dict[str, CanonicalJSONInput] = {
+    "ctfeKeyDigest": "sha256:270488a309d22e804eeb245493e87c667658d749006b9fee9cc614572d4fbbdc",
+    "fulcioIntermediateDigest": "sha256:f8cbecf186db7714624a5f4e99da31a917cbef70a94dd6921f5c3ca969dfe30a",
+    "fulcioRootDigest": "sha256:f989aa23def87c549404eadba767768d2a3c8d6d30a8b793f9f518a8eafd2cf5",
+    "rekorKeyDigest": "sha256:dce5ef715502ec9f3cdfd11f8cc384b31a6141023d3e7595e9908a81cb6241bd",
+}
+
 _TRUSTED_ROOT: dict[str, CanonicalJSONInput] = {
+    "legacyTrustMaterial": _LEGACY_TRUST_MATERIAL,
     "rootBytes": 5630,
     "rootDigest": _ROOT_DIGEST,
     "rootExpires": "2026-11-20T13:58:18Z",
@@ -117,11 +138,14 @@ _APPROVAL: dict[str, CanonicalJSONInput] = {
     "approvedBytes": {
         "archive": {"bytes": 98970270, "digest": _ARCHIVE_DIGEST},
         "executable": {"bytes": 258278208, "digest": _EXECUTABLE_DIGEST},
+        "legacyTrustMaterial": _LEGACY_TRUST_MATERIAL,
         "signatureBundle": {"bytes": 8585, "digest": _BUNDLE_DIGEST},
         "trustedRoot": {
             key: value
             for key, value in _TRUSTED_ROOT.items()
-            if not key.endswith("Expires") and not key.endswith("Version")
+            if key != "legacyTrustMaterial"
+            and not key.endswith("Expires")
+            and not key.endswith("Version")
         },
         "verifier": {
             "binaryBytes": 108805570,
@@ -252,6 +276,7 @@ _PROOF_RECEIPT: dict[str, CanonicalJSONInput] = {
         "status": "not-formal-admission",
     },
     "trustedRoot": {
+        "legacyTrustMaterial": _LEGACY_TRUST_MATERIAL,
         "rootDigest": _ROOT_DIGEST,
         "snapshotDigest": _SNAPSHOT_DIGEST,
         "targetsDigest": _TARGETS_DIGEST,
@@ -340,7 +365,7 @@ _CODEX_CANDIDATE: dict[str, CanonicalJSONInput] = {
     },
     "claims": {
         "formalAdmission": False,
-        "formalSignatureReceipt": False,
+        "formalSignatureReceipt": True,
         "immutableMirrorVisible": False,
     },
     "elf": {
@@ -438,10 +463,10 @@ def _validate_builder_candidate(value: Mapping[str, Any]) -> None:
         "builder claims",
     )
     if dict(claims) != {
-        "debBytesMirrored": False,
+        "debBytesMirrored": True,
         "formalAdmission": False,
         "immutableMirrorVisible": False,
-        "networklessRebuild": False,
+        "networklessRebuild": True,
     }:
         raise ExternalAdmissionError("builder candidate claims exceed observed evidence")
     base = _require_keys(value["baseImage"], {"digest", "reference"}, "builder base image")
@@ -562,6 +587,113 @@ def _validate_retrieval_metadata(value: Mapping[str, Any]) -> None:
             _validate_https_url(redirect)
 
 
+def _validate_noble_deb_closure(value: Mapping[str, Any]) -> None:
+    _require_keys(
+        value,
+        {"claims", "inRelease", "packageIndices", "packages", "schema", "snapshot", "status"},
+        "Noble deb closure",
+    )
+    if value["schema"] != "text-to-cad.agent-runtime-noble-deb-closure-candidate/1":
+        raise ExternalAdmissionError("Noble deb closure schema is invalid")
+    if canonical_json_digest(value) != NOBLE_DEB_CLOSURE_DIGEST:
+        raise ExternalAdmissionError("Noble deb closure does not equal reviewed closure digest")
+    if value["snapshot"] != "20260815T000000Z" or value["status"] != "local-candidate":
+        raise ExternalAdmissionError("Noble deb closure identity is invalid")
+    if value["claims"] != {
+        "debBytesMirroredLocal": True,
+        "formalAdmission": False,
+        "immutableMirrorVisible": False,
+        "inReleaseAuthenticated": True,
+        "networklessRebuild": True,
+        "packageIndexHashesMatched": True,
+    }:
+        raise ExternalAdmissionError("Noble deb closure claims are invalid")
+    in_release = value["inRelease"]
+    indices = value["packageIndices"]
+    packages = value["packages"]
+    if not isinstance(in_release, (list, tuple)) or len(in_release) != 4:
+        raise ExternalAdmissionError("Noble InRelease closure is incomplete")
+    if not isinstance(indices, (list, tuple)) or len(indices) != 8:
+        raise ExternalAdmissionError("Noble Packages index closure is incomplete")
+    if not isinstance(packages, (list, tuple)) or len(packages) != 78:
+        raise ExternalAdmissionError("Noble package closure is incomplete")
+    for record in in_release:
+        item = _require_keys(
+            record, {"bytes", "digest", "signatureVerified", "suite"}, "Noble InRelease"
+        )
+        if item["signatureVerified"] is not True:
+            raise ExternalAdmissionError("Noble InRelease signature is not verified")
+        _require_digest(item["digest"], "Noble InRelease digest")
+    for record in indices:
+        item = _require_keys(
+            record,
+            {"bytes", "component", "digest", "path", "suite", "uncompressedDigest"},
+            "Noble Packages index",
+        )
+        _require_digest(item["digest"], "Noble Packages index digest")
+        _require_digest(item["uncompressedDigest"], "Noble Packages uncompressed digest")
+    package_names: list[str] = []
+    for record in packages:
+        item = _require_keys(
+            record,
+            {"architecture", "bytes", "digest", "indexAuthorities", "localFilename", "package", "poolPath", "version"},
+            "Noble package",
+        )
+        _require_digest(item["digest"], "Noble package digest")
+        if not isinstance(item["indexAuthorities"], (list, tuple)) or not item["indexAuthorities"]:
+            raise ExternalAdmissionError("Noble package has no signed index authority")
+        if not isinstance(item["package"], str):
+            raise ExternalAdmissionError("Noble package name is invalid")
+        package_names.append(item["package"])
+    if package_names != sorted(package_names):
+        raise ExternalAdmissionError("Noble package closure order is not canonical")
+
+
+def _validate_builder_reproducibility_diagnostic(value: Mapping[str, Any]) -> None:
+    _require_keys(
+        value,
+        {
+            "baseLayerEqual", "fileInventory", "firstImage", "postBaseLayersEqual",
+            "reproducible", "schema", "secondImage", "semanticConfigEqual", "status",
+        },
+        "builder reproducibility diagnostic",
+    )
+    if value["schema"] != "text-to-cad.agent-runtime-builder-reproducibility-diagnostic/1":
+        raise ExternalAdmissionError("builder reproducibility diagnostic schema is invalid")
+    if canonical_json_digest(value) != BUILDER_REPRODUCIBILITY_DIAGNOSTIC_DIGEST:
+        raise ExternalAdmissionError("builder result does not equal reviewed diagnostic digest")
+    if (
+        value["status"] != "diagnostic-only"
+        or value["reproducible"] is not False
+        or value["semanticConfigEqual"] is not True
+        or value["baseLayerEqual"] is not True
+        or value["postBaseLayersEqual"] is not False
+    ):
+        raise ExternalAdmissionError("builder reproducibility result is overstated")
+    inventory = _require_keys(
+        value["fileInventory"],
+        {"changed", "files", "pycChanged", "runtimeMountedChanged", "transientStateChanged"},
+        "builder file inventory",
+    )
+    if dict(inventory) != {
+        "changed": 846,
+        "files": 11441,
+        "pycChanged": 842,
+        "runtimeMountedChanged": 1,
+        "transientStateChanged": 3,
+    }:
+        raise ExternalAdmissionError("builder file inventory is not exact")
+    for label in ("firstImage", "secondImage"):
+        image = _require_keys(
+            value[label], {"created", "id", "layers", "size"}, f"builder {label}"
+        )
+        _require_digest(image["id"], f"builder {label} id")
+        if not isinstance(image["layers"], (list, tuple)) or len(image["layers"]) != 8:
+            raise ExternalAdmissionError(f"builder {label} layer closure is incomplete")
+        for layer in image["layers"]:
+            _require_digest(layer, f"builder {label} layer")
+
+
 def _validate(kind: str, value: Mapping[str, Any]) -> None:
     if kind in _NORMATIVE:
         expected, expected_digest = _NORMATIVE[kind]
@@ -576,6 +708,12 @@ def _validate(kind: str, value: Mapping[str, Any]) -> None:
         return
     if kind == "builder-input-candidate":
         _validate_builder_candidate(value)
+        return
+    if kind == "noble-deb-closure-candidate":
+        _validate_noble_deb_closure(value)
+        return
+    if kind == "builder-reproducibility-diagnostic":
+        _validate_builder_reproducibility_diagnostic(value)
         return
     if kind == "python-wheel-lock":
         expected = _freeze_mapping(_PYTHON_WHEEL_LOCK)
@@ -691,6 +829,20 @@ def load_codex_signature_proof() -> ExternalAdmissionDocument:
     )
 
 
+def _formal_codex_signature_receipt() -> ExternalAdmissionDocument:
+    """Return the exact reviewed two-leaf promotion of the proof receipt."""
+
+    formal = dict(_PROOF_RECEIPT)
+    formal["result"] = "verified"
+    formal["trustBootstrap"] = {
+        "approvalDigest": CODEX_APPROVAL_DIGEST,
+        "status": "verified",
+    }
+    return parse_external_strict(
+        "codex-signature-verification", canonical_json_bytes(formal)
+    )
+
+
 def build_codex_offline_plan(
     *,
     verifier: Path,
@@ -744,11 +896,12 @@ def build_codex_offline_plan(
 def _pem_bytes(label: str, payload: bytes) -> bytes:
     encoded = base64.b64encode(payload)
     lines = [encoded[index:index + 64] for index in range(0, len(encoded), 64)]
-    return (
+    pem = (
         f"-----BEGIN {label}-----\n".encode("ascii")
         + b"\n".join(lines)
-        + f"\n-----END {label}-----\n".encode("ascii")
+        + f"\n-----END {label}-----".encode("ascii")
     )
+    return pem if label == "CERTIFICATE" else pem + b"\n"
 
 
 def _decode_approved(raw: Any, expected_digest: str, label: str) -> bytes:
@@ -829,8 +982,10 @@ def extract_codex_trust_material(
     _write_read_only(material.rekor_key, _pem_bytes("PUBLIC KEY", rekor))
     _write_read_only(material.ct_key, _pem_bytes("PUBLIC KEY", ct_key))
     expected_pem_digests = {
-        material.ca_root: "sha256:dcf166eebe7cbd9760947a88213d94e656349c647d439569dc76a275f05b7159",
-        material.ca_intermediate: "sha256:ac5a60ca80f473f8b7742111f9eb49bf7dbd8f03f41a5b39d58b62b6f0de4d0f",
+        material.ca_root: cast(str, _LEGACY_TRUST_MATERIAL["fulcioRootDigest"]),
+        material.ca_intermediate: cast(
+            str, _LEGACY_TRUST_MATERIAL["fulcioIntermediateDigest"]
+        ),
         material.rekor_key: "sha256:dce5ef715502ec9f3cdfd11f8cc384b31a6141023d3e7595e9908a81cb6241bd",
         material.ct_key: "sha256:270488a309d22e804eeb245493e87c667658d749006b9fee9cc614572d4fbbdc",
     }
@@ -872,6 +1027,62 @@ def replay_codex_offline_plan(
     if rekor_code != 1 or "rekor" not in rekor_output.lower():
         raise ExternalAdmissionError("Codex wrong Rekor key control did not reject")
     return load_codex_signature_proof()
+
+
+def _run_offline_command(
+    args: tuple[str, ...], environment: Mapping[str, str]
+) -> tuple[int, str]:
+    try:
+        completed = subprocess.run(
+            args,
+            env=dict(environment),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise ExternalAdmissionError("approved Codex verifier could not execute") from exc
+    return completed.returncode, completed.stdout + completed.stderr
+
+
+def _require_exact_blob(path: Path, digest: str, size: int, label: str) -> None:
+    actual_digest, actual_size = _file_identity(path)
+    if actual_size != size:
+        raise ExternalAdmissionError(f"approved {label} byte length mismatch")
+    if actual_digest != digest:
+        raise ExternalAdmissionError(f"approved {label} digest mismatch")
+
+
+def produce_codex_formal_signature_receipt(
+    *,
+    verifier: Path,
+    bundle: Path,
+    executable: Path,
+    archive: Path,
+    trusted_root: Path,
+    output_directory: Path,
+    runner: Any = _run_offline_command,
+) -> ExternalAdmissionDocument:
+    """Verify every approved byte/control, then promote only the two formal leaves."""
+
+    _require_exact_blob(verifier, _VERIFIER_DIGEST, 108805570, "verifier")
+    _require_exact_blob(bundle, _BUNDLE_DIGEST, 8585, "signature bundle")
+    _require_exact_blob(executable, _EXECUTABLE_DIGEST, 258278208, "executable")
+    _require_exact_blob(archive, _ARCHIVE_DIGEST, 98970270, "archive")
+    _require_exact_blob(trusted_root, _TRUSTED_ROOT_DIGEST, 6787, "trusted root")
+    material = extract_codex_trust_material(trusted_root, output_directory)
+    plan = build_codex_offline_plan(
+        verifier=verifier,
+        bundle=bundle,
+        executable=executable,
+        archive=archive,
+        ca_root=material.ca_root,
+        ca_intermediate=material.ca_intermediate,
+        rekor_key=material.rekor_key,
+        ct_key=material.ct_key,
+    )
+    replay_codex_offline_plan(plan, runner)
+    return _formal_codex_signature_receipt()
 
 
 def _file_identity(path: Path) -> tuple[str, int]:

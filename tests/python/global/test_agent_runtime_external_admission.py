@@ -17,6 +17,22 @@ BUILDER_CANDIDATE = (
     / "builder"
     / "builder-input-candidate.json"
 )
+NOBLE_DEB_CLOSURE = (
+    REPO_ROOT
+    / "packages"
+    / "agent_runtime"
+    / "external"
+    / "builder"
+    / "noble-deb-closure-candidate.json"
+)
+BUILDER_REPRODUCIBILITY_DIAGNOSTIC = (
+    REPO_ROOT
+    / "packages"
+    / "agent_runtime"
+    / "external"
+    / "builder"
+    / "builder-reproducibility-diagnostic.json"
+)
 PYTHON_WHEEL_LOCK = (
     REPO_ROOT
     / "packages"
@@ -49,6 +65,22 @@ CODEX_CANDIDATE = (
     / "codex"
     / "codex-admission-candidate.json"
 )
+CODEX_SIGNATURE_RECEIPT = (
+    REPO_ROOT
+    / "packages"
+    / "agent_runtime"
+    / "external"
+    / "codex"
+    / "codex-signature-verification-receipt.json"
+)
+CODEX_RETRIEVAL_RECEIPT = (
+    REPO_ROOT
+    / "packages"
+    / "agent_runtime"
+    / "external"
+    / "codex"
+    / "codex-retrieval-metadata.json"
+)
 
 
 class FakeMirrorStore:
@@ -77,6 +109,57 @@ class FakeMirrorStore:
 
 
 class ExternalAdmissionContractTests(unittest.TestCase):
+    def test_noble_deb_closure_is_exact_signed_and_networkless_rebuilt(self) -> None:
+        from scripts.pilot.agent_runtime import canonical_json_bytes
+        from scripts.pilot.agent_runtime.external_admission import (
+            NOBLE_DEB_CLOSURE_DIGEST,
+            ExternalAdmissionError,
+            external_digest,
+            parse_external_strict,
+        )
+
+        closure = parse_external_strict(
+            "noble-deb-closure-candidate", NOBLE_DEB_CLOSURE.read_bytes()
+        )
+        self.assertEqual(external_digest(closure), NOBLE_DEB_CLOSURE_DIGEST)
+        self.assertEqual(len(closure.value["packages"]), 78)
+        self.assertEqual(len(closure.value["packageIndices"]), 8)
+        self.assertTrue(closure.value["claims"]["inReleaseAuthenticated"])
+        self.assertTrue(closure.value["claims"]["packageIndexHashesMatched"])
+        self.assertTrue(closure.value["claims"]["networklessRebuild"])
+        self.assertFalse(closure.value["claims"]["formalAdmission"])
+        substituted = copy.deepcopy(closure.value)
+        substituted["packages"][0]["digest"] = "sha256:" + "0" * 64
+        with self.assertRaisesRegex(ExternalAdmissionError, "reviewed closure digest"):
+            parse_external_strict(
+                "noble-deb-closure-candidate", canonical_json_bytes(substituted)
+            )
+
+    def test_builder_reproducibility_diagnostic_refuses_false_success(self) -> None:
+        from scripts.pilot.agent_runtime import canonical_json_bytes
+        from scripts.pilot.agent_runtime.external_admission import (
+            BUILDER_REPRODUCIBILITY_DIAGNOSTIC_DIGEST,
+            ExternalAdmissionError,
+            external_digest,
+            parse_external_strict,
+        )
+
+        diagnostic = parse_external_strict(
+            "builder-reproducibility-diagnostic",
+            BUILDER_REPRODUCIBILITY_DIAGNOSTIC.read_bytes(),
+        )
+        self.assertEqual(
+            external_digest(diagnostic), BUILDER_REPRODUCIBILITY_DIAGNOSTIC_DIGEST
+        )
+        self.assertFalse(diagnostic.value["reproducible"])
+        self.assertEqual(diagnostic.value["fileInventory"]["changed"], 846)
+        substituted = copy.deepcopy(diagnostic.value)
+        substituted["reproducible"] = True
+        with self.assertRaisesRegex(ExternalAdmissionError, "diagnostic digest"):
+            parse_external_strict(
+                "builder-reproducibility-diagnostic", canonical_json_bytes(substituted)
+            )
+
     def test_codex_evidence_contract_matches_reviewed_subject_and_predicates(self) -> None:
         from scripts.pilot.agent_runtime.contracts import PREDICATES, SUBJECT_FIELDS
 
@@ -111,8 +194,20 @@ class ExternalAdmissionContractTests(unittest.TestCase):
         )
 
         approval, policy = load_codex_normative_inputs()
+        self.assertEqual(
+            CODEX_APPROVAL_DIGEST,
+            "sha256:85bf8165e3ded898ec4892c8ae3ab48172566d871c79add02c96f389f663d5c4",
+        )
+        self.assertEqual(
+            CODEX_POLICY_DIGEST,
+            "sha256:8bfd47abc5c13845f82a218fe79ac2378adb29c4cb302a8b9a41eb631f3451d2",
+        )
         self.assertEqual(external_digest(approval), CODEX_APPROVAL_DIGEST)
         self.assertEqual(external_digest(policy), CODEX_POLICY_DIGEST)
+        self.assertEqual(
+            approval.value["approvedBytes"]["legacyTrustMaterial"]["fulcioRootDigest"],
+            "sha256:f989aa23def87c549404eadba767768d2a3c8d6d30a8b793f9f518a8eafd2cf5",
+        )
         self.assertEqual(
             parse_external_strict(
                 "sigstore-trust-anchor-approval",
@@ -170,12 +265,13 @@ class ExternalAdmissionContractTests(unittest.TestCase):
 
         document = parse_external_strict("builder-input-candidate", BUILDER_CANDIDATE.read_bytes())
         self.assertEqual(document.value["status"], "local-candidate")
-        self.assertFalse(document.value["claims"]["debBytesMirrored"])
+        self.assertTrue(document.value["claims"]["debBytesMirrored"])
+        self.assertTrue(document.value["claims"]["networklessRebuild"])
         self.assertFalse(document.value["claims"]["immutableMirrorVisible"])
         self.assertFalse(document.value["claims"]["formalAdmission"])
         self.assertEqual(
             document.value["localImage"]["id"],
-            "sha256:49de767070e9a205a5424860162e409c8ff4268e0567effb8d9265fc553a1ee2",
+            "sha256:9f53dae6dd44ad326e18c7620b45230607c5e81c8dfc1cf59494656e295faeff",
         )
         self.assertEqual(
             canonical_external_bytes(document), BUILDER_CANDIDATE.read_bytes().removesuffix(b"\n")
@@ -303,6 +399,10 @@ class ExternalAdmissionContractTests(unittest.TestCase):
         )
 
         proof = load_codex_signature_proof()
+        self.assertEqual(
+            CODEX_PROOF_RECEIPT_DIGEST,
+            "sha256:ee8632e8d7e9610014e0d59e0b074414540e6e6b5e8feca04d2ef519db488e84",
+        )
         self.assertEqual(external_digest(proof), CODEX_PROOF_RECEIPT_DIGEST)
         self.assertEqual(proof.value["result"], "proof-only")
         self.assertEqual(proof.value["trustBootstrap"]["status"], "not-formal-admission")
@@ -312,6 +412,50 @@ class ExternalAdmissionContractTests(unittest.TestCase):
             ),
             proof,
         )
+
+    def test_formal_signature_subreceipt_changes_only_two_reviewed_leaves(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            CODEX_FORMAL_RECEIPT_DIGEST,
+            _formal_codex_signature_receipt,
+            external_digest,
+            load_codex_signature_proof,
+            parse_external_strict,
+        )
+
+        proof = copy.deepcopy(load_codex_signature_proof().value)
+        formal = _formal_codex_signature_receipt()
+        expected = copy.deepcopy(proof)
+        expected["result"] = "verified"
+        expected["trustBootstrap"]["status"] = "verified"
+        self.assertEqual(formal.value, expected)
+        persisted = parse_external_strict(
+            "codex-signature-verification", CODEX_SIGNATURE_RECEIPT.read_bytes()
+        )
+        self.assertEqual(persisted.value, formal.value)
+        self.assertEqual(external_digest(persisted), CODEX_FORMAL_RECEIPT_DIGEST)
+
+    def test_formal_signature_producer_rejects_substituted_bytes_before_runner(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            ExternalAdmissionError,
+            produce_codex_formal_signature_receipt,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            substituted = root / "substituted"
+            substituted.write_bytes(b"not approved")
+            calls = []
+            with self.assertRaisesRegex(ExternalAdmissionError, "byte length"):
+                produce_codex_formal_signature_receipt(
+                    verifier=substituted,
+                    bundle=substituted,
+                    executable=substituted,
+                    archive=substituted,
+                    trusted_root=substituted,
+                    output_directory=root / "trust",
+                    runner=lambda args, env: calls.append((args, env)),
+                )
+            self.assertEqual(calls, [])
 
     def test_retrieval_metadata_is_closed_non_authoritative_and_ordered(self) -> None:
         from scripts.pilot.agent_runtime import canonical_json_bytes
@@ -363,6 +507,20 @@ class ExternalAdmissionContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ExternalAdmissionError, "HTTPS URL"):
             parse_external_strict("codex-retrieval-metadata", canonical_json_bytes(document))
 
+    def test_concrete_retrieval_receipt_binds_observed_approved_bytes(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            CODEX_RETRIEVAL_RECEIPT_DIGEST,
+            external_digest,
+            parse_external_strict,
+        )
+
+        receipt = parse_external_strict(
+            "codex-retrieval-metadata", CODEX_RETRIEVAL_RECEIPT.read_bytes()
+        )
+        self.assertEqual(external_digest(receipt), CODEX_RETRIEVAL_RECEIPT_DIGEST)
+        self.assertEqual(receipt.value["objects"][0]["kind"], "archive")
+        self.assertEqual(receipt.value["objects"][-1]["kind"], "trustedRoot")
+
     def test_node_candidate_binds_signed_checksum_elf_and_offline_smoke(self) -> None:
         from scripts.pilot.agent_runtime.external_admission import parse_external_strict
 
@@ -389,7 +547,7 @@ class ExternalAdmissionContractTests(unittest.TestCase):
         self.assertIsNone(document.value["elf"]["interpreter"])
         self.assertTrue(document.value["probes"]["nodeAbsent"])
         self.assertTrue(document.value["probes"]["noninteractiveParserSmoke"])
-        self.assertFalse(document.value["claims"]["formalSignatureReceipt"])
+        self.assertTrue(document.value["claims"]["formalSignatureReceipt"])
         self.assertFalse(document.value["claims"]["formalAdmission"])
 
     def test_codex_legacy_offline_plan_is_deny_proxy_and_has_three_negatives(self) -> None:
@@ -453,6 +611,16 @@ class ExternalAdmissionContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ExternalAdmissionError, "byte length"):
                 extract_codex_trust_material(substituted, root / "out")
             self.assertFalse((root / "out").exists())
+
+    def test_legacy_pem_projection_has_no_trailing_newline(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import _pem_bytes
+
+        pem = _pem_bytes("CERTIFICATE", b"exact-cert-bytes")
+        self.assertEqual(
+            pem,
+            b"-----BEGIN CERTIFICATE-----\nZXhhY3QtY2VydC1ieXRlcw==\n-----END CERTIFICATE-----",
+        )
+        self.assertFalse(pem.endswith(b"\n"))
 
 
 if __name__ == "__main__":
