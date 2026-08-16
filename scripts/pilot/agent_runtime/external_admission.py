@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import base64
+import io
 import json
 import os
 from pathlib import Path
@@ -13,6 +15,7 @@ import socket
 import sys
 import tempfile
 import lzma
+import zipfile
 from urllib.parse import urlsplit
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -85,6 +88,17 @@ class StableBlobSnapshot:
     bytes: int
 
 
+@dataclass(frozen=True)
+class LocalCASArtifactLocator:
+    """One exact, read-only local CAS record for downstream consumers."""
+
+    artifact_id: str
+    path: Path
+    bytes: int
+    digest: str
+    mode: str
+
+
 class ExternalMirrorStore(Protocol):
     """Minimal create-only, exact-version external mirror adapter."""
 
@@ -143,10 +157,13 @@ CODEX_OS_NETWORK_DENIED_LAUNCH_RECEIPT_DIGEST = (
     "sha256:e17e637c59c8121b3bdd254cd8f081e000068281cd345a5943705bcd2e8270e6"
 )
 LOCAL_CAS_BYTE_LOCATORS_DIGEST = (
-    "sha256:ad65cd8af1b85f953d0163756491e6f087eabc308f17f48cd630dbce6e36680b"
+    "sha256:9f068c5b6c3d03eae562a5da5a872abd3370ea1fc1cee46b26c330ce49e60e66"
 )
 _LOCAL_CAS_BYTE_LOCATORS_FILE_DIGEST = (
-    "sha256:63bba8d11a40618d0a93df9f488337f9c49baa567316a851fa0ad5081427958b"
+    "sha256:9f068c5b6c3d03eae562a5da5a872abd3370ea1fc1cee46b26c330ce49e60e66"
+)
+SPDX_LICENSE_CATALOG_DIGEST = (
+    "sha256:5865e5d860a9278d30d22eb5522952f85eb620b2a6a3e68e02a5df7449835a31"
 )
 NOBLE_RUNTIME_DEB_LOCAL_LOCATORS_DIGEST = (
     "sha256:18e98c27e115ecf4c336c4847c87540b0a6fc103b5791d20a88d846f01e4aac6"
@@ -851,8 +868,71 @@ def _validate(kind: str, value: Mapping[str, Any]) -> None:
         )
         if value["schema"] != "text-to-cad.agent-runtime-local-cas-byte-locators/1":
             raise ExternalAdmissionError("local CAS locator schema is invalid")
-        if len(value["artifacts"]) != 4 or value["formalAdmission"] is not False:
+        artifacts = cast(tuple[Any, ...], value["artifacts"])
+        expected_ids = (
+            "builder.docker-archive", "python.numpy", "python.trimesh", "python.pillow",
+            "node.archive", "node.checksums", "node.checksums-signature",
+            "node.release-key", "codex.archive", "codex.executable",
+            "codex.signature-bundle", "codex.verifier", "codex.verifier-checksums",
+            "codex.tuf-root", "codex.tuf-timestamp", "codex.tuf-snapshot",
+            "codex.tuf-targets", "codex.trusted-root", "spdx.license-list-wheel",
+            "spdx.license-catalog",
+        )
+        if (
+            len(artifacts) != 20
+            or value["formalAdmission"] is not False
+            or value["immutableMirrorVisible"] is not False
+            or tuple(cast(Mapping[str, Any], item).get("artifactId") for item in artifacts)
+            != expected_ids
+        ):
             raise ExternalAdmissionError("local CAS locator claims are invalid")
+        for artifact_value in artifacts:
+            artifact = cast(Mapping[str, Any], artifact_value)
+            required = {"artifactId", "bytes", "digest", "kind", "locator", "mode"}
+            if not set(artifact).issuperset(required):
+                raise ExternalAdmissionError("local CAS artifact record is incomplete")
+            artifact_id = artifact["artifactId"]
+            if (
+                type(artifact_id) is not str
+                or re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,63}", artifact_id) is None
+                or type(artifact["bytes"]) is not int
+                or artifact["bytes"] < 0
+                or type(artifact["kind"]) is not str
+                or not artifact["kind"].isascii()
+                or artifact["mode"] != "0444"
+            ):
+                raise ExternalAdmissionError("local CAS artifact scalar is invalid")
+            _require_digest(artifact["digest"], "local CAS artifact digest")
+            if artifact["locator"] != (
+                "/private/tmp/sai004-external-mirror/sha256/"
+                + cast(str, artifact["digest"]).removeprefix("sha256:")
+            ):
+                raise ExternalAdmissionError("local CAS artifact locator is not exact")
+        return
+    if kind == "spdx-license-catalog":
+        if canonical_json_digest(value) != SPDX_LICENSE_CATALOG_DIGEST:
+            raise ExternalAdmissionError("SPDX license catalog is not exact")
+        _require_keys(
+            value,
+            {"exceptions", "licenseListVersion", "licenses", "schema"},
+            "SPDX license catalog",
+        )
+        licenses = value["licenses"]
+        exceptions = value["exceptions"]
+        if (
+            value["schema"] != "text-to-cad.spdx-license-catalog/1"
+            or value["licenseListVersion"] != "3.28.0"
+            or not isinstance(licenses, (list, tuple))
+            or not isinstance(exceptions, (list, tuple))
+            or len(licenses) != 727
+            or len(exceptions) != 84
+        ):
+            raise ExternalAdmissionError("SPDX license catalog shape is invalid")
+        for label, identifiers in (("license", licenses), ("exception", exceptions)):
+            if tuple(sorted(identifiers)) != tuple(identifiers) or len(set(identifiers)) != len(identifiers):
+                raise ExternalAdmissionError(f"SPDX {label} identifiers are not ordered unique")
+            if any(type(item) is not str or not item or not item.isascii() for item in identifiers):
+                raise ExternalAdmissionError(f"SPDX {label} identifier is invalid")
         return
     if kind == "noble-runtime-deb-local-locators":
         if canonical_json_digest(value) != NOBLE_RUNTIME_DEB_LOCAL_LOCATORS_DIGEST:
@@ -1356,6 +1436,117 @@ def _snapshot_exact_blob(
     return StableBlobSnapshot(destination, snapshot_digest, snapshot_size)
 
 
+def get_local_cas_artifact_locator(
+    artifact_id: str, *, manifest: Path | None = None
+) -> LocalCASArtifactLocator:
+    """Return one exact locator record from the closed local CAS document."""
+
+    if type(artifact_id) is not str or not artifact_id:
+        raise ExternalAdmissionError("local CAS artifact id is invalid")
+    selected_manifest = manifest or (
+        Path(__file__).resolve().parents[3]
+        / "packages/agent_runtime/external/local-cas-byte-locators.json"
+    )
+    document = parse_external_strict(
+        "local-cas-byte-locators",
+        _read_regular_bytes(selected_manifest, "local CAS locator manifest"),
+    )
+    matches = tuple(
+        cast(Mapping[str, Any], item)
+        for item in cast(tuple[Any, ...], document.value["artifacts"])
+        if cast(Mapping[str, Any], item)["artifactId"] == artifact_id
+    )
+    if len(matches) != 1:
+        raise ExternalAdmissionError("local CAS artifact id is not selected exactly once")
+    record = matches[0]
+    return LocalCASArtifactLocator(
+        artifact_id=artifact_id,
+        path=Path(cast(str, record["locator"])),
+        bytes=cast(int, record["bytes"]),
+        digest=cast(str, record["digest"]),
+        mode=cast(str, record["mode"]),
+    )
+
+
+def _derive_spdx_catalog_bytes(wheel_bytes: bytes) -> bytes:
+    try:
+        with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as archive:
+            source_bytes = archive.read("spdx_license_list/__init__.py")
+        source = source_bytes.decode("utf-8")
+        tree = ast.parse(source)
+    except (KeyError, UnicodeDecodeError, SyntaxError, zipfile.BadZipFile, OSError) as exc:
+        raise ExternalAdmissionError("SPDX source wheel cannot be parsed offline") from exc
+    collections: dict[str, list[str]] = {}
+    for node in tree.body:
+        if (
+            not isinstance(node, ast.AnnAssign)
+            or not isinstance(node.target, ast.Name)
+            or node.target.id not in {"LICENSES", "EXCEPTIONS"}
+            or not isinstance(node.value, ast.Dict)
+        ):
+            continue
+        identifiers: list[str] = []
+        for key in node.value.keys:
+            if not isinstance(key, ast.Constant) or type(key.value) is not str:
+                raise ExternalAdmissionError("SPDX source identifier is not a literal string")
+            identifiers.append(key.value)
+        collections[node.target.id] = identifiers
+    if set(collections) != {"LICENSES", "EXCEPTIONS"}:
+        raise ExternalAdmissionError("SPDX source dictionaries are not exact")
+    licenses = sorted(collections["LICENSES"])
+    exceptions = sorted(collections["EXCEPTIONS"])
+    if (
+        len(licenses) != 727
+        or len(exceptions) != 84
+        or len(set(licenses)) != len(licenses)
+        or len(set(exceptions)) != len(exceptions)
+        or any(not item or not item.isascii() for item in licenses + exceptions)
+    ):
+        raise ExternalAdmissionError("SPDX source identifier closure is invalid")
+    return canonical_json_bytes(
+        {
+            "exceptions": exceptions,
+            "licenseListVersion": "3.28.0",
+            "licenses": licenses,
+            "schema": "text-to-cad.spdx-license-catalog/1",
+        }
+    )
+
+
+def validate_spdx_license_catalog(
+    *, source_wheel: Path, catalog: Path, output_directory: Path
+) -> ExternalAdmissionDocument:
+    """Derive and validate the exact SPDX 3.28.0 catalog without importing code."""
+
+    try:
+        output_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except OSError as exc:
+        raise ExternalAdmissionError("SPDX replay output must be new") from exc
+    wheel_snapshot = _snapshot_exact_blob(
+        source_wheel,
+        output_directory / "spdx_license_list-3.28.0-py3-none-any.whl",
+        "sha256:4470ca5de095d04e4172d8776e245d629a99abf0d08741261dd014559b746534",
+        18657,
+        "SPDX License List source wheel",
+        expected_source_mode=0o444,
+    )
+    catalog_snapshot = _snapshot_exact_blob(
+        catalog,
+        output_directory / "spdx-license-catalog-3.28.0.json",
+        SPDX_LICENSE_CATALOG_DIGEST,
+        12540,
+        "SPDX license catalog",
+        expected_source_mode=0o444,
+    )
+    derived = _derive_spdx_catalog_bytes(
+        _read_regular_bytes(wheel_snapshot.path, "SPDX source wheel snapshot")
+    )
+    observed = _read_regular_bytes(catalog_snapshot.path, "SPDX catalog snapshot")
+    if derived != observed:
+        raise ExternalAdmissionError("SPDX catalog differs from admitted source wheel")
+    return parse_external_strict("spdx-license-catalog", observed)
+
+
 def validate_local_cas_locators(
     manifest: Path, output_directory: Path
 ) -> ExternalAdmissionDocument:
@@ -1369,7 +1560,7 @@ def validate_local_cas_locators(
         manifest,
         output_directory / "manifest.json",
         _LOCAL_CAS_BYTE_LOCATORS_FILE_DIGEST,
-        1494,
+        6817,
         "local CAS locator manifest",
     )
     document = parse_external_strict(

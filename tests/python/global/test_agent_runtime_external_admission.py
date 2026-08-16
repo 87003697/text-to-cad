@@ -115,6 +115,10 @@ LOCAL_CAS_LOCATORS = (
     REPO_ROOT / "packages" / "agent_runtime" / "external"
     / "local-cas-byte-locators.json"
 )
+SPDX_LICENSE_CATALOG = (
+    REPO_ROOT / "packages" / "agent_runtime" / "external" / "spdx"
+    / "spdx-license-catalog-3.28.0.json"
+)
 
 
 class FakeMirrorStore:
@@ -149,9 +153,12 @@ class FakeMirrorStore:
 
 class ExternalAdmissionContractTests(unittest.TestCase):
     def test_local_cas_locator_manifest_is_closed(self) -> None:
+        from scripts.pilot.agent_runtime import canonical_json_bytes
         from scripts.pilot.agent_runtime.external_admission import (
             LOCAL_CAS_BYTE_LOCATORS_DIGEST,
+            ExternalAdmissionError,
             external_digest,
+            get_local_cas_artifact_locator,
             parse_external_strict,
         )
 
@@ -159,11 +166,94 @@ class ExternalAdmissionContractTests(unittest.TestCase):
             "local-cas-byte-locators", LOCAL_CAS_LOCATORS.read_bytes()
         )
         self.assertEqual(external_digest(manifest), LOCAL_CAS_BYTE_LOCATORS_DIGEST)
+        self.assertEqual(len(manifest.value["artifacts"]), 20)
         self.assertEqual(manifest.value["artifacts"][0]["kind"], "builderDockerArchive")
         self.assertEqual(
-            [artifact["distribution"] for artifact in manifest.value["artifacts"][1:]],
+            [artifact["distribution"] for artifact in manifest.value["artifacts"][1:4]],
             ["numpy", "trimesh", "Pillow"],
         )
+        self.assertEqual(
+            tuple(artifact["artifactId"] for artifact in manifest.value["artifacts"][-16:]),
+            (
+                "node.archive", "node.checksums", "node.checksums-signature",
+                "node.release-key", "codex.archive", "codex.executable",
+                "codex.signature-bundle", "codex.verifier",
+                "codex.verifier-checksums", "codex.tuf-root",
+                "codex.tuf-timestamp", "codex.tuf-snapshot", "codex.tuf-targets",
+                "codex.trusted-root", "spdx.license-list-wheel",
+                "spdx.license-catalog",
+            ),
+        )
+        catalog = get_local_cas_artifact_locator("spdx.license-catalog")
+        self.assertEqual(catalog.bytes, 12540)
+        self.assertEqual(
+            catalog.digest,
+            "sha256:5865e5d860a9278d30d22eb5522952f85eb620b2a6a3e68e02a5df7449835a31",
+        )
+        self.assertEqual(catalog.mode, "0444")
+        self.assertEqual(catalog.path.name, catalog.digest.removeprefix("sha256:"))
+        with self.assertRaisesRegex(ExternalAdmissionError, "not selected exactly once"):
+            get_local_cas_artifact_locator("spdx.unknown")
+        substituted = copy.deepcopy(manifest.value)
+        substituted["artifacts"][-1]["mode"] = "0644"
+        with self.assertRaisesRegex(ExternalAdmissionError, "locator manifest"):
+            parse_external_strict(
+                "local-cas-byte-locators", canonical_json_bytes(substituted)
+            )
+
+    def test_spdx_license_catalog_is_exact_closed_and_ordered(self) -> None:
+        from scripts.pilot.agent_runtime import canonical_json_bytes
+        from scripts.pilot.agent_runtime.external_admission import (
+            SPDX_LICENSE_CATALOG_DIGEST,
+            ExternalAdmissionError,
+            external_digest,
+            parse_external_strict,
+        )
+
+        self.assertEqual(len(SPDX_LICENSE_CATALOG.read_bytes()), 12540)
+        catalog = parse_external_strict(
+            "spdx-license-catalog", SPDX_LICENSE_CATALOG.read_bytes()
+        )
+        self.assertEqual(external_digest(catalog), SPDX_LICENSE_CATALOG_DIGEST)
+        self.assertEqual(catalog.value["licenseListVersion"], "3.28.0")
+        self.assertEqual(len(catalog.value["licenses"]), 727)
+        self.assertEqual(len(catalog.value["exceptions"]), 84)
+        self.assertEqual(tuple(sorted(catalog.value["licenses"])), catalog.value["licenses"])
+        substituted = copy.deepcopy(catalog.value)
+        substituted["licenses"][0] = "substitution"
+        with self.assertRaisesRegex(ExternalAdmissionError, "catalog"):
+            parse_external_strict(
+                "spdx-license-catalog", canonical_json_bytes(substituted)
+            )
+
+    def test_spdx_catalog_replay_derives_exact_reviewed_bytes(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            ExternalAdmissionError,
+            get_local_cas_artifact_locator,
+            validate_spdx_license_catalog,
+        )
+
+        wheel = get_local_cas_artifact_locator("spdx.license-list-wheel")
+        catalog = get_local_cas_artifact_locator("spdx.license-catalog")
+        if not wheel.path.is_file() or not catalog.path.is_file():
+            self.skipTest("SAI-004 local external CAS is not present")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            replayed = validate_spdx_license_catalog(
+                source_wheel=wheel.path,
+                catalog=catalog.path,
+                output_directory=root / "valid",
+            )
+            self.assertEqual(replayed.value["licenseListVersion"], "3.28.0")
+            substituted = root / "substituted-catalog.json"
+            substituted.write_bytes(catalog.path.read_bytes() + b" ")
+            substituted.chmod(0o444)
+            with self.assertRaisesRegex(ExternalAdmissionError, "byte length"):
+                validate_spdx_license_catalog(
+                    source_wheel=wheel.path,
+                    catalog=substituted,
+                    output_directory=root / "invalid",
+                )
 
     def test_noble_runtime_deb_closure_is_distinct_exact_and_complete(self) -> None:
         from scripts.pilot.agent_runtime.external_admission import (
