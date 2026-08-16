@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 
 
 def load_module():
@@ -28,17 +30,33 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
 
     def test_prompt_fixes_input_and_requests_all_reviewable_outputs(self):
         module = load_module()
-        prompt = module.build_prompt(Path("/repo/models/toys4k/cup_cup_033.ply"), Path("/old/source.js"))
+        prompt = module.build_prompt(
+            Path("/repo/models/toys4k/cup_cup_033.ply"),
+            Path("/exp/source/cup_cup_033.implicit.js"),
+        )
         for expected in (
             "/repo/models/toys4k/cup_cup_033.ply",
-            "/old/source.js",
+            "/exp/source/cup_cup_033.implicit.js",
             "source/cup_cup_033.implicit.js",
             "artifacts/cup_cup_033.glb",
             "measurement/numeric-measurement.json",
             "review.md",
             "local tools",
+            "meshscope",
+            "trimesh",
         ):
             self.assertIn(expected, prompt)
+        for forbidden in (
+            "Do not run git",
+            "Do not run find",
+            "Do not use head",
+            "Do not use snapshot",
+            "Do not use a browser",
+            "Do not use matplotlib",
+            "Do not run canonical-build",
+            "Do not read binary files as text",
+        ):
+            self.assertIn(forbidden, prompt)
 
     def test_validation_requires_nonempty_geometry_measurement_review_and_last_message(self):
         module = load_module()
@@ -80,10 +98,11 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             exp = Path(directory)
             (exp / "receipt.json").write_text("{}", encoding="utf-8")
-            module.write_artifact_manifest(exp, 0)
+            module.write_artifact_manifest(exp, 0, "a" * 40)
             manifest = json.loads((exp / "artifact_manifest.json").read_text(encoding="utf-8"))
             self.assertIs(type(manifest["final_status"]), int)
             self.assertEqual(manifest["final_status"], 0)
+            self.assertEqual(manifest["source_revision"], "a" * 40)
             self.assertEqual(manifest["files"][0]["path"], "receipt.json")
 
     def test_run_plan_rejects_existing_output_and_wrong_fixed_input_digest(self):
@@ -96,14 +115,46 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
             source = root / "prior.js"
             source.write_text("source", encoding="utf-8")
             with self.assertRaisesRegex(module.MvpError, "digest"):
-                module.prepare_plan(root, "group", "exp", source)
+                module.prepare_plan(root, "group", "exp", source, "a" * 40)
             fixed.write_bytes(b"fixture")
             module.FIXED_INPUT_SHA256 = module.sha256(fixed)
-            plan = module.prepare_plan(root, "group", "exp", source)
+            plan = module.prepare_plan(root, "group", "exp", source, "a" * 40)
             self.assertEqual(plan.exp_dir, root / "outputs/group/exp")
+            self.assertEqual(plan.source_revision, "a" * 40)
             plan.exp_dir.mkdir(parents=True)
             with self.assertRaisesRegex(module.MvpError, "fresh"):
-                module.prepare_plan(root, "group", "exp", source)
+                module.prepare_plan(root, "group", "exp", source, "a" * 40)
+
+    def test_source_revision_is_explicit_and_does_not_depend_on_git_metadata(self):
+        module = load_module()
+        parser = module.argument_parser()
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args([
+                "--group", "g", "--exp", "e", "--initial-source", "/source.js",
+            ])
+        args = parser.parse_args([
+            "--group", "g", "--exp", "e", "--initial-source", "/source.js",
+            "--source-revision", "b" * 40,
+        ])
+        self.assertEqual(args.source_revision, "b" * 40)
+        self.assertFalse(hasattr(module, "_git_sha"))
+
+    def test_runner_seeds_one_fixed_working_source_copy(self):
+        module = load_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixed = root / "models/toys4k/cup_cup_033.ply"
+            fixed.parent.mkdir(parents=True)
+            fixed.write_bytes(b"fixture")
+            module.FIXED_INPUT_SHA256 = module.sha256(fixed)
+            initial = root / "prior.implicit.js"
+            initial.write_bytes(b"fixed source bytes\n")
+            plan = module.prepare_plan(root, "g", "e", initial, "c" * 40)
+            plan.exp_dir.mkdir(parents=True)
+            working = module.seed_working_source(plan)
+            self.assertEqual(working, plan.exp_dir / "source/cup_cup_033.implicit.js")
+            self.assertEqual(working.read_bytes(), b"fixed source bytes\n")
+            self.assertEqual(initial.read_bytes(), b"fixed source bytes\n")
 
 
 if __name__ == "__main__":

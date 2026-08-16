@@ -38,6 +38,7 @@ CODEX_VERSION = "0.142.1"
 MAX_SECONDS = 45 * 60
 PRICING_AUTHORITY = "iWiki-4020336897-v54-2026-08-14"
 COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
 
 
 class MvpError(RuntimeError):
@@ -51,6 +52,7 @@ class RunPlan(NamedTuple):
     initial_source: Path
     input_sha256: str
     source_sha256: str
+    source_revision: str
 
 
 def sha256(path: Path) -> str:
@@ -66,9 +68,14 @@ def _regular_nonempty(path: Path, label: str) -> None:
         raise MvpError(f"{label} must be one nonempty regular file")
 
 
-def prepare_plan(repo_root: Path, group: str, exp: str, initial_source: Path) -> RunPlan:
+def prepare_plan(
+    repo_root: Path, group: str, exp: str, initial_source: Path,
+    source_revision: str,
+) -> RunPlan:
     if not COMPONENT.fullmatch(group) or not COMPONENT.fullmatch(exp):
         raise MvpError("group and exp must be safe path components")
+    if not SOURCE_REVISION.fullmatch(source_revision):
+        raise MvpError("source revision must be one exact 40-character lowercase Git SHA")
     input_path = repo_root / FIXED_INPUT
     _regular_nonempty(input_path, "fixed cup_cup_033 input")
     observed = sha256(input_path)
@@ -79,7 +86,10 @@ def prepare_plan(repo_root: Path, group: str, exp: str, initial_source: Path) ->
     exp_dir = repo_root / "outputs" / group / exp
     if exp_dir.exists():
         raise MvpError("output experiment must be fresh")
-    return RunPlan(repo_root, exp_dir, input_path, initial_source, observed, sha256(initial_source))
+    return RunPlan(
+        repo_root, exp_dir, input_path, initial_source, observed,
+        sha256(initial_source), source_revision,
+    )
 
 
 def codex_config(proxy_url: str, client_token: str) -> str:
@@ -96,24 +106,31 @@ def codex_config(proxy_url: str, client_token: str) -> str:
     )
 
 
-def build_prompt(input_path: Path, initial_source: Path) -> str:
+def build_prompt(input_path: Path, working_source: Path) -> str:
     return f"""You are running exactly one Development/MVP CAD reconstruction job.
 This is not Sealed, not Formal, not Verified, and not a production completion.
 
-Use local tools in this repository. The fixed mesh input is:
+Use only the bounded local tools described below. The fixed mesh input is:
 {input_path}
 The repository root is:
 {input_path.parents[2]}
-The explicit initial source is:
-{initial_source}
+The runner has already made the fixed working source copy at:
+{working_source}
 
-Inspect both, then improve or rebuild the CAD source for cup_cup_033. Write all
-reviewable results below the current experiment directory at these exact paths:
-- source/cup_cup_033.implicit.js (complete reproducible source)
-- artifacts/cup_cup_033.glb (nonempty rendered geometry)
-- measurement/numeric-measurement.json (numeric dimensions and comparison metrics)
+Edit only that working source copy. Use the repository's local source execution
+tool, meshscope, and trimesh only as needed to generate and numerically measure
+the candidate and fixed mesh. Write these exact reviewable results:
+- source/cup_cup_033.implicit.js (the edited complete reproducible source)
+- artifacts/cup_cup_033.glb (nonempty GLB exported with meshscope or trimesh)
+- measurement/numeric-measurement.json (numeric bounds, extents, volume/area
+  when defined, vertex/face counts, and numeric candidate-versus-input metrics)
 - review.md (what was changed, commands/tests, limitations, and Development/MVP label)
 
+Keep context bounded. Do not run git. Do not run find. Do not use head.
+Do not use snapshot. Do not use a browser. Do not use matplotlib.
+Do not run canonical-build. Do not read binary files as text or dump their
+bytes; load the PLY/GLB only through meshscope or trimesh.
+Do not recursively inspect the repo.
 Do not access credentials or network configuration. Do not call this work Sealed,
 Formal, Verified, or production complete. End with a concise result summary.
 """
@@ -242,9 +259,11 @@ def _atomic_json(path: Path, value: object) -> None:
     temporary.replace(path)
 
 
-def write_artifact_manifest(exp_dir: Path, final_status: int) -> None:
+def write_artifact_manifest(exp_dir: Path, final_status: int, source_revision: str) -> None:
     if type(final_status) is not int:
         raise MvpError("final_status must be an integer")
+    if not SOURCE_REVISION.fullmatch(source_revision):
+        raise MvpError("source revision must be one exact 40-character lowercase Git SHA")
     files = []
     for path in sorted(exp_dir.rglob("*")):
         if path.is_symlink():
@@ -257,7 +276,8 @@ def write_artifact_manifest(exp_dir: Path, final_status: int) -> None:
             })
     _atomic_json(exp_dir / "artifact_manifest.json", {
         "schema_version": 1, "workload_status": final_status,
-        "final_status": final_status, "files": files,
+        "final_status": final_status, "source_revision": source_revision,
+        "files": files,
     })
 
 
@@ -271,16 +291,21 @@ def _codex_command(codex: str, exp_dir: Path, last_message: Path) -> list[str]:
     ]
 
 
-def _git_sha(repo_root: Path) -> str:
-    result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo_root, check=True, stdout=subprocess.PIPE)
-    return result.stdout.decode("ascii").strip()
+def seed_working_source(plan: RunPlan) -> Path:
+    working_source = plan.exp_dir / "source/cup_cup_033.implicit.js"
+    working_source.parent.mkdir()
+    shutil.copyfile(plan.initial_source, working_source)
+    if sha256(working_source) != plan.source_sha256:
+        raise MvpError("fixed working source copy digest mismatch")
+    return working_source
 
 
 def execute(plan: RunPlan, *, codex: str = "codex", prior_total_ledger: Path | None = None) -> int:
     plan.exp_dir.mkdir(parents=True, mode=0o700)
     run_dir = plan.exp_dir / "run"
     run_dir.mkdir()
-    prompt = build_prompt(plan.input_path, plan.initial_source).encode()
+    working_source = seed_working_source(plan)
+    prompt = build_prompt(plan.input_path, working_source).encode()
     (run_dir / "prompt.txt").write_bytes(prompt)
     job_ledger = run_dir / "job-ledger.jsonl"
     total_ledger = run_dir / "total-ledger.jsonl"
@@ -362,7 +387,7 @@ def execute(plan: RunPlan, *, codex: str = "codex", prior_total_ledger: Path | N
         "classification": CLASSIFICATION,
         "status": "development-mvp-completed" if success else "development-mvp-failed",
         "notSealed": True, "notFormal": True, "notVerified": True,
-        "fixtureId": "cup_cup_033", "gitSha": _git_sha(plan.repo_root),
+        "fixtureId": "cup_cup_033", "sourceRevision": plan.source_revision,
         "launcherSha256": sha256(Path(__file__)),
         "runtime": {"environment": "CVM", "docker": False, "codexVersion": observed_version},
         "model": MODEL, "wireApi": "responses", "codeMode": False,
@@ -385,20 +410,28 @@ def execute(plan: RunPlan, *, codex: str = "codex", prior_total_ledger: Path | N
         "secretPersistence": "none; VENUS_TOKEN remained proxy-process memory and was removed from Codex environment",
     }
     _atomic_json(plan.exp_dir / "receipt.json", receipt)
-    write_artifact_manifest(plan.exp_dir, 0 if success else 1)
+    write_artifact_manifest(plan.exp_dir, 0 if success else 1, plan.source_revision)
     return 0 if success else 1
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--group", required=True)
     parser.add_argument("--exp", required=True)
     parser.add_argument("--initial-source", required=True, type=Path)
+    parser.add_argument("--source-revision", required=True)
     parser.add_argument("--prior-total-ledger", type=Path)
     parser.add_argument("--codex", default="codex")
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = argument_parser().parse_args(argv)
     try:
-        plan = prepare_plan(REPO_ROOT, args.group, args.exp, args.initial_source)
+        plan = prepare_plan(
+            REPO_ROOT, args.group, args.exp, args.initial_source,
+            args.source_revision,
+        )
         return execute(plan, codex=args.codex, prior_total_ledger=args.prior_total_ledger)
     except MvpError as error:
         print(f"CVM MVP preflight failed: {error}", file=sys.stderr)
