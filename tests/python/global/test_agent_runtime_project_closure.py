@@ -440,18 +440,16 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                 ):
                     closure.validate_project_manifest(mutated)
 
-            mismatched_source = dict(meshshot_source)
-            mismatched_source["sourceTreeDigest"] = _canonical_digest("wrong-source")
             with self.assertRaisesRegex(closure.ProjectClosureError, "source"):
                 closure.assemble_python_artifact(
-                    mismatched_source,
+                    meshshot_source,
                     {
                         "distribution": "meshshot-agent-runtime",
                         "version": "0.1.0",
                         "wheelPath": meshshot["wheelPath"],
                         "wheelSha256": meshshot["wheelSha256"],
                         "wheelBytes": meshshot["wheelBytes"],
-                        "sourceTreeDigest": meshshot_source["sourceTreeDigest"],
+                        "sourceTreeDigest": _canonical_digest("wrong-source"),
                         "fileManifestDigest": meshshot_source["fileManifestDigest"],
                         "browserInventoryEmpty": True,
                         "browserDenial": meshshot["browserDenial"],
