@@ -37,6 +37,14 @@ from agent_runtime_boundary_matrix import ScriptedAdapter, record  # noqa: E402
 SCHEMA = "meshshot.agent-boundary.prototype-concurrency/1"
 CUP_MANIFEST_DIGEST = "sha256:" + "5" * 64
 VERIFICATION_PLAN_DIGEST = "sha256:" + "6" * 64
+# Named vectors for source.txt=b"source" and input.bin=b"input" at mode 0644.
+# Materialization verifies them with contract.canonical_tree_digest().
+SOURCE_TREE_GOLDEN = Digest(
+    "sha256:623a1b45d75ebc530e4ece2c29da0624b60202afe80494d6005037835bfd009a",
+)
+INPUT_TREE_GOLDEN = Digest(
+    "sha256:05c680e33dac19289cec5450e2beb5d6515d410d31ad367aa6296e93017df4fe",
+)
 SHARED_IDENTITY_KEYS = (
     "agentImageDigest", "agentConfigDigest", "runtimeManifestDigest",
     "sourceDigest", "inputDigest", "brokerAuthorityDigest", "workloadDigest",
@@ -83,15 +91,6 @@ def authority_group(root: Path) -> tuple[FileAuthorityStore, Path]:
     return FileAuthorityStore(store_root), receipt_root
 
 
-def _single_file_tree_digest(name: str, content: bytes) -> Digest:
-    value = hashlib.sha256()
-    value.update(
-        b"f\0" + name.encode("utf-8") + b"\0" + b"0o644\0"
-        + str(len(content)).encode("ascii") + b"\0" + content
-    )
-    return Digest("sha256:" + value.hexdigest())
-
-
 def pending_execution(
     root: Path, index: int, residual_preview: bool = False,
 ) -> PendingExecution:
@@ -99,8 +98,7 @@ def pending_execution(
     request = ExecutionRequest(
         f"job-{index}", Digest("sha256:" + "1" * 64),
         Digest("sha256:" + "2" * 64), Digest("sha256:" + "3" * 64),
-        _single_file_tree_digest("source.txt", b"source"),
-        _single_file_tree_digest("input.bin", b"input"),
+        SOURCE_TREE_GOLDEN, INPUT_TREE_GOLDEN,
         Digest("sha256:" + "4" * 64), workload,
     )
     return PendingExecution(
