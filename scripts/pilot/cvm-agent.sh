@@ -21,9 +21,10 @@ case "$mode" in
         source_revision="$(git rev-parse HEAD)"
         module_sha="$(sha256_file scripts/pilot/cvm_agent.py)"
         prompt_sha="$(sha256_file scripts/pilot/cvm_agent_surface_prompt.md)"
-        source_digest="$(python3 -m scripts.pilot.cvm_agent source-digest)"
+        read -r source_digest source_manifest \
+            < <(python3 -m scripts.pilot.cvm_agent source-identity)
         exec ssh -n cvm \
-            "cd ~/text-to-cad && scripts/pilot/cvm-agent-remote.sh submit surface-adaptation --source-revision '$source_revision' --module-sha256 '$module_sha' --prompt-sha256 '$prompt_sha' --source-digest '$source_digest'"
+            "cd ~/text-to-cad && scripts/pilot/cvm-agent-remote.sh submit surface-adaptation --source-revision '$source_revision' --module-sha256 '$module_sha' --prompt-sha256 '$prompt_sha' --source-digest '$source_digest' --source-manifest-base64 '$source_manifest'"
         ;;
     monitor)
         shift

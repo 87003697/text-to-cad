@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import fcntl
 import hashlib
 import json
@@ -91,17 +92,71 @@ def _source_files(root: Path) -> list[Path]:
     return sorted(files, key=lambda path: path.relative_to(root).as_posix())
 
 
-def _source_digest(root: Path | None = None) -> str:
-    """Bind the task's complete readable source surface after deployment."""
-
+def _source_manifest(root: Path | None = None) -> list[dict[str, str]]:
     root = REPO_ROOT if root is None else root
-    digest = hashlib.sha256()
-    for path in _source_files(root):
-        relative = path.relative_to(root).as_posix().encode()
-        digest.update(len(relative).to_bytes(8, "big"))
-        digest.update(relative)
-        digest.update(bytes.fromhex(_sha256(path)))
-    return digest.hexdigest()
+    return [
+        {
+            "path": path.relative_to(root).as_posix(),
+            "sha256": _sha256(path),
+        }
+        for path in _source_files(root)
+    ]
+
+
+def _manifest_bytes(manifest: list[dict[str, str]]) -> bytes:
+    return json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+
+
+def _source_digest(manifest: list[dict[str, str]] | None = None) -> str:
+    """Bind the exact task input list and every expected file digest."""
+
+    value = _source_manifest() if manifest is None else manifest
+    return hashlib.sha256(_manifest_bytes(value)).hexdigest()
+
+
+def _decode_manifest(encoded: str) -> list[dict[str, str]]:
+    try:
+        raw = base64.b64decode(encoded, altchars=b"-_", validate=True)
+        value = json.loads(raw)
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise AgentError("source manifest is invalid") from exc
+    if not isinstance(value, list) or len(value) > 1000:
+        raise AgentError("source manifest is invalid")
+    normalized: list[dict[str, str]] = []
+    previous = ""
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"path", "sha256"}:
+            raise AgentError("source manifest is invalid")
+        path = item["path"]
+        digest = item["sha256"]
+        if not isinstance(path, str) or not isinstance(digest, str):
+            raise AgentError("source manifest is invalid")
+        allowed = path in SOURCE_INPUT_FILES or any(
+            path.startswith(prefix + "/") for prefix in SOURCE_INPUT_PREFIXES
+        )
+        if (
+            not allowed
+            or not re.fullmatch(r"[A-Za-z0-9._/-]+", path)
+            or path <= previous
+            or not SHA256.fullmatch(digest)
+        ):
+            raise AgentError("source manifest is invalid")
+        normalized.append({"path": path, "sha256": digest})
+        previous = path
+    if not normalized:
+        raise AgentError("source manifest is invalid")
+    return normalized
+
+
+def _verify_manifest(root: Path, manifest: list[dict[str, str]]) -> None:
+    for item in manifest:
+        path = root / item["path"]
+        try:
+            metadata = path.lstat()
+        except OSError as exc:
+            raise AgentError("source manifest verification failed") from exc
+        if not stat.S_ISREG(metadata.st_mode) or _sha256(path) != item["sha256"]:
+            raise AgentError("source manifest verification failed")
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -195,6 +250,7 @@ def submit(
     module_sha256: str,
     prompt_sha256: str,
     source_digest: str,
+    source_manifest_base64: str,
     *,
     detach: Callable[[Sequence[str]], int] | None = None,
 ) -> dict[str, Any]:
@@ -203,8 +259,13 @@ def submit(
     if task not in TASKS or not REVISION.fullmatch(source_revision):
         raise AgentError("invalid CVM agent submission")
     _verify_workflow(module_sha256, prompt_sha256)
-    if not SHA256.fullmatch(source_digest) or _source_digest() != source_digest:
+    source_manifest = _decode_manifest(source_manifest_base64)
+    if (
+        not SHA256.fullmatch(source_digest)
+        or _source_digest(source_manifest) != source_digest
+    ):
         raise AgentError("deployed source digest mismatch")
+    _verify_manifest(REPO_ROOT, source_manifest)
     STATE_ROOT.mkdir(parents=True, exist_ok=True)
     with (STATE_ROOT / "budget.lock").open("a", encoding="utf-8") as ledger:
         fcntl.flock(ledger.fileno(), fcntl.LOCK_EX)
@@ -231,6 +292,7 @@ def submit(
             "model": MODEL,
             "sourceRevision": source_revision,
             "sourceDigest": source_digest,
+            "sourceManifest": source_manifest,
             "moduleSha256": module_sha256,
             "promptSha256": prompt_sha256,
             "group": group,
@@ -269,12 +331,13 @@ def submit(
     return _public(_load(handle))
 
 
-def _copy_source(destination: Path) -> None:
+def _copy_source(destination: Path, manifest: list[dict[str, str]]) -> None:
     """Copy exactly the source bytes covered by the deployment digest."""
 
     destination.mkdir(parents=True, mode=0o700)
-    for source in _source_files(REPO_ROOT):
-        target = destination / source.relative_to(REPO_ROOT)
+    for item in manifest:
+        source = REPO_ROOT / item["path"]
+        target = destination / item["path"]
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
 
@@ -651,8 +714,13 @@ def supervise(
         control.mkdir(mode=0o700)
         exp_dir.mkdir(parents=True)
         run_dir.mkdir()
-        _copy_source(baseline)
-        if _source_digest(baseline) != value["sourceDigest"]:
+        source_manifest = value.get("sourceManifest")
+        if not isinstance(source_manifest, list):
+            raise AgentError("source manifest is invalid")
+        _copy_source(baseline, source_manifest)
+        try:
+            _verify_manifest(baseline, source_manifest)
+        except AgentError:
             raise AgentError("copied source digest mismatch")
         shutil.copytree(baseline, workspace)
         prompt = PROMPT_PATH.read_bytes()
@@ -747,7 +815,8 @@ def _parser() -> argparse.ArgumentParser:
     submit_parser.add_argument("--module-sha256", required=True)
     submit_parser.add_argument("--prompt-sha256", required=True)
     submit_parser.add_argument("--source-digest", required=True)
-    subparsers.add_parser("source-digest")
+    submit_parser.add_argument("--source-manifest-base64", required=True)
+    subparsers.add_parser("source-identity")
     supervise_parser = subparsers.add_parser("supervise")
     supervise_parser.add_argument("handle")
     monitor_parser = subparsers.add_parser("monitor")
@@ -759,8 +828,10 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        if args.command == "source-digest":
-            print(_source_digest())
+        if args.command == "source-identity":
+            manifest = _source_manifest()
+            encoded = base64.urlsafe_b64encode(_manifest_bytes(manifest)).decode()
+            print(_source_digest(manifest), encoded)
             return 0
         if args.command == "submit":
             result = submit(
@@ -769,6 +840,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.module_sha256,
                 args.prompt_sha256,
                 args.source_digest,
+                args.source_manifest_base64,
             )
             status = 0
         elif args.command == "supervise":

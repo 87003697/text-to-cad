@@ -50,12 +50,17 @@ class CvmAgentTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def submit(self) -> dict[str, object]:
+        manifest = cvm_agent._source_manifest()
+        encoded = cvm_agent.base64.urlsafe_b64encode(
+            cvm_agent._manifest_bytes(manifest)
+        ).decode()
         return cvm_agent.submit(
             "surface-adaptation",
             "a" * 40,
             cvm_agent._sha256(Path(cvm_agent.__file__).resolve()),
             cvm_agent._sha256(self.prompt),
-            cvm_agent._source_digest(),
+            cvm_agent._source_digest(manifest),
+            encoded,
             detach=lambda _command: 4321,
         )
 
@@ -68,12 +73,16 @@ class CvmAgentTests(unittest.TestCase):
         self.assertFalse(value["retryAllowed"])
 
     def test_submit_failure_is_terminal_without_reusing_the_handle(self) -> None:
+        manifest = cvm_agent._source_manifest()
         result = cvm_agent.submit(
             "surface-adaptation",
             "a" * 40,
             cvm_agent._sha256(Path(cvm_agent.__file__).resolve()),
             cvm_agent._sha256(self.prompt),
-            cvm_agent._source_digest(),
+            cvm_agent._source_digest(manifest),
+            cvm_agent.base64.urlsafe_b64encode(
+                cvm_agent._manifest_bytes(manifest)
+            ).decode(),
             detach=mock.Mock(side_effect=OSError("no process")),
         )
         self.assertEqual(result["state"], "failed")
@@ -85,13 +94,17 @@ class CvmAgentTests(unittest.TestCase):
             self.submit()
 
     def test_submit_rejects_stale_remote_workflow_before_state(self) -> None:
+        manifest = cvm_agent._source_manifest()
         with self.assertRaisesRegex(cvm_agent.AgentError, "module digest mismatch"):
             cvm_agent.submit(
                 "surface-adaptation",
                 "a" * 40,
                 "0" * 64,
                 cvm_agent._sha256(self.prompt),
-                cvm_agent._source_digest(),
+                cvm_agent._source_digest(manifest),
+                cvm_agent.base64.urlsafe_b64encode(
+                    cvm_agent._manifest_bytes(manifest)
+                ).decode(),
                 detach=lambda _command: 1,
             )
         self.assertFalse(self.state.exists())
@@ -100,13 +113,14 @@ class CvmAgentTests(unittest.TestCase):
         (self.repo / "outputs/private").mkdir(parents=True)
         (self.repo / "outputs/private/value").write_text("secret", encoding="utf-8")
         destination = self.root / "copy"
-        cvm_agent._copy_source(destination)
+        manifest = cvm_agent._source_manifest()
+        cvm_agent._copy_source(destination, manifest)
         self.assertTrue((destination / "scripts/pilot/runner.py").is_file())
         self.assertFalse((destination / "outputs").exists())
 
         (self.repo / "scripts/pilot/escape").symlink_to(self.root)
         with self.assertRaisesRegex(cvm_agent.AgentError, "special file"):
-            cvm_agent._copy_source(self.root / "rejected")
+            cvm_agent._source_manifest()
 
     def test_codex_command_keeps_token_out_of_process_arguments(self) -> None:
         workspace = self.root / "workspace"
