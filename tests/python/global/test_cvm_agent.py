@@ -178,7 +178,7 @@ class CvmAgentTests(unittest.TestCase):
         with (
             mock.patch.object(cvm_agent.shutil, "which", return_value="/usr/bin/codex"),
             mock.patch.object(cvm_agent, "_chown_tree"),
-            mock.patch.object(cvm_agent.os, "chown"),
+            mock.patch.object(cvm_agent.os, "chown") as chown,
             mock.patch.object(cvm_agent, "_require_closed_docker_socket"),
             mock.patch.object(cvm_agent, "_run_process_group", side_effect=fake_run),
             mock.patch.object(cvm_agent, "RetryProxy", FakeProxy),
@@ -201,6 +201,10 @@ class CvmAgentTests(unittest.TestCase):
         config = control / "home/.codex/config.toml"
         self.assertNotIn("sensitive-value", observed["config"])
         self.assertIn(str(observed["client_token"]), observed["config"])
+        self.assertIn(
+            mock.call(config, cvm_agent.NOBODY_UID, cvm_agent.NOBODY_GID),
+            chown.call_args_list,
+        )
         self.assertFalse(config.exists())
 
     def test_normal_codex_exit_still_terminates_the_process_group(self) -> None:

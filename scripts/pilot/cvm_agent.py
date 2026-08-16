@@ -565,6 +565,7 @@ def _run_codex(
         config_path = codex_home / "config.toml"
         config_path.write_text(config, encoding="utf-8")
         config_path.chmod(0o600)
+        os.chown(config_path, NOBODY_UID, NOBODY_GID)
         environment = {
             "HOME": os.fspath(home),
             "CODEX_HOME": os.fspath(codex_home),
