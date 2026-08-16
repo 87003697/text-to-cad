@@ -638,12 +638,48 @@ symlinks, distinguishes uploaded from verified-existing S3 state, proves mount
 visibility, reports retained CVM source separately, and never enters cleanup
 under the retain policy.
 
-The first real retained-postmortem publication was rejected before execution by
-the external-action gate because the failed-run payload and exact S3 destination
-need a fresh specific authorization. Therefore the failed exp remains only on
-CVM, its S3 output prefix was not created by this operation, and the new pull
-path has not yet been exercised against external state.
+After a fresh payload-specific grant, the retained-postmortem publication
+succeeded through the reviewed `cvm-pull` path. It uploaded and then verified
+31 regular files at
+`s3://arcwm-code-us-west-2/ericzyma/text-to-cad/outputs/20260816-094800-browser-sidecar-cup/20260816-015329-cup_cup_033/`,
+proved the same count visible through the Mac mount, followed no symlink, and
+retained the complete CVM source directory.
 
-No merge, Git push, tracker mutation, dependency installation, unrelated
-cleanup, historical image deletion, or second paid submission has been
-performed through this checkpoint.
+The published postmortem closes the earlier runtime-image hypothesis. The job
+receipt binds the expected Sidecar, Broker, base, and source identities, records
+zero accepted requests and contexts, proves exact absence, and closes at
+`sidecar-readiness`. `run/stderr.log` records
+`cannot close mounted Agent browser surface` before Sidecar startup. There is
+no `run/rollout.jsonl`, `workspace.json`, `step_index.json`, `notes.md`, or
+`final/manifest.json`; the Venus workload never started and the verified
+incremental model cost for this handle is `$0`.
+
+The failure exposed a host-runner integration defect rather than another image
+defect. The generic scanner already supports links across a complete explicitly
+declared root closure, but `prepare_nested_browser_gate` scanned each read-only
+mount as if it were an isolated root. Normal Linux aliases between separately
+declared immutable roots were therefore rejected. Clean implementation commit
+`865569f154bf4e12a40e58c37d38140af636c470` passes the 103-test focused
+Browser Sidecar/runner set and the full Python global suite, plus bundle and
+development-symlink checks. Independent Standards and Spec/security review both
+report zero findings. It supplies every read-only source root as the scanner's
+declared closure while leaving both writable mounts on the strict no-exception
+path; dangling, cyclic, uninspectable, and undeclared-root escapes still fail
+closed. The change is host-runner-only and does not require another image.
+
+The repository `cvm-push` workflow then deployed exact clean source
+`865569f154bf4e12a40e58c37d38140af636c470` and passed remote runtime hash
+verification; the remote Git base remains `no-git`, so the push receipt source
+identity is authoritative. A new snapshot was not created: the attempted new
+group `20260816-102100-browser-sidecar-cup-r2` was rejected before upload by the
+external-action gate because the prior snapshot grant named only the old
+payload/destination. Do not reuse the old `d6eb1d16` snapshot with the new
+runner or submit a second paid pilot until a fresh exact snapshot destination
+is authorized and verified.
+
+No merge, Git push, tracker mutation, unrelated cleanup, historical image
+deletion, or second paid submission has been performed through this checkpoint.
+Only the lockfile-pinned worktree-local docs dependencies were installed to run
+the successful lint and production build. Submission usage is 1 of 10,
+effective paid model executions are zero, and verified incremental spend is
+`$0` of the authorized `$500` ceiling.
