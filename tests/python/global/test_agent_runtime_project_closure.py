@@ -13,7 +13,9 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
+from unittest import mock
 import zipfile
 
 
@@ -87,6 +89,50 @@ def _rewrite_wheel(
             output.writestr(info, extra[1])
         if duplicate is not None:
             output.writestr(duplicate, values[duplicate])
+
+
+def _write_synthetic_meshscope_wheel(destination: Path, source: dict) -> None:
+    native_name = "meshscope/voxblame/_native.cpython-312-x86_64-linux-gnu.so"
+    entries = {
+        record["path"].removeprefix("src/"): (
+            REPO_ROOT / "packages/meshscope" / record["path"]
+        ).read_bytes()
+        for record in source["files"]
+        if record["path"].startswith("src/meshscope/")
+        and record["path"].endswith(".py")
+    }
+    entries[native_name] = b"\x7fELF\x02\x01" + b"\0" * 12 + b"\x3e\0" + b"native"
+    dist_info = "meshscope-0.1.0.dist-info"
+    entries[f"{dist_info}/METADATA"] = (
+        b"Metadata-Version: 2.4\nName: meshscope\nVersion: 0.1.0\n"
+        b"Requires-Python: <3.13,>=3.12\nRequires-Dist: numpy==2.4.6\n"
+        b"Requires-Dist: Pillow==12.2.0\nRequires-Dist: trimesh==4.12.2\n"
+    )
+    entries[f"{dist_info}/WHEEL"] = (
+        b"Wheel-Version: 1.0\nGenerator: setuptools (82.0.1)\n"
+        b"Root-Is-Purelib: false\nTag: cp312-cp312-linux_x86_64\n"
+    )
+    entries[f"{dist_info}/top_level.txt"] = b"meshscope\n"
+    record_name = f"{dist_info}/RECORD"
+    rows = []
+    for name, payload in entries.items():
+        digest = (
+            base64.urlsafe_b64encode(hashlib.sha256(payload).digest())
+            .rstrip(b"=")
+            .decode("ascii")
+        )
+        rows.append((name, f"sha256={digest}", str(len(payload))))
+    rows.append((record_name, "", ""))
+    stream = StringIO(newline="")
+    csv.writer(stream, lineterminator="\n").writerows(rows)
+    entries[record_name] = stream.getvalue().encode("utf-8")
+    with zipfile.ZipFile(destination, "w") as archive:
+        for name, payload in entries.items():
+            info = zipfile.ZipInfo(name, (2025, 8, 16, 0, 0, 0))
+            info.create_system = 3
+            permissions = 0o755 if name == native_name else 0o644
+            info.external_attr = (stat.S_IFREG | permissions) << 16
+            archive.writestr(info, payload)
 
 
 class AgentRuntimeProjectClosureTests(unittest.TestCase):
@@ -339,6 +385,107 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
             with self.assertRaisesRegex(closure.ProjectClosureError, "cp312"):
                 closure.audit_meshscope_wheel(pure)
 
+    def test_meshscope_distribution_and_native_wheel_are_exactly_closed(self) -> None:
+        closure = _load_project_closure()
+        metadata = tomllib.loads(
+            (REPO_ROOT / "packages/meshscope/pyproject.toml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(metadata["build-system"]["requires"], ["setuptools==82.0.1"])
+        self.assertEqual(metadata["project"]["requires-python"], ">=3.12,<3.13")
+        self.assertEqual(
+            metadata["project"]["dependencies"],
+            ["numpy==2.4.6", "Pillow==12.2.0", "trimesh==4.12.2"],
+        )
+        self.assertEqual(
+            (REPO_ROOT / "packages/meshscope/MANIFEST.in").read_text(
+                encoding="utf-8"
+            ),
+            "include src/meshscope/voxblame/_native.cpp\n",
+        )
+        self.assertIs(metadata["tool"]["setuptools"]["include-package-data"], False)
+        self.assertIn(
+            'compile_args = ["-O3", "-std=c++17", "-g0"]',
+            (REPO_ROOT / "packages/meshscope/setup.py").read_text(encoding="utf-8"),
+        )
+        with tempfile.TemporaryDirectory(prefix="meshscope-closed-wheel-") as directory:
+            root = Path(directory)
+            source = closure.meshscope_source_record(REPO_ROOT)
+            wheel = root / "meshscope-0.1.0-cp312-cp312-linux_x86_64.whl"
+            libraries = {
+                name: root / name
+                for name in (
+                    "libc.so.6",
+                    "libgcc_s.so.1",
+                    "libm.so.6",
+                    "libstdc++.so.6",
+                    "ld-linux-x86-64.so.2",
+                )
+            }
+            for name, path in libraries.items():
+                path.write_bytes(name.encode("ascii"))
+            _write_synthetic_meshscope_wheel(wheel, source)
+            ldd_output = "\n".join(
+                [
+                    f"libstdc++.so.6 => {libraries['libstdc++.so.6']} (0x1)",
+                    f"libgcc_s.so.1 => {libraries['libgcc_s.so.1']} (0x2)",
+                    f"libc.so.6 => {libraries['libc.so.6']} (0x3)",
+                    f"libm.so.6 => {libraries['libm.so.6']} (0x4)",
+                    f"/lib64/ld-linux-x86-64.so.2 => {libraries['ld-linux-x86-64.so.2']} (0x5)",
+                ]
+            )
+
+            def tool(command, **kwargs):
+                del kwargs
+                if command[0] == "auditwheel":
+                    output = 'platform tag: "manylinux_2_24_x86_64"\n'
+                elif command[0] == "ldd":
+                    output = ldd_output
+                elif command[1] == "-dW":
+                    output = "\n".join(
+                        f"Shared library: [{name}]"
+                        for name in ("libc.so.6", "libgcc_s.so.1", "libstdc++.so.6")
+                    )
+                elif command[1] == "-VW":
+                    output = (
+                        "GLIBC_2.2.5 GLIBC_2.14 GLIBC_2.4 GCC_3.0 "
+                        "GLIBCXX_3.4 GLIBCXX_3.4.21 CXXABI_1.3 CXXABI_1.3.9"
+                    )
+                elif command[1] == "-sW":
+                    output = "PyInit__native"
+                else:
+                    output = "ELF64 little endian x86-64"
+                return subprocess.CompletedProcess(command, 0, output, "")
+
+            with mock.patch.object(closure.subprocess, "run", side_effect=tool):
+                audit = closure.audit_meshscope_wheel(
+                    wheel,
+                    source,
+                    readelf="readelf",
+                    ldd="ldd",
+                    auditwheel="auditwheel",
+                )
+            self.assertEqual(audit["sourceTreeDigest"], source["sourceTreeDigest"])
+            self.assertEqual(
+                [item["soname"] for item in audit["resolvedLibraries"]],
+                [
+                    "ld-linux-x86-64.so.2",
+                    "libc.so.6",
+                    "libgcc_s.so.1",
+                    "libm.so.6",
+                    "libstdc++.so.6",
+                ],
+            )
+            self.assertEqual(audit["auditwheelPlatformTag"], "manylinux_2_24_x86_64")
+
+            attacked = root / "attacked.whl"
+            _rewrite_wheel(wheel, attacked, extra=("meshscope/rogue.py", b"pass\n"))
+            attacked_exact_name = root / "meshscope-0.1.0-cp312-cp312-manylinux_2_24_x86_64.whl"
+            attacked.rename(attacked_exact_name)
+            with self.assertRaises(closure.ProjectClosureError):
+                closure.audit_meshscope_wheel(attacked_exact_name, source)
+
     def test_meshscope_source_enumeration_rejects_unexpected_and_symlink_entries(self) -> None:
         closure = _load_project_closure()
         for attack in ("unexpected", "symlink"):
@@ -355,6 +502,117 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                     (target / "src/meshscope/rogue.py").symlink_to("io.py")
                 with self.assertRaises(closure.ProjectClosureError):
                     closure.meshscope_source_record(repo)
+
+    def test_meshscope_cup_conformance_record_is_closed_over_native_facts(self) -> None:
+        closure = _load_project_closure()
+        with tempfile.TemporaryDirectory(prefix="meshscope-cup-conformance-") as directory:
+            root = Path(directory)
+            wheel = root / "meshscope-0.1.0-cp312-cp312-linux_x86_64.whl"
+            wheel.write_bytes(b"project-wheel")
+            dependencies = []
+            for name in ("numpy.whl", "pillow.whl", "trimesh.whl"):
+                path = root / name
+                path.write_bytes(name.encode("ascii"))
+                dependencies.append(path)
+
+            def run(command, **kwargs):
+                if "install" in command:
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                cup_root = Path(command[-1])
+                target = Path(kwargs["env"]["PYTHONPATH"])
+                native = (
+                    target
+                    / "meshscope/voxblame/_native.cpython-312-x86_64-linux-gnu.so"
+                )
+                native.parent.mkdir(parents=True)
+                native.write_bytes(b"native")
+                (cup_root / "input").mkdir(parents=True)
+                (cup_root / "input/input.json").write_text(
+                    json.dumps(
+                        {"input_triangle_count": 3764, "canonical_triangle_count": 3764}
+                    ),
+                    encoding="utf-8",
+                )
+                step = cup_root / "voxblame/steps/000000"
+                step.mkdir(parents=True)
+                (step / "summary.json").write_text(
+                    json.dumps(
+                        {
+                            "max_depth": 8,
+                            "step": 0,
+                            "errors_by_depth": [
+                                {
+                                    "depth": 8,
+                                    "reference_surface_count": 452682,
+                                    "candidate_surface_count": 452682,
+                                    "missing_surface_count": 0,
+                                    "excess_surface_count": 0,
+                                    "union_surface_count": 452682,
+                                    "surface_error_count": 0,
+                                    "surface_error_rate": 0.0,
+                                }
+                            ],
+                            "objective_facts": {
+                                "global_depth_8_zero": True,
+                                "out_of_frame_clear": True,
+                                "no_evidence_conflict": True,
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(
+                    command, 0, "meshscope-cup-native-ok\n", ""
+                )
+
+            with mock.patch.object(closure.subprocess, "run", side_effect=run):
+                result = closure.verify_meshscope_native_install(
+                    wheel,
+                    REPO_ROOT
+                    / "models/agent-runtime/cup_cup_033/input/cup_cup_033.ply",
+                    tuple(dependencies),
+                    python="python3.12",
+                )
+            self.assertEqual(result["status"], "development-candidate")
+            self.assertEqual(result["fixture"]["inputTriangleCount"], 3764)
+            self.assertEqual(
+                result["measurement"]["depthEight"]["reference_surface_count"],
+                452682,
+            )
+            self.assertNotIn("surface_error_rate", result["measurement"]["depthEight"])
+            self.assertEqual(result["providerDispatchCount"], 0)
+            self.assertTrue(result["nativeConformanceDigest"].startswith("sha256:"))
+
+    def test_meshscope_development_evidence_reassembles_and_rejects_mutation(self) -> None:
+        closure = _load_project_closure()
+        root = (
+            REPO_ROOT
+            / "models/agent-runtime/cup_cup_033/meshscope-development"
+        )
+        builds = tuple(
+            json.loads((root / name).read_bytes())
+            for name in (
+                "build-1.json",
+                "build-2.json",
+                "build-alternate-root.json",
+            )
+        )
+        audit = json.loads((root / "wheel-audit.json").read_bytes())
+        conformance = json.loads(
+            (root / "cup-native-conformance.json").read_bytes()
+        )
+        candidate = closure.assemble_meshscope_development_candidate(
+            builds, audit, conformance
+        )
+        self.assertEqual(
+            closure.canonical_json_bytes(candidate) + b"\n",
+            (root / "candidate.json").read_bytes(),
+        )
+        conformance["providerDispatchCount"] = 1
+        with self.assertRaises(closure.ProjectClosureError):
+            closure.assemble_meshscope_development_candidate(
+                builds, audit, conformance
+            )
 
     def test_project_manifest_closes_all_project_artifacts(self) -> None:
         closure = _load_project_closure()
