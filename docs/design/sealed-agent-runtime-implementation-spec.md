@@ -158,6 +158,15 @@ object, ref, workflow, or commit. It validates those schema-neutral documents an
 their digests through the one canonical JSON seam before constructing the typed
 `codex-admission` evidence child.
 
+Codex 0.147.0 uses Cosign's legacy bundle format. The producer deterministically
+extracts the exact Fulcio root/intermediate and Rekor/CTFE keys from the approved
+`trusted_root.json`, checks their four approved digests, and invokes the exact
+Cosign 2.4.1 bytes with explicit CA/key inputs, `--offline`, an empty cache and
+denied network. It verifies the Fulcio chain, embedded SCT, artifact signature,
+identity claims and Rekor Signed Entry Timestamp/body binding. The SET is an
+inclusion promise, not a Merkle inclusion proof; the receipt and public claim
+must preserve that distinction.
+
 The bootstrap is the exact version-2 SAR-004 approval object printed in the
 reviewed receipt contract. It binds every accepted archive, executable, bundle,
 verifier, checksum, TUF metadata, and trusted-root byte. A same-origin checksum,
