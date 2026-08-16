@@ -30,6 +30,19 @@ times. At 168 renames even a 1% per-rename loss rate leaves roughly a 1-in-5 cha
 build, which is what the reporter saw: 1 of 3 runs completing, each failure on a different
 component. Widening costs the common case nothing, because a 31 ms median still wins on the
 first or second retry.
+
+The 750 ms window is not the end of it, and a bigger constant is not the answer. Remeasured on
+0.4.13 across eight instrumented builds: 413 of 2067 renames blocked, median 31 ms, p90 78 ms,
+p99 265 ms -- and max 797 ms. Exactly one rename in 2067 beat the window, and one is all it
+takes. The tail is long and thin, so any finite window eventually loses to it and chasing it
+trades a bounded wait for a slow creep.
+
+So ``write_bytes_atomic`` attacks the cause instead of the budget: when the ladder is exhausted
+it writes the payload once more under a FRESH temp name and runs the ladder again. The violation
+belongs to the handle the server still holds on the temp file just closed; a file it has never
+seen carries no deferred close. One extra write in the rare tail case, still strictly bounded --
+which is the same principle the window was chosen under. Callers that own an existing file, and
+so cannot rewrite it, keep the plain ``replace_atomic`` ladder.
 """
 
 from __future__ import annotations
@@ -42,6 +55,11 @@ from pathlib import Path
 # ago and the server has not caught up.
 WINDOWS_SHARING_VIOLATION = 32
 RETRY_DELAYS_SECONDS = (0.05, 0.1, 0.2, 0.4)
+
+# How many times ``write_bytes_atomic`` writes the payload before giving up: the first write
+# plus one rewrite under a fresh temp name. See the module docstring -- this is the bounded
+# answer to the long tail, in place of a longer window.
+WRITE_ATTEMPTS = 2
 
 
 def replace_atomic(temp_path: Path | str, target_path: Path | str) -> None:
@@ -61,12 +79,23 @@ def write_bytes_atomic(target_path: Path, payload: bytes) -> None:
 
     Same directory on purpose: a rename across filesystems is not atomic, and a temp dir on
     another volume would silently turn this into a copy.
+
+    If the rename ladder is exhausted by a sharing violation, the payload is written once more
+    under a fresh temp name and the ladder runs again. The violation is pinned to the handle the
+    server still holds on *that* temp file, so a file it has never seen starts clean rather than
+    re-colliding with the same stale handle.
     """
     resolved = Path(target_path)
     resolved.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = resolved.with_name(f"{resolved.name}.{os.getpid()}.{time.time_ns()}.tmp")
-    try:
-        temp_path.write_bytes(payload)
-        replace_atomic(temp_path, resolved)
-    finally:
-        temp_path.unlink(missing_ok=True)
+    for attempt in range(WRITE_ATTEMPTS):
+        temp_path = resolved.with_name(f"{resolved.name}.{os.getpid()}.{time.time_ns()}.tmp")
+        try:
+            temp_path.write_bytes(payload)
+            replace_atomic(temp_path, resolved)
+            return
+        except OSError as error:
+            last_attempt = attempt == WRITE_ATTEMPTS - 1
+            if last_attempt or getattr(error, "winerror", None) != WINDOWS_SHARING_VIOLATION:
+                raise
+        finally:
+            temp_path.unlink(missing_ok=True)

@@ -131,6 +131,70 @@ class WriteBytesAtomicTest(unittest.TestCase):
             self.assertEqual([], list(Path(temp_dir).iterdir()), "a temp file was left behind")
 
 
+    def test_an_exhausted_ladder_rewrites_under_a_fresh_temp_name(self) -> None:
+        """Issue #274 again, after 0.4.13: the tail is long and thin, so widen the strategy.
+
+        Remeasured across eight instrumented builds: 413 of 2067 renames blocked, p99 265 ms,
+        max 797 ms -- one rename beat the 750 ms window, and one is all it takes. The violation
+        is pinned to the handle the server holds on the temp file just closed, so a file it has
+        never seen starts clean.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="cad-atomic-") as temp_dir:
+            target = Path(temp_dir) / "artifact.glb"
+            sources = []
+            real_replace = os.replace
+
+            def blocked_until_a_new_temp_file(source, destination):
+                sources.append(Path(source).name)
+                if len(sources) <= len(atomic_replace.RETRY_DELAYS_SECONDS) + 1:
+                    raise sharing_violation()
+                real_replace(source, destination)
+
+            with mock.patch.object(atomic_replace.os, "replace",
+                                   side_effect=blocked_until_a_new_temp_file),                  mock.patch.object(atomic_replace.time, "sleep"):
+                atomic_replace.write_bytes_atomic(target, b"glTF")
+
+            self.assertEqual(b"glTF", target.read_bytes())
+            first_ladder = set(sources[:len(atomic_replace.RETRY_DELAYS_SECONDS) + 1])
+            self.assertEqual(1, len(first_ladder), "the first ladder must reuse one temp file")
+            self.assertNotIn(
+                sources[-1],
+                first_ladder,
+                "the retry after exhaustion must use a temp file the server has never seen",
+            )
+
+    def test_the_rewrite_is_bounded(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="cad-atomic-") as temp_dir:
+            target = Path(temp_dir) / "artifact.glb"
+            error = sharing_violation()
+            with mock.patch.object(atomic_replace.os, "replace", side_effect=error) as replace,                  mock.patch.object(atomic_replace.time, "sleep"):
+                with self.assertRaises(PermissionError) as raised:
+                    atomic_replace.write_bytes_atomic(target, b"glTF")
+
+            self.assertIs(error, raised.exception, "the original error must survive")
+            self.assertEqual(
+                atomic_replace.WRITE_ATTEMPTS * (len(atomic_replace.RETRY_DELAYS_SECONDS) + 1),
+                replace.call_count,
+                "two ladders, then give up -- a build that retries forever is worse",
+            )
+            self.assertEqual([], list(Path(temp_dir).iterdir()), "a temp file was left behind")
+
+    def test_any_other_error_is_not_rewritten(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="cad-atomic-") as temp_dir:
+            target = Path(temp_dir) / "artifact.glb"
+            with mock.patch.object(atomic_replace.os, "replace",
+                                   side_effect=OSError("nope")) as replace:
+                with self.assertRaises(OSError):
+                    atomic_replace.write_bytes_atomic(target, b"glTF")
+            self.assertEqual(1, replace.call_count, "only WinError 32 earns a second write")
+
+
 class EveryRenameGoesThroughTheHelperTest(unittest.TestCase):
     """The point of the helper: one policy, not one per writer.
 
