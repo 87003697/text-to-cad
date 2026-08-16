@@ -111,6 +111,19 @@ class CvmAgentTests(unittest.TestCase):
             )
         self.assertFalse(self.state.exists())
 
+    def test_source_manifest_rejects_a_lexical_escape(self) -> None:
+        manifest = [
+            {
+                "path": "scripts/pilot/../../AGENTS.md",
+                "sha256": "0" * 64,
+            }
+        ]
+        encoded = cvm_agent.base64.urlsafe_b64encode(
+            cvm_agent._manifest_bytes(manifest)
+        ).decode()
+        with self.assertRaisesRegex(cvm_agent.AgentError, "manifest is invalid"):
+            cvm_agent._decode_manifest(encoded)
+
     def test_source_copy_excludes_state_and_rejects_symlinks(self) -> None:
         (self.repo / "outputs/private").mkdir(parents=True)
         (self.repo / "outputs/private/value").write_text("secret", encoding="utf-8")

@@ -134,9 +134,11 @@ def _decode_manifest(encoded: str) -> list[dict[str, str]]:
         allowed = path in SOURCE_INPUT_FILES or any(
             path.startswith(prefix + "/") for prefix in SOURCE_INPUT_PREFIXES
         )
+        path_parts = path.split("/")
         if (
             not allowed
             or not re.fullmatch(r"[A-Za-z0-9._/-]+", path)
+            or any(part in {"", ".", ".."} for part in path_parts)
             or path <= previous
             or not SHA256.fullmatch(digest)
         ):

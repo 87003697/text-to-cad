@@ -38,6 +38,7 @@ class CvmSyncContractTests(unittest.TestCase):
         self.assertIn("/viewer/", ignores)
         self.assertNotIn("viewer/", ignores)
         self.assertIn(".cvm-jobs/", ignores)
+        self.assertIn(".cvm-agent-jobs/", ignores)
         production_lines = "\n".join(
             line
             for line in module.splitlines()
@@ -53,11 +54,13 @@ class CvmSyncContractTests(unittest.TestCase):
             module,
         )
         self.assertIn("IMPLICIT_NODE_MODULES_INCLUDE", module)
+        self.assertIn('"/.cvm-agent-jobs/"', module)
         self.assertIn('["ssh", "-n", "cvm", command]', module)
         self.assertNotIn("prepare_remote_runtime_dirs", module)
         self.assertNotIn("unlink --", module)
         self.assertIn("linked worktree", skill)
         self.assertIn("实体 production bundle", skill)
+        self.assertIn("`.cvm-agent-jobs/`", skill)
         self.assertIn("不会修改 source checkout", skill)
         self.assertIn("scripts/pilot/cvm-submit.sh", skill)
         self.assertNotIn(
@@ -68,6 +71,7 @@ class CvmSyncContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn(".cvm-jobs", snapshot_ignores)
+        self.assertIn(".cvm-agent-jobs", snapshot_ignores)
 
     def test_rsync_ignore_preserves_remote_git_dir_for_linked_worktree_source(
         self,
