@@ -73,15 +73,63 @@ individual receipt producers or storage adapters.
 Small interface, large hidden responsibility:
 
 ```text
+parse_canonical_json(bytes) -> immutable canonical JSON value
+canonical_json_bytes(value) -> bytes
+canonical_json_digest(value) -> sha256
+
 parse_strict(kind, bytes) -> typed document
 canonical_bytes(document) -> bytes
 digest(document) -> sha256
 validate_graph(root, children) -> verified | closed failure
 ```
 
-It owns strict schemas, canonical JSON, digest calculation, the 15-node DAG,
-child state/cascade rules, lifecycle failure dominance, tombstones and
-proof-only publication. No producer may implement a second canonical encoder.
+The first three functions are the only lower-level canonical JSON seam. They
+are schema-neutral and enforce the same byte/value grammar for every caller:
+one canonical UTF-8 JSON value; no byte-order mark, duplicate object key,
+trailing value, float, non-finite number, or integer outside signed 64-bit
+range; ASCII object keys and string values; at most 1 MiB of input or output;
+and maximum nesting depth 64. Objects sort keys by ASCII code point, arrays
+retain their specified order, and the encoding has no insignificant whitespace.
+Input may have exactly one trailing newline, which is removed before canonical
+byte comparison; output and digests never include it. The parsed mapping and
+array graph is recursively immutable.
+
+`parse_canonical_json` proves only that the bytes satisfy this canonical JSON
+grammar and returns that immutable value. It makes no schema, evidence, supply,
+identity, state, or validity claim. `canonical_json_bytes` rechecks the same
+value/depth/ASCII/integer/size grammar and is the one encoder.
+`canonical_json_digest` is exactly `sha256:` plus the lowercase SHA-256 of
+`canonical_json_bytes(value)`; it never hashes caller-supplied serialization.
+
+The existing `parse_strict`, `canonical_bytes`, and `digest` functions remain
+typed evidence wrappers. They must use exactly the three primitives above:
+`parse_strict` parses through `parse_canonical_json`, selects one closed
+`EvidenceDocument` kind, validates its exact schema, and only then returns a
+typed document; `canonical_bytes` revalidates the typed evidence schema before
+calling `canonical_json_bytes`; and `digest` delegates to
+`canonical_json_digest` after that same typed validation. The kernel additionally
+owns the 15-node DAG, child state/cascade rules, lifecycle failure dominance,
+tombstones, and proof-only publication.
+
+Every non-evidence producer must likewise run its own exact closed schema
+validator before emitting or digesting a value through the lower-level seam.
+The required order is parse or construct, validate the producer-owned closed
+schema, then canonicalize or digest. A raw canonical JSON value, including a
+valid supply document, can never enter the 15-node evidence graph; graph APIs
+accept only the closed typed evidence wrappers. A consumer rejects an unknown
+evidence kind, an untyped/raw graph node, schema validation after emission or
+digest, a digest over input bytes rather than canonical output, and any private
+or second JSON encoder. Canonical syntax success must never be reported as
+schema or evidence success.
+
+This schema-neutral seam allows SAI-006, SAI-002, and future supply schemas to
+share one encoder without adding those schemas to SAI-001's evidence-kind
+registry. SAI-006 owns the exact closed keys and literals for its local
+manifest, candidate/final lock, publication, and visibility schemas within the
+already fixed supply contract. That ownership may close representation details;
+it may not improvise or weaken artifact identity, authority, state-transition,
+failure/retry, publication/visibility, promotion, rollback, or reconciliation
+semantics. No producer may implement another canonical encoder.
 
 ### Artifact builder
 
