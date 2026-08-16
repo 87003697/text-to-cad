@@ -124,6 +124,7 @@ _FIXTURE_PATHS = {
     "numericInspectionPath": _FIXTURE_ROOT / "numeric-inspection.json",
     "routeManifestPath": _FIXTURE_ROOT / "route.json",
     "expectedOutputPath": _FIXTURE_ROOT / "expected-output.json",
+    "canonicalBuildRecordPath": _FIXTURE_ROOT / "canonical-build-record.json",
 }
 _CONFORMANCE_FIXTURE_PATH = _FIXTURE_ROOT / "conformance-fixture.json"
 _OBSERVATIONS = {
@@ -262,6 +263,36 @@ def _validate_expected_output(value: Mapping[str, Any]) -> None:
         _require_digest(build[field], f"Cup canonical build.{field}")
 
 
+def _validate_canonical_build_record(value: Mapping[str, Any]) -> None:
+    _require_keys(
+        value,
+        {
+            "schema", "builder", "canonicalSourceDigest",
+            "measurementGlbDigest", "profileDigest", "rebuildRecipeDigest",
+        },
+        "canonical build record",
+    )
+    if value["schema"] != "text-to-cad.canonical-build-record/1":
+        raise ManifestError("canonical build record schema is invalid")
+    builder = _require_keys(
+        value["builder"],
+        {"entrypoint", "profileId", "toolId", "toolVersion"},
+        "canonical build record builder",
+    )
+    if dict(builder) != {
+        "entrypoint": "implicit-cad.canonical-build/1",
+        "profileId": "implicit_voxblame_depth8/1",
+        "toolId": "implicitjs",
+        "toolVersion": "0.1.0",
+    }:
+        raise ManifestError("canonical build record builder identity is invalid")
+    for field in (
+        "canonicalSourceDigest", "measurementGlbDigest", "profileDigest",
+        "rebuildRecipeDigest",
+    ):
+        _require_digest(value[field], f"canonical build record.{field}")
+
+
 def _validate_conformance_fixture(value: Mapping[str, Any]) -> None:
     _require_keys(
         value,
@@ -343,6 +374,7 @@ def _validate_capability(value: Mapping[str, Any]) -> None:
             "id", "inputPath", "inputDigest", "inputBytes", "sourcePath", "sourceDigest",
             "numericInspectionPath", "numericInspectionDigest", "routeManifestPath",
             "routeManifestDigest", "expectedOutputPath", "expectedOutputDigest",
+            "canonicalBuildRecordPath", "canonicalBuildRecordDigest",
         },
         "Cup capability fixture",
     )
@@ -353,7 +385,7 @@ def _validate_capability(value: Mapping[str, Any]) -> None:
             raise ManifestError(f"Cup fixture {path_field} is invalid")
     for field in (
         "inputDigest", "sourceDigest", "numericInspectionDigest",
-        "routeManifestDigest", "expectedOutputDigest",
+        "routeManifestDigest", "expectedOutputDigest", "canonicalBuildRecordDigest",
     ):
         _require_digest(fixture[field], f"Cup fixture.{field}")
 
@@ -364,6 +396,7 @@ _VALIDATORS = {
     "numeric-inspection": _validate_numeric_inspection,
     "numeric-route": _validate_numeric_route,
     "cup-expected-output": _validate_expected_output,
+    "canonical-build-record": _validate_canonical_build_record,
     "cup-conformance-fixture": _validate_conformance_fixture,
 }
 
@@ -475,10 +508,18 @@ def validate_cup_fixture_graph(repo_root: Path) -> dict[str, str]:
             "stored Cup expected output",
         ),
     )
+    canonical_build_record = parse_manifest_strict(
+        "canonical-build-record",
+        _file_bytes(
+            root / _FIXTURE_PATHS["canonicalBuildRecordPath"],
+            "stored canonical build record",
+        ),
+    )
     expected = capability.value["fixture"]
     numeric_digest = manifest_digest(numeric)
     route_digest = manifest_digest(route)
     expected_output_digest = manifest_digest(expected_output)
+    canonical_build_record_digest = manifest_digest(canonical_build_record)
     if numeric.value["inputDigest"] != expected["inputDigest"]:
         raise ManifestError("numeric inspection inputDigest substitution")
     numeric_observations = {
@@ -490,6 +531,11 @@ def validate_cup_fixture_graph(repo_root: Path) -> dict[str, str]:
         raise ManifestError(
             "expected output canonicalSourceDigest substitution"
         )
+    if (
+        canonical_build_record.value["canonicalSourceDigest"]
+        != expected["sourceDigest"]
+    ):
+        raise ManifestError("canonical build record canonicalSourceDigest substitution")
     if expected_output.value["numericInspectionDigest"] != numeric_digest:
         raise ManifestError(
             "expected output numericInspectionDigest substitution"
@@ -500,10 +546,25 @@ def validate_cup_fixture_graph(repo_root: Path) -> dict[str, str]:
         raise ManifestError("expected output route substitution")
     if dict(expected_output.value["observations"]) != numeric_observations:
         raise ManifestError("expected output observations do not bind numeric inspection")
+    expected_build = expected_output.value["canonicalBuild"]
+    recorded_build = canonical_build_record.value
+    builder = recorded_build["builder"]
+    for field, recorded_value in (
+        ("entrypoint", builder["entrypoint"]),
+        ("profileId", builder["profileId"]),
+        ("measurementGlbDigest", recorded_build["measurementGlbDigest"]),
+        ("profileDigest", recorded_build["profileDigest"]),
+        ("rebuildRecipeDigest", recorded_build["rebuildRecipeDigest"]),
+    ):
+        if expected_build[field] != recorded_value:
+            raise ManifestError(
+                f"expected output canonicalBuild.{field} substitution"
+            )
     for field, observed_digest in (
         ("numericInspectionDigest", numeric_digest),
         ("routeManifestDigest", route_digest),
         ("expectedOutputDigest", expected_output_digest),
+        ("canonicalBuildRecordDigest", canonical_build_record_digest),
     ):
         if expected[field] != observed_digest:
             raise ManifestError(f"Cup capability {field} substitution")
@@ -565,6 +626,13 @@ def build_cup_capability_manifest(repo_root: Path) -> ManifestDocument:
         "expectedOutputPath": _FIXTURE_PATHS["expectedOutputPath"].as_posix(),
         "expectedOutputDigest": _manifest_file_digest(
             "cup-expected-output", root / _FIXTURE_PATHS["expectedOutputPath"]
+        ),
+        "canonicalBuildRecordPath": _FIXTURE_PATHS[
+            "canonicalBuildRecordPath"
+        ].as_posix(),
+        "canonicalBuildRecordDigest": _manifest_file_digest(
+            "canonical-build-record",
+            root / _FIXTURE_PATHS["canonicalBuildRecordPath"],
         ),
     }
     return _typed("cup-capability", {

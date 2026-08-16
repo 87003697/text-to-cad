@@ -112,7 +112,7 @@ class AgentRuntimeManifestTests(unittest.TestCase):
         )
         self.assertEqual(
             plan.value["conformanceFixtureDigest"],
-            "sha256:bb7cd07a62e11bd8a403a020c94df8e8baf072173e97e1c8657b2442e85fc732",
+            "sha256:11dd81d0c10da55bbd1c92f7571f4baec6a5fc064295dd284c2e3dfb79ff47a7",
         )
         self.assertEqual(
             parse_manifest_strict("verification-plan", canonical_manifest_bytes(plan)), plan
@@ -181,6 +181,45 @@ class AgentRuntimeManifestTests(unittest.TestCase):
             regenerate_outer_bindings(root)
             with self.assertRaisesRegex(
                 ManifestError, "expected output canonicalSourceDigest substitution"
+            ):
+                build_verification_plan(bindings, root)
+
+        for field in (
+            "measurementGlbDigest",
+            "profileDigest",
+            "rebuildRecipeDigest",
+        ):
+            with self.subTest(expected_build_digest=field), tempfile.TemporaryDirectory(
+                prefix="cup-fixture-graph-"
+            ) as directory:
+                root = Path(directory)
+                fixture = root / "models" / "agent-runtime" / "cup_cup_033"
+                fixture.parent.mkdir(parents=True)
+                shutil.copytree(FIXTURE_ROOT, fixture)
+                expected_path = fixture / "expected-output.json"
+                expected = json.loads(expected_path.read_bytes())
+                expected["canonicalBuild"][field] = "sha256:" + "f" * 64
+                expected_path.write_bytes(canonical_json_bytes(expected) + b"\n")
+                regenerate_outer_bindings(root)
+                with self.assertRaisesRegex(
+                    ManifestError,
+                    rf"expected output canonicalBuild\.{field} substitution",
+                ):
+                    build_verification_plan(bindings, root)
+
+        with tempfile.TemporaryDirectory(prefix="cup-fixture-graph-") as directory:
+            root = Path(directory)
+            fixture = root / "models" / "agent-runtime" / "cup_cup_033"
+            fixture.parent.mkdir(parents=True)
+            shutil.copytree(FIXTURE_ROOT, fixture)
+            record_path = fixture / "canonical-build-record.json"
+            record = json.loads(record_path.read_bytes())
+            record["measurementGlbDigest"] = "sha256:" + "e" * 64
+            record_path.write_bytes(canonical_json_bytes(record) + b"\n")
+            regenerate_outer_bindings(root)
+            with self.assertRaisesRegex(
+                ManifestError,
+                r"expected output canonicalBuild\.measurementGlbDigest substitution",
             ):
                 build_verification_plan(bindings, root)
 
@@ -295,11 +334,21 @@ class AgentRuntimeManifestTests(unittest.TestCase):
         ))
 
     def test_cup_source_build_and_rebuild_match_the_provider_free_golden(self) -> None:
+        from scripts.pilot.agent_runtime import canonical_json_bytes
         from scripts.pilot.agent_runtime.manifests import parse_manifest_strict
 
-        expected = parse_manifest_strict(
-            "cup-expected-output", (FIXTURE_ROOT / "expected-output.json").read_bytes()
-        ).value
+        record_document = parse_manifest_strict(
+            "canonical-build-record",
+            (FIXTURE_ROOT / "canonical-build-record.json").read_bytes(),
+        )
+        record = record_document.value
+        source_digest = "sha256:" + hashlib.sha256(
+            (FIXTURE_ROOT / "source" / "cup_cup_033.implicit.js").read_bytes()
+        ).hexdigest()
+        self.assertEqual(
+            record["canonicalSourceDigest"],
+            source_digest,
+        )
         cli = REPO_ROOT / "packages" / "implicitjs" / "scripts" / "canonical-build.mjs"
         with tempfile.TemporaryDirectory(prefix="sealed-cup-golden-") as directory:
             root = Path(directory)
@@ -328,23 +377,32 @@ class AgentRuntimeManifestTests(unittest.TestCase):
                 text=True,
             )
             for build_root in (root / "build", root / "build" / "rebuilt"):
-                self.assertEqual(
-                    "sha256:" + hashlib.sha256(
+                build_manifest = json.loads((build_root / "build.json").read_bytes())
+                observed_record = {
+                    "builder": {
+                        "entrypoint": build_manifest["entrypoint"]["id"],
+                        "profileId": build_manifest["profile"]["id"],
+                        "toolId": build_manifest["tool"]["id"],
+                        "toolVersion": build_manifest["tool"]["version"],
+                    },
+                    "canonicalSourceDigest": source_digest,
+                    "measurementGlbDigest": "sha256:" + hashlib.sha256(
                         (build_root / "artifacts" / "model.glb").read_bytes()
                     ).hexdigest(),
-                    expected["canonicalBuild"]["measurementGlbDigest"],
-                )
-                self.assertEqual(
-                    "sha256:" + hashlib.sha256(
+                    "profileDigest": "sha256:" + hashlib.sha256(
                         (build_root / "profile.json").read_bytes()
                     ).hexdigest(),
-                    expected["canonicalBuild"]["profileDigest"],
-                )
-                self.assertEqual(
-                    "sha256:" + hashlib.sha256(
+                    "rebuildRecipeDigest": "sha256:" + hashlib.sha256(
                         (build_root / "rebuild.json").read_bytes()
                     ).hexdigest(),
-                    expected["canonicalBuild"]["rebuildRecipeDigest"],
+                    "schema": "text-to-cad.canonical-build-record/1",
+                }
+                self.assertEqual(
+                    parse_manifest_strict(
+                        "canonical-build-record",
+                        canonical_json_bytes(observed_record),
+                    ),
+                    record_document,
                 )
 
 
