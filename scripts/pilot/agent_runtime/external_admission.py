@@ -9,7 +9,10 @@ import os
 from pathlib import Path
 import stat
 import subprocess
+import socket
+import sys
 import tempfile
+import lzma
 from urllib.parse import urlsplit
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -29,12 +32,27 @@ class ExternalAdmissionError(ValueError):
     """An external admission document violates its closed contract."""
 
 
+class ExternalMirrorPublishError(ExternalAdmissionError):
+    """A normalized mirror error with an explicit possible-write boundary."""
+
+    def __init__(self, message: str, *, may_have_written: bool) -> None:
+        super().__init__(message)
+        self.may_have_written = may_have_written
+
+
 @dataclass(frozen=True)
 class ExternalAdmissionDocument:
     """One typed, recursively immutable external admission document."""
 
     kind: str
     value: Mapping[str, CanonicalJSONValue]
+
+    def __post_init__(self) -> None:
+        if type(self.kind) is not str or not self.kind:
+            raise ExternalAdmissionError("external document kind must be a nonempty string")
+        if not isinstance(self.value, Mapping):
+            raise ExternalAdmissionError("external document value must be an object")
+        object.__setattr__(self, "value", _freeze_mapping(self.value))
 
 
 @dataclass(frozen=True)
@@ -56,6 +74,15 @@ class CodexTrustMaterial:
     ca_intermediate: Path
     rekor_key: Path
     ct_key: Path
+
+
+@dataclass(frozen=True)
+class StableBlobSnapshot:
+    """One verified private snapshot produced from a single no-follow open."""
+
+    path: Path
+    digest: str
+    bytes: int
 
 
 class ExternalMirrorStore(Protocol):
@@ -86,10 +113,49 @@ CODEX_RETRIEVAL_RECEIPT_DIGEST = (
     "sha256:8441d9ab8c6b0b75703fba5da1b6ccb16aea28f431ef1a8c963583d7a4c6e331"
 )
 NOBLE_DEB_CLOSURE_DIGEST = (
-    "sha256:53729fdf0db8bfac5a722db686a19bc073240de175eadb7509326f4fcf2c91b2"
+    "sha256:1d389e9bccb3f8cfac0120d1c2596d92794660fbffb75f3ff57a072d6c32de8c"
+)
+_NOBLE_DEB_CLOSURE_FILE_DIGEST = (
+    "sha256:d8991abf6429b21426a7109f22e5adb3b32a158c9fe258cedc4240d4dd173552"
 )
 BUILDER_REPRODUCIBILITY_DIAGNOSTIC_DIGEST = (
     "sha256:a8c99137e96c6e520be9ce2d3a50c8d6976891f37111d28e13e0742d1068b024"
+)
+BUILDER_INPUT_CANDIDATE_DIGEST = (
+    "sha256:d1bc0a6b4865dc220973afe503dbe75ada247b2e5ce48e4717cb3890f24a1b57"
+)
+BUILDER_NETWORK_DENIAL_RECEIPT_DIGEST = (
+    "sha256:beadfa37c1dfe9dd78c2bc0856d75e191f9901af0d1f4eabe4a10594d9285ef1"
+)
+NOBLE_DEB_REPLAY_RECEIPT_DIGEST = (
+    "sha256:b9f5c776ce1888ec43edafc7b2934f16d1b7351d18ee5c51b27b43a7373a8de4"
+)
+NOBLE_RUNTIME_DEB_CLOSURE_DIGEST = (
+    "sha256:0e5690a15585657ae71452605f69ad3b5f81874630c0a1989838401595f06b89"
+)
+_NOBLE_RUNTIME_DEB_CLOSURE_FILE_DIGEST = (
+    "sha256:b2a05d9ffea54f8bfa4fcd0ec254c0cbde272f3a8b0fb31d81d0632802356820"
+)
+NOBLE_RUNTIME_DEB_REPLAY_RECEIPT_DIGEST = (
+    "sha256:deb265b9f96e7f1610c20174ef0413f4e30756187feabe1e45bfffbd6fa4a6ee"
+)
+CODEX_OS_NETWORK_DENIED_LAUNCH_RECEIPT_DIGEST = (
+    "sha256:e17e637c59c8121b3bdd254cd8f081e000068281cd345a5943705bcd2e8270e6"
+)
+LOCAL_CAS_BYTE_LOCATORS_DIGEST = (
+    "sha256:ad65cd8af1b85f953d0163756491e6f087eabc308f17f48cd630dbce6e36680b"
+)
+_LOCAL_CAS_BYTE_LOCATORS_FILE_DIGEST = (
+    "sha256:63bba8d11a40618d0a93df9f488337f9c49baa567316a851fa0ad5081427958b"
+)
+NOBLE_RUNTIME_DEB_LOCAL_LOCATORS_DIGEST = (
+    "sha256:18e98c27e115ecf4c336c4847c87540b0a6fc103b5791d20a88d846f01e4aac6"
+)
+_NOBLE_RUNTIME_DEB_LOCAL_LOCATORS_FILE_DIGEST = (
+    "sha256:37c7b305ffbd7ca672d021fab986e40ed8cbe45e01dc99566a29640da21275e7"
+)
+RUNTIME_OS_NETWORK_DENIAL_RECEIPT_DIGEST = (
+    "sha256:37e2652151c9791ec2d51804997482af2e6f8f836a86f7cac3743594d011c967"
 )
 
 _ARCHIVE_DIGEST = "sha256:0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36"
@@ -455,6 +521,8 @@ def _validate_builder_candidate(value: Mapping[str, Any]) -> None:
     )
     if value["schema"] != "text-to-cad.agent-runtime-builder-input-candidate/1":
         raise ExternalAdmissionError("builder input candidate schema is invalid")
+    if canonical_json_digest(value) != BUILDER_INPUT_CANDIDATE_DIGEST:
+        raise ExternalAdmissionError("builder input candidate does not equal exact candidate digest")
     if value["status"] != "local-candidate":
         raise ExternalAdmissionError("builder input candidate cannot claim admission")
     claims = _require_keys(
@@ -590,7 +658,10 @@ def _validate_retrieval_metadata(value: Mapping[str, Any]) -> None:
 def _validate_noble_deb_closure(value: Mapping[str, Any]) -> None:
     _require_keys(
         value,
-        {"claims", "inRelease", "packageIndices", "packages", "schema", "snapshot", "status"},
+        {
+            "claims", "inRelease", "packageIndices", "packages", "schema", "snapshot",
+            "status", "ubuntuArchiveKeyring",
+        },
         "Noble deb closure",
     )
     if value["schema"] != "text-to-cad.agent-runtime-noble-deb-closure-candidate/1":
@@ -599,6 +670,17 @@ def _validate_noble_deb_closure(value: Mapping[str, Any]) -> None:
         raise ExternalAdmissionError("Noble deb closure does not equal reviewed closure digest")
     if value["snapshot"] != "20260815T000000Z" or value["status"] != "local-candidate":
         raise ExternalAdmissionError("Noble deb closure identity is invalid")
+    keyring = _require_keys(
+        value["ubuntuArchiveKeyring"],
+        {"bytes", "digest", "signingKeyFingerprint"},
+        "Ubuntu archive keyring",
+    )
+    if dict(keyring) != {
+        "bytes": 3607,
+        "digest": "sha256:80a36b0a6de2f69f49d2df75ef473ccde121e9e190b9ea01d20a4f63778d5c31",
+        "signingKeyFingerprint": "F6ECB3762474EDA9D21B7022871920D1991BC93C",
+    }:
+        raise ExternalAdmissionError("Ubuntu archive keyring identity is invalid")
     if value["claims"] != {
         "debBytesMirroredLocal": True,
         "formalAdmission": False,
@@ -712,8 +794,119 @@ def _validate(kind: str, value: Mapping[str, Any]) -> None:
     if kind == "noble-deb-closure-candidate":
         _validate_noble_deb_closure(value)
         return
+    if kind == "noble-runtime-deb-closure-candidate":
+        if canonical_json_digest(value) != NOBLE_RUNTIME_DEB_CLOSURE_DIGEST:
+            raise ExternalAdmissionError("Noble runtime closure does not equal exact digest")
+        _require_keys(
+            value,
+            {
+                "builderInput", "claims", "inRelease", "packageIndices", "packages",
+                "runtimeRoots", "schema", "snapshot", "status", "ubuntuArchiveKeyring",
+            },
+            "Noble runtime deb closure",
+        )
+        if value["schema"] != "text-to-cad.agent-runtime-noble-runtime-deb-closure-candidate/1":
+            raise ExternalAdmissionError("Noble runtime closure schema is invalid")
+        if tuple(value["runtimeRoots"]) != (
+            "bash", "coreutils", "file", "findutils", "git", "git-lfs", "locales",
+            "procps", "ripgrep", "sed",
+        ) or len(value["packages"]) != 47:
+            raise ExternalAdmissionError("Noble runtime closure roots or package count is invalid")
+        return
     if kind == "builder-reproducibility-diagnostic":
         _validate_builder_reproducibility_diagnostic(value)
+        return
+    if kind == "builder-network-denial-launch":
+        if canonical_json_digest(value) != BUILDER_NETWORK_DENIAL_RECEIPT_DIGEST:
+            raise ExternalAdmissionError("builder network denial receipt is not exact")
+        if value.get("schema") != "text-to-cad.agent-runtime-builder-network-denial-launch/1":
+            raise ExternalAdmissionError("builder network denial receipt schema is invalid")
+        return
+    if kind == "noble-deb-closure-replay":
+        if canonical_json_digest(value) != NOBLE_DEB_REPLAY_RECEIPT_DIGEST:
+            raise ExternalAdmissionError("Noble replay receipt is not exact")
+        if value.get("schema") != "text-to-cad.agent-runtime-noble-deb-closure-replay/1":
+            raise ExternalAdmissionError("Noble replay receipt schema is invalid")
+        return
+    if kind == "codex-os-network-denied-verification-launch":
+        if canonical_json_digest(value) != CODEX_OS_NETWORK_DENIED_LAUNCH_RECEIPT_DIGEST:
+            raise ExternalAdmissionError("Codex OS network denial launch receipt is not exact")
+        if value.get("schema") != "text-to-cad.agent-runtime-codex-os-network-denied-verification-launch/1":
+            raise ExternalAdmissionError("Codex OS network denial launch schema is invalid")
+        return
+    if kind == "noble-runtime-deb-closure-replay":
+        if canonical_json_digest(value) != NOBLE_RUNTIME_DEB_REPLAY_RECEIPT_DIGEST:
+            raise ExternalAdmissionError("Noble runtime replay receipt is not exact")
+        if value.get("schema") != "text-to-cad.agent-runtime-noble-runtime-deb-closure-replay/1":
+            raise ExternalAdmissionError("Noble runtime replay receipt schema is invalid")
+        return
+    if kind == "local-cas-byte-locators":
+        if canonical_json_digest(value) != LOCAL_CAS_BYTE_LOCATORS_DIGEST:
+            raise ExternalAdmissionError("local CAS locator manifest is not exact")
+        _require_keys(
+            value, {"artifacts", "formalAdmission", "immutableMirrorVisible", "schema"},
+            "local CAS locator manifest",
+        )
+        if value["schema"] != "text-to-cad.agent-runtime-local-cas-byte-locators/1":
+            raise ExternalAdmissionError("local CAS locator schema is invalid")
+        if len(value["artifacts"]) != 4 or value["formalAdmission"] is not False:
+            raise ExternalAdmissionError("local CAS locator claims are invalid")
+        return
+    if kind == "noble-runtime-deb-local-locators":
+        if canonical_json_digest(value) != NOBLE_RUNTIME_DEB_LOCAL_LOCATORS_DIGEST:
+            raise ExternalAdmissionError("Noble runtime local locators are not exact")
+        _require_keys(
+            value,
+            {"casRoot", "closureDigest", "formalAdmission", "immutableMirrorVisible", "objects", "schema"},
+            "Noble runtime local locators",
+        )
+        if (
+            value["schema"] != "text-to-cad.agent-runtime-noble-runtime-deb-local-locators/1"
+            or len(value["objects"]) != 47
+            or value["formalAdmission"] is not False
+        ):
+            raise ExternalAdmissionError("Noble runtime local locator claims are invalid")
+        return
+    if kind == "runtime-os-network-denial-launch":
+        if canonical_json_digest(value) != RUNTIME_OS_NETWORK_DENIAL_RECEIPT_DIGEST:
+            raise ExternalAdmissionError("runtime OS network denial receipt is not exact")
+        _require_keys(
+            value,
+            {
+                "buildInvocation", "buildKit", "builderImageId", "debCount",
+                "dockerfileDigest", "exitCode", "formalAdmission",
+                "immutableMirrorVisible", "networkMode", "observedAt", "platform",
+                "pull", "result", "rootFsDiffIds", "runtimeClosureDigest",
+                "runtimeImageBytes", "runtimeImageId", "schema", "toolVersions",
+            },
+            "runtime OS network denial receipt",
+        )
+        if (
+            value["schema"]
+            != "text-to-cad.agent-runtime-runtime-os-network-denial-launch/1"
+            or value["networkMode"] != "none"
+            or value["result"] != "network-disabled-build-succeeded"
+            or value["platform"] != "linux/amd64"
+            or value["debCount"] != 47
+            or value["exitCode"] != 0
+            or value["buildKit"] is not False
+            or value["pull"] is not False
+            or value["formalAdmission"] is not False
+            or value["immutableMirrorVisible"] is not False
+        ):
+            raise ExternalAdmissionError("runtime OS network denial claims are invalid")
+        for field in ("builderImageId", "dockerfileDigest", "runtimeClosureDigest", "runtimeImageId"):
+            _require_digest(value[field], f"runtime OS {field}")
+        if len(value["rootFsDiffIds"]) != 10:
+            raise ExternalAdmissionError("runtime OS root filesystem closure is incomplete")
+        for layer in value["rootFsDiffIds"]:
+            _require_digest(layer, "runtime OS root filesystem layer")
+        _require_keys(
+            value["toolVersions"],
+            {"bash", "coreutils", "file", "findutils", "git", "git-lfs",
+             "locales", "procps", "ripgrep", "sed"},
+            "runtime OS tool versions",
+        )
         return
     if kind == "python-wheel-lock":
         expected = _freeze_mapping(_PYTHON_WHEEL_LOCK)
@@ -940,7 +1133,7 @@ def extract_codex_trust_material(
     if digest != _TRUSTED_ROOT_DIGEST:
         raise ExternalAdmissionError("approved trusted root digest mismatch")
     try:
-        root = json.loads(trusted_root.read_bytes())
+        root = json.loads(_read_regular_bytes(trusted_root, "approved trusted root"))
         intermediate_raw = root["certificateAuthorities"][1]["certChain"]["certificates"][0]["rawBytes"]
         ca_root_raw = root["certificateAuthorities"][1]["certChain"]["certificates"][1]["rawBytes"]
         rekor_raw = root["tlogs"][0]["publicKey"]["rawBytes"]
@@ -1029,28 +1222,206 @@ def replay_codex_offline_plan(
     return load_codex_signature_proof()
 
 
-def _run_offline_command(
+_NETWORK_DENY_PROFILE = "(version 1)(allow default)(deny network*)"
+
+
+def _run_in_os_network_sandbox(
     args: tuple[str, ...], environment: Mapping[str, str]
 ) -> tuple[int, str]:
+    executor = Path("/usr/bin/sandbox-exec")
+    if not executor.is_file():
+        raise ExternalAdmissionError("OS network-disabled executor is unavailable")
     try:
         completed = subprocess.run(
-            args,
+            (str(executor), "-p", _NETWORK_DENY_PROFILE, *args),
             env=dict(environment),
             check=False,
             capture_output=True,
             text=True,
         )
     except OSError as exc:
-        raise ExternalAdmissionError("approved Codex verifier could not execute") from exc
+        raise ExternalAdmissionError(
+            "approved Codex verifier could not execute in OS network sandbox"
+        ) from exc
     return completed.returncode, completed.stdout + completed.stderr
 
 
-def _require_exact_blob(path: Path, digest: str, size: int, label: str) -> None:
-    actual_digest, actual_size = _file_identity(path)
-    if actual_size != size:
+def _run_os_network_disabled_command(
+    args: tuple[str, ...], environment: Mapping[str, str]
+) -> tuple[int, str]:
+    return _run_in_os_network_sandbox(args, environment)
+
+
+def _assert_os_network_denied() -> None:
+    """Prove the exact sandbox denies both loopback and outbound connects."""
+
+    probe = (
+        "import errno,socket,sys; host=sys.argv[1]; port=int(sys.argv[2]); "
+        "s=socket.socket(); s.settimeout(1); "
+        "\ntry: s.connect((host,port))\n"
+        "except OSError as e: sys.exit(73 if e.errno in (errno.EPERM,errno.EACCES) else 74)\n"
+        "else: sys.exit(0)"
+    )
+    try:
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        loopback_port = listener.getsockname()[1]
+        loopback_code, _ = _run_in_os_network_sandbox(
+            (sys.executable, "-c", probe, "127.0.0.1", str(loopback_port)), {}
+        )
+    except OSError as exc:
+        raise ExternalAdmissionError("loopback denial probe could not launch") from exc
+    finally:
+        try:
+            listener.close()
+        except (OSError, UnboundLocalError):
+            pass
+    outbound_code, _ = _run_in_os_network_sandbox(
+        (sys.executable, "-c", probe, "1.1.1.1", "443"), {}
+    )
+    if loopback_code != 73 or outbound_code != 73:
+        raise ExternalAdmissionError("OS sandbox did not separately deny network probes")
+
+
+def _snapshot_exact_blob(
+    source: Path,
+    destination: Path,
+    digest: str,
+    size: int,
+    label: str,
+    *,
+    executable: bool = False,
+    expected_source_mode: int | None = None,
+) -> StableBlobSnapshot:
+    """Open once without following links, hash-copy, and rehash a stable snapshot."""
+
+    _require_digest(digest, f"approved {label} digest")
+    source_fd = _open_regular_no_follow(source, label)
+    try:
+        before = os.fstat(source_fd)
+        if expected_source_mode is not None and stat.S_IMODE(before.st_mode) != expected_source_mode:
+            raise ExternalAdmissionError(f"approved {label} source mode mismatch")
+        if before.st_size != size:
+            raise ExternalAdmissionError(f"approved {label} byte length mismatch")
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        destination_fd = os.open(destination, flags, 0o500 if executable else 0o400)
+        source_hash = hashlib.sha256()
+        copied = 0
+        try:
+            while True:
+                chunk = os.read(source_fd, 1024 * 1024)
+                if not chunk:
+                    break
+                source_hash.update(chunk)
+                copied += len(chunk)
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(destination_fd, view)
+                    if written <= 0:
+                        raise OSError("short snapshot write")
+                    view = view[written:]
+            os.fsync(destination_fd)
+        finally:
+            os.close(destination_fd)
+        after = os.fstat(source_fd)
+        stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+            raise ExternalAdmissionError(f"approved {label} changed during snapshot")
+    except ExternalAdmissionError:
+        raise
+    except OSError as exc:
+        raise ExternalAdmissionError(f"approved {label} snapshot failed") from exc
+    finally:
+        os.close(source_fd)
+    observed = "sha256:" + source_hash.hexdigest()
+    if copied != size:
         raise ExternalAdmissionError(f"approved {label} byte length mismatch")
-    if actual_digest != digest:
+    if observed != digest:
         raise ExternalAdmissionError(f"approved {label} digest mismatch")
+    try:
+        os.chmod(destination, 0o555 if executable else 0o444)
+    except OSError as exc:
+        raise ExternalAdmissionError(
+            f"approved {label} snapshot mode cannot be fixed"
+        ) from exc
+    snapshot_digest, snapshot_size = _file_identity(destination)
+    if (snapshot_digest, snapshot_size) != (digest, size):
+        raise ExternalAdmissionError(f"approved {label} snapshot rehash mismatch")
+    return StableBlobSnapshot(destination, snapshot_digest, snapshot_size)
+
+
+def validate_local_cas_locators(
+    manifest: Path, output_directory: Path
+) -> ExternalAdmissionDocument:
+    """Snapshot and revalidate every exact local CAS byte locator for consumption."""
+
+    try:
+        output_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except OSError as exc:
+        raise ExternalAdmissionError("local CAS validation output must be new") from exc
+    manifest_snapshot = _snapshot_exact_blob(
+        manifest,
+        output_directory / "manifest.json",
+        _LOCAL_CAS_BYTE_LOCATORS_FILE_DIGEST,
+        1494,
+        "local CAS locator manifest",
+    )
+    document = parse_external_strict(
+        "local-cas-byte-locators",
+        _read_regular_bytes(manifest_snapshot.path, "local CAS locator snapshot"),
+    )
+    for index, artifact_value in enumerate(cast(tuple[Any, ...], document.value["artifacts"])):
+        artifact = cast(Mapping[str, Any], artifact_value)
+        locator = Path(cast(str, artifact["locator"]))
+        if locator.name != cast(str, artifact["digest"]).removeprefix("sha256:"):
+            raise ExternalAdmissionError("local CAS locator is not content-addressed")
+        _snapshot_exact_blob(
+            locator,
+            output_directory / "objects" / f"{index:02d}-{locator.name}",
+            cast(str, artifact["digest"]),
+            cast(int, artifact["bytes"]),
+            f"local CAS artifact {index}",
+            expected_source_mode=0o444,
+        )
+    return document
+
+
+def validate_noble_runtime_deb_local_locators(
+    manifest: Path, output_directory: Path
+) -> ExternalAdmissionDocument:
+    """Snapshot and revalidate all 47 content-addressed runtime deb locators."""
+
+    try:
+        output_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except OSError as exc:
+        raise ExternalAdmissionError("runtime deb validation output must be new") from exc
+    manifest_snapshot = _snapshot_exact_blob(
+        manifest,
+        output_directory / "manifest.json",
+        _NOBLE_RUNTIME_DEB_LOCAL_LOCATORS_FILE_DIGEST,
+        16393,
+        "runtime deb locator manifest",
+    )
+    document = parse_external_strict(
+        "noble-runtime-deb-local-locators",
+        _read_regular_bytes(manifest_snapshot.path, "runtime deb locator snapshot"),
+    )
+    for index, artifact_value in enumerate(cast(tuple[Any, ...], document.value["objects"])):
+        artifact = cast(Mapping[str, Any], artifact_value)
+        locator = Path(cast(str, artifact["locator"]))
+        if locator.name != cast(str, artifact["digest"]).removeprefix("sha256:"):
+            raise ExternalAdmissionError("runtime deb locator is not content-addressed")
+        _snapshot_exact_blob(
+            locator,
+            output_directory / "objects" / f"{index:02d}-{locator.name}",
+            cast(str, artifact["digest"]),
+            cast(int, artifact["bytes"]),
+            f"runtime deb CAS object {index}",
+            expected_source_mode=0o444,
+        )
+    return document
 
 
 def produce_codex_formal_signature_receipt(
@@ -1060,22 +1431,91 @@ def produce_codex_formal_signature_receipt(
     executable: Path,
     archive: Path,
     trusted_root: Path,
+    verifier_checksums: Path,
+    root: Path,
+    timestamp: Path,
+    snapshot: Path,
+    targets: Path,
     output_directory: Path,
-    runner: Any = _run_offline_command,
 ) -> ExternalAdmissionDocument:
-    """Verify every approved byte/control, then promote only the two formal leaves."""
+    """Verify approved snapshots with the fixed OS network-disabled executor."""
 
-    _require_exact_blob(verifier, _VERIFIER_DIGEST, 108805570, "verifier")
-    _require_exact_blob(bundle, _BUNDLE_DIGEST, 8585, "signature bundle")
-    _require_exact_blob(executable, _EXECUTABLE_DIGEST, 258278208, "executable")
-    _require_exact_blob(archive, _ARCHIVE_DIGEST, 98970270, "archive")
-    _require_exact_blob(trusted_root, _TRUSTED_ROOT_DIGEST, 6787, "trusted root")
-    material = extract_codex_trust_material(trusted_root, output_directory)
-    plan = build_codex_offline_plan(
+    _assert_os_network_denied()
+    return _produce_codex_formal_signature_receipt_for_test(
         verifier=verifier,
         bundle=bundle,
         executable=executable,
         archive=archive,
+        trusted_root=trusted_root,
+        verifier_checksums=verifier_checksums,
+        root=root,
+        timestamp=timestamp,
+        snapshot=snapshot,
+        targets=targets,
+        output_directory=output_directory,
+        runner=_run_os_network_disabled_command,
+    )
+
+
+def _produce_codex_formal_signature_receipt_for_test(
+    *,
+    verifier: Path,
+    bundle: Path,
+    executable: Path,
+    archive: Path,
+    trusted_root: Path,
+    verifier_checksums: Path,
+    root: Path,
+    timestamp: Path,
+    snapshot: Path,
+    targets: Path,
+    output_directory: Path,
+    runner: Any,
+) -> ExternalAdmissionDocument:
+    """Private injected seam; production never accepts an alternate executor."""
+
+    try:
+        output_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except OSError as exc:
+        raise ExternalAdmissionError("formal verification output must be new") from exc
+    inputs = output_directory / "inputs"
+    verifier_snapshot = _snapshot_exact_blob(
+        verifier, inputs / "cosign", _VERIFIER_DIGEST, 108805570, "verifier", executable=True
+    )
+    bundle_snapshot = _snapshot_exact_blob(
+        bundle, inputs / "bundle.sigstore", _BUNDLE_DIGEST, 8585, "signature bundle"
+    )
+    executable_snapshot = _snapshot_exact_blob(
+        executable, inputs / "codex", _EXECUTABLE_DIGEST, 258278208, "executable"
+    )
+    archive_snapshot = _snapshot_exact_blob(
+        archive, inputs / "codex.tar.gz", _ARCHIVE_DIGEST, 98970270, "archive"
+    )
+    trusted_root_snapshot = _snapshot_exact_blob(
+        trusted_root, inputs / "trusted_root.json", _TRUSTED_ROOT_DIGEST, 6787, "trusted root"
+    )
+    _snapshot_exact_blob(
+        verifier_checksums, inputs / "cosign_checksums.txt",
+        _CHECKSUMS_DIGEST, 3906, "verifier checksums"
+    )
+    _snapshot_exact_blob(root, inputs / "15.root.json", _ROOT_DIGEST, 5630, "TUF root")
+    _snapshot_exact_blob(
+        timestamp, inputs / "timestamp.json", _TIMESTAMP_DIGEST, 449, "TUF timestamp"
+    )
+    _snapshot_exact_blob(
+        snapshot, inputs / "165.snapshot.json", _SNAPSHOT_DIGEST, 1760, "TUF snapshot"
+    )
+    _snapshot_exact_blob(
+        targets, inputs / "14.targets.json", _TARGETS_DIGEST, 4942, "TUF targets"
+    )
+    material = extract_codex_trust_material(
+        trusted_root_snapshot.path, output_directory / "trust"
+    )
+    plan = build_codex_offline_plan(
+        verifier=verifier_snapshot.path,
+        bundle=bundle_snapshot.path,
+        executable=executable_snapshot.path,
+        archive=archive_snapshot.path,
         ca_root=material.ca_root,
         ca_intermediate=material.ca_intermediate,
         rekor_key=material.rekor_key,
@@ -1086,22 +1526,313 @@ def produce_codex_formal_signature_receipt(
 
 
 def _file_identity(path: Path) -> tuple[str, int]:
-    try:
-        metadata = path.lstat()
-    except OSError as exc:
-        raise ExternalAdmissionError("external blob cannot be inspected") from exc
-    if not stat.S_ISREG(metadata.st_mode):
-        raise ExternalAdmissionError("external blob must be a regular file")
+    descriptor = _open_regular_no_follow(path, "external blob")
     digest = hashlib.sha256()
     size = 0
     try:
-        with path.open("rb") as stream:
-            while chunk := stream.read(1024 * 1024):
-                digest.update(chunk)
-                size += len(chunk)
+        before = os.fstat(descriptor)
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            size += len(chunk)
+        after = os.fstat(descriptor)
+        stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+            raise ExternalAdmissionError("external blob changed during identity read")
+    except ExternalAdmissionError:
+        raise
     except OSError as exc:
         raise ExternalAdmissionError("external blob cannot be read") from exc
+    finally:
+        os.close(descriptor)
     return "sha256:" + digest.hexdigest(), size
+
+
+def _open_regular_no_follow(path: Path, label: str) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags)
+        metadata = os.fstat(descriptor)
+    except OSError as exc:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise ExternalAdmissionError(f"{label} cannot be opened without following links") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        os.close(descriptor)
+        raise ExternalAdmissionError(f"{label} must be a regular file")
+    return descriptor
+
+
+def _read_regular_bytes(path: Path, label: str) -> bytes:
+    descriptor = _open_regular_no_follow(path, label)
+    chunks: list[bytes] = []
+    try:
+        before = os.fstat(descriptor)
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+        if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+            raise ExternalAdmissionError(f"{label} changed during read")
+    except ExternalAdmissionError:
+        raise
+    except OSError as exc:
+        raise ExternalAdmissionError(f"{label} cannot be read") from exc
+    finally:
+        os.close(descriptor)
+    try:
+        return b"".join(chunks)
+    except MemoryError:
+        raise
+    except Exception as exc:
+        raise ExternalAdmissionError(f"{label} cannot be materialized") from exc
+
+
+def _fixed_gpgv_runner(args: tuple[str, ...]) -> tuple[int, str]:
+    candidates = (Path("/opt/homebrew/bin/gpgv"), Path("/usr/bin/gpgv"))
+    executable = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if executable is None:
+        raise ExternalAdmissionError("fixed gpgv verifier is unavailable")
+    try:
+        completed = subprocess.run(
+            (str(executable), *args), check=False, capture_output=True, text=True
+        )
+    except OSError as exc:
+        raise ExternalAdmissionError("Ubuntu InRelease verifier could not execute") from exc
+    return completed.returncode, completed.stdout + completed.stderr
+
+
+def _release_sha256_entries(payload: bytes) -> Mapping[str, tuple[str, int]]:
+    try:
+        lines = payload.decode("utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise ExternalAdmissionError("Ubuntu InRelease is not UTF-8 text") from exc
+    entries: dict[str, tuple[str, int]] = {}
+    in_sha256 = False
+    for line in lines:
+        if line == "SHA256:":
+            in_sha256 = True
+            continue
+        if not in_sha256:
+            continue
+        if not line.startswith(" "):
+            break
+        fields = line.split()
+        if len(fields) != 3 or re.fullmatch(r"[0-9a-f]{64}", fields[0]) is None:
+            raise ExternalAdmissionError("Ubuntu InRelease SHA256 section is malformed")
+        try:
+            size = int(fields[1])
+        except ValueError as exc:
+            raise ExternalAdmissionError("Ubuntu InRelease size is malformed") from exc
+        if fields[2] in entries or size < 0:
+            raise ExternalAdmissionError("Ubuntu InRelease SHA256 entry is invalid")
+        entries[fields[2]] = ("sha256:" + fields[0], size)
+    if not entries:
+        raise ExternalAdmissionError("Ubuntu InRelease has no SHA256 authority")
+    return _freeze_mapping(entries)  # type: ignore[arg-type]
+
+
+def _package_stanzas(payload: bytes) -> Mapping[str, Mapping[str, str]]:
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ExternalAdmissionError("Ubuntu Packages index is not UTF-8 text") from exc
+    records: dict[str, Mapping[str, str]] = {}
+    for raw_stanza in text.split("\n\n"):
+        fields: dict[str, str] = {}
+        for line in raw_stanza.splitlines():
+            if not line or line.startswith((" ", "\t")) or ": " not in line:
+                continue
+            key, value = line.split(": ", 1)
+            fields[key] = value
+        filename = fields.get("Filename")
+        if filename is None:
+            continue
+        required = {"Package", "Version", "Architecture", "Filename", "Size", "SHA256"}
+        if set(fields).issuperset(required):
+            if filename in records:
+                raise ExternalAdmissionError("Ubuntu Packages index has duplicate Filename")
+            records[filename] = fields
+    return records
+
+
+def replay_noble_deb_closure(
+    *,
+    closure: Path,
+    keyring: Path,
+    inrelease_directory: Path,
+    package_index_directory: Path,
+    deb_directory: Path,
+    output_directory: Path,
+) -> ExternalAdmissionDocument:
+    """Replay the complete signed Noble -> Packages -> 78-deb chain."""
+
+    return _replay_noble_deb_closure_for_test(
+        closure=closure,
+        keyring=keyring,
+        inrelease_directory=inrelease_directory,
+        package_index_directory=package_index_directory,
+        deb_directory=deb_directory,
+        output_directory=output_directory,
+        gpgv_runner=_fixed_gpgv_runner,
+    )
+
+
+def replay_noble_runtime_deb_closure(
+    *,
+    closure: Path,
+    keyring: Path,
+    inrelease_directory: Path,
+    package_index_directory: Path,
+    deb_directory: Path,
+    output_directory: Path,
+) -> ExternalAdmissionDocument:
+    """Replay the independently locked 47-deb Agent runtime closure."""
+
+    return _replay_noble_deb_closure_for_test(
+        closure=closure,
+        keyring=keyring,
+        inrelease_directory=inrelease_directory,
+        package_index_directory=package_index_directory,
+        deb_directory=deb_directory,
+        output_directory=output_directory,
+        gpgv_runner=_fixed_gpgv_runner,
+        closure_kind="noble-runtime-deb-closure-candidate",
+        closure_file_digest=_NOBLE_RUNTIME_DEB_CLOSURE_FILE_DIGEST,
+        closure_file_bytes=21263,
+    )
+
+
+def _replay_noble_deb_closure_for_test(
+    *,
+    closure: Path,
+    keyring: Path,
+    inrelease_directory: Path,
+    package_index_directory: Path,
+    deb_directory: Path,
+    output_directory: Path,
+    gpgv_runner: Any,
+    closure_kind: str = "noble-deb-closure-candidate",
+    closure_file_digest: str = _NOBLE_DEB_CLOSURE_FILE_DIGEST,
+    closure_file_bytes: int = 35151,
+) -> ExternalAdmissionDocument:
+    """Private injected seam for deterministic GPG failure tests."""
+
+    try:
+        output_directory.mkdir(mode=0o700, parents=True, exist_ok=False)
+    except OSError as exc:
+        raise ExternalAdmissionError("Noble replay output must be new") from exc
+    closure_snapshot = _snapshot_exact_blob(
+        closure,
+        output_directory / "closure.json",
+        closure_file_digest,
+        closure_file_bytes,
+        "Noble closure",
+    )
+    document = parse_external_strict(
+        closure_kind,
+        _read_regular_bytes(closure_snapshot.path, "Noble closure snapshot"),
+    )
+    value = document.value
+    keyring_record = cast(Mapping[str, Any], value["ubuntuArchiveKeyring"])
+    keyring_snapshot = _snapshot_exact_blob(
+        keyring,
+        output_directory / "ubuntu-archive-keyring.gpg",
+        cast(str, keyring_record["digest"]),
+        cast(int, keyring_record["bytes"]),
+        "Ubuntu archive keyring",
+    )
+    release_authorities: dict[str, Mapping[str, tuple[str, int]]] = {}
+    for record_value in cast(tuple[Any, ...], value["inRelease"]):
+        record = cast(Mapping[str, Any], record_value)
+        suite = cast(str, record["suite"])
+        try:
+            matches = tuple(inrelease_directory.glob(f"*_dists_{suite}_InRelease"))
+        except OSError as exc:
+            raise ExternalAdmissionError("Noble InRelease paths cannot be enumerated") from exc
+        if len(matches) != 1:
+            raise ExternalAdmissionError("Noble InRelease path set is not exact")
+        snapshot = _snapshot_exact_blob(
+            matches[0],
+            output_directory / "inrelease" / f"{suite}.InRelease",
+            cast(str, record["digest"]),
+            cast(int, record["bytes"]),
+            f"{suite} InRelease",
+        )
+        code, output = gpgv_runner(
+            ("--status-fd=1", "--keyring", str(keyring_snapshot.path), str(snapshot.path))
+        )
+        fingerprint = cast(str, keyring_record["signingKeyFingerprint"])
+        if code != 0 or "[GNUPG:] VALIDSIG " + fingerprint not in output:
+            raise ExternalAdmissionError("Ubuntu InRelease signature verification failed")
+        release_authorities[suite] = _release_sha256_entries(
+            _read_regular_bytes(snapshot.path, f"{suite} InRelease snapshot")
+        )
+
+    index_records: dict[str, Mapping[str, Mapping[str, str]]] = {}
+    for record_value in cast(tuple[Any, ...], value["packageIndices"]):
+        record = cast(Mapping[str, Any], record_value)
+        suite = cast(str, record["suite"])
+        component = cast(str, record["component"])
+        authority = f"{suite}/{record['path']}"
+        expected = release_authorities[suite].get(cast(str, record["path"]))
+        if expected != (record["digest"], record["bytes"]):
+            raise ExternalAdmissionError("Packages index is not bound by verified InRelease")
+        source = package_index_directory / f"{suite}_{component}_Packages.xz"
+        snapshot = _snapshot_exact_blob(
+            source,
+            output_directory / "indices" / f"{suite}_{component}_Packages.xz",
+            cast(str, record["digest"]),
+            cast(int, record["bytes"]),
+            f"{authority} index",
+        )
+        try:
+            decompressed = lzma.decompress(
+                _read_regular_bytes(snapshot.path, f"{authority} index snapshot")
+            )
+        except (OSError, lzma.LZMAError) as exc:
+            raise ExternalAdmissionError("Packages index decompression failed") from exc
+        observed_uncompressed = "sha256:" + hashlib.sha256(decompressed).hexdigest()
+        if observed_uncompressed != record["uncompressedDigest"]:
+            raise ExternalAdmissionError("Packages uncompressed digest mismatch")
+        index_records[authority] = _package_stanzas(decompressed)
+
+    packages = cast(tuple[Any, ...], value["packages"])
+    for record_value in packages:
+        record = cast(Mapping[str, Any], record_value)
+        local_name = cast(str, record["localFilename"])
+        _snapshot_exact_blob(
+            deb_directory / local_name,
+            output_directory / "debs" / local_name,
+            cast(str, record["digest"]),
+            cast(int, record["bytes"]),
+            f"deb {local_name}",
+        )
+        for authority_value in cast(tuple[Any, ...], record["indexAuthorities"]):
+            authority = cast(str, authority_value)
+            indexed = index_records.get(authority, {}).get(cast(str, record["poolPath"]))
+            if indexed is None:
+                raise ExternalAdmissionError("deb is absent from declared Packages authority")
+            expected_package = cast(str, record["package"]).split(":", 1)[0]
+            if (
+                indexed["Package"] != expected_package
+                or indexed["Version"] != record["version"]
+                or indexed["Architecture"] != record["architecture"]
+                or indexed["Filename"] != record["poolPath"]
+                or indexed["SHA256"] != cast(str, record["digest"]).removeprefix("sha256:")
+                or indexed["Size"] != str(record["bytes"])
+            ):
+                raise ExternalAdmissionError("deb metadata differs from Packages authority")
+    return document
 
 
 def admit_local_blob(
@@ -1110,40 +1841,38 @@ def admit_local_blob(
     """Copy exact regular bytes into a local content-addressed mirror."""
 
     _require_digest(expected_digest, "external blob digest")
-    actual_digest, actual_bytes = _file_identity(source)
-    if actual_digest != expected_digest:
-        raise ExternalAdmissionError("external blob digest mismatch")
-    if actual_bytes != expected_bytes:
-        raise ExternalAdmissionError("external blob byte length mismatch")
     destination_dir = mirror_root / "sha256"
     destination = destination_dir / expected_digest.removeprefix("sha256:")
-    destination_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        destination_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ExternalAdmissionError("local mirror directory cannot be created") from exc
     if destination.exists() or destination.is_symlink():
         existing_digest, existing_bytes = _file_identity(destination)
         if (existing_digest, existing_bytes) != (expected_digest, expected_bytes):
             raise ExternalAdmissionError("existing mirror object is a substitution")
         return destination
 
-    descriptor, temporary_name = tempfile.mkstemp(prefix=".admit-", dir=destination_dir)
-    temporary = Path(temporary_name)
     try:
-        with os.fdopen(descriptor, "wb") as output, source.open("rb") as input_stream:
-            while chunk := input_stream.read(1024 * 1024):
-                output.write(chunk)
-            output.flush()
-            os.fsync(output.fileno())
-        os.chmod(temporary, 0o444)
-        try:
-            os.link(temporary, destination)
-        except FileExistsError:
-            existing_digest, existing_bytes = _file_identity(destination)
-            if (existing_digest, existing_bytes) != (expected_digest, expected_bytes):
-                raise ExternalAdmissionError("existing mirror object is a substitution")
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+        with tempfile.TemporaryDirectory(prefix=".admit-", dir=destination_dir) as staging:
+            temporary = Path(staging) / "object"
+            snapshot = _snapshot_exact_blob(
+                source,
+                temporary,
+                expected_digest,
+                expected_bytes,
+                "external blob",
+            )
+            try:
+                os.link(snapshot.path, destination)
+            except FileExistsError:
+                existing_digest, existing_bytes = _file_identity(destination)
+                if (existing_digest, existing_bytes) != (expected_digest, expected_bytes):
+                    raise ExternalAdmissionError("existing mirror object is a substitution")
+    except ExternalAdmissionError:
+        raise
+    except OSError as exc:
+        raise ExternalAdmissionError("local mirror snapshot cannot be committed") from exc
     return destination
 
 
@@ -1157,25 +1886,101 @@ def publish_external_blob(
 ) -> Mapping[str, CanonicalJSONValue]:
     """Publish one exact blob through a versioned create-only adapter."""
 
-    _require_digest(digest, "external mirror digest")
+    if type(bucket) is not str or not bucket or not bucket.isascii():
+        raise ExternalMirrorPublishError("external mirror bucket is invalid", may_have_written=False)
+    if (
+        type(prefix) is not str
+        or not prefix
+        or not prefix.isascii()
+        or prefix.startswith("/")
+        or any(part in ("", ".", "..") for part in prefix.split("/"))
+    ):
+        raise ExternalMirrorPublishError("external mirror prefix is invalid", may_have_written=False)
+    if type(payload) is not bytes:
+        raise ExternalMirrorPublishError("external mirror payload must be bytes", may_have_written=False)
+    if type(digest) is not str or _DIGEST_RE.fullmatch(digest) is None:
+        raise ExternalMirrorPublishError("external mirror digest is invalid", may_have_written=False)
     actual_digest = "sha256:" + hashlib.sha256(payload).hexdigest()
     if actual_digest != digest:
-        raise ExternalAdmissionError("external mirror payload digest mismatch")
-    if store.versioning_status(bucket) != "Enabled":
-        raise ExternalAdmissionError("external mirror bucket versioning must be Enabled")
+        raise ExternalMirrorPublishError(
+            "external mirror payload digest mismatch", may_have_written=False
+        )
     key = prefix.rstrip("/") + "/sha256/" + digest.removeprefix("sha256:")
-    if store.current_version(bucket, key) is not None:
-        raise ExternalAdmissionError("external mirror key already exists")
-    version_id, etag = store.put_create_only(bucket, key, payload)
-    reread = store.get_exact_version(bucket, key, version_id)
+    try:
+        versioning = store.versioning_status(bucket)
+    except Exception as exc:
+        raise ExternalMirrorPublishError(
+            "external mirror versioning preflight failed", may_have_written=False
+        ) from exc
+    if versioning != "Enabled":
+        raise ExternalMirrorPublishError(
+            "external mirror bucket versioning must be Enabled", may_have_written=False
+        )
+    try:
+        current = store.current_version(bucket, key)
+    except Exception as exc:
+        raise ExternalMirrorPublishError(
+            "external mirror current-version preflight failed", may_have_written=False
+        ) from exc
+    if current is not None:
+        if (
+            type(current) is not tuple
+            or len(current) != 2
+            or any(type(item) is not str or not item for item in current)
+        ):
+            raise ExternalMirrorPublishError(
+                "external mirror current-version response is malformed",
+                may_have_written=False,
+            )
+        version_id, etag = current
+        try:
+            reread = store.get_exact_version(bucket, key, version_id)
+        except Exception as exc:
+            raise ExternalMirrorPublishError(
+                "external mirror exact reuse reread failed", may_have_written=False
+            ) from exc
+        if type(reread) is not bytes or reread != payload:
+            raise ExternalMirrorPublishError(
+                "external mirror existing object is not exact", may_have_written=False
+            )
+        disposition = "reused-exact-version"
+    else:
+        try:
+            response = store.put_create_only(bucket, key, payload)
+        except Exception as exc:
+            raise ExternalMirrorPublishError(
+                "external mirror create-only write failed", may_have_written=True
+            ) from exc
+        if (
+            type(response) is not tuple
+            or len(response) != 2
+            or any(type(item) is not str or not item for item in response)
+        ):
+            raise ExternalMirrorPublishError(
+                "external mirror create response is malformed", may_have_written=True
+            )
+        version_id, etag = response
+        try:
+            reread = store.get_exact_version(bucket, key, version_id)
+        except Exception as exc:
+            raise ExternalMirrorPublishError(
+                "external mirror exact-version reread failed", may_have_written=True
+            ) from exc
+        disposition = "created"
     if reread != payload:
-        raise ExternalAdmissionError("external mirror exact-version reread mismatch")
+        raise ExternalMirrorPublishError(
+            "external mirror exact-version reread mismatch",
+            may_have_written=disposition == "created",
+        )
     receipt = {
         "bucket": bucket,
         "bytes": len(payload),
         "digest": digest,
+        "disposition": disposition,
         "etag": etag,
+        "exactVersionReread": True,
         "key": key,
+        "schema": "text-to-cad.agent-runtime-external-mirror-publication/1",
         "versionId": version_id,
     }
     return _freeze_mapping(receipt)

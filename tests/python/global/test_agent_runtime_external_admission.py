@@ -5,6 +5,8 @@ import hashlib
 import os
 import tempfile
 import unittest
+import inspect
+from unittest import mock
 from pathlib import Path
 
 
@@ -32,6 +34,30 @@ BUILDER_REPRODUCIBILITY_DIAGNOSTIC = (
     / "external"
     / "builder"
     / "builder-reproducibility-diagnostic.json"
+)
+BUILDER_NETWORK_RECEIPT = (
+    REPO_ROOT / "packages" / "agent_runtime" / "external" / "builder"
+    / "builder-network-denial-launch-receipt.json"
+)
+NOBLE_REPLAY_RECEIPT = (
+    REPO_ROOT / "packages" / "agent_runtime" / "external" / "builder"
+    / "noble-deb-closure-replay-receipt.json"
+)
+NOBLE_RUNTIME_DEB_CLOSURE = (
+    REPO_ROOT / "packages" / "agent_runtime" / "external" / "builder"
+    / "noble-runtime-deb-closure-candidate.json"
+)
+NOBLE_RUNTIME_REPLAY_RECEIPT = (
+    REPO_ROOT / "packages" / "agent_runtime" / "external" / "builder"
+    / "noble-runtime-deb-closure-replay-receipt.json"
+)
+NOBLE_RUNTIME_LOCAL_LOCATORS = (
+    REPO_ROOT / "packages" / "agent_runtime" / "external" / "builder"
+    / "noble-runtime-deb-local-locators.json"
+)
+RUNTIME_OS_BUILD_RECEIPT = (
+    REPO_ROOT / "packages" / "agent_runtime" / "external" / "builder"
+    / "runtime-os-network-denial-launch-receipt.json"
 )
 PYTHON_WHEEL_LOCK = (
     REPO_ROOT
@@ -81,6 +107,14 @@ CODEX_RETRIEVAL_RECEIPT = (
     / "codex"
     / "codex-retrieval-metadata.json"
 )
+CODEX_OS_NETWORK_RECEIPT = (
+    REPO_ROOT / "packages" / "agent_runtime" / "external" / "codex"
+    / "codex-os-network-denied-verification-launch-receipt.json"
+)
+LOCAL_CAS_LOCATORS = (
+    REPO_ROOT / "packages" / "agent_runtime" / "external"
+    / "local-cas-byte-locators.json"
+)
 
 
 class FakeMirrorStore:
@@ -88,15 +122,19 @@ class FakeMirrorStore:
         self.versioning = versioning
         self.objects: dict[tuple[str, str, str], bytes] = {}
         self.current: dict[tuple[str, str], tuple[str, str]] = {}
+        self.calls = 0
         self.put_calls = 0
 
     def versioning_status(self, bucket: str) -> str | None:
+        self.calls += 1
         return self.versioning
 
     def current_version(self, bucket: str, key: str) -> tuple[str, str] | None:
+        self.calls += 1
         return self.current.get((bucket, key))
 
     def put_create_only(self, bucket: str, key: str, payload: bytes) -> tuple[str, str]:
+        self.calls += 1
         self.put_calls += 1
         version_id = "version-1"
         etag = '"etag-1"'
@@ -105,10 +143,102 @@ class FakeMirrorStore:
         return version_id, etag
 
     def get_exact_version(self, bucket: str, key: str, version_id: str) -> bytes:
+        self.calls += 1
         return self.objects[(bucket, key, version_id)]
 
 
 class ExternalAdmissionContractTests(unittest.TestCase):
+    def test_local_cas_locator_manifest_is_closed(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            LOCAL_CAS_BYTE_LOCATORS_DIGEST,
+            external_digest,
+            parse_external_strict,
+        )
+
+        manifest = parse_external_strict(
+            "local-cas-byte-locators", LOCAL_CAS_LOCATORS.read_bytes()
+        )
+        self.assertEqual(external_digest(manifest), LOCAL_CAS_BYTE_LOCATORS_DIGEST)
+        self.assertEqual(manifest.value["artifacts"][0]["kind"], "builderDockerArchive")
+        self.assertEqual(
+            [artifact["distribution"] for artifact in manifest.value["artifacts"][1:]],
+            ["numpy", "trimesh", "Pillow"],
+        )
+
+    def test_noble_runtime_deb_closure_is_distinct_exact_and_complete(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            NOBLE_RUNTIME_DEB_CLOSURE_DIGEST,
+            external_digest,
+            parse_external_strict,
+        )
+
+        closure = parse_external_strict(
+            "noble-runtime-deb-closure-candidate", NOBLE_RUNTIME_DEB_CLOSURE.read_bytes()
+        )
+        self.assertEqual(external_digest(closure), NOBLE_RUNTIME_DEB_CLOSURE_DIGEST)
+        self.assertEqual(len(closure.value["packages"]), 47)
+        self.assertEqual(
+            closure.value["runtimeRoots"],
+            ("bash", "coreutils", "file", "findutils", "git", "git-lfs", "locales",
+             "procps", "ripgrep", "sed"),
+        )
+        replay = parse_external_strict(
+            "noble-runtime-deb-closure-replay",
+            NOBLE_RUNTIME_REPLAY_RECEIPT.read_bytes(),
+        )
+        self.assertEqual(replay.value["result"], "verified")
+        locators = parse_external_strict(
+            "noble-runtime-deb-local-locators", NOBLE_RUNTIME_LOCAL_LOCATORS.read_bytes()
+        )
+        self.assertEqual(len(locators.value["objects"]), 47)
+
+    def test_runtime_os_build_receipt_binds_exact_offline_image(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            RUNTIME_OS_NETWORK_DENIAL_RECEIPT_DIGEST,
+            external_digest,
+            parse_external_strict,
+        )
+
+        receipt = parse_external_strict(
+            "runtime-os-network-denial-launch", RUNTIME_OS_BUILD_RECEIPT.read_bytes()
+        )
+        self.assertEqual(
+            external_digest(receipt), RUNTIME_OS_NETWORK_DENIAL_RECEIPT_DIGEST
+        )
+        self.assertEqual(receipt.value["networkMode"], "none")
+        self.assertEqual(
+            receipt.value["runtimeImageId"],
+            "sha256:921e5f6de0f7a8b2fdafff4f5f561fc5a797baa0787e89bf3ec7cfe4fe6cf61c",
+        )
+        self.assertEqual(receipt.value["debCount"], 47)
+        self.assertFalse(receipt.value["formalAdmission"])
+        self.assertFalse(receipt.value["immutableMirrorVisible"])
+        self.assertEqual(
+            set(receipt.value["toolVersions"]),
+            {"bash", "coreutils", "file", "findutils", "git", "git-lfs",
+             "locales", "procps", "ripgrep", "sed"},
+        )
+
+    def test_network_denial_and_noble_replay_receipts_are_exact(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            BUILDER_NETWORK_DENIAL_RECEIPT_DIGEST,
+            NOBLE_DEB_REPLAY_RECEIPT_DIGEST,
+            external_digest,
+            parse_external_strict,
+        )
+
+        network = parse_external_strict(
+            "builder-network-denial-launch", BUILDER_NETWORK_RECEIPT.read_bytes()
+        )
+        replay = parse_external_strict(
+            "noble-deb-closure-replay", NOBLE_REPLAY_RECEIPT.read_bytes()
+        )
+        self.assertEqual(external_digest(network), BUILDER_NETWORK_DENIAL_RECEIPT_DIGEST)
+        self.assertEqual(external_digest(replay), NOBLE_DEB_REPLAY_RECEIPT_DIGEST)
+        self.assertEqual(network.value["networkMode"], "none")
+        self.assertEqual(network.value["result"], "network-disabled-build-succeeded")
+        self.assertEqual(replay.value["debCount"], 78)
+
     def test_noble_deb_closure_is_exact_signed_and_networkless_rebuilt(self) -> None:
         from scripts.pilot.agent_runtime import canonical_json_bytes
         from scripts.pilot.agent_runtime.external_admission import (
@@ -282,8 +412,15 @@ class ExternalAdmissionContractTests(unittest.TestCase):
         from scripts.pilot.agent_runtime import canonical_json_bytes
         from scripts.pilot.agent_runtime.external_admission import ExternalAdmissionError
 
-        with self.assertRaisesRegex(ExternalAdmissionError, "unexpected keys"):
+        with self.assertRaisesRegex(ExternalAdmissionError, "exact candidate digest"):
             parse_external_strict("builder-input-candidate", canonical_json_bytes(extended))
+
+        scalar_substitution = copy.deepcopy(document.value)
+        scalar_substitution["apt"]["installedPackageCount"] = True
+        with self.assertRaisesRegex(ExternalAdmissionError, "exact candidate digest"):
+            parse_external_strict(
+                "builder-input-candidate", canonical_json_bytes(scalar_substitution)
+            )
 
     def test_python_wheel_lock_is_exact_closed_and_runtime_minimal(self) -> None:
         from scripts.pilot.agent_runtime.external_admission import (
@@ -343,7 +480,7 @@ class ExternalAdmissionContractTests(unittest.TestCase):
 
             link = root / "link.bin"
             os.symlink(source, link)
-            with self.assertRaisesRegex(ExternalAdmissionError, "regular file"):
+            with self.assertRaisesRegex(ExternalAdmissionError, "without following links"):
                 admit_local_blob(link, root / "other", digest, len(payload))
             with self.assertRaisesRegex(ExternalAdmissionError, "digest"):
                 admit_local_blob(source, root / "other", "sha256:" + "0" * 64, len(payload))
@@ -386,8 +523,68 @@ class ExternalAdmissionContractTests(unittest.TestCase):
             digest=digest,
         )
         self.assertEqual(receipt["versionId"], "version-1")
+        self.assertEqual(receipt["disposition"], "created")
+        self.assertEqual(
+            set(receipt),
+            {"bucket", "bytes", "digest", "disposition", "etag",
+             "exactVersionReread", "key", "schema", "versionId"},
+        )
+        self.assertEqual(
+            receipt["schema"], "text-to-cad.agent-runtime-external-mirror-publication/1"
+        )
+        self.assertTrue(receipt["exactVersionReread"])
         self.assertTrue(receipt["key"].endswith(digest.removeprefix("sha256:")))
         self.assertEqual(store.put_calls, 1)
+
+        reused = publish_external_blob(
+            store=store,
+            bucket="arcwm-code-us-west-2",
+            prefix="ericzyma/text-to-cad/agent-runtime/external",
+            payload=payload,
+            digest=digest,
+        )
+        self.assertEqual(reused["disposition"], "reused-exact-version")
+        self.assertEqual(store.put_calls, 1)
+
+    def test_remote_mirror_preflight_and_write_uncertainty_are_typed(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            ExternalMirrorPublishError,
+            publish_external_blob,
+        )
+
+        store = FakeMirrorStore()
+        with self.assertRaises(ExternalMirrorPublishError) as caught:
+            publish_external_blob(
+                store=store, bucket="bucket", prefix="prefix", payload=b"bytes",
+                digest="not-a-digest",
+            )
+        self.assertFalse(caught.exception.may_have_written)
+        self.assertEqual(store.calls, 0)
+
+        class FailingPut(FakeMirrorStore):
+            def put_create_only(self, bucket: str, key: str, payload: bytes):
+                self.calls += 1
+                raise OSError("ambiguous transport failure")
+
+        digest = "sha256:" + hashlib.sha256(b"bytes").hexdigest()
+        with self.assertRaises(ExternalMirrorPublishError) as written:
+            publish_external_blob(
+                store=FailingPut(), bucket="bucket", prefix="prefix",
+                payload=b"bytes", digest=digest,
+            )
+        self.assertTrue(written.exception.may_have_written)
+
+        class MalformedPut(FakeMirrorStore):
+            def put_create_only(self, bucket: str, key: str, payload: bytes):
+                self.put_calls += 1
+                return ("version-only",)
+
+        with self.assertRaises(ExternalMirrorPublishError) as malformed:
+            publish_external_blob(
+                store=MalformedPut(), bucket="bucket", prefix="prefix",
+                payload=b"bytes", digest=digest,
+            )
+        self.assertTrue(malformed.exception.may_have_written)
 
     def test_codex_proof_receipt_is_exact_and_not_formal(self) -> None:
         from scripts.pilot.agent_runtime.external_admission import (
@@ -434,10 +631,34 @@ class ExternalAdmissionContractTests(unittest.TestCase):
         self.assertEqual(persisted.value, formal.value)
         self.assertEqual(external_digest(persisted), CODEX_FORMAL_RECEIPT_DIGEST)
 
+    def test_codex_formal_launch_binds_os_network_denial_and_snapshots(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            CODEX_OS_NETWORK_DENIED_LAUNCH_RECEIPT_DIGEST,
+            external_digest,
+            parse_external_strict,
+        )
+
+        receipt = parse_external_strict(
+            "codex-os-network-denied-verification-launch",
+            CODEX_OS_NETWORK_RECEIPT.read_bytes(),
+        )
+        self.assertEqual(
+            external_digest(receipt), CODEX_OS_NETWORK_DENIED_LAUNCH_RECEIPT_DIGEST
+        )
+        self.assertEqual(receipt.value["executor"], "/usr/bin/sandbox-exec")
+        self.assertTrue(receipt.value["stableSnapshotsRehashed"])
+        self.assertTrue(receipt.value["controls"]["loopbackNetworkDenied"])
+        self.assertTrue(receipt.value["controls"]["outboundNetworkDenied"])
+
     def test_formal_signature_producer_rejects_substituted_bytes_before_runner(self) -> None:
         from scripts.pilot.agent_runtime.external_admission import (
             ExternalAdmissionError,
+            _produce_codex_formal_signature_receipt_for_test,
             produce_codex_formal_signature_receipt,
+        )
+
+        self.assertNotIn(
+            "runner", inspect.signature(produce_codex_formal_signature_receipt).parameters
         )
 
         with tempfile.TemporaryDirectory() as directory:
@@ -446,16 +667,94 @@ class ExternalAdmissionContractTests(unittest.TestCase):
             substituted.write_bytes(b"not approved")
             calls = []
             with self.assertRaisesRegex(ExternalAdmissionError, "byte length"):
-                produce_codex_formal_signature_receipt(
+                _produce_codex_formal_signature_receipt_for_test(
                     verifier=substituted,
                     bundle=substituted,
                     executable=substituted,
                     archive=substituted,
                     trusted_root=substituted,
+                    verifier_checksums=substituted,
+                    root=substituted,
+                    timestamp=substituted,
+                    snapshot=substituted,
+                    targets=substituted,
                     output_directory=root / "trust",
                     runner=lambda args, env: calls.append((args, env)),
                 )
             self.assertEqual(calls, [])
+
+    def test_external_document_constructor_deep_freezes_mutable_input(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import ExternalAdmissionDocument
+
+        source = {"nested": {"items": [1, 2]}}
+        document = ExternalAdmissionDocument(kind="test-only", value=source)
+        source["nested"]["items"].append(3)
+        self.assertEqual(document.value["nested"]["items"], (1, 2))
+        with self.assertRaises(TypeError):
+            document.value["nested"]["new"] = True
+
+    def test_stable_snapshot_detects_source_change_during_single_open_copy(self) -> None:
+        from scripts.pilot.agent_runtime import external_admission
+
+        payload = b"x" * (1024 * 1024 + 1)
+        digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.write_bytes(payload)
+            original_read = os.read
+            changed = False
+
+            def racing_read(descriptor: int, size: int) -> bytes:
+                nonlocal changed
+                chunk = original_read(descriptor, size)
+                if chunk and not changed:
+                    changed = True
+                    with source.open("ab") as stream:
+                        stream.write(b"substitution")
+                return chunk
+
+            with mock.patch.object(external_admission.os, "read", side_effect=racing_read):
+                with self.assertRaisesRegex(
+                    external_admission.ExternalAdmissionError, "changed during snapshot"
+                ):
+                    external_admission._snapshot_exact_blob(
+                        source, root / "snapshot", digest, len(payload), "racing blob"
+                    )
+
+    def test_existing_local_cas_rejects_change_during_single_open_validation(self) -> None:
+        from scripts.pilot.agent_runtime import external_admission
+
+        payload = b"y" * (1024 * 1024 + 1)
+        digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.write_bytes(payload)
+            admitted = external_admission.admit_local_blob(
+                source, root / "mirror", digest, len(payload)
+            )
+            admitted.chmod(0o644)
+            original_read = os.read
+            changed = False
+
+            def racing_read(descriptor: int, size: int) -> bytes:
+                nonlocal changed
+                chunk = original_read(descriptor, size)
+                if chunk and not changed:
+                    changed = True
+                    with admitted.open("ab") as stream:
+                        stream.write(b"substitution")
+                return chunk
+
+            with mock.patch.object(external_admission.os, "read", side_effect=racing_read):
+                with self.assertRaisesRegex(
+                    external_admission.ExternalAdmissionError,
+                    "changed during identity read",
+                ):
+                    external_admission.admit_local_blob(
+                        source, root / "mirror", digest, len(payload)
+                    )
 
     def test_retrieval_metadata_is_closed_non_authoritative_and_ordered(self) -> None:
         from scripts.pilot.agent_runtime import canonical_json_bytes
