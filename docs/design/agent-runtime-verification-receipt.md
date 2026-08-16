@@ -308,7 +308,7 @@ must not infer or claim that the `.tar.gz` itself was signed.
 Trust starts from this exact versioned out-of-band approval object. The
 reviewed specification bytes are the authority: they are not downloaded from
 the origins that serve the approved artifacts. Its canonical digest is
-`sha256:caad11a590c6f7f2e1c892fe5001e0a171155e3bd07cceb1de573ebd8ad50ca9`:
+`sha256:85bf8165e3ded898ec4892c8ae3ab48172566d871c79add02c96f389f663d5c4`:
 
 ```json
 {
@@ -322,6 +322,12 @@ the origins that serve the approved artifacts. Its canonical digest is
     "executable": {
       "bytes": 258278208,
       "digest": "sha256:cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40"
+    },
+    "legacyTrustMaterial": {
+      "ctfeKeyDigest": "sha256:270488a309d22e804eeb245493e87c667658d749006b9fee9cc614572d4fbbdc",
+      "fulcioIntermediateDigest": "sha256:f8cbecf186db7714624a5f4e99da31a917cbef70a94dd6921f5c3ca969dfe30a",
+      "fulcioRootDigest": "sha256:f989aa23def87c549404eadba767768d2a3c8d6d30a8b793f9f518a8eafd2cf5",
+      "rekorKeyDigest": "sha256:dce5ef715502ec9f3cdfd11f8cc384b31a6141023d3e7595e9908a81cb6241bd"
     },
     "signatureBundle": {
       "bytes": 8585,
@@ -350,7 +356,7 @@ the origins that serve the approved artifacts. Its canonical digest is
   "sameOriginHashAuthenticationAllowed": false,
   "schema": "text-to-cad.sigstore-trust-anchor-approval/2",
   "scope": "codex-0.147.0-x86_64-unknown-linux-musl",
-  "signaturePolicyDigest": "sha256:92e0fa99ae181916f2570bbf17ed8d8ae2ea016fdd87309e0f1db84cf60d3f76"
+  "signaturePolicyDigest": "sha256:8bfd47abc5c13845f82a218fe79ac2378adb29c4cb302a8b9a41eb631f3451d2"
 }
 ```
 
@@ -361,11 +367,15 @@ revoking, or superseding these approved bytes requires a reviewed specification
 change. The approval deliberately binds the archive, extracted executable,
 signature bundle, verifier, verifier checksum file, Sigstore trusted-root
 target, and the TUF metadata observed during research. The TUF hashes establish
-the approved byte set, not a self-authenticating online bootstrap.
+the approved byte set, not a self-authenticating online bootstrap. For the
+legacy Cosign bundle, the four `legacyTrustMaterial` digests are the exact
+Fulcio root/intermediate and Rekor/CTFE keys deterministically extracted from
+the approved `trusted_root.json`; independently downloaded or ambient copies
+are never authority.
 
 The version-specific policy is the following exact closed object. Its canonical
 digest is
-`sha256:92e0fa99ae181916f2570bbf17ed8d8ae2ea016fdd87309e0f1db84cf60d3f76`,
+`sha256:8bfd47abc5c13845f82a218fe79ac2378adb29c4cb302a8b9a41eb631f3451d2`,
 which is the only admitted `signaturePolicyDigest` for this Codex version and
 platform:
 
@@ -424,6 +434,12 @@ platform:
     "logIndex": 2363083279
   },
   "trustedRoot": {
+    "legacyTrustMaterial": {
+      "ctfeKeyDigest": "sha256:270488a309d22e804eeb245493e87c667658d749006b9fee9cc614572d4fbbdc",
+      "fulcioIntermediateDigest": "sha256:f8cbecf186db7714624a5f4e99da31a917cbef70a94dd6921f5c3ca969dfe30a",
+      "fulcioRootDigest": "sha256:f989aa23def87c549404eadba767768d2a3c8d6d30a8b793f9f518a8eafd2cf5",
+      "rekorKeyDigest": "sha256:dce5ef715502ec9f3cdfd11f8cc384b31a6141023d3e7595e9908a81cb6241bd"
+    },
     "rootBytes": 5630,
     "rootDigest": "sha256:73747011d0857ada15479a16c4cae0f3ed03aac698b523b97e1de314ac9d9ca8",
     "rootExpires": "2026-11-20T13:58:18Z",
@@ -462,7 +478,7 @@ platform:
 
 The signature verification producer emits the following exact proof-only
 object after offline verification. Its canonical digest is
-`sha256:5a44a295d99cb15842b90fa8da1d6206922876bd748815782d66ae357ad0c994`.
+`sha256:ee8632e8d7e9610014e0d59e0b074414540e6e6b5e8feca04d2ef519db488e84`.
 It records the replay but is not the required formal
 `signatureVerificationReceiptDigest` because `result` and
 `trustBootstrap.status` remain proof-only:
@@ -511,7 +527,7 @@ It records the replay but is not the required formal
   "result": "proof-only",
   "schema": "text-to-cad.agent-runtime-codex-signature-verification/1",
   "signatureBundleDigest": "sha256:8ea31ab792fe0cfc7ba55c9dfc1836edf166dabf2d564ed7391eed6c7d422b3d",
-  "signaturePolicyDigest": "sha256:92e0fa99ae181916f2570bbf17ed8d8ae2ea016fdd87309e0f1db84cf60d3f76",
+  "signaturePolicyDigest": "sha256:8bfd47abc5c13845f82a218fe79ac2378adb29c4cb302a8b9a41eb631f3451d2",
   "signedPayloadDigest": "sha256:cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
   "transparencyLog": {
     "integratedTime": "2026-08-07T01:02:25Z",
@@ -519,10 +535,16 @@ It records the replay but is not the required formal
     "logIndex": 2363083279
   },
   "trustBootstrap": {
-    "approvalDigest": "sha256:caad11a590c6f7f2e1c892fe5001e0a171155e3bd07cceb1de573ebd8ad50ca9",
+    "approvalDigest": "sha256:85bf8165e3ded898ec4892c8ae3ab48172566d871c79add02c96f389f663d5c4",
     "status": "not-formal-admission"
   },
   "trustedRoot": {
+    "legacyTrustMaterial": {
+      "ctfeKeyDigest": "sha256:270488a309d22e804eeb245493e87c667658d749006b9fee9cc614572d4fbbdc",
+      "fulcioIntermediateDigest": "sha256:f8cbecf186db7714624a5f4e99da31a917cbef70a94dd6921f5c3ca969dfe30a",
+      "fulcioRootDigest": "sha256:f989aa23def87c549404eadba767768d2a3c8d6d30a8b793f9f518a8eafd2cf5",
+      "rekorKeyDigest": "sha256:dce5ef715502ec9f3cdfd11f8cc384b31a6141023d3e7595e9908a81cb6241bd"
+    },
     "rootDigest": "sha256:73747011d0857ada15479a16c4cae0f3ed03aac698b523b97e1de314ac9d9ca8",
     "snapshotDigest": "sha256:8f784ab614ec62bfdd5f568eb2a2e3011668449ba235ed4eb7befa99f8469933",
     "targetsDigest": "sha256:6a697f7f8908c8ab26c11786ecb490b54acec97fa8c802e399f065f8a0cc1acd",
@@ -583,10 +605,10 @@ have these exact meanings:
 | `archiveSingleExecutableExact` | The receipt's complete `archive` object equals the policy, the raw archive matches `archiveDigest`, and safe listing/extraction proves its one fixed regular member equals `executableDigest`; both `linksAllowed` and `pathTraversalAllowed` are false and `signedDirectly` is false |
 | `signatureBundleDigestExact` | The raw 8,585-byte bundle digest equals subject, policy, and receipt `signatureBundleDigest`, and its payload digest equals `executableDigest` |
 | `signaturePolicyExact` | The policy has exactly the closed object above and its independently recomputed digest equals subject and receipt `signaturePolicyDigest` |
-| `signatureVerified` | The formal receipt has `cryptographicResult:verified`, `result:verified`, `trustBootstrap.status:verified`, and the fixed approved verifier verifies the approved bundle over `executableDigest` under the approved trusted-root bytes; the archive negative control is exactly `rejected-payload-mismatch` with exit code `1` |
+| `signatureVerified` | The formal receipt has `cryptographicResult:verified`, `result:verified`, `trustBootstrap.status:verified`, and the fixed approved Cosign 2.4.1 verifier in legacy-bundle mode verifies the approved bundle over `executableDigest` using only the four approved trust-material projections; `--offline`, an empty ambient cache, and denied network are mandatory, and the archive negative control is exactly `rejected-payload-mismatch` with exit code `1` |
 | `certificateIdentityExact` | Certificate SAN plus repository, workflow name/ref/SHA/trigger, upstream workflow digest, and Linux signing-action digest equal policy, with `wildcardsAllowed:false` |
-| `certificateIssuerExact` | OIDC issuer, certificate-chain issuer, certificate fingerprint, and certificate validity bounds equal the policy literals |
-| `transparencyLogVerified` | The bundle inclusion verifies under the approved trusted-root bytes and equals the fixed Rekor log ID, index, and integrated time; that time is within the fixed certificate validity interval |
+| `certificateIssuerExact` | OIDC issuer, certificate-chain issuer, certificate fingerprint, and certificate validity bounds equal policy; the Fulcio chain verifies under the approved root/intermediate and the embedded SCT verifies under the approved CTFE key |
+| `transparencyLogVerified` | The legacy bundle's Rekor Signed Entry Timestamp (inclusion promise) verifies under the approved Rekor key; its body binds `executableDigest` and equals the fixed log ID, index, and integrated time, which is within the fixed certificate validity interval. This predicate does not claim a Merkle inclusion proof |
 
 The policy and verification receipt are immutable inputs to the
 `codex-admission` child, not additional graph nodes. The child subject copies
@@ -597,6 +619,15 @@ verifier or trust cache, wildcard identity, alternate ref/workflow/commit,
 missing or substituted Rekor entry, any byte not fixed by the approval,
 archive-as-signed claim, multi-entry/link/traversal archive, or signature over
 bytes other than `executableDigest`.
+
+The approved upstream bundle is Cosign's legacy format. Verification supplies
+the extracted Fulcio root and intermediate through `--ca-roots` and
+`--ca-intermediates`, and supplies the extracted Rekor and CTFE keys through
+`SIGSTORE_REKOR_PUBLIC_KEY` and `SIGSTORE_CT_LOG_PUBLIC_KEY_FILE`. Omitting
+either explicit key, accepting system roots, or permitting Cosign to enter its
+default TUF/network path is a failure. The SET proves the log's signed inclusion
+promise; full Merkle inclusion enrichment is deferred and may not be inferred
+from this receipt.
 
 It also rejects the proof-only receipt or its digest, an unapproved or
 substituted approval object, same-origin hashes offered as additional authority,

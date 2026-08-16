@@ -103,8 +103,15 @@ After safely extracting the only regular archive member, the successful
 offline command was:
 
 ```text
+SIGSTORE_REKOR_PUBLIC_KEY=<approved-rekor-key> \
+SIGSTORE_CT_LOG_PUBLIC_KEY_FILE=<approved-ctfe-key> \
+SIGSTORE_NO_CACHE=1 \
+HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 \
+ALL_PROXY=http://127.0.0.1:9 NO_PROXY= \
 cosign verify-blob --offline \
   --bundle codex-x86_64-unknown-linux-musl.sigstore \
+  --ca-roots <approved-fulcio-root> \
+  --ca-intermediates <approved-fulcio-intermediate> \
   --certificate-identity https://github.com/openai/codex/.github/workflows/rust-release.yml@refs/tags/rust-v0.147.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-github-workflow-name rust-release \
@@ -115,7 +122,20 @@ cosign verify-blob --offline \
   codex-x86_64-unknown-linux-musl
 ```
 
-It returned exactly `Verified OK`. Replacing the final executable path with
+The four explicit trust files were deterministically extracted from the exact
+approved `trusted_root.json`; their SHA-256 values are, respectively,
+`dce5ef715502ec9f3cdfd11f8cc384b31a6141023d3e7595e9908a81cb6241bd`,
+`270488a309d22e804eeb245493e87c667658d749006b9fee9cc614572d4fbbdc`,
+`f989aa23def87c549404eadba767768d2a3c8d6d30a8b793f9f518a8eafd2cf5`,
+and `f8cbecf186db7714624a5f4e99da31a917cbef70a94dd6921f5c3ca969dfe30a`.
+The deny proxy is a fail-fast guard in addition to the network-restricted
+environment. Omitting the explicit Rekor or CTFE key enters Cosign's default
+TUF path and is therefore rejected by the formal producer.
+
+It returned exactly `Verified OK`, including the Fulcio chain, embedded SCT,
+identity claims, artifact signature, and Rekor Signed Entry Timestamp/body
+binding. The legacy bundle contains an inclusion promise, not a Merkle inclusion
+proof. Replacing the final executable path with
 the `.tar.gz` returned exit 1 and identified the mismatch:
 
 ```text
