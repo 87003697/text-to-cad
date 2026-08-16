@@ -138,21 +138,46 @@ OCI run. It adopts the following first-release **Agent Concurrency Contract**:
   Execution receives a fresh job identity, owner nonce, Broker secret,
   challenge, private root/home/cache/tmp/work/output tree, Broker volume and
   socket authority, output subject, and terminal receipt mapping.
-- Broker authority is reserved per job, but the preview Broker process and its
-  Sidecar are started lazily only when that job emits a residual preview
-  request. No request means neither starts. There is no global Browser pool and
-  no cross-job Broker volume, secret, challenge, owner, or Sidecar ownership.
+- Broker authority is reserved per job. Its job-private Broker process starts
+  lazily only after admission, when the SAR-003 entrypoint reaches the mandatory
+  Broker-authenticated preflight; it cannot wait for a residual preview because
+  that proof gates workload release. The job-private Sidecar process starts
+  later and only when that job emits a residual preview request. A queued job
+  has neither process, while an admitted no-preview job has a Broker but no
+  Sidecar. There is no global Browser pool and no cross-job Broker volume,
+  secret, challenge, owner, process, or Sidecar ownership.
 - The Agent never gets Docker authority. One job's failed cleanup or retained
   tree produces its own failed receipt and retained evidence; it cannot delete
   or rewrite the other jobs' resources or receipts.
 
-The executable fifth-job case first holds four lifecycle operations at their
-terminal boundary, proves the fifth identity is queued, releases exactly one
-slot, observes the fifth become active without a peak above four, then finishes
-all receipts and absence checks. A second concurrent case leaves one failed
-job's real tree behind while proving the other three trees absent. The closed
-substitution matrix rejects cross-job owner, secret, challenge, Broker volume,
-source, input, output, and terminal-receipt subjects.
+The executable adapters start separate lightweight provider-free Broker and
+Sidecar subprocesses with exact job/owner marker files. Cleanup terminates and
+waits for each process independently with a bound, removes its private resource,
+and proves both processes absent before admission capacity is released. A
+`finally` path performs the same bounded stop if a test assertion itself fails.
+
+The fifth-job case first holds four lifecycle operations at their terminal
+boundary, proves the fifth identity is queued with no processes, releases
+exactly one slot only after that job's processes and volume are absent, observes
+the fifth become active without a peak above four, then finishes all receipts
+and absence checks. A second concurrent case leaves one failed job's real tree
+behind while proving the other three trees and every subprocess absent.
+
+The outer test supervisor independently digests the actual output tree, captures
+the actual terminal protocol record, validates its observed identity and
+`outputDigest`, and creates one job-private immutable (`0400`, exclusive-create)
+receipt outside the cleanup tree. It never derives the observed terminal
+identity from the expected identity. The closed substitution matrix rejects
+cross-job owner, secret, challenge, Broker volume, source, input, output path,
+terminal subject, terminal output digest, and supervisor receipt path while
+preserving the foreign receipt and output.
+
+All test authority bytes are labelled
+`SYNTHETIC_DETERMINISTIC_TEST_ONLY` and are pseudonymized in committed evidence;
+the harness does not claim to sample cryptographic randomness. Five grants use
+one persistent supervisor `FileAuthorityStore`, and replaying a consumed grant
+is rejected before admission or resource start. Production freshness remains
+the SAR-003 cryptographic allocator decision.
 
 This evidence is also constrained by the SAR-005 verification authority design
 at commit `16fb4288192e645b91b23e4f724b1420e085b24a`, specifically the exact

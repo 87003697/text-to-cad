@@ -24,6 +24,8 @@ class AgentRuntimeConcurrencyTests(unittest.TestCase):
         admission = self.result["admission"]
         self.assertEqual(admission["activeCap"], 4)
         self.assertTrue(admission["fifthQueuedAtCap"])
+        self.assertTrue(admission["queuedFifthHasNoProcess"])
+        self.assertTrue(admission["slotReleasedAfterProcessAbsence"])
         self.assertEqual(admission["observedPeak"], 4)
         self.assertEqual(
             self.result["verdict"], "ADOPT_FIRST_RELEASE_CAP_FOUR",
@@ -42,38 +44,33 @@ class AgentRuntimeConcurrencyTests(unittest.TestCase):
     def test_preview_broker_and_sidecar_are_lazy_and_job_private(self) -> None:
         rows = self.result["admission"]["executions"]
         self.assertEqual(
-            [row["previewBrokerStarted"] for row in rows],
-            [False, True, False, False, True],
+            [row["brokerStartedAtPreflight"] for row in rows],
+            [True] * 5,
         )
         self.assertEqual(
             [row["sidecarStarted"] for row in rows],
             [False, True, False, False, True],
         )
-        self.assertEqual(len({row["brokerVolume"] for row in rows}), 5)
-        self.assertEqual(len({row["ownerNonce"] for row in rows}), 5)
-        preview_authorities = [
-            row["previewAuthorityDigest"] for row in rows
-            if row["previewRequested"]
-        ]
-        self.assertEqual(len(set(preview_authorities)), 2)
-        self.assertEqual(len({
-            row["sidecarOwnerNonce"] for row in rows
-            if row["previewRequested"]
-        }), 2)
-        self.assertTrue(all(
-            row["previewAuthorityDigest"] is None
-            and row["sidecarOwnerNonce"] is None
-            for row in rows if not row["previewRequested"]
-        ))
+        self.assertEqual(len({row["brokerResourcePseudonym"] for row in rows}), 5)
+        self.assertEqual(len({row["syntheticAuthorityPseudonym"] for row in rows}), 5)
+        self.assertTrue(all(row["brokerProcessAbsent"] for row in rows))
+        self.assertTrue(all(row["sidecarProcessAbsent"] for row in rows))
+        self.assertTrue(all(row["brokerIdentityMarkerExact"] for row in rows))
+        self.assertTrue(all(row["sidecarIdentityMarkerExact"] for row in rows))
+        self.assertTrue(all(row["startedResourcesDistinct"] for row in rows))
 
     def test_output_and_terminal_receipts_map_to_exact_execution_subject(self) -> None:
         rows = self.result["admission"]["executions"]
         self.assertTrue(all(
             row["executionSubjectDigest"] == row["terminalReceiptSubjectDigest"]
-            and row["outputSubjectDigest"] is not None
+            and row["outputTreeDigest"] == row["receiptOutputTreeDigest"]
+            and row["receiptImmutableMode"] == "0o400"
+            and row["receiptSupervisorOwned"] is True
+            and all(row["outerTerminalValidation"].values())
             and row["cleanupAbsence"] is True
             for row in rows
         ))
+        self.assertEqual(len({row["receiptDigest"] for row in rows}), 5)
 
     def test_cross_job_substitution_matrix_is_closed(self) -> None:
         rows = self.result["substitutions"]["rows"]
@@ -81,13 +78,15 @@ class AgentRuntimeConcurrencyTests(unittest.TestCase):
             [row["substitution"] for row in rows],
             [
                 "owner", "secret", "challenge", "broker-volume", "source",
-                "input", "output", "receipt",
+                "input", "output", "terminal-subject", "output-digest",
+                "receipt-path",
             ],
         )
         self.assertTrue(all(row["verdict"] == "PASS" for row in rows))
         self.assertTrue(all(
             row["foreignResourcesPreserved"] is True for row in rows
         ))
+        self.assertTrue(all(row["allStartedProcessesAbsent"] for row in rows))
 
     def test_one_residue_does_not_delete_or_falsify_peers(self) -> None:
         result = self.result["failureIsolation"]
@@ -95,6 +94,26 @@ class AgentRuntimeConcurrencyTests(unittest.TestCase):
         self.assertTrue(result["failedJobRetained"])
         self.assertEqual(result["peerStatuses"], ["succeeded"] * 3)
         self.assertTrue(result["peerRootsAbsent"])
+        self.assertTrue(result["allProcessesAbsent"])
+        self.assertEqual(result["durableReceiptCount"], 4)
+        self.assertTrue(result["durableReceiptsDistinct"])
+        self.assertTrue(result["durableReceiptsImmutable"])
+        self.assertTrue(result["durableReceiptsSupervisorOwned"])
+        self.assertTrue(result["receiptOutputMappingsExact"])
+        self.assertTrue(result["retainedOutputStillMatchesReceipt"])
+
+    def test_replay_is_rejected_before_admission_or_resource_start(self) -> None:
+        self.assertTrue(
+            self.result["admission"]["replayRejectedBeforeAdmissionOrResource"],
+        )
+        self.assertTrue(
+            self.result["admission"]["sharedAuthorityStoreClosed"],
+        )
+        self.assertEqual(
+            self.result["authorityGeneration"],
+            "SYNTHETIC_DETERMINISTIC_TEST_ONLY",
+        )
+        self.assertFalse(self.result["cryptographicRandomnessSampled"])
 
     def test_harness_does_not_claim_real_container_evidence(self) -> None:
         self.assertFalse(self.result["dockerAuthorityInAgent"])
