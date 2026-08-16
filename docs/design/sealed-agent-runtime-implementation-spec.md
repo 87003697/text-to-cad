@@ -122,14 +122,22 @@ digest, a digest over input bytes rather than canonical output, and any private
 or second JSON encoder. Canonical syntax success must never be reported as
 schema or evidence success.
 
-This schema-neutral seam allows SAI-006, SAI-002, and future supply schemas to
-share one encoder without adding those schemas to SAI-001's evidence-kind
-registry. SAI-006 owns the exact closed keys and literals for its local
-manifest, candidate/final lock, publication, and visibility schemas within the
-already fixed supply contract. That ownership may close representation details;
-it may not improvise or weaken artifact identity, authority, state-transition,
-failure/retry, publication/visibility, promotion, rollback, or reconciliation
-semantics. No producer may implement another canonical encoder.
+This schema-neutral seam allows SAI-002, SAI-006, SAI-007, and future producers
+to share one encoder without adding their schemas to SAI-001's evidence-kind
+registry or transferring schema ownership. SAI-002 owns the exact closed
+verification-plan and Cup capability manifest schemas. SAI-006 owns only the
+exact closed Execution Source Snapshot local manifest and lock schemas and that
+snapshot's own publication and visibility receipt schemas. SAI-007 owns the
+exact closed Candidate Descriptor; artifact and candidate publication,
+provision, and import receipts; final Agent Runtime Lock and finalizer; and
+downstream supply schemas assigned to it by the fixed supply contract. Future
+producers own their schemas only through their assigning ticket and normative
+specification, not by using these canonical primitives.
+
+Each owner may close its assigned representation details; none may improvise or
+weaken artifact identity, authority, state-transition, failure/retry,
+publication/visibility, promotion, rollback, or reconciliation semantics. No
+producer may implement another canonical encoder.
 
 ### Artifact builder
 
