@@ -58,7 +58,8 @@ blocking wait；terminal completion 会提前 hand back。精确的更早 deadli
   `AGENTS.md` 缺失则 exit 1）。
 - **`.git/` 和 `.git` 都不得传输**：前者覆盖普通 checkout，后者覆盖 linked
   worktree 的 gitfile；不得让 rsync 尝试用 gitfile 覆盖 CVM 的 `.git/` 目录。
-- **`.cvm-jobs/` 不得传输**：它是 CVM 侧权威运行状态，Mac 同名目录不能覆盖。
+- **`.cvm-jobs/` 与 `.cvm-agent-jobs/` 不得传输**：它们是 CVM 侧权威运行状态，
+  Mac 同名目录不能覆盖。
 - **CVM skill runtime 永远采用实体 production bundle**：Mac checkout 可以是开发
   symlink；push 不在远端预先 `unlink`，而由经过验证的 staging 作为 rsync source
   完成 symlink→目录转换。
