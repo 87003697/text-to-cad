@@ -144,8 +144,33 @@ _MESHSCOPE_VERSION_REQUIREMENTS = (
 _CUP_INPUT_SHA256 = "3d4c7ca9118ef8a6d4ae3e7af3117250ca824ad5b8de36dcfa2c66cece47ae67"
 _CUP_INPUT_BYTES = 190_047
 _MESHSCOPE_BUILDER_IMAGE_ID = (
-    "sha256:49de767070e9a205a5424860162e409c8ff4268e0567effb8d9265fc553a1ee2"
+    "sha256:9f53dae6dd44ad326e18c7620b45230607c5e81c8dfc1cf59494656e295faeff"
 )
+_SAI004_CANDIDATE_COMMIT = "055728d386b992c127002ab0a396dd150c16fab4"
+_SAI004_SOURCE_DOCUMENTS = (
+    {
+        "path": "packages/agent_runtime/external/local-cas-byte-locators.json",
+        "digest": "sha256:63bba8d11a40618d0a93df9f488337f9c49baa567316a851fa0ad5081427958b",
+        "bytes": 1_494,
+    },
+    {
+        "path": "packages/agent_runtime/external/builder/builder-network-denial-launch-receipt.json",
+        "digest": "sha256:6a4428bd7297db1e26425da30994e4e8bf3f2566a6f1fb6a5cd4c291e3987ee6",
+        "bytes": 690,
+    },
+    {
+        "path": "packages/agent_runtime/external/builder/noble-deb-closure-replay-receipt.json",
+        "digest": "sha256:e88946c84c4532dcf78feae11a1c29291f4baf85ba408f92055dd29e6de4c397",
+        "bytes": 332,
+    },
+)
+_SAI004_BUILDER_ARCHIVE = {
+    "locator": "/private/tmp/sai004-external-mirror/sha256/6d29afa2895213691d2a456b1673710f8f8f8897cd33cafef34064ef9c15ed64",
+    "digest": "sha256:6d29afa2895213691d2a456b1673710f8f8f8897cd33cafef34064ef9c15ed64",
+    "bytes": 273_906_688,
+    "mode": "0444",
+    "platform": "linux/amd64",
+}
 _MESHSCOPE_SOURCE_TREE_DIGEST = (
     "sha256:97e7354fa2a50a49e4f2ad2dce10d9e2ae0f0336e67803c8ccd52279d80334d8"
 )
@@ -205,6 +230,32 @@ _MESHSCOPE_DEPENDENCY_WHEELS = (
         "bytes": 741_043,
     },
 )
+_SAI004_RUNTIME_WHEEL_CAS = (
+    {
+        **_MESHSCOPE_DEPENDENCY_WHEELS[0],
+        "distribution": "numpy",
+        "version": "2.4.6",
+        "locator": "/private/tmp/sai004-external-mirror/sha256/90f9849678c75fe7afa2d348ac842c168b0a4d3d61919687216dfc547976d853",
+        "mode": "0444",
+        "platform": "linux/amd64/cp312",
+    },
+    {
+        **_MESHSCOPE_DEPENDENCY_WHEELS[1],
+        "distribution": "Pillow",
+        "version": "12.2.0",
+        "locator": "/private/tmp/sai004-external-mirror/sha256/b86024e52a1b269467a802258c25521e6d742349d760728092e1bc2d135b4d76",
+        "mode": "0444",
+        "platform": "linux/amd64/cp312",
+    },
+    {
+        **_MESHSCOPE_DEPENDENCY_WHEELS[2],
+        "distribution": "trimesh",
+        "version": "4.12.2",
+        "locator": "/private/tmp/sai004-external-mirror/sha256/b5b5afa63c5272345f2858f7676bc8c217dc8a89f4fadf6193fe10a81b5ff2aa",
+        "mode": "0444",
+        "platform": "py3-none-any",
+    },
+)
 _MESHSCOPE_NATIVE_SHA256 = (
     "sha256:cf11f7d01b788a21b9219c1da64f6bc906adde4755b09f55f5341369b184f6e0"
 )
@@ -244,7 +295,7 @@ _MESHSCOPE_WHEEL_RECORD_DIGEST = (
     "sha256:099cff0084d0cdea62ccde3c32bf5d3cd052cbefed0057f96111dda027ec3f20"
 )
 _MESHSCOPE_AUDITWHEEL_REPORT_DIGEST = (
-    "sha256:d94abce4aab3bc6fa472fd1ae42ec3eb52401842b4a6e7b34c6c3cd46a328c24"
+    "sha256:7ca88e7ed43c23ea2b2d801996356029baaac14810a03cbfe50900cad233025d"
 )
 _MESHSCOPE_ELF_REPORTS_DIGEST = (
     "sha256:87f862fcd406342c2a123386e26a56258daaadeb54f7b305638aa910d2d04778"
@@ -1358,10 +1409,136 @@ print("meshscope-cup-native-ok")
     return result
 
 
+def _expected_meshscope_local_development_admission() -> dict[str, Any]:
+    record = {
+        "schema": "text-to-cad.meshscope-local-development-admission/1",
+        "status": "qualified-local-candidate",
+        "sai004CandidateCommit": _SAI004_CANDIDATE_COMMIT,
+        "sourceDocuments": list(_SAI004_SOURCE_DOCUMENTS),
+        "builder": {
+            "imageId": _MESHSCOPE_BUILDER_IMAGE_ID,
+            "platform": "linux/amd64",
+            "dockerArchive": dict(_SAI004_BUILDER_ARCHIVE),
+            "launchReceiptDocumentDigest": _SAI004_SOURCE_DOCUMENTS[1]["digest"],
+            "debReplayDocumentDigest": _SAI004_SOURCE_DOCUMENTS[2]["digest"],
+            "networkMode": "none",
+            "pull": False,
+        },
+        "runtimeWheels": [dict(item) for item in _SAI004_RUNTIME_WHEEL_CAS],
+        "localCasBytesVerified": True,
+        "formalAdmission": False,
+        "immutableMirrorVisible": False,
+    }
+    record["localDevelopmentAdmissionDigest"] = canonical_json_digest(record)
+    return record
+
+
+def build_meshscope_local_development_admission(
+    source_documents: tuple[Path, ...], cas_artifacts: tuple[Path, ...]
+) -> dict[str, Any]:
+    """Verify SAI-004 local candidate bytes without upgrading Formal admission."""
+
+    if len(source_documents) != 3 or len(cas_artifacts) != 4:
+        raise ProjectClosureError("meshscope local admission input set is not exact")
+    parsed_documents = []
+    for document, expected in zip(
+        source_documents, _SAI004_SOURCE_DOCUMENTS, strict=True
+    ):
+        payload = document.read_bytes()
+        if (
+            len(payload) != expected["bytes"]
+            or f"sha256:{hashlib.sha256(payload).hexdigest()}" != expected["digest"]
+        ):
+            raise ProjectClosureError("SAI-004 source document identity is invalid")
+        parsed = parse_canonical_json(payload)
+        if not isinstance(parsed, Mapping):
+            raise ProjectClosureError("SAI-004 source document is not an object")
+        parsed_documents.append(parsed)
+
+    locator_record, launch_receipt, replay_receipt = parsed_documents
+    if (
+        locator_record.get("schema")
+        != "text-to-cad.agent-runtime-local-cas-byte-locators/1"
+        or locator_record.get("formalAdmission") is not False
+        or locator_record.get("immutableMirrorVisible") is not False
+        or launch_receipt.get("schema")
+        != "text-to-cad.agent-runtime-builder-network-denial-launch/1"
+        or launch_receipt.get("builderImageId") != _MESHSCOPE_BUILDER_IMAGE_ID
+        or launch_receipt.get("platform") != "linux/amd64"
+        or launch_receipt.get("networkMode") != "none"
+        or launch_receipt.get("pull") is not False
+        or launch_receipt.get("exitCode") != 0
+        or launch_receipt.get("result") != "network-disabled-build-succeeded"
+        or replay_receipt.get("schema")
+        != "text-to-cad.agent-runtime-noble-deb-closure-replay/1"
+        or replay_receipt.get("result") != "verified"
+        or replay_receipt.get("debCount") != 78
+    ):
+        raise ProjectClosureError("SAI-004 local candidate claims are invalid")
+
+    expected_cas = (_SAI004_BUILDER_ARCHIVE, *_SAI004_RUNTIME_WHEEL_CAS)
+    for artifact, expected in zip(cas_artifacts, expected_cas, strict=True):
+        expected_path = Path(str(expected["locator"]))
+        expected_digest = expected.get("digest", expected.get("sha256"))
+        if artifact != expected_path or artifact.is_symlink() or not artifact.is_file():
+            raise ProjectClosureError("SAI-004 local CAS locator is invalid")
+        mode = f"{stat.S_IMODE(artifact.stat().st_mode):04o}"
+        payload = artifact.read_bytes()
+        if (
+            mode != expected["mode"]
+            or len(payload) != expected["bytes"]
+            or f"sha256:{hashlib.sha256(payload).hexdigest()}" != expected_digest
+        ):
+            raise ProjectClosureError("SAI-004 local CAS bytes are invalid")
+
+    locator_artifacts = locator_record.get("artifacts")
+    if not isinstance(locator_artifacts, (list, tuple)) or len(locator_artifacts) != 4:
+        raise ProjectClosureError("SAI-004 local CAS record is invalid")
+    expected_locator_artifacts = [
+        {
+            "kind": "builderDockerArchive",
+            "imageId": _MESHSCOPE_BUILDER_IMAGE_ID,
+            **_SAI004_BUILDER_ARCHIVE,
+        },
+        *[
+            {
+                key: value
+                for key, value in item.items()
+                if key != "path"
+            }
+            | {"kind": "pythonWheel", "digest": item["sha256"]}
+            for item in (
+                _SAI004_RUNTIME_WHEEL_CAS[0],
+                _SAI004_RUNTIME_WHEEL_CAS[2],
+                _SAI004_RUNTIME_WHEEL_CAS[1],
+            )
+        ],
+    ]
+    for item in expected_locator_artifacts[1:]:
+        item.pop("sha256", None)
+    if not _exact_json(locator_artifacts, expected_locator_artifacts):
+        raise ProjectClosureError("SAI-004 local CAS record artifacts are invalid")
+    return _expected_meshscope_local_development_admission()
+
+
+def _validate_meshscope_local_development_admission(
+    record: Mapping[str, Any]
+) -> str:
+    if not _exact_json(record, _expected_meshscope_local_development_admission()):
+        raise ProjectClosureError("meshscope local Development admission is invalid")
+    digest = record.get("localDevelopmentAdmissionDigest")
+    without_digest = dict(record)
+    without_digest.pop("localDevelopmentAdmissionDigest", None)
+    if digest != canonical_json_digest(without_digest):
+        raise ProjectClosureError("meshscope local Development digest is invalid")
+    return str(digest)
+
+
 def assemble_meshscope_development_candidate(
     builds: tuple[Mapping[str, Any], ...],
     audit: Mapping[str, Any],
     conformance: Mapping[str, Any],
+    local_admission: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Cross-bind Development evidence without claiming dependency admission."""
 
@@ -1587,14 +1764,18 @@ def assemble_meshscope_development_candidate(
     ):
         raise ProjectClosureError("meshscope conformance is not bound to the audit")
 
+    local_admission_digest = _validate_meshscope_local_development_admission(
+        local_admission
+    )
     record_names = (
         "build-1.json",
         "build-2.json",
         "build-alternate-root.json",
         "wheel-audit.json",
         "cup-native-conformance.json",
+        "local-development-admission.json",
     )
-    record_values = (*builds, audit, conformance)
+    record_values = (*builds, audit, conformance, local_admission)
     result = {
         "schema": "text-to-cad.meshscope-development-candidate/1",
         "status": "development-candidate",
@@ -1623,6 +1804,12 @@ def assemble_meshscope_development_candidate(
         ],
         "nativeAuditDigest": audit_digest,
         "nativeConformanceDigest": conformance_digest,
+        "localDevelopmentAdmission": {
+            "status": "qualified-local-candidate",
+            "formalAdmission": False,
+            "immutableMirrorVisible": False,
+            "digest": local_admission_digest,
+        },
         "admission": {
             "admitted": False,
             "blockers": [
@@ -1826,6 +2013,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     meshscope_verify.add_argument("--record", type=Path, required=True)
     meshscope_verify.add_argument("--python", default="python3.12")
+    meshscope_local_admission = subparsers.add_parser(
+        "record-meshscope-local-admission"
+    )
+    meshscope_local_admission.add_argument(
+        "--source-document", type=Path, action="append", required=True
+    )
+    meshscope_local_admission.add_argument(
+        "--cas-artifact", type=Path, action="append", required=True
+    )
+    meshscope_local_admission.add_argument("--record", type=Path, required=True)
     meshscope_candidate = subparsers.add_parser("assemble-meshscope-candidate")
     meshscope_candidate.add_argument(
         "--build-record", type=Path, action="append", required=True
@@ -1833,6 +2030,9 @@ def main(argv: list[str] | None = None) -> int:
     meshscope_candidate.add_argument("--audit-record", type=Path, required=True)
     meshscope_candidate.add_argument(
         "--conformance-record", type=Path, required=True
+    )
+    meshscope_candidate.add_argument(
+        "--local-admission-record", type=Path, required=True
     )
     meshscope_candidate.add_argument("--record", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -1887,6 +2087,13 @@ def main(argv: list[str] | None = None) -> int:
                 python=args.python,
             ),
         )
+    elif args.command == "record-meshscope-local-admission":
+        _write_record(
+            args.record,
+            build_meshscope_local_development_admission(
+                tuple(args.source_document), tuple(args.cas_artifact)
+            ),
+        )
     elif args.command == "assemble-meshscope-candidate":
         builds = tuple(
             _read_record(path, "meshscope build record")
@@ -1896,9 +2103,14 @@ def main(argv: list[str] | None = None) -> int:
         conformance = _read_record(
             args.conformance_record, "meshscope conformance record"
         )
+        local_admission = _read_record(
+            args.local_admission_record, "meshscope local admission record"
+        )
         _write_record(
             args.record,
-            assemble_meshscope_development_candidate(builds, audit, conformance),
+            assemble_meshscope_development_candidate(
+                builds, audit, conformance, local_admission
+            ),
         )
     return 0
 
