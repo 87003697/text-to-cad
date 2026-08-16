@@ -40,6 +40,7 @@ try:
     )
     from scripts.pilot.browser_surface import (
         BrowserSurfaceError,
+        BrowserSurfaceRootError,
         canonicalize_browser_masks,
         discover_browser_roots,
     )
@@ -62,6 +63,7 @@ except ModuleNotFoundError as exc:
     )
     from browser_surface import (  # type: ignore[no-redef]
         BrowserSurfaceError,
+        BrowserSurfaceRootError,
         canonicalize_browser_masks,
         discover_browser_roots,
     )
@@ -982,6 +984,11 @@ def prepare_nested_browser_gate(
             permitted_symlink_roots=[source for source, _, _ in mounts],
         )
         writable_findings = discover_browser_roots(writable_mounts)
+    except BrowserSurfaceRootError as exc:
+        raise PilotError(
+            "cannot close mounted Agent browser surface "
+            f"at {exc.target_root}: {exc.reason}"
+        ) from exc
     except BrowserSurfaceError as exc:
         raise PilotError("cannot close mounted Agent browser surface") from exc
     if writable_findings:

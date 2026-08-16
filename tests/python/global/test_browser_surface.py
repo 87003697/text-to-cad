@@ -54,10 +54,17 @@ class BrowserSurfaceTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp:
             missing = Path(temp) / "missing"
-            with self.assertRaises(browser_surface.BrowserSurfaceError):
+            with self.assertRaises(
+                browser_surface.BrowserSurfaceRootError
+            ) as caught:
                 browser_surface.discover_browser_roots(
                     [(missing, Path("/sandbox/required"), True)]
                 )
+            self.assertEqual(caught.exception.target_root, "/sandbox/required")
+            self.assertEqual(
+                caught.exception.reason,
+                "cannot inspect mounted browser surface",
+            )
             self.assertEqual(
                 browser_surface.discover_browser_roots(
                     [(missing, Path("/sandbox/optional"), False)]

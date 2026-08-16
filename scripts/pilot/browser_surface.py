@@ -41,6 +41,17 @@ class BrowserSurfaceError(RuntimeError):
     """The complete mounted surface could not be inspected fail-closed."""
 
 
+class BrowserSurfaceRootError(BrowserSurfaceError):
+    """One public mount target failed for one already-sanitized reason."""
+
+    def __init__(self, target_root: str, reason: str) -> None:
+        """Retain only the sandbox target and fixed scanner message."""
+
+        super().__init__(reason)
+        self.target_root = target_root
+        self.reason = reason
+
+
 class _DanglingSurfaceLink(BrowserSurfaceError):
     """One enumerated immutable link has no current target."""
 
@@ -739,8 +750,13 @@ def discover_browser_roots(
                 findings,
                 permitted,
             )
-        except BrowserSurfaceError:
-            raise
+        except BrowserSurfaceError as exc:
+            raise BrowserSurfaceRootError(
+                Path(target_root).as_posix(), str(exc)
+            ) from exc
         except OSError as exc:
-            raise _closed(exc) from exc
+            closed = _closed(exc)
+            raise BrowserSurfaceRootError(
+                Path(target_root).as_posix(), str(closed)
+            ) from exc
     return canonicalize_browser_masks(findings)

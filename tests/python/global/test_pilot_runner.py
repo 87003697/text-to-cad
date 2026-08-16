@@ -2095,6 +2095,46 @@ class ProductionPathContractTests(unittest.TestCase):
             "permitted_symlink_roots", discover.call_args_list[1].kwargs
         )
 
+    def test_surface_failure_names_fixed_target_and_reason(self) -> None:
+        """Preflight can discriminate a root without exposing its host source."""
+
+        runner = load_runner()
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
+            root = Path(temp)
+            repo_root = root / "repo"
+            exp_dir = repo_root / "outputs/group/exp"
+            upper = exp_dir / "run/.codex-upper"
+            exp_dir.mkdir(parents=True)
+            upper.mkdir(parents=True)
+            mounts = [(root / "host-usr", Path("/usr"), True)]
+            with (
+                mock.patch.object(
+                    runner, "_readonly_surface_mounts", return_value=mounts
+                ),
+                mock.patch.object(
+                    runner, "resolve_installed_skill_dirs", return_value=[]
+                ),
+                mock.patch.object(runner, "prepare_sandbox", return_value=upper),
+                mock.patch.object(
+                    runner,
+                    "discover_browser_roots",
+                    side_effect=runner.BrowserSurfaceRootError(
+                        "/usr", "mounted browser surface symlink is dangling"
+                    ),
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    runner.PilotError,
+                    "at /usr: mounted browser surface symlink is dangling",
+                ):
+                    runner.prepare_nested_browser_gate(
+                        repo_root,
+                        exp_dir,
+                        [],
+                        {"HOME": str(root / "home")},
+                        mock.Mock(),
+                    )
+
     def test_writable_browser_artifact_fails_actual_gate_preparation(self) -> None:
         """Writable experiment/cache discovery closes before any Sidecar resource."""
 
