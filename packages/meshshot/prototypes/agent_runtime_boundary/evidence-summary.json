@@ -1,0 +1,28 @@
+{
+  "schema": "meshshot.agent-boundary.prototype-evidence/1",
+  "ticket": "SAR-003",
+  "sourceBase": "563ba9f3e823235d3065237b87c1be9a206d17bd",
+  "verdict": "ADOPT_WITH_FORMAL_VERIFICATION_GATES",
+  "decision": "Use an outer-verified inert OCI create, an identity-bound entrypoint preflight/release proof, an identity-bound terminal proof, and exact-ID cleanup/absence proof.",
+  "adversarialMatrix": {
+    "status": "PASS",
+    "cases": 17,
+    "redGreen": true
+  },
+  "sourceLevel": {
+    "status": "PASS",
+    "tests": 6,
+    "matrixBytes": 9826,
+    "matrixSha256": "39025945d0869d5911095c18ff082a830c52bbb6843df39727d043fb1e0b1487"
+  },
+  "realOci": {
+    "status": "NOT_RUN",
+    "reason": "The default Colima profile did not become reachable. The separately running Browser Sidecar profile contains Browser Sidecar/Broker and Playwright-derived prototype images, but no admitted browser-free Agent Runtime Artifact/base digest.",
+    "cleanup": "The failed default profile was stopped and its Docker socket is absent. Read-only prefix inventory on the running Browser Sidecar profile found no SAR-003 containers, volumes, or networks."
+  },
+  "agentRuntimeVerified": false,
+  "formalRunnerModified": false,
+  "providerCalls": 0,
+  "push": "NOT_RUN",
+  "trackerMutation": "NOT_RUN"
+}
