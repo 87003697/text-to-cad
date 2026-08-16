@@ -728,19 +728,31 @@ def discover_browser_roots(
     """Return exact masks, optionally closing immutable cross-root aliases."""
 
     adapter = filesystem or SurfaceFilesystem()
+    mount_list = list(mounts)
+    source_targets: dict[str, set[str]] = {}
+    for source_root, target_root, required in mount_list:
+        target_text = Path(target_root).as_posix()
+        if not isinstance(required, bool):
+            raise BrowserSurfaceRootError(
+                target_text,
+                "mounted browser surface requiredness is invalid",
+            )
+        source_text = os.path.abspath(os.fspath(source_root))
+        source_targets.setdefault(source_text, set()).add(target_text)
     declared = {
         os.path.abspath(os.fspath(root)) for root in permitted_symlink_roots
     }
-    permitted = tuple(
-        sorted(
-            declared
-            | {os.path.realpath(root, strict=True) for root in declared}
-        )
-    )
+    resolved_declared: set[str] = set()
+    for root in sorted(declared):
+        public_target = sorted(source_targets.get(root, {Path(root).as_posix()}))[0]
+        try:
+            resolved_declared.add(os.path.realpath(root, strict=True))
+        except OSError as exc:
+            closed = _closed(exc)
+            raise BrowserSurfaceRootError(public_target, str(closed)) from exc
+    permitted = tuple(sorted(declared | resolved_declared))
     findings: list[dict[str, str]] = []
-    for source_root, target_root, required in mounts:
-        if not isinstance(required, bool):
-            raise BrowserSurfaceError("mounted browser surface requiredness is invalid")
+    for source_root, target_root, required in mount_list:
         try:
             _walk_mount(
                 Path(source_root),

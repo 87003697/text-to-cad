@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts.pilot import browser_surface
 
@@ -71,6 +72,32 @@ class BrowserSurfaceTests(unittest.TestCase):
                 ),
                 [],
             )
+
+    def test_permitted_root_resolution_failure_uses_public_target(self) -> None:
+        """Closure construction never exposes a failing host source path."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "private-host-root"
+            source.mkdir()
+            with mock.patch.object(
+                browser_surface.os.path,
+                "realpath",
+                side_effect=PermissionError(errno.EACCES, str(source)),
+            ):
+                with self.assertRaises(
+                    browser_surface.BrowserSurfaceRootError
+                ) as caught:
+                    browser_surface.discover_browser_roots(
+                        [(source, Path("/sandbox/usr"), True)],
+                        permitted_symlink_roots=[source],
+                    )
+
+        self.assertEqual(caught.exception.target_root, "/sandbox/usr")
+        self.assertEqual(
+            caught.exception.reason,
+            "cannot inspect mounted browser surface",
+        )
+        self.assertNotIn("private-host-root", str(caught.exception))
 
     def test_every_symlink_is_closed_or_resolved_once_inside_root(self) -> None:
         """Dangling, escaping, and cyclic links close without outside traversal."""
