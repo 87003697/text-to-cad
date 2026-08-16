@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 from pathlib import Path
+from pathlib import PurePosixPath
 import re
 import stat
 from typing import Mapping
@@ -21,7 +22,7 @@ MAC_RE = re.compile(r"^[0-9a-f]{64}$")
 IDENTITY_KEYS = (
     "jobId", "ownerNonce", "agentImageDigest", "agentConfigDigest",
     "runtimeManifestDigest", "sourceDigest", "inputDigest",
-    "brokerAuthorityDigest",
+    "brokerAuthorityDigest", "workloadDigest",
 )
 
 
@@ -48,6 +49,7 @@ class ExecutionIdentity:
     source_digest: Digest
     input_digest: Digest
     broker_authority_digest: Digest
+    workload_digest: Digest
 
     def __post_init__(self) -> None:
         if not JOB_RE.fullmatch(self.job_id):
@@ -65,6 +67,7 @@ class ExecutionIdentity:
             "sourceDigest": self.source_digest.value,
             "inputDigest": self.input_digest.value,
             "brokerAuthorityDigest": self.broker_authority_digest.value,
+            "workloadDigest": self.workload_digest.value,
         }
 
     @classmethod
@@ -80,6 +83,7 @@ class ExecutionIdentity:
             source_digest=Digest(str(value["sourceDigest"])),
             input_digest=Digest(str(value["inputDigest"])),
             broker_authority_digest=Digest(str(value["brokerAuthorityDigest"])),
+            workload_digest=Digest(str(value["workloadDigest"])),
         )
 
 
@@ -124,6 +128,19 @@ def broker_mac(secret: bytes, identity: ExecutionIdentity, challenge: str) -> st
     payload = {"challenge": challenge, **identity.as_json()}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hmac.new(secret, encoded, hashlib.sha256).hexdigest()
+
+
+def workload_digest(argv: tuple[str, ...]) -> Digest:
+    if (
+        not argv or len(argv) > 64
+        or not all(isinstance(item, str) and item and "\0" not in item for item in argv)
+        or sum(len(item.encode("utf-8")) for item in argv) > 16384
+        or not PurePosixPath(argv[0]).is_absolute()
+        or ".." in PurePosixPath(argv[0]).parts
+    ):
+        raise ContractError("workload argv must be one closed nonempty absolute command")
+    encoded = json.dumps(argv, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return Digest("sha256:" + hashlib.sha256(encoded).hexdigest())
 
 
 def verify_broker_mac(

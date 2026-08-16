@@ -1,20 +1,20 @@
 {
-  "schema": "meshshot.agent-boundary.prototype-evidence/2",
+  "schema": "meshshot.agent-boundary.prototype-evidence/3",
   "ticket": "SAR-003",
   "sourceBase": "563ba9f3e823235d3065237b87c1be9a206d17bd",
   "verdict": "ADOPT_WITH_FORMAL_VERIFICATION_GATES",
-  "decision": "Use outer comparison of exact OCI manifest/config identities, an inert create/inspect/start lifecycle, a challenge-bound Broker HMAC relayed by the entrypoint, an identity-bound terminal proof, and exact-ID cleanup/absence proof.",
+  "decision": "Use outer comparison of exact OCI manifest/config identities, candidate-to-owned ID admission, immutable workload binding, an inert create/inspect/start lifecycle, a challenge-bound Broker HMAC relayed by the entrypoint, complete process-group supervision, an identity-bound terminal proof, and independent owned-resource cleanup/absence proofs.",
   "adversarialMatrix": {
     "status": "PASS",
-    "cases": 21,
+    "cases": 27,
     "redGreen": true,
     "productionShapedAdapter": true
   },
   "sourceLevel": {
     "status": "PASS",
-    "tests": 10,
-    "matrixBytes": 14941,
-    "matrixSha256": "79575260b16a5a09e5807c46596479f8094c45b33536b59853c5bf6eec9facb9",
+    "tests": 13,
+    "matrixBytes": 26173,
+    "matrixSha256": "3f6e29b763c24622afcb23389b9e5c62d6ed837bfd1544f30b46c07ae75cd29f",
     "formalBrowserScannerReused": true,
     "fullSar005Verification": false
   },

@@ -8,15 +8,15 @@ import json
 import os
 from pathlib import Path
 import socket
-import subprocess
 import sys
 from typing import Mapping
 
 import browser_surface
 from contract import (
-    ContractError, Digest, ExecutionIdentity, canonical_tree_digest,
-    require_exact_record,
+    ContractError, Digest, ExecutionIdentity, IDENTITY_KEYS,
+    canonical_tree_digest, require_exact_record, workload_digest,
 )
+from process_group import run_workload_group
 
 
 CONTROL = Path("/run/agent-boundary")
@@ -29,11 +29,7 @@ WRITABLE = (
 )
 BROKER = Path("/run/meshshot-browser")
 RUNTIME_MANIFEST = Path("/opt/text-to-cad/runtime-manifest.json")
-MANIFEST_KEYS = {"schema", "workload", *(
-    "jobId", "ownerNonce", "agentImageDigest", "agentConfigDigest",
-    "runtimeManifestDigest", "sourceDigest", "inputDigest",
-    "brokerAuthorityDigest",
-)}
+MANIFEST_KEYS = {"schema", "workload", *IDENTITY_KEYS}
 
 
 class GateError(RuntimeError):
@@ -122,10 +118,16 @@ def main() -> int:
     if (
         not isinstance(manifest, dict)
         or set(manifest) != MANIFEST_KEYS
-        or manifest.get("schema") != "meshshot.agent-boundary/2"
+        or manifest.get("schema") != "meshshot.agent-boundary/3"
     ):
         raise GateError("invalid manifest")
     identity = ExecutionIdentity.from_mapping(manifest)
+    workload_value = manifest["workload"]
+    if not isinstance(workload_value, list):
+        raise GateError("workload argv is invalid")
+    workload = tuple(workload_value)
+    if workload_digest(workload) != identity.workload_digest:
+        raise GateError("workload identity mismatch")
     for target in (Path("/"), SOURCE, INPUT, CONTROL, BROKER):
         if "ro" not in _mount_options(target):
             raise GateError("required read-only mount is writable")
@@ -171,12 +173,9 @@ def main() -> int:
     release = _read_record()
     require_exact_record(release, "meshshot.agent-boundary.release/1", identity)
 
-    workload = manifest["workload"]
-    if not isinstance(workload, list) or not workload or not all(isinstance(item, str) and item for item in workload):
-        raise GateError("workload argv is invalid")
     with (WRITABLE[-1] / "agent.stdout").open("wb") as stdout, (WRITABLE[-1] / "agent.stderr").open("wb") as stderr:
-        completed = subprocess.run(
-            workload, cwd=WRITABLE[-2], stdout=stdout, stderr=stderr, check=False,
+        result = run_workload_group(
+            workload, cwd=str(WRITABLE[-2]), stdout=stdout, stderr=stderr,
             env={
                 "HOME": str(WRITABLE[0]), "CODEX_HOME": str(WRITABLE[0] / ".codex"),
                 "XDG_CACHE_HOME": str(WRITABLE[1]), "TMPDIR": str(WRITABLE[2]),
@@ -184,14 +183,18 @@ def main() -> int:
                 "TZ": "UTC", "GIT_TERMINAL_PROMPT": "0", "PYTHONDONTWRITEBYTECODE": "1",
             },
         )
+    if not result.group_absent:
+        raise GateError("workload process group remains")
     _publish({
-        "schema": "meshshot.agent-boundary.terminal/2", **identity.as_json(),
-        "workloadStatus": completed.returncode,
+        "schema": "meshshot.agent-boundary.terminal/3", **identity.as_json(),
+        "workloadStatus": result.returncode,
         "outputDigest": canonical_tree_digest(WRITABLE[-1]).value,
+        "processGroupAbsent": result.group_absent,
+        "descendantResidue": result.descendant_residue,
     })
     ack = _read_record()
     require_exact_record(ack, "meshshot.agent-boundary.ack/1", identity)
-    return completed.returncode
+    return result.returncode
 
 
 if __name__ == "__main__":
