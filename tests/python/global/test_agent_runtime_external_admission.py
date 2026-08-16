@@ -490,6 +490,21 @@ class ExternalAdmissionContractTests(unittest.TestCase):
             with self.assertRaisesRegex(ExternalAdmissionError, "existing mirror object"):
                 admit_local_blob(source, root / "mirror", digest, len(payload))
 
+    def test_local_cas_rejects_bool_expected_bytes_before_io(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            ExternalAdmissionError,
+            admit_local_blob,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "one-byte"
+            source.write_bytes(b"x")
+            digest = "sha256:" + hashlib.sha256(b"x").hexdigest()
+            with self.assertRaisesRegex(ExternalAdmissionError, "byte length"):
+                admit_local_blob(source, root / "mirror", digest, True)
+            self.assertFalse((root / "mirror").exists())
+
     def test_remote_mirror_refuses_unversioned_store_before_write(self) -> None:
         from scripts.pilot.agent_runtime.external_admission import (
             ExternalAdmissionError,
@@ -585,6 +600,108 @@ class ExternalAdmissionContractTests(unittest.TestCase):
                 payload=b"bytes", digest=digest,
             )
         self.assertTrue(malformed.exception.may_have_written)
+
+    def test_remote_mirror_rejects_noncanonical_adapter_identities(self) -> None:
+        from scripts.pilot.agent_runtime.external_admission import (
+            ExternalMirrorPublishError,
+            publish_external_blob,
+        )
+
+        payload = b"bytes"
+        digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+
+        class CreateResponse(FakeMirrorStore):
+            def __init__(self, response: object) -> None:
+                super().__init__()
+                self.response = response
+
+            def put_create_only(self, bucket: str, key: str, payload: bytes):
+                self.put_calls += 1
+                return self.response
+
+        bad_responses = (
+            ("version-\N{LATIN SMALL LETTER E WITH ACUTE}", '"etag"'),
+            ("v" * 1025, '"etag"'),
+            ("version", "etag-unquoted"),
+            ("version", '"etag-\N{LATIN SMALL LETTER E WITH ACUTE}"'),
+            ("version", '"' + "e" * 1023 + '"'),
+            ["version", '"etag"'],
+        )
+        for response in bad_responses:
+            with self.subTest(create=response):
+                with self.assertRaisesRegex(
+                    ExternalMirrorPublishError, "response is malformed"
+                ) as caught:
+                    publish_external_blob(
+                        store=CreateResponse(response), bucket="bucket", prefix="prefix",
+                        payload=payload, digest=digest,
+                    )
+                self.assertTrue(caught.exception.may_have_written)
+
+        class ReuseResponse(FakeMirrorStore):
+            def __init__(self, response: object) -> None:
+                super().__init__()
+                self.response = response
+
+            def current_version(self, bucket: str, key: str):
+                self.calls += 1
+                return self.response
+
+        for response in bad_responses:
+            with self.subTest(reuse=response):
+                store = ReuseResponse(response)
+                with self.assertRaisesRegex(
+                    ExternalMirrorPublishError, "response is malformed"
+                ) as caught:
+                    publish_external_blob(
+                        store=store, bucket="bucket", prefix="prefix",
+                        payload=payload, digest=digest,
+                    )
+                self.assertFalse(caught.exception.may_have_written)
+                self.assertEqual(store.put_calls, 0)
+
+    def test_remote_mirror_normalizes_reread_and_receipt_failures(self) -> None:
+        from scripts.pilot.agent_runtime import external_admission
+
+        payload = b"bytes"
+        digest = "sha256:" + hashlib.sha256(payload).hexdigest()
+
+        class RereadFailure(FakeMirrorStore):
+            def get_exact_version(self, bucket: str, key: str, version_id: str):
+                raise OSError("adapter reread failed")
+
+        for reused in (False, True):
+            with self.subTest(reused=reused):
+                store = RereadFailure()
+                if reused:
+                    store.current[("bucket", "prefix/sha256/" + digest[7:])] = (
+                        "version-1", '"etag-1"'
+                    )
+                with self.assertRaises(external_admission.ExternalMirrorPublishError) as caught:
+                    external_admission.publish_external_blob(
+                        store=store, bucket="bucket", prefix="prefix",
+                        payload=payload, digest=digest,
+                    )
+                self.assertEqual(caught.exception.may_have_written, not reused)
+
+        for reused in (False, True):
+            with self.subTest(receipt_freeze_reused=reused):
+                store = FakeMirrorStore()
+                if reused:
+                    key = "prefix/sha256/" + digest[7:]
+                    store.current[("bucket", key)] = ("version-1", '"etag-1"')
+                    store.objects[("bucket", key, "version-1")] = payload
+                with mock.patch.object(
+                    external_admission, "_freeze_mapping", side_effect=OSError("freeze failed")
+                ):
+                    with self.assertRaises(
+                        external_admission.ExternalMirrorPublishError
+                    ) as caught:
+                        external_admission.publish_external_blob(
+                            store=store, bucket="bucket", prefix="prefix",
+                            payload=payload, digest=digest,
+                        )
+                self.assertEqual(caught.exception.may_have_written, not reused)
 
     def test_codex_proof_receipt_is_exact_and_not_formal(self) -> None:
         from scripts.pilot.agent_runtime.external_admission import (

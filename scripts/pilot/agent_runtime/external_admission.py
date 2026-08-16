@@ -497,6 +497,8 @@ _RFC3339_SECONDS_RE = re.compile(
 )
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_MIRROR_VERSION_ID_RE = re.compile(r"[A-Za-z0-9._~+/=-]{1,1024}\Z")
+_MIRROR_ETAG_RE = re.compile(r'"[ -!#-~]{1,1022}"\Z')
 
 
 def _require_keys(value: Any, keys: set[str], label: str) -> Mapping[str, Any]:
@@ -1296,6 +1298,8 @@ def _snapshot_exact_blob(
 ) -> StableBlobSnapshot:
     """Open once without following links, hash-copy, and rehash a stable snapshot."""
 
+    if type(size) is not int or size < 0:
+        raise ExternalAdmissionError(f"approved {label} byte length is invalid")
     _require_digest(digest, f"approved {label} digest")
     source_fd = _open_regular_no_follow(source, label)
     try:
@@ -1840,6 +1844,8 @@ def admit_local_blob(
 ) -> Path:
     """Copy exact regular bytes into a local content-addressed mirror."""
 
+    if type(expected_bytes) is not int or expected_bytes < 0:
+        raise ExternalAdmissionError("external blob byte length is invalid")
     _require_digest(expected_digest, "external blob digest")
     destination_dir = mirror_root / "sha256"
     destination = destination_dir / expected_digest.removeprefix("sha256:")
@@ -1874,6 +1880,28 @@ def admit_local_blob(
     except OSError as exc:
         raise ExternalAdmissionError("local mirror snapshot cannot be committed") from exc
     return destination
+
+
+def _mirror_version_response(
+    value: Any, *, may_have_written: bool
+) -> tuple[str, str]:
+    if type(value) is not tuple or len(value) != 2:
+        raise ExternalMirrorPublishError(
+            "external mirror adapter response is malformed",
+            may_have_written=may_have_written,
+        )
+    version_id, etag = value
+    if (
+        type(version_id) is not str
+        or _MIRROR_VERSION_ID_RE.fullmatch(version_id) is None
+        or type(etag) is not str
+        or _MIRROR_ETAG_RE.fullmatch(etag) is None
+    ):
+        raise ExternalMirrorPublishError(
+            "external mirror adapter response is malformed",
+            may_have_written=may_have_written,
+        )
+    return version_id, etag
 
 
 def publish_external_blob(
@@ -1923,16 +1951,7 @@ def publish_external_blob(
             "external mirror current-version preflight failed", may_have_written=False
         ) from exc
     if current is not None:
-        if (
-            type(current) is not tuple
-            or len(current) != 2
-            or any(type(item) is not str or not item for item in current)
-        ):
-            raise ExternalMirrorPublishError(
-                "external mirror current-version response is malformed",
-                may_have_written=False,
-            )
-        version_id, etag = current
+        version_id, etag = _mirror_version_response(current, may_have_written=False)
         try:
             reread = store.get_exact_version(bucket, key, version_id)
         except Exception as exc:
@@ -1951,15 +1970,7 @@ def publish_external_blob(
             raise ExternalMirrorPublishError(
                 "external mirror create-only write failed", may_have_written=True
             ) from exc
-        if (
-            type(response) is not tuple
-            or len(response) != 2
-            or any(type(item) is not str or not item for item in response)
-        ):
-            raise ExternalMirrorPublishError(
-                "external mirror create response is malformed", may_have_written=True
-            )
-        version_id, etag = response
+        version_id, etag = _mirror_version_response(response, may_have_written=True)
         try:
             reread = store.get_exact_version(bucket, key, version_id)
         except Exception as exc:
@@ -1967,7 +1978,7 @@ def publish_external_blob(
                 "external mirror exact-version reread failed", may_have_written=True
             ) from exc
         disposition = "created"
-    if reread != payload:
+    if type(reread) is not bytes or reread != payload:
         raise ExternalMirrorPublishError(
             "external mirror exact-version reread mismatch",
             may_have_written=disposition == "created",
@@ -1983,4 +1994,10 @@ def publish_external_blob(
         "schema": "text-to-cad.agent-runtime-external-mirror-publication/1",
         "versionId": version_id,
     }
-    return _freeze_mapping(receipt)
+    try:
+        return _freeze_mapping(receipt)
+    except Exception as exc:
+        raise ExternalMirrorPublishError(
+            "external mirror publication receipt is not canonical",
+            may_have_written=disposition == "created",
+        ) from exc
