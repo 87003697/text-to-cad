@@ -22,8 +22,8 @@ runtime supply implementation:
 
 - [`cvm_sidecar_probe.py`](../../scripts/pilot/cvm_sidecar_probe.py) inspects
   exact source revisions and image IDs, creates a fresh deterministic handle,
-  writes a hash-and-size-attested `docker save` archive, and publishes a local
-  prepare receipt.
+  writes a hash-and-size-attested legacy Docker-native archive, and publishes a
+  local prepare receipt. That legacy archive format is not selected here.
 - Its provision step rechecks the local archive, creates a single-owner
   attempt, transfers the archive and receipt by direct `rsync`, and validates a
   remote provision receipt. This is a bounded prepare/provision/probe pattern,
@@ -60,9 +60,12 @@ keys, invalid UTF-8, non-integer JSON numbers, and non-canonical encodings.
 
 | Name | Meaning | Authority |
 | --- | --- | --- |
-| Agent image manifest digest | OCI linux/amd64 image manifest selected by `docker create` | Runtime image identity |
-| Agent image config digest | OCI configuration object referenced by that manifest | Entrypoint, labels, rootfs configuration identity |
-| Docker archive digest | SHA-256 of the exact `docker save` transport bytes | Transfer integrity only |
+| OCI index digest | Canonical `index.json` bytes in the OCI image layout | Portable selection root inside the archive |
+| Agent image manifest digest | OCI linux/amd64 manifest selected from that index | Portable runtime image identity |
+| Agent image config digest | OCI configuration object referenced by that manifest | Portable entrypoint, labels, and rootfs configuration identity |
+| OCI layer digests | Ordered layer descriptors and exact blob bytes referenced by the manifest | Portable rootfs byte closure |
+| OCI layout archive digest | SHA-256 of the deterministic tar containing the exact OCI image layout | Transfer integrity only |
+| Host-local loaded image ID | Full 64-hex `sha256:` ID independently observed after import | Host execution address for one fresh provision receipt only |
 | S3 object version | Bucket, key, and immutable VersionId holding those archive bytes | Storage location, not runtime identity |
 | Runtime manifest digest | Closed inventory of runtime programs and versions | Capability content identity |
 | Cup capability manifest digest | Closed Cup-only callable capability set | Scope identity |
@@ -75,10 +78,10 @@ keys, invalid UTF-8, non-integer JSON numbers, and non-canonical encodings.
 
 The archive object is therefore not the authority by itself. It is a transport
 blob. The Agent Runtime Lock digest selects the archive bytes, OCI
-manifest/config, build/runtime/Cup identities, SBOM, and Verified root as one
-closed statement. The `current` channel selects only an Agent Runtime Lock
-digest; it never selects an archive, image tag, Git branch, or image ID
-independently.
+index/manifest/config/layers, admitted outer importer, build/runtime/Cup
+identities, SBOM, and Verified root as one closed statement. The `current`
+channel selects only an Agent Runtime Lock digest; it never selects an archive,
+image tag, Git branch, portable manifest, or host-local image ID independently.
 
 ## Immutable S3 layout
 
@@ -88,7 +91,7 @@ namespace:
 ```text
 s3://arcwm-code-us-west-2/
   ericzyma/text-to-cad/runtime/agent/v1/
-    archives/sha256/<archive-hex>.docker.tar
+    archives/sha256/<archive-hex>.oci.tar
     locks/sha256/<lock-hex>.json
     sbom/sha256/<sbom-hex>.spdx.json
     provenance/sha256/<provenance-hex>.json
@@ -96,6 +99,8 @@ s3://arcwm-code-us-west-2/
     verification/roots/sha256/<verified-root-hex>.json
     promotion-authorizations/sha256/<authorization-hex>.json
     channels/cup-formal/current.json
+    reconciliations/<reconciliation-handle>/terminal.json
+    reconciliation-tombstones/<reconciliation-handle>.json
     operations/<operation-handle>/terminal.json
 ```
 
@@ -119,16 +124,35 @@ cannot safely be self-referential.
 ```json
 {
   "agentImage": {
+    "configBytes": 9012,
     "configDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "configMediaType": "application/vnd.oci.image.config.v1+json",
+    "indexBytes": 345,
+    "indexDigest": "sha256:abababababababababababababababababababababababababababababababab",
+    "layers": [
+      {
+        "bytes": 1234,
+        "digest": "sha256:1212121212121212121212121212121212121212121212121212121212121212",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip"
+      },
+      {
+        "bytes": 5678,
+        "digest": "sha256:3434343434343434343434343434343434343434343434343434343434343434",
+        "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip"
+      }
+    ],
+    "manifestBytes": 678,
     "manifestDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "manifestMediaType": "application/vnd.oci.image.manifest.v1+json",
     "platform": {"architecture": "amd64", "os": "linux"}
   },
   "archive": {
+    "admissionReceiptDigest": "sha256:7878787878787878787878787878787878787878787878787878787878787878",
     "bytes": 123456789,
-    "format": "docker-archive",
+    "format": "oci-image-layout-tar-v1",
     "s3": {
       "bucket": "arcwm-code-us-west-2",
-      "key": "ericzyma/text-to-cad/runtime/agent/v1/archives/sha256/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.docker.tar",
+      "key": "ericzyma/text-to-cad/runtime/agent/v1/archives/sha256/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.oci.tar",
       "region": "us-west-2",
       "versionId": "illustrative-version-id"
     },
@@ -138,14 +162,21 @@ cannot safely be self-referential.
     "baseImageManifestDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "buildInputSetDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "buildRecipeDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    "buildSourceSnapshotDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-    "builderImageManifestDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    "builderImageManifestDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "projectRuntimeArtifactSetDigest": "sha256:2323232323232323232323232323232323232323232323232323232323232323"
   },
   "codex": {
     "archiveDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
     "executableDigest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
     "platform": "x86_64-unknown-linux-musl",
     "version": "0.147.0"
+  },
+  "outerImporter": {
+    "admissionReceiptDigest": "sha256:4545454545454545454545454545454545454545454545454545454545454545",
+    "name": "text-to-cad-oci-import",
+    "platformArtifactSetDigest": "sha256:5656565656565656565656565656565656565656565656565656565656565656",
+    "toolClosureDigest": "sha256:6767676767676767676767676767676767676767676767676767676767676767",
+    "version": "1"
   },
   "manifests": {
     "cupRuntimeCapabilityManifestDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
@@ -182,30 +213,47 @@ The example is syntax only. It is not a lock for an existing image.
 
 The lock consumer enforces all of these equalities:
 
-1. the lock's image, build, runtime, Cup, and verification values equal the
-   Verified root subject and its referenced child subjects;
+1. the lock's manifest/config, base/builder/build-input/recipe/project-runtime,
+   Codex, runtime, Cup, SBOM, and verification values equal the fields that
+   actually exist in the Verified root subject and its referenced children;
 2. the Verified root object is fetched by exact digest and has status
    `verified` under its strict graph validator;
 3. archive `sha256` equals both its content-addressed key suffix and the exact
    fetched bytes; `bytes` equals the fetched length;
-4. `docker load` followed by OCI/Docker inspection yields exactly the locked
-   image manifest, config, platform, runtime labels, and no additional selected
-   image;
+4. the deterministic archive expands to exactly `oci-layout`, `index.json`,
+   and the locked blob set; index bytes select exactly one locked linux/amd64
+   manifest whose descriptors select the locked config and ordered layers;
 5. Codex and SBOM identities equal their corresponding admitted evidence; and
-6. every field and nested field set is exact. Missing or additional fields
+6. the outer importer admission receipt closes its exact name, version,
+   per-platform executable artifacts, and tool closure; and
+7. every field and nested field set is exact. Missing or additional fields
    close admission.
 
-No local tag is recorded in the lock. A provisioner may create a nonce-scoped
-temporary tag to make `docker save` or `docker load` practical, but it must
-resolve that tag back to the locked manifest/config and remove it or mark its
-residue in the terminal receipt. Execution uses the locked manifest digest
-with `--pull=never`.
+The SAR-005 graph has no OCI index, layer-set, or outer-importer fields. This
+contract does not invent equalities to absent evidence. Instead, the archive's
+`admissionReceiptDigest` closes deterministic packaging, index selection,
+manifest/config descriptors, ordered layers, and exact blob bytes, while the
+outer importer's admission receipt closes supply tooling. The selected
+manifest/config then form the equality seam into the existing SAR-005 image
+identity and build-provenance fields. No separate build snapshot field exists
+on either side of that seam.
+
+No local tag or host-local image ID is recorded in the lock. The admitted outer
+importer imports the exact OCI image-layout archive into the target Docker
+engine and emits its own receipt. A provisioner may create a nonce-scoped
+temporary import reference, but it must resolve that reference through fresh
+host inspection and remove it or mark its residue in the terminal receipt.
+The portable manifest digest is not assumed to be a runnable local address.
+Execution uses the full host-local image ID from that fresh provision receipt,
+after another exact inspect-before-start, with `--pull=never`.
 
 ## Source Snapshot is a separate execution artifact
 
-The build source snapshot in the lock explains how the image was built. The
-execution Source Snapshot is different: it is mounted read-only for one Agent
-Execution and may change without changing the Agent Runtime Lock.
+The lock's build identity is closed by the SAR-005 `buildInputSetDigest`,
+`buildRecipeDigest`, and `projectRuntimeArtifactSetDigest`; there is no separate
+build snapshot concept or lock field. The execution Source Snapshot is a
+separate artifact mounted read-only for one Agent Execution and may change
+without changing the Agent Runtime Lock.
 
 A formal Source Snapshot must have a strict
 `text-to-cad.source-snapshot-lock/1` containing:
@@ -246,11 +294,11 @@ Every stage reads and validates the exact terminal output of its predecessor.
 | --- | --- | --- |
 | Acquire | exact external/build input objects plus retrieval receipts | No mutable URLs, tags, or ambient caches become admitted inputs |
 | Admit | closed build-input set, Codex admission, dependency locks, and expected hashes | Any missing byte/hash/signature-policy result stops before build |
-| Offline Build | linux/amd64 image manifest/config and build provenance | Network must be disabled; an undeclared cache hit or fetch fails the build |
-| Prepare | exact `docker-archive`, archive hash/size, SBOM, candidate lock bytes | Temporary tags resolve to the built manifest or preparation fails |
+| Offline Build | linux/amd64 OCI index/manifest/config/layers and build provenance | Network must be disabled; an undeclared cache hit or fetch fails the build |
+| Prepare | deterministic OCI image-layout tar, closed blob set, archive hash/size, SBOM, candidate lock bytes | Any missing/extra/re-encoded OCI object or importer admission gap fails preparation |
 | Immutable S3 Publish | archive, lock, SBOM/provenance references, and exact S3 VersionIds | Create-only or exact-byte reuse; reread mismatch retains scratch |
-| Provision | target-owned provision receipt for exact lock/archive | Fetch exact VersionId, `docker load`, no registry pull, no attempt adoption |
-| Verify loaded identity | loaded-identity receipt for manifest/config/platform/runtime/Cup labels | A host-local ID or tag mismatch closes the attempt |
+| Provision | target-owned provision receipt for exact lock/archive/importer | Fetch exact VersionId, use only the admitted outer importer, no registry pull, no attempt adoption |
+| Verify loaded identity | loaded-identity receipt mapping portable OCI bytes to one full host-local image ID/config observation | Missing, non-unique, truncated, tag-derived, or inconsistent host mapping closes the attempt |
 | Consume Verified root | strict validation of the exact lock-linked SAR-005 root | Missing, non-verified, cross-subject, or changed bytes close promotion |
 | Deployment conformance | fresh target-host lifecycle and Cup conformance receipt | Required on every promotion, including rollback; does not amend SAR-005 root |
 | Atomic Promote | one conditional versioned channel-state write | CAS conflict leaves prior current authoritative; an unreadable successful write makes state unresolved and blocks execution |
@@ -276,18 +324,48 @@ host identity is known; it does not create, rewrite, or extend the root.
 
 `text-to-cad.agent-runtime-provision/1` is terminal and exact. On success it
 binds operation handle/owner digest, target environment and host fingerprint,
-lock digest, archive S3 locator/hash/size, Docker server OS/architecture,
-loaded manifest/config digests, temporary-reference disposition, workflow
-source/file digests, and resource disposition. On failure it records the first
-ordered `failureCheck`, `retryAllowed: false`, retained-resource disposition,
-and any separately validated abort receipt.
+lock digest, archive S3 locator/hash/size, Docker server OS/architecture, exact
+outer-importer admission and selected platform-artifact digests, portable OCI
+index/manifest/config/ordered-layer observations, the full 64-hex host-local
+loaded image ID, its independently inspected local config mapping,
+temporary-reference disposition, workflow source/file digests, and resource
+disposition. On failure it records the first ordered `failureCheck`,
+`retryAllowed: false`, retained-resource disposition, and any separately
+validated abort receipt.
 
 `text-to-cad.agent-runtime-loaded-identity/1` is a smaller child receipt that
-binds the successful provision receipt digest to exact inspected
-manifest/config/platform/runtime-manifest/Cup-manifest values. The runtime lock
+binds the successful provision receipt digest to exact inspected host-local
+image ID/config/platform/runtime-manifest/Cup-manifest values. The runtime lock
 consumer recomputes every equality. A Docker image ID that happens to be
-present on one host is not portable authority; the receipt proves how the
-loaded host representation resolves to the OCI identities in the lock.
+present on one host is not portable authority; the receipt proves how this
+particular imported host representation resolves to the OCI identities in the
+lock. The receipt must not assume that the portable manifest digest equals a
+runnable host-local image ID, or that the host-local ID equals the portable
+config digest merely because a particular Docker version often represents it
+that way.
+
+The exact equality chain is:
+
+```text
+archive SHA-256 and length
+  -> exact OCI layout index bytes
+  -> selected linux/amd64 manifest bytes
+  -> referenced config bytes + ordered layer descriptor/blob bytes
+  -> exact admitted outer importer invocation and receipt
+  -> independently inspected full host-local image ID/config mapping
+  -> provision receipt digest + loaded-identity receipt digest
+  -> execution inspect-before-start of that same host-local ID/config
+  -> docker create/run by full host-local ID with --pull=never
+```
+
+Every arrow is checked in the forward direction from locked bytes and again
+where the downstream receipt repeats an upstream value. Immediately before
+container creation, execution rereads current channel state, selects the fresh
+provision receipt bound to its target and generation, inspects the receipt's
+full host-local ID, verifies the same local config/platform/runtime/Cup
+mapping, and passes that exact local ID to Docker. A tag, truncated ID,
+portable manifest digest used as a local address, stale provision receipt, or
+registry resolution is rejected.
 
 Promotion also requires a fresh
 `text-to-cad.agent-runtime-deployment-conformance/1` for that target. It binds
@@ -299,6 +377,11 @@ not a replacement or amendment of `Agent Runtime Verified`.
 
 Promotion first writes an immutable
 `text-to-cad.agent-runtime-promotion-authorization/1`. It has exactly:
+
+`operationRequestId` is the digest of the immutable canonical promotion request
+bytes. The same value must appear in the authorization, intended channel-state
+bytes, write attempt, terminal operation record, and any reconciliation; it is
+not regenerated after an uncertain response.
 
 ```json
 {
@@ -318,6 +401,7 @@ Promotion first writes an immutable
   "loadedIdentityReceiptDigest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
   "macVisibilityReceiptDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
   "operationHandle": "sarsp-1234567890abcdef12345678",
+  "operationRequestId": "sha256:2424242424242424242424242424242424242424242424242424242424242424",
   "provisionReceiptDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
   "retryAllowed": false,
   "schema": "text-to-cad.agent-runtime-promotion-authorization/1",
@@ -342,6 +426,7 @@ version/ETag as the compare-and-swap precondition. The new object has exactly:
   "currentLockDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "generation": 8,
   "operationHandle": "sarsp-1234567890abcdef12345678",
+  "operationRequestId": "sha256:2424242424242424242424242424242424242424242424242424242424242424",
   "predecessorLockDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "previousPointerDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   "promotionAuthorizationDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
@@ -356,11 +441,12 @@ receipt. The immutable authorization proves the gates; the channel-state
 version proves which lock actually became current. There is no second mutable
 alias whose update could split authority.
 
-If compare-and-swap fails, the candidate is not current. The operation records
-`promotion-conflict`, retains its evidence, and does not retry automatically.
-If the S3 write succeeds but the returned version cannot be reread exactly,
-execution remains prohibited and all scratch is retained for reconciliation.
-No client may infer success from a candidate tag or authorization alone.
+If the service definitively returns a compare-and-swap precondition failure,
+the candidate is not current. The operation records `promotion-conflict`,
+retains its evidence, and does not retry automatically. A lost write response,
+an unreadable returned VersionId, a failed exact S3 reread, or a failed
+post-CAS Mac reread enters reconciliation instead. No client may infer success
+from a candidate tag, authorization, write request, listing, or cached pointer.
 
 Mac mount visibility is a pre-promotion gate because operators need the
 canonical archive, lock, and verification graph to be visible through the
@@ -370,8 +456,124 @@ CAS. It is operational evidence only: it does not prove image identity,
 runtime behavior, S3 provenance, or host provisioning. A pre-promotion mount
 failure blocks promotion but does not falsify a valid SAR-005 Verified root.
 After CAS, mounted visibility of the new channel-state bytes is checked again
-before execution and cleanup. Failure of that post-CAS check makes the channel
-operationally unresolved; it does not silently restore the prior pointer.
+before execution and cleanup. Failure of that post-CAS check blocks execution
+and requires reconciliation; if the exact S3 version is confirmed, the later
+receipt can classify it as promoted-but-not-Mac-visible. It does not silently
+restore the prior pointer.
+
+## Append-only channel reconciliation
+
+Reconciliation is a bounded, read-only investigation of one possibly applied
+conditional write. It never writes, deletes, copies, or restores
+`channels/cup-formal/current.json`. It has a new one-shot handle
+`sarcr-<24 lowercase hex>` and consumes the original operation request,
+promotion authorization, exact before state, and intended canonical pointer
+bytes. Starting reconciliation is not an automatic retry of promotion: it is a
+new append-only evidence operation that cannot change channel state.
+
+The terminal `text-to-cad.agent-runtime-channel-reconciliation/1` has exactly
+this shape:
+
+```json
+{
+  "before": {
+    "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "etag": "illustrative-prior-etag",
+    "versionId": "illustrative-prior-version"
+  },
+  "checks": {
+    "exactVersionGetsComplete": true,
+    "macIntendedBytesVisible": true,
+    "s3IntendedBytesVisible": true
+  },
+  "intended": {
+    "operationRequestId": "sha256:2424242424242424242424242424242424242424242424242424242424242424",
+    "pointerDigest": "sha256:2525252525252525252525252525252525252525252525252525252525252525",
+    "promotionAuthorizationDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "observed": {
+    "latest": {
+      "digest": "sha256:2525252525252525252525252525252525252525252525252525252525252525",
+      "etag": "illustrative-intended-etag",
+      "versionId": "illustrative-intended-version"
+    },
+    "versionChain": [
+      {
+        "digest": "sha256:2525252525252525252525252525252525252525252525252525252525252525",
+        "etag": "illustrative-intended-etag",
+        "isDeleteMarker": false,
+        "isLatest": true,
+        "versionId": "illustrative-intended-version"
+      },
+      {
+        "digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "etag": "illustrative-prior-etag",
+        "isDeleteMarker": false,
+        "isLatest": false,
+        "versionId": "illustrative-prior-version"
+      }
+    ]
+  },
+  "outcome": "promoted",
+  "promotionOperationHandle": "sarsp-1234567890abcdef12345678",
+  "reconciliationHandle": "sarcr-abcdef1234567890abcdef12",
+  "retryAllowed": false,
+  "schema": "text-to-cad.agent-runtime-channel-reconciliation/1",
+  "status": "terminal",
+  "writeResponse": {
+    "etag": null,
+    "versionId": null
+  }
+}
+```
+
+`writeResponse` preserves exactly what the original caller received; both
+fields may be null after a lost response. `observed.versionChain` is ordered
+newest to oldest and covers every channel-state version from current latest
+through the exact `before.versionId`, inclusive. Listing is used only to find
+candidate VersionIds. Every non-delete version in the bounded chain is fetched
+with an exact-version GET, parsed under the strict channel-state schema, and
+hashed; a delete marker is recorded with JSON `null` for `digest` and `etag`.
+An incomplete, over-limit, changing, or un-fetchable chain cannot be treated as
+absence or success.
+
+The outcome is exactly `promoted`, `not-promoted`, or `ambiguous`:
+
+- `promoted`: exactly one exact-version object equals the intended canonical
+  pointer digest and repeats its authorization digest and operation request ID,
+  and that object is the sole latest version. That state is current authority.
+  Execution additionally requires exact S3 and Mac visibility of those pointer
+  bytes. If Mac visibility is false, the outcome is still `promoted`, but the
+  current channel is execution- and pointer-change-blocked until a later
+  read-only reconciliation proves visibility.
+- `not-promoted`: no version equals the intended pointer, and the exact before
+  VersionId/digest remains the sole latest version with no intervening data or
+  delete-marker version. The prior current remains authoritative.
+- `ambiguous`: every other result, including duplicate intended versions,
+  intended-but-not-latest, a foreign later version, delete marker, incomplete
+  chain, exact-GET failure, or inability to prove intended S3 bytes. The
+  channel is frozen: neither current nor prior may execute, and no promotion or
+  rollback may change the pointer.
+
+The lost-response-after-successful-CAS case resolves to `promoted` when the
+single intended version is latest even though `writeResponse` is null. The
+confirmed-CAS-but-post-mount-failure case also resolves to `promoted`, with
+`macIntendedBytesVisible: false`; current is authoritative but execution and
+cleanup remain blocked. A proof that the before version is still latest and no
+intended version exists resolves to `not-promoted`. Listing alone proves none
+of these outcomes.
+
+The reconciliation terminal record is published append-only at its handle and
+reread exactly. If normal publication fails, an independent append-once
+reconciliation tombstone binds the handle, original request ID, before digest,
+intended pointer digest, last durable observation, and
+`retentionRequired: true`. Failure of both leaves the channel frozen with no
+authoritative reconciliation receipt. A later bounded reconciliation may use
+a new handle and repeat only these reads. Pointer-changing promotion or
+rollback may resume only after `not-promoted`, or after `promoted` with both
+exact S3 and Mac visibility true. It remains frozen for `ambiguous` and for a
+promoted-but-not-visible state. Reconciliation never mutates the pointer to
+manufacture an outcome.
 
 ## Rollback is a new promotion
 
@@ -382,9 +584,9 @@ candidate is the exact `predecessorLockDigest` from the current channel state.
 The rollback operation must:
 
 1. reread and strictly validate current channel state and both locks;
-2. prove the predecessor lock bytes, archive object VersionId/hash/size, image
-   manifest/config, build/runtime/Cup identities, and Verified root are
-   unchanged;
+2. prove the predecessor lock bytes, archive object VersionId/hash/size, OCI
+   index/manifest/config/layers, outer importer, build/runtime/Cup identities,
+   and Verified root are unchanged;
 3. provision the predecessor archive afresh on the target host;
 4. produce fresh loaded-identity and target deployment-conformance receipts;
 5. publish a new promotion authorization; and
@@ -426,15 +628,25 @@ current/predecessor state or retained failure/verification/promotion receipt.
 
 Successful local or target-host scratch cleanup is allowed only after the
 terminal operation receipt, every immutable S3 object, exact S3 rereads, atomic
-channel state, and Mac mount visibility are all verified. Cleanup is scoped to
-the operation handle and must prove absence. Failed operations, publication
-ambiguity, visibility failure, residue, or missing terminal publication retain
-all scratch and record `cleanupDisposition` without attempting broad cleanup.
+channel state, and Mac mount visibility are all verified. An initially
+uncertain conditional write additionally requires a `promoted` reconciliation
+whose exact S3 and Mac visibility checks are true. `not-promoted` and
+`ambiguous` outcomes retain the original candidate and scratch; a `promoted`
+outcome with failed visibility also retains them until a later read-only
+reconciliation proves visibility. Cleanup is scoped to the operation handle
+and must prove absence. Failed operations, unresolved reconciliation,
+publication ambiguity, visibility failure, residue, or missing terminal
+publication retain all scratch and record `cleanupDisposition` without
+attempting broad cleanup.
 
 ## Failure and retry contract
 
 Every stage emits one terminal operation record under its fresh handle with
-status `succeeded`, `failed`, or `publication-failed`. Failure precedence is:
+status `succeeded`, `failed`, `reconciliation-required`, or
+`publication-failed`. `reconciliation-required` binds the before state,
+intended canonical pointer digest, promotion authorization, operation request
+ID, and any returned write metadata; it grants no execution authority and
+freezes pointer-changing operations. Failure precedence is:
 
 1. retained or unproved owned resources;
 2. absence-proof failure;
@@ -458,35 +670,50 @@ scratch and external operations must treat the attempt as unresolved.
 An implementation is conformant only if machine tests prove all of these:
 
 1. the canonical lock digest is the only artifact selected by channel state;
-2. the lock closes archive, OCI manifest/config/platform, build inputs, Codex,
-   runtime/Cup manifests, SBOM, and exact Verified root;
+2. the lock closes archive, OCI index/manifest/config/ordered layers/platform,
+   outer importer, build inputs, Codex, runtime/Cup manifests, SBOM, and exact
+   Verified root;
 3. archive and lock publication is create-only or exact-byte reuse by S3
    VersionId, size, and SHA-256;
-4. provisioning uses the exact archive version, validates loaded identity, and
-   never pulls;
-5. execution resolves current once, revalidates it, and uses the manifest with
-   `--pull=never`; tags and predecessor fallback are rejected;
+4. provisioning uses the exact OCI image-layout archive and admitted importer,
+   validates the portable-to-host-local identity mapping, and never pulls;
+5. execution resolves current once, binds the fresh provision receipt,
+   inspect-verifies its full host-local image ID/config immediately before
+   start, and uses that local ID with `--pull=never`; tags, portable-manifest
+   addressing, and predecessor fallback are rejected;
 6. non-bootstrap channel state has one current and one distinct predecessor,
    and each resolves to a valid retained lock/archive/Verified root;
-7. promotion is one conditional pointer write and a conflict cannot change the
-   previous authoritative state;
+7. promotion is one conditional pointer write, a definite conflict cannot
+   change the previous authoritative state, and an uncertain write freezes all
+   pointer-changing and execution operations pending append-only reconciliation;
 8. rollback is a new promotion with fresh provision, loaded-identity, and
    deployment-conformance receipts;
 9. Source Snapshot identity is separate and cannot change the runtime lock;
-10. Mac visibility can block promotion but cannot create runtime evidence;
+10. pre-promotion Mac visibility of immutable candidate objects blocks CAS,
+    while post-CAS pointer visibility blocks execution and triggers
+    reconciliation; neither can create runtime evidence;
 11. failed attempts never auto-retry, never adopt a handle, and retain
     diagnostics/resources unless exact absence is proved; and
-12. cleanup and any future GC cannot act on names, tags, unresolved references,
+12. reconciliation classifies exact version chains only as promoted,
+    not-promoted, or ambiguous; never mutates the pointer; and cannot infer from
+    a list response alone; and
+13. cleanup and any future GC cannot act on names, tags, unresolved references,
     active current/predecessor objects, or historical failure evidence.
 
-Required negative fixtures include archive/lock hash substitution, S3
-VersionId substitution, lock/Verified-root cross-subject grafting, config vs.
-manifest confusion, host-local image-ID substitution, source-snapshot/runtime
-conflation, missing predecessor, current equal to predecessor, stale-CAS
-promotion, crash before and after pointer write, Mac mount mismatch, rollback
-without fresh target receipts, tag-only execution, registry fallback, handle
-adoption, terminal-publication failure, cleanup residue, and GC reachability
-mistakes.
+Required negative fixtures include archive/lock hash substitution, OCI index or
+blob omission/re-encoding, manifest/config/layer substitution, unadmitted or
+wrong-platform importer, S3 VersionId substitution, lock/Verified-root
+cross-subject grafting, portable-manifest-as-local-ID confusion, host-local
+image-ID/config substitution, stale or truncated local ID, execution-time
+re-inspection drift, source-snapshot/runtime conflation, missing predecessor,
+current equal to predecessor, stale-CAS promotion, lost response after a
+successful CAS, confirmed CAS plus post-mount failure, duplicate intended
+versions, intended-but-not-latest, delete markers, incomplete version chains,
+listing-only inference, reconciliation pointer mutation, rollback before
+reconciliation, crash before and after pointer write, Mac mount mismatch,
+rollback without fresh target receipts, tag-only execution, registry fallback,
+handle adoption, terminal-publication failure, cleanup residue, and GC
+reachability mistakes.
 
 ## Implementation status
 
@@ -494,7 +721,8 @@ Nothing in this document publishes an archive, creates a lock, promotes a
 channel, provisions a host, runs Colima/CVM, calls a provider, or proves an
 Agent runtime. Follow-on implementation must add strict schemas and
 canonicalizers, S3 versioning/precondition checks, immutable publication and
-visibility receipts, lock/root validators, exact provision and loaded-identity
-receipts, deployment conformance, CAS promotion, rollback, failure fixtures,
-and provider-free Colima/CVM evidence before any runtime can be called supplied
-or promoted.
+visibility receipts, canonical OCI image-layout producer, admitted outer
+importer, lock/root validators, portable-to-host loaded-identity receipts,
+execution inspect-before-start, deployment conformance, CAS promotion,
+append-only reconciliation, rollback, failure fixtures, and provider-free
+Colima/CVM evidence before any runtime can be called supplied or promoted.
