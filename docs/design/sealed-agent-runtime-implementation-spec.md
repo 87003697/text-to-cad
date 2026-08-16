@@ -195,9 +195,105 @@ mandatory.
 build(admitted_build_input_set) -> candidate OCI closure + build receipts
 ```
 
-It consumes only admitted, locally mirrored bytes, performs a network-disabled
-build, emits deterministic OCI image-layout bytes, runtime and Cup manifests,
-SBOM and browser-deny evidence, and never reads the execution Source Snapshot.
+SAI-005 owns this producer and the production image-resident entrypoint. It
+consumes only admitted, locally mirrored bytes, performs a network-disabled
+build, and never reads the execution Source Snapshot. The exact OCI image
+config has `Entrypoint` equal to the one-element array
+`["/usr/local/libexec/text-to-cad-agent-entrypoint"]` and `Cmd` equal to the
+empty array. SAI-005 fixes that regular executable's bytes, mode `0555`, and
+SHA-256 in the runtime manifest; the same digest becomes the approved
+`entrypointDigest` in the verification plan and both lifecycle subjects.
+
+SAI-009 owns the outer execution supervisor and consumes that SAI-005 output
+through the SAI-007 candidate/lock. It may pass the immutable workload and
+job-private capabilities to the fixed entrypoint but may not generate, patch,
+mount over, or select alternate entrypoint bytes. This direction is
+SAI-005 -> SAI-007 -> SAI-009 and introduces no reverse dependency. The
+throwaway SAR-003 prototype entrypoint is decision evidence only: SAI-005 must
+implement the reviewed production contract in `packages/agent_runtime/` and
+must not copy, vendor, import, or execute the prototype as production bytes.
+
+The image-resident runtime manifest is the regular file
+`/usr/share/text-to-cad/runtime-manifest.json`, mode `0444`, and is canonical
+JSON with schema literal
+`text-to-cad.agent-runtime-manifest/1` and exactly these top-level keys:
+`schema`, `platform`, `entrypoint`, `cupCapabilityManifest`, `programs`,
+`nativeLibraries`, and `runtimeFiles`. `platform` is exactly
+`{"architecture":"amd64","os":"linux"}`. `entrypoint` has exactly `path`,
+`mode`, `bytes`, `digest`, and `argv`; its values are the fixed path/mode above,
+the observed nonnegative byte length, its full SHA-256, and the exact
+one-element image-config `Entrypoint` array. `cupCapabilityManifest` has exactly
+`path` and `digest` for the image-resident closed Cup manifest; its path is
+exactly `/usr/share/text-to-cad/cup-capability-manifest.json`.
+
+`programs` is a path-sorted array whose entries have exactly `name`, `path`,
+`version`, and `digest`. `nativeLibraries` is a path-sorted array whose entries
+have exactly `path`, `soname`, and `digest`. `runtimeFiles` is a path-sorted
+complete inventory of sealed runtime payload files except the runtime manifest
+itself; entries have exactly `path`, `mode`, `bytes`, and `digest`. Every path
+is absolute, normalized, unique, is not the manifest path above, and names one
+regular file in the final rootfs; every mode is an unsigned integer containing
+only permission bits, every byte count is nonnegative, and every digest is full
+SHA-256. Symlinks, directories, devices, sockets, and other non-regular entries
+are represented only by the OCI rootfs and are not permitted as manifest file
+records. Every program, native library, entrypoint, and Cup manifest file must
+also appear with identical identity in `runtimeFiles`. The inventory boundary
+is exactly the union of those referenced files and every regular file admitted
+by `projectRuntimeArtifactSetDigest`; no file outside that union may appear.
+`programs` contains every executable invoked by the entrypoint or immutable
+workload, and `nativeLibraries` contains their complete resolved ELF
+`DT_NEEDED` closure. OS/dependency package membership remains bound by the
+dependency lock and external SBOM rather than being silently reclassified as a
+project runtime artifact.
+
+All three arrays reject duplicate paths, unknown keys, non-canonical ordering,
+or a path/digest mismatch against the final rootfs. Program `name` and
+`version`, and library `soname`, are non-empty ASCII strings observed from the
+admitted bytes; they are not mutable labels. Empty arrays are permitted only
+when their exact membership rule yields no entry, never as an unknown or
+not-scanned sentinel.
+
+The runtime manifest does not contain its own digest: it contains neither
+`runtimeManifestDigest` nor any OCI index, manifest, config, layer, SBOM,
+browser-inventory, receipt, candidate,
+lock, or Verified-root digest. Its identity is the SHA-256 of its complete
+canonical bytes, computed externally and then recorded in the OCI config label,
+`org.text-to-cad.agent-runtime-manifest.digest`, and copied unchanged into the
+candidate/lock, verification root, and typed evidence. The manifest is written
+into the rootfs before the final layer/config/manifest digests are computed, so
+it never hashes itself or a downstream container.
+
+The portable image uses gzip-compressed OCI layers only, with media type
+`application/vnd.oci.image.layer.v1.tar+gzip`, matching the fixed supply
+contract. Each descriptor digest/size covers the exact gzip blob; the config
+`rootfs.diff_ids` entry at the same ordinal covers the exact uncompressed tar
+bytes. Deterministic gzip has MTIME zero, no original-name/comment/extra fields,
+and one fixed compression implementation/level recorded in the build recipe.
+Mixing uncompressed-layer media types, recompressing a layer, or equating a blob
+digest with its DiffID is rejected. Two clean builds must reproduce index,
+manifest, config, ordered gzip blob, and ordered DiffID bytes exactly.
+
+After the final OCI manifest digest exists, SAI-005 produces the SPDX JSON 2.3
+SBOM plus browser inventory/scan receipt as separate canonical artifacts. They
+are not copied into any image layer. Their digests are absent from every image
+layer, the runtime manifest, and OCI config, preventing image/SBOM/browser
+self-reference. They bind the already-final `agentImageManifestDigest`.
+SAI-005 owns these artifact producers and their raw closed outputs; SAI-011
+owns the typed `sbom` and `browser-deny` evidence producers that validate those
+outputs and insert the existing two nodes into the 15-node graph. Neither
+ticket may create an additional node or move either external artifact into the
+image.
+
+The SBOM producer and typed validator share no ambient SPDX registry. Each
+consumes the admitted local
+`text-to-cad.spdx-license-catalog/1` version 3.28.0 bytes fixed by the receipt
+contract (12,540 canonical bytes,
+`sha256:5865e5d860a9278d30d22eb5522952f85eb620b2a6a3e68e02a5df7449835a31`),
+recomputes the catalog independently, and applies the exact License List,
+Exception List, `WITH`, `LicenseRef`, and `NOASSERTION` rules there. The
+SAI-005 build-input closure binds this catalog and its admitted source wheel;
+SAI-011 validates against the same literal catalog identity. Neither performs a
+network refresh or imports a host-installed catalog.
 
 ### Artifact supply
 
@@ -229,9 +325,12 @@ mock/no provider capability, and no channel authority.
 The outer supervisor allocates fresh authority, validates all immutable
 identities, creates an inert container, admits the returned exact container ID
 before obtaining delete authority, verifies inert configuration, then starts a
-fixed entrypoint. The entrypoint validates namespaces and a challenge-bound
-Broker HMAC before releasing the immutable workload. It supervises the whole
-process group and publishes terminal evidence only after descendant absence.
+fixed entrypoint whose path/config/digest are SAI-005 image outputs repeated by
+the candidate, lock, verification plan, and lifecycle subject. SAI-009 only
+consumes and rechecks that identity. The entrypoint validates namespaces and a
+challenge-bound Broker HMAC before releasing the immutable workload. It
+supervises the whole process group and publishes terminal evidence only after
+descendant absence.
 
 The provider capability is a job-private Proxy container. The Agent and Proxy
 share one newly created Docker `--internal` network containing no other job;
