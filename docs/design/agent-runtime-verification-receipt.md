@@ -80,6 +80,36 @@ environment-qualified verification execution binds the same plan-approved
 Source Snapshot below; none is a production Source Snapshot or part of the
 artifact build-input identity.
 
+### Runtime manifest and post-manifest evidence boundary
+
+The exact image-resident runtime-manifest schema and production entrypoint are
+owned by SAI-005 and defined by the
+[implementation specification](sealed-agent-runtime-implementation-spec.md#artifact-builder).
+The manifest is stored at `/usr/share/text-to-cad/runtime-manifest.json`; it does not contain
+`runtimeManifestDigest` or any OCI/SBOM/browser/candidate/lock/evidence digest.
+The root `runtimeManifestDigest` is computed from those complete canonical
+bytes outside the manifest. `runtimeManifestInsideImageExact` requires the
+fixed path and bytes, the config label
+`org.text-to-cad.agent-runtime-manifest.digest`, the root subject, and every
+same-named child field to agree exactly.
+
+`entrypointExact` requires the OCI config `Entrypoint` to be exactly
+`["/usr/local/libexec/text-to-cad-agent-entrypoint"]`, `Cmd` to be exactly the
+empty array, and the file's path, mode `0555`, byte length, and digest to equal
+the runtime-manifest `entrypoint`. That digest also equals the approved
+verification-plan `entrypointDigest` and both lifecycle subject values. The
+outer supervisor is not an image entrypoint producer and cannot satisfy this
+predicate with mounted, generated, prototype, or alternate bytes.
+
+The SPDX SBOM, browser inventory, and raw browser scan receipt are produced
+only after the final OCI manifest digest exists. They are external canonical
+artifacts and are absent from every image layer, the runtime manifest, and OCI
+config. The `sbom` and `browser-deny` subjects bind them to the already-final
+`agentImageManifestDigest`; no image byte or runtime-manifest field points back
+to their digests. SAI-005 owns the raw artifact producers. SAI-011 owns the
+existing typed `sbom` and `browser-deny` evidence producers and may not add a
+node, place those artifacts in the image, or rewrite their SAI-005 observations.
+
 The digest of canonical `subject` is `subjectDigest`. Every child repeats that
 digest, not the subject fields, so a child from another artifact, configuration,
 capability manifest, or build-input lock cannot be grafted into the graph.
@@ -295,6 +325,27 @@ and no truthy substitute is accepted.
 | `cup-golden` | `fixtureDigestExact`, `formalRouterImplicitOnly`, `faceCount3764`, `watertightFalse`, `eulerNumber144`, `nodeImplicitSubsetExact`, `meshscopeAccepted`, `voxBlameAccepted`, `residualBrokerPreviewAccepted`, `outputDigestRepeatable` |
 | `source-snapshot` | `manifestSchemaExact`, `pathSetClosed`, `regularFilesOnly`, `fileModesBound`, `fileSizesBound`, `fileDigestsBound`, `treeDigestMatchesObservation`, `readOnlyMountEligible` |
 | `verification-plan` | `planSchemaExact`, `planDigestExact`, `scannerApproved`, `sourceSnapshotApproved`, `sourceManifestApproved`, `inputSnapshotApproved`, `cupFixtureApproved`, `routerManifestApproved`, `expectedOutputApproved`, `conformanceFixtureApproved`, `lifecycleHarnessApproved`, `entrypointApproved`, `receiptSchemaApproved`, `agentConfigApproved`, `brokerAuthorityApproved`, `workloadApproved` |
+
+For the `sbom` node, `licensesRecorded:true` has one exact meaning. Every SPDX
+`packages` entry and every SPDX `files` entry must have a `licenseConcluded`
+that parses as an SPDX 2.3 license expression and contains neither
+`NOASSERTION` nor `NONE`. Each identifier in the expression must be either an
+SPDX License List identifier or a case-sensitive `LicenseRef-<id>` using only
+one or more ASCII letters, digits, `.`, or `-` after the prefix. Every referenced
+`LicenseRef-<id>` must have exactly one matching `hasExtractedLicensingInfo`
+entry whose `licenseId` is identical, whose `extractedText` is non-empty, and
+whose `comment` is exactly
+`evidenceDigest=sha256:<64 lowercase hex>`, where that digest is the SHA-256 of
+the UTF-8 `extractedText` bytes. Duplicate or unused extracted-license entries
+are rejected.
+
+This rule applies independently to packages and files; a package license does
+not cover a file field and vice versa. A missing/empty field, parse failure,
+unknown bare identifier, unresolved or multiply defined `LicenseRef`, evidence
+digest mismatch, `NOASSERTION`, or `NONE` makes `licensesRecorded:false` at its
+normative position. Such values may remain in a failed diagnostic SBOM but can
+never make the predicate true. No network license lookup or producer success
+summary is accepted as evidence.
 
 The Codex signature predicates bind a signature over the extracted executable,
 not over the archive. `archiveSingleExecutableExact` requires the exact archive

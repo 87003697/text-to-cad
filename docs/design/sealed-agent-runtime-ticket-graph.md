@@ -15,13 +15,13 @@ The operational handoff is the
 | SAI-002 | Verification-plan and Cup capability manifests; provider-free durable Cup golden fixture and numeric-only route inspection | SAI-001 | exact manifest equality and router fixture tests |
 | SAI-003 | Browser-free project closure: split meshshot Broker client, build meshscope cp312 native wheel, vendor canonical implicit subset | SAI-002 | wheel/ELF audit, browser import/executable/cache denial, Cup imports |
 | SAI-004 | External-byte admission for Noble/debs, Python wheels, Node 24.13.0 and Codex 0.147.0 | SAI-001 | immutable mirror metadata, hashes, signature/checksum facts without overstated provenance, Node-absent Codex smoke |
-| SAI-005 | Network-disabled deterministic OCI builder, runtime/Cup manifests, SBOM and browser-deny producer | SAI-003, SAI-004 | two byte-identical builds and complete OCI/config/layer closure |
+| SAI-005 | Network-disabled deterministic OCI builder; production image-resident fixed entrypoint; runtime/Cup manifests; external SBOM and browser-inventory/receipt artifacts | SAI-003, SAI-004 | two byte-identical builds; exact entrypoint/config/runtime-manifest identity; gzip blob plus uncompressed DiffID closure; external post-manifest inventories |
 | SAI-006 | Execution Source Snapshot builder and immutable publication/visibility contract | SAI-001 | no-follow manifest, exact digest/count/size, S3 exact-version and Mac visibility checks |
 | SAI-007 | Candidate descriptor, artifact supply/provision, final-lock finalizer and admitted OCI importer | SAI-001, SAI-005 | non-circular candidate-to-Verified-to-final-lock chain, portable-to-local identity, inspect-before-start, `--pull=never` |
 | SAI-008 | CAS promotion, deterministic reconciliation, predecessor and rollback module | SAI-007 | bootstrap/later CAS, lost-response, mount-failure, unfreeze and fresh rollback drills |
-| SAI-009 | Production Agent execution supervisor replacing host bwrap | SAI-006, SAI-007 | full SAR-003 adversarial suite plus one real Colima container lifecycle |
+| SAI-009 | Production outer Agent execution supervisor replacing host bwrap; consumes and rechecks the SAI-005 entrypoint through the SAI-007 candidate/lock | SAI-006, SAI-007 | full SAR-003 adversarial suite, fixed-entrypoint substitution denial, plus one real Colima container lifecycle |
 | SAI-010 | Job-private dual-homed Venus Proxy capability and provider-free mock conformance | SAI-001, SAI-009 | per-job internal Agent network, Proxy-only allowlisted egress, namespace/route/DNS/firewall identity, 48-request/time/token ceilings, cross-job denial, cleanup/absence, zero real dispatch |
-| SAI-011 | Colima/CVM verification producers and 15-node orchestrator | SAI-002, SAI-005, SAI-006, SAI-009 | candidate-bound identical-plan evidence, canonical Verified root, then final lock |
+| SAI-011 | Colima/CVM typed evidence producers and 15-node orchestrator, including validation of SAI-005 external SBOM and browser artifacts | SAI-002, SAI-005, SAI-006, SAI-009 | candidate-bound identical-plan evidence, existing typed `sbom`/`browser-deny` nodes, canonical Verified root, then final lock |
 | SAI-012 | Production four-active FIFO admission and separate real isolation qualification | SAI-009, SAI-011 | four real containers, zero-allocation fifth queue, failure isolation, resource absence; no Verified-root rewrite |
 | SAI-013 | End-to-end supply, promotion, reconciliation and rollback acceptance | SAI-008, SAI-011, SAI-012 | exact S3/CVM/Mac receipts; current plus distinct predecessor retained |
 | SAI-014 | Provider-free production pilot integration with Agent + Venus Proxy + Broker + Sidecar | SAI-010, SAI-013 | fixed Source Snapshot/input, full Gate terminal/cleanup receipts, mock upstream and zero provider dispatch |
@@ -36,7 +36,9 @@ only in isolated worktrees with stable ticket owners.
 2. `G2 manifests`: SAI-002 and SAI-006 may run in parallel after SAI-001.
 3. `G3 dependency closure`: SAI-003 and SAI-004 may run in parallel; they own
    project packaging and external admission respectively.
-4. `G4 artifact`: SAI-005.
+4. `G4 artifact`: SAI-005 owns the image entrypoint and raw post-manifest
+   inventory artifacts; it does not implement the SAI-009 supervisor or
+   SAI-011 typed evidence nodes.
 5. `G5 supply and execution`: SAI-007, then SAI-008 and SAI-009 may run in
    parallel because promotion and execution own separate modules.
 6. `G6 provider and verification`: SAI-010 and SAI-011 may run in parallel
