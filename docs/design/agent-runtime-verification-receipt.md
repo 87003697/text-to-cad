@@ -208,7 +208,7 @@ consumer enforces every equality in this matrix:
 | `verificationPlanDigest` | root `subject.verificationPlanDigest`; `verification-plan.subject.verificationPlanDigest` |
 | `scannerDigest` | `browser-deny.subject.scannerDigest` |
 | `verificationSourceSnapshotDigest` | both `source-snapshot.subject.executionSourceSnapshotDigest`; both lifecycle and both conformance `executionSourceSnapshotDigest` |
-| `verificationSourceManifestDigest` | both `source-snapshot.subject.sourceManifestDigest` |
+| `verificationSourceManifestDigest` | each `source-snapshot.subject.sourceManifestDigest` whose node is `succeeded` |
 | `verificationInputSnapshotDigest` | both lifecycle and both conformance `inputSnapshotDigest` |
 | `cupFixtureDigest` | `cup-golden.subject.fixtureDigest` |
 | `routerManifestDigest` | `cup-golden.subject.routerManifestDigest` |
@@ -221,13 +221,37 @@ consumer enforces every equality in this matrix:
 | `brokerAuthorityDigest` | both lifecycle `brokerAuthorityDigest` |
 | `workloadDigest` | both lifecycle `workloadDigest` |
 
+`verificationSourceSnapshotDigest` is request-bound identity. Every Source
+Snapshot, lifecycle, and conformance child repeats it as the non-null
+`executionSourceSnapshotDigest` in every status, including `failed` and
+`not-run`, and it always equals the plan value. The Source Snapshot
+`sourceManifestDigest` is instead an observation established by
+`treeDigestMatchesObservation`:
+
+- A `succeeded` Source Snapshot has a concrete `sourceManifestDigest` equal to
+  `verificationSourceManifestDigest`.
+- A `failed` Source Snapshot follows the predicate observation grammar. If
+  `treeDigestMatchesObservation` is `true`, the concrete observed manifest
+  digest equals the plan value; if it is `false`, the concrete observed digest
+  remains in the subject and differs from the plan value; if it is `null`,
+  `sourceManifestDigest` is `null`.
+- A `not-run` Source Snapshot has `sourceManifestDigest`, `pathCount`, and
+  `totalBytes` set to `null`.
+
+A strict consumer rejects a succeeded manifest mismatch, a null succeeded
+manifest, a non-null not-run observation, or a failed observation whose
+null/concrete state disagrees with `treeDigestMatchesObservation`. It must not
+reject a failed Source Snapshot merely because its concrete observed manifest
+differs from the plan. The two Source Snapshot node subjects are required to be
+byte-for-byte equal, including counts after environment is excluded, only when
+both nodes succeeded; their request-bound fields remain equal in every status.
+
 In addition, root image/runtime/Cup identities equal every same-named child
 field, and `cup-golden.observedOutputDigest` plus each conformance
 `observedOutputDigest` must equal the plan's `expectedOutputDigest` on success.
-The two Source Snapshot node subjects must be byte-for-byte equal, including
-counts, after environment is excluded. A producer-selected scanner, harness,
-entrypoint, receipt schema, fixture, input, router, expected output, or
-verification Source Snapshot is a schema rejection.
+A producer-selected scanner, harness, entrypoint, receipt schema, fixture,
+input, router, expected output, or verification Source Snapshot is a schema
+rejection.
 
 This plan controls verification only. A later production Agent Execution may
 mount a different Source Snapshot by its own execution identity without
