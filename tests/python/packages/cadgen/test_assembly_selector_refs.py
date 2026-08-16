@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from tests.python.support.paths import add_repo_path
@@ -210,6 +211,186 @@ class AssemblyEntityRefsTest(AssemblyOccurrenceRefsTest):
         flat = self._flat_index()
         merged = self._merged()
         self.assertEqual(flat.single_occurrence_id, merged.single_occurrence_id)
+
+
+class MergedRowsAreInternallyConsistentTest(AssemblyOccurrenceRefsTest):
+    """Every id and every RANGE a merged row carries must point somewhere true.
+
+    A component's rows index that component's own tables. Copied across unchanged they all still
+    RESOLVE -- against the wrong thing, which is worse than not resolving at all, because the
+    caller gets a confident answer. `#o1.12.f19` used to report `shapeId s1`, and `s1` in the
+    merged index is a solid 40 mm away from the face claiming it.
+    """
+
+    def _merged(self) -> lookup.SelectorIndex:
+        occurrences = assembly_lookup.merge_assembly_occurrences(
+            self._flat_index(), self.descriptor, self.package_dir
+        )
+        return assembly_lookup.merge_assembly_entities(
+            occurrences, self.descriptor, self.package_dir
+        )
+
+    def test_a_face_names_a_shape_that_exists_and_contains_it(self) -> None:
+        merged = self._merged()
+        checked = 0
+        for face in merged.faces:
+            occurrence_id = str(face.get("occurrenceId") or "")
+            if not occurrence_id or occurrence_id == "o1":
+                continue
+            shape_id = str(face.get("shapeId") or "")
+            self.assertTrue(
+                shape_id.startswith(f"{occurrence_id}."),
+                f"{face['id']} names {shape_id}, which belongs to another occurrence",
+            )
+            shape = merged.shape_by_id.get(shape_id)
+            self.assertIsNotNone(shape, f"{face['id']} names a shape that does not resolve")
+            # Geometric consistency, not just naming: a face has to lie inside its own solid.
+            for axis in range(3):
+                self.assertGreaterEqual(
+                    face["bbox"]["min"][axis], shape["bbox"]["min"][axis] - 1e-6,
+                    f"{face['id']} sits outside {shape_id}",
+                )
+                self.assertLessEqual(
+                    face["bbox"]["max"][axis], shape["bbox"]["max"][axis] + 1e-6,
+                    f"{face['id']} sits outside {shape_id}",
+                )
+            checked += 1
+        self.assertGreater(checked, 0, "no placed faces were checked")
+
+    def test_shape_refs_resolve_and_slice_their_own_faces(self) -> None:
+        merged = self._merged()
+        checked = 0
+        for shape in merged.shapes:
+            occurrence_id = str(shape.get("occurrenceId") or "")
+            if not occurrence_id or occurrence_id == "o1":
+                continue
+            self.assertIsNotNone(lookup.lookup_selector(f"#{shape['id']}", merged))
+            start = int(shape.get("faceStart") or 0)
+            count = int(shape.get("faceCount") or 0)
+            self.assertGreater(count, 0)
+            for face in merged.faces[start : start + count]:
+                self.assertEqual(
+                    shape["id"], str(face.get("shapeId")),
+                    "a shape's face range must contain exactly its own faces",
+                )
+            checked += 1
+        self.assertGreater(checked, 0, "no placed shapes were checked")
+
+    def test_an_occurrence_range_slices_its_own_entities(self) -> None:
+        merged = self._merged()
+        checked = 0
+        for occurrence_id, row in merged.occurrence_by_id.items():
+            if occurrence_id == "o1" or not int(row.get("faceCount") or 0):
+                continue
+            start = int(row["faceStart"])
+            faces = merged.faces[start : start + int(row["faceCount"])]
+            self.assertTrue(faces, f"{occurrence_id} has an empty face range")
+            for face in faces:
+                self.assertEqual(occurrence_id, str(face.get("occurrenceId")))
+            checked += 1
+        self.assertGreater(checked, 0, "no occurrence ranges were checked")
+
+    def test_buffer_offsets_are_dropped_rather_than_carried_stale(self) -> None:
+        """These index the COMPONENT's proxy buffers. The merged index holds the flat
+        assembly's, so a copied start points into unrelated data -- silently, and only for
+        whoever renders a highlight from it. Absent makes that a KeyError instead."""
+        merged = self._merged()
+        for rows in (merged.faces, merged.edges):
+            for row in rows:
+                if not str(row.get("occurrenceId") or "").count("."):
+                    continue
+                for field in ("triangleStart", "segmentStart", "surfaceHalfEdgeStart"):
+                    self.assertNotIn(field, row, f"{row['id']} carries a stale {field}")
+
+    def test_adjacency_rows_stay_in_range(self) -> None:
+        """Every relation row is an index into a list we concatenated into. An un-rebased one
+        still lands somewhere -- on another occurrence's edge."""
+        merged = self._merged()
+        for face in merged.faces:
+            occurrence_id = str(face.get("occurrenceId") or "")
+            if not occurrence_id or occurrence_id == "o1":
+                continue
+            for selector in lookup.face_adjacent_edge_selectors(face, merged):
+                self.assertTrue(
+                    selector.startswith(f"{occurrence_id}."),
+                    f"{face['id']} is adjacent to {selector}, which is not its own",
+                )
+
+
+class DormantPathsTest(unittest.TestCase):
+    """Vertices, and geometry that cannot be placed.
+
+    No model in this repo carries vertices -- every component bundle reports vertexCount 0 -- so
+    the vertex rebasing is dead code that will wake up the first time a package has one. That is
+    exactly when nobody will be looking at it, so it is driven here with a synthetic component.
+    """
+
+    def _fake_component(self):
+        manifest = {
+            "tables": {
+                "occurrenceColumns": ["id", "name", "bbox"],
+                "shapeColumns": ["id", "occurrenceId", "ordinal", "bbox"],
+                "faceColumns": ["id", "occurrenceId", "shapeId", "ordinal", "center", "edgeStart", "edgeCount"],
+                "edgeColumns": ["id", "occurrenceId", "shapeId", "ordinal", "center", "vertexStart", "vertexCount"],
+                "vertexColumns": ["id", "occurrenceId", "ordinal", "center", "edgeStart", "edgeCount"],
+            },
+            "occurrences": [["o1", "part", None]],
+            "shapes": [["o1.s1", "o1", 1, None]],
+            "faces": [["o1.f1", "o1", "o1.s1", 1, [0.0, 0.0, 0.0], 0, 1]],
+            "edges": [["o1.e1", "o1", "o1.s1", 1, [0.0, 0.0, 0.0], 0, 2]],
+            "vertices": [
+                ["o1.v1", "o1", 1, [0.0, 0.0, 0.0], 0, 1],
+                ["o1.v2", "o1", 2, [1.0, 0.0, 0.0], 1, 1],
+            ],
+            "relations": {
+                "faceEdgeRows": [0],
+                "edgeFaceRows": [0],
+                "edgeVertexRows": [0, 1],
+                "vertexEdgeRows": [0, 0],
+            },
+        }
+        return lookup.build_selector_index(manifest)
+
+    def test_vertex_ranges_are_rebased_for_every_occurrence(self) -> None:
+        component = self._fake_component()
+        descriptor = {
+            "occurrences": [
+                {"id": "o1.1", "name": "a", "component": "c", "transform": None},
+                {"id": "o1.2", "name": "b", "component": "c",
+                 "transform": [1, 0, 0, 100, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]},
+            ]
+        }
+        flat = lookup.build_selector_index(
+            {"tables": {"occurrenceColumns": ["id"]}, "occurrences": [["o1"]]}
+        )
+        with mock.patch.object(assembly_lookup, "_component_index", return_value=component):
+            merged = assembly_lookup.merge_assembly_entities(flat, descriptor, Path("."))
+
+        for occurrence_id in ("o1.1", "o1.2"):
+            edge = merged.edge_by_id[f"{occurrence_id}.e1"]
+            neighbours = lookup.edge_adjacent_vertex_selectors(edge, merged)
+            self.assertEqual(
+                [f"{occurrence_id}.v1", f"{occurrence_id}.v2"], neighbours,
+                f"{occurrence_id}.e1 reached another occurrence's vertices",
+            )
+            vertex = merged.vertex_by_id[f"{occurrence_id}.v2"]
+            self.assertEqual(
+                [f"{occurrence_id}.e1"], lookup.vertex_adjacent_edge_selectors(vertex, merged),
+            )
+        # ...and the second occurrence is genuinely 100 mm away, not a shared row.
+        self.assertEqual(100.0, merged.vertex_by_id["o1.2.v1"]["center"][0])
+        self.assertEqual(0.0, merged.vertex_by_id["o1.1.v1"]["center"][0])
+
+    def test_geometry_that_cannot_be_placed_is_dropped_not_left_local(self) -> None:
+        """A field kept unplaced would be a component-local number in an otherwise world-space
+        row, shared by every occurrence of that component."""
+        placed = assembly_lookup._place_entity_row(
+            assembly_lookup._matrix([1, 0, 0, 5, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]),
+            {"id": "x", "center": "not-a-point", "normal": None, "bbox": {"min": [0, 0, 0]}},
+        )
+        for field in ("center", "normal", "bbox"):
+            self.assertNotIn(field, placed, f"{field} survived unplaced")
+        self.assertEqual("x", placed["id"], "non-geometry fields are untouched")
 
 
 class PlacementAgainstAnalyticGeometryTest(AssemblyOccurrenceRefsTest):

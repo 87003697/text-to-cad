@@ -153,20 +153,34 @@ def _transform_params(matrix: list[float], params: object) -> object:
 
 
 def _place_entity_row(matrix: list[float], row: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a component row into world coordinates.
+
+    A geometry field that cannot be placed is REMOVED rather than left as it was. Keeping it
+    would publish a component-local coordinate in a row whose every other number is in assembly
+    space, with nothing marking which is which -- and it would be the same object shared by every
+    occurrence of that component, so the two identical spacers would report one position. The
+    frames must not mix silently; that is what FEEDBACK.md P2 cost a wrong edit and a revert.
+    """
     placed = dict(row)
     for field in _POINT_FIELDS:
         if field in placed:
             moved = transform_point(matrix, placed[field])
-            if moved is not None:
+            if moved is None:
+                placed.pop(field, None)
+            else:
                 placed[field] = moved
     for field in _DIRECTION_FIELDS:
         if field in placed:
             moved = transform_direction(matrix, placed[field])
-            if moved is not None:
+            if moved is None:
+                placed.pop(field, None)
+            else:
                 placed[field] = moved
     if "bbox" in placed:
         moved_box = transform_bbox(matrix, placed["bbox"])
-        if moved_box is not None:
+        if moved_box is None:
+            placed.pop("bbox", None)
+        else:
             placed["bbox"] = moved_box
     if "params" in placed:
         placed["params"] = _transform_params(matrix, placed["params"])
@@ -292,33 +306,59 @@ def _entity_id(occurrence_id: str, local_id: object, kind: str, ordinal: object)
     return f"{occurrence_id}.{suffix}" if suffix else f"{occurrence_id}.{kind}"
 
 
+def _rebase(row: dict, field: str, offset: int) -> None:
+    """Shift a range field that indexes a list we are concatenating into."""
+    if field in row:
+        try:
+            row[field] = offset + int(row[field] or 0)
+        except (TypeError, ValueError):
+            row[field] = offset
+
+
+# Offsets into the component's OWN proxy buffers (mesh triangles, edge polylines, surface
+# half-edges). The merged index carries the flat assembly's buffers, not the component's, so a
+# start copied across points into unrelated data. Dropped rather than rebased: there is nothing
+# in this index for them to point AT. Absent raises a KeyError at the reader; stale silently
+# returns the wrong triangles.
+_BUFFER_START_FIELDS = ("triangleStart", "segmentStart", "surfaceHalfEdgeStart")
+
+
 def merge_assembly_entities(
     index: SelectorIndex,
     descriptor: Mapping[str, Any],
     package_dir: Path,
 ) -> SelectorIndex:
-    """Add each occurrence's faces/edges/vertices, placed into world coordinates.
+    """Add each occurrence's shapes/faces/edges/vertices, placed into world coordinates.
 
     This is what makes a ref picked in the viewer measurable: `#o1.12.f19` is face 19 of that
     occurrence's component, and until now only the flat whole-assembly namespace resolved, whose
     numbering does not agree with the component's (FEEDBACK.md: "the assembly's f18 is the wall's
     face; the part's f18 is a 17.085 mm2 cylinder").
 
-    Adjacency survives the merge. Component relation rows index that component's own tables, so
-    they are re-based as they are concatenated -- otherwise `face_adjacent_edge_selectors` would
-    return confident, wrong neighbours, which is worse than returning none.
+    Every id and every RANGE is re-based as the tables concatenate. A component's rows index its
+    own tables: a face's `edgeStart` points into that component's faceEdgeRows, a shape's
+    `faceStart` slices that component's face list, an edge's `shapeId` names that component's
+    solid. Copied across unchanged they all still resolve -- against the wrong thing, which is
+    worse than not resolving. `#o1.12.f19` reported `shapeId s1`, and `s1` in the merged index is
+    a solid 40 mm away.
     """
     occurrences = descriptor.get("occurrences")
     if not isinstance(occurrences, list) or not occurrences:
         return index
 
+    shapes = list(index.shapes)
     faces = list(index.faces)
     edges = list(index.edges)
     vertices = list(index.vertices)
+    shape_by_id = dict(index.shape_by_id)
     face_by_id = dict(index.face_by_id)
     edge_by_id = dict(index.edge_by_id)
     vertex_by_id = dict(index.vertex_by_id)
+    occurrence_by_id = dict(index.occurrence_by_id)
+    occurrence_rows = list(index.occurrences)
     relations = {name: list(rows) for name, rows in index.relations.items()}
+    for name in ("faceEdgeRows", "edgeFaceRows", "edgeVertexRows", "vertexEdgeRows"):
+        relations.setdefault(name, [])
     cache: dict[str, Any] = {}
     added = 0
 
@@ -334,20 +374,40 @@ def merge_assembly_entities(
             continue
         matrix = _matrix(entry.get("transform"))
 
+        shape_offset = len(shapes)
         face_offset = len(faces)
         edge_offset = len(edges)
         vertex_offset = len(vertices)
-        face_edge_offset = len(relations.get("faceEdgeRows", []))
-        edge_face_offset = len(relations.get("edgeFaceRows", []))
-        edge_vertex_offset = len(relations.get("edgeVertexRows", []))
-        vertex_edge_offset = len(relations.get("vertexEdgeRows", []))
+        face_edge_offset = len(relations["faceEdgeRows"])
+        edge_face_offset = len(relations["edgeFaceRows"])
+        edge_vertex_offset = len(relations["edgeVertexRows"])
+        vertex_edge_offset = len(relations["vertexEdgeRows"])
 
+        # A face names its owning solid by id, so the rename has to be known before the faces
+        # are written or `shapeId` keeps pointing at the flat namespace.
+        shape_id_map: dict[str, str] = {}
+        for row in component_index.shapes:
+            new_id = _entity_id(occurrence_id, row.get("id"), "s", row.get("ordinal"))
+            shape_id_map[str(row.get("id"))] = new_id
+
+        for row in component_index.shapes:
+            placed = _place_entity_row(matrix, row)
+            placed["id"] = shape_id_map[str(row.get("id"))]
+            placed["occurrenceId"] = occurrence_id
+            _rebase(placed, "faceStart", face_offset)
+            _rebase(placed, "edgeStart", edge_offset)
+            shapes.append(placed)
+            shape_by_id.setdefault(str(placed["id"]), placed)
+            added += 1
         for row in component_index.faces:
             placed = _place_entity_row(matrix, row)
             placed["id"] = _entity_id(occurrence_id, row.get("id"), "f", row.get("ordinal"))
             placed["occurrenceId"] = occurrence_id
-            if "edgeStart" in placed:
-                placed["edgeStart"] = face_edge_offset + int(placed.get("edgeStart") or 0)
+            if placed.get("shapeId") is not None:
+                placed["shapeId"] = shape_id_map.get(str(placed["shapeId"]), placed["shapeId"])
+            _rebase(placed, "edgeStart", face_edge_offset)
+            for field in _BUFFER_START_FIELDS:
+                placed.pop(field, None)
             faces.append(placed)
             face_by_id.setdefault(str(placed["id"]), placed)
             added += 1
@@ -355,8 +415,12 @@ def merge_assembly_entities(
             placed = _place_entity_row(matrix, row)
             placed["id"] = _entity_id(occurrence_id, row.get("id"), "e", row.get("ordinal"))
             placed["occurrenceId"] = occurrence_id
-            if "faceStart" in placed:
-                placed["faceStart"] = edge_face_offset + int(placed.get("faceStart") or 0)
+            if placed.get("shapeId") is not None:
+                placed["shapeId"] = shape_id_map.get(str(placed["shapeId"]), placed["shapeId"])
+            _rebase(placed, "faceStart", edge_face_offset)
+            _rebase(placed, "vertexStart", edge_vertex_offset)
+            for field in _BUFFER_START_FIELDS:
+                placed.pop(field, None)
             edges.append(placed)
             edge_by_id.setdefault(str(placed["id"]), placed)
             added += 1
@@ -364,34 +428,51 @@ def merge_assembly_entities(
             placed = _place_entity_row(matrix, row)
             placed["id"] = _entity_id(occurrence_id, row.get("id"), "v", row.get("ordinal"))
             placed["occurrenceId"] = occurrence_id
+            _rebase(placed, "edgeStart", vertex_edge_offset)
             vertices.append(placed)
             vertex_by_id.setdefault(str(placed["id"]), placed)
             added += 1
 
         component_relations = component_index.relations
-        relations.setdefault("faceEdgeRows", []).extend(
+        relations["faceEdgeRows"].extend(
             edge_offset + int(value) for value in component_relations.get("faceEdgeRows", [])
         )
-        relations.setdefault("edgeFaceRows", []).extend(
+        relations["edgeFaceRows"].extend(
             face_offset + int(value) for value in component_relations.get("edgeFaceRows", [])
         )
-        relations.setdefault("edgeVertexRows", []).extend(
+        relations["edgeVertexRows"].extend(
             vertex_offset + int(value) for value in component_relations.get("edgeVertexRows", [])
         )
-        relations.setdefault("vertexEdgeRows", []).extend(
+        relations["vertexEdgeRows"].extend(
             edge_offset + int(value) for value in component_relations.get("vertexEdgeRows", [])
         )
-        # Silence the unused-offset warnings for the two vertex rebases above; they are read
-        # through the extend() calls and exist so a package that does carry vertices works.
-        del edge_vertex_offset, vertex_edge_offset
+
+        # The occurrence's own ranges, now that its rows exist. Phase 1 wrote zeros because it
+        # had no entities to point at, and a zero range reads as "this occurrence has no faces".
+        occurrence_row = occurrence_by_id.get(occurrence_id)
+        if isinstance(occurrence_row, dict):
+            occurrence_row.update(
+                {
+                    "shapeStart": shape_offset,
+                    "shapeCount": len(component_index.shapes),
+                    "faceStart": face_offset,
+                    "faceCount": len(component_index.faces),
+                    "edgeStart": edge_offset,
+                    "edgeCount": len(component_index.edges),
+                }
+            )
 
     if not added:
         return index
     return replace(
         index,
+        occurrences=occurrence_rows,
+        occurrence_by_id=occurrence_by_id,
+        shapes=shapes,
         faces=faces,
         edges=edges,
         vertices=vertices,
+        shape_by_id=shape_by_id,
         face_by_id=face_by_id,
         edge_by_id=edge_by_id,
         vertex_by_id=vertex_by_id,
