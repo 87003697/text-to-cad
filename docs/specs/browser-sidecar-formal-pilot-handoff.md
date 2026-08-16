@@ -547,15 +547,16 @@ is:
   milestones, not new conformance authority.
 
 Recommended tracker reconciliation for
-`browser-sidecar-formal-pilot-integration` is **keep open / Formal blocked by
-environment capability**, not completed and not failed implementation. Record
-the local regression and dual review as passed, attach the immutable Colima
-failure receipt, and record `host-shared Unix socket unsupported` as the local
-environment limitation. Keep CVM three-role prepare/provision/probe, Venus
-pilots, canonical Workspace/CAD/Viewer/eight-view review, and final receipts as
-`Not Run`. A separate follow-up may evaluate a Colima-native Docker-volume or
-network transport, but it must not silently weaken the current private Unix
-socket authority or convert this failed SHA into retry authority.
+`browser-sidecar-formal-pilot-integration` is **keep open / Formal pilot
+pending**, not completed and not failed implementation. Record the local
+regression and dual review as passed, attach the immutable Colima failure
+receipt, and record `host-shared Unix socket unsupported` as the local
+environment limitation. The unchanged transport subsequently passed the
+native-Linux CVM three-role gate below. Keep Venus pilots, canonical
+Workspace/CAD/Viewer/eight-view review, and final receipts as `Not Run`. A
+separate follow-up may evaluate a Colima-native Docker-volume or network
+transport, but it must not silently weaken the current private Unix socket
+authority or convert this failed SHA into retry authority.
 
 ## Deferred interaction and required next action
 
@@ -568,13 +569,41 @@ socket on Colima's host-shared filesystem. The next valid unchanged-transport
 boundary is native Linux CVM, where the private capability directory and Unix
 socket share one native filesystem.
 
-Before paid CVM closure, Formal preparation must supply all three ordered roles:
-Sidecar, sealed Agent client, and distinct Broker. The Broker is independently
-bound to its own exact source revision and retained runtime image ID. The legacy
-two-role form remains only for the provider-free narrow capability probe. No CVM
-provisioning or run has been performed at this checkpoint; the bounded one-run
-authorization remains gated on fresh independent re-review.
+Formal CVM preparation supplied all three ordered roles: Sidecar, sealed Agent
+client, and distinct Broker. The Broker is independently bound to its own exact
+source revision and retained runtime image ID. The legacy two-role form remains
+only for the provider-free narrow capability probe.
 
-No CVM/Venus/provider/model request, push, merge, tracker mutation, dependency
-installation, retained-handle access, unrelated cleanup, or image deletion has
-been performed through this checkpoint.
+The repository `cvm-push` workflow deployed clean source
+`bdf662f9d56e53d30e1bbacae8136be82ea45eec` and passed its remote runtime hash
+checks. Its receipt SHA-256 is
+`f84f04aee5b3e0d0ec15db30cd7a348fbc3f8fab9e572ca43c845476ddafeb70`;
+the remote Git base was `no-git`, so the receipt's source identity, not a remote
+checkout HEAD, is authoritative.
+
+Three-role handle `cvmsp-289e369c94709037b2af7135` prepared a 1,084,925,952
+byte archive with SHA-256
+`c54b7d9743923aab03ca7bfe55942ee6a8f661bb8e9872d3c5912f6adc1f75a6`.
+Provision verified the same archive remotely, retained three distinct runtime
+image IDs in Sidecar/client/Broker order, and proved the archive, incoming
+directory, and remote prepare receipt absent. The local provision receipt is
+`.cvm-sidecar-probes/cvmsp-289e369c94709037b2af7135/provision.json`, SHA-256
+`b9e970f28da9b6a9d47470e8bded8517cf67ce6352f3500bb89595b5c20ddbc3`.
+
+The same handle's one-shot probe succeeded with fixed request SHA-256
+`b155c2ac8a5396971825cd09626f75510d2669fbcdd669f9e1cfe9ce41fdf3a6`.
+It proved one connected context and page, blocked external egress, no visible
+browser executable or source alias, exact closing, exit zero, no cleanup
+errors, and labeled container/network absence. Its local receipt is
+`.cvm-sidecar-probes/cvmsp-289e369c94709037b2af7135/probe.json`, SHA-256
+`663a67f04a2222e37709b7c726bebd2e476a95f3de0a34efd885ab6c499854b5`.
+Both terminal operations record `retryAllowed:false`; this handle must not be
+reused.
+
+No Venus/provider/model request has been made and incremental paid cost remains
+zero. The canonical snapshot upload for group
+`20260816-094800-browser-sidecar-cup` was rejected before execution because the
+external-action gate requires a fresh payload-specific S3 authorization. No
+snapshot or paid job handle was created. No merge, Git push, tracker mutation,
+dependency installation, unrelated cleanup, or image deletion has been
+performed through this checkpoint.
