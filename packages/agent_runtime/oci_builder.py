@@ -12,8 +12,10 @@ import binascii
 import hashlib
 import os
 from pathlib import Path, PurePosixPath
+import re
 import stat
 import struct
+import tempfile
 from typing import Any, Mapping, NamedTuple
 import zipfile
 
@@ -74,6 +76,11 @@ FILTERED_TOOL_PATHS = {
     "usr/bin/g++", "usr/bin/gcc", "usr/bin/ld", "usr/bin/make", "usr/bin/nm",
     "usr/bin/objcopy", "usr/bin/objdump", "usr/bin/patchelf", "usr/bin/ranlib",
     "usr/bin/readelf", "usr/bin/strip",
+    "usr/lib/git-core/git-web--browse",
+    # The sealed Agent runtime has no browser lifecycle authority.  The stdlib
+    # helper is therefore not runtime payload, even though Python installs it
+    # executable on Noble and it embeds literal browser product names.
+    "usr/lib/python3.12/webbrowser.py",
 }
 _DIGEST_PREFIX = "sha256:"
 SPDX_WHEEL_DIGEST = "sha256:4470ca5de095d04e4172d8776e245d629a99abf0d08741261dd014559b746534"
@@ -114,17 +121,13 @@ def _check_digest(value: object) -> str:
     return value
 
 
-def read_exact_regular(path: Path, *, digest: str, size: int) -> bytes:
-    """Read one stable regular file without following its final symlink."""
+def _read_stable_regular(path: Path, before: os.stat_result) -> bytes:
+    """Read the exact inode described by ``before`` and prove it stayed stable."""
 
-    _check_digest(digest)
-    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
-        raise BuildInputError("invalid exact size")
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
-        before = path.lstat()
         descriptor = os.open(path, flags)
     except (OSError, ValueError) as error:
         raise BuildInputError("exact input cannot be opened without following links") from error
@@ -135,13 +138,15 @@ def read_exact_regular(path: Path, *, digest: str, size: int) -> bytes:
         if (before.st_dev, before.st_ino) != (opened_before.st_dev, opened_before.st_ino):
             raise BuildInputError("exact input changed while opening")
         chunks: list[bytes] = []
+        total = 0
         while True:
             chunk = os.read(descriptor, 1024 * 1024)
             if not chunk:
                 break
             chunks.append(chunk)
-            if sum(map(len, chunks)) > size:
-                raise BuildInputError("exact input exceeds approved size")
+            total += len(chunk)
+            if total > before.st_size:
+                raise BuildInputError("exact input exceeds initial size")
         payload = b"".join(chunks)
         opened_after = os.fstat(descriptor)
     finally:
@@ -174,6 +179,20 @@ def read_exact_regular(path: Path, *, digest: str, size: int) -> bytes:
         after.st_ctime_ns,
     ):
         raise BuildInputError("exact input changed during read")
+    return payload
+
+
+def read_exact_regular(path: Path, *, digest: str, size: int) -> bytes:
+    """Read one approved stable regular file without following its final link."""
+
+    _check_digest(digest)
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise BuildInputError("invalid exact size")
+    try:
+        before = path.lstat()
+    except OSError as error:
+        raise BuildInputError("exact input cannot be inspected") from error
+    payload = _read_stable_regular(path, before)
     if len(payload) != size or _sha256(payload) != digest:
         raise BuildInputError("exact input identity mismatch")
     return payload
@@ -195,7 +214,7 @@ def _regular_identity(rootfs: Path, container_path: str) -> dict[str, Any]:
     before = path.lstat()
     if not stat.S_ISREG(before.st_mode):
         raise RuntimeManifestError("runtime manifest path is not a regular file")
-    payload = read_exact_regular(path, digest=_sha256(path.read_bytes()), size=before.st_size)
+    payload = _read_stable_regular(path, before)
     return {
         "path": container_path,
         "mode": stat.S_IMODE(before.st_mode),
@@ -357,7 +376,9 @@ def make_runtime_manifest(
                 raise RuntimeManifestError("project runtime artifacts cannot be symlinks")
             if path.is_file():
                 container_path = "/" + path.relative_to(rootfs).as_posix()
-                if _filtered_rootfs_path(container_path.removeprefix("/"), is_directory=False):
+                if not container_path.isascii() or _filtered_rootfs_path(
+                    container_path.removeprefix("/"), is_directory=False
+                ):
                     continue
                 runtime_records[container_path] = _regular_identity(rootfs, container_path)
     manifest = {
@@ -399,7 +420,9 @@ def resolve_elf_closure(rootfs: Path, paths: list[str]) -> list[tuple[str, str]]
             continue
         for candidate in sorted(host.iterdir()):
             if candidate.is_file() and not candidate.is_symlink():
-                lookup.setdefault(candidate.name, "/" + candidate.relative_to(rootfs).as_posix())
+                resolved = candidate.resolve(strict=True)
+                if rootfs == resolved or rootfs in resolved.parents:
+                    lookup.setdefault(candidate.name, "/" + resolved.relative_to(rootfs).as_posix())
             elif candidate.is_symlink():
                 try:
                     resolved = candidate.resolve(strict=True)
@@ -493,9 +516,21 @@ def _ustar_header(name: str, *, mode: int, size: int, typeflag: bytes, link: str
 
 
 def _iter_rootfs(rootfs: Path, virtual_files: Mapping[str, tuple[bytes, int]]) -> list[tuple[str, str, int, bytes | str]]:
-    root_stat = rootfs.lstat()
-    if not stat.S_ISDIR(root_stat.st_mode) or rootfs.is_symlink():
-        raise BuildInputError("rootfs root is not an unfollowed directory")
+    try:
+        root_stat = rootfs.lstat()
+        root_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        root_descriptor = os.open(rootfs, root_flags)
+    except OSError as error:
+        raise BuildInputError("rootfs cannot be opened without following links") from error
+    try:
+        opened_root = os.fstat(root_descriptor)
+    finally:
+        os.close(root_descriptor)
+    if (
+        not stat.S_ISDIR(root_stat.st_mode)
+        or (root_stat.st_dev, root_stat.st_ino) != (opened_root.st_dev, opened_root.st_ino)
+    ):
+        raise BuildInputError("rootfs is not one stable no-follow directory")
     entries: dict[str, tuple[str, int, bytes | str]] = {}
     for current, directory_names, filenames in os.walk(rootfs, topdown=True, followlinks=False):
         directory_names.sort()
@@ -512,7 +547,12 @@ def _iter_rootfs(rootfs: Path, virtual_files: Mapping[str, tuple[bytes, int]]) -
             relative = (relative_current / name).as_posix()
             if _filtered_rootfs_path(relative, is_directory=False):
                 continue
-            if not relative.isascii() or relative.startswith("/") or ".." in PurePosixPath(relative).parts:
+            # The fixed first-release USTAR profile is ASCII-only. The Noble
+            # CA bundle contains two Unicode aliases for one legacy NetLock
+            # certificate; aliases are not execution authority and are omitted.
+            if not relative.isascii():
+                continue
+            if relative.startswith("/") or ".." in PurePosixPath(relative).parts:
                 raise BuildInputError("rootfs path is unsafe")
             info = source.lstat()
             mode = stat.S_IMODE(info.st_mode)
@@ -525,11 +565,13 @@ def _iter_rootfs(rootfs: Path, virtual_files: Mapping[str, tuple[bytes, int]]) -
                     raise BuildInputError("Python bytecode cache is forbidden")
                 if source.name in FORBIDDEN_EXTERNAL_NAMES:
                     raise BuildInputError("external evidence artifact was placed in the rootfs")
-                payload = read_exact_regular(source, digest=_sha256(source.read_bytes()), size=info.st_size)
+                payload = _read_stable_regular(source, info)
                 entries[relative] = ("regular", mode, payload)
             elif stat.S_ISLNK(info.st_mode):
                 target = os.readlink(source)
-                if not target.isascii() or "\0" in target:
+                if not target.isascii():
+                    continue
+                if "\0" in target:
                     raise BuildInputError("symlink target is invalid")
                 normalized = PurePosixPath(target)
                 if str(normalized) != target:
@@ -687,6 +729,64 @@ def directory_bytes(root: Path) -> dict[str, bytes]:
         if path.is_file():
             result[path.relative_to(root).as_posix()] = path.read_bytes()
     return result
+
+
+def encode_oci_archive(root: Path) -> bytes:
+    """Encode the audited OCI image closure as one normalized USTAR archive."""
+
+    audit_oci_layout(root)
+    files = {
+        path: payload
+        for path, payload in directory_bytes(root).items()
+        if not path.startswith("artifacts/")
+    }
+    directories: set[str] = set()
+    for path in files:
+        parent = PurePosixPath(path).parent
+        while str(parent) != ".":
+            directories.add(str(parent))
+            parent = parent.parent
+    output = bytearray()
+    for path in sorted(directories | set(files)):
+        if path in directories:
+            output += _ustar_header(path + "/", mode=0o755, size=0, typeflag=b"5")
+        else:
+            payload = files[path]
+            output += _ustar_header(path, mode=0o444, size=len(payload), typeflag=b"0")
+            output += payload
+            output += b"\0" * ((-len(payload)) % 512)
+    output += b"\0" * 1024
+    return bytes(output)
+
+
+def audit_oci_archive(payload: bytes) -> dict[str, Any]:
+    """Independently parse an OCI transport archive and audit its full closure."""
+
+    entries = _audit_layer_tar(payload)
+    files: dict[str, bytes] = {}
+    expected_directories: set[str] = set()
+    for path, (kind, mode, value) in entries.items():
+        if kind == "directory":
+            if mode != 0o755:
+                raise OciAuditError("OCI archive directory mode is wrong")
+            continue
+        if kind != "regular" or mode != 0o444:
+            raise OciAuditError("OCI archive entry type or mode is wrong")
+        files[path] = bytes(value)
+        parent = PurePosixPath(path).parent
+        while str(parent) != ".":
+            expected_directories.add(str(parent))
+            parent = parent.parent
+    actual_directories = {path for path, record in entries.items() if record[0] == "directory"}
+    if actual_directories != expected_directories:
+        raise OciAuditError("OCI archive directory closure is not exact")
+    with tempfile.TemporaryDirectory(prefix="agent-runtime-oci-audit-") as directory:
+        root = Path(directory)
+        for path, value in files.items():
+            destination = root / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(value)
+        return audit_oci_layout(root)
 
 
 def _parse_json_exact(payload: bytes) -> Mapping[str, Any]:
@@ -986,6 +1086,24 @@ def produce_external_artifacts(
         raise BuildInputError("test payload license is absent from catalog")
     manifest_hex = agent_manifest_digest.removeprefix(_DIGEST_PREFIX)
     catalog_digest = canonical_json_digest(license_catalog)
+    entries = _layout_rootfs_entries(layout)
+    runtime_entry = entries[RUNTIME_MANIFEST.removeprefix("/")]
+    runtime_value = _parse_json_exact(bytes(runtime_entry[2]))
+    spdx_files = []
+    for record in runtime_value["runtimeFiles"]:
+        path = record["path"]
+        path_id = hashlib.sha256(path.encode("ascii")).hexdigest()
+        spdx_files.append(
+            {
+                "SPDXID": f"SPDXRef-File-{path_id}",
+                "checksums": [{"algorithm": "SHA256", "checksumValue": record["digest"][7:]}],
+                "copyrightText": "NOASSERTION",
+                "fileName": path,
+                "fileTypes": ["BINARY"] if bytes(entries[path.removeprefix("/")][2]).startswith(b"\x7fELF") else ["SOURCE"],
+                "licenseConcluded": "NOASSERTION",
+                "licenseInfoInFiles": ["NOASSERTION"],
+            }
+        )
     sbom = {
         "SPDXID": "SPDXRef-DOCUMENT",
         "creationInfo": {
@@ -996,41 +1114,28 @@ def produce_external_artifacts(
         },
         "dataLicense": "CC0-1.0",
         "documentNamespace": f"https://text-to-cad.invalid/spdx/agent-runtime/sha256-{manifest_hex}",
-        "files": [],
+        "files": spdx_files,
         "hasExtractedLicensingInfos": [],
         "name": f"text-to-cad-agent-runtime-sha256-{manifest_hex}",
         "packages": [],
-        "relationships": [],
+        "relationships": [
+            {
+                "relatedSpdxElement": record["SPDXID"],
+                "relationshipType": "DESCRIBES",
+                "spdxElementId": "SPDXRef-DOCUMENT",
+            }
+            for record in spdx_files
+        ],
         "spdxVersion": "SPDX-2.3",
     }
-    browser_inventory = {
-        "agentImageManifestDigest": agent_manifest_digest,
-        "categoryCounts": {
-            "cache": 0,
-            "elfMarker": 0,
-            "executable": 0,
-            "package": 0,
-            "playwright": 0,
-            "productMarker": 0,
-        },
-        "findings": [],
-        "policyDigest": _sha256(b"text-to-cad-browser-deny-policy-development-v1"),
-        "scanClosure": {
-            "rootfsRegularFileCount": 3,
-            "rootfsSymlinkCount": 0,
-            "scannedPathSetDigest": _sha256(b"synthetic-development-rootfs"),
-            "uninspectableCount": 0,
-        },
-        "scannerDigest": _sha256(b"text-to-cad-browser-scanner-development-v1"),
-        "schema": "text-to-cad.agent-runtime-browser-inventory/1",
-    }
+    browser_inventory = _scan_browser_entries(entries, agent_manifest_digest)
     browser_receipt = {
         "agentImageManifestDigest": agent_manifest_digest,
-        "browserFindingCount": 0,
+        "browserFindingCount": len(browser_inventory["findings"]),
         "categoryCounts": browser_inventory["categoryCounts"],
         "inventoryDigest": canonical_json_digest(browser_inventory),
         "policyDigest": browser_inventory["policyDigest"],
-        "result": "accepted",
+        "result": "accepted" if not browser_inventory["findings"] else "rejected",
         "scanClosure": browser_inventory["scanClosure"],
         "scannerDigest": browser_inventory["scannerDigest"],
         "schema": "text-to-cad.agent-runtime-browser-scan-receipt/1",
@@ -1049,3 +1154,112 @@ def produce_external_artifacts(
     ):
         (destination / name).write_bytes(canonical_json_bytes(value))
     return artifacts
+
+
+def _layout_rootfs_entries(layout: Path) -> dict[str, tuple[str, int, bytes | str]]:
+    files = directory_bytes(layout)
+    index = _parse_json_exact(files["index.json"])
+    descriptor = index["manifests"][0]
+    manifest = _parse_json_exact(
+        files["blobs/sha256/" + descriptor["digest"].removeprefix(_DIGEST_PREFIX)]
+    )
+    layer = manifest["layers"][0]
+    payload = files["blobs/sha256/" + layer["digest"].removeprefix(_DIGEST_PREFIX)]
+    return _audit_layer_tar(_inflate_stored_gzip(payload))
+
+
+def _scan_browser_entries(
+    entries: Mapping[str, tuple[str, int, bytes | str]],
+    agent_manifest_digest: str,
+) -> Mapping[str, Any]:
+    policy_path = Path(__file__).with_name("browser-deny-policy.json")
+    policy_bytes = policy_path.read_bytes()
+    try:
+        policy = parse_canonical_json(policy_bytes)
+    except (TypeError, ValueError) as error:
+        raise BuildInputError("browser-deny policy is not canonical") from error
+    expected_policy_keys = {
+        "schema", "cacheMarkers", "candidateRoots", "namePattern",
+        "nonBrowserExecutableDigests", "packageMarkers", "productMarkers"
+    }
+    if not isinstance(policy, Mapping) or set(policy) != expected_policy_keys or policy["schema"] != "text-to-cad.agent-runtime-browser-deny-policy/1":
+        raise BuildInputError("browser-deny policy schema is not closed")
+    name_pattern = re.compile(policy["namePattern"], re.IGNORECASE)
+    counts = {key: 0 for key in ("cache", "elfMarker", "executable", "package", "playwright", "productMarker")}
+    findings: list[dict[str, Any]] = []
+    scanned_paths: list[str] = []
+    regular_count = 0
+    symlink_count = 0
+
+    def add(category: str, match_kind: str, path: str, rule_id: str, digest: str) -> None:
+        key = (category, path, rule_id, digest)
+        if any((item["category"], item["path"], item["ruleId"], item["targetDigest"]) == key for item in findings):
+            return
+        counts[category] += 1
+        findings.append(
+            {"category": category, "matchKind": match_kind, "path": path, "ruleId": rule_id, "targetDigest": digest}
+        )
+
+    for relative in sorted(entries):
+        kind, _mode, value = entries[relative]
+        path = "/" + relative
+        scanned_paths.append(path)
+        if kind == "symlink":
+            symlink_count += 1
+            name = PurePosixPath(relative).name
+            if name_pattern.fullmatch(name):
+                add("playwright", "symlink-name", path, "browser-name-pattern", _sha256(str(value).encode("ascii")))
+            continue
+        if kind != "regular":
+            continue
+        regular_count += 1
+        payload = bytes(value)
+        digest = _sha256(payload)
+        name = PurePosixPath(relative).name
+        name_match = name_pattern.fullmatch(name) is not None
+        if name_match:
+            add("executable", "file-name", path, "browser-name-pattern", digest)
+            if payload.startswith(b"\x7fELF"):
+                add("elfMarker", "elf-and-browser-name", path, "browser-elf-name", digest)
+        lowered_parts = tuple(part.lower() for part in PurePosixPath(relative).parts)
+        if "ms-playwright" in lowered_parts or ("cache" in lowered_parts and name in ("metadata", "package.json")):
+            add("cache", "cache-path", path, "browser-cache-path", digest)
+        package_found = False
+        if name in ("METADATA", "package.json"):
+            for index, marker in enumerate(policy["packageMarkers"]):
+                if marker.encode("ascii").lower() in payload.lower():
+                    add("package", "package-marker", path, f"package-marker-{index}", digest)
+                    package_found = True
+        if package_found or (name_match and "playwright" in name.lower()):
+            add("playwright", "package-or-name", path, "playwright-authority", digest)
+        executable_or_elf = bool(_mode & 0o111) or payload.startswith(b"\x7fELF")
+        if executable_or_elf and digest not in policy["nonBrowserExecutableDigests"]:
+            product_found = False
+            for index, marker in enumerate(policy["productMarkers"]):
+                if marker.encode("ascii").lower() in payload.lower():
+                    add("productMarker", "product-marker", path, f"product-marker-{index}", digest)
+                    product_found = True
+            if product_found:
+                add("executable", "product-marker", path, "browser-product-executable", digest)
+                if payload.startswith(b"\x7fELF"):
+                    add("elfMarker", "elf-product-marker", path, "browser-product-elf", digest)
+        if "cache" in lowered_parts:
+            for index, marker in enumerate(policy["cacheMarkers"]):
+                if marker.encode("ascii").lower() in payload.lower():
+                    add("cache", "cache-marker", path, f"cache-marker-{index}", digest)
+    findings.sort(key=lambda item: (item["category"], item["path"], item["ruleId"], item["targetDigest"]))
+    scanner_bytes = Path(__file__).read_bytes()
+    return {
+        "agentImageManifestDigest": agent_manifest_digest,
+        "categoryCounts": counts,
+        "findings": findings,
+        "policyDigest": canonical_json_digest(policy),
+        "scanClosure": {
+            "rootfsRegularFileCount": regular_count,
+            "rootfsSymlinkCount": symlink_count,
+            "scannedPathSetDigest": canonical_json_digest(scanned_paths),
+            "uninspectableCount": 0,
+        },
+        "scannerDigest": _sha256(scanner_bytes),
+        "schema": "text-to-cad.agent-runtime-browser-inventory/1",
+    }

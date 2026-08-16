@@ -12,12 +12,22 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BUILDER = REPO_ROOT / "packages" / "agent_runtime" / "oci_builder.py"
+BUILD_CLI = REPO_ROOT / "scripts" / "pilot" / "agent-runtime-build.py"
 
 
 def _load_builder():
     spec = importlib.util.spec_from_file_location("agent_runtime_oci_builder", BUILDER)
     if spec is None or spec.loader is None:
         raise RuntimeError("builder module is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_build_cli():
+    spec = importlib.util.spec_from_file_location("agent_runtime_build_cli", BUILD_CLI)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("build CLI module is unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -78,8 +88,24 @@ class AgentRuntimeOciBuilderTests(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertEqual(builder.directory_bytes(Path(oa)), builder.directory_bytes(Path(ob)))
             self.assertEqual(builder.audit_oci_layout(Path(oa)), first)
+            archive_a = builder.encode_oci_archive(Path(oa))
+            archive_b = builder.encode_oci_archive(Path(ob))
+            self.assertEqual(archive_a, archive_b)
+            self.assertEqual(builder.audit_oci_archive(archive_a), first)
             self.assertEqual(first["layerMediaType"], "application/vnd.oci.image.layer.v1.tar+gzip")
             self.assertNotEqual(first["layerDigest"], first["diffId"])
+
+    def test_builder_rejects_a_symlink_rootfs(self) -> None:
+        builder = _load_builder()
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as output:
+            actual = Path(directory) / "actual"
+            actual.mkdir()
+            _write_root(actual)
+            link = Path(directory) / "root"
+            link.symlink_to(actual, target_is_directory=True)
+            request = builder.synthetic_test_request(actual)._replace(rootfs=link)
+            with self.assertRaises(builder.BuildInputError):
+                builder.build_oci_layout(request, Path(output))
 
     def test_auditor_rejects_descriptor_or_uncompressed_diffid_substitution(self) -> None:
         builder = _load_builder()
@@ -136,6 +162,36 @@ class AgentRuntimeOciBuilderTests(unittest.TestCase):
                 artifact_digest = builder.canonical_json_digest(value).encode("ascii")
                 self.assertNotIn(artifact_digest, image_bytes)
 
+    def test_browser_lifecycle_helper_is_filtered_and_browser_payload_is_rejected(self) -> None:
+        builder = _load_builder()
+        with tempfile.TemporaryDirectory() as root_dir, tempfile.TemporaryDirectory() as output_dir:
+            root, output = Path(root_dir), Path(output_dir)
+            _write_root(root)
+            helper = root / "usr/lib/python3.12/webbrowser.py"
+            helper.parent.mkdir(parents=True)
+            helper.write_bytes(b"#!/usr/bin/python3\n# HeadlessChrome Chromium Google Chrome\n")
+            helper.chmod(0o755)
+            browser = root / "usr/local/bin/chromium"
+            browser.parent.mkdir(parents=True, exist_ok=True)
+            browser.write_bytes(b"#!/bin/sh\n# HeadlessChrome\n")
+            browser.chmod(0o555)
+            record = builder.build_oci_layout(builder.synthetic_test_request(root), output)
+            artifacts = builder.produce_external_artifacts(
+                output,
+                agent_manifest_digest=record["manifestDigest"],
+                license_catalog={
+                    "schema": "text-to-cad.spdx-license-catalog/1",
+                    "licenseListVersion": "3.28.0",
+                    "licenses": ["MIT"],
+                    "exceptions": [],
+                },
+                development_test_only=True,
+            )
+            layer_entries = builder._layout_rootfs_entries(output)
+            self.assertNotIn("usr/lib/python3.12/webbrowser.py", layer_entries)
+            self.assertEqual(artifacts["browserScanReceipt"]["result"], "rejected")
+            self.assertGreater(artifacts["browserScanReceipt"]["browserFindingCount"], 0)
+
     def test_fixed_spdx_wheel_derives_the_exact_12540_byte_catalog(self) -> None:
         builder = _load_builder()
         wheel = Path("/private/tmp/sai005-spdx_license_list-3.28.0-py3-none-any.whl")
@@ -147,6 +203,27 @@ class AgentRuntimeOciBuilderTests(unittest.TestCase):
         self.assertEqual(builder.canonical_json_digest(catalog), builder.SPDX_CATALOG_DIGEST)
         self.assertEqual(len(catalog["licenses"]), 727)
         self.assertEqual(len(catalog["exceptions"]), 84)
+
+    def test_build_receipt_inputs_bind_integrated_sai003_and_sai004_records(self) -> None:
+        builder = _load_builder()
+        cli = _load_build_cli()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _write_root(root)
+            manifest = builder.synthetic_test_request(root).runtime_manifest
+            bindings = cli._exact_build_inputs(manifest)
+        self.assertEqual(
+            bindings["qualifiedLocalRecordDigest"],
+            "sha256:0ac123449e0042cfa0bcc231d27f3c624aa8c092d1351131768755fc3bb2f766",
+        )
+        self.assertEqual(
+            bindings["localCasLocatorManifestDigest"],
+            "sha256:9f068c5b6c3d03eae562a5da5a872abd3370ea1fc1cee46b26c330ce49e60e66",
+        )
+        self.assertEqual(
+            bindings["runtimeOsImageId"],
+            "sha256:921e5f6de0f7a8b2fdafff4f5f561fc5a797baa0787e89bf3ec7cfe4fe6cf61c",
+        )
 
 
 if __name__ == "__main__":
