@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import http.client
+import importlib.util
 import json
 from decimal import Decimal
 import tempfile
@@ -66,6 +67,21 @@ def post(port: int, body: bytes, token: str = "job-token"):
 
 
 class DevelopmentVenusProxyTests(unittest.TestCase):
+    def test_cli_secret_reference_accepts_one_lf_but_rejects_empty_or_crlf(self):
+        script = Path("scripts/pilot/agent-runtime-development-proxy.py").resolve()
+        spec = importlib.util.spec_from_file_location("development_proxy_cli", script)
+        module = importlib.util.module_from_spec(spec)
+        assert spec is not None and spec.loader is not None
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "token"
+            path.write_text("a-valid-token\n", encoding="utf-8")
+            self.assertEqual(module._secret(path, "test"), "a-valid-token")
+            for invalid in ("", "token\r\n", "token\nextra"):
+                path.write_text(invalid, encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "invalid"):
+                    module._secret(path, "test")
+
     def test_recommended_policy_independently_reserves_39_20(self):
         from scripts.pilot.agent_runtime.development_venus_proxy import CostPolicy
 
@@ -107,6 +123,12 @@ class DevelopmentVenusProxyTests(unittest.TestCase):
         self.assertEqual(records[0]["mayHaveReachedModel"], True)
         self.assertEqual(records[0]["reservedUsd"], "2.450000")
         self.assertEqual(records[1]["usage"]["inputTokens"], 100)
+        self.assertEqual(records[1]["settledCostUpperBoundUsd"], "0.001168")
+        self.assertIsNone(records[1]["actualUsd"])
+        self.assertEqual(
+            records[1]["actualUsdUnavailableReason"],
+            "trusted_provider_dollar_telemetry_absent",
+        )
         self.assertNotIn("secret-request-body-marker", ledger_text)
         self.assertNotIn("provider-token", ledger_text)
 

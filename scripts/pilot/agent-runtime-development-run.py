@@ -38,13 +38,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--internal-network",
         help="pre-created SAI-010 job-private internal network; omitted means network none",
     )
+    parser.add_argument("--proxy-base-url", help="job-private internal proxy base ending in /v1")
+    parser.add_argument(
+        "--proxy-client-token-file", type=Path,
+        help="read-only reference containing the one-job Agent-to-Proxy capability",
+    )
     parser.add_argument("--docker", default="docker", help="Docker-compatible CLI executable")
+    parser.add_argument("--docker-context", help="explicit Docker context/profile")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        proxy_client_token = None
+        if args.proxy_client_token_file is not None:
+            proxy_client_token = args.proxy_client_token_file.read_text(encoding="utf-8").strip()
         args.output_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
         request = fixed_candidate_request(
             repo_root=REPO_ROOT,
@@ -56,8 +65,12 @@ def main(argv: list[str] | None = None) -> int:
             broker_parent=args.broker_parent,
             timeout_seconds=args.timeout_seconds,
             internal_network=args.internal_network,
+            proxy_base_url=args.proxy_base_url,
+            proxy_client_token=proxy_client_token,
         )
-        receipt = execute(request, engine=DockerEngine(args.docker))
+        receipt = execute(
+            request, engine=DockerEngine(args.docker, context=args.docker_context)
+        )
     except (OSError, SupervisorError) as error:
         sys.stderr.write(f"Development supervisor failed: {error}\n")
         return 1

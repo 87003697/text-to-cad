@@ -22,10 +22,11 @@ from scripts.pilot.agent_runtime.development_venus_proxy import (
 
 def _secret(path: Path, label: str) -> str:
     try:
-        value = path.read_text(encoding="utf-8").strip()
-    except OSError as error:
+        payload = path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeError) as error:
         raise ValueError(f"{label} secret reference is unreadable") from error
-    if not value or "\n" in value:
+    value = payload[:-1] if payload.endswith("\n") else payload
+    if not value or "\n" in value or "\r" in value:
         raise ValueError(f"{label} secret reference is invalid")
     return value
 

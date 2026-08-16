@@ -149,6 +149,44 @@ class DevelopmentSupervisorTests(unittest.TestCase):
         self.assertIn("type=volume,src=job-volume,dst=/guest/output", args)
         self.assertNotIn("network create", " ".join(args))
 
+    def test_docker_adapter_pins_the_selected_context(self) -> None:
+        engine = supervisor.DockerEngine("docker-test", context="colima-exact")
+        completed = subprocess.CompletedProcess([], 0, b"ok", b"")
+        with mock.patch("subprocess.run", return_value=completed) as execute:
+            engine._run("image", "inspect", "sha256:" + "1" * 64)
+        self.assertEqual(
+            execute.call_args.args[0][:4],
+            ["docker-test", "--context", "colima-exact", "image"],
+        )
+
+    def test_proxy_home_seed_runs_as_agent_uid_without_chown_capability(self) -> None:
+        engine = supervisor.DockerEngine("docker-test")
+        volumes = supervisor._DockerWritableVolumes(
+            engine,
+            "sha256:" + "1" * 64,
+            "development-123456789012345678901234",
+            "a" * 64,
+            b"model_provider = \"venus\"\n",
+        )
+        completed = subprocess.CompletedProcess([], 0, b"", b"")
+        volume_result = subprocess.CompletedProcess([], 0, b"unused\n", b"")
+
+        def result(*args, **_kwargs):
+            if args[:2] == ("volume", "create"):
+                return subprocess.CompletedProcess([], 0, (args[-1] + "\n").encode(), b"")
+            return completed
+
+        with mock.patch.object(engine, "_run", side_effect=result) as execute:
+            volumes.prepare()
+        seed = next(
+            call for call in execute.call_args_list
+            if call.kwargs.get("input_bytes") is not None
+        )
+        self.assertEqual(seed.kwargs["input_bytes"], b'model_provider = "venus"\n')
+        self.assertIn("65532:65532", seed.args)
+        self.assertIn("--interactive", seed.args)
+        self.assertNotIn("os.chown", " ".join(seed.args))
+
     def test_attach_failure_does_not_signal_an_already_exited_process_group(self) -> None:
         process = mock.Mock()
         process.poll.return_value = 125
@@ -352,6 +390,58 @@ class DevelopmentSupervisorTests(unittest.TestCase):
             assert engine.spec is not None
             self.assertEqual(engine.spec.network_mode, "t2c-job-private-123")
             self.assertFalse(any(call == "create-network" for call in engine.calls))
+
+    def test_job_private_proxy_capability_is_seeded_only_in_agent_home(self) -> None:
+        client_token = "one-shot-client-secret-1234567890"
+        class CapabilityEngine(FakeEngine):
+            def create(self, spec):
+                home = next(
+                    mount.source for mount in spec.mounts
+                    if mount.target == "/run/text-to-cad-agent/home"
+                )
+                self.config = (Path(home) / ".codex/config.toml").read_text()
+                return super().create(spec)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            engine = CapabilityEngine()
+            request = replace(
+                self._request(root),
+                internal_network="t2c-job-private-123",
+                proxy_base_url="http://t2c-proxy-job:8080/v1",
+                proxy_client_token=client_token,
+            )
+            receipt = supervisor.execute(
+                request,
+                engine=engine,
+                broker_factory=lambda path, control, secret: FakeBroker(engine, path, control, secret),
+            )
+
+        self.assertIn('model_provider = "venus"', engine.config)
+        self.assertIn('base_url = "http://t2c-proxy-job:8080/v1"', engine.config)
+        self.assertIn(f'experimental_bearer_token = "{client_token}"', engine.config)
+        self.assertNotIn(client_token, json.dumps(receipt))
+        self.assertEqual(receipt["proxyCapability"], "job-private-one-shot")
+        self.assertEqual(receipt["executionMode"], "development-venus-proxy")
+        self.assertIsNone(receipt["providerDispatchCount"])
+        self.assertEqual(
+            receipt["providerAccounting"], "external-job-private-proxy-ledger"
+        )
+
+    def test_proxy_capability_requires_the_internal_network_seam(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            request = replace(
+                self._request(root),
+                proxy_base_url="http://t2c-proxy-job:8080/v1",
+                proxy_client_token="one-shot-client-secret-1234567890",
+            )
+            with self.assertRaisesRegex(supervisor.SupervisorError, "internal network"):
+                supervisor.execute(
+                    request,
+                    engine=FakeEngine(),
+                    broker_factory=lambda *_args: None,
+                )
 
     def test_residue_fails_closed_and_retains_terminal_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

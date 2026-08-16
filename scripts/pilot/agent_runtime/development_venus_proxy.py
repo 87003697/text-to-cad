@@ -109,7 +109,7 @@ class _Ledger:
                 exposure += Decimal(str(record["reservedUsd"]))
             elif record.get("event") == "settle":
                 exposure -= Decimal(str(record["releasedReservedUsd"]))
-                exposure += Decimal(str(record["actualUsd"]))
+                exposure += Decimal(str(record["settledCostUpperBoundUsd"]))
         return exposure
 
     @staticmethod
@@ -382,14 +382,14 @@ class DevelopmentProxy:
         rate_class = "long" if usage["inputTokens"] > LONG_CONTEXT_THRESHOLD else "short"
         rates = RATES[rate_class]
         uncached = usage["inputTokens"] - usage["cachedInputTokens"]
-        actual = (
-            Decimal(uncached) * rates["input"]
+        settled_upper_bound = (
+            Decimal(uncached) * max(rates["input"], rates["cache_write"])
             + Decimal(usage["cachedInputTokens"]) * rates["cache_read"]
             + Decimal(usage["outputTokens"]) * rates["output"]
         ) / MILLION
         reserved = self.policy.worst_case_attempt_usd
         # Usage which contradicts the enforced reservation is not trusted.
-        if actual > reserved:
+        if settled_upper_bound > reserved:
             self.record_missing_usage(attempt, 200, reason="usage_exceeds_reservation")
             return
         with self._state_lock:
@@ -397,7 +397,10 @@ class DevelopmentProxy:
         self.ledger.append({
             "schema": "text-to-cad.development-venus-ledger/1", "event": "settle",
             "jobId": self.job_id, "attempt": attempt, "usage": usage,
-            "actualUsd": _money(actual), "releasedReservedUsd": _money(reserved),
+            "actualUsd": None,
+            "actualUsdUnavailableReason": "trusted_provider_dollar_telemetry_absent",
+            "settledCostUpperBoundUsd": _money(settled_upper_bound),
+            "releasedReservedUsd": _money(reserved),
             "pricingAuthority": "iWiki-4020336897-v54-2026-08-14",
         })
 

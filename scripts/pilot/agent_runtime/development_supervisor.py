@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 from typing import Callable, Mapping, Protocol
+from urllib.parse import urlsplit
 
 from .canonical_json import canonical_json_bytes, parse_canonical_json
 
@@ -206,6 +207,8 @@ class DevelopmentRequest:
     output_dir: Path
     workload: tuple[str, ...]
     internal_network: str | None = None
+    proxy_base_url: str | None = None
+    proxy_client_token: str | None = None
     broker_parent: Path = Path("/tmp")
     timeout_seconds: int = MAX_TIMEOUT_SECONDS
 
@@ -219,6 +222,8 @@ def fixed_candidate_request(
     source_dir: Path | None = None,
     input_dir: Path | None = None,
     internal_network: str | None = None,
+    proxy_base_url: str | None = None,
+    proxy_client_token: str | None = None,
     broker_parent: Path = Path("/tmp"),
     timeout_seconds: int = MAX_TIMEOUT_SECONDS,
 ) -> DevelopmentRequest:
@@ -259,6 +264,8 @@ def fixed_candidate_request(
         output_dir=output_dir,
         workload=tuple(workload),
         internal_network=internal_network,
+        proxy_base_url=proxy_base_url,
+        proxy_client_token=proxy_client_token,
         broker_parent=broker_parent,
         timeout_seconds=timeout_seconds,
     )
@@ -473,8 +480,7 @@ class _DockerBrokerMock:
 
     def _start(self) -> "_DockerBrokerMock":
         self.process = subprocess.Popen(
-            [
-                self.engine.executable,
+            self.engine.command(
                 "run", "--interactive", "--name", self.container_name,
                 "--pull", "never", "--read-only", "--user", "0:0",
                 "--network", "none", "--cap-drop", "ALL",
@@ -483,7 +489,7 @@ class _DockerBrokerMock:
                 "--mount", f"type=volume,src={self.volume_name},dst=/run/meshshot-browser",
                 "--mount", f"type=bind,src={self.helper_path},dst=/broker.py,readonly",
                 "--entrypoint", "/usr/bin/python3.12", self.image_id, "/broker.py",
-            ],
+            ),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -524,11 +530,19 @@ class _DockerBrokerMock:
 class _DockerWritableVolumes:
     """Colima-local writable roots that preserve Agent uid ownership."""
 
-    def __init__(self, engine: "DockerEngine", image_id: str, job_id: str, owner_nonce: str) -> None:
+    def __init__(
+        self,
+        engine: "DockerEngine",
+        image_id: str,
+        job_id: str,
+        owner_nonce: str,
+        proxy_config: bytes | None,
+    ) -> None:
         suffix = job_id.removeprefix("development-")
         self.engine = engine
         self.image_id = image_id
         self.owner_nonce = owner_nonce
+        self.proxy_config = proxy_config
         self.names = {
             target: f"t2c-job-{suffix}-{target.rsplit('/', 1)[-1]}"
             for target in _WRITABLE_TARGETS
@@ -567,6 +581,41 @@ class _DockerWritableVolumes:
                 roots.append(target)
             args += ["--entrypoint", "/usr/bin/chmod", self.image_id, "0777", *roots]
             self.engine._run(*args)
+            if self.proxy_config is not None:
+                home_volume = self.names["/run/text-to-cad-agent/home"]
+                self.engine._run(
+                    "run", "--rm", "--pull", "never", "--read-only",
+                    "--user", "0:0", "--network", "none", "--cap-drop", "ALL",
+                    "--security-opt", "no-new-privileges",
+                    "--label", f"org.text-to-cad.owner-nonce={self.owner_nonce}",
+                    "--mount", f"type=volume,src={home_volume},dst=/home",
+                    "--entrypoint", "/usr/bin/mkdir", self.image_id,
+                    "--mode=0777", "/home/.codex",
+                )
+                seed = (
+                    "import pathlib, sys; "
+                    "p=pathlib.Path('/home/.codex'); "
+                    "f=p/'config.toml'; f.write_bytes(sys.stdin.buffer.read()); "
+                    "f.chmod(0o600)"
+                )
+                self.engine._run(
+                    "run", "--rm", "--interactive", "--pull", "never", "--read-only",
+                    "--user", "65532:65532", "--network", "none", "--cap-drop", "ALL",
+                    "--security-opt", "no-new-privileges",
+                    "--label", f"org.text-to-cad.owner-nonce={self.owner_nonce}",
+                    "--mount", f"type=volume,src={home_volume},dst=/home",
+                    "--entrypoint", "/usr/bin/python3.12", self.image_id, "-c", seed,
+                    input_bytes=self.proxy_config,
+                )
+                self.engine._run(
+                    "run", "--rm", "--pull", "never", "--read-only",
+                    "--user", "0:0", "--network", "none", "--cap-drop", "ALL",
+                    "--security-opt", "no-new-privileges",
+                    "--label", f"org.text-to-cad.owner-nonce={self.owner_nonce}",
+                    "--mount", f"type=volume,src={home_volume},dst=/home",
+                    "--entrypoint", "/usr/bin/chmod", self.image_id,
+                    "0700", "/home/.codex",
+                )
         except BaseException:
             for name in created:
                 self.engine._run("volume", "rm", "--force", name, check=False)
@@ -576,6 +625,23 @@ class _DockerWritableVolumes:
         self.engine._run(
             "cp", f"{container_id}:/run/text-to-cad-agent/output/.", str(destination)
         )
+
+    def restore_root_modes_after_container_create(self) -> None:
+        """Undo Docker volume copy-up modes before the Agent is started."""
+
+        args = [
+            "run", "--rm", "--pull", "never", "--read-only",
+            "--user", "0:0", "--network", "none", "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges",
+            "--label", f"org.text-to-cad.owner-nonce={self.owner_nonce}",
+        ]
+        roots: list[str] = []
+        for index, name in enumerate(self.names.values()):
+            target = f"/job-root/{index}"
+            args += ["--mount", f"type=volume,src={name},dst={target}"]
+            roots.append(target)
+        args += ["--entrypoint", "/usr/bin/chmod", self.image_id, "0777", *roots]
+        self.engine._run(*args)
 
     def cleanup(self) -> None:
         for name in self.names.values():
@@ -622,6 +688,26 @@ def _validate_request(request: DevelopmentRequest) -> None:
         or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-" for character in request.internal_network)
     ):
         raise SupervisorError("pre-created internal network name is invalid")
+    if (request.proxy_base_url is None) != (request.proxy_client_token is None):
+        raise SupervisorError("proxy URL and client capability must be supplied together")
+    if request.proxy_base_url is not None:
+        if request.internal_network is None:
+            raise SupervisorError("proxy capability requires one internal network")
+        parsed = urlsplit(request.proxy_base_url)
+        if (
+            parsed.scheme != "http"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or parsed.path.rstrip("/") != "/v1"
+            or parsed.hostname == "v2.open.venus.oa.com"
+        ):
+            raise SupervisorError("proxy base URL is not one internal Responses endpoint")
+        token = request.proxy_client_token
+        if token is None or not 32 <= len(token) <= 4096 or "\n" in token or "\r" in token:
+            raise SupervisorError("proxy client capability is invalid")
     broker_parent = request.broker_parent.resolve()
     if not broker_parent.is_dir() or broker_parent.is_symlink():
         raise SupervisorError("Broker parent must be one existing host-visible directory")
@@ -664,6 +750,20 @@ def execute(
     broker_secret = secrets.token_bytes(32)
     broker_authority_digest = _digest(broker_secret)
     workload = list(request.workload)
+    proxy_config: bytes | None = None
+    proxy_capability = "absent"
+    execution_mode = "development-provider-free"
+    if request.proxy_base_url is not None and request.proxy_client_token is not None:
+        proxy_capability = "job-private-one-shot"
+        execution_mode = "development-venus-proxy"
+        proxy_config = (
+            'model_provider = "venus"\n'
+            '[model_providers.venus]\n'
+            'name = "Venus GPT-5.6 Sol Development Proxy"\n'
+            f"base_url = {json.dumps(request.proxy_base_url)}\n"
+            'wire_api = "responses"\n'
+            f"experimental_bearer_token = {json.dumps(request.proxy_client_token)}\n"
+        ).encode("utf-8")
     identity: dict[str, object] = {
         "agentImageManifestDigest": request.image_manifest_digest,
         "runtimeManifestDigest": request.runtime_manifest_digest,
@@ -671,8 +771,9 @@ def execute(
         "inputSnapshotDigest": input_digest,
         "agentConfigDigest": _digest(canonical_json_bytes({
             "fixtureId": FIXTURE_ID,
-            "mode": "development-provider-free",
-            "proxyCapability": "reserved-not-configured",
+            "mode": execution_mode,
+            "proxyCapability": proxy_capability,
+            "proxyBaseUrl": request.proxy_base_url,
             "agentNetwork": request.internal_network or "none",
             "timeoutSeconds": request.timeout_seconds,
         })),
@@ -701,7 +802,7 @@ def execute(
     docker_writable: _DockerWritableVolumes | None = None
     if isinstance(engine, DockerEngine):
         docker_writable = _DockerWritableVolumes(
-            engine, request.image_id, job_id, owner_nonce
+            engine, request.image_id, job_id, owner_nonce, proxy_config
         )
         writable_mounts = docker_writable.mounts
     else:
@@ -710,6 +811,10 @@ def execute(
             source.mkdir(mode=0o700)
             source.chmod(0o777)
             writable_sources[target] = source
+        if proxy_config is not None:
+            codex_home = writable_sources["/run/text-to-cad-agent/home"] / ".codex"
+            codex_home.mkdir(mode=0o700)
+            _publish_exclusive(codex_home / "config.toml", proxy_config, mode=0o600)
         artifact_root.chmod(0o777)
         writable_sources[_WRITABLE_TARGETS[-1]] = artifact_root
         writable_mounts = tuple(
@@ -771,6 +876,9 @@ def execute(
         with broker_context as broker:
             adapter_stage = "container-create"
             container_id = engine.create(spec)
+            if docker_writable is not None:
+                adapter_stage = "job-volume-post-create-modes"
+                docker_writable.restore_root_modes_after_container_create()
             adapter_stage = "container-inspect"
             if not container_id or not _same_observation(engine.inspect(container_id), spec, container_id):
                 failure_check = "inert-container"
@@ -934,7 +1042,14 @@ def execute(
         "fixtureId": FIXTURE_ID,
         "classification": "Development/Not Sealed/Not Formal",
         "attemptCount": 1,
-        "providerDispatchCount": 0,
+        "executionMode": execution_mode,
+        "providerDispatchCount": 0 if proxy_config is None else None,
+        "providerAccounting": (
+            "supervisor-zero-provider-capability"
+            if proxy_config is None
+            else "external-job-private-proxy-ledger"
+        ),
+        "proxyCapability": proxy_capability,
         "timeoutSeconds": request.timeout_seconds,
         "containerId": container_id,
         "containerAbsent": container_absent,
@@ -960,12 +1075,26 @@ def execute(
 class DockerEngine:
     """Docker-compatible adapter reserved for the Colima Development runner."""
 
-    def __init__(self, executable: str = "docker") -> None:
+    def __init__(self, executable: str = "docker", *, context: str | None = None) -> None:
         self.executable = executable
+        self.context = context
 
-    def _run(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
+    def command(self, *args: str) -> list[str]:
+        prefix = [self.executable]
+        if self.context is not None:
+            prefix += ["--context", self.context]
+        return [*prefix, *args]
+
+    def _run(
+        self,
+        *args: str,
+        check: bool = True,
+        input_bytes: bytes | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run(
-            [self.executable, *args], check=check, stdin=subprocess.DEVNULL,
+            self.command(*args), check=check,
+            stdin=subprocess.DEVNULL if input_bytes is None else None,
+            input=input_bytes,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
 
@@ -1008,7 +1137,7 @@ class DockerEngine:
 
     def exchange(self, container_id, release_for_preflight, timeout_seconds):
         process = subprocess.Popen(
-            [self.executable, "start", "--attach", "--interactive", container_id],
+            self.command("start", "--attach", "--interactive", container_id),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True,
         )
