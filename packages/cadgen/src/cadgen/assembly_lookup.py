@@ -289,21 +289,24 @@ def _component_index(package_dir: Path, component: str, cache: dict[str, Any]) -
     return built
 
 
-def _entity_id(occurrence_id: str, local_id: object, kind: str, ordinal: object) -> str:
+def _entity_id(occurrence_id: str, local_id: object, kind: str, ordinal: object) -> str | None:
     """``o1.f19`` inside a component becomes ``o1.12.f19`` in the assembly.
 
     Prefers the row's own ordinal over re-parsing its id, so the assembly ref keeps the number
     the component's own namespace uses -- which is what makes a translated ref checkable by hand
     against the part file, the exact step users were doing manually.
+
+    None when neither an ordinal nor a suffix is available. Naming it ``o1.12.f`` instead would
+    be a selector that cannot be parsed AND that every unnamed row of that component would
+    share, so the first would silently stand in for the rest.
     """
     if ordinal is not None:
         try:
             return f"{occurrence_id}.{kind}{int(ordinal)}"
         except (TypeError, ValueError):
             pass
-    tail = str(local_id or "")
-    _, _, suffix = tail.rpartition(".")
-    return f"{occurrence_id}.{suffix}" if suffix else f"{occurrence_id}.{kind}"
+    _, _, suffix = str(local_id or "").rpartition(".")
+    return f"{occurrence_id}.{suffix}" if suffix else None
 
 
 def _rebase(row: dict, field: str, offset: int) -> None:
@@ -388,11 +391,15 @@ def merge_assembly_entities(
         shape_id_map: dict[str, str] = {}
         for row in component_index.shapes:
             new_id = _entity_id(occurrence_id, row.get("id"), "s", row.get("ordinal"))
-            shape_id_map[str(row.get("id"))] = new_id
+            if new_id is not None:
+                shape_id_map[str(row.get("id"))] = new_id
 
         for row in component_index.shapes:
+            new_id = shape_id_map.get(str(row.get("id")))
+            if new_id is None:
+                continue
             placed = _place_entity_row(matrix, row)
-            placed["id"] = shape_id_map[str(row.get("id"))]
+            placed["id"] = new_id
             placed["occurrenceId"] = occurrence_id
             _rebase(placed, "faceStart", face_offset)
             _rebase(placed, "edgeStart", edge_offset)
@@ -400,8 +407,11 @@ def merge_assembly_entities(
             shape_by_id.setdefault(str(placed["id"]), placed)
             added += 1
         for row in component_index.faces:
+            new_id = _entity_id(occurrence_id, row.get("id"), "f", row.get("ordinal"))
+            if new_id is None:
+                continue
             placed = _place_entity_row(matrix, row)
-            placed["id"] = _entity_id(occurrence_id, row.get("id"), "f", row.get("ordinal"))
+            placed["id"] = new_id
             placed["occurrenceId"] = occurrence_id
             if placed.get("shapeId") is not None:
                 placed["shapeId"] = shape_id_map.get(str(placed["shapeId"]), placed["shapeId"])
@@ -412,8 +422,11 @@ def merge_assembly_entities(
             face_by_id.setdefault(str(placed["id"]), placed)
             added += 1
         for row in component_index.edges:
+            new_id = _entity_id(occurrence_id, row.get("id"), "e", row.get("ordinal"))
+            if new_id is None:
+                continue
             placed = _place_entity_row(matrix, row)
-            placed["id"] = _entity_id(occurrence_id, row.get("id"), "e", row.get("ordinal"))
+            placed["id"] = new_id
             placed["occurrenceId"] = occurrence_id
             if placed.get("shapeId") is not None:
                 placed["shapeId"] = shape_id_map.get(str(placed["shapeId"]), placed["shapeId"])
@@ -425,8 +438,11 @@ def merge_assembly_entities(
             edge_by_id.setdefault(str(placed["id"]), placed)
             added += 1
         for row in component_index.vertices:
+            new_id = _entity_id(occurrence_id, row.get("id"), "v", row.get("ordinal"))
+            if new_id is None:
+                continue
             placed = _place_entity_row(matrix, row)
-            placed["id"] = _entity_id(occurrence_id, row.get("id"), "v", row.get("ordinal"))
+            placed["id"] = new_id
             placed["occurrenceId"] = occurrence_id
             _rebase(placed, "edgeStart", vertex_edge_offset)
             vertices.append(placed)
@@ -449,8 +465,17 @@ def merge_assembly_entities(
 
         # The occurrence's own ranges, now that its rows exist. Phase 1 wrote zeros because it
         # had no entities to point at, and a zero range reads as "this occurrence has no faces".
+        # A COPY. These row dicts are shared with the index we were handed, and
+        # SelectorIndex is a frozen value: writing ranges into them in place would leave the
+        # caller's index claiming slices of lists it does not have.
         occurrence_row = occurrence_by_id.get(occurrence_id)
         if isinstance(occurrence_row, dict):
+            occurrence_row = dict(occurrence_row)
+            occurrence_by_id[occurrence_id] = occurrence_row
+            for position, existing in enumerate(occurrence_rows):
+                if existing is not None and str(existing.get("id")) == occurrence_id:
+                    occurrence_rows[position] = occurrence_row
+                    break
             occurrence_row.update(
                 {
                     "shapeStart": shape_offset,

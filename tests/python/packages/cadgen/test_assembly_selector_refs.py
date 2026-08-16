@@ -290,6 +290,27 @@ class MergedRowsAreInternallyConsistentTest(AssemblyOccurrenceRefsTest):
             checked += 1
         self.assertGreater(checked, 0, "no occurrence ranges were checked")
 
+    def test_the_index_it_was_handed_is_left_alone(self) -> None:
+        """SelectorIndex is a frozen dataclass -- a value. `replace()` makes a new one, but the
+        ROW DICTS are shared, so writing occurrence ranges in place left the caller's index
+        claiming slices of lists it does not have."""
+        occurrences = assembly_lookup.merge_assembly_occurrences(
+            self._flat_index(), self.descriptor, self.package_dir
+        )
+        occurrence_id = str(self.descriptor["occurrences"][0]["id"])
+        before = dict(occurrences.occurrence_by_id[occurrence_id])
+        merged = assembly_lookup.merge_assembly_entities(
+            occurrences, self.descriptor, self.package_dir
+        )
+        self.assertEqual(
+            before, occurrences.occurrence_by_id[occurrence_id],
+            "the input index's occurrence row was rewritten in place",
+        )
+        self.assertGreater(
+            int(merged.occurrence_by_id[occurrence_id]["faceCount"]), 0,
+            "the merged index should carry the ranges instead",
+        )
+
     def test_buffer_offsets_are_dropped_rather_than_carried_stale(self) -> None:
         """These index the COMPONENT's proxy buffers. The merged index holds the flat
         assembly's, so a copied start points into unrelated data -- silently, and only for
