@@ -105,17 +105,21 @@ def run_workload_group(
 ) -> GroupResult:
     """Run one new session; residue forces TERM/KILL and a failed result."""
     runtime = adapter or OsGroupAdapter()
-    process, pgid = runtime.spawn(argv, cwd, env, stdout, stderr)
     interrupted: int | None = None
+    pgid: int | None = None
 
     def relay(signum: int, frame: object) -> None:
         nonlocal interrupted
         if interrupted is None:
             interrupted = signum
-        runtime.signal_group(pgid, signum)
+        if pgid is not None:
+            runtime.signal_group(pgid, signum)
 
     handlers = runtime.install_handlers(relay)
     try:
+        process, pgid = runtime.spawn(argv, cwd, env, stdout, stderr)
+        if interrupted is not None:
+            runtime.signal_group(pgid, interrupted)
         returncode = runtime.wait(process)
         if interrupted is not None:
             absent = _await_absence(runtime, pgid, terminate_timeout)
