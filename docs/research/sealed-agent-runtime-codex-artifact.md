@@ -91,28 +91,20 @@ Docker build:
 
 1. Retrieve only the fixed archive asset `504450426` and Sigstore bundle asset
    `504450400` from OpenAI's `rust-v0.147.0` release. Record exact URLs,
-   redirects, response metadata, byte lengths, and the annotated tag object
-   `3ed6f04f6bf8b7c46299d1cb1ff99c74ce21a51d` peeled to commit
-   `be6e8eac029b183056b7e4402879f15d2c85f61b` in the closed authenticated
-   retrieval receipt. Resolve and observe those Git identities independently;
-   copying them from the signature policy is not evidence. The receipt uses the
-   contract's closed `text-to-cad.codex-authenticated-retrieval/1` schema and
-   binds every release/archive/bundle/verifier request, redirect, transport
-   observation, and the independently provisioned controller attestation.
+   redirects, response metadata, and byte lengths in the closed
+   `text-to-cad.codex-retrieval-metadata/1` document. This is provenance only;
+   it is not publisher authentication and cannot authorize different bytes.
 2. Require the archive and bundle byte lengths and SHA-256 values printed in
    the Decision section. Mirror those unchanged bytes before any image build.
 3. List the archive without following links or extracting paths. Require
    exactly one regular member named `codex-x86_64-unknown-linux-musl`, no link
    and no traversal, then safely extract it and require the exact executable
    byte length and SHA-256 above.
-4. Provision the exact version-1 SAR-004 trust-anchor approval through the
-   independently authenticated text-to-cad release-input channel. Validate the
-   closed trusted-clock and TUF-acquisition receipts, including sequential root
-   rotation, persistent version state, rollback/freeze checks, and every role's
-   expiry at the trusted time. Same-origin hashes do not authenticate this
-   bootstrap; the release controller's preconfigured approval digest is the
-   out-of-band trust decision. This fixed policy is inadmissible at or after
-   `2026-08-23T01:53:11Z`; it has no offline grace.
+4. Require the exact version-2 SAR-004 approval object from the reviewed receipt
+   contract. It binds the archive, executable, bundle, verifier, checksums, TUF
+   metadata and trusted-root bytes. Same-origin hashes and retrieval metadata
+   cannot extend it; updating or revoking the set requires a reviewed new
+   approval and policy.
 5. Validate the exact canonical signature policy and verification-receipt
    schemas in the receipt contract. Run the exact mirrored Cosign 2.4.1
    `darwin/arm64` verifier bytes with SHA-256
@@ -152,14 +144,13 @@ also binds repository `openai/codex`, workflow `rust-release`, ref
 contains index `2363083279` for that payload.
 
 The version-specific canonical policy digest is
-`sha256:4b8eecd7ed38a82f1d43904c5f929df939eb1f33ee1a6b1536abf846080ec0f0`.
-It binds the exact release/tag/workflow/action, certificate identity, bundle,
-Cosign verifier, and TUF/trusted-root closure recorded in the proof candidate.
-It also binds the independently provisioned version-1 trust-anchor approval
-digest
-`sha256:204ba1877701878fced6fef268db1c4bf3adce077e68789640ae1f5ace845b9c`.
+`sha256:92e0fa99ae181916f2570bbf17ed8d8ae2ea016fdd87309e0f1db84cf60d3f76`.
+It binds the exact workflow/action, certificate identity, bundle, Cosign
+verifier, and trusted-root closure recorded in the proof candidate. The
+version-2 normative approval digest is
+`sha256:caad11a590c6f7f2e1c892fe5001e0a171155e3bd07cceb1de573ebd8ad50ca9`.
 The corrected proof-only signature-verification receipt digest is
-`sha256:a1856038b9b0ca0e79c40597ad36a64ab5503fc2bffe971a1dd3ebb9193c1d21`.
+`sha256:5a44a295d99cb15842b90fa8da1d6206922876bd748815782d66ae357ad0c994`.
 These digests identify canonical documents defined by the receipt contract;
 they do not by themselves complete SAI-004 admission.
 
@@ -172,13 +163,13 @@ The correct claim boundary is:
   the signed executable. The archive negative control must remain part of the
   verification receipt.
 - A formal `codex-admission` child may claim signature verification only after
-  the out-of-band approval, trusted clock, rollback/freeze/expiry-checked TUF
-  acquisition, authenticated release retrieval/tag observation, verifier, trust
-  material, bundle, policy, formal receipt, archive/member binding, immutable
-  mirror, ELF closure, and both smoke predicates all succeed.
+  the exact normative approval, verifier, trust material, bundle, policy,
+  formal receipt, archive/member binding, immutable mirror, ELF closure, and
+  both smoke predicates all succeed. Retrieval metadata remains mandatory
+  provenance but is not part of the signature trust decision.
 - The committed proof candidate did not publish the immutable project mirror,
-  authenticate its trust bootstrap out of band, publish formal trusted-clock,
-  TUF-acquisition, or release-retrieval receipts, run the
+  consume the normative approval as a formal admission input, publish formal
+  retrieval metadata, run the
   Noble/Node-absent/noninteractive smokes, or emit an admission child.
   It must not be described as `Codex admitted`, `Agent Runtime Verified`, or as
   a signature over the archive.
@@ -205,24 +196,22 @@ The Codex section of the future runtime lock must contain at least:
   "signature_bundle_asset_id": 504450400,
   "signature_bundle_sha256": "8ea31ab792fe0cfc7ba55c9dfc1836edf166dabf2d564ed7391eed6c7d422b3d",
   "signature_bundle_bytes": 8585,
-  "trust_anchor_approval_digest": "sha256:204ba1877701878fced6fef268db1c4bf3adce077e68789640ae1f5ace845b9c",
-  "signature_policy_digest": "sha256:4b8eecd7ed38a82f1d43904c5f929df939eb1f33ee1a6b1536abf846080ec0f0",
-  "proof_only_signature_verification_receipt_digest": "sha256:a1856038b9b0ca0e79c40597ad36a64ab5503fc2bffe971a1dd3ebb9193c1d21",
+  "trust_anchor_approval_digest": "sha256:caad11a590c6f7f2e1c892fe5001e0a171155e3bd07cceb1de573ebd8ad50ca9",
+  "signature_policy_digest": "sha256:92e0fa99ae181916f2570bbf17ed8d8ae2ea016fdd87309e0f1db84cf60d3f76",
+  "proof_only_signature_verification_receipt_digest": "sha256:5a44a295d99cb15842b90fa8da1d6206922876bd748815782d66ae357ad0c994",
   "signature_verification_receipt_digest": "<filled by formal admission>",
   "verifier_binary_sha256": "13343856b69f70388c4fe0b986a31dde5958e444b41be22d785d3dc5e1a9cc62",
   "trusted_root_sha256": "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
   "version_output": "codex-cli 0.147.0",
   "node_required": false,
   "retrieval_receipt_digest": "<filled by formal admission>",
-  "trusted_clock_receipt_digest": "<filled by formal admission>",
-  "tuf_acquisition_receipt_digest": "<filled by formal admission>",
   "elf_closure_digest": "<filled by formal admission>",
   "artifact_store_object": "<immutable object identity>"
 }
 ```
 
-Only formal signature-verification, retrieval, trusted-clock, TUF-acquisition,
-ELF, and immutable-store fields remain placeholders. The upstream artifact,
+Only formal signature-verification, retrieval, ELF, and immutable-store fields
+remain placeholders. The upstream artifact,
 archive/member, bundle, trust-anchor approval, signature policy, verifier, and
 trusted-root identities are fixed. The placeholders still prevent this research
 note from being mistaken for completed admission.

@@ -131,8 +131,8 @@ At this proof's observation time, the then-current closed `codex-admission`
 predicate `publisherSignatureClaimAbsent` could not represent these facts, so
 SAI-004 implementation was stopped pending contract correction. The later
 reviewed contract now has distinct archive, executable, bundle, signing-policy,
-verifier, trust-bootstrap, authenticated-retrieval, and verification-result
-bindings; its current normative definition is
+verifier, normative byte-approval, non-authoritative retrieval-metadata, and
+verification-result bindings; its current normative definition is
 [`agent-runtime-verification-receipt.md`](../design/agent-runtime-verification-receipt.md#codex-01470-signature-policy-and-receipt).
 This historical proof and its machine-readable candidate remain immutable
 observations and are not themselves an admission receipt.

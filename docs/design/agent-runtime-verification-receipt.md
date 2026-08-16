@@ -305,43 +305,67 @@ must not infer or claim that the `.tar.gz` itself was signed.
 
 #### Codex 0.147.0 signature policy and receipt
 
-Trust starts from this exact versioned out-of-band approval object. Its
-canonical digest is
-`sha256:204ba1877701878fced6fef268db1c4bf3adce077e68789640ae1f5ace845b9c`:
+Trust starts from this exact versioned out-of-band approval object. The
+reviewed specification bytes are the authority: they are not downloaded from
+the origins that serve the approved artifacts. Its canonical digest is
+`sha256:caad11a590c6f7f2e1c892fe5001e0a171155e3bd07cceb1de573ebd8ad50ca9`:
 
 ```json
 {
   "approvalAuthority": "text-to-cad/SAR-004-reviewed-spec",
-  "approvalVersion": 1,
-  "bootstrapRoot": {
-    "digest": "sha256:73747011d0857ada15479a16c4cae0f3ed03aac698b523b97e1de314ac9d9ca8",
-    "version": 15
+  "approvalVersion": 2,
+  "approvedBytes": {
+    "archive": {
+      "bytes": 98970270,
+      "digest": "sha256:0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36"
+    },
+    "executable": {
+      "bytes": 258278208,
+      "digest": "sha256:cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40"
+    },
+    "signatureBundle": {
+      "bytes": 8585,
+      "digest": "sha256:8ea31ab792fe0cfc7ba55c9dfc1836edf166dabf2d564ed7391eed6c7d422b3d"
+    },
+    "trustedRoot": {
+      "rootBytes": 5630,
+      "rootDigest": "sha256:73747011d0857ada15479a16c4cae0f3ed03aac698b523b97e1de314ac9d9ca8",
+      "snapshotBytes": 1760,
+      "snapshotDigest": "sha256:8f784ab614ec62bfdd5f568eb2a2e3011668449ba235ed4eb7befa99f8469933",
+      "targetsBytes": 4942,
+      "targetsDigest": "sha256:6a697f7f8908c8ab26c11786ecb490b54acec97fa8c802e399f065f8a0cc1acd",
+      "timestampBytes": 449,
+      "timestampDigest": "sha256:367992e4f09fbdb98f05cbf4433a3e6d3830d34c230eebd955fb20ccb5c0a956",
+      "trustedRootBytes": 6787,
+      "trustedRootDigest": "sha256:6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66"
+    },
+    "verifier": {
+      "binaryBytes": 108805570,
+      "binaryDigest": "sha256:13343856b69f70388c4fe0b986a31dde5958e444b41be22d785d3dc5e1a9cc62",
+      "checksumsBytes": 3906,
+      "checksumsDigest": "sha256:5020625e52f7041b9e4a21ee7ef4e2d085d767e72f86e2458443b012b0200362"
+    }
   },
   "deliveryChannel": "text-to-cad-reviewed-release-input",
   "sameOriginHashAuthenticationAllowed": false,
-  "schema": "text-to-cad.sigstore-trust-anchor-approval/1",
-  "scope": "sigstore-production",
-  "trustedRootTarget": {
-    "digest": "sha256:6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
-    "name": "trusted_root.json"
-  }
+  "schema": "text-to-cad.sigstore-trust-anchor-approval/2",
+  "scope": "codex-0.147.0-x86_64-unknown-linux-musl",
+  "signaturePolicyDigest": "sha256:92e0fa99ae181916f2570bbf17ed8d8ae2ea016fdd87309e0f1db84cf60d3f76"
 }
 ```
 
-The approval bytes are provisioned from the independently authenticated,
-reviewed text-to-cad release input, never downloaded from GitHub, Sigstore, or
-another origin used for the bytes being verified. A digest or checksum fetched
-from the same origin as a verifier, release asset, or TUF object is only an
-integrity observation and cannot authenticate this bootstrap. If the exact
-approval object is absent or its delivery channel is not trusted by the
-release controller, `signatureVerified` is inadmissible.
-The release controller's preconfigured approval digest is the out-of-band
-trust decision; this document does not and cannot authenticate its own
-bootstrap.
+The approval is a versioned normative release input. A consumer accepts only
+the exact object and digest printed here; an implementation, retrieval receipt,
+ambient cache, or same-origin checksum cannot replace or extend it. Updating,
+revoking, or superseding these approved bytes requires a reviewed specification
+change. The approval deliberately binds the archive, extracted executable,
+signature bundle, verifier, verifier checksum file, Sigstore trusted-root
+target, and the TUF metadata observed during research. The TUF hashes establish
+the approved byte set, not a self-authenticating online bootstrap.
 
 The version-specific policy is the following exact closed object. Its canonical
 digest is
-`sha256:4b8eecd7ed38a82f1d43904c5f929df939eb1f33ee1a6b1536abf846080ec0f0`,
+`sha256:92e0fa99ae181916f2570bbf17ed8d8ae2ea016fdd87309e0f1db84cf60d3f76`,
 which is the only admitted `signaturePolicyDigest` for this Codex version and
 platform:
 
@@ -386,12 +410,6 @@ platform:
     "wildcardsAllowed": false,
     "workflowDigest": "sha256:62367daacaabcc8972b6f0a60d2f964bd957e7ec68cab5d62756fd494041d183"
   },
-  "release": {
-    "annotatedTagObjectSha": "3ed6f04f6bf8b7c46299d1cb1ff99c74ce21a51d",
-    "commitSha": "be6e8eac029b183056b7e4402879f15d2c85f61b",
-    "repository": "openai/codex",
-    "tag": "rust-v0.147.0"
-  },
   "schema": "text-to-cad.agent-runtime-codex-signature-policy/1",
   "signatureBundle": {
     "assetId": 504450400,
@@ -404,11 +422,6 @@ platform:
     "integratedTime": "2026-08-07T01:02:25Z",
     "logId": "c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d",
     "logIndex": 2363083279
-  },
-  "trustBootstrap": {
-    "approvalDigest": "sha256:204ba1877701878fced6fef268db1c4bf3adce077e68789640ae1f5ace845b9c",
-    "approvalVersion": 1,
-    "sameOriginHashAuthenticationAllowed": false
   },
   "trustedRoot": {
     "rootBytes": 5630,
@@ -449,10 +462,10 @@ platform:
 
 The signature verification producer emits the following exact proof-only
 object after offline verification. Its canonical digest is
-`sha256:a1856038b9b0ca0e79c40597ad36a64ab5503fc2bffe971a1dd3ebb9193c1d21`.
+`sha256:5a44a295d99cb15842b90fa8da1d6206922876bd748815782d66ae357ad0c994`.
 It records the replay but is not the required formal
-`signatureVerificationReceiptDigest` because its formal acquisition fields are
-null:
+`signatureVerificationReceiptDigest` because `result` and
+`trustBootstrap.status` remain proof-only:
 
 ```json
 {
@@ -495,20 +508,10 @@ null:
     "wildcardsAllowed": false,
     "workflowDigest": "sha256:62367daacaabcc8972b6f0a60d2f964bd957e7ec68cab5d62756fd494041d183"
   },
-  "observedAt": "2026-08-16T11:28:49Z",
-  "releaseObservation": {
-    "annotatedTagObjectSha": "3ed6f04f6bf8b7c46299d1cb1ff99c74ce21a51d",
-    "commitSha": "be6e8eac029b183056b7e4402879f15d2c85f61b",
-    "publishedAt": "2026-08-07T01:41:49Z",
-    "releaseId": 366471016,
-    "repository": "openai/codex",
-    "retrievalReceiptDigest": null,
-    "tag": "rust-v0.147.0"
-  },
   "result": "proof-only",
   "schema": "text-to-cad.agent-runtime-codex-signature-verification/1",
   "signatureBundleDigest": "sha256:8ea31ab792fe0cfc7ba55c9dfc1836edf166dabf2d564ed7391eed6c7d422b3d",
-  "signaturePolicyDigest": "sha256:4b8eecd7ed38a82f1d43904c5f929df939eb1f33ee1a6b1536abf846080ec0f0",
+  "signaturePolicyDigest": "sha256:92e0fa99ae181916f2570bbf17ed8d8ae2ea016fdd87309e0f1db84cf60d3f76",
   "signedPayloadDigest": "sha256:cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
   "transparencyLog": {
     "integratedTime": "2026-08-07T01:02:25Z",
@@ -516,10 +519,8 @@ null:
     "logIndex": 2363083279
   },
   "trustBootstrap": {
-    "approvalDigest": "sha256:204ba1877701878fced6fef268db1c4bf3adce077e68789640ae1f5ace845b9c",
-    "status": "not-formal-admission",
-    "trustedClockReceiptDigest": null,
-    "tufAcquisitionReceiptDigest": null
+    "approvalDigest": "sha256:caad11a590c6f7f2e1c892fe5001e0a171155e3bd07cceb1de573ebd8ad50ca9",
+    "status": "not-formal-admission"
   },
   "trustedRoot": {
     "rootDigest": "sha256:73747011d0857ada15479a16c4cae0f3ed03aac698b523b97e1de314ac9d9ca8",
@@ -540,146 +541,34 @@ null:
 }
 ```
 
-The formal receipt uses that same closed schema. It may differ from the
-proof-only object in exactly six leaves: `result` is `verified`; `observedAt`
-equals the trusted-clock receipt's `observedAt`;
-`releaseObservation.retrievalReceiptDigest` equals the child subject's concrete
-`retrievalReceiptDigest`; `trustBootstrap.status` is `verified`; and
-`trustBootstrap.trustedClockReceiptDigest` plus
-`trustBootstrap.tufAcquisitionReceiptDigest` are concrete canonical SHA-256
-digests. Every other leaf is identical to the proof-only object and the policy
-projection. The
-formal receipt's canonical digest, computed only after those fields are
-concrete, is the subject's `signatureVerificationReceiptDigest`; the proof-only
-digest above is never admissible there.
+The formal receipt uses that same closed schema and differs in exactly two
+leaves: `result` and `trustBootstrap.status` are both `verified`. Every other
+leaf equals the proof-only receipt and policy projection. The formal receipt's
+canonical digest is the subject's `signatureVerificationReceiptDigest`; the
+proof-only digest above is forbidden there. The verifier receives the exact
+approved executable, bundle, verifier, and trusted-root bytes and runs offline.
+No network observation, mutable controller key, ambient trust cache, or locally
+updated TUF state can change an approved byte or satisfy a signature predicate.
 
-The concrete `retrievalReceiptDigest` binds one closed authenticated retrieval
-receipt containing the exact release asset observations and a
-`releaseObservation` object with exactly `repository`, `releaseId`, `tag`,
-`publishedAt`, `annotatedTagObjectSha`, and `commitSha`. The formal signature
-receipt copies those six observed values. The producer independently resolves
-the annotated tag object and peels it, then requires the observed object SHA and
-commit to equal both the retrieval receipt and policy; merely copying policy
-expectations is rejected.
+The subject's separate `retrievalReceiptDigest` records non-authoritative
+provenance only. Its document uses schema literal
+`text-to-cad.codex-retrieval-metadata/1` and exactly `schema`, `observedAt`, and
+`objects`. `observedAt` is UTC RFC 3339 at whole-second precision. `objects` is
+an array in this exact order: `archive`, `signatureBundle`, `verifierBinary`,
+`verifierChecksums`, `root`, `timestamp`, `snapshot`, `targets`,
+`trustedRoot`. Each object has exactly `kind`, `requestedUrl`, `finalUrl`,
+`redirects`, `bytes`, `digest`, and `responseMetadataDigest`. `kind` is its
+printed literal; URLs are nonempty HTTPS strings without userinfo or fragment;
+`redirects` is an array of HTTPS URLs in observed order; `bytes` is a
+nonnegative integer; both digests use the full digest grammar. The received
+length and digest for every object must equal the approval object where that
+object is approved. Missing, extra, reordered, or substituted objects are
+rejected.
 
-That authenticated retrieval receipt has schema literal
-`text-to-cad.codex-authenticated-retrieval/1` and exactly these seven top-level
-keys: `schema`, `issuedAt`, `trustedClockReceiptDigest`, `issuer`,
-`releaseObservation`, `acquisitions`, and `authentication`. `issuedAt` is UTC
-RFC 3339 at whole-second precision and equals the trusted-clock observation;
-`trustedClockReceiptDigest` is its canonical SHA-256 digest. `issuer` has
-exactly `authority` (literal `text-to-cad/SAR-004`), `controllerIdentity`
-(literal `text-to-cad-release-controller`), and `channel` (literal
-`text-to-cad-authenticated-receipt-channel/1`). `releaseObservation` has
-exactly the six keys and values listed in the preceding paragraph.
-
-`acquisitions` has exactly `releaseRecord`, `archive`, `signatureBundle`,
-`verifierBinary`, and `verifierChecksums`. Each is a closed acquisition record
-with exactly these keys:
-
-| Key | Exact grammar |
-| --- | --- |
-| `objectKind` | Its containing key as a string literal |
-| `objectIdentity` | `github-release:366471016`, `github-asset:504450426`, `github-asset:504450400`, `github-asset:196693093`, or `cosign-checksums:v2.4.1`, respectively |
-| `assetId` | The corresponding integer for `archive`, `signatureBundle`, and `verifierBinary`; null only for `releaseRecord` and `verifierChecksums` |
-| `name` | `rust-v0.147.0-release-record.json`, the exact policy archive name, exact policy bundle name, `cosign-darwin-arm64`, or `cosign_checksums.txt`, respectively |
-| `requestedUrl` | Respectively the five fixed source URLs printed immediately below |
-| `redirectChain` | An array, possibly empty, of closed redirect objects below in observed order |
-| `finalUrl` | The final HTTPS URL after exactly that chain |
-| `transport` | The closed transport observation below |
-| `bytes` | Concrete nonnegative integer equal to the received representation length |
-| `digest` | Canonical `sha256:<64 lowercase hex>` of the received representation |
-
-The fixed requested URLs are
-`https://api.github.com/repos/openai/codex/releases/tags/rust-v0.147.0`,
-`https://github.com/openai/codex/releases/download/rust-v0.147.0/codex-x86_64-unknown-linux-musl.tar.gz`,
-`https://github.com/openai/codex/releases/download/rust-v0.147.0/codex-x86_64-unknown-linux-musl.sigstore`,
-`https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign-darwin-arm64`,
-and
-`https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign_checksums.txt`.
-The archive, bundle, verifier binary, and checksums `bytes` and `digest` equal
-policy; the release record is independently parsed to produce the six exact
-`releaseObservation` values.
-
-Each redirect object has exactly `status` (one of 301, 302, 303, 307, 308),
-`fromUrl`, `location`, `toUrl`, and `tlsServerName`. `toUrl` is the RFC 3986
-resolution of `location` against `fromUrl`; every URL is HTTPS with no userinfo
-or fragment. Each hop's host and `tlsServerName` are identical and belong to
-the exact allowlist `api.github.com`, `github.com`,
-`release-assets.githubusercontent.com`, or `objects.githubusercontent.com`.
-The first `fromUrl` equals `requestedUrl`, adjacent hops join exactly, and the
-last `toUrl` equals `finalUrl`; an empty chain requires
-`finalUrl == requestedUrl`.
-
-Each `transport` object has exactly `scheme` (literal `https`), `requestMethod`
-(literal `GET`), `responseStatus` (literal 200), `tlsServerName` (the final URL
-host), `tlsProtocol` (literal `TLSv1.2` or `TLSv1.3`),
-`certificateChainDigest`, `responseHeadersDigest`, and `contentLength`.
-The two digests use canonical SHA-256; `contentLength` equals `bytes`. TLS and
-redirect observations establish what the controller saw but do not replace the
-independent controller attestation below.
-
-`authentication` has exactly `scheme` (literal
-`release-controller-channel-attestation/1`), `controllerIdentity` and `channel`
-(the exact issuer literals), `keyDigest`, `evidenceDigest`, `signedProjection`
-(literal `all-top-level-fields-except-authentication`),
-`independentOfSourceOrigins` (literal true), and `verified` (literal true).
-`keyDigest` must equal a verification key provisioned in the release controller
-configuration independently of GitHub and Sigstore. `evidenceDigest` binds the
-detached authentication evidence. That evidence is a canonical JSON object with
-exactly `schema` (literal
-`text-to-cad.release-controller-channel-attestation/1`), `algorithm` (literal
-`Ed25519`), `keyDigest`, `payloadDigest`, and `signatureBase64`. `keyDigest` is
-the SHA-256 of the raw 32-byte Ed25519 public key and equals the receipt field;
-`payloadDigest` is the canonical SHA-256 of the other six receipt top-level
-fields; `signatureBase64` is canonical padded RFC 4648 base64 encoding of the
-64-byte Ed25519 signature over those canonical projection bytes. The canonical
-digest of this five-key evidence object equals `evidenceDigest`, and the
-signature is verified under the independently provisioned key before the
-receipt is accepted. Neither a copied policy literal, a source-host
-checksum, the receipt's own digest, nor `verified:true` can satisfy this check.
-Unknown or missing keys, an unprovisioned key, unavailable evidence, signature
-failure, source-origin reuse for the controller key, or any acquisition,
-redirect, transport, release, issuer, or clock mismatch rejects the receipt.
-
-The trusted-clock receipt has exactly `schema` (literal
-`text-to-cad.trusted-clock-receipt/1`), `controllerIdentity` (literal
-`text-to-cad-release-controller`), `observedAt` (UTC RFC 3339, whole seconds),
-`previousObservedAt` (null only for the first approved run, otherwise the prior
-accepted value), and `monotonic` (literal true). It is emitted through the
-release controller's independently authenticated receipt channel, not obtained
-from GitHub or Sigstore. The controller rejects a time earlier than
-`previousObservedAt` and stores the accepted receipt before signature
-verification.
-
-The TUF acquisition receipt has exactly these top-level keys:
-`schema` (literal `text-to-cad.sigstore-tuf-acquisition/1`),
-`trustAnchorApprovalDigest`, `trustedClockReceiptDigest`, `observedAt`,
-`previousState`, `metadata`, `trustedRootTarget`, and `checks`.
-`trustAnchorApprovalDigest` is the exact approval digest above;
-`trustedClockReceiptDigest` is the concrete clock-receipt digest and
-`observedAt` equals its time. `previousState` is null only on first use of
-approval version 1; otherwise it contains the prior accepted `observedAt` and,
-for each of `root`, `timestamp`, `snapshot`, and `targets`, exactly `version`
-and `digest`. `metadata` contains those four role names, each with exactly the
-policy's `bytes`, `digest`, `expires`, and `version`; `trustedRootTarget`
-contains exactly `bytes` and `digest`. `checks` has exactly
-`approvalProvisionedOutOfBand`, `rootChainVerified`,
-`roleSignaturesVerified`, `consistentSnapshotVerified`,
-`trustedRootTargetVerified`, `rollbackRejected`, `freezeRejected`, and
-`unexpiredAtTrustedTime`, all literal true.
-
-Starting from approved root version 15, TUF root updates must be sequential and
-signature-valid under the prior root. A role version lower than prior state is
-a rollback and is rejected. Reusing the same timestamp, snapshot, or targets
-version is allowed only with the identical digest; a same-version new digest is
-rejected. A timestamp version equal to prior state is also rejected as frozen
-once its expiry is reached. All four metadata expiries must be later than the
-trusted `observedAt`; there is no offline grace. Consequently this exact policy
-cannot produce `signatureVerified=true` at or after
-`2026-08-23T01:53:11Z`. Continued admission requires a newly reviewed policy
-that pins freshly acquired, TUF-verified metadata; changing only a receipt or
-accepting a local cache is forbidden.
+This metadata says where bytes were observed; it is not publisher
+authentication, a trust anchor, or an input to `signatureVerified`. TLS and
+response details may be retained in restricted diagnostics, but no transport
+claim can replace the normative approval or the offline Sigstore proof.
 
 For this version/platform, a `codex-admission` subject must carry exactly the
 archive, executable, and bundle digests printed above and the printed policy
@@ -694,32 +583,30 @@ have these exact meanings:
 | `archiveSingleExecutableExact` | The receipt's complete `archive` object equals the policy, the raw archive matches `archiveDigest`, and safe listing/extraction proves its one fixed regular member equals `executableDigest`; both `linksAllowed` and `pathTraversalAllowed` are false and `signedDirectly` is false |
 | `signatureBundleDigestExact` | The raw 8,585-byte bundle digest equals subject, policy, and receipt `signatureBundleDigest`, and its payload digest equals `executableDigest` |
 | `signaturePolicyExact` | The policy has exactly the closed object above and its independently recomputed digest equals subject and receipt `signaturePolicyDigest` |
-| `signatureVerified` | The formal receipt has `cryptographicResult:verified`, `result:verified`, concrete trusted-clock and TUF-acquisition receipt digests, `trustBootstrap.status:verified`, and the fixed verifier verifies the bundle over `executableDigest`; the archive negative control is exactly `rejected-payload-mismatch` with exit code `1` |
-| `certificateIdentityExact` | Certificate SAN plus repository, workflow name/ref/SHA/trigger, upstream workflow digest, and Linux signing-action digest equal policy; the receipt's independently observed annotated tag object and peeled commit equal both the closed authenticated retrieval receipt and policy, with `wildcardsAllowed:false` |
+| `signatureVerified` | The formal receipt has `cryptographicResult:verified`, `result:verified`, `trustBootstrap.status:verified`, and the fixed approved verifier verifies the approved bundle over `executableDigest` under the approved trusted-root bytes; the archive negative control is exactly `rejected-payload-mismatch` with exit code `1` |
+| `certificateIdentityExact` | Certificate SAN plus repository, workflow name/ref/SHA/trigger, upstream workflow digest, and Linux signing-action digest equal policy, with `wildcardsAllowed:false` |
 | `certificateIssuerExact` | OIDC issuer, certificate-chain issuer, certificate fingerprint, and certificate validity bounds equal the policy literals |
-| `transparencyLogVerified` | The bundle inclusion verifies under the out-of-band-approved root and the concrete rollback/freeze/expiry-checked TUF acquisition receipt, and equals the fixed Rekor log ID, index, and integrated time; that time is within the fixed certificate validity interval |
+| `transparencyLogVerified` | The bundle inclusion verifies under the approved trusted-root bytes and equals the fixed Rekor log ID, index, and integrated time; that time is within the fixed certificate validity interval |
 
 The policy and verification receipt are immutable inputs to the
 `codex-admission` child, not additional graph nodes. The child subject copies
 the raw bundle digest, fixed policy digest, and concrete formal-receipt digest.
 A strict consumer requires exact equality between those subject fields and the policy
 and receipt, checks every nested key/literal/digest, and rejects an ambient
-verifier or trust cache, wildcard identity, alternate tag/ref/workflow/commit,
-missing or substituted Rekor entry, trust material or an acquisition receipt
-inconsistent with the fixed TUF identities, versions, or expiry metadata,
+verifier or trust cache, wildcard identity, alternate ref/workflow/commit,
+missing or substituted Rekor entry, any byte not fixed by the approval,
 archive-as-signed claim, multi-entry/link/traversal archive, or signature over
 bytes other than `executableDigest`.
 
-It also rejects the proof-only receipt or its digest, a null formal acquisition
-field, an unapproved bootstrap, same-origin checksum bootstrap, an untrusted or
-backward clock, expired metadata, a frozen or rolled-back TUF role, a release
-tag/commit copied only from policy, or any mismatch among the observed release,
-retrieval receipt, certificate workflow SHA/ref, and policy.
+It also rejects the proof-only receipt or its digest, an unapproved or
+substituted approval object, same-origin hashes offered as additional authority,
+or any mismatch among the approved bytes, certificate workflow claims, policy,
+and formal receipt. Retrieval metadata remains mandatory for provenance but is
+never consulted to decide a signature predicate.
 
-The proof-only receipt fixes the observed verification facts. Formal admission
-additionally requires `retrievalReceiptDigest` to bind authenticated acquisition
-of the exact verifier and trust bytes while their signed metadata was valid. The
-committed proof candidate is not that admission receipt.
+The proof-only receipt fixes the observed cryptographic verification facts. The
+committed proof candidate is not a formal receipt and does not complete mirror,
+ELF, Node-absent, noninteractive, or `codex-admission` evidence.
 
 The seven signature predicates are evaluated in their printed order. Each is a
 normal admission predicate under the generic stop-at-first-false grammar; no
