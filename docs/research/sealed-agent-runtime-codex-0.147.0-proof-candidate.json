@@ -1,0 +1,132 @@
+{
+  "archive": {
+    "assetId": 504450426,
+    "bytes": 98970270,
+    "name": "codex-x86_64-unknown-linux-musl.tar.gz",
+    "sha256": "0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36",
+    "signedDirectly": false,
+    "source": "https://github.com/openai/codex/releases/download/rust-v0.147.0/codex-x86_64-unknown-linux-musl.tar.gz"
+  },
+  "archiveBinding": {
+    "entryCount": 1,
+    "entryName": "codex-x86_64-unknown-linux-musl",
+    "entryType": "regular-file",
+    "linksAllowed": false,
+    "pathTraversalAllowed": false
+  },
+  "codexRelease": {
+    "annotatedTagObjectSha": "3ed6f04f6bf8b7c46299d1cb1ff99c74ce21a51d",
+    "commitSha": "be6e8eac029b183056b7e4402879f15d2c85f61b",
+    "publishedAt": "2026-08-07T01:41:49Z",
+    "releaseId": 366471016,
+    "repository": "openai/codex",
+    "tag": "rust-v0.147.0",
+    "version": "0.147.0"
+  },
+  "executable": {
+    "bytes": 258278208,
+    "name": "codex-x86_64-unknown-linux-musl",
+    "sha256": "cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
+    "target": "x86_64-unknown-linux-musl"
+  },
+  "limitations": {
+    "admissionImplemented": false,
+    "archiveSignatureAvailable": false,
+    "immutableProjectMirrorPublished": false,
+    "receiptSchemaCorrected": false,
+    "runtimeSmokePerformed": false,
+    "s3PublicationPerformed": false,
+    "verifierBootstrapFullySelfAuthenticating": false
+  },
+  "observedAt": "2026-08-16T11:28:49Z",
+  "schema": "text-to-cad.agent-runtime-codex-admission-research/1",
+  "signatureBundle": {
+    "assetId": 504450400,
+    "bytes": 8585,
+    "certificateFingerprintSha256": "0cd70c48dbbb777f1910538d62604b16be271028b8195325bb8eae58fcf255c8",
+    "certificateIssuer": "O=sigstore.dev,CN=sigstore-intermediate",
+    "certificateNotAfter": "2026-08-07T01:12:23Z",
+    "certificateNotBefore": "2026-08-07T01:02:23Z",
+    "name": "codex-x86_64-unknown-linux-musl.sigstore",
+    "payloadSha256": "cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
+    "sha256": "8ea31ab792fe0cfc7ba55c9dfc1836edf166dabf2d564ed7391eed6c7d422b3d",
+    "source": "https://github.com/openai/codex/releases/download/rust-v0.147.0/codex-x86_64-unknown-linux-musl.sigstore"
+  },
+  "signatureIdentityPolicy": {
+    "githubWorkflowName": "rust-release",
+    "githubWorkflowRef": "refs/tags/rust-v0.147.0",
+    "githubWorkflowRepository": "openai/codex",
+    "githubWorkflowSha": "be6e8eac029b183056b7e4402879f15d2c85f61b",
+    "githubWorkflowTrigger": "push",
+    "oidcIssuer": "https://token.actions.githubusercontent.com",
+    "sanUri": "https://github.com/openai/codex/.github/workflows/rust-release.yml@refs/tags/rust-v0.147.0",
+    "wildcardsAllowed": false
+  },
+  "signatureVerification": {
+    "archiveNegativeExit": 1,
+    "archiveNegativeObservedBundlePayloadSha256": "cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
+    "archiveNegativeObservedPayloadSha256": "0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36",
+    "executableOfflineResult": "Verified OK",
+    "rekorIntegratedTime": "2026-08-07T01:02:25Z",
+    "rekorLogId": "c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d",
+    "rekorLogIndex": 2363083279
+  },
+  "status": "proof-only-not-admitted",
+  "trustedRootAcquisition": {
+    "root": {
+      "bytes": 5630,
+      "expires": "2026-11-20T13:58:18Z",
+      "sha256": "73747011d0857ada15479a16c4cae0f3ed03aac698b523b97e1de314ac9d9ca8",
+      "source": "https://tuf-repo-cdn.sigstore.dev/15.root.json",
+      "version": 15
+    },
+    "snapshot": {
+      "bytes": 1760,
+      "expires": "2036-05-15T08:09:16Z",
+      "sha256": "8f784ab614ec62bfdd5f568eb2a2e3011668449ba235ed4eb7befa99f8469933",
+      "source": "https://tuf-repo-cdn.sigstore.dev/165.snapshot.json",
+      "version": 165
+    },
+    "targets": {
+      "bytes": 4942,
+      "expires": "2036-05-09T09:00:52Z",
+      "sha256": "6a697f7f8908c8ab26c11786ecb490b54acec97fa8c802e399f065f8a0cc1acd",
+      "source": "https://tuf-repo-cdn.sigstore.dev/14.targets.json",
+      "version": 14
+    },
+    "timestamp": {
+      "bytes": 449,
+      "expires": "2026-08-23T01:53:11Z",
+      "sha256": "367992e4f09fbdb98f05cbf4433a3e6d3830d34c230eebd955fb20ccb5c0a956",
+      "source": "https://tuf-repo-cdn.sigstore.dev/timestamp.json",
+      "version": 757
+    },
+    "trustedRootTarget": {
+      "bytes": 6787,
+      "sha256": "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
+      "source": "https://tuf-repo-cdn.sigstore.dev/targets/6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66.trusted_root.json"
+    }
+  },
+  "upstreamWorkflow": {
+    "linuxSigningActionPath": ".github/actions/linux-code-sign/action.yml",
+    "linuxSigningActionSha256": "4e5fa040cf838f087ce4a0c585f651e90111b4a02973458b926d6938a24108e5",
+    "path": ".github/workflows/rust-release.yml",
+    "sha256": "62367daacaabcc8972b6f0a60d2f964bd957e7ec68cab5d62756fd494041d183"
+  },
+  "verifier": {
+    "assetId": 196693093,
+    "binaryBytes": 108805570,
+    "binarySha256": "13343856b69f70388c4fe0b986a31dde5958e444b41be22d785d3dc5e1a9cc62",
+    "checksumsBytes": 3906,
+    "checksumsSha256": "5020625e52f7041b9e4a21ee7ef4e2d085d767e72f86e2458443b012b0200362",
+    "checksumsSource": "https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign_checksums.txt",
+    "commitSha": "9a4cfe1aae777984c07ce373d97a65428bbff734",
+    "name": "cosign",
+    "platform": "darwin/arm64",
+    "releaseId": 178267850,
+    "source": "https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign-darwin-arm64",
+    "sourcePackaging": "raw-executable-no-archive",
+    "tagObjectSha": "531befdf6581582e22eda7cda084565bb106efa6",
+    "version": "2.4.1"
+  }
+}
