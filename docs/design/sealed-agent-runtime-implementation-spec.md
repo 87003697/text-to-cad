@@ -143,7 +143,8 @@ producer may implement another canonical encoder.
 
 ```text
 admit_codex(retrieval, archive, executable, signature_bundle,
-            signature_policy, verifier, trusted_root) -> codex-admission evidence
+            signature_policy, trust_anchor_approval, tuf_acquisition,
+            trusted_clock, verifier, trusted_root) -> codex-admission evidence
 ```
 
 SAI-004 owns this producer and the closed Codex signature-policy and
@@ -155,12 +156,27 @@ commit. The producer validates those schema-neutral documents and computes
 their digests through the one canonical JSON seam before constructing the typed
 `codex-admission` evidence child.
 
+The bootstrap is the versioned SAR-004 trust-anchor approval provisioned
+through the independently authenticated text-to-cad release-input channel. A
+same-origin verifier checksum, TUF-object digest, or release-asset hash is not
+bootstrap authentication. The producer validates the closed trusted-clock and
+TUF-acquisition receipts, persists accepted time and role versions, and rejects
+clock rollback, role rollback, same-version digest substitution, frozen or
+expired metadata, and any offline-expiry grace. The fixed timestamp metadata
+expires at `2026-08-23T01:53:11Z`; at or after that instant this policy is
+inadmissible until a newly reviewed policy pins a fresh TUF-verified closure.
+
 For Codex 0.147.0, the fixed Sigstore bundle signs the single extracted
 `x86_64-unknown-linux-musl` executable. The producer separately proves that the
 fixed archive contains exactly that one regular member with the expected name,
 byte length, and digest and no link or traversal. It records and enforces the
 negative archive verification control; it never calls the archive signed or
 allows a valid executable signature to stand in for the archive-member binding.
+The policy and receipt use the identical closed `archive` projection. The
+formal receipt also copies the independently observed annotated tag object and
+peeled commit from the closed authenticated retrieval receipt and checks them
+against the certificate workflow ref/SHA and policy; policy expectations alone
+are not an observation.
 The committed research proof fixes the policy inputs but is not itself an
 admission result: immutable mirroring, ELF closure, Node-absent and
 noninteractive smoke, and the complete successful evidence child remain

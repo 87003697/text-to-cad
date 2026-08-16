@@ -305,9 +305,43 @@ must not infer or claim that the `.tar.gz` itself was signed.
 
 #### Codex 0.147.0 signature policy and receipt
 
+Trust starts from this exact versioned out-of-band approval object. Its
+canonical digest is
+`sha256:204ba1877701878fced6fef268db1c4bf3adce077e68789640ae1f5ace845b9c`:
+
+```json
+{
+  "approvalAuthority": "text-to-cad/SAR-004-reviewed-spec",
+  "approvalVersion": 1,
+  "bootstrapRoot": {
+    "digest": "sha256:73747011d0857ada15479a16c4cae0f3ed03aac698b523b97e1de314ac9d9ca8",
+    "version": 15
+  },
+  "deliveryChannel": "text-to-cad-reviewed-release-input",
+  "sameOriginHashAuthenticationAllowed": false,
+  "schema": "text-to-cad.sigstore-trust-anchor-approval/1",
+  "scope": "sigstore-production",
+  "trustedRootTarget": {
+    "digest": "sha256:6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
+    "name": "trusted_root.json"
+  }
+}
+```
+
+The approval bytes are provisioned from the independently authenticated,
+reviewed text-to-cad release input, never downloaded from GitHub, Sigstore, or
+another origin used for the bytes being verified. A digest or checksum fetched
+from the same origin as a verifier, release asset, or TUF object is only an
+integrity observation and cannot authenticate this bootstrap. If the exact
+approval object is absent or its delivery channel is not trusted by the
+release controller, `signatureVerified` is inadmissible.
+The release controller's preconfigured approval digest is the out-of-band
+trust decision; this document does not and cannot authenticate its own
+bootstrap.
+
 The version-specific policy is the following exact closed object. Its canonical
 digest is
-`sha256:283a3458787b25f5d18b86b8967f81147b255c63d15dae2a432d3a6db7e77b29`,
+`sha256:4b8eecd7ed38a82f1d43904c5f929df939eb1f33ee1a6b1536abf846080ec0f0`,
 which is the only admitted `signaturePolicyDigest` for this Codex version and
 platform:
 
@@ -318,7 +352,9 @@ platform:
     "bytes": 98970270,
     "digest": "sha256:0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36",
     "linksAllowed": false,
+    "memberBytes": 258278208,
     "memberCount": 1,
+    "memberDigest": "sha256:cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
     "memberName": "codex-x86_64-unknown-linux-musl",
     "memberType": "regular-file",
     "name": "codex-x86_64-unknown-linux-musl.tar.gz",
@@ -369,6 +405,11 @@ platform:
     "logId": "c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d",
     "logIndex": 2363083279
   },
+  "trustBootstrap": {
+    "approvalDigest": "sha256:204ba1877701878fced6fef268db1c4bf3adce077e68789640ae1f5ace845b9c",
+    "approvalVersion": 1,
+    "sameOriginHashAuthenticationAllowed": false
+  },
   "trustedRoot": {
     "rootBytes": 5630,
     "rootDigest": "sha256:73747011d0857ada15479a16c4cae0f3ed03aac698b523b97e1de314ac9d9ca8",
@@ -408,12 +449,15 @@ platform:
 
 The signature verification producer emits the following exact proof-only
 object after offline verification. Its canonical digest is
-`sha256:beca82ea9864536e5200b837b2f136620dcefab1b1c3cc3e58087ad133d98d00`,
-the required `signatureVerificationReceiptDigest`:
+`sha256:a1856038b9b0ca0e79c40597ad36a64ab5503fc2bffe971a1dd3ebb9193c1d21`.
+It records the replay but is not the required formal
+`signatureVerificationReceiptDigest` because its formal acquisition fields are
+null:
 
 ```json
 {
   "archive": {
+    "assetId": 504450426,
     "bytes": 98970270,
     "digest": "sha256:0246e2e773834e07f0fb5249ed6ebad12e4591e608f8c7bb97dd6a9690544c36",
     "linksAllowed": false,
@@ -422,6 +466,7 @@ the required `signatureVerificationReceiptDigest`:
     "memberDigest": "sha256:cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
     "memberName": "codex-x86_64-unknown-linux-musl",
     "memberType": "regular-file",
+    "name": "codex-x86_64-unknown-linux-musl.tar.gz",
     "pathTraversalAllowed": false,
     "signedDirectly": false
   },
@@ -439,6 +484,7 @@ the required `signatureVerificationReceiptDigest`:
     "oidcIssuer": "https://token.actions.githubusercontent.com",
     "sanUri": "https://github.com/openai/codex/.github/workflows/rust-release.yml@refs/tags/rust-v0.147.0"
   },
+  "cryptographicResult": "verified",
   "githubWorkflow": {
     "linuxSigningActionDigest": "sha256:4e5fa040cf838f087ce4a0c585f651e90111b4a02973458b926d6938a24108e5",
     "name": "rust-release",
@@ -449,15 +495,31 @@ the required `signatureVerificationReceiptDigest`:
     "wildcardsAllowed": false,
     "workflowDigest": "sha256:62367daacaabcc8972b6f0a60d2f964bd957e7ec68cab5d62756fd494041d183"
   },
-  "result": "verified",
+  "observedAt": "2026-08-16T11:28:49Z",
+  "releaseObservation": {
+    "annotatedTagObjectSha": "3ed6f04f6bf8b7c46299d1cb1ff99c74ce21a51d",
+    "commitSha": "be6e8eac029b183056b7e4402879f15d2c85f61b",
+    "publishedAt": "2026-08-07T01:41:49Z",
+    "releaseId": 366471016,
+    "repository": "openai/codex",
+    "retrievalReceiptDigest": null,
+    "tag": "rust-v0.147.0"
+  },
+  "result": "proof-only",
   "schema": "text-to-cad.agent-runtime-codex-signature-verification/1",
   "signatureBundleDigest": "sha256:8ea31ab792fe0cfc7ba55c9dfc1836edf166dabf2d564ed7391eed6c7d422b3d",
-  "signaturePolicyDigest": "sha256:283a3458787b25f5d18b86b8967f81147b255c63d15dae2a432d3a6db7e77b29",
+  "signaturePolicyDigest": "sha256:4b8eecd7ed38a82f1d43904c5f929df939eb1f33ee1a6b1536abf846080ec0f0",
   "signedPayloadDigest": "sha256:cb0a15567e9a60a5820d54b0f6ae86d504dc3805c1eab21a47f70e3eb7b73a40",
   "transparencyLog": {
     "integratedTime": "2026-08-07T01:02:25Z",
     "logId": "c0d23d6ad406973f9559f3ba2d1ca01f84147d8ffc5b8445c224f98b9591801d",
     "logIndex": 2363083279
+  },
+  "trustBootstrap": {
+    "approvalDigest": "sha256:204ba1877701878fced6fef268db1c4bf3adce077e68789640ae1f5ace845b9c",
+    "status": "not-formal-admission",
+    "trustedClockReceiptDigest": null,
+    "tufAcquisitionReceiptDigest": null
   },
   "trustedRoot": {
     "rootDigest": "sha256:73747011d0857ada15479a16c4cae0f3ed03aac698b523b97e1de314ac9d9ca8",
@@ -478,9 +540,72 @@ the required `signatureVerificationReceiptDigest`:
 }
 ```
 
+The formal receipt uses that same closed schema. It may differ from the
+proof-only object in exactly six leaves: `result` is `verified`; `observedAt`
+equals the trusted-clock receipt's `observedAt`;
+`releaseObservation.retrievalReceiptDigest` equals the child subject's concrete
+`retrievalReceiptDigest`; `trustBootstrap.status` is `verified`; and
+`trustBootstrap.trustedClockReceiptDigest` plus
+`trustBootstrap.tufAcquisitionReceiptDigest` are concrete canonical SHA-256
+digests. Every other leaf is identical to the proof-only object and the policy
+projection. The
+formal receipt's canonical digest, computed only after those fields are
+concrete, is the subject's `signatureVerificationReceiptDigest`; the proof-only
+digest above is never admissible there.
+
+The concrete `retrievalReceiptDigest` binds one closed authenticated retrieval
+receipt containing the exact release asset observations and a
+`releaseObservation` object with exactly `repository`, `releaseId`, `tag`,
+`publishedAt`, `annotatedTagObjectSha`, and `commitSha`. The formal signature
+receipt copies those six observed values. The producer independently resolves
+the annotated tag object and peels it, then requires the observed object SHA and
+commit to equal both the retrieval receipt and policy; merely copying policy
+expectations is rejected.
+
+The trusted-clock receipt has exactly `schema` (literal
+`text-to-cad.trusted-clock-receipt/1`), `controllerIdentity` (literal
+`text-to-cad-release-controller`), `observedAt` (UTC RFC 3339, whole seconds),
+`previousObservedAt` (null only for the first approved run, otherwise the prior
+accepted value), and `monotonic` (literal true). It is emitted through the
+release controller's independently authenticated receipt channel, not obtained
+from GitHub or Sigstore. The controller rejects a time earlier than
+`previousObservedAt` and stores the accepted receipt before signature
+verification.
+
+The TUF acquisition receipt has exactly these top-level keys:
+`schema` (literal `text-to-cad.sigstore-tuf-acquisition/1`),
+`trustAnchorApprovalDigest`, `trustedClockReceiptDigest`, `observedAt`,
+`previousState`, `metadata`, `trustedRootTarget`, and `checks`.
+`trustAnchorApprovalDigest` is the exact approval digest above;
+`trustedClockReceiptDigest` is the concrete clock-receipt digest and
+`observedAt` equals its time. `previousState` is null only on first use of
+approval version 1; otherwise it contains the prior accepted `observedAt` and,
+for each of `root`, `timestamp`, `snapshot`, and `targets`, exactly `version`
+and `digest`. `metadata` contains those four role names, each with exactly the
+policy's `bytes`, `digest`, `expires`, and `version`; `trustedRootTarget`
+contains exactly `bytes` and `digest`. `checks` has exactly
+`approvalProvisionedOutOfBand`, `rootChainVerified`,
+`roleSignaturesVerified`, `consistentSnapshotVerified`,
+`trustedRootTargetVerified`, `rollbackRejected`, `freezeRejected`, and
+`unexpiredAtTrustedTime`, all literal true.
+
+Starting from approved root version 15, TUF root updates must be sequential and
+signature-valid under the prior root. A role version lower than prior state is
+a rollback and is rejected. Reusing the same timestamp, snapshot, or targets
+version is allowed only with the identical digest; a same-version new digest is
+rejected. A timestamp version equal to prior state is also rejected as frozen
+once its expiry is reached. All four metadata expiries must be later than the
+trusted `observedAt`; there is no offline grace. Consequently this exact policy
+cannot produce `signatureVerified=true` at or after
+`2026-08-23T01:53:11Z`. Continued admission requires a newly reviewed policy
+that pins freshly acquired, TUF-verified metadata; changing only a receipt or
+accepting a local cache is forbidden.
+
 For this version/platform, a `codex-admission` subject must carry exactly the
-archive, executable, bundle, policy, and verification-receipt digests printed
-above; `retrievalReceiptDigest` and `elfClosureDigest` bind the separately
+archive, executable, and bundle digests printed above and the printed policy
+digest. Its `signatureVerificationReceiptDigest` is instead the independently
+computed digest of the concrete formal receipt; the proof-only digest is
+forbidden. `retrievalReceiptDigest` and `elfClosureDigest` bind the separately
 produced acquisition/mirror and Noble ELF observations. The signature checks
 have these exact meanings:
 
@@ -489,21 +614,27 @@ have these exact meanings:
 | `archiveSingleExecutableExact` | The receipt's complete `archive` object equals the policy, the raw archive matches `archiveDigest`, and safe listing/extraction proves its one fixed regular member equals `executableDigest`; both `linksAllowed` and `pathTraversalAllowed` are false and `signedDirectly` is false |
 | `signatureBundleDigestExact` | The raw 8,585-byte bundle digest equals subject, policy, and receipt `signatureBundleDigest`, and its payload digest equals `executableDigest` |
 | `signaturePolicyExact` | The policy has exactly the closed object above and its independently recomputed digest equals subject and receipt `signaturePolicyDigest` |
-| `signatureVerified` | The fixed verifier and trusted-root closure verify the fixed bundle over `executableDigest` with result `verified`; the archive negative control is exactly `rejected-payload-mismatch` with exit code `1` |
-| `certificateIdentityExact` | Certificate SAN plus repository, workflow name/ref/SHA/trigger, upstream workflow digest, Linux signing-action digest, release tag object, and peeled commit equal the policy literals, with `wildcardsAllowed:false` |
+| `signatureVerified` | The formal receipt has `cryptographicResult:verified`, `result:verified`, concrete trusted-clock and TUF-acquisition receipt digests, `trustBootstrap.status:verified`, and the fixed verifier verifies the bundle over `executableDigest`; the archive negative control is exactly `rejected-payload-mismatch` with exit code `1` |
+| `certificateIdentityExact` | Certificate SAN plus repository, workflow name/ref/SHA/trigger, upstream workflow digest, and Linux signing-action digest equal policy; the receipt's independently observed annotated tag object and peeled commit equal both the closed authenticated retrieval receipt and policy, with `wildcardsAllowed:false` |
 | `certificateIssuerExact` | OIDC issuer, certificate-chain issuer, certificate fingerprint, and certificate validity bounds equal the policy literals |
-| `transparencyLogVerified` | The bundle inclusion verifies under the fixed TUF/trusted-root digests and equals the fixed Rekor log ID, index, and integrated time; that time is within the fixed certificate validity interval |
+| `transparencyLogVerified` | The bundle inclusion verifies under the out-of-band-approved root and the concrete rollback/freeze/expiry-checked TUF acquisition receipt, and equals the fixed Rekor log ID, index, and integrated time; that time is within the fixed certificate validity interval |
 
 The policy and verification receipt are immutable inputs to the
 `codex-admission` child, not additional graph nodes. The child subject copies
-the raw bundle digest and the two canonical document digests above. A strict
-consumer requires exact equality between those subject fields and the policy
+the raw bundle digest, fixed policy digest, and concrete formal-receipt digest.
+A strict consumer requires exact equality between those subject fields and the policy
 and receipt, checks every nested key/literal/digest, and rejects an ambient
 verifier or trust cache, wildcard identity, alternate tag/ref/workflow/commit,
 missing or substituted Rekor entry, trust material or an acquisition receipt
 inconsistent with the fixed TUF identities, versions, or expiry metadata,
 archive-as-signed claim, multi-entry/link/traversal archive, or signature over
 bytes other than `executableDigest`.
+
+It also rejects the proof-only receipt or its digest, a null formal acquisition
+field, an unapproved bootstrap, same-origin checksum bootstrap, an untrusted or
+backward clock, expired metadata, a frozen or rolled-back TUF role, a release
+tag/commit copied only from policy, or any mismatch among the observed release,
+retrieval receipt, certificate workflow SHA/ref, and policy.
 
 The proof-only receipt fixes the observed verification facts. Formal admission
 additionally requires `retrievalReceiptDigest` to bind authenticated acquisition
