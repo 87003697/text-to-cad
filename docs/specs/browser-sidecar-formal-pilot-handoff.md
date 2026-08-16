@@ -600,10 +600,32 @@ errors, and labeled container/network absence. Its local receipt is
 Both terminal operations record `retryAllowed:false`; this handle must not be
 reused.
 
-No Venus/provider/model request has been made and incremental paid cost remains
-zero. The canonical snapshot upload for group
-`20260816-094800-browser-sidecar-cup` was rejected before execution because the
-external-action gate requires a fresh payload-specific S3 authorization. No
-snapshot or paid job handle was created. No merge, Git push, tracker mutation,
-dependency installation, unrelated cleanup, or image deletion has been
+After a fresh payload-specific grant, the canonical snapshot for group
+`20260816-094800-browser-sidecar-cup` uploaded successfully and became visible
+through the Mac mount. Its `HEAD.sha` is
+`d6eb1d167d3f48ff1065df34d73413c05f7c6d91`; `dirty.diff` and `untracked.txt`
+are both empty. A second incremental `cvm-push` aligned the deployed source to
+that exact clean HEAD and passed remote runtime verification. Its receipt
+SHA-256 is
+`755f7f396047ef03ce6f6f5e3676827c87993facdea691a598d2b2551fa3ec40`.
+
+Exactly one new Cup pilot was submitted:
+`20260816-094800-browser-sidecar-cup/20260816-015329-cup_cup_033`.
+It reached terminal `failed` in the monitor with `process_exit_code:1`,
+`runner_final_status:1`, last checkpoint `pilot: initial commit`, and tap
+availability `pending`. The handle must not be resubmitted. Default safe
+`cvm-pull --exp` confirmed `final_status=1` and one retained
+`run/.codex-upper`; by contract it uploaded nothing and preserved the complete
+CVM postmortem. No canonical Workspace, CAD, Viewer/eight-view artifact, or
+rollout usage receipt is locally available, so no model invocation or exact
+incremental cost may be claimed from this evidence. The short pre-workload
+failure is consistent with, but does not by itself prove, the open integration
+risk that the paid runner still addresses the Mac-fixed image IDs while CVM
+provision retained different backend runtime IDs. Do not submit a successor
+until the retained postmortem can be reviewed without violating its retention
+boundary or a separately reviewed provisioning-receipt-to-runner binding closes
+that ambiguity.
+
+No merge, Git push, tracker mutation, dependency installation, unrelated
+cleanup, historical image deletion, or second paid submission has been
 performed through this checkpoint.
