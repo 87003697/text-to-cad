@@ -146,8 +146,10 @@ Parse request → Discover plan → Qualify terminal/postmortem
   `rclone lsf threed-code:arcwm-code-us-west-2/...` 排查
 - exit 5（verify fail：本地文件数 ≠ S3 文件数） → 汇报 exp 名 + 两侧计数，指示
   不清 CVM，让用户人工介入
-- exit 6（S3 已验证且 CVM 已清，但 mount 尚不可见）→ 明确数据已安全上传，
-  刷新 `ericzyma/text-to-cad/outputs` 后重查；不得重跑上传或声称数据丢失
+- exit 6（S3 已验证但 mount 尚不可见）→ 明确数据已安全上传，并按 policy 如实
+  报告：普通 publish 为 `CVM source cleaned`，`--retain-cvm-source` 为
+  `CVM source retained`；刷新 `ericzyma/text-to-cad/outputs` 后重查，不得重跑上传或
+  声称数据丢失
 - exit 7（unsafe exp path）→ 不上传、不清理，检查 CVM 目录命名
 - exit 9（missing/invalid terminal manifest）→ 不上传、不清理；使用同一 handle
   回到 `$cvm-monitor`，不得自动 resubmit
