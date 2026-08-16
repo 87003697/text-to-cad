@@ -184,12 +184,14 @@ platform object. Each child field that names a root identity must equal the
 root value; each dependent field must equal the corresponding dependency's
 subject value.
 
-`resourceDisposition` has exactly `agentContainer`, `ownerLabels`,
-`brokerVolume`, `jobPrivateTree`, and `workloadProcessGroup`; every value is
-`absent`, `retained`, or `unproved`. `cleanupDisposition` has exactly
-`agentContainer`, `brokerVolume`, and `jobPrivateTree`; every value is
-`succeeded`, `failed`, or `not-required`. These closed observations distinguish
-positive residue from failure to prove absence without exposing IDs or paths.
+For every `succeeded` or `failed` lifecycle child, `resourceDisposition` is a
+concrete object with exactly `agentContainer`, `ownerLabels`, `brokerVolume`,
+`jobPrivateTree`, and `workloadProcessGroup`; every value is `absent`,
+`retained`, or `unproved`. `cleanupDisposition` is a concrete object with
+exactly `agentContainer`, `brokerVolume`, and `jobPrivateTree`; every value is
+`succeeded`, `failed`, or `not-required`. A `not-run` lifecycle child has both
+fields set to `null`. These closed observations distinguish positive residue
+from failure to prove absence without exposing IDs or paths.
 
 ### Verification authority and cross-field equality
 
@@ -224,27 +226,33 @@ consumer enforces every equality in this matrix:
 `verificationSourceSnapshotDigest` is request-bound identity. Every Source
 Snapshot, lifecycle, and conformance child repeats it as the non-null
 `executionSourceSnapshotDigest` in every status, including `failed` and
-`not-run`, and it always equals the plan value. The Source Snapshot
-`sourceManifestDigest` is instead an observation established by
-`treeDigestMatchesObservation`:
+`not-run`, and it always equals the plan value. The three Source Snapshot
+observations have this closed establishing-predicate map:
 
-- A `succeeded` Source Snapshot has a concrete `sourceManifestDigest` equal to
-  `verificationSourceManifestDigest`.
-- A `failed` Source Snapshot follows the predicate observation grammar. If
-  `treeDigestMatchesObservation` is `true`, the concrete observed manifest
-  digest equals the plan value; if it is `false`, the concrete observed digest
-  remains in the subject and differs from the plan value; if it is `null`,
-  `sourceManifestDigest` is `null`.
+| Observation | Establishing predicate | Exact concrete value rule |
+| --- | --- | --- |
+| `sourceManifestDigest` | `treeDigestMatchesObservation` | Equal to `verificationSourceManifestDigest` when `true`; a concrete full digest different from the plan value when `false` |
+| `pathCount` | `pathSetClosed` | Any permitted nonnegative integer when `true` or `false` |
+| `totalBytes` | `fileSizesBound` | Any permitted nonnegative integer when `true` or `false` |
+
+- A `succeeded` Source Snapshot has all three observations concrete and its
+  `sourceManifestDigest` equals `verificationSourceManifestDigest`.
+- A `failed` Source Snapshot applies each row independently. An observation is
+  `null` if and only if its establishing predicate is `null`; a `true` or
+  `false` predicate retains the concrete observed value required by the row.
+  This makes observations after an earlier first failure deterministically
+  `null` without erasing observations already made.
 - A `not-run` Source Snapshot has `sourceManifestDigest`, `pathCount`, and
   `totalBytes` set to `null`.
 
-A strict consumer rejects a succeeded manifest mismatch, a null succeeded
-manifest, a non-null not-run observation, or a failed observation whose
-null/concrete state disagrees with `treeDigestMatchesObservation`. It must not
-reject a failed Source Snapshot merely because its concrete observed manifest
-differs from the plan. The two Source Snapshot node subjects are required to be
-byte-for-byte equal, including counts after environment is excluded, only when
-both nodes succeeded; their request-bound fields remain equal in every status.
+A strict consumer rejects a succeeded manifest mismatch, any null succeeded
+observation, any non-null not-run observation, a failed observation whose
+null/concrete state disagrees with its establishing predicate, or a concrete
+value that violates its row. It must not reject a failed Source Snapshot merely
+because its concrete observed manifest differs from the plan. The two Source
+Snapshot node subjects are required to be byte-for-byte equal, including counts
+after environment is excluded, only when both nodes succeeded; their
+request-bound fields remain equal in every status.
 
 In addition, root image/runtime/Cup identities equal every same-named child
 field, and `cup-golden.observedOutputDigest` plus each conformance
@@ -345,12 +353,25 @@ mandatory suffix. It appends each fact it actually establishes and never
 changes an earlier `false` to `null` or `true`. A terminal/workload predicate is
 `null` only when the corresponding fact genuinely cannot exist or be observed;
 for example, `workloadTerminalZero` is null if no workload was released.
-Cleanup and resource-absence predicates are never null after any lifecycle
-resource mutation: a cleanup action is succeeded/failed, and absence is
-absent/retained/unproved. When no matching resource was ever allocated,
-cleanup is `not-required`/true and absence is `absent`/true. An unexpected
-adapter exception sets `adapterOperationsClosed:false` but still enters every
-safe mandatory suffix.
+After a lifecycle node starts, its cleanup and resource-absence predicates are
+never null and both disposition objects are always concrete. For each cleanup
+pair, `containerCleanupSucceeded`, `brokerVolumeCleanupSucceeded`, or
+`jobPrivateTreeCleanupSucceeded` is `true` exactly when its matching
+`cleanupDisposition` value is `succeeded` or `not-required`, and is `false`
+exactly when that value is `failed`. For each absence pair,
+`workloadProcessGroupAbsent`, `agentContainerAbsent`, `ownerLabelsAbsent`,
+`brokerVolumeAbsent`, or `jobPrivateTreeAbsent` is `true` exactly when its
+matching `resourceDisposition` value is `absent`, and is `false` exactly when
+that value is `retained` or `unproved`.
+
+When no matching resource was ever allocated, cleanup is
+`not-required`/true and absence is `absent`/true. An unexpected early adapter
+exception sets `adapterOperationsClosed:false` but still enters every safe
+mandatory suffix and records each cleanup as `succeeded`, `failed`, or
+`not-required` and each absence as `absent`, `retained`, or `unproved`, as
+applicable. A strict consumer rejects either disposition object as null in a
+`succeeded` or `failed` lifecycle child, either object as concrete in a
+`not-run` lifecycle child, or any predicate/disposition mismatch above.
 
 After all phases, the lifecycle child selects one of its observed false
 predicates without deleting any others:
@@ -433,8 +454,9 @@ therefore requires a concrete observation, and a concrete false observation is
 retained rather than erased. A succeeded node forbids null observations; a
 not-run node has every observation field `null`. The Source Snapshot manifest
 and count rules remain exactly as specified under verification authority and
-cross-field equality above. A failed lifecycle node uses its closed disposition
-objects after any resource mutation and otherwise uses `null`.
+cross-field equality above. A succeeded or failed lifecycle node has both
+closed disposition objects concrete; a not-run lifecycle node has both `null`,
+exactly as specified in the lifecycle phase rules above.
 
 The remaining observation map is closed:
 
