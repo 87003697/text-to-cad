@@ -113,7 +113,9 @@ Docker build:
    state or online trust lookup is authority.
 6. Verify the bundle over the extracted executable with the exact SAN, OIDC
    issuer, repository, workflow, tag ref, workflow commit, and trigger below;
-   require `Verified OK` and the fixed Rekor inclusion. As a mandatory negative
+   require `Verified OK`, the fixed Rekor Signed Entry Timestamp/body binding,
+   and the embedded SCT. The legacy bundle proves an inclusion promise, not a
+   Merkle inclusion proof. As a mandatory negative
    control, verify that presenting the archive as payload is rejected because
    its digest differs from the bundle payload digest.
 7. On `linux/amd64` Noble, require direct native execution to report exactly
@@ -144,13 +146,13 @@ also binds repository `openai/codex`, workflow `rust-release`, ref
 contains index `2363083279` for that payload.
 
 The version-specific canonical policy digest is
-`sha256:92e0fa99ae181916f2570bbf17ed8d8ae2ea016fdd87309e0f1db84cf60d3f76`.
+`sha256:8bfd47abc5c13845f82a218fe79ac2378adb29c4cb302a8b9a41eb631f3451d2`.
 It binds the exact workflow/action, certificate identity, bundle, Cosign
 verifier, and trusted-root closure recorded in the proof candidate. The
 version-2 normative approval digest is
-`sha256:caad11a590c6f7f2e1c892fe5001e0a171155e3bd07cceb1de573ebd8ad50ca9`.
+`sha256:85bf8165e3ded898ec4892c8ae3ab48172566d871c79add02c96f389f663d5c4`.
 The corrected proof-only signature-verification receipt digest is
-`sha256:5a44a295d99cb15842b90fa8da1d6206922876bd748815782d66ae357ad0c994`.
+`sha256:ee8632e8d7e9610014e0d59e0b074414540e6e6b5e8feca04d2ef519db488e84`.
 These digests identify canonical documents defined by the receipt contract;
 they do not by themselves complete SAI-004 admission.
 
@@ -196,12 +198,16 @@ The Codex section of the future runtime lock must contain at least:
   "signature_bundle_asset_id": 504450400,
   "signature_bundle_sha256": "8ea31ab792fe0cfc7ba55c9dfc1836edf166dabf2d564ed7391eed6c7d422b3d",
   "signature_bundle_bytes": 8585,
-  "trust_anchor_approval_digest": "sha256:caad11a590c6f7f2e1c892fe5001e0a171155e3bd07cceb1de573ebd8ad50ca9",
-  "signature_policy_digest": "sha256:92e0fa99ae181916f2570bbf17ed8d8ae2ea016fdd87309e0f1db84cf60d3f76",
-  "proof_only_signature_verification_receipt_digest": "sha256:5a44a295d99cb15842b90fa8da1d6206922876bd748815782d66ae357ad0c994",
+  "trust_anchor_approval_digest": "sha256:85bf8165e3ded898ec4892c8ae3ab48172566d871c79add02c96f389f663d5c4",
+  "signature_policy_digest": "sha256:8bfd47abc5c13845f82a218fe79ac2378adb29c4cb302a8b9a41eb631f3451d2",
+  "proof_only_signature_verification_receipt_digest": "sha256:ee8632e8d7e9610014e0d59e0b074414540e6e6b5e8feca04d2ef519db488e84",
   "signature_verification_receipt_digest": "<filled by formal admission>",
   "verifier_binary_sha256": "13343856b69f70388c4fe0b986a31dde5958e444b41be22d785d3dc5e1a9cc62",
   "trusted_root_sha256": "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
+  "fulcio_root_sha256": "f989aa23def87c549404eadba767768d2a3c8d6d30a8b793f9f518a8eafd2cf5",
+  "fulcio_intermediate_sha256": "f8cbecf186db7714624a5f4e99da31a917cbef70a94dd6921f5c3ca969dfe30a",
+  "rekor_key_sha256": "dce5ef715502ec9f3cdfd11f8cc384b31a6141023d3e7595e9908a81cb6241bd",
+  "ctfe_key_sha256": "270488a309d22e804eeb245493e87c667658d749006b9fee9cc614572d4fbbdc",
   "version_output": "codex-cli 0.147.0",
   "node_required": false,
   "retrieval_receipt_digest": "<filled by formal admission>",
