@@ -55,17 +55,81 @@ _WRITABLE_TARGETS = (
     "/run/text-to-cad-agent/work",
     "/run/text-to-cad-agent/output",
 )
+_BROKER_HELPER_SOURCE = b'''#!/usr/bin/python3.12
+import hashlib
+import hmac
+import json
+import os
+import socket
+import sys
+
+def canonical(value):
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True).encode("ascii")
+
+config_line = sys.stdin.buffer.readline(65537)
+if not config_line.endswith(b"\\n") or len(config_line) > 65536:
+    raise SystemExit(125)
+config = json.loads(config_line)
+control = config["control"]
+secret = bytes.fromhex(config["secretHex"])
+path = "/run/meshshot-browser/browser.sock"
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(path)
+os.chmod(path, 0o777)
+server.listen(1)
+sys.stdout.buffer.write(b"READY\\n")
+sys.stdout.buffer.flush()
+connection, _ = server.accept()
+with connection:
+    line = connection.makefile("rb").readline(16385)
+    if not line.endswith(b"\\n") or len(line) > 16384:
+        raise SystemExit(125)
+    challenge = json.loads(line)
+    identity_keys = (
+        "agentImageManifestDigest", "runtimeManifestDigest",
+        "executionSourceSnapshotDigest", "inputSnapshotDigest",
+        "agentConfigDigest", "brokerAuthorityDigest", "workloadDigest",
+        "jobId", "ownerNonce",
+    )
+    expected = {
+        "schema": "text-to-cad.agent-broker-challenge/1",
+        "challenge": control["challenge"],
+        **{key: control[key] for key in identity_keys},
+    }
+    if challenge != expected or canonical(challenge) != line[:-1]:
+        raise SystemExit(125)
+    proof = {
+        "schema": "text-to-cad.agent-broker-proof/1",
+        "challenge": challenge["challenge"],
+        "brokerMac": hmac.new(secret, canonical(challenge), hashlib.sha256).hexdigest(),
+        **{key: challenge[key] for key in identity_keys},
+    }
+    connection.sendall(canonical(proof) + b"\\n")
+server.close()
+'''
 
 
 class SupervisorError(RuntimeError):
     """The Development execution failed closed."""
 
 
+class AttachError(SupervisorError):
+    """A safe attach-stage failure with retained process output."""
+
+    def __init__(self, stage: str, cause: str, status: int, stdout: bytes, stderr: bytes) -> None:
+        super().__init__(f"{stage}:{cause}")
+        self.stage = stage
+        self.status = status
+        self.stdout = stdout
+        self.stderr = stderr
+
+
 @dataclass(frozen=True)
 class Mount:
-    source: Path
+    source: Path | str
     target: str
     read_only: bool
+    kind: str = "bind"
 
 
 @dataclass(frozen=True)
@@ -344,6 +408,184 @@ class _BrokerMock:
             self._ready.set()
 
 
+def _readline_with_timeout(stream: object, timeout: float) -> bytes:
+    holder: dict[str, object] = {}
+
+    def reader() -> None:
+        try:
+            holder["line"] = stream.readline(16385)
+        except BaseException as error:
+            holder["error"] = error
+
+    thread = threading.Thread(target=reader, name="development-broker-ready", daemon=True)
+    thread.start()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise TimeoutError("Broker helper readiness timed out")
+    if "error" in holder:
+        raise SupervisorError("Broker helper readiness read failed") from holder["error"]  # type: ignore[misc]
+    return holder.get("line", b"")  # type: ignore[return-value]
+
+
+class _DockerBrokerMock:
+    """Colima-local provider-free Broker sharing one job-private volume."""
+
+    def __init__(
+        self,
+        engine: "DockerEngine",
+        image_id: str,
+        helper_path: Path,
+        job_id: str,
+        owner_nonce: str,
+        control: Mapping[str, object],
+        secret: bytes,
+    ) -> None:
+        suffix = job_id.removeprefix("development-")
+        self.engine = engine
+        self.image_id = image_id
+        self.helper_path = helper_path
+        self.control = control
+        self.secret = secret
+        self.volume_name = f"t2c-broker-{suffix}"
+        self.container_name = f"t2c-broker-helper-{suffix}"
+        self.owner_nonce = owner_nonce
+        self.process: subprocess.Popen[bytes] | None = None
+        self.error: BaseException | None = None
+        self.absent = False
+
+    @property
+    def mount(self) -> Mount:
+        return Mount(self.volume_name, "/run/meshshot-browser", False, "volume")
+
+    def __enter__(self) -> "_DockerBrokerMock":
+        created = self.engine._run(
+            "volume", "create",
+            "--label", f"org.text-to-cad.owner-nonce={self.owner_nonce}",
+            self.volume_name,
+        )
+        if created.stdout.decode("ascii").strip() != self.volume_name:
+            raise SupervisorError("Broker volume creation identity is wrong")
+        try:
+            return self._start()
+        except BaseException:
+            self._cleanup()
+            raise
+
+    def _start(self) -> "_DockerBrokerMock":
+        self.process = subprocess.Popen(
+            [
+                self.engine.executable,
+                "run", "--interactive", "--name", self.container_name,
+                "--pull", "never", "--read-only", "--user", "0:0",
+                "--network", "none", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges",
+                "--label", f"org.text-to-cad.owner-nonce={self.owner_nonce}",
+                "--mount", f"type=volume,src={self.volume_name},dst=/run/meshshot-browser",
+                "--mount", f"type=bind,src={self.helper_path},dst=/broker.py,readonly",
+                "--entrypoint", "/usr/bin/python3.12", self.image_id, "/broker.py",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        if self.process.stdin is None or self.process.stdout is None:
+            raise SupervisorError("Broker helper pipes are unavailable")
+        config = {"control": dict(self.control), "secretHex": self.secret.hex()}
+        self.process.stdin.write(canonical_json_bytes(config) + b"\n")
+        self.process.stdin.close()
+        if _readline_with_timeout(self.process.stdout, 10.0) != b"READY\n":
+            raise SupervisorError("Broker helper did not become ready")
+        return self
+
+    def __exit__(self, _kind, _value, _traceback) -> None:
+        if self.process is not None:
+            try:
+                self.process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                self.engine._run("kill", "--signal", "TERM", self.container_name, check=False)
+                try:
+                    self.process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    self.engine._run("kill", "--signal", "KILL", self.container_name, check=False)
+                    self.process.wait()
+            if self.process.returncode not in (0, None) and _kind is None:
+                self.error = SupervisorError("Broker helper exited nonzero")
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        self.engine._run("rm", "--force", self.container_name, check=False)
+        self.engine._run("volume", "rm", "--force", self.volume_name, check=False)
+        container_absent = self.engine._run("inspect", self.container_name, check=False).returncode != 0
+        volume_absent = self.engine._run("volume", "inspect", self.volume_name, check=False).returncode != 0
+        self.absent = container_absent and volume_absent
+
+
+class _DockerWritableVolumes:
+    """Colima-local writable roots that preserve Agent uid ownership."""
+
+    def __init__(self, engine: "DockerEngine", image_id: str, job_id: str, owner_nonce: str) -> None:
+        suffix = job_id.removeprefix("development-")
+        self.engine = engine
+        self.image_id = image_id
+        self.owner_nonce = owner_nonce
+        self.names = {
+            target: f"t2c-job-{suffix}-{target.rsplit('/', 1)[-1]}"
+            for target in _WRITABLE_TARGETS
+        }
+        self.absent = False
+
+    @property
+    def mounts(self) -> tuple[Mount, ...]:
+        return tuple(
+            Mount(self.names[target], target, False, "volume")
+            for target in _WRITABLE_TARGETS
+        )
+
+    def prepare(self) -> None:
+        created: list[str] = []
+        try:
+            for name in self.names.values():
+                result = self.engine._run(
+                    "volume", "create",
+                    "--label", f"org.text-to-cad.owner-nonce={self.owner_nonce}",
+                    name,
+                )
+                if result.stdout.decode("ascii").strip() != name:
+                    raise SupervisorError("job-private volume creation identity is wrong")
+                created.append(name)
+            args = [
+                "run", "--rm", "--pull", "never", "--read-only",
+                "--user", "0:0", "--network", "none", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges",
+                "--label", f"org.text-to-cad.owner-nonce={self.owner_nonce}",
+            ]
+            roots: list[str] = []
+            for index, name in enumerate(self.names.values()):
+                target = f"/job-root/{index}"
+                args += ["--mount", f"type=volume,src={name},dst={target}"]
+                roots.append(target)
+            args += ["--entrypoint", "/usr/bin/chmod", self.image_id, "0777", *roots]
+            self.engine._run(*args)
+        except BaseException:
+            for name in created:
+                self.engine._run("volume", "rm", "--force", name, check=False)
+            raise
+
+    def copy_output(self, container_id: str, destination: Path) -> None:
+        self.engine._run(
+            "cp", f"{container_id}:/run/text-to-cad-agent/output/.", str(destination)
+        )
+
+    def cleanup(self) -> None:
+        for name in self.names.values():
+            self.engine._run("volume", "rm", "--force", name, check=False)
+        self.absent = all(
+            self.engine._run("volume", "inspect", name, check=False).returncode != 0
+            for name in self.names.values()
+        )
+
+
 def _validate_request(request: DevelopmentRequest) -> None:
     for value in (
         request.image_id,
@@ -450,26 +692,48 @@ def execute(
     control_root = private_root / "control"
     control_root.mkdir(mode=0o700, parents=True)
     _publish_exclusive(control_root / "manifest.json", control, mode=0o444)
+    helper_path = control_root / "broker-helper.py"
+    _publish_exclusive(helper_path, _BROKER_HELPER_SOURCE, mode=0o444)
     control_root.chmod(0o555)
     writable_sources: dict[str, Path] = {}
-    for target in _WRITABLE_TARGETS[:-1]:
-        source = private_root / target.rsplit("/", 1)[-1]
-        source.mkdir(mode=0o700)
-        source.chmod(0o777)
-        writable_sources[target] = source
     artifact_root = request.output_dir / "artifacts"
     artifact_root.mkdir(mode=0o700)
-    artifact_root.chmod(0o777)
-    writable_sources[_WRITABLE_TARGETS[-1]] = artifact_root
+    docker_writable: _DockerWritableVolumes | None = None
+    if isinstance(engine, DockerEngine):
+        docker_writable = _DockerWritableVolumes(
+            engine, request.image_id, job_id, owner_nonce
+        )
+        writable_mounts = docker_writable.mounts
+    else:
+        for target in _WRITABLE_TARGETS[:-1]:
+            source = private_root / target.rsplit("/", 1)[-1]
+            source.mkdir(mode=0o700)
+            source.chmod(0o777)
+            writable_sources[target] = source
+        artifact_root.chmod(0o777)
+        writable_sources[_WRITABLE_TARGETS[-1]] = artifact_root
+        writable_mounts = tuple(
+            Mount(writable_sources[target], target, False)
+            for target in _WRITABLE_TARGETS
+        )
     # Darwin's AF_UNIX path ceiling is short.  Colima callers must select a
     # short /Users parent shared with its VM; unit callers may use /tmp.
     broker_root = request.broker_parent.resolve() / f"t2c-{job_id.removeprefix('development-')}"
+    if broker_factory is _BrokerMock and isinstance(engine, DockerEngine):
+        broker_context: object = _DockerBrokerMock(
+            engine, request.image_id, helper_path, job_id, owner_nonce,
+            control, broker_secret,
+        )
+        broker_mount = broker_context.mount  # type: ignore[attr-defined]
+    else:
+        broker_context = broker_factory(broker_root, control, broker_secret)
+        broker_mount = Mount(broker_root, "/run/meshshot-browser", False)
     mounts = (
         Mount(control_root, "/run/text-to-cad-agent/control", True),
         Mount(request.source_dir.resolve(), "/run/text-to-cad-agent/source", True),
         Mount(request.input_dir.resolve(), "/run/text-to-cad-agent/input", True),
-        *(Mount(writable_sources[target], target, False) for target in _WRITABLE_TARGETS),
-        Mount(broker_root, "/run/meshshot-browser", False),
+        *writable_mounts,
+        broker_mount,
     )
     labels = {
         "org.text-to-cad.development": "true",
@@ -497,9 +761,17 @@ def execute(
     owner_absent = True
     private_tree_absent = False
     broker_tree_absent = False
+    writable_volumes_absent = docker_writable is None
+    adapter_stage = "broker-start"
     try:
-        with broker_factory(broker_root, control, broker_secret) as broker:
+        if docker_writable is not None:
+            adapter_stage = "job-volume-prepare"
+            docker_writable.prepare()
+        adapter_stage = "broker-start"
+        with broker_context as broker:
+            adapter_stage = "container-create"
             container_id = engine.create(spec)
+            adapter_stage = "container-inspect"
             if not container_id or not _same_observation(engine.inspect(container_id), spec, container_id):
                 failure_check = "inert-container"
                 raise SupervisorError("inert container observation is not exact")
@@ -535,9 +807,13 @@ def execute(
                     "release": True,
                 }) + b"\n"
 
+            adapter_stage = "container-exchange"
             result = engine.exchange(container_id, release_for_preflight, request.timeout_seconds)
+            adapter_stage = "broker-terminal"
             if broker.error is not None:
                 raise SupervisorError("Broker mock failed") from broker.error
+        if broker_context.error is not None:  # type: ignore[attr-defined]
+            raise SupervisorError("Broker mock failed") from broker_context.error  # type: ignore[attr-defined]
     except TimeoutError as error:
         failure_check = "timeout"
         failure_message = str(error)
@@ -550,6 +826,8 @@ def execute(
     except SupervisorError as error:
         failure_check = failure_check or "execution"
         failure_message = str(error)
+        if isinstance(error, AttachError):
+            result = AttachedResult(error.status, error.stdout, error.stderr)
         if container_id is not None:
             try:
                 engine.terminate(container_id)
@@ -558,7 +836,7 @@ def execute(
                 failure_message = "container termination did not complete"
     except (OSError, subprocess.SubprocessError, ValueError) as error:
         failure_check = "execution-adapter"
-        failure_message = type(error).__name__
+        failure_message = f"{adapter_stage}:{type(error).__name__}"
         if container_id is not None:
             try:
                 engine.terminate(container_id)
@@ -567,6 +845,12 @@ def execute(
                 failure_message = "container termination did not complete"
     finally:
         if container_id is not None:
+            if docker_writable is not None:
+                try:
+                    docker_writable.copy_output(container_id, artifact_root)
+                except (OSError, subprocess.SubprocessError, SupervisorError, ValueError):
+                    failure_check = failure_check or "output-copy"
+                    failure_message = failure_message or "job output copy did not complete"
             try:
                 engine.remove(container_id)
                 container_absent = engine.container_absent(container_id)
@@ -574,6 +858,11 @@ def execute(
             except (OSError, subprocess.SubprocessError, SupervisorError, ValueError):
                 container_absent = False
                 owner_absent = False
+        if isinstance(broker_context, _DockerBrokerMock) and not broker_context.absent:
+            broker_context._cleanup()
+        if docker_writable is not None:
+            docker_writable.cleanup()
+            writable_volumes_absent = docker_writable.absent
         try:
             control_root.chmod(0o700)
         except FileNotFoundError:
@@ -585,13 +874,16 @@ def execute(
         except OSError:
             pass
         private_tree_absent = not private_root.exists()
-        try:
-            shutil.rmtree(broker_root)
-        except FileNotFoundError:
-            pass
-        except OSError:
-            pass
-        broker_tree_absent = not broker_root.exists()
+        if isinstance(broker_context, _DockerBrokerMock):
+            broker_tree_absent = broker_context.absent
+        else:
+            try:
+                shutil.rmtree(broker_root)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                pass
+            broker_tree_absent = not broker_root.exists()
 
     _publish_exclusive(
         supervisor_root / "entrypoint.stdout.jsonl",
@@ -632,6 +924,9 @@ def execute(
     if not private_tree_absent or not broker_tree_absent:
         failure_check = "cleanup-absence"
         failure_message = "job-private tree or Broker socket tree absence is not proven"
+    if not writable_volumes_absent:
+        failure_check = "cleanup-absence"
+        failure_message = "job-private writable volume absence is not proven"
 
     receipt: dict[str, object] = {
         "schema": "text-to-cad.agent-runtime-development-supervisor-terminal/1",
@@ -646,6 +941,8 @@ def execute(
         "ownerLabelsAbsent": owner_absent,
         "jobPrivateTreeAbsent": private_tree_absent,
         "brokerSocketTreeAbsent": broker_tree_absent,
+        "brokerVolumeAbsent": broker_tree_absent,
+        "writableVolumesAbsent": writable_volumes_absent,
         "brokerProofDigest": broker_proof_digest,
         "imageId": request.image_id,
         "imageConfigDigest": request.image_config_digest,
@@ -680,7 +977,7 @@ class DockerEngine:
         for key, value in sorted(spec.labels.items()):
             args += ["--label", f"{key}={value}"]
         for mount in spec.mounts:
-            value = f"type=bind,src={mount.source},dst={mount.target}"
+            value = f"type={mount.kind},src={mount.source},dst={mount.target}"
             if mount.read_only:
                 value += ",readonly"
             args += ["--mount", value]
@@ -691,7 +988,15 @@ class DockerEngine:
     def inspect(self, container_id: str) -> ContainerObservation:
         completed = self._run("inspect", container_id)
         value = json.loads(completed.stdout)[0]
-        mounts = tuple(Mount(Path(item["Source"]), item["Destination"], not item["RW"]) for item in value["Mounts"])
+        mounts = tuple(
+            Mount(
+                item["Name"] if item["Type"] == "volume" else Path(item["Source"]),
+                item["Destination"],
+                not item["RW"],
+                item["Type"],
+            )
+            for item in value["Mounts"]
+        )
         return ContainerObservation(
             container_id=value["Id"], image_id=value["Image"],
             entrypoint=value["Config"]["Entrypoint"][0],
@@ -710,6 +1015,8 @@ class DockerEngine:
         try:
             stdout, stderr = _interactive_exchange(process, release_for_preflight, timeout_seconds)
         except BaseException:
+            if process.poll() is not None:
+                raise
             try:
                 os.killpg(process.pid, 15)
                 process.wait(timeout=2)
@@ -755,20 +1062,46 @@ def _interactive_exchange(process, release_for_preflight, timeout_seconds: int) 
     holder: dict[str, object] = {}
 
     def worker() -> None:
+        stage = "attach-read-preflight"
+        first = b""
         try:
             first = process.stdout.readline(16385)
             if not first.endswith(b"\n"):
-                raise SupervisorError("entrypoint preflight line is unavailable")
+                process.wait()
+                holder["stdout"] = first + process.stdout.read()
+                holder["stderr"] = process.stderr.read()
+                holder["error"] = AttachError(
+                    stage,
+                    "preflight-unavailable",
+                    process.returncode if isinstance(process.returncode, int) else 125,
+                    holder["stdout"],  # type: ignore[arg-type]
+                    holder["stderr"],  # type: ignore[arg-type]
+                )
+                return
+            stage = "attach-validate-preflight"
             release = release_for_preflight(first[:-1])
+            stage = "attach-write-release"
             process.stdin.write(release)
             process.stdin.flush()
             process.stdin.close()
+            stage = "attach-read-terminal"
             tail = process.stdout.read()
             holder["stdout"] = first + tail
+            stage = "attach-read-stderr"
             holder["stderr"] = process.stderr.read()
+            stage = "attach-wait"
             process.wait()
         except BaseException as error:
-            holder["error"] = error
+            if isinstance(error, AttachError):
+                holder["error"] = error
+            else:
+                holder["error"] = AttachError(
+                    stage,
+                    type(error).__name__,
+                    process.returncode if isinstance(process.returncode, int) else 125,
+                    holder.get("stdout", first),  # type: ignore[arg-type]
+                    holder.get("stderr", b""),  # type: ignore[arg-type]
+                )
 
     thread = threading.Thread(target=worker, name="development-docker-attach", daemon=True)
     thread.start()

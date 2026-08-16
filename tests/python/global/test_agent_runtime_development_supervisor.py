@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import io
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -129,7 +130,10 @@ class DevelopmentSupervisorTests(unittest.TestCase):
             user="65532:65532",
             read_only_root=True,
             network_mode="job-internal",
-            mounts=(supervisor.Mount(Path("/host/input"), "/guest/input", True),),
+            mounts=(
+                supervisor.Mount(Path("/host/input"), "/guest/input", True),
+                supervisor.Mount("job-volume", "/guest/output", False, "volume"),
+            ),
             labels={"owner": "nonce"},
         )
         engine = supervisor.DockerEngine("docker-test")
@@ -142,7 +146,44 @@ class DevelopmentSupervisorTests(unittest.TestCase):
         self.assertIn("job-internal", args)
         self.assertIn("no-new-privileges", args)
         self.assertIn("type=bind,src=/host/input,dst=/guest/input,readonly", args)
+        self.assertIn("type=volume,src=job-volume,dst=/guest/output", args)
         self.assertNotIn("network create", " ".join(args))
+
+    def test_attach_failure_does_not_signal_an_already_exited_process_group(self) -> None:
+        process = mock.Mock()
+        process.poll.return_value = 125
+        process.returncode = 125
+        engine = supervisor.DockerEngine("docker-test")
+        with (
+            mock.patch.object(supervisor.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                supervisor, "_interactive_exchange",
+                side_effect=supervisor.SupervisorError("preflight unavailable"),
+            ),
+            mock.patch.object(
+                supervisor.os, "killpg",
+                side_effect=AssertionError("must not signal exited attach process"),
+            ),
+        ):
+            with self.assertRaisesRegex(supervisor.SupervisorError, "preflight unavailable"):
+                engine.exchange("container", lambda _line: b"", 60)
+
+    def test_missing_preflight_preserves_attach_stderr_and_safe_stage(self) -> None:
+        class Process:
+            stdin = io.BytesIO()
+            stdout = io.BytesIO(b"")
+            stderr = io.BytesIO(b"agent-entrypoint: denied\n")
+            returncode = None
+
+            def wait(self):
+                self.returncode = 125
+                return 125
+
+        with self.assertRaises(supervisor.AttachError) as raised:
+            supervisor._interactive_exchange(Process(), lambda _line: b"", 1)
+        self.assertEqual(raised.exception.stage, "attach-read-preflight")
+        self.assertEqual(raised.exception.status, 125)
+        self.assertEqual(raised.exception.stderr, b"agent-entrypoint: denied\n")
 
     def test_fixed_candidate_request_rejects_mutable_or_noncanonical_workload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -277,6 +318,25 @@ class DevelopmentSupervisorTests(unittest.TestCase):
             self.assertEqual(failure["failureCheck"], "timeout")
             self.assertEqual(failure["attemptCount"], 1)
             self.assertEqual(failure["providerDispatchCount"], 0)
+
+    def test_adapter_failure_records_safe_stage_without_exception_text(self) -> None:
+        class PermissionEngine(FakeEngine):
+            def exchange(self, *_args):
+                raise PermissionError("/sensitive/host/path")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            engine = PermissionEngine()
+            with self.assertRaisesRegex(supervisor.SupervisorError, "container-exchange"):
+                supervisor.execute(
+                    self._request(root), engine=engine,
+                    broker_factory=lambda path, control, secret: FakeBroker(engine, path, control, secret),
+                )
+            terminal = json.loads((root / "output/supervisor/terminal.json").read_bytes())
+            self.assertEqual(
+                terminal["failureReason"], "container-exchange:PermissionError"
+            )
+            self.assertNotIn("sensitive", json.dumps(terminal))
 
     def test_precreated_internal_network_is_consumed_but_not_created(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
