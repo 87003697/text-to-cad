@@ -350,6 +350,34 @@ class BrowserSurfaceTests(unittest.TestCase):
                 ],
             )
 
+    def test_cross_root_alias_chain_may_enter_declared_empty_mount(self) -> None:
+        """Alternatives-style chains stop safely inside one verified empty root."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            usr = root / "usr"
+            etc = root / "etc"
+            masked = usr / "local"
+            binary = usr / "bin"
+            alternatives = etc / "alternatives"
+            masked.mkdir(parents=True)
+            binary.mkdir(parents=True)
+            alternatives.mkdir(parents=True)
+            (binary / "sudo").symlink_to(masked / "sa/tjj/bin/sudo")
+            (alternatives / "sudo").symlink_to(binary / "sudo")
+
+            self.assertEqual(
+                browser_surface.discover_browser_roots(
+                    [
+                        (usr, Path("/sandbox/usr"), True),
+                        (etc, Path("/sandbox/etc"), True),
+                    ],
+                    permitted_symlink_roots=[usr, etc],
+                    masked_source_roots=[masked],
+                ),
+                [],
+            )
+
     def test_dangling_aliases_always_close(self) -> None:
         """Sealed and mounted surfaces both reject every dangling alias."""
 

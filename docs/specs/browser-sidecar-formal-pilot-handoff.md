@@ -49,6 +49,9 @@ the session JSONL. The dirty `develop` root was not used or modified.
   descendants of a scan root as its masked roots, preserving the host walker's
   link closure after those directories are intentionally emptied. A root-level
   empty `tmpfs` remains an ordinary empty scan root rather than masking itself.
+  Cross-root alias resolution carries the same verified mask set and stops only
+  when a resolved component enters one of those roots; missing targets anywhere
+  else remain dangling-link failures.
   Exact duplicates are stable, and a shortest covering directory `tmpfs` mask
   removes every descendant mask. The outer bwrap builder and nested gate reject
   any non-antichain manifest, so parent-empty and child-exists predicates cannot
@@ -180,7 +183,7 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Broker OCI revision:
   `091b9d3b95f2b7797c1cac9414f05439923a439c`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:fb672c0a6f1759a0858df84124252d9710a90e14167f2fcc3106678366dd8002`
+  `sha256:85795dbdcc37cda8a2c2ff7793703e7fd63ab495e9b42f3d5c7a1cdfb2f703c1`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with

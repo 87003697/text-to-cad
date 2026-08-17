@@ -56,6 +56,10 @@ class _DanglingSurfaceLink(BrowserSurfaceError):
     """One enumerated immutable link has no current target."""
 
 
+class _MaskedSurfaceLink(BrowserSurfaceError):
+    """One immutable cross-root link enters an already verified empty root."""
+
+
 class SurfaceFilesystem:
     """Public OS-boundary adapter for deterministic fail-closed inspection tests."""
 
@@ -338,6 +342,7 @@ def _resolve_declared_path(
     filesystem: SurfaceFilesystem,
     *,
     source_root: str,
+    masked_roots: frozenset[str] = frozenset(),
 ) -> tuple[str, bool]:
     """Resolve every link hop while remaining in the declared root closure."""
 
@@ -354,6 +359,13 @@ def _resolve_declared_path(
         ):
             raise BrowserSurfaceError(
                 "mounted browser surface external symlink escapes declared roots"
+            )
+        if any(
+            current == masked or _inside_root(masked, current)
+            for masked in masked_roots
+        ):
+            raise _MaskedSurfaceLink(
+                "mounted browser surface symlink enters empty root"
             )
         metadata = filesystem.lstat(current)
         if not stat.S_ISLNK(metadata.st_mode):
@@ -632,12 +644,15 @@ def _walk_mount(
                     permitted_symlink_roots,
                     filesystem,
                     source_root=source_text,
+                    masked_roots=masked_source_roots,
                 )
             else:
                 resolved_candidate = os.path.realpath(candidate, strict=True)
                 crossed_source_root = not _inside_root(
                     source_text, resolved_candidate
                 )
+        except _MaskedSurfaceLink:
+            continue
         except FileNotFoundError as exc:
             raise _DanglingSurfaceLink(
                 "mounted browser surface symlink is dangling"
