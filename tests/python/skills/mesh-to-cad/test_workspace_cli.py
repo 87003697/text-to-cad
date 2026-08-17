@@ -1176,7 +1176,12 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertIsNotNone(runner_spec.loader)
         runner = importlib.util.module_from_spec(runner_spec)
         runner_spec.loader.exec_module(runner)
-        self.workspace = self.root / "runner-driven-experiment"
+        runner_temporary = tempfile.TemporaryDirectory(
+            dir=REPO_ROOT / "outputs",
+            prefix="workspace-cli-runner-test-",
+        )
+        self.addCleanup(runner_temporary.cleanup)
+        self.workspace = Path(runner_temporary.name) / "runner-driven-experiment"
         workload = [
             sys.executable,
             str(Path(__file__).resolve()),
@@ -1202,7 +1207,7 @@ class WorkspaceCliTests(unittest.TestCase):
             terminate = send_signal
             kill = send_signal
 
-        def start_synthetic_tap(_tap_bin, exp_dir, _environ):
+        def start_synthetic_tap(_tap_bin, exp_dir, _environ, _retry_url):
             run_dir = exp_dir / "run"
             run_dir.mkdir(parents=True, exist_ok=True)
             (run_dir / ".claude-tap.log").write_text(
@@ -1226,7 +1231,75 @@ class WorkspaceCliTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
+        class SyntheticSidecar:
+            @classmethod
+            def create(cls, *args, **kwargs):
+                return cls(*args, **kwargs)
+
+            def __init__(self, _exp_dir, _sandbox_exp_dir, *, job_id, cancelled):
+                self.job_id = job_id
+                self.cancelled = cancelled
+                self.sandbox_authority_path = Path(
+                    "/run/meshshot-browser/authority.json"
+                )
+                self.capability_dir = Path("/run/meshshot-browser")
+
+            def start(self):
+                return None
+
+            def poll_failed(self):
+                return False
+
+            def record_nested_gate(self, proof):
+                self.test_case.assertEqual({"status": "synthetic-pass"}, proof)
+
+            def close(self, *, workload_status):
+                self.test_case.assertEqual(0, workload_status)
+                return {
+                    "schema": runner.RECEIPT_SCHEMA,
+                    "status": "succeeded",
+                    "imageId": runner.IMAGE_ID,
+                    "imageSourceRevision": runner.IMAGE_SOURCE_REVISION,
+                    "brokerImageId": runner.BROKER_IMAGE_ID,
+                    "brokerImageSourceRevision": runner.BROKER_IMAGE_SOURCE_REVISION,
+                    "brokerBaseImageId": runner.BROKER_BASE_IMAGE_ID,
+                    "programs": runner.PROGRAMS,
+                    "predicates": {
+                        name: True for name in runner.RECEIPT_PREDICATES
+                    },
+                    "counts": {
+                        "acceptedRequests": 2,
+                        "freshContexts": 3,
+                        "programCounts": {"residual": 1, "viewer": 1},
+                    },
+                    "failureCheck": None,
+                    "retryAllowed": False,
+                }
+
+        SyntheticSidecar.test_case = self
+
+        class SyntheticGateChannel:
+            def __init__(self, capability_dir):
+                self.test_case.assertEqual(
+                    Path("/run/meshshot-browser"),
+                    capability_dir,
+                )
+
+            def receive(self, _cancelled):
+                return {"status": "synthetic-pass"}
+
+            def release(self):
+                return None
+
+            def close(self):
+                return None
+
+        SyntheticGateChannel.test_case = self
+
         with (
+            mock.patch.object(runner, "prepare_nested_browser_gate"),
+            mock.patch.object(runner, "BrowserSidecarJob", SyntheticSidecar),
+            mock.patch.object(runner, "NestedGateChannel", SyntheticGateChannel),
             mock.patch.object(runner, "resolve_tap", return_value="synthetic-tap"),
             mock.patch.object(
                 runner,
@@ -1249,7 +1322,15 @@ class WorkspaceCliTests(unittest.TestCase):
                 side_effect=export_synthetic_trace,
             ),
         ):
-            runner_status = runner.run_pilot(self.workspace, [], workload, {})
+            runner_status = runner.run_pilot(
+                self.workspace,
+                [
+                    REPO_ROOT
+                    / "models/agent-runtime/cup_cup_033/input/cup_cup_033.ply"
+                ],
+                workload,
+                dict(os.environ),
+            )
         reviewed = subprocess.run(
             (
                 sys.executable,
