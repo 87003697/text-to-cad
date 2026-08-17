@@ -17,7 +17,7 @@ explicitly authorized.
 2. Submit the fixed task and preserve the returned handle:
 
    ```bash
-   scripts/pilot/cvm-agent.sh submit surface-adaptation
+   scripts/pilot/cvm-agent.sh submit broker-readiness
    ```
 
 3. Wait once; an interrupted monitor never authorizes resubmission:
@@ -39,9 +39,10 @@ digest-bound `/var/lib/text-to-cad-cvm-agent` source subset with
 `workspace-write`. Its root-private
 baseline and Venus audit are separate from the worker-owned tree. It cannot
 write the shared checkout or use the root-owned Docker socket. The fixed prompt
-forbids networked tool commands, Docker mutation, formal pilots, dependency
-installation, and nested model calls. The supervisor alone copies review
-artifacts into `outputs/`.
+targets the current two-image Broker readiness failure and forbids networked
+tool commands, Docker access, formal pilots, dependency installation, and
+nested model calls. The supervisor alone copies review artifacts into
+`outputs/`.
 
 One handle is one terminal attempt. Only one may be active, the authorization
 ledger permits at most ten handles, and each handle permits at most 48 Venus

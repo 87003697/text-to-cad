@@ -26,9 +26,9 @@ from scripts.pilot.venus_retry_proxy import RetryProxy
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STATE_ROOT = REPO_ROOT / ".cvm-agent-jobs"
 SCRATCH_ROOT = Path("/var/lib/text-to-cad-cvm-agent")
-PROMPT_PATH = REPO_ROOT / "scripts/pilot/cvm_agent_surface_prompt.md"
+PROMPT_PATH = REPO_ROOT / "scripts/pilot/cvm_agent_broker_prompt.md"
 MODEL = "gpt-5.6-sol"
-TASKS = frozenset({"surface-adaptation"})
+TASKS = frozenset({"broker-readiness"})
 HANDLE = re.compile(r"^cvma-[0-9a-f]{24}$")
 REVISION = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")

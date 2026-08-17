@@ -20,7 +20,7 @@ class CvmAgentTests(unittest.TestCase):
         self.state = self.root / "state"
         self.scratch = self.root / "scratch"
         self.scratch.mkdir()
-        self.prompt = self.repo / "scripts/pilot/cvm_agent_surface_prompt.md"
+        self.prompt = self.repo / "scripts/pilot/cvm_agent_broker_prompt.md"
         self.prompt.parent.mkdir(parents=True)
         self.prompt.write_text("fixed surface task\n", encoding="utf-8")
         (self.repo / "scripts/pilot/runner.py").write_text(
@@ -57,7 +57,7 @@ class CvmAgentTests(unittest.TestCase):
             cvm_agent._manifest_bytes(manifest)
         ).decode()
         return cvm_agent.submit(
-            "surface-adaptation",
+            "broker-readiness",
             "a" * 40,
             cvm_agent._sha256(Path(cvm_agent.__file__).resolve()),
             cvm_agent._sha256(self.prompt),
@@ -77,7 +77,7 @@ class CvmAgentTests(unittest.TestCase):
     def test_submit_failure_is_terminal_without_reusing_the_handle(self) -> None:
         manifest = cvm_agent._source_manifest()
         result = cvm_agent.submit(
-            "surface-adaptation",
+            "broker-readiness",
             "a" * 40,
             cvm_agent._sha256(Path(cvm_agent.__file__).resolve()),
             cvm_agent._sha256(self.prompt),
@@ -99,7 +99,7 @@ class CvmAgentTests(unittest.TestCase):
         manifest = cvm_agent._source_manifest()
         with self.assertRaisesRegex(cvm_agent.AgentError, "module digest mismatch"):
             cvm_agent.submit(
-                "surface-adaptation",
+                "broker-readiness",
                 "a" * 40,
                 "0" * 64,
                 cvm_agent._sha256(self.prompt),
