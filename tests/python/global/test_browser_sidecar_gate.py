@@ -181,6 +181,72 @@ class BrowserSidecarGateTests(unittest.TestCase):
         self.assertEqual(proof["status"], "failed:residual-render")
         self.assertNotIn("secret", json.dumps(proof, sort_keys=True))
 
+    def test_surface_failure_reports_only_a_fixed_scanner_reason(self) -> None:
+        """Scanner paths stay private while its fixed reason remains actionable."""
+
+        gate = load_gate()
+        surface = {
+            "schema": "meshshot.browser-sidecar.agent-browser-surface/1",
+            "scanRoots": ["/usr"],
+            "browserExclusions": [],
+        }
+        identity = {
+            "jobId": "formal-job-1",
+            "nonce": "a" * 32,
+            "artifactSha256": "b" * 64,
+            "surfaceManifest": surface,
+            "surfaceManifestSha256": "c" * 64,
+        }
+        rendered = SimpleNamespace(
+            png_bytes=b"png",
+            profile_sha256=gate.GATE["profileSha256"],
+            views=({"name": name} for name in gate.GATE["views"]),
+        )
+        viewer = {
+            "inspection": {
+                "before": "Display and projection: Solid, Orthographic",
+                "after": "Display and projection: Solid, Perspective",
+            },
+            "bodyMentionsFixture": True,
+            "bodyHasArtifactError": False,
+        }
+        with (
+            mock.patch.object(gate, "_authority", return_value={}),
+            mock.patch.object(gate, "render_residual_preview", return_value=rendered),
+            mock.patch.object(gate.Image, "open") as opened,
+            mock.patch.object(gate, "_viewer_request", return_value=viewer),
+            mock.patch.object(gate, "_exclusions_closed", return_value=True),
+            mock.patch.object(
+                gate,
+                "discover_browser_roots",
+                side_effect=gate.BrowserSurfaceRootError(
+                    "/private/secret/root",
+                    "mounted browser surface symlink is dangling",
+                ),
+            ),
+        ):
+            image = opened.return_value.__enter__.return_value
+            image.mode = "RGB"
+            image.size = (504, 1008)
+            with mock.patch.object(
+                gate.hashlib,
+                "sha256",
+                return_value=SimpleNamespace(
+                    hexdigest=lambda: gate.GATE["publicPngSha256"]
+                ),
+            ):
+                with self.assertRaises(gate.GateCheckError) as caught:
+                    gate.run_gate_checks(identity)
+
+        self.assertEqual(caught.exception.stage, "surface-symlink-dangling")
+        self.assertNotIn("private", str(caught.exception))
+        self.assertEqual(
+            gate.SURFACE_FAILURE_STAGES[
+                "mounted browser surface symlink is unresolved"
+            ],
+            "surface-symlink-unresolved",
+        )
+
     def test_gate_exec_surface_has_no_render_arguments_or_shell(self) -> None:
         source = GATE_PATH.read_text(encoding="utf-8")
         self.assertIn("os.execvpe(workload[0], workload", source)

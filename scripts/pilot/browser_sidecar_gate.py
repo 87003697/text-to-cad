@@ -24,6 +24,7 @@ try:
         CONFORMANCE_TOP_LEVEL_BROWSER_ROOTS,
     )
     from scripts.pilot.browser_surface import (
+        BrowserSurfaceRootError,
         canonicalize_browser_masks,
         discover_browser_roots,
     )
@@ -36,6 +37,7 @@ except ModuleNotFoundError:
         CONFORMANCE_TOP_LEVEL_BROWSER_ROOTS,
     )
     from browser_surface import (  # type: ignore[no-redef]
+        BrowserSurfaceRootError,
         canonicalize_browser_masks,
         discover_browser_roots,
     )
@@ -56,6 +58,21 @@ GATE_ARTIFACT_PATH = Path(GATE["artifactPath"])
 MAX_PROOF_BYTES = GATE["maxProofBytes"]
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
+SURFACE_FAILURE_STAGES = {
+    "cannot inspect mounted browser surface": "surface-cannot-inspect",
+    "declared browser surface root is a symlink": "surface-declared-root-symlink",
+    "mounted empty surface mask escapes roots": "surface-empty-mask-escapes-roots",
+    "mounted empty surface mask is not a directory": "surface-empty-mask-not-directory",
+    "mounted browser surface external symlink identity changed": "surface-external-alias-identity",
+    "mounted browser surface external symlink escapes declared roots": "surface-external-alias-outside-closure",
+    "mounted browser surface external symlink is unresolved": "surface-external-alias-unresolved",
+    "mounted browser surface identity changed": "surface-identity-changed",
+    "mounted browser surface requiredness is invalid": "surface-requiredness-invalid",
+    "mounted browser surface symlink cycle": "surface-symlink-cycle",
+    "mounted browser surface symlink is dangling": "surface-symlink-dangling",
+    "mounted browser surface symlink escapes root": "surface-symlink-escapes-root",
+    "mounted browser surface symlink is unresolved": "surface-symlink-unresolved",
+}
 
 
 class GateCheckError(ValueError):
@@ -75,6 +92,13 @@ def _checked(stage: str, operation: Any) -> Any:
         return operation()
     except GateCheckError:
         raise
+    except BrowserSurfaceRootError as exc:
+        closed_stage = (
+            SURFACE_FAILURE_STAGES.get(exc.reason)
+            if stage == "surface-discovery"
+            else None
+        )
+        raise GateCheckError(closed_stage or stage) from exc
     except Exception as exc:
         raise GateCheckError(stage) from exc
 
