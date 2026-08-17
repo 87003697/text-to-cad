@@ -132,6 +132,17 @@ BROKER_IMAGE_PROJECTIONS = (
 VIEW_ORDER = ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
 OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
 MAX_REQUEST_BYTES = 1024 * 1024
+BROKER_STARTUP_STAGES = frozenset(
+    {
+        "playwright-import",
+        "authority-fetch",
+        "authority-validate",
+        "browser-connect",
+        "isolation-preflight",
+        "socket-bind",
+        "ready-publish",
+    }
+)
 
 
 def _broker_runtime_user_options() -> tuple[str, ...]:
@@ -150,6 +161,35 @@ def _broker_runtime_user_options() -> tuple[str, ...]:
         "--user",
         f"{uid}:{gid}",
     )
+
+
+def _publish_broker_startup_failure(job_id: str, stage: str) -> int:
+    """Publish one closed startup stage without exposing exception content."""
+
+    if JOB_ID.fullmatch(job_id) is None or stage not in BROKER_STARTUP_STAGES:
+        return 2
+    print(
+        json.dumps(
+            {
+                "event": "startup-failed",
+                "schema": BROKER_SCHEMA,
+                "jobId": job_id,
+                "stage": stage,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        flush=True,
+    )
+    return 1
+
+
+def _load_sync_playwright() -> Callable[[], Any]:
+    """Load the Broker's fixed Playwright entrypoint behind a closed stage."""
+
+    from playwright.sync_api import sync_playwright
+
+    return sync_playwright
 
 
 class BrowserSidecarError(RuntimeError):
@@ -1208,6 +1248,37 @@ class BrowserSidecarJob:
 
         if self.broker_container_id is None:
             raise BrowserSidecarError("Broker was not created", check="broker-readiness")
+
+        def require_no_startup_failure(records: Sequence[object]) -> None:
+            startup_failure = next(
+                (
+                    record
+                    for record in records
+                    if isinstance(record, dict)
+                    and record.get("event") == "startup-failed"
+                ),
+                None,
+            )
+            if startup_failure is None:
+                return
+            stage = startup_failure.get("stage")
+            if (
+                set(startup_failure)
+                != {"event", "schema", "jobId", "stage"}
+                or startup_failure.get("schema") != BROKER_SCHEMA
+                or startup_failure.get("jobId") != self.job_id
+                or not isinstance(stage, str)
+                or stage not in BROKER_STARTUP_STAGES
+            ):
+                raise BrowserSidecarError(
+                    "registered-program broker failure identity mismatch",
+                    check="broker-readiness",
+                )
+            raise BrowserSidecarError(
+                "Broker failed during closed startup stage",
+                check=f"broker-startup-{stage}",
+            )
+
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             self._check_cancelled()
@@ -1225,6 +1296,7 @@ class BrowserSidecarJob:
                 ),
                 None,
             )
+            require_no_startup_failure(records)
             if ready is not None:
                 record = ready
                 break
@@ -1243,6 +1315,15 @@ class BrowserSidecarJob:
                 )
             payload = _strict_json(state.stdout, "broker-state")
             if not isinstance(payload, dict) or payload.get("Running") is not True:
+                final_logs = self._docker(
+                    "logs", "--tail", "50", self.broker_container_id
+                )
+                final_records = [
+                    _strict_json(line, "broker-readiness")
+                    for line in final_logs.stdout.splitlines()
+                    if line.startswith("{")
+                ]
+                require_no_startup_failure(final_records)
                 raise BrowserSidecarError(
                     "Broker stopped before readiness",
                     check="broker-readiness-exit",
@@ -2035,10 +2116,11 @@ def run_broker(args: argparse.Namespace) -> int:
     socket_path = SANDBOX_SOCKET_PATH
     if JOB_ID.fullmatch(args.job_id) is None:
         return 2
+    stage = "playwright-import"
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return 2
+        sync_playwright = _load_sync_playwright()
+    except Exception:
+        return _publish_broker_startup_failure(args.job_id, stage)
 
     closing = False
 
@@ -2055,14 +2137,18 @@ def run_broker(args: argparse.Namespace) -> int:
     }
     server: socket.socket | None = None
     if socket_path.exists() or socket_path.is_symlink():
-        return 2
+        return _publish_broker_startup_failure(args.job_id, "socket-bind")
     try:
+        stage = "authority-fetch"
         with urlopen("http://sidecar:3001/v1/authority", timeout=15) as response:
             if response.status != 200:
-                return 1
+                raise BrowserSidecarError(
+                    "Sidecar authority status is invalid", check=stage
+                )
             raw_authority = response.read(16 * 1024 + 1)
         if len(raw_authority) > 16 * 1024:
-            return 1
+            raise BrowserSidecarError("Sidecar authority is too large", check=stage)
+        stage = "authority-validate"
         authority = _strict_json(raw_authority.decode("ascii"), "sidecar-authority")
         if (
             not isinstance(authority, dict)
@@ -2084,8 +2170,9 @@ def run_broker(args: argparse.Namespace) -> int:
             or not isinstance(authority.get("endpointPath"), str)
             or not authority["endpointPath"].startswith("/browser/")
         ):
-            return 1
+            raise BrowserSidecarError("Sidecar authority is invalid", check=stage)
         browser_endpoint = f"ws://sidecar:3000{authority['endpointPath']}"
+        stage = "browser-connect"
         with sync_playwright() as playwright:
             browser = playwright.chromium.connect(
                 browser_endpoint,
@@ -2093,12 +2180,15 @@ def run_broker(args: argparse.Namespace) -> int:
             )
             try:
                 broker = RegisteredProgramBroker(browser, args.job_id)
+                stage = "isolation-preflight"
                 isolation = broker.preflight(authority)
+                stage = "socket-bind"
                 server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 server.bind(str(socket_path))
                 os.chmod(socket_path, 0o600)
                 server.listen(4)
                 server.settimeout(0.2)
+                stage = "ready-publish"
                 print(
                     json.dumps(
                         {
@@ -2113,6 +2203,7 @@ def run_broker(args: argparse.Namespace) -> int:
                     ),
                     flush=True,
                 )
+                stage = "serve"
                 while not closing:
                     try:
                         connection, _ = server.accept()
@@ -2182,7 +2273,9 @@ def run_broker(args: argparse.Namespace) -> int:
                 )
             finally:
                 browser.close()
-    except (OSError, Exception):
+    except Exception:
+        if stage in BROKER_STARTUP_STAGES:
+            return _publish_broker_startup_failure(args.job_id, stage)
         return 1
     finally:
         if server is not None:

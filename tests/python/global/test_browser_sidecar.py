@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -101,6 +102,111 @@ class BrowserSidecarJobTests(unittest.TestCase):
                     "1234:5678",
                 ),
             )
+
+    def test_broker_startup_failure_reports_only_closed_stage(self) -> None:
+        output = StringIO()
+        with mock.patch("sys.stdout", new=output):
+            status = browser_sidecar._publish_broker_startup_failure(
+                "formal-job-1", "isolation-preflight"
+            )
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            json.loads(output.getvalue()),
+            {
+                "event": "startup-failed",
+                "schema": browser_sidecar.BROKER_SCHEMA,
+                "jobId": "formal-job-1",
+                "stage": "isolation-preflight",
+            },
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = browser_sidecar.BrowserSidecarJob.create(
+                Path(temp),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+            )
+            job.docker = "/usr/bin/docker"
+            job.broker_container_id = BROKER_CONTAINER_ID
+            failure = {
+                "event": "startup-failed",
+                "schema": browser_sidecar.BROKER_SCHEMA,
+                "jobId": "formal-job-1",
+                "stage": "isolation-preflight",
+            }
+
+            def docker(*arguments, **_kwargs):
+                if arguments[0] == "logs":
+                    return subprocess.CompletedProcess(
+                        arguments, 0, json.dumps(failure) + "\n", ""
+                    )
+                raise AssertionError(arguments)
+
+            with mock.patch.object(job, "_docker", side_effect=docker):
+                with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
+                    job._wait_broker_ready()
+        self.assertEqual(caught.exception.check, "broker-startup-isolation-preflight")
+
+        failure["stage"] = []
+        with mock.patch.object(job, "_docker", side_effect=docker):
+            with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
+                job._wait_broker_ready()
+        self.assertEqual(caught.exception.check, "broker-readiness")
+
+    def test_broker_startup_failure_survives_log_exit_race(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            job = browser_sidecar.BrowserSidecarJob.create(
+                Path(temp),
+                Path("/workspace/repo/outputs/group/exp"),
+                job_id="formal-job-1",
+            )
+            job.docker = "/usr/bin/docker"
+            job.broker_container_id = BROKER_CONTAINER_ID
+            calls = 0
+
+            def docker(*arguments, **_kwargs):
+                nonlocal calls
+                if arguments[0] == "logs":
+                    calls += 1
+                    output = ""
+                    if calls == 2:
+                        output = json.dumps(
+                            {
+                                "event": "startup-failed",
+                                "schema": browser_sidecar.BROKER_SCHEMA,
+                                "jobId": "formal-job-1",
+                                "stage": "browser-connect",
+                            }
+                        ) + "\n"
+                    return subprocess.CompletedProcess(arguments, 0, output, "")
+                if arguments[:2] == ("container", "inspect"):
+                    return subprocess.CompletedProcess(
+                        arguments, 0, json.dumps({"Running": False}) + "\n", ""
+                    )
+                raise AssertionError(arguments)
+
+            with mock.patch.object(job, "_docker", side_effect=docker):
+                with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
+                    job._wait_broker_ready()
+        self.assertEqual(calls, 2)
+        self.assertEqual(caught.exception.check, "broker-startup-browser-connect")
+
+    def test_broker_import_failure_emits_only_closed_stage(self) -> None:
+        output = StringIO()
+        with (
+            mock.patch.object(
+                browser_sidecar,
+                "_load_sync_playwright",
+                side_effect=OSError("sensitive path"),
+            ),
+            mock.patch("sys.stdout", new=output),
+        ):
+            status = browser_sidecar.run_broker(
+                browser_sidecar.argparse.Namespace(job_id="formal-job-1")
+            )
+        self.assertEqual(status, 1)
+        self.assertNotIn("sensitive", output.getvalue())
+        self.assertEqual(json.loads(output.getvalue())["stage"], "playwright-import")
 
     def test_runtime_binding_accepts_only_current_two_image_provision(self) -> None:
         handle = "cvmsp-" + "1" * 24
