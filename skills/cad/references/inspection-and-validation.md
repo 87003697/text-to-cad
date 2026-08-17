@@ -38,6 +38,33 @@ Selector refs are local to the STEP/CAD entry target passed to the command. They
 
 Pass selector refs as `#...` tokens. The STEP/CAD file path or entry target is a separate CLI argument.
 
+### Referencing a part by its label
+
+A part's build123d label can stand in for its occurrence id anywhere a ref is accepted:
+
+```text
+#eye_shank             the part labelled eye_shank
+#eye_shank.f45         a face on it
+#eye_shank.f45,f46     two faces on it -- the label carries forward like an occurrence id
+```
+
+Numeric refs are unchanged and always work; labels are an additional spelling, not a
+replacement. `snapshot --mode list` shows each part's `name`, and `inspect refs` reports the
+exact ref to paste as `labelRef`.
+
+A label may contain letters, digits, `_` and `:`, and may not start with a digit. Parts whose
+label cannot be spelled that way, or which collides with the numeric grammar (`f12`, `o1`,
+`m2`), are addressable by their numeric ref only.
+
+When several parts share a label -- two wheels, one `cast_rim:5spoke` -- each gets a numbered
+ref in tree order and the bare label refuses to resolve rather than guessing:
+
+```text
+$ snapshot -i motorbike.step.py --focus='#cast_rim:5spoke'
+selection.focus label 'cast_rim:5spoke' matches 2 occurrences;
+use one of: #cast_rim:5spoke_1 (o1.7.2), #cast_rim:5spoke_2 (o1.14.2)
+```
+
 ## Validation sequence
 
 1. Generation completed and the STEP/STP file exists.
