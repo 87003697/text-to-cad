@@ -1176,8 +1176,10 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertIsNotNone(runner_spec.loader)
         runner = importlib.util.module_from_spec(runner_spec)
         runner_spec.loader.exec_module(runner)
+        outputs_root = REPO_ROOT / "outputs"
+        outputs_root.mkdir(exist_ok=True)
         runner_temporary = tempfile.TemporaryDirectory(
-            dir=REPO_ROOT / "outputs",
+            dir=outputs_root,
             prefix="workspace-cli-runner-test-",
         )
         self.addCleanup(runner_temporary.cleanup)
