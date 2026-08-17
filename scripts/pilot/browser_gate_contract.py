@@ -7,10 +7,13 @@ AGENT_SYSTEM_EMPTY_ROOTS = (
     "/usr/lib/.build-id",
     "/usr/lib/debug",
     "/usr/lib/firmware",
+    "/usr/local",
     "/usr/share/doc",
     "/usr/share/licenses",
+    "/usr/share/sgml",
     "/usr/src",
 )
+AGENT_EXTERNAL_EMPTY_ROOTS = ("/var/tmp",)
 CONFORMANCE_OPTIONAL_ROOTS = (
     "/app",
     "/etc",

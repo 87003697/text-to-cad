@@ -25,6 +25,7 @@ from typing import Callable, Mapping
 
 try:
     from scripts.pilot.browser_gate_contract import (
+        AGENT_EXTERNAL_EMPTY_ROOTS,
         AGENT_SYSTEM_EMPTY_ROOTS,
         CONFORMANCE_SYSTEM_ALIAS_ROOTS,
     )
@@ -52,6 +53,7 @@ except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
     from browser_gate_contract import (  # type: ignore[no-redef]
+        AGENT_EXTERNAL_EMPTY_ROOTS,
         AGENT_SYSTEM_EMPTY_ROOTS,
         CONFORMANCE_SYSTEM_ALIAS_ROOTS,
     )
@@ -95,6 +97,7 @@ SYSTEM_RO_PATHS = (
     Path("/etc/alternatives"),
     Path("/etc/ca-certificates"),
     Path("/etc/crypto-policies"),
+    Path("/etc/environment"),
     Path("/etc/fonts"),
     Path("/etc/group"),
     Path("/etc/hosts"),
@@ -765,6 +768,15 @@ def existing_system_empty_paths() -> list[Path]:
     return [path for path in paths if path.is_dir() and not path.is_symlink()]
 
 
+def existing_external_empty_paths() -> list[Path]:
+    """Return fixed empty runtime roots created instead of mounting host data."""
+
+    if sys.platform != "linux":
+        return []
+    paths = [Path(root) for root in AGENT_EXTERNAL_EMPTY_ROOTS]
+    return [path for path in paths if path.is_dir() and not path.is_symlink()]
+
+
 def _empty_surface_exclusions(
     mounts: list[tuple[Path, Path, bool]],
     empty_paths: list[Path],
@@ -1034,12 +1046,14 @@ def prepare_nested_browser_gate(
             for source, _, _ in mounts
         )
     ]
+    external_empty_paths = existing_external_empty_paths()
     try:
         browser_exclusions = discover_browser_roots(
             mounts,
             permitted_symlink_roots=[
                 *(source for source, _, _ in mounts),
                 *existing_system_alias_paths(),
+                *external_empty_paths,
             ],
             masked_source_roots=empty_paths,
         )
@@ -1054,10 +1068,22 @@ def prepare_nested_browser_gate(
     if writable_findings:
         raise PilotError("writable Agent surface contains a browser artifact")
     exclusions = canonicalize_browser_masks(
-        [*browser_exclusions, *_empty_surface_exclusions(mounts, empty_paths)]
+        [
+            *browser_exclusions,
+            *_empty_surface_exclusions(mounts, empty_paths),
+            *(
+                {
+                    "kind": "system",
+                    "target": path.as_posix(),
+                    "mask": "tmpfs",
+                }
+                for path in external_empty_paths
+            ),
+        ]
     )
     scan_roots = sorted(
         {target.as_posix() for _, target, _ in [*mounts, *writable_mounts]}
+        | {path.as_posix() for path in external_empty_paths}
     )
     manifest = {
         "schema": NESTED_GATE["surfaceSchema"],
@@ -1141,6 +1167,7 @@ def build_bwrap_argv(
                 )
             }
             | {sandbox_exp.as_posix(), SANDBOX_CODEX_HOME.as_posix()}
+            | {path.as_posix() for path in existing_external_empty_paths()}
         )
         if gate_manifest.get("scanRoots") != expected_scan_roots:
             raise PilotError("nested Browser Gate mount surface changed")
@@ -1175,6 +1202,8 @@ def build_bwrap_argv(
         "/home",
         "--dir",
         "/run",
+        "--dir",
+        "/var",
         "--dir",
         str(SANDBOX_HOME),
         "--symlink",
