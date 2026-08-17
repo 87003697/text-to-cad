@@ -8,6 +8,9 @@ import json
 import sys
 from pathlib import Path
 
+PACKAGES_DIR = Path(__file__).resolve().parent.parent / "packages"
+sys.path.append(str(PACKAGES_DIR / "meshscope" / "src"))
+sys.path.append(str(PACKAGES_DIR / "meshshot" / "src"))
 
 from meshscope.voxblame import (
     PrepareReferenceError,

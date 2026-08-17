@@ -40,6 +40,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Hydrate Agent Runtime fixture
+        run: >-
+          git lfs pull
+          --include="models/agent-runtime/cup_cup_033/input/cup_cup_033.ply"
+          --exclude=""
+
       - name: Check development layout
         run: scripts/github-workflows/check-symlinks.sh
 

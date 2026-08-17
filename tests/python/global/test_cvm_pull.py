@@ -80,13 +80,23 @@ class PullRequestTests(unittest.TestCase):
                 "--exp",
                 "20260805-170000-audit/20260805-170001-airplane",
                 "--include-byproducts",
+                "--retain-cvm-source",
             ]
         )
         self.assertEqual(
             request.exp,
             "20260805-170000-audit/20260805-170001-airplane",
         )
-        self.assertTrue(request.include_byproducts)
+        self.assertIs(
+            request.postmortem_policy,
+            cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
+        )
+
+        with self.assertRaisesRegex(
+            cvm_pull.PullError,
+            "--retain-cvm-source requires --include-byproducts",
+        ):
+            cvm_pull.parse_request(["--exp", "group/exp", "--retain-cvm-source"])
 
         with self.assertRaisesRegex(cvm_pull.PullError, "Unsafe --exp"):
             cvm_pull.parse_request(["--exp", "../escape"])
@@ -94,7 +104,11 @@ class PullRequestTests(unittest.TestCase):
 
 class PullPlanTests(unittest.TestCase):
     def workflow(self, runner: FakeRunner):
-        request = cvm_pull.PullRequest(None, None, False, False)
+        request = cvm_pull.PullRequest(
+            None,
+            None,
+            cvm_pull.PostmortemPolicy.DEFAULT,
+        )
         workflow = cvm_pull.CvmPull(request, runner)
         workflow.mount_path = Path("/nonexistent-test-mount")
         return workflow
@@ -104,11 +118,13 @@ class PullPlanTests(unittest.TestCase):
         workflow = self.workflow(runner)
         payloads = {
             "group/complete": {
+                "path_safe": True,
                 "complete": True,
                 "final_status": 0,
                 "has_postmortem": False,
             },
             "group/incomplete": {
+                "path_safe": True,
                 "complete": False,
                 "final_status": None,
                 "has_postmortem": False,
@@ -138,21 +154,48 @@ class PullPlanTests(unittest.TestCase):
         self.assertIn("isinstance(manifest, dict)", source)
         self.assertIn("value = None", source)
 
+    def test_inspection_rejects_symlinked_output_ancestor_before_manifest(self) -> None:
+        runner = FakeRunner()
+        runner.respond(
+            "python3 -c",
+            stdout=json.dumps(
+                {
+                    "path_safe": False,
+                    "complete": False,
+                    "final_status": None,
+                    "has_postmortem": False,
+                }
+            ),
+        )
+        workflow = self.workflow(runner)
+        with self.assertRaisesRegex(
+            cvm_pull.PullError,
+            "Unsafe CVM exp path",
+        ) as error:
+            workflow._inspect_exp("group/exp")
+        self.assertEqual(error.exception.status, 7)
+        command = runner.remote_commands[-1]
+        self.assertIn("path.lstat().st_mode", command)
+        self.assertIn("stat.S_ISDIR", command)
+
     def test_qualify_preserves_every_nonzero_integer_and_postmortem(self) -> None:
         runner = FakeRunner()
         workflow = self.workflow(runner)
         payloads = {
             "group/success": {
+                "path_safe": True,
                 "complete": True,
                 "final_status": 0,
                 "has_postmortem": False,
             },
             "group/negative": {
+                "path_safe": True,
                 "complete": True,
                 "final_status": -9,
                 "has_postmortem": False,
             },
             "group/upper": {
+                "path_safe": True,
                 "complete": True,
                 "final_status": 0,
                 "has_postmortem": True,
@@ -181,7 +224,11 @@ class PullPlanTests(unittest.TestCase):
         runner = FakeRunner()
         runner.respond("test -d", status=0)
         workflow = cvm_pull.CvmPull(
-            cvm_pull.PullRequest("group/exp", None, False, False),
+            cvm_pull.PullRequest(
+                "group/exp",
+                None,
+                cvm_pull.PostmortemPolicy.DEFAULT,
+            ),
             runner,
         )
         workflow.mount_path = Path("/tmp/cvm-pull-test-mount")
@@ -247,6 +294,88 @@ class PullPlanTests(unittest.TestCase):
             with self.assertRaises(cvm_pull.PullError):
                 workflow.publish(plan)
         self.assertEqual(events, ["upload"])
+
+    def test_publish_can_verify_postmortem_without_cleaning_cvm_source(self) -> None:
+        runner = FakeRunner()
+        request = cvm_pull.PullRequest(
+            None,
+            None,
+            cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
+        )
+        workflow = cvm_pull.CvmPull(request, runner)
+        plan = cvm_pull.PullPlan(
+            cvm_exps=("group/failed",),
+            candidates=("group/failed",),
+            s3_exps=frozenset(),
+            publish=("group/failed",),
+            preserve=(),
+        )
+        events: list[str] = []
+        with (
+            mock.patch.object(
+                workflow,
+                "_upload_exp",
+                side_effect=lambda _exp: events.append("upload"),
+            ),
+            mock.patch.object(
+                workflow,
+                "_verify_exp",
+                side_effect=lambda _exp: events.append("verify") or 7,
+            ),
+            mock.patch.object(
+                workflow,
+                "_cleanup_exp",
+                side_effect=lambda _exp: events.append("cleanup"),
+            ),
+        ):
+            result = workflow.publish(plan)
+        self.assertEqual(events, ["upload", "verify"])
+        self.assertEqual(result.uploaded, ("group/failed",))
+        self.assertEqual(result.retained_source, ("group/failed",))
+
+    def test_existing_verified_postmortem_is_not_reported_as_uploaded(self) -> None:
+        runner = FakeRunner()
+        workflow = cvm_pull.CvmPull(
+            cvm_pull.PullRequest(
+                None,
+                None,
+                cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
+            ),
+            runner,
+        )
+        plan = cvm_pull.PullPlan(
+            cvm_exps=("group/failed",),
+            candidates=("group/failed",),
+            s3_exps=frozenset({"group/failed"}),
+            publish=("group/failed",),
+            preserve=(),
+        )
+        with (
+            mock.patch.object(
+                workflow,
+                "_existing_s3_is_complete",
+                return_value=(True, 7, 7),
+            ),
+            mock.patch.object(workflow, "_upload_exp") as upload,
+            mock.patch.object(workflow, "_cleanup_exp") as cleanup,
+        ):
+            result = workflow.publish(plan)
+        upload.assert_not_called()
+        cleanup.assert_not_called()
+        self.assertEqual(result.uploaded, ())
+        self.assertEqual(result.verified_existing, ("group/failed",))
+        self.assertEqual(result.retained_source, ("group/failed",))
+
+        with mock.patch.object(workflow, "_log") as log:
+            workflow.report(result)
+        messages = [call.args[0] for call in log.call_args_list]
+        self.assertTrue(
+            any(
+                message.startswith("Existing S3 prefix verified")
+                for message in messages
+            )
+        )
+        self.assertIn("Retained CVM source:", messages)
 
     def test_publish_resumes_cleanup_for_verified_existing_s3_prefix(self) -> None:
         runner = FakeRunner()
@@ -349,6 +478,13 @@ class PullPlanTests(unittest.TestCase):
         command = runner.remote_commands[-1]
         self.assertIn("path.relative_to(root).as_posix()", command)
         self.assertIn("fnmatch.fnmatch(relative, pattern)", command)
+        self.assertIn("stat.S_ISREG(path.lstat().st_mode)", command)
+
+    def test_upload_never_follows_cvm_symlinks(self) -> None:
+        runner = FakeRunner()
+        workflow = self.workflow(runner)
+        workflow._upload_exp("group/exp")
+        self.assertIn("--no-follow-symlinks", runner.remote_commands[-1])
 
     def test_s3_count_uses_pipefail(self) -> None:
         runner = FakeRunner()

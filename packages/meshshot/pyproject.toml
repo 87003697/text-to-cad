@@ -17,4 +17,4 @@ where = ["src"]
 include = ["meshshot*"]
 
 [tool.setuptools.package-data]
-meshshot = ["profiles/*.json", "runtime/*"]
+meshshot = ["browser_contract.json", "profiles/*.json", "runtime/*"]

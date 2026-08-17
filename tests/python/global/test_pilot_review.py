@@ -9,7 +9,9 @@ import unittest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-REVIEWER_PATH = REPO_ROOT / ".claude/skills/pilot-review/scripts/review.py"
+REVIEWER_PATH = (
+    REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-review/__main__.py"
+)
 
 
 def load_reviewer():
@@ -138,11 +140,25 @@ class PilotReviewTests(unittest.TestCase):
             },
         )
         write_json(
+            self.exp / "final/rebuild.json",
+            {"schema": "canonical-build.recipe/1"},
+        )
+        write_json(
+            self.exp / "final/verification.json",
+            {
+                "schema": "canonical-build.verification/1",
+                "verification_sha256": "a" * 64,
+            },
+        )
+        write_json(
             self.exp / "final/manifest.json",
             {
                 "schema": "mesh-to-cad.final-delivery/1",
                 "selected_step": 1,
                 "accepted": True,
+                "rebuild_sha256": "8" * 64,
+                "verification_sha256": "9" * 64,
+                "verification_identity_sha256": "a" * 64,
                 "identity_sha256": "6" * 64,
             },
         )
@@ -237,6 +253,8 @@ class PilotReviewTests(unittest.TestCase):
                 "region_diff",
                 "agent_assessment",
                 "selection",
+                "rebuild",
+                "verification",
                 "final_delivery",
             }.issubset(node_types)
         )
@@ -253,7 +271,9 @@ class PilotReviewTests(unittest.TestCase):
             "measurement_publishes_step",
             "attempt_contributes_to_cycle",
             "step_considered_for_selection",
-            "selection_publishes_delivery",
+            "selection_triggers_rebuild",
+            "rebuild_verified_independently",
+            "verification_supports_delivery",
         ):
             self.assertIn(expected, edge_types)
         attempt_ids = {
@@ -262,6 +282,13 @@ class PilotReviewTests(unittest.TestCase):
             if node["type"] == "attempt"
         }
         self.assertEqual({"attempt:0", "attempt:1", "attempt:2"}, attempt_ids)
+        final_evidence = {
+            node["type"]: node["evidence"]
+            for node in review["graph"]["nodes"]
+            if node["type"] in {"rebuild", "verification"}
+        }
+        for evidence in final_evidence.values():
+            self.assertTrue((self.exp / evidence).is_file(), evidence)
         cycle_contributors = {
             edge["from"]
             for edge in review["graph"]["edges"]

@@ -1,5 +1,6 @@
 # macOS
 .DS_Store
+/.cvm-sidecar-probes/
 .vscode
 
 # Python
@@ -43,6 +44,7 @@ tmp/
 outputs
 outputs/
 .cvm-jobs/
+.cvm-agent-jobs/
 
 # Local printer credentials
 /bambu-printers.json

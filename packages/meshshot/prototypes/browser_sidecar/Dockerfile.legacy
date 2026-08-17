@@ -1,0 +1,18 @@
+# THROWAWAY parity-only derivative of the fixed Sidecar image.
+ARG SIDECAR_IMAGE=meshshot-sidecar-prototype@sha256:c61318789e67cbac0ef1d4b0b91b25b158070cee5c516e296d9661097fa980fb
+FROM ${SIDECAR_IMAGE}
+ARG PROTOTYPE_SOURCE_REVISION=uncommitted
+ENV PYTHONPATH=/opt/browser-sidecar/meshshot-src
+LABEL org.opencontainers.image.title="meshshot-browser-sidecar-public-baseline-prototype" \
+      org.opencontainers.image.revision="${PROTOTYPE_SOURCE_REVISION}" \
+      io.text-to-cad.source-base="9c5b7ea39030a013023a2f06c83b9b869a394861" \
+      io.text-to-cad.review-parent="629eaec232ab2816466dafb5182a1bb4fe66295d"
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --break-system-packages --no-cache-dir Pillow==11.3.0 playwright==1.60.0
+COPY --chown=pwuser:pwuser packages/meshshot/prototypes/browser_sidecar/public_parity.py /opt/browser-sidecar/prototype/public_parity.py
+COPY --chown=pwuser:pwuser packages/meshshot/src/meshshot /opt/browser-sidecar/meshshot-src/meshshot
+USER pwuser
+ENTRYPOINT ["python3", "/opt/browser-sidecar/prototype/public_parity.py", "baseline"]

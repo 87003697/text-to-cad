@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import base64
 from collections.abc import Sequence
-from dataclasses import dataclass
-from io import BytesIO
-import math
+from importlib.resources import files
+import json
+import os
 from pathlib import Path
+import socket
 from typing import Any
 
-from PIL import Image
-
-from meshshot.profile import load_profile
+from meshshot import broker_client
+from meshshot.broker_client import MeshGeometry, MeshshotError, RenderedPreview
 
 
 _ORIGIN = "http://meshshot.local"
@@ -21,64 +20,40 @@ _ROUTE_GLOB = f"{_ORIGIN}/**"
 _RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
 _BROWSER_STARTUP_TIMEOUT_MS = 15_000
 _RENDER_TIMEOUT_MS = 120_000
-_OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
+_CONTRACT = json.loads(
+    files("meshshot").joinpath("browser_contract.json").read_text(encoding="utf-8")
+)
+_AUTHORITY_PATH = Path(_CONTRACT["authorityPath"])
+_SOCKET_PATH = Path(_CONTRACT["socketPath"])
 
 
-class MeshshotError(RuntimeError):
-    """Stable renderer failure surfaced through the public preview command."""
+def _load_browser_authority() -> dict[str, Any] | None:
+    """Return the fixed formal authority, or None outside a formal job."""
+    return broker_client.load_browser_authority(
+        _AUTHORITY_PATH,
+        open_file=os.open,
+        fstat_file=os.fstat,
+        read_file=os.read,
+        close_file=os.close,
+        effective_uid=os.getuid,
+    )
 
 
-@dataclass(frozen=True)
-class MeshGeometry:
-    """JSON-safe indexed triangles in the canonical renderer frame."""
-
-    vertices: Sequence[Sequence[float]]
-    faces: Sequence[Sequence[int]]
-
-    def to_json(self) -> dict[str, list[list[float]] | list[list[int]]]:
-        vertices = [[float(value) for value in vertex] for vertex in self.vertices]
-        faces = [[int(value) for value in face] for face in self.faces]
-        if not vertices or any(
-            len(vertex) != 3 or not all(math.isfinite(value) for value in vertex)
-            for vertex in vertices
-        ):
-            raise MeshshotError("mesh geometry requires finite three-dimensional vertices")
-        if not faces or any(
-            len(face) != 3
-            or any(index < 0 or index >= len(vertices) for index in face)
-            for face in faces
-        ):
-            raise MeshshotError("mesh geometry requires valid triangle indices")
-        return {"vertices": vertices, "faces": faces}
+def _registered_residual_render(
+    authority: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Submit one exact residual request to the job-private program broker."""
+    return broker_client.registered_residual_render(
+        authority,
+        payload,
+        socket_path=_SOCKET_PATH,
+        socket_factory=socket.socket,
+    )
 
 
-@dataclass(frozen=True)
-class RenderedPreview:
-    """Opaque RGB PNG bytes and semantic facts returned by the browser core."""
+def _legacy_browser_render(payload: dict[str, Any]) -> dict[str, Any]:
+    """Run the existing local browser path outside a formal pilot job."""
 
-    png_bytes: bytes
-    variant: str
-    profile_sha256: str
-    views: tuple[dict[str, Any], ...]
-
-
-def render_residual_preview(
-    reference: MeshGeometry,
-    candidate: MeshGeometry,
-    *,
-    variant: str = "step",
-    exterior_directions: Sequence[str] = (),
-) -> RenderedPreview:
-    """Render reference green and candidate red in one batched browser job."""
-
-    loaded = load_profile()
-    if variant not in loaded.profile["variants"]:
-        raise MeshshotError(f"unsupported render variant: {variant}")
-    directions = tuple(str(value) for value in exterior_directions)
-    if len(set(directions)) != len(directions) or any(
-        value not in _OUTSIDE_DIRECTIONS for value in directions
-    ):
-        raise MeshshotError("exterior directions must be unique signed x/y/z values")
     runtime_files = {
         "/render.html": _RUNTIME_DIR / "render.html",
         "/residual-render.js": _RUNTIME_DIR / "residual-render.js",
@@ -89,14 +64,6 @@ def render_residual_preview(
             "meshshot browser runtime is missing; run the mesh-compare bundle: "
             + ", ".join(missing)
         )
-
-    payload = {
-        "profile": loaded.profile,
-        "variant": variant,
-        "reference": reference.to_json(),
-        "candidate": candidate.to_json(),
-        "exteriorDirections": list(directions),
-    }
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -154,35 +121,27 @@ def render_residual_preview(
         raise
     except Exception as exc:
         raise MeshshotError(f"headless residual render failed: {exc}") from exc
+    return result
 
-    if not isinstance(result, dict) or result.get("ok") is not True:
-        detail = result.get("error") if isinstance(result, dict) else None
-        raise MeshshotError(str(detail or "browser returned an invalid render result"))
-    data_url = result.get("pngDataUrl")
-    if not isinstance(data_url, str) or not data_url.startswith("data:image/png;base64,"):
-        raise MeshshotError("browser returned invalid PNG data")
-    try:
-        browser_png = base64.b64decode(data_url.split(",", 1)[1], validate=True)
-        with Image.open(BytesIO(browser_png)) as image:
-            image.load()
-            image = image.convert("RGB")
-            expected = tuple(loaded.profile["variants"][variant]["image_pixels"])
-            if image.size != expected:
-                raise MeshshotError(
-                    f"browser returned {image.size}, expected {expected} for {variant}"
-                )
-            encoded = BytesIO()
-            image.save(encoded, format="PNG", compress_level=9, optimize=False)
-    except MeshshotError:
-        raise
-    except Exception as exc:
-        raise MeshshotError(f"browser returned unreadable PNG data: {exc}") from exc
-    views = result.get("views")
-    if not isinstance(views, list) or len(views) != 8:
-        raise MeshshotError("browser returned invalid view metadata")
-    return RenderedPreview(
-        png_bytes=encoded.getvalue(),
-        variant=variant,
-        profile_sha256=loaded.sha256,
-        views=tuple(dict(view) for view in views),
+
+def render_residual_preview(
+    reference: MeshGeometry,
+    candidate: MeshGeometry,
+    *,
+    variant: str = "step",
+    exterior_directions: Sequence[str] = (),
+) -> RenderedPreview:
+    """Render reference green and candidate red in one batched browser job."""
+
+    loaded, payload, _ = broker_client.prepare_payload(
+        reference, candidate, variant, exterior_directions
     )
+    authority = _load_browser_authority()
+    if authority is None:
+        result = _legacy_browser_render(payload)
+    else:
+        result = _registered_residual_render(
+            authority,
+            broker_client.broker_payload(payload),
+        )
+    return broker_client.finalize_preview(result, loaded, variant)
