@@ -97,6 +97,25 @@ class Case:
         if evidence: args.extend(("--evidence", str(self.evidence_path)))
         return args
 
+    def adapter(self, *, sleep_seconds: int = 0) -> Path:
+        adapter = self.root / "provider-free-adapter.py"
+        adapter_ledger = self.root / "adapter-ledger.jsonl"
+        adapter_ledger.write_bytes(self.ledger.read_bytes())
+        script = f'''#!{sys.executable}
+import json,pathlib,shutil,sys,time
+request=json.loads(sys.stdin.buffer.readline())
+time.sleep({sleep_seconds})
+output=pathlib.Path(request["outputPath"])
+source=pathlib.Path({str(self.root)!r})
+for name in ("source","route","geometry","logs","terminal"):
+    shutil.copytree(source/name,output/name)
+shutil.copyfile(source/"evidence.json",output/"evidence.json")
+shutil.copyfile(source/"adapter-ledger.jsonl",output/"ledger.jsonl")
+receipt={{"schema":"text-to-cad.toys4k-depth8-adapter-terminal/1","status":"development-terminal","fixture":request["fixture"],"route":request["route"]["chosen"],"paidDispatchCount":0,"wholeJobRetryCount":0,"processGroupAbsent":True,"cleanupAbsence":True,"evidencePath":"evidence.json","ledgerPath":"ledger.jsonl"}}
+print(json.dumps(receipt,sort_keys=True,separators=(",",":")))
+'''
+        adapter.write_text(script); adapter.chmod(0o700); return adapter
+
 
 class Toys4KDepth8DevelopmentCliTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -186,6 +205,26 @@ class Toys4KDepth8DevelopmentCliTests(unittest.TestCase):
     def test_ambiguous_timeout_retains_reservation_with_no_whole_job_retry_and_cleanup_absence(self) -> None:
         case = Case(self.root); rows = case.valid_ledger()[:1] + [{"schema": "text-to-cad.development-venus-ledger/1", "jobId": case.run_id, "attempt": 1, "event": "transport-error"}]; case.write_ledger(rows)
         result, receipt = self.run_cli(*case.args()); self.assertEqual(0, result.returncode); self.assertEqual("2.450000", receipt["accounting"]["conservativeUsd"]); self.assertFalse(receipt["policy"]["wholeJobRetry"])
+
+    def test_execute_supervises_one_fresh_provider_free_adapter_and_validates_its_terminal_evidence(self) -> None:
+        case = Case(self.root); output = self.root / "executed"; adapter = case.adapter()
+        case.ledger.write_text("")
+        args = case.args(evidence=False) + ["--execute", "--output-root", str(output), "--provider-free-adapter", str(adapter)]
+        result, receipt = self.run_cli(*args)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("development-evidence-complete", receipt["status"])
+        self.assertEqual(0, receipt["paidDispatchCount"])
+        self.assertEqual(0, receipt["execution"]["wholeJobRetryCount"])
+        self.assertTrue(receipt["execution"]["processGroupAbsent"])
+
+    def test_execute_timeout_kills_the_adapter_process_group_without_retry(self) -> None:
+        case = Case(self.root); output = self.root / "timed-out"; adapter = case.adapter(sleep_seconds=10)
+        case.ledger.write_text("")
+        args = case.args(evidence=False) + ["--execute", "--output-root", str(output), "--provider-free-adapter", str(adapter), "--timeout-seconds", "1"]
+        result, receipt = self.run_cli(*args)
+        self.assertEqual(2, result.returncode)
+        self.assertEqual("execution-timeout", receipt["failureCheck"])
+        self.assertEqual((0, 0), (receipt["attemptCount"], receipt["paidDispatchCount"]))
 
     # 12
     def test_secret_or_capability_material_is_rejected_from_evidence_and_logs(self) -> None:

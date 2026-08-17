@@ -13,6 +13,7 @@ import hmac
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import socket
@@ -126,6 +127,28 @@ class AttachError(SupervisorError):
 
 
 @dataclass(frozen=True)
+class FixtureAuthority:
+    """Outer-owned immutable fixture and bootstrap-source authority."""
+
+    fixture_id: str
+    route: str
+    input_filename: str
+    input_digest: str
+    input_bytes: int
+    source_files: tuple[tuple[str, str], ...]
+
+
+CUP_FIXTURE_AUTHORITY = FixtureAuthority(
+    fixture_id=FIXTURE_ID,
+    route="implicit-cad",
+    input_filename=f"{FIXTURE_ID}.ply",
+    input_digest=_FIXED_INPUT_DIGEST,
+    input_bytes=190047,
+    source_files=((f"{FIXTURE_ID}.implicit.js", _FIXED_SOURCE_DIGEST),),
+)
+
+
+@dataclass(frozen=True)
 class Mount:
     source: Path | str
     target: str
@@ -206,6 +229,7 @@ class DevelopmentRequest:
     input_dir: Path
     output_dir: Path
     workload: tuple[str, ...]
+    fixture_authority: FixtureAuthority = CUP_FIXTURE_AUTHORITY
     internal_network: str | None = None
     proxy_base_url: str | None = None
     proxy_client_token: str | None = None
@@ -263,12 +287,34 @@ def fixed_candidate_request(
         input_dir=input_dir or repo_root / "models/agent-runtime/cup_cup_033/input",
         output_dir=output_dir,
         workload=tuple(workload),
+        fixture_authority=CUP_FIXTURE_AUTHORITY,
         internal_network=internal_network,
         proxy_base_url=proxy_base_url,
         proxy_client_token=proxy_client_token,
         broker_parent=broker_parent,
         timeout_seconds=timeout_seconds,
     )
+
+
+def route_candidate_request(
+    *, repo_root: Path, image_id: str, output_dir: Path, workload_path: Path,
+    source_dir: Path, input_dir: Path, fixture_authority: FixtureAuthority,
+    internal_network: str | None = None, proxy_base_url: str | None = None,
+    proxy_client_token: str | None = None, broker_parent: Path = Path("/tmp"),
+    timeout_seconds: int = MAX_TIMEOUT_SECONDS,
+) -> DevelopmentRequest:
+    """Build one route-aware request while preserving the fixed image authority."""
+
+    request = fixed_candidate_request(
+        repo_root=repo_root, image_id=image_id, output_dir=output_dir,
+        workload_path=workload_path, source_dir=source_dir, input_dir=input_dir,
+        internal_network=internal_network, proxy_base_url=proxy_base_url,
+        proxy_client_token=proxy_client_token, broker_parent=broker_parent,
+        timeout_seconds=timeout_seconds,
+    )
+    return DevelopmentRequest(**{
+        **request.__dict__, "fixture_authority": fixture_authority,
+    })
 
 
 def _digest(payload: bytes) -> str:
@@ -679,14 +725,35 @@ def _validate_request(request: DevelopmentRequest) -> None:
         )
     ):
         raise SupervisorError("outer-owned workload argv is invalid")
-    if not (request.source_dir / f"{FIXTURE_ID}.implicit.js").is_file():
-        raise SupervisorError("fixed cup_cup_033 source is absent")
-    if not (request.input_dir / f"{FIXTURE_ID}.ply").is_file():
-        raise SupervisorError("fixed cup_cup_033 input is absent")
-    if _digest((request.source_dir / f"{FIXTURE_ID}.implicit.js").read_bytes()) != _FIXED_SOURCE_DIGEST:
-        raise SupervisorError("fixed cup_cup_033 source identity is wrong")
-    if _digest((request.input_dir / f"{FIXTURE_ID}.ply").read_bytes()) != _FIXED_INPUT_DIGEST:
-        raise SupervisorError("fixed cup_cup_033 input identity is wrong")
+    authority = request.fixture_authority
+    if (
+        not re.fullmatch(r"[a-z0-9][a-z0-9_]{2,127}", authority.fixture_id)
+        or authority.route not in {"cad", "implicit-cad"}
+        or Path(authority.input_filename).name != authority.input_filename
+        or not _full_digest(authority.input_digest)
+        or authority.input_bytes <= 0
+    ):
+        raise SupervisorError("fixture authority is invalid")
+    if not request.source_dir.is_dir() or request.source_dir.is_symlink():
+        raise SupervisorError("bootstrap source root is invalid")
+    observed_sources: dict[str, str] = {}
+    for path in request.source_dir.rglob("*"):
+        info = path.lstat()
+        if stat.S_ISDIR(info.st_mode):
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            raise SupervisorError("bootstrap source contains a link or special entry")
+        observed_sources[path.relative_to(request.source_dir).as_posix()] = _digest(path.read_bytes())
+    if observed_sources != dict(authority.source_files):
+        raise SupervisorError("bootstrap source identity is wrong")
+    input_path = request.input_dir / authority.input_filename
+    if input_path.is_symlink() or not input_path.is_file():
+        raise SupervisorError("fixed fixture input is absent")
+    payload = input_path.read_bytes()
+    if len(payload) != authority.input_bytes or _digest(payload) != authority.input_digest:
+        raise SupervisorError("fixed fixture input identity is wrong")
+    if {path.name for path in request.input_dir.iterdir()} != {authority.input_filename}:
+        raise SupervisorError("fixed fixture input root contains an unowned entry")
     if request.internal_network is not None and (
         not request.internal_network
         or len(request.internal_network) > 128
@@ -775,7 +842,8 @@ def execute(
         "executionSourceSnapshotDigest": source_digest,
         "inputSnapshotDigest": input_digest,
         "agentConfigDigest": _digest(canonical_json_bytes({
-            "fixtureId": FIXTURE_ID,
+            "fixtureId": request.fixture_authority.fixture_id,
+            "route": request.fixture_authority.route,
             "mode": execution_mode,
             "proxyCapability": proxy_capability,
             "proxyBaseUrl": request.proxy_base_url,
@@ -847,7 +915,8 @@ def execute(
     )
     labels = {
         "org.text-to-cad.development": "true",
-        "org.text-to-cad.fixture": FIXTURE_ID,
+        "org.text-to-cad.fixture": request.fixture_authority.fixture_id,
+        "org.text-to-cad.route": request.fixture_authority.route,
         "org.text-to-cad.job-id": job_id,
         "org.text-to-cad.owner-nonce": owner_nonce,
     }
@@ -1044,8 +1113,9 @@ def execute(
     receipt: dict[str, object] = {
         "schema": "text-to-cad.agent-runtime-development-supervisor-terminal/1",
         "status": "development-failed" if failure_check else "development-succeeded",
-        "fixtureId": FIXTURE_ID,
-        "classification": "Development/Not Sealed/Not Formal",
+        "fixtureId": request.fixture_authority.fixture_id,
+        "route": request.fixture_authority.route,
+        "classification": "Development/MVP - Not Sealed, Not Formal, Not Verified, Not Production",
         "attemptCount": 1,
         "executionMode": execution_mode,
         "providerDispatchCount": 0 if proxy_config is None else None,

@@ -11,9 +11,13 @@ import argparse
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import signal
 import stat
+import subprocess
+import time
 from typing import Any
 
 CLASSIFICATION = "Development/MVP — Not Sealed, Not Formal, Not Verified, Not Production"
@@ -206,19 +210,92 @@ def emit(value: dict[str, Any]) -> None:
     print(json.dumps(value, sort_keys=True, separators=(",", ":")))
 
 
+def child_path(root: Path, relative: object, check: str) -> Path:
+    if not isinstance(relative, str) or Path(relative).is_absolute() or ".." in Path(relative).parts:
+        raise GateError(check, "adapter returned an unsafe path")
+    candidate = root / relative
+    if candidate.is_symlink() or not candidate.is_file():
+        raise GateError(check, "adapter authority file is absent")
+    return candidate
+
+
+def execute_adapter(args: argparse.Namespace, identity: dict[str, Any], expected: dict[str, Any]) -> tuple[Path, Path, dict[str, Any]]:
+    output = args.output_root
+    if output is None or output.exists():
+        raise GateError("execution-preparation", "execution output must be one fresh path")
+    if args.provider_free_adapter is None:
+        raise GateError("backend-closure", "no reviewed route-aware Development backend adapter is selected")
+    if args.provider_free_conformance_contract is None:
+        raise GateError("backend-closure", "provider-free adapter is forbidden outside conformance")
+    adapter = args.provider_free_adapter
+    if adapter.is_symlink() or not adapter.is_file() or not os.access(adapter, os.X_OK):
+        raise GateError("backend-closure", "provider-free adapter must be one executable regular file")
+    output.mkdir(mode=0o700, parents=True)
+    request = {
+        "schema": "text-to-cad.toys4k-depth8-adapter-request/1",
+        "classification": CLASSIFICATION,
+        "fixture": identity,
+        "route": {"chosen": expected["route"], "evidence": expected["routeEvidence"]},
+        "inputPath": str((args.fixture_root / f"{identity['key']}.ply").resolve()),
+        "outputPath": str(output.resolve()),
+        "workspaceProtocol": "mesh-to-cad.workspace/1",
+        "depths": list(range(1, 9)),
+        "policy": {"maxAttempts": 16, "maxRequestBytes": 200000, "maxOutputTokens": 40000, "timeoutSeconds": args.timeout_seconds, "wholeJobRetry": False},
+    }
+    environment = {key: value for key, value in os.environ.items() if key in {"PATH", "LANG", "LC_ALL", "TZ"}}
+    started = time.monotonic()
+    process = subprocess.Popen(
+        [str(adapter.resolve())], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, start_new_session=True, env=environment,
+    )
+    try:
+        stdout, stderr = process.communicate(canonical(request) + b"\n", timeout=args.timeout_seconds)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGTERM)
+        try: stdout, stderr = process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL); stdout, stderr = process.communicate()
+        raise GateError("execution-timeout", "one job timed out; process group terminated and no retry was attempted")
+    if process.returncode != 0:
+        raise GateError("execution-terminal", f"one job adapter exited {process.returncode}")
+    if SECRET.search(stdout.decode("utf-8", errors="ignore")) or SECRET.search(stderr.decode("utf-8", errors="ignore")):
+        raise GateError("credential-safety", "adapter output disclosed secret or capability material")
+    try: receipt = json.loads(stdout)
+    except ValueError as exc: raise GateError("execution-terminal", "adapter did not return one JSON receipt") from exc
+    if not isinstance(receipt, dict) or receipt.get("schema") != "text-to-cad.toys4k-depth8-adapter-terminal/1" or receipt.get("status") != "development-terminal" or receipt.get("paidDispatchCount") != 0:
+        raise GateError("execution-terminal", "adapter terminal receipt is invalid")
+    if receipt.get("fixture") != identity or receipt.get("route") != expected["route"] or receipt.get("wholeJobRetryCount") != 0 or receipt.get("processGroupAbsent") is not True or receipt.get("cleanupAbsence") is not True:
+        raise GateError("execution-terminal", "adapter identity, retry, or cleanup evidence is invalid")
+    receipt["elapsedSeconds"] = round(time.monotonic() - started, 6)
+    return child_path(output, receipt.get("evidencePath"), "terminal-evidence"), child_path(output, receipt.get("ledgerPath"), "accounting"), receipt
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__); parser.add_argument("fixture_key")
     parser.add_argument("--fixture-root", type=Path); parser.add_argument("--provider-free-conformance-contract", type=Path)
     parser.add_argument("--prior-total-ledger", type=Path); parser.add_argument("--sequence-state", type=Path); parser.add_argument("--evidence", type=Path)
+    parser.add_argument("--execute", action="store_true"); parser.add_argument("--output-root", type=Path)
+    parser.add_argument("--provider-free-adapter", type=Path); parser.add_argument("--timeout-seconds", type=int, default=2700)
     args = parser.parse_args(argv)
     receipt: dict[str, Any] = {"schema": "text-to-cad.toys4k-depth8-development-receipt/1", "classification": CLASSIFICATION, "status": "development-failed", "attemptCount": 0, "paidDispatchCount": 0}
     try:
         if args.fixture_key not in FIXTURES: raise GateError("fixture-allowlist", "fixture key is not allowlisted")
         expected = contract(args, args.fixture_key); root = args.fixture_root or Path(__file__).resolve().parents[2] / "models/toys4k"
+        args.fixture_root = root
         identity = input_identity(root, args.fixture_key, expected); sequence(args.sequence_state, args.fixture_key)
         rows = ledger_rows(args.prior_total_ledger); accounting = validate_ledger(rows, None, terminal=False)
         receipt.update({"fixture": identity, "route": expected["route"], "routeEvidence": expected["routeEvidence"], "policy": {"maxAttempts": 16, "maxRequestBytes": 200000, "maxOutputTokens": 40000, "maxJobUsd": "39.200000", "maxJobs": 4, "maxTotalUsd": "156.800000", "timeoutSeconds": 2700, "wholeJobRetry": False}, "accounting": accounting})
-        if args.evidence is None:
+        if args.execute:
+            if accounting["jobCount"] != ORDER.index(args.fixture_key) or Decimal(accounting["conservativeUsd"]) + Decimal("2.450000") > Decimal("156.800000"):
+                raise GateError("accounting", "next serialized job cannot reserve its worst case")
+            if not 0 < args.timeout_seconds <= 2700: raise GateError("execution-preparation", "timeout must be in (0, 2700]")
+            evidence_path, ledger_path, adapter_receipt = execute_adapter(args, identity, expected)
+            rows = ledger_rows(ledger_path)
+            result = terminal(evidence_path, identity, expected, rows); receipt.update(result); receipt["attemptCount"] = result["accounting"]["attemptCount"]
+            if result["accounting"]["jobCount"] != ORDER.index(args.fixture_key) + 1: raise GateError("accounting", "terminal ledger job prefix is not serialized")
+            receipt["paidDispatchCount"] = adapter_receipt["paidDispatchCount"]; receipt["status"] = "development-evidence-complete"; receipt["execution"] = adapter_receipt
+            receipt["nextSequenceState"] = {"schema": "text-to-cad.toys4k-depth8-sequence/1", "completed": list(ORDER[:ORDER.index(args.fixture_key) + 1]), "blockingFailures": []}
+        elif args.evidence is None:
             if accounting["jobCount"] != ORDER.index(args.fixture_key) or Decimal(accounting["conservativeUsd"]) + Decimal("2.450000") > Decimal("156.800000"):
                 raise GateError("accounting", "next serialized job cannot reserve its worst case")
             receipt["status"] = "development-prepared"
