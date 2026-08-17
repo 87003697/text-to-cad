@@ -96,7 +96,81 @@ def _overhang_facts(mesh: trimesh.Trimesh, angle_limit: float) -> dict:
 
 
 def _wall_facts(mesh: trimesh.Trimesh, samples: int, seed: int = 42) -> dict:
-    """Ray-cast thickness field from area-weighted surface samples."""
+    """Ray-cast thickness field, measured one connected body at a time.
+
+    Cast against a whole assembly, a ray leaving one body can cross a mating
+    clearance and land on its neighbour, which records the fit gap as a wall.
+    A tight-clearance assembly then reports a wall-thickness violation that no
+    single part actually has. Splitting first makes that impossible, because
+    each body is only ever measured against itself.
+    """
+    bodies = mesh.split(only_watertight=False)
+    if len(bodies) <= 1:
+        facts = _wall_facts_single(mesh, samples, seed)
+        facts.pop("_thickness", None)
+        facts.pop("_origins", None)
+        return facts
+
+    areas = np.array([float(b.area) for b in bodies])
+    if not np.isfinite(areas).all() or areas.sum() <= 0.0:
+        return {
+            "samples": 0,
+            "note": "no positive face area; mesh is degenerate, thickness not measured",
+        }
+
+    # Split the sample budget by surface area so a large body is not measured
+    # at the same resolution as a small one, with a floor so small bodies are
+    # still sampled at all.
+    share = areas / areas.sum()
+    pooled: list = []
+    pooled_origins: list = []
+    per_body: list = []
+    for i, (body, frac) in enumerate(zip(bodies, share)):
+        budget = max(int(round(samples * frac)), 64)
+        facts = _wall_facts_single(body, budget, seed + i)
+        per_body.append({
+            "body": i,
+            "min_mm": facts.get("min_mm"),
+            "median_mm": facts.get("median_mm"),
+            "samples_valid": facts.get("samples_valid", 0),
+        })
+        if "_thickness" in facts:
+            pooled.append(facts["_thickness"])
+            pooled_origins.append(facts["_origins"])
+
+    if not pooled:
+        return {
+            "error": "no valid thickness samples",
+            "body_count": len(bodies),
+            "per_body": per_body,
+        }
+
+    thickness = np.concatenate(pooled)
+    origins = np.concatenate(pooled_origins)
+    thin_idx = np.argsort(thickness)[:8]
+
+    return {
+        "body_count": len(bodies),
+        "measured_per_body": True,
+        "samples_valid": int(len(thickness)),
+        "min_mm": round(float(thickness.min()), 3),
+        "p05_mm": round(float(np.percentile(thickness, 5)), 3),
+        "p25_mm": round(float(np.percentile(thickness, 25)), 3),
+        "median_mm": round(float(np.median(thickness)), 3),
+        "max_mm": round(float(thickness.max()), 3),
+        "per_body": per_body,
+        "thinnest_samples": [
+            {
+                "location_xyz": [round(float(v), 2) for v in origins[i]],
+                "thickness_mm": round(float(thickness[i]), 3),
+            }
+            for i in thin_idx
+        ],
+    }
+
+
+def _wall_facts_single(mesh: trimesh.Trimesh, samples: int, seed: int = 42) -> dict:
+    """Ray-cast thickness field for ONE connected body."""
     rng = np.random.default_rng(seed)
     n = min(samples, max(len(mesh.faces), 1))
     face_idx = rng.choice(len(mesh.faces), size=n,
@@ -137,6 +211,11 @@ def _wall_facts(mesh: trimesh.Trimesh, samples: int, seed: int = 42) -> dict:
             }
             for i in thin_idx
         ],
+        # Underscore keys are internal: _wall_facts pools them across bodies
+        # and strips them before anything is printed. They are numpy arrays
+        # and would not survive json.dumps.
+        "_thickness": thickness,
+        "_origins": hit_origins,
     }
 
 
@@ -192,6 +271,43 @@ def _orientation_facts(mesh: trimesh.Trimesh, angle_limit: float) -> dict:
     return {"angle_limit_used_deg": angle_limit, "candidates": out}
 
 
+def _safe(fn, *args) -> dict:
+    """Run one fact family, degrading to an error field instead of a traceback.
+
+    measure assembles every family before printing, so one throwing family
+    used to cost the user the facts that did compute: a planar mesh dies in
+    convex_hull and took the whole report with it. Each family now fails on
+    its own and the rest still reach the caller as JSON.
+    """
+    try:
+        return fn(*args)
+    except Exception as exc:  # noqa: BLE001 - report it, never propagate
+        detail = f"{type(exc).__name__}: {exc}".splitlines()[0]
+        return {"error": detail[:300]}
+
+
+def _scale_hint(mesh: trimesh.Trimesh) -> dict:
+    """Flag meshes whose units are probably not millimetres.
+
+    A meters-scale export measures a bbox like 0.05 x 0.02 x 0.04, which sits
+    under the 0.1 mm on-plate tolerance: every down-facing face reads as
+    resting on the plate, so overhangs and support both come back 0.0 and the
+    part looks like a flawless print. Give the workflow something measured to
+    branch on rather than asking the agent to eyeball the bounding box.
+    """
+    diag = float(np.linalg.norm(mesh.extents))
+    suspect = bool(np.isfinite(diag) and diag < 1.0)
+    return {
+        "bbox_diagonal_mm": round(diag, 4),
+        "units_suspect": suspect,
+        "note": (
+            "bbox diagonal under 1 mm; source is probably in meters or inches. "
+            "Rescale to millimetres before trusting overhang, support or "
+            "thickness numbers."
+        ) if suspect else "bbox consistent with millimetre units",
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="command", required=True)
@@ -216,15 +332,17 @@ def main() -> int:
     if args.command == "measure":
         report = {
             "file": args.mesh,
-            "mesh": _mesh_facts(mesh),
-            "overhangs": _overhang_facts(mesh, args.angle_limit),
-            "wall_thickness": _wall_facts(mesh, args.samples),
-            "support_volume": _support_volume_facts(mesh, args.angle_limit),
+            "mesh": _safe(_mesh_facts, mesh),
+            "scale": _safe(_scale_hint, mesh),
+            "overhangs": _safe(_overhang_facts, mesh, args.angle_limit),
+            "wall_thickness": _safe(_wall_facts, mesh, args.samples),
+            "support_volume": _safe(_support_volume_facts, mesh, args.angle_limit),
         }
     else:
         report = {
             "file": args.mesh,
-            "orientations": _orientation_facts(mesh, args.angle_limit),
+            "scale": _safe(_scale_hint, mesh),
+            "orientations": _safe(_orientation_facts, mesh, args.angle_limit),
         }
 
     print(json.dumps(report, indent=2))

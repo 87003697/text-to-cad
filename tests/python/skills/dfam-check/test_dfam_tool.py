@@ -177,3 +177,100 @@ class CliTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MultiBodyWallTest(unittest.TestCase):
+    """A mating clearance is not a wall.
+
+    Cast against a whole assembly, a ray can leave one body, cross the fit gap
+    and land on its neighbour, recording the gap as wall thickness. Measuring
+    per body makes that impossible.
+    """
+
+    def _assembly(self, tmp: Path) -> str:
+        socket = Box(10, 10, 10) - Box(6.6, 6.6, 20)     # 1.7 mm wall
+        peg = Box(6.0, 6.0, 8)                           # 0.3 mm clearance a side
+        export_stl(socket, str(tmp / "socket.stl"))
+        export_stl(peg, str(tmp / "peg.stl"))
+        merged = trimesh.util.concatenate([
+            trimesh.load(str(tmp / "socket.stl"), force="mesh"),
+            trimesh.load(str(tmp / "peg.stl"), force="mesh"),
+        ])
+        path = tmp / "mating.stl"
+        merged.export(str(path))
+        return str(path)
+
+    def test_each_body_is_measured_against_itself(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            facts = dfam_tool._wall_facts(dfam_tool._load(self._assembly(tmp)), samples=2000)
+
+        self.assertEqual(facts["body_count"], 2)
+        self.assertTrue(facts["measured_per_body"])
+
+        thinnest = min(b["min_mm"] for b in facts["per_body"] if b["min_mm"] is not None)
+        # 0.3 mm is the fit gap; the thinnest real wall is the 1.7 mm socket.
+        self.assertGreater(thinnest, 1.0)
+
+    def test_internal_arrays_never_reach_the_payload(self) -> None:
+        """The pooled arrays are numpy and would not survive json.dumps."""
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            for path in (self._assembly(tmp), _stl(Box(20, 20, 15), tmp, "solid")):
+                facts = dfam_tool._wall_facts(dfam_tool._load(path), samples=400)
+                leaked = [k for k in facts if k.startswith("_")]
+                self.assertEqual(leaked, [], f"{path} leaked {leaked}")
+                json.dumps(facts)
+
+    def test_single_body_keeps_the_flat_result_shape(self) -> None:
+        """One body must not acquire per-body keys, and must stay accurate.
+
+        Uses a hollow box because a solid box has a bimodal thickness field
+        (15 mm through the flats, 20 mm through the sides), so asserting a
+        single median would only be testing the triangulation.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            path = _stl(_hollow_box(2.0), tmp, "hollow_single")
+            facts = dfam_tool._wall_facts(dfam_tool._load(path), samples=800)
+
+        self.assertNotIn("body_count", facts)
+        self.assertNotIn("per_body", facts)
+        self.assertAlmostEqual(facts["median_mm"], 2.0, delta=0.4)
+
+
+class ResilienceTest(unittest.TestCase):
+    def test_one_failing_family_does_not_lose_the_others(self) -> None:
+        """A planar mesh kills convex_hull; the rest of the report survives."""
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "planar.stl"
+            trimesh.Trimesh(
+                vertices=[[0, 0, 0], [10, 0, 0], [0, 10, 0]],
+                faces=[[0, 1, 2]],
+                process=False,
+            ).export(str(path))
+            payload = _run_cli(["measure", str(path)])
+
+        self.assertIn("error", payload["support_volume"])
+        self.assertNotIn("error", payload["overhangs"])
+        self.assertNotIn("error", payload["mesh"])
+
+
+class ScaleHintTest(unittest.TestCase):
+    """Sub-millimetre bbox means wrong units, not a flawless part."""
+
+    def test_meters_scale_mesh_is_flagged(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            small = dfam_tool._load(_stl(Box(0.05, 0.02, 0.04), tmp, "meters"))
+            big = dfam_tool._load(_stl(Box(20, 20, 15), tmp, "mm"))
+
+        self.assertTrue(dfam_tool._scale_hint(small)["units_suspect"])
+        self.assertFalse(dfam_tool._scale_hint(big)["units_suspect"])
+
+    def test_scale_appears_in_both_subcommands(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            path = _stl(Box(20, 20, 15), tmp, "box")
+            self.assertIn("scale", _run_cli(["measure", path]))
+            self.assertIn("scale", _run_cli(["orientations", path]))

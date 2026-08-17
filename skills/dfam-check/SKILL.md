@@ -68,13 +68,19 @@ Compare only trustworthy pairs of evidence.
   field) and the measured fact (JSON field path) for every finding.
 - Treat `p05_mm` below the wall-thickness limit as a violation even when
   `min_mm` alone could be a sampling outlier; report both values.
+- On an assembly, `wall_thickness` reports `body_count` and a `per_body`
+  breakdown. Attribute a violation to the body it belongs to; a thin figure
+  pooled across bodies is not a finding against the part as a whole.
 - Do not apply support-angle findings to powder processes (SLS, MJF); the
   relevant powder-process check is trapped-volume powder escape, which this
   tool does not yet measure — report that as `❓ need more info` when
   enclosed cavities are likely.
-- Do not silently rescale geometry. If the bounding box suggests wrong units
-  (for example a 0.03 mm "part"), report a unit/scale finding and ask the
-  user to confirm units before applying any material-specific comparisons.
+- Do not silently rescale geometry. `scale.units_suspect` is measured from
+  the bounding-box diagonal: when it is `true`, the source is probably in
+  meters or inches, every down-facing face reads as resting on the plate, and
+  overhang and support figures of 0.0 mean nothing. Report a unit/scale
+  finding and ask the user to confirm units before comparing anything against
+  a material limit.
 - Support-volume ratios are coarse upper bounds; report them as cost
   signals, not hard failures, unless the user has set an explicit budget.
 

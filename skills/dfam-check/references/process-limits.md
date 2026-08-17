@@ -38,3 +38,21 @@ category structure (feature limits §6.5, support structures §6.7).
 - **Orientation candidates** are the six axis-aligned rotations only.
   A candidate reaching materially lower support area than the current
   orientation is a finding worth reporting with its build-height tradeoff.
+
+
+## What the tool measures today
+
+`dfam_tool.py` returns measured values for **min supported wall**, **min
+unsupported wall** (both from the thickness field) and **self-supporting
+angle** (from the overhang map). Those rows can be compared directly against
+the limits above.
+
+**Min hole diameter**, **min positive feature** and **max unsupported bridge**
+have no measured counterpart yet. Treat them the way the trapped-powder gap is
+treated: report them as not checked, rather than inferring them from a render,
+the bounding box, or the triangle count. A limit with no measurement behind it
+is not a finding.
+
+Wall thickness is measured per connected body. An assembly reports a
+`per_body` breakdown alongside the pooled figures, because a ray crossing a
+mating clearance would otherwise record the fit gap as a wall.

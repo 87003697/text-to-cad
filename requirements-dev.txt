@@ -19,6 +19,7 @@ ezdxf
 playwright
 # - skills/dfam-check/requirements.txt
 rtree
+scipy
 
 # Extra third-party requirements used by repo tests.
 networkx
