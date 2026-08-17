@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import io
 import importlib.util
 import json
 import os
@@ -1151,6 +1152,61 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(status, 143)
         self.assertFalse(state.workload_started)
         wait_workload.assert_not_called()
+
+    def test_run_pilot_reports_closed_sidecar_failure_check(self) -> None:
+        """A closed Sidecar error remains diagnosable after cleanup."""
+
+        supervisor = self.supervisor
+
+        class FakeSidecar:
+            @classmethod
+            def create(cls, *args, **kwargs):
+                return cls()
+
+            def __init__(self):
+                self.capability_dir = Path("/private/tmp/fixed-capability")
+
+            def start(self):
+                raise supervisor.BrowserSidecarError(
+                    "Broker stopped before readiness",
+                    check="broker-readiness-exit",
+                )
+
+            def close(self, *, workload_status):
+                return {"schema": supervisor.RECEIPT_SCHEMA, "status": "failed"}
+
+        stderr = io.StringIO()
+        with (
+            tempfile.TemporaryDirectory(dir="/tmp") as temp,
+            mock.patch.object(supervisor, "REPO_ROOT", Path(temp)),
+            mock.patch.object(supervisor, "prepare_exp"),
+            mock.patch.object(supervisor, "prepare_nested_browser_gate"),
+            mock.patch.object(supervisor, "BrowserSidecarJob", FakeSidecar),
+            mock.patch.object(
+                supervisor,
+                "finalize_pilot",
+                side_effect=lambda exp, status, env, **kwargs: status,
+            ),
+            mock.patch.object(
+                supervisor,
+                "validate_exp_dir",
+                return_value=Path(temp).resolve() / "outputs/group/exp",
+            ),
+            mock.patch("sys.stderr", stderr),
+        ):
+            status = supervisor.run_pilot(
+                Path(temp) / "outputs/group/exp",
+                [],
+                ["/fake/workload"],
+                self.environ,
+            )
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "Browser Sidecar failed (broker-readiness-exit): "
+            "Broker stopped before readiness",
+            stderr.getvalue(),
+        )
 
     def test_run_pilot_owns_sidecar_around_nested_workload(self) -> None:
         events: list[object] = []

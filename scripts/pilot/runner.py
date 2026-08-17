@@ -1841,6 +1841,16 @@ def run_pilot(
                 if relay.cancelled
                 else 1
             )
+        except BrowserSidecarError as exc:
+            print(
+                f"pilot-runner: Browser Sidecar failed ({exc.check}): {exc}",
+                file=sys.stderr,
+            )
+            workload_status = (
+                128 + (relay.signum or signal.SIGTERM)
+                if relay.cancelled
+                else 1
+            )
         except Exception as exc:
             print(
                 f"pilot-runner: Browser Sidecar failed ({type(exc).__name__})",
