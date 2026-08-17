@@ -163,7 +163,7 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Broker OCI revision:
   `091b9d3b95f2b7797c1cac9414f05439923a439c`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:a2340cd95da6fb761e6d6680d419e793e953c9f8c86abd11f5f22f96be377b72`
+  `sha256:f2a80453c5a5f5e3a6f81c162cefd8e6fbe6989fc39a95c6434f473b1649351a`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with

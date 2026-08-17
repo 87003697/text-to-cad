@@ -102,6 +102,32 @@ def _surface_os_stage(exc: BaseException) -> str | None:
     return None
 
 
+def _surface_root_category(target_root: str) -> str:
+    """Reduce one validated sandbox scan root to a fixed non-path category."""
+
+    if target_root == "/usr":
+        return "system-usr"
+    if target_root == "/etc" or target_root.startswith("/etc/"):
+        return "system-config"
+    if target_root == "/workspace/repo/.venv":
+        return "venv"
+    if target_root.startswith("/workspace/repo/gateway/"):
+        return "gateway"
+    if target_root.startswith("/workspace/repo/skills/") or target_root.startswith(
+        "/home/pilot/.codex/skills/"
+    ):
+        return "skill"
+    if target_root.startswith("/workspace/repo/outputs/"):
+        return "experiment"
+    if target_root == "/home/pilot/.codex":
+        return "codex-home"
+    if target_root in {"/sys", "/var/tmp"}:
+        return "empty-system"
+    if target_root.startswith("/workspace/repo/"):
+        return "input"
+    return "other"
+
+
 class GateCheckError(ValueError):
     """One closed nested-gate stage failed without exporting its exception."""
 
@@ -120,9 +146,12 @@ def _checked(stage: str, operation: Any) -> Any:
     except GateCheckError:
         raise
     except BrowserSurfaceRootError as exc:
+        os_stage = _surface_os_stage(exc)
+        if os_stage == "surface-os-permission":
+            os_stage = f"{os_stage}-{_surface_root_category(exc.target_root)}"
         closed_stage = (
             (
-                _surface_os_stage(exc)
+                os_stage
                 if exc.reason == "cannot inspect mounted browser surface"
                 else SURFACE_FAILURE_STAGES.get(exc.reason)
             )

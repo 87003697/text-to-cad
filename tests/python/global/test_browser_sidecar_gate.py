@@ -266,8 +266,24 @@ class BrowserSidecarGateTests(unittest.TestCase):
                 mock.Mock(side_effect=failure),
             )
 
-        self.assertEqual(caught.exception.stage, "surface-os-permission")
+        self.assertEqual(caught.exception.stage, "surface-os-permission-other")
         self.assertNotIn("private", str(caught.exception))
+
+        categories = {
+            "/usr": "system-usr",
+            "/etc/ssl": "system-config",
+            "/workspace/repo/.venv": "venv",
+            "/workspace/repo/gateway/codex-tap-gpt56": "gateway",
+            "/workspace/repo/skills/cad": "skill",
+            "/home/pilot/.codex/skills/cad": "skill",
+            "/workspace/repo/outputs/group/exp": "experiment",
+            "/home/pilot/.codex": "codex-home",
+            "/sys": "empty-system",
+            "/workspace/repo/models/input.ply": "input",
+        }
+        for target, expected in categories.items():
+            with self.subTest(target=target):
+                self.assertEqual(gate._surface_root_category(target), expected)
 
     def test_gate_exec_surface_has_no_render_arguments_or_shell(self) -> None:
         source = GATE_PATH.read_text(encoding="utf-8")
