@@ -134,6 +134,24 @@ OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
 MAX_REQUEST_BYTES = 1024 * 1024
 
 
+def _broker_runtime_user_options() -> tuple[str, ...]:
+    """Run the Broker as the host owner with one private writable home."""
+
+    uid = os.getuid()
+    gid = os.getgid()
+    return (
+        "--tmpfs",
+        "/tmp:rw,nosuid,nodev,size=32m,mode=1777",
+        "--tmpfs",
+        (
+            "/home/pwuser:rw,nosuid,nodev,size=16m,"
+            f"uid={uid},gid={gid},mode=700"
+        ),
+        "--user",
+        f"{uid}:{gid}",
+    )
+
+
 class BrowserSidecarError(RuntimeError):
     """One closed formal-pilot Browser Sidecar lifecycle failure."""
 
@@ -1435,10 +1453,7 @@ class BrowserSidecarJob:
                 "384m",
                 "--cpus",
                 "0.5",
-                "--tmpfs",
-                "/tmp:rw,nosuid,nodev,size=32m,mode=1777",
-                "--user",
-                f"{os.getuid()}:{os.getgid()}",
+                *_broker_runtime_user_options(),
                 "--mount",
                 (
                     "type=bind,src="

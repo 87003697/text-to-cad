@@ -82,6 +82,26 @@ def configure_gate(job: browser_sidecar.BrowserSidecarJob) -> None:
 class BrowserSidecarJobTests(unittest.TestCase):
     """Observe one complete exact-image lifecycle through its public adapter."""
 
+    def test_broker_runtime_user_has_matching_private_home(self) -> None:
+        with (
+            mock.patch.object(browser_sidecar.os, "getuid", return_value=1234),
+            mock.patch.object(browser_sidecar.os, "getgid", return_value=5678),
+        ):
+            self.assertEqual(
+                browser_sidecar._broker_runtime_user_options(),
+                (
+                    "--tmpfs",
+                    "/tmp:rw,nosuid,nodev,size=32m,mode=1777",
+                    "--tmpfs",
+                    (
+                        "/home/pwuser:rw,nosuid,nodev,size=16m,"
+                        "uid=1234,gid=5678,mode=700"
+                    ),
+                    "--user",
+                    "1234:5678",
+                ),
+            )
+
     def test_runtime_binding_accepts_only_current_two_image_provision(self) -> None:
         handle = "cvmsp-" + "1" * 24
         sidecar_runtime_id = "sha256:" + "a" * 64
@@ -440,6 +460,25 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertIn("--read-only", broker_create)
         self.assertIn("--mount", broker_create)
         self.assertIn(browser_sidecar.BROKER_IMAGE_ID, broker_create)
+        broker_tmpfs = [
+            broker_create[index + 1]
+            for index, argument in enumerate(broker_create)
+            if argument == "--tmpfs"
+        ]
+        self.assertEqual(
+            broker_tmpfs,
+            [
+                "/tmp:rw,nosuid,nodev,size=32m,mode=1777",
+                (
+                    "/home/pwuser:rw,nosuid,nodev,size=16m,"
+                    f"uid={os.getuid()},gid={os.getgid()},mode=700"
+                ),
+            ],
+        )
+        self.assertEqual(
+            broker_create[broker_create.index("--user") + 1],
+            f"{os.getuid()}:{os.getgid()}",
+        )
         broker_bind = next(
             value for value in broker_create if value.startswith("type=bind,")
         )
