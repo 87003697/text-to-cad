@@ -62,7 +62,13 @@ class BrowserSidecarGateTests(unittest.TestCase):
         surface = {
             "schema": "meshshot.browser-sidecar.agent-browser-surface/1",
             "scanRoots": ["/usr"],
-            "browserExclusions": [],
+            "browserExclusions": [
+                {
+                    "kind": "system",
+                    "target": "/usr/share/polkit-1/rules.d",
+                    "mask": "tmpfs",
+                }
+            ],
         }
         identity = {
             "schema": "meshshot.browser-sidecar.nested-gate-input/1",
@@ -119,7 +125,10 @@ class BrowserSidecarGateTests(unittest.TestCase):
             mock.patch.object(gate, "_viewer_request", return_value=viewer) as request,
             mock.patch.object(gate, "load_gate_identity", return_value=identity),
             mock.patch.object(gate, "_authority", return_value={"jobId": "formal-job-1"}),
-            mock.patch.object(gate, "discover_browser_roots", return_value=[]),
+            mock.patch.object(gate, "_exclusions_closed", return_value=True),
+            mock.patch.object(
+                gate, "discover_browser_roots", return_value=[]
+            ) as discover,
             mock.patch.object(gate, "_browser_processes", return_value=[]),
         ):
             proof = gate.run_gate_checks()
@@ -150,6 +159,10 @@ class BrowserSidecarGateTests(unittest.TestCase):
         )
         request.assert_called_once_with(identity)
         public_api.assert_called_once()
+        self.assertEqual(
+            discover.call_args.kwargs["masked_source_roots"],
+            [Path("/usr/share/polkit-1/rules.d")],
+        )
         self.assertEqual(public_api.call_args.kwargs, {
             "variant": "step",
             "exterior_directions": [],

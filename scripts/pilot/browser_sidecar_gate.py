@@ -435,6 +435,11 @@ def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, A
                 Path("/proc/mounts"),
                 Path("/proc/self/mounts"),
             ],
+            masked_source_roots=[
+                Path(item["target"])
+                for item in manifest["browserExclusions"]
+                if item["mask"] == "tmpfs"
+            ],
         ),
     )
     excluded_targets = {item["target"] for item in manifest["browserExclusions"]}

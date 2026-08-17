@@ -45,6 +45,9 @@ the session JSONL. The dirty `develop` root was not used or modified.
   escaping, cyclic, or uninspectable targets close, and reachable in-root
   targets are inspected once. Read-only findings receive canonical deterministic
   bwrap masks that are rechecked by the same scanner in the nested namespace.
+  The nested scanner consumes the exact signed `tmpfs` targets as its masked
+  roots, preserving the host walker's link closure after those directories are
+  intentionally emptied.
   Exact duplicates are stable, and a shortest covering directory `tmpfs` mask
   removes every descendant mask. The outer bwrap builder and nested gate reject
   any non-antichain manifest, so parent-empty and child-exists predicates cannot
@@ -176,7 +179,7 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Broker OCI revision:
   `091b9d3b95f2b7797c1cac9414f05439923a439c`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:0a8ef4357fd8029d4d99516a62044094b2c20f554e7f88ee1f5edff3dfff7d0d`
+  `sha256:43ba53a3d9cd5bb3d1135287f2670f2043a9dff39dcac4b2eaf2ed2ee8636345`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with
