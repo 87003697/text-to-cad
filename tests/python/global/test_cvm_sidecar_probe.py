@@ -243,7 +243,11 @@ def write_portable_archive_docker(path: Path) -> None:
                 tags = load_tags()
                 references = sys.argv[5:]
                 saved = [tags[reference] for reference in references]
-                assert saved in ([sidecar, client], [sidecar, client, broker])
+                assert saved in (
+                    [sidecar, broker],
+                    [sidecar, client],
+                    [sidecar, client, broker],
+                )
                 if os.environ.get("FAKE_MANIFEST_VARIANT") == "opaque":
                     output.write_bytes(b"opaque fixed docker-save output" + bytes([10]))
                     raise SystemExit(0)
@@ -697,17 +701,31 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             self.assertEqual(error.exception.check, "prepare-cleanup-absence")
             self.assertFalse(save_called)
 
-    def test_public_wrapper_exposes_only_prepare_provision_and_probe(self) -> None:
-        result = subprocess.run(
-            [WRAPPER, "remote-probe", "cvmsp-" + "0" * 24],
-            cwd=REPO_ROOT,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+    def test_current_skill_exposes_only_two_image_prepare_and_provision(self) -> None:
+        prepare = cvm_sidecar_probe.parse_args(
+            [
+                "prepare",
+                "--sidecar-source-revision",
+                SOURCE_REVISION,
+                "--sidecar-image",
+                SIDECAR_ID,
+                "--broker-source-revision",
+                BROKER_SOURCE_REVISION,
+                "--broker-image",
+                BROKER_ID,
+            ]
         )
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("prepare|provision|probe", result.stderr)
+        self.assertEqual(prepare.operation, "prepare")
+        self.assertEqual(prepare.sidecar_image, SIDECAR_ID)
+        self.assertEqual(prepare.broker_image, BROKER_ID)
+
+        skill = (
+            REPO_ROOT / ".claude/skills/cvm-sidecar-provision/SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("--sidecar-source-revision", skill)
+        self.assertIn("--broker-source-revision", skill)
+        self.assertNotIn("--client-image", skill)
+        self.assertNotIn(" one-shot probe", skill.lower())
 
         ignores = (REPO_ROOT / ".cvmignore").read_text(encoding="utf-8")
         gitignores = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
@@ -823,6 +841,52 @@ class CvmSidecarProbeCliTests(unittest.TestCase):
             ],
         )
         self.assertNotEqual(receipt["images"][1]["id"], receipt["images"][2]["id"])
+
+    def test_prepare_current_runtime_archives_only_sidecar_and_broker(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="cvm-sidecar-current-prepare-"
+        ) as root_text:
+            root = Path(root_text)
+            repo = root / "repo"
+            wrapper = copy_cli(repo)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            write_image_docker(fake_bin / "docker")
+
+            result = subprocess.run(
+                [
+                    wrapper,
+                    "prepare",
+                    "--sidecar-source-revision",
+                    SOURCE_REVISION,
+                    "--sidecar-image",
+                    SIDECAR_ID,
+                    "--broker-source-revision",
+                    BROKER_SOURCE_REVISION,
+                    "--broker-image",
+                    BROKER_ID,
+                ],
+                cwd=repo,
+                env=cli_env(fake_bin),
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            receipt = json.loads(result.stdout)
+
+        self.assertEqual(
+            [
+                (image["role"], image["id"], image["sourceRevision"])
+                for image in receipt["images"]
+            ],
+            [
+                ("sidecar", SIDECAR_ID, SOURCE_REVISION),
+                ("broker", BROKER_ID, BROKER_SOURCE_REVISION),
+            ],
+        )
 
     def test_prepare_rejects_revision_not_bound_by_both_image_configs(self) -> None:
         with tempfile.TemporaryDirectory(prefix="cvm-sidecar-source-bind-") as root_text:

@@ -17,7 +17,7 @@ Use these durable entrypoints for normal work:
 | Run one Toys4K pilot | `scripts/pilot/toys4k-pilot.sh <object> <group>` |
 | Run a Toys4K pilot batch | `scripts/pilot/toys4k-batch.sh <slug> <object>...` |
 | Push the current source overlay to CVM | `scripts/pilot/cvm-push.sh` |
-| Provision/probe exact Browser Sidecar images | `scripts/pilot/cvm-sidecar-probe.sh prepare|provision|probe ...` |
+| Provision exact Browser Sidecar runtime images | `scripts/pilot/cvm-sidecar-probe.sh prepare|provision ...` |
 | Submit a detached CVM pilot | `scripts/pilot/cvm-submit.sh pilot <object> <group>` |
 | Monitor a CVM job | `scripts/pilot/cvm-monitor.sh --once|--wait <handle>` |
 | Pull terminal CVM outputs | `scripts/pilot/cvm-pull.sh --exp|--group ...` |

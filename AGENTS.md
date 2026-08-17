@@ -12,8 +12,8 @@ don't need this file.
 
 - **Branches.** Work on `develop`. Do not use `main` for dev work.
 - **CVM operations.** Push code, pull pilot outputs, batch code snapshots, and
-  Browser Sidecar image provisioning/probes go through skills — `/cvm-push`,
-  `/cvm-pull`, `/snapshot-batch`, `/cvm-sidecar-probe` — not raw
+  Browser Sidecar image provisioning go through skills — `/cvm-push`,
+  `/cvm-pull`, `/snapshot-batch`, `/cvm-sidecar-provision` — not raw
   `rsync`/`scp`/`aws s3 cp`. See
   `.claude/skills/cvm-*/SKILL.md`.
 - **Skill isolation.** Skills are self-contained at runtime. No imports

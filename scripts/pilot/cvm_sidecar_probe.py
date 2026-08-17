@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Provision exact Browser Sidecar images and run one bounded CVM probe."""
+"""Provision exact Browser Sidecar runtime images on CVM."""
 
 from __future__ import annotations
 
@@ -932,11 +932,34 @@ def _cleanup_failed_prepare(
 
 
 def prepare(args: argparse.Namespace) -> Mapping[str, object]:
-    if SOURCE_REVISION.fullmatch(args.source_revision) is None:
-        raise ProbeError("source revision must be an exact 40-hex Git SHA")
+    sidecar_source_revision = getattr(args, "sidecar_source_revision", None)
+    legacy_source_revision = getattr(args, "source_revision", None)
+    legacy_client_image = getattr(args, "client_image", None)
     broker_image = getattr(args, "broker_image", None)
     broker_source_revision = getattr(args, "broker_source_revision", None)
-    if (broker_image is None) != (broker_source_revision is None):
+    current_runtime = sidecar_source_revision is not None
+    if current_runtime and (
+        legacy_source_revision is not None or legacy_client_image is not None
+    ):
+        raise ProbeError("current and legacy image arguments cannot be combined")
+    if current_runtime and (broker_image is None or broker_source_revision is None):
+        raise ProbeError(
+            "current runtime requires exact Sidecar and Broker images",
+            check="broker-revision",
+        )
+    if not current_runtime and (
+        legacy_source_revision is None or legacy_client_image is None
+    ):
+        raise ProbeError("legacy image arguments are incomplete")
+    source_revision = (
+        sidecar_source_revision if current_runtime else legacy_source_revision
+    )
+    assert isinstance(source_revision, str)
+    if SOURCE_REVISION.fullmatch(source_revision) is None:
+        raise ProbeError("source revision must be an exact 40-hex Git SHA")
+    if not current_runtime and (broker_image is None) != (
+        broker_source_revision is None
+    ):
         raise ProbeError(
             "Broker image and source revision must be supplied together",
             check="broker-revision",
@@ -951,15 +974,15 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
         )
     workflow_source_revision = _inspect_workflow_source()
     workflow_files = _workflow_file_hashes()
-    images = [
-        _inspect_image("sidecar", args.sidecar_image),
-        _inspect_image("client", args.client_image),
-    ]
-    expected_revisions = {
-        "sidecar": args.source_revision,
-        "client": args.source_revision,
-    }
-    if broker_image is not None:
+    images = [_inspect_image("sidecar", args.sidecar_image)]
+    expected_revisions = {"sidecar": source_revision}
+    if current_runtime:
+        images.append(_inspect_image("broker", broker_image))
+        expected_revisions["broker"] = broker_source_revision
+    else:
+        images.append(_inspect_image("client", legacy_client_image))
+        expected_revisions["client"] = source_revision
+    if not current_runtime and broker_image is not None:
         images.append(_inspect_image("broker", broker_image))
         expected_revisions["broker"] = broker_source_revision
     for image in images:
@@ -969,7 +992,7 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
                 check=f"{image['role']}-revision",
             )
     identity = {
-        "imageSourceRevision": args.source_revision,
+        "imageSourceRevision": source_revision,
         "workflowSourceRevision": workflow_source_revision,
         "workflowFiles": workflow_files,
         "images": [image["id"] for image in images],
@@ -1028,8 +1051,8 @@ def prepare(args: argparse.Namespace) -> Mapping[str, object]:
             "schema": "cvm-sidecar.prepare-receipt/1",
             "status": "prepared",
             "handle": handle,
-            "sourceRevision": args.source_revision,
-            "imageSourceRevision": args.source_revision,
+            "sourceRevision": source_revision,
+            "imageSourceRevision": source_revision,
             "workflowSourceRevision": workflow_source_revision,
             "workflowFiles": workflow_files,
             "images": images,
@@ -1630,19 +1653,21 @@ def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
                 "prepare receipt has no sidecar image",
                 check="sidecar-receipt",
             )
-        if len(images_payload) not in {2, 3}:
+        roles = [
+            image.get("role") for image in images_payload if isinstance(image, dict)
+        ]
+        if roles not in (
+            ["sidecar", "broker"],
+            ["sidecar", "client"],
+            ["sidecar", "client", "broker"],
+        ):
             raise ProbeError(
                 "prepare receipt does not name the fixed image roles",
                 check="client-receipt",
             )
-        expected_roles = (
-            ["sidecar", "client"]
-            if len(images_payload) == 2
-            else ["sidecar", "client", "broker"]
-        )
         images = [
             _verify_image_receipt(image, role, handle)
-            for image, role in zip(images_payload, expected_roles, strict=True)
+            for image, role in zip(images_payload, roles, strict=True)
         ]
         for image in images:
             reference = str(image["archiveReference"])
@@ -1674,9 +1699,7 @@ def remote_provision(handle: str, owner_nonce: str) -> Mapping[str, object]:
             raise ProbeError(
                 "loaded fixed image IDs are not distinct",
                 check=(
-                    "broker-loaded-id"
-                    if len(loaded_ids) == 3
-                    else "client-loaded-id"
+                    "broker-loaded-id" if "broker" in roles else "client-loaded-id"
                 ),
             )
         assert free_bytes is not None and verified_files is not None
@@ -2334,9 +2357,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="operation", required=True)
     prepare_parser = subparsers.add_parser("prepare")
-    prepare_parser.add_argument("--source-revision", required=True)
+    prepare_parser.add_argument("--sidecar-source-revision")
+    prepare_parser.add_argument("--source-revision", help=argparse.SUPPRESS)
     prepare_parser.add_argument("--sidecar-image", required=True)
-    prepare_parser.add_argument("--client-image", required=True)
+    prepare_parser.add_argument("--client-image", help=argparse.SUPPRESS)
     prepare_parser.add_argument("--broker-source-revision")
     prepare_parser.add_argument("--broker-image")
     provision_parser = subparsers.add_parser("provision")
