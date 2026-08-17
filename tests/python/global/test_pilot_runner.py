@@ -2059,6 +2059,12 @@ class ProductionPathContractTests(unittest.TestCase):
                 (source_usr, Path("/usr"), True),
                 (source_etc, Path("/etc"), True),
             ]
+            system_aliases = [
+                Path("/bin"),
+                Path("/lib"),
+                Path("/lib64"),
+                Path("/sbin"),
+            ]
             sidecar = mock.Mock()
             with (
                 mock.patch.object(
@@ -2066,6 +2072,11 @@ class ProductionPathContractTests(unittest.TestCase):
                 ),
                 mock.patch.object(
                     runner, "resolve_installed_skill_dirs", return_value=[]
+                ),
+                mock.patch.object(
+                    runner,
+                    "existing_system_alias_paths",
+                    return_value=system_aliases,
                 ),
                 mock.patch.object(runner, "prepare_sandbox", return_value=upper),
                 mock.patch.object(
@@ -2089,7 +2100,13 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertEqual(discover.call_args_list[0].args, (mounts,))
         self.assertEqual(
             discover.call_args_list[0].kwargs,
-            {"permitted_symlink_roots": [source_usr, source_etc]},
+            {
+                "permitted_symlink_roots": [
+                    source_usr,
+                    source_etc,
+                    *system_aliases,
+                ]
+            },
         )
         self.assertNotIn(
             "permitted_symlink_roots", discover.call_args_list[1].kwargs

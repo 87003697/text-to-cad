@@ -24,6 +24,7 @@ from types import FrameType
 from typing import Callable, Mapping
 
 try:
+    from scripts.pilot.browser_gate_contract import CONFORMANCE_SYSTEM_ALIAS_ROOTS
     from scripts.pilot.venus_retry_proxy import RetryProxy
     from scripts.pilot.browser_sidecar import (
         BROKER_BASE_IMAGE_ID,
@@ -47,6 +48,9 @@ try:
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
+    from browser_gate_contract import (  # type: ignore[no-redef]
+        CONFORMANCE_SYSTEM_ALIAS_ROOTS,
+    )
     from venus_retry_proxy import RetryProxy
     from browser_sidecar import (  # type: ignore[no-redef]
         BROKER_BASE_IMAGE_ID,
@@ -743,6 +747,13 @@ def existing_system_paths() -> list[Path]:
     return [path for path in SYSTEM_RO_PATHS if path.exists()]
 
 
+def existing_system_alias_paths() -> list[Path]:
+    """Return fixed usr-merge aliases that exist on this host surface."""
+
+    aliases = [Path(root) for root in CONFORMANCE_SYSTEM_ALIAS_ROOTS]
+    return [path for path in aliases if path.exists() or path.is_symlink()]
+
+
 def build_sandbox_environment(
     environ: Mapping[str, str],
     tap_url: str,
@@ -981,7 +992,10 @@ def prepare_nested_browser_gate(
     try:
         exclusions = discover_browser_roots(
             mounts,
-            permitted_symlink_roots=[source for source, _, _ in mounts],
+            permitted_symlink_roots=[
+                *(source for source, _, _ in mounts),
+                *existing_system_alias_paths(),
+            ],
         )
         writable_findings = discover_browser_roots(writable_mounts)
     except BrowserSurfaceRootError as exc:
