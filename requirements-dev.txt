@@ -29,5 +29,4 @@ playwright
 networkx
 lxml
 pytest
-setuptools==82.0.1
 trimesh

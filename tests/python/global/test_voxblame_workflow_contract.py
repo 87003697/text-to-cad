@@ -93,21 +93,6 @@ ALLOWED_REJECTION_OCCURRENCES = {
         "next_action": 1,
         "remaining_error_count": 1,
     },
-    "plugins/cad/skills/mesh-compare/scripts/packages/meshscope/src/meshscope/voxblame/CONTRACT.md": {
-        "change_counts": 1,
-        "coarsest_first_error_depth": 1,
-        "next_action": 2,
-        "remaining_error_count": 1,
-    },
-    "plugins/cad/skills/mesh-compare/scripts/packages/meshscope/src/meshscope/voxblame/contracts.py": {
-        "change_counts": 1,
-        "coarsest_first_error_depth": 1,
-        "next_action": 1,
-        "remaining_error_count": 1,
-    },
-    "plugins/cad/skills/mesh-to-cad/scripts/mesh-to-cad-workspace/workspace_core.py": {
-        "compare_metrics.json": 1,
-    },
     "skills/mesh-to-cad/scripts/mesh-to-cad-workspace/workspace_core.py": {
         "compare_metrics.json": 1,
     },

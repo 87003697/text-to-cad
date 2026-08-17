@@ -1326,10 +1326,7 @@ class WorkspaceCliTests(unittest.TestCase):
         ):
             runner_status = runner.run_pilot(
                 self.workspace,
-                [
-                    REPO_ROOT
-                    / "models/agent-runtime/cup_cup_033/input/cup_cup_033.ply"
-                ],
+                [],
                 workload,
                 dict(os.environ),
             )
