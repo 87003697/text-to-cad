@@ -455,8 +455,8 @@ class RegisteredProgramBroker:
             "viewerArtifactClean": False,
         }
 
-    def preflight(self) -> Mapping[str, object]:
-        """Prove exact baked authority, Source-Hidden, and blocked egress."""
+    def preflight(self, authority: Mapping[str, Any]) -> Mapping[str, object]:
+        """Prove fixed out-of-band authority and blocked browser egress."""
 
         context = self.browser.new_context(
             viewport={"width": 64, "height": 64},
@@ -471,26 +471,22 @@ class RegisteredProgramBroker:
             )
             result = page.evaluate(
                 """async () => {
-                  const response = await fetch("http://127.0.0.1:3001/v1/authority");
-                  if (!response.ok) throw new Error("authority endpoint failed");
-                  const authority = await response.json();
                   let externalEgressBlocked = false;
                   try {
                     await fetch("https://example.com/", { signal: AbortSignal.timeout(5000) });
                   } catch {
                     externalEgressBlocked = true;
                   }
-                  return { authority, externalEgressBlocked };
+                  return { externalEgressBlocked };
                 }"""
             )
         finally:
             context.close()
         result = _exact_object(
             result,
-            {"authority", "externalEgressBlocked"},
+            {"externalEgressBlocked"},
             "isolation-preflight",
         )
-        authority = result["authority"]
         if (
             not isinstance(authority, dict)
             or set(authority)
@@ -2085,7 +2081,7 @@ def run_broker(args: argparse.Namespace) -> int:
             )
             try:
                 broker = RegisteredProgramBroker(browser, args.job_id)
-                isolation = broker.preflight()
+                isolation = broker.preflight(authority)
                 server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 server.bind(str(socket_path))
                 os.chmod(socket_path, 0o600)

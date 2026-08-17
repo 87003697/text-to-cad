@@ -1257,28 +1257,25 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
         self.assertTrue(browser.contexts[0].closed)
 
     def test_preflight_requires_no_source_alias_and_blocked_browser_egress(self) -> None:
-        preflight_result = [
-            {
-                "authority": {
-                    "schema": "meshshot.browser-sidecar.prototype/1",
-                    "jobId": "formal-job-1",
-                    "endpointPath": "/browser/token",
-                    "browserPid": 321,
-                    "chromiumRevision": "1223",
-                    "chromiumVersion": "148.0.7778.96",
-                    "playwrightVersion": "1.60.0",
-                    "programs": PROGRAMS,
-                    "sourceAliasesVisible": [],
-                },
-                "externalEgressBlocked": True,
-            }
-        ]
+        authority = {
+            "schema": "meshshot.browser-sidecar.prototype/1",
+            "jobId": "formal-job-1",
+            "endpointPath": "/browser/token",
+            "browserPid": 321,
+            "chromiumRevision": "1223",
+            "chromiumVersion": "148.0.7778.96",
+            "playwrightVersion": "1.60.0",
+            "programs": PROGRAMS,
+            "sourceAliasesVisible": [],
+        }
+        preflight_result = [{"externalEgressBlocked": True}]
 
         class FakePage:
             def goto(self, url, **kwargs):
                 self.url = url
 
             def evaluate(self, expression, argument=None):
+                self.expression = expression
                 return preflight_result[0]
 
         class FakeContext:
@@ -1304,7 +1301,7 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
         browser = FakeBrowser()
         broker = browser_sidecar.RegisteredProgramBroker(browser, "formal-job-1")
 
-        receipt = broker.preflight()
+        receipt = broker.preflight(authority)
 
         self.assertEqual(
             receipt,
@@ -1315,19 +1312,12 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
             },
         )
         self.assertTrue(browser.contexts[0].closed)
+        self.assertNotIn("3001/v1/authority", browser.contexts[0].page.expression)
 
-        preflight_result[0] = {
-            "authority": {
-                "schema": "meshshot.browser-sidecar.prototype/1",
-                "jobId": "formal-job-1",
-                "programs": PROGRAMS,
-                "sourceAliasesVisible": ["/workspace"],
-                "browserPid": 321,
-            },
-            "externalEgressBlocked": True,
-        }
+        invalid_authority = dict(authority)
+        invalid_authority["sourceAliasesVisible"] = ["/workspace"]
         with self.assertRaisesRegex(browser_sidecar.BrowserSidecarError, "isolation"):
-            broker.preflight()
+            broker.preflight(invalid_authority)
 
 
 if __name__ == "__main__":
