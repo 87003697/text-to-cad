@@ -13,13 +13,14 @@ assembly manifest from the package at read time (see the design doc, sec. 6/8).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 from pathlib import Path
 from typing import Any, Mapping
 
-from cadgen._internal.atomic_replace import replace_atomic
+from cadgen._internal.atomic_replace import replace_atomic, temp_suffix
 from cadgen.catalog import render_package_dir
 from cadgen._internal.generation import (
     DEFAULT_MESH_ANGULAR_TOLERANCE,
@@ -384,7 +385,7 @@ def _write_component_glb_atomic(
     """Build to a sibling temp file and rename into place, so a killed build
     never leaves a truncated ``<cid>.glb`` that a later run would trust as a
     valid content-addressed cache hit."""
-    temp_path = out_glb.with_name(f"{out_glb.name}.tmp{os.getpid()}")
+    temp_path = out_glb.with_name(f"{out_glb.name}{temp_suffix()}")
     try:
         build_component_glb_from_shape(
             shape,
@@ -395,7 +396,10 @@ def _write_component_glb_atomic(
         )
         replace_atomic(temp_path, out_glb)
     finally:
-        temp_path.unlink(missing_ok=True)
+        # The handle that blocks a rename blocks the delete too; letting that escape would
+        # replace the real failure with a cleanup error.
+        with contextlib.suppress(OSError):
+            temp_path.unlink(missing_ok=True)
     return out_glb
 
 
@@ -765,7 +769,7 @@ def build_package_from_compound(
     # Atomic: a reader polling this package must never observe a truncated descriptor.
     # write_text() truncates in place, so a concurrent status read could see half a file
     # and report the package unreadable.
-    _descriptor_tmp = package_dir / f".{DESCRIPTOR_NAME}.tmp{os.getpid()}"
+    _descriptor_tmp = package_dir / f".{DESCRIPTOR_NAME}{temp_suffix()}"
     _descriptor_tmp.write_text(json.dumps(descriptor))
     replace_atomic(_descriptor_tmp, package_dir / DESCRIPTOR_NAME)
     # The lazy whole-assembly topology sidecar was extracted against the
