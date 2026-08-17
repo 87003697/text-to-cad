@@ -412,7 +412,15 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory(prefix="meshscope-closed-wheel-") as directory:
             root = Path(directory)
-            source = closure.meshscope_source_record(REPO_ROOT)
+            clean_repo = root / "source-repo"
+            shutil.copytree(
+                REPO_ROOT / "packages/meshscope",
+                clean_repo / "packages/meshscope",
+                ignore=shutil.ignore_patterns(
+                    "__pycache__", "*.egg-info", "_native.*.so"
+                ),
+            )
+            source = closure.meshscope_source_record(clean_repo)
             wheel = root / "meshscope-0.1.0-cp312-cp312-linux_x86_64.whl"
             libraries = {
                 name: root / name
