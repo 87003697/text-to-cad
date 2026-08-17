@@ -111,7 +111,6 @@ SYSTEM_RO_PATHS = (
     Path("/etc/pki"),
     Path("/etc/resolv.conf"),
     Path("/etc/ssl"),
-    Path("/sys"),
 )
 SANDBOX_ENV_PASSTHROUGH = (
     "HTTP_PROXY",
@@ -1202,6 +1201,8 @@ def build_bwrap_argv(
         "/home",
         "--dir",
         "/run",
+        "--dir",
+        "/sys",
         "--dir",
         "/var",
         "--dir",

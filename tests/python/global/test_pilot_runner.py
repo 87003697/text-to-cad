@@ -1898,6 +1898,8 @@ class ProductionPathContractTests(unittest.TestCase):
                 )
         triples = [argv[index : index + 3] for index in range(len(argv) - 2)]
         self.assertIn(Path("/etc/crypto-policies"), runner.SYSTEM_RO_PATHS)
+        self.assertNotIn(Path("/sys"), runner.SYSTEM_RO_PATHS)
+        self.assertIn("/sys", runner.AGENT_EXTERNAL_EMPTY_ROOTS)
         self.assertEqual(
             argv[-6:],
             [
