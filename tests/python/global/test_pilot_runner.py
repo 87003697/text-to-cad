@@ -1562,6 +1562,18 @@ class ProductionPathContractTests(unittest.TestCase):
         ):
             self.assertFalse((UTILS_ROOT / legacy_path).exists())
 
+    def test_sidecar_pilot_forbids_local_browser_install(self) -> None:
+        """The Agent must use registered rendering, not rebuild a browser in bwrap."""
+
+        pilot = (PILOT_ROOT / "toys4k-pilot.sh").read_text(encoding="utf-8")
+        self.assertIn("Browser Sidecar is the only browser authority", pilot)
+        self.assertIn("Do not install, download, or launch Playwright", pilot)
+        self.assertIn("do not invoke `mesh-preview` or `cad snapshot`", pilot)
+        self.assertRegex(pilot, r"routing-only preview and GLB\s+handoff.*explicitly waived")
+        self.assertRegex(pilot, r"numeric mesh inspection.*routing evidence")
+        self.assertIn("does not apply to mandatory `mesh-compare` previews", pilot)
+        self.assertRegex(pilot, r"registered Sidecar residual renderer")
+
     def test_gateway_rejects_missing_url_before_codex(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             capture = Path(temp) / "argv"

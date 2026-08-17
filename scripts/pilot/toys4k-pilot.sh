@@ -55,6 +55,15 @@ Do not call `view_image` in this Venus-backed pilot: its Responses
 continuation rejects image tool output. Still generate and cite every required
 PNG, and use the formal preview JSON plus objective measurements for decisions.
 
+The Browser Sidecar is the only browser authority when
+`/run/meshshot-browser/authority.json` exists. Do not install, download, or launch Playwright,
+Chromium, Chrome, or any other browser inside the Agent sandbox. In that case,
+do not invoke `mesh-preview` or `cad snapshot`: the routing-only preview and GLB
+handoff required by `mesh-inspect` are explicitly waived for this browserless
+Agent. Record numeric mesh inspection as the routing evidence instead. This
+waiver does not apply to mandatory `mesh-compare` previews; they use the
+registered Sidecar residual renderer and must still be generated.
+
 Stay under ${EXP_DIR}; do not modify skills/, packages/, or files outside.
 EOF
 )

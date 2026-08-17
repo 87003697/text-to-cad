@@ -134,7 +134,7 @@ BROKER_IMAGE_PROJECTIONS = (
 )
 VIEW_ORDER = ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
 OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
-MAX_REQUEST_BYTES = 1024 * 1024
+MAX_REQUEST_BYTES = CONTRACT["maxRequestBytes"]
 BROKER_STARTUP_STAGES = frozenset(
     {
         "playwright-import",

@@ -247,6 +247,7 @@ class ResidualRendererTests(unittest.TestCase):
             renderer._SOCKET_PATH,
             Path("/run/meshshot-browser/browser.sock"),
         )
+        self.assertEqual(renderer._MAX_REQUEST_BYTES, 32 * 1024 * 1024)
         self.assertTrue(
             (Path(renderer.__file__).resolve().parent / "browser_contract.json").is_file()
         )

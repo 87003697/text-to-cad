@@ -919,6 +919,10 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertEqual(contract["responseSchema"], browser_sidecar.RESPONSE_SCHEMA)
         self.assertEqual(contract["authorityPath"], "/run/meshshot-browser/authority.json")
         self.assertEqual(contract["socketPath"], "/run/meshshot-browser/browser.sock")
+        self.assertEqual(contract["maxRequestBytes"], 32 * 1024 * 1024)
+        # The observed depth-8 airplane request is 27,176,700 bytes.
+        self.assertGreater(contract["maxRequestBytes"], 27_176_700)
+        self.assertEqual(contract["maxRequestBytes"], browser_sidecar.MAX_REQUEST_BYTES)
         package_data = (
             browser_sidecar.REPO_ROOT / "packages/meshshot/pyproject.toml"
         ).read_text(encoding="utf-8")

@@ -41,7 +41,7 @@ _PROGRAMS = _CONTRACT["programs"]
 _JOB_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
 _GATE_NONCE = re.compile(r"[0-9a-f]{16,64}\Z")
 _MAX_AUTHORITY_BYTES = 16 * 1024
-_MAX_REQUEST_BYTES = 1024 * 1024
+_MAX_REQUEST_BYTES = _CONTRACT["maxRequestBytes"]
 _MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 _SOCKET_TIMEOUT_SECONDS = 120.0
 
@@ -174,7 +174,9 @@ def _registered_residual_render(
         ensure_ascii=True,
     ).encode("ascii")
     if len(request_bytes) > _MAX_REQUEST_BYTES:
-        raise MeshshotError("formal residual request exceeds 1 MiB")
+        raise MeshshotError(
+            f"formal residual request exceeds {_MAX_REQUEST_BYTES} bytes"
+        )
     response_bytes = bytearray()
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
