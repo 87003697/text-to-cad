@@ -579,6 +579,43 @@ def _walk_mount(
     resolved_aliases: list[tuple[tuple[str, ...], _Node]] = []
     force_complete: set[tuple[str, ...]] = set()
 
+    def enters_empty_mount(link: _Node) -> bool:
+        """Return whether one lexical link chain enters a fixed empty root."""
+
+        assert link.link_target is not None
+        candidate = _absolute_link_destination(
+            source_text, link.relative, link.link_target
+        )
+        seen: set[tuple[str, ...]] = set()
+        while True:
+            if any(
+                candidate == masked or _inside_root(masked, candidate)
+                for masked in masked_source_roots
+            ):
+                return True
+            if not _inside_root(source_text, candidate):
+                return False
+            relative = tuple(Path(os.path.relpath(candidate, source_text)).parts)
+            replaced = False
+            for index in range(len(relative)):
+                prefix = relative[: index + 1]
+                target = nodes.get(prefix)
+                if target is None or target.link_target is None:
+                    continue
+                if prefix in seen:
+                    return False
+                seen.add(prefix)
+                candidate = _absolute_link_destination(
+                    source_text,
+                    prefix,
+                    target.link_target,
+                    relative[index + 1 :],
+                )
+                replaced = True
+                break
+            if not replaced:
+                return False
+
     for relative in sorted(
         (path for path, node in nodes.items() if node.link_target is not None)
     ):
@@ -586,10 +623,7 @@ def _walk_mount(
         candidate = _absolute_link_destination(
             source_text, link.relative, link.link_target or ""
         )
-        if any(
-            candidate == masked or _inside_root(masked, candidate)
-            for masked in masked_source_roots
-        ):
+        if enters_empty_mount(link):
             continue
         try:
             if permitted_symlink_roots:
