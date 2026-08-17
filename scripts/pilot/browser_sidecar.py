@@ -1239,11 +1239,10 @@ class BrowserSidecarJob:
         if (
             not isinstance(record, dict)
             or set(record)
-            != {"event", "schema", "jobId", "imageId", "programs", "isolation"}
+            != {"event", "schema", "jobId", "programs", "isolation"}
             or record.get("event") != "ready"
             or record.get("schema") != BROKER_SCHEMA
             or record.get("jobId") != self.job_id
-            or record.get("imageId") != IMAGE_ID
             or record.get("programs") != PROGRAMS
             or not isinstance(isolation, dict)
             or set(isolation)
@@ -1609,7 +1608,6 @@ class BrowserSidecarJob:
                                 "event",
                                 "schema",
                                 "jobId",
-                                "imageId",
                                 "acceptedRequests",
                                 "freshContexts",
                                 "programCounts",
@@ -1617,7 +1615,6 @@ class BrowserSidecarJob:
                             }
                             or terminal_record.get("schema") != BROKER_SCHEMA
                             or terminal_record.get("jobId") != self.job_id
-                            or terminal_record.get("imageId") != IMAGE_ID
                             or not isinstance(accepted, int)
                             or isinstance(accepted, bool)
                             or accepted < 0
@@ -2093,7 +2090,6 @@ def run_broker(args: argparse.Namespace) -> int:
                             "event": "ready",
                             "schema": BROKER_SCHEMA,
                             "jobId": args.job_id,
-                            "imageId": IMAGE_ID,
                             "programs": PROGRAMS,
                             "isolation": isolation,
                         },
@@ -2159,7 +2155,6 @@ def run_broker(args: argparse.Namespace) -> int:
                             "event": "terminal",
                             "schema": BROKER_SCHEMA,
                             "jobId": args.job_id,
-                            "imageId": IMAGE_ID,
                             "acceptedRequests": broker.request_count,
                             "freshContexts": broker.request_count + 1,
                             "programCounts": broker.program_counts,

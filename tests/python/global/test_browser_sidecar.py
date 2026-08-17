@@ -280,7 +280,6 @@ class BrowserSidecarJobTests(unittest.TestCase):
                             "event": "ready",
                             "schema": "meshshot.browser-sidecar.broker/1",
                             "jobId": "formal-job-1",
-                            "imageId": IMAGE_ID,
                             "programs": PROGRAMS,
                             "isolation": {
                                 "sourceAliasesVisible": [],
@@ -295,7 +294,6 @@ class BrowserSidecarJobTests(unittest.TestCase):
                                 "event": "terminal",
                                 "schema": "meshshot.browser-sidecar.broker/1",
                                 "jobId": "formal-job-1",
-                                "imageId": IMAGE_ID,
                                 "acceptedRequests": 2,
                                 "freshContexts": 3,
                                 "programCounts": {"residual": 1, "viewer": 1},
@@ -527,7 +525,6 @@ class BrowserSidecarJobTests(unittest.TestCase):
                                 "event": "terminal",
                                 "schema": browser_sidecar.BROKER_SCHEMA,
                                 "jobId": "formal-job-1",
-                                "imageId": IMAGE_ID,
                                 "acceptedRequests": 2,
                                 "freshContexts": 3,
                                 "programCounts": {"residual": 1, "viewer": 1},
