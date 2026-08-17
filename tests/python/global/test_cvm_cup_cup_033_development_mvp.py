@@ -153,11 +153,17 @@ class CvmCupCup033DevelopmentMvpTests(unittest.TestCase):
             parser.parse_args([
                 "--group", "g", "--exp", "e", "--initial-source", "/source.js",
             ])
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args([
+                "--group", "g", "--exp", "e", "--initial-source", "/source.js",
+                "--source-revision", "b" * 40,
+            ])
         args = parser.parse_args([
             "--group", "g", "--exp", "e", "--initial-source", "/source.js",
-            "--source-revision", "b" * 40,
+            "--source-revision", "b" * 40, "--confirm-paid-development",
         ])
         self.assertEqual(args.source_revision, "b" * 40)
+        self.assertTrue(args.confirm_paid_development)
         self.assertFalse(hasattr(module, "_git_sha"))
 
     def test_runner_seeds_one_fixed_working_source_copy(self):

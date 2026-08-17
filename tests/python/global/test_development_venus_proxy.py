@@ -121,6 +121,7 @@ class DevelopmentVenusProxyTests(unittest.TestCase):
         self.assertEqual(upstream.requests[0][2], "Bearer provider-token")
         self.assertEqual([record["event"] for record in records], ["reserve", "settle", "terminal"])
         self.assertEqual(records[0]["mayHaveReachedModel"], True)
+        self.assertEqual(records[0]["requestBytes"], len(upstream.requests[0][1]))
         self.assertEqual(records[0]["reservedUsd"], "2.450000")
         self.assertEqual(records[1]["usage"]["inputTokens"], 100)
         self.assertEqual(records[1]["settledCostUpperBoundUsd"], "0.001168")
@@ -131,6 +132,162 @@ class DevelopmentVenusProxyTests(unittest.TestCase):
         )
         self.assertNotIn("secret-request-body-marker", ledger_text)
         self.assertNotIn("provider-token", ledger_text)
+
+    def test_rewritten_request_must_still_fit_the_forwarded_byte_ceiling(self):
+        request = b'{"model":"gpt-5.6-sol","input":""}'
+        response = b'{"usage":{"input_tokens":1,"output_tokens":1}}'
+        with tempfile.TemporaryDirectory() as directory, MockUpstream(
+            [(200, "application/json", response)]
+        ) as upstream:
+            from scripts.pilot.agent_runtime.development_venus_proxy import CostPolicy, DevelopmentProxy
+
+            ledger = Path(directory) / "ledger.jsonl"
+            with DevelopmentProxy(
+                upstream.url, ledger, upstream_token=None, client_token="job-token",
+                job_id="cup-cup-033-forwarded-ceiling",
+                policy=CostPolicy(
+                    max_attempts=1,
+                    max_request_bytes=len(request),
+                    max_output_tokens=1,
+                ),
+                allow_mock_target=True,
+            ) as proxy:
+                status, payload = post(proxy.port, request)
+            records = [json.loads(line) for line in ledger.read_text().splitlines()]
+
+        self.assertEqual(status, 413)
+        self.assertEqual(json.loads(payload), {"error": "request_byte_ceiling"})
+        self.assertEqual(upstream.requests, [])
+        self.assertEqual([record["event"] for record in records], ["terminal"])
+
+    def test_prior_ledger_rejects_a_settle_without_its_exact_reserve(self):
+        with tempfile.TemporaryDirectory() as directory:
+            from scripts.pilot.agent_runtime.development_venus_proxy import DevelopmentProxy
+
+            total = Path(directory) / "total.jsonl"
+            total.write_text(json.dumps({
+                "schema": "text-to-cad.development-venus-ledger/1",
+                "event": "settle",
+                "jobId": "foreign-job",
+                "attempt": 1,
+                "releasedReservedUsd": "99.000000",
+                "settledCostUpperBoundUsd": "0.000001",
+            }) + "\n", encoding="utf-8")
+            proxy = None
+            try:
+                with self.assertRaisesRegex(RuntimeError, "matching reserve"):
+                    proxy = DevelopmentProxy(
+                        "http://127.0.0.1:1/llmproxy/v1",
+                        Path(directory) / "job.jsonl",
+                        total_ledger_path=total,
+                        upstream_token=None,
+                        client_token="job-token",
+                        job_id="cup-cup-033-ledger-admission",
+                        allow_mock_target=True,
+                    )
+            finally:
+                if proxy is not None:
+                    proxy._server.server_close()
+
+    def test_prior_ledger_rejects_duplicate_or_mismatched_settlement(self):
+        reserve = {
+            "schema": "text-to-cad.development-venus-ledger/1",
+            "event": "reserve",
+            "jobId": "foreign-job",
+            "attempt": 1,
+            "mayHaveReachedModel": True,
+            "requestBytes": 100,
+            "inputTokenUpperBound": 200_000,
+            "outputTokenUpperBound": 40_000,
+            "rateClass": "short",
+            "reservedUsd": "2.450000",
+        }
+        settle = {
+            "schema": "text-to-cad.development-venus-ledger/1",
+            "event": "settle",
+            "jobId": "foreign-job",
+            "attempt": 1,
+            "usage": {"inputTokens": 100, "outputTokens": 20, "cachedInputTokens": 10},
+            "actualUsd": None,
+            "actualUsdUnavailableReason": "trusted_provider_dollar_telemetry_absent",
+            "releasedReservedUsd": "2.450000",
+            "settledCostUpperBoundUsd": "0.001168",
+            "pricingAuthority": "iWiki-4020336897-v54-2026-08-14",
+        }
+        cases = {
+            "duplicate settle": [reserve, settle, settle],
+            "exact reserve": [reserve, {**settle, "releasedReservedUsd": "2.440000"}],
+        }
+        for expected, rows in cases.items():
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
+                from scripts.pilot.agent_runtime.development_venus_proxy import DevelopmentProxy
+
+                total = Path(directory) / "total.jsonl"
+                total.write_text(
+                    "".join(json.dumps(row) + "\n" for row in rows),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(RuntimeError, expected):
+                    DevelopmentProxy(
+                        "http://127.0.0.1:1/llmproxy/v1",
+                        Path(directory) / "job.jsonl",
+                        total_ledger_path=total,
+                        upstream_token=None,
+                        client_token="job-token",
+                        job_id="cup-cup-033-ledger-admission",
+                        allow_mock_target=True,
+                    )
+
+    def test_prior_ledger_recomputes_fixed_policy_economic_fields(self):
+        reserve = {
+            "schema": "text-to-cad.development-venus-ledger/1",
+            "event": "reserve",
+            "jobId": "foreign-job",
+            "attempt": 1,
+            "mayHaveReachedModel": True,
+            "requestBytes": 100,
+            "inputTokenUpperBound": 200_000,
+            "outputTokenUpperBound": 40_000,
+            "rateClass": "short",
+            "reservedUsd": "2.450000",
+        }
+        settle = {
+            "schema": "text-to-cad.development-venus-ledger/1",
+            "event": "settle",
+            "jobId": "foreign-job",
+            "attempt": 1,
+            "usage": {"inputTokens": 100, "outputTokens": 20, "cachedInputTokens": 10},
+            "actualUsd": None,
+            "actualUsdUnavailableReason": "trusted_provider_dollar_telemetry_absent",
+            "releasedReservedUsd": "2.450000",
+            "settledCostUpperBoundUsd": "0.001168",
+            "pricingAuthority": "iWiki-4020336897-v54-2026-08-14",
+        }
+        cases = {
+            "worst-case reservation": [{**reserve, "reservedUsd": "0.000001"}, {
+                **settle, "releasedReservedUsd": "0.000001", "settledCostUpperBoundUsd": "0.000000",
+            }],
+            "settled cost": [reserve, {**settle, "settledCostUpperBoundUsd": "0.000001"}],
+        }
+        for expected, rows in cases.items():
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as directory:
+                from scripts.pilot.agent_runtime.development_venus_proxy import DevelopmentProxy
+
+                total = Path(directory) / "total.jsonl"
+                total.write_text(
+                    "".join(json.dumps(row) + "\n" for row in rows),
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(RuntimeError, expected):
+                    DevelopmentProxy(
+                        "http://127.0.0.1:1/llmproxy/v1",
+                        Path(directory) / "job.jsonl",
+                        total_ledger_path=total,
+                        upstream_token=None,
+                        client_token="job-token",
+                        job_id="cup-cup-033-ledger-economic-admission",
+                        allow_mock_target=True,
+                    )
 
     def test_missing_usage_and_timeout_keep_reservations(self):
         request = b'{"model":"gpt-5.6-sol","input":"x","max_output_tokens":1}'

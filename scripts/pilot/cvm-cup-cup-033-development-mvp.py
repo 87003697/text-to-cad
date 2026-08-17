@@ -437,6 +437,7 @@ def seed_working_source(plan: RunPlan) -> Path:
 def execute(
     plan: RunPlan, *, codex: str = "codex",
     prior_total_ledger: Path | None = None,
+    paid_authorization_basis: str | None = None,
     outer_builder: Callable[[RunPlan, Path, Path], dict[str, object]] = outer_deterministic_build,
     provider_factory: Callable[..., Any] = DevelopmentProxy,
 ) -> int:
@@ -470,6 +471,11 @@ def execute(
             "runtime": {"environment": "CVM", "docker": False, "codexVersion": None},
             "model": MODEL, "wireApi": "responses", "codeMode": False,
             "pricingAuthority": PRICING_AUTHORITY,
+            "paidAuthorization": {
+                "confirmed": paid_authorization_basis is not None,
+                "basis": paid_authorization_basis,
+                "telemetryException": "not-used; paid dispatch remained zero",
+            },
             "buildOwnership": "outer-deterministic-provider-free",
             "gptRole": "review-only-not-run",
             "outerBuild": {
@@ -509,6 +515,9 @@ def execute(
     glb_path = plan.exp_dir / "artifacts/cup_cup_033.glb"
     prompt = build_prompt(working_source, measurement_path, glb_path).encode()
     (run_dir / "prompt.txt").write_bytes(prompt)
+
+    if paid_authorization_basis is None:
+        raise MvpError("explicit paid Development authorization is required")
 
     upstream_token = os.environ.get("VENUS_TOKEN")
     if not upstream_token or "\n" in upstream_token or "\r" in upstream_token:
@@ -595,6 +604,14 @@ def execute(
         "runtime": {"environment": "CVM", "docker": False, "codexVersion": observed_version},
         "model": MODEL, "wireApi": "responses", "codeMode": False,
         "venusBaseUrl": VENUS_BASE_URL, "pricingAuthority": PRICING_AUTHORITY,
+        "paidAuthorization": {
+            "confirmed": True,
+            "basis": paid_authorization_basis,
+            "telemetryException": (
+                "explicit human Development override; trusted actual-dollar telemetry absent; "
+                "admission uses fixed rate and hard-token worst-case reservations"
+            ),
+        },
         "input": {"path": str(FIXED_INPUT), "sha256": plan.input_sha256},
         "initialSource": {"path": os.fspath(plan.initial_source), "sha256": plan.source_sha256,
                           "identityPolicy": "explicit MVP input; digest may differ from prior candidates"},
@@ -626,6 +643,7 @@ def execute(
 
 def argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--confirm-paid-development", action="store_true", required=True)
     parser.add_argument("--group", required=True)
     parser.add_argument("--exp", required=True)
     parser.add_argument("--initial-source", required=True, type=Path)
@@ -642,7 +660,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             REPO_ROOT, args.group, args.exp, args.initial_source,
             args.source_revision,
         )
-        return execute(plan, codex=args.codex, prior_total_ledger=args.prior_total_ledger)
+        return execute(
+            plan,
+            codex=args.codex,
+            prior_total_ledger=args.prior_total_ledger,
+            paid_authorization_basis="CLI --confirm-paid-development",
+        )
     except MvpError as error:
         print(f"CVM MVP preflight failed: {error}", file=sys.stderr)
         return 2

@@ -27,6 +27,8 @@ from urllib.parse import urlsplit
 VENUS_BASE_URL = "http://v2.open.venus.oa.com/llmproxy/v1"
 MODEL = "gpt-5.6-sol"
 RESPONSES_PATH = "/v1/responses"
+LEDGER_SCHEMA = "text-to-cad.development-venus-ledger/1"
+PRICING_AUTHORITY = "iWiki-4020336897-v54-2026-08-14"
 MAX_ATTEMPTS = 48
 LONG_CONTEXT_THRESHOLD = 272_000
 USD_QUANTUM = Decimal("0.000001")
@@ -95,21 +97,128 @@ class CostPolicy:
         return self.worst_case_attempt_usd * self.max_attempts
 
 
+def _settled_upper_bound(usage: dict[str, int]) -> Decimal:
+    rate_class = "long" if usage["inputTokens"] > LONG_CONTEXT_THRESHOLD else "short"
+    rates = RATES[rate_class]
+    uncached = usage["inputTokens"] - usage["cachedInputTokens"]
+    return (
+        Decimal(uncached) * max(rates["input"], rates["cache_write"])
+        + Decimal(usage["cachedInputTokens"]) * rates["cache_read"]
+        + Decimal(usage["outputTokens"]) * rates["output"]
+    ) / MILLION
+
+
 class _Ledger:
-    def __init__(self, job_path: Path, total_path: Path | None) -> None:
+    def __init__(self, job_path: Path, total_path: Path | None, policy: CostPolicy) -> None:
         self.job_path = job_path
         self.total_path = total_path or job_path
+        self.policy = policy
         self._lock = threading.Lock()
+        for path in {self.job_path, self.total_path}:
+            if path.exists():
+                with path.open("r", encoding="utf-8") as stream:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_SH)
+                    self._exposure(self._read(stream), policy)
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
-    def _exposure(records: list[dict[str, object]]) -> Decimal:
+    def _attempt_key(record: dict[str, object], event: str) -> tuple[str, int]:
+        job_id = record.get("jobId")
+        attempt = record.get("attempt")
+        if not isinstance(job_id, str) or not job_id or len(job_id) > 128:
+            raise RuntimeError(f"cost ledger {event} has invalid job identity")
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt <= 0:
+            raise RuntimeError(f"cost ledger {event} has invalid attempt identity")
+        return job_id, attempt
+
+    @staticmethod
+    def _amount(record: dict[str, object], key: str, event: str) -> Decimal:
+        try:
+            amount = Decimal(str(record[key]))
+        except (KeyError, ArithmeticError, ValueError) as error:
+            raise RuntimeError(f"cost ledger {event} has invalid {key}") from error
+        if not amount.is_finite() or amount < 0:
+            raise RuntimeError(f"cost ledger {event} has invalid {key}")
+        return amount
+
+    @staticmethod
+    def _validate_reserve(record: dict[str, object], policy: CostPolicy) -> Decimal:
+        if record.get("schema") != LEDGER_SCHEMA:
+            raise RuntimeError("cost ledger reserve has invalid schema")
+        request_bytes = record.get("requestBytes")
+        if (
+            not isinstance(request_bytes, int) or isinstance(request_bytes, bool)
+            or not 0 < request_bytes <= policy.max_request_bytes
+        ):
+            raise RuntimeError("cost ledger reserve has invalid request byte ceiling")
+        expected = {
+            "mayHaveReachedModel": True,
+            "inputTokenUpperBound": policy.max_request_bytes,
+            "outputTokenUpperBound": policy.max_output_tokens,
+            "rateClass": policy.rate_class,
+        }
+        if any(record.get(key) != value for key, value in expected.items()):
+            raise RuntimeError("cost ledger reserve does not match the fixed token and rate policy")
+        amount = _Ledger._amount(record, "reservedUsd", "reserve")
+        if amount != Decimal(_money(policy.worst_case_attempt_usd)):
+            raise RuntimeError("cost ledger reserve does not match the worst-case reservation")
+        return amount
+
+    @staticmethod
+    def _validate_settle(record: dict[str, object], policy: CostPolicy) -> Decimal:
+        if record.get("schema") != LEDGER_SCHEMA:
+            raise RuntimeError("cost ledger settle has invalid schema")
+        usage = record.get("usage")
+        if not isinstance(usage, dict):
+            raise RuntimeError("cost ledger settle has invalid usage")
+        values = tuple(usage.get(key) for key in ("inputTokens", "outputTokens", "cachedInputTokens"))
+        if not all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in values):
+            raise RuntimeError("cost ledger settle has invalid usage")
+        input_tokens, output_tokens, cached_tokens = values
+        if cached_tokens > input_tokens or input_tokens > policy.max_request_bytes or output_tokens > policy.max_output_tokens:
+            raise RuntimeError("cost ledger settle usage exceeds the fixed token policy")
+        if (
+            record.get("actualUsd") is not None
+            or record.get("actualUsdUnavailableReason") != "trusted_provider_dollar_telemetry_absent"
+            or record.get("pricingAuthority") != PRICING_AUTHORITY
+        ):
+            raise RuntimeError("cost ledger settle has invalid pricing authority")
+        expected = _settled_upper_bound(usage)
+        settled = _Ledger._amount(record, "settledCostUpperBoundUsd", "settle")
+        if settled != expected.quantize(USD_QUANTUM, rounding=ROUND_UP):
+            raise RuntimeError("cost ledger settled cost does not match fixed rates and usage")
+        return settled
+
+    @staticmethod
+    def _exposure(records: list[dict[str, object]], policy: CostPolicy) -> Decimal:
         exposure = Decimal(0)
+        reserves: dict[tuple[str, int], Decimal] = {}
+        settlements: set[tuple[str, int]] = set()
         for record in records:
-            if record.get("event") == "reserve":
-                exposure += Decimal(str(record["reservedUsd"]))
-            elif record.get("event") == "settle":
-                exposure -= Decimal(str(record["releasedReservedUsd"]))
-                exposure += Decimal(str(record["settledCostUpperBoundUsd"]))
+            event = record.get("event")
+            if event == "reserve":
+                key = _Ledger._attempt_key(record, "reserve")
+                if key in reserves:
+                    raise RuntimeError("cost ledger contains duplicate reserve")
+                amount = _Ledger._validate_reserve(record, policy)
+                reserves[key] = amount
+                exposure += amount
+            elif event == "settle":
+                key = _Ledger._attempt_key(record, "settle")
+                if key not in reserves:
+                    raise RuntimeError("cost ledger settle has no matching reserve")
+                if key in settlements:
+                    raise RuntimeError("cost ledger contains duplicate settle")
+                released = _Ledger._amount(record, "releasedReservedUsd", "settle")
+                settled = _Ledger._amount(record, "settledCostUpperBoundUsd", "settle")
+                if released != reserves[key]:
+                    raise RuntimeError("cost ledger settle does not release its exact reserve")
+                if settled > released:
+                    raise RuntimeError("cost ledger settlement exceeds its reserve")
+                settled = _Ledger._validate_settle(record, policy)
+                settlements.add(key)
+                exposure -= released
+                exposure += settled
         return exposure
 
     @staticmethod
@@ -143,14 +252,14 @@ class _Ledger:
             admitted_jobs = {str(r["jobId"]) for r in total_records if r.get("event") == "reserve" and "jobId" in r}
             if record["jobId"] not in admitted_jobs and len(admitted_jobs) >= policy.max_jobs:
                 raise PermissionError("total job ceiling exhausted")
-            if self._exposure(total_records) + amount > policy.total_usd:
+            if self._exposure(total_records, policy) + amount > policy.total_usd:
                 raise PermissionError("total USD reservation ceiling exhausted")
             if self.job_path == self.total_path:
                 job_records = total_records
             else:
                 with self.job_path.open("a+", encoding="utf-8") as job:
                     job_records = self._read(job)
-            if self._exposure([r for r in job_records if r.get("jobId") == record["jobId"]]) + amount > policy.per_job_usd:
+            if self._exposure([r for r in job_records if r.get("jobId") == record["jobId"]], policy) + amount > policy.per_job_usd:
                 raise PermissionError("per-job USD reservation ceiling exhausted")
             self._append_locked(total, record)
             if self.job_path != self.total_path:
@@ -219,8 +328,11 @@ class _Handler(BaseHTTPRequestHandler):
             return
         request["max_output_tokens"] = min(requested_output, owner.policy.max_output_tokens)
         forwarded_body = json.dumps(request, sort_keys=True, separators=(",", ":")).encode()
+        if len(forwarded_body) > owner.policy.max_request_bytes:
+            self._reply(413, b'{"error":"request_byte_ceiling"}')
+            return
         try:
-            attempt = owner.reserve_attempt(length)
+            attempt = owner.reserve_attempt(len(forwarded_body))
         except PermissionError as error:
             code = "attempt_ceiling" if owner.attempts >= owner.policy.max_attempts else "cost_ceiling"
             self._reply(429, json.dumps({"error": code}, separators=(",", ":")).encode())
@@ -284,7 +396,7 @@ class DevelopmentProxy:
         if not math.isfinite(upstream_timeout) or upstream_timeout <= 0:
             raise ValueError("upstream timeout must be positive")
         self.target = target
-        self.ledger = _Ledger(ledger_path, total_ledger_path)
+        self.ledger = _Ledger(ledger_path, total_ledger_path, policy)
         self.upstream_token = upstream_token
         self.client_token = client_token
         self.job_id = job_id
@@ -311,7 +423,7 @@ class DevelopmentProxy:
                 raise PermissionError("attempt ceiling exhausted")
             attempt = self.attempts + 1
             record = {
-                "schema": "text-to-cad.development-venus-ledger/1",
+                "schema": LEDGER_SCHEMA,
                 "event": "reserve",
                 "jobId": self.job_id,
                 "attempt": attempt,
@@ -379,14 +491,7 @@ class DevelopmentProxy:
         ):
             self.record_missing_usage(attempt, 200, reason="usage_exceeds_token_ceiling")
             return
-        rate_class = "long" if usage["inputTokens"] > LONG_CONTEXT_THRESHOLD else "short"
-        rates = RATES[rate_class]
-        uncached = usage["inputTokens"] - usage["cachedInputTokens"]
-        settled_upper_bound = (
-            Decimal(uncached) * max(rates["input"], rates["cache_write"])
-            + Decimal(usage["cachedInputTokens"]) * rates["cache_read"]
-            + Decimal(usage["outputTokens"]) * rates["output"]
-        ) / MILLION
+        settled_upper_bound = _settled_upper_bound(usage)
         reserved = self.policy.worst_case_attempt_usd
         # Usage which contradicts the enforced reservation is not trusted.
         if settled_upper_bound > reserved:
@@ -401,7 +506,7 @@ class DevelopmentProxy:
             "actualUsdUnavailableReason": "trusted_provider_dollar_telemetry_absent",
             "settledCostUpperBoundUsd": _money(settled_upper_bound),
             "releasedReservedUsd": _money(reserved),
-            "pricingAuthority": "iWiki-4020336897-v54-2026-08-14",
+            "pricingAuthority": PRICING_AUTHORITY,
         })
 
     def record_transport_error(self, attempt: int, category: str) -> None:

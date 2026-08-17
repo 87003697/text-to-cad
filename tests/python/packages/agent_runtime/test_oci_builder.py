@@ -10,7 +10,7 @@ import tempfile
 import unittest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 BUILDER = REPO_ROOT / "packages" / "agent_runtime" / "oci_builder.py"
 BUILD_CLI = REPO_ROOT / "scripts" / "pilot" / "agent-runtime-build.py"
 

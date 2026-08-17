@@ -12,7 +12,7 @@ import unittest
 from unittest import mock
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[4]
 ENTRYPOINT = REPO_ROOT / "packages/agent_runtime/text-to-cad-agent-entrypoint"
 
 
