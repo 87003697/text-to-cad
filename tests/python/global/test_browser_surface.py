@@ -32,6 +32,10 @@ class BrowserSurfaceTests(unittest.TestCase):
             metadata = root / "lib/.build-id"
             metadata.mkdir(parents=True)
             (metadata / "stale").symlink_to("../../../../usr/bin/missing")
+            (root / "bin").mkdir()
+            (root / "bin/host-tool").symlink_to(
+                "../lib/.build-id/missing-tool"
+            )
 
             with self.assertRaises(browser_surface.BrowserSurfaceError):
                 browser_surface.discover_browser_roots(

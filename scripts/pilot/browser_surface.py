@@ -586,6 +586,11 @@ def _walk_mount(
         candidate = _absolute_link_destination(
             source_text, link.relative, link.link_target or ""
         )
+        if any(
+            candidate == masked or _inside_root(masked, candidate)
+            for masked in masked_source_roots
+        ):
+            continue
         try:
             if permitted_symlink_roots:
                 resolved_candidate, crossed_source_root = _resolve_declared_path(
