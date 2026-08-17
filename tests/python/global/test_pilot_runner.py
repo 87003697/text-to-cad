@@ -1161,7 +1161,10 @@ class RunnerTests(unittest.TestCase):
             def create(cls, *args, **kwargs):
                 return cls(*args, **kwargs)
 
-            def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled=None):
+            def __init__(
+                self, exp_dir, sandbox_exp_dir, *, job_id, cancelled=None,
+                runtime_images=None,
+            ):
                 events.append(("construct", exp_dir, sandbox_exp_dir, job_id))
                 self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
                 self.capability_dir = Path("/private/tmp/fixed-capability")
@@ -1270,7 +1273,10 @@ class RunnerTests(unittest.TestCase):
             def create(cls, *args, **kwargs):
                 return cls(*args, **kwargs)
 
-            def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled):
+            def __init__(
+                self, exp_dir, sandbox_exp_dir, *, job_id, cancelled,
+                runtime_images=None,
+            ):
                 self.capability_dir = Path("/private/tmp/fixed-capability")
                 self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
                 self.cancelled = cancelled
@@ -1326,7 +1332,10 @@ class RunnerTests(unittest.TestCase):
             def create(cls, *args, **kwargs):
                 return cls(*args, **kwargs)
 
-            def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled=None):
+            def __init__(
+                self, exp_dir, sandbox_exp_dir, *, job_id, cancelled=None,
+                runtime_images=None,
+            ):
                 self.capability_dir = Path("/private/tmp/fixed-capability")
                 self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
 

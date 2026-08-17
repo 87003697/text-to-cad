@@ -48,7 +48,15 @@ image IDs, removes the transfer archive, and reports `status:"provisioned"`.
 
 After provisioning, use the existing pilot runner with a provider-free
 workload for the runtime smoke. A paid pilot remains a separate authorized
-operation.
+operation. Bind an authorized detached pilot to this provision receipt by
+passing the handle as the final argument:
+
+```bash
+scripts/pilot/cvm-submit.sh pilot <object> <group> <prepared-handle>
+```
+
+The runner accepts no caller-supplied image ID or Docker reference. It resolves
+both only from that handle's verified two-role provision receipt.
 
 ## Failure boundary
 

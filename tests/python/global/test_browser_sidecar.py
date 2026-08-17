@@ -82,6 +82,75 @@ def configure_gate(job: browser_sidecar.BrowserSidecarJob) -> None:
 class BrowserSidecarJobTests(unittest.TestCase):
     """Observe one complete exact-image lifecycle through its public adapter."""
 
+    def test_runtime_binding_accepts_only_current_two_image_provision(self) -> None:
+        handle = "cvmsp-" + "1" * 24
+        sidecar_runtime_id = "sha256:" + "a" * 64
+        broker_runtime_id = "sha256:" + "b" * 64
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            state = repo / ".cvm-sidecar-probes" / handle
+            state.mkdir(parents=True)
+            receipt = {
+                "schema": "cvm-sidecar.provision-receipt/1",
+                "status": "provisioned",
+                "handle": handle,
+                "images": [
+                    {
+                        "role": "sidecar",
+                        "id": browser_sidecar.IMAGE_ID,
+                        "configSha256": browser_sidecar.IMAGE_ID.removeprefix("sha256:"),
+                        "platform": "linux/amd64",
+                        "sourceRevision": browser_sidecar.IMAGE_SOURCE_REVISION,
+                        "archiveReference": f"text-to-cad-cvm-sidecar-sidecar:{handle}-{'c' * 32}",
+                    },
+                    {
+                        "role": "broker",
+                        "id": browser_sidecar.BROKER_IMAGE_ID,
+                        "configSha256": browser_sidecar.BROKER_IMAGE_ID.removeprefix("sha256:"),
+                        "platform": "linux/amd64",
+                        "sourceRevision": browser_sidecar.BROKER_IMAGE_SOURCE_REVISION,
+                        "archiveReference": f"text-to-cad-cvm-sidecar-broker:{handle}-{'c' * 32}",
+                    },
+                ],
+                "retainedImageIds": [sidecar_runtime_id, broker_runtime_id],
+                "transferCleanup": {
+                    "archiveAbsent": True,
+                    "prepareReceiptAbsent": True,
+                    "incomingDirectoryAbsent": True,
+                    "errors": [],
+                },
+                "retryAllowed": False,
+            }
+            (state / "provision.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            with mock.patch.object(browser_sidecar, "REPO_ROOT", repo):
+                binding = browser_sidecar.resolve_runtime_image_binding(
+                    {"TTC_BROWSER_RUNTIME_PROVISION_HANDLE": handle}
+                )
+
+        self.assertEqual(binding.sidecar_address, receipt["images"][0]["archiveReference"])
+        self.assertEqual(binding.sidecar_runtime_id, sidecar_runtime_id)
+        self.assertEqual(binding.broker_address, receipt["images"][1]["archiveReference"])
+        self.assertEqual(binding.broker_runtime_id, broker_runtime_id)
+
+        receipt["images"][1]["role"] = "client"
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+            state = repo / ".cvm-sidecar-probes" / handle
+            state.mkdir(parents=True)
+            (state / "provision.json").write_text(
+                json.dumps(receipt), encoding="utf-8"
+            )
+            with (
+                mock.patch.object(browser_sidecar, "REPO_ROOT", repo),
+                self.assertRaises(browser_sidecar.BrowserSidecarError) as raised,
+            ):
+                browser_sidecar.resolve_runtime_image_binding(
+                    {"TTC_BROWSER_RUNTIME_PROVISION_HANDLE": handle}
+                )
+        self.assertEqual(raised.exception.check, "runtime-image-binding")
+
     def test_capability_layout_failure_is_terminal_and_released(self) -> None:
         """Partial pre-Docker construction still owns cleanup and a receipt."""
 

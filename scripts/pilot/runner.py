@@ -42,6 +42,7 @@ try:
         NESTED_GATE,
         BrowserSidecarError,
         BrowserSidecarJob,
+        resolve_runtime_image_binding,
     )
     from scripts.pilot.browser_surface import (
         BrowserSurfaceError,
@@ -70,6 +71,7 @@ except ModuleNotFoundError as exc:
         NESTED_GATE,
         BrowserSidecarError,
         BrowserSidecarJob,
+        resolve_runtime_image_binding,
     )
     from browser_surface import (  # type: ignore[no-redef]
         BrowserSurfaceError,
@@ -1808,6 +1810,7 @@ def run_pilot(
                 sandbox_exp,
                 job_id=job_id,
                 cancelled=lambda: relay.cancelled,
+                runtime_images=resolve_runtime_image_binding(environ),
             )
             prepare_nested_browser_gate(
                 REPO_ROOT,

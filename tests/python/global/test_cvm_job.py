@@ -591,6 +591,43 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
         self.assertIn("ServerAliveInterval=30", commands[1])
         self.assertIn("scripts.pilot.cvm_job wait", commands[1])
 
+    def test_submit_binds_one_verified_browser_runtime_handle(self) -> None:
+        fake_bin = self.workspace / "runtime-bin"
+        fake_bin.mkdir()
+        command_log = self.workspace / "runtime-command.log"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" > "$CVM_WRAPPER_LOG"
+printf '%s\n' '{"job":"group/exp","state":"submitted"}'
+""",
+        )
+        handle = "cvmsp-" + "1" * 24
+        result = subprocess.run(
+            [
+                os.fspath(SUBMIT_SCRIPT),
+                "pilot",
+                "airplane",
+                "20260805-170000-audit",
+                handle,
+            ],
+            env={
+                **os.environ,
+                "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                "CVM_WRAPPER_LOG": os.fspath(command_log),
+            },
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        command = command_log.read_text(encoding="utf-8")
+        self.assertIn(
+            f"TTC_BROWSER_RUNTIME_PROVISION_HANDLE='{handle}'", command
+        )
+
     def test_submit_and_monitor_reject_batch_without_ssh(self) -> None:
         fake_bin = self.workspace / "bin"
         fake_bin.mkdir()

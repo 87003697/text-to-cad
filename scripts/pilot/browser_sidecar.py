@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 from urllib.request import urlopen
 
@@ -101,6 +102,7 @@ RECEIPT_PREDICATES = (
     "absenceProved",
 )
 JOB_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
+RUNTIME_PROVISION_HANDLE = re.compile(r"cvmsp-[0-9a-f]{24}\Z")
 RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 IMAGE_PROJECTIONS = (
     ("id", "{{.Id}}", IMAGE_ID),
@@ -145,6 +147,97 @@ class BrowserSidecarError(RuntimeError):
         super().__init__(message)
         self.check = check
         self.terminal_receipt = terminal_receipt
+
+
+@dataclass(frozen=True)
+class RuntimeImageBinding:
+    """Bind portable reviewed identities to one Docker host's loaded images."""
+
+    sidecar_address: str
+    sidecar_runtime_id: str
+    broker_address: str
+    broker_runtime_id: str
+
+
+def resolve_runtime_image_binding(
+    environ: Mapping[str, str],
+) -> RuntimeImageBinding:
+    """Resolve either canonical local images or one verified CVM provision."""
+
+    handle = environ.get("TTC_BROWSER_RUNTIME_PROVISION_HANDLE")
+    if handle is None:
+        return RuntimeImageBinding(IMAGE_ID, IMAGE_ID, BROKER_IMAGE_ID, BROKER_IMAGE_ID)
+    if RUNTIME_PROVISION_HANDLE.fullmatch(handle) is None:
+        raise BrowserSidecarError(
+            "runtime provision handle is invalid", check="runtime-image-binding"
+        )
+    receipt_path = REPO_ROOT / ".cvm-sidecar-probes" / handle / "provision.json"
+    try:
+        receipt = _strict_json(
+            receipt_path.read_text(encoding="utf-8"), "runtime provision receipt"
+        )
+    except (OSError, BrowserSidecarError) as exc:
+        raise BrowserSidecarError(
+            "runtime provision receipt is unavailable", check="runtime-image-binding"
+        ) from exc
+    if not isinstance(receipt, dict):
+        raise BrowserSidecarError(
+            "runtime provision receipt is invalid", check="runtime-image-binding"
+        )
+    images = receipt.get("images")
+    retained = receipt.get("retainedImageIds")
+    cleanup = receipt.get("transferCleanup")
+    expected = (
+        ("sidecar", IMAGE_ID, IMAGE_SOURCE_REVISION),
+        ("broker", BROKER_IMAGE_ID, BROKER_IMAGE_SOURCE_REVISION),
+    )
+    valid = bool(
+        receipt.get("schema") == "cvm-sidecar.provision-receipt/1"
+        and receipt.get("status") == "provisioned"
+        and receipt.get("handle") == handle
+        and receipt.get("retryAllowed") is False
+        and isinstance(images, list)
+        and len(images) == 2
+        and isinstance(retained, list)
+        and len(retained) == 2
+        and all(
+            isinstance(value, str) and re.fullmatch(r"sha256:[0-9a-f]{64}", value)
+            for value in retained
+        )
+        and len(set(retained)) == 2
+        and cleanup
+        == {
+            "archiveAbsent": True,
+            "prepareReceiptAbsent": True,
+            "incomingDirectoryAbsent": True,
+            "errors": [],
+        }
+    )
+    addresses: list[str] = []
+    if valid:
+        for image, (role, source_id, revision) in zip(images, expected, strict=True):
+            reference = image.get("archiveReference") if isinstance(image, dict) else None
+            if not (
+                isinstance(image, dict)
+                and image.get("role") == role
+                and image.get("id") == source_id
+                and image.get("platform") == "linux/amd64"
+                and image.get("sourceRevision") == revision
+                and image.get("configSha256") == source_id.removeprefix("sha256:")
+                and isinstance(reference, str)
+                and re.fullmatch(
+                    rf"text-to-cad-cvm-sidecar-{role}:{handle}-[0-9a-f]{{32}}",
+                    reference,
+                )
+            ):
+                valid = False
+                break
+            addresses.append(reference)
+    if not valid or len(addresses) != 2:
+        raise BrowserSidecarError(
+            "runtime provision receipt is invalid", check="runtime-image-binding"
+        )
+    return RuntimeImageBinding(addresses[0], retained[0], addresses[1], retained[1])
 
 
 def _strict_json(raw: str, label: str) -> Any:
@@ -691,6 +784,7 @@ class BrowserSidecarJob:
         job_id: str,
         cancelled: Callable[[], bool] | None = None,
         capability_parent: Path | None = None,
+        runtime_images: RuntimeImageBinding | None = None,
     ) -> None:
         """Bind immutable identities without mutating the capability filesystem."""
 
@@ -701,6 +795,7 @@ class BrowserSidecarJob:
         self.job_id = job_id
         self.cancelled = cancelled or (lambda: False)
         self.capability_parent = capability_parent
+        self.runtime_images = runtime_images or resolve_runtime_image_binding({})
         self.run_dir = self.exp_dir / "run"
         self.receipt_path = self.run_dir / "browser-sidecar-receipt.json"
         self.owner_nonce = secrets.token_hex(16)
@@ -749,6 +844,7 @@ class BrowserSidecarJob:
         job_id: str,
         cancelled: Callable[[], bool] | None = None,
         capability_parent: Path | None = None,
+        runtime_images: RuntimeImageBinding | None = None,
     ) -> BrowserSidecarJob:
         """Create the capability layout under one receipt-owning job object."""
 
@@ -758,6 +854,7 @@ class BrowserSidecarJob:
             job_id=job_id,
             cancelled=cancelled,
             capability_parent=capability_parent,
+            runtime_images=runtime_images,
         )
         try:
             job._prepare_capability_layout()
@@ -1228,13 +1325,19 @@ class BrowserSidecarJob:
             self._check_cancelled()
             self._inspect_image(
                 role="sidecar",
-                image_id=IMAGE_ID,
-                projections=IMAGE_PROJECTIONS,
+                image_id=self.runtime_images.sidecar_address,
+                projections=(
+                    ("id", "{{.Id}}", self.runtime_images.sidecar_runtime_id),
+                    *IMAGE_PROJECTIONS[1:],
+                ),
             )
             self._inspect_image(
                 role="broker",
-                image_id=BROKER_IMAGE_ID,
-                projections=BROKER_IMAGE_PROJECTIONS,
+                image_id=self.runtime_images.broker_address,
+                projections=(
+                    ("id", "{{.Id}}", self.runtime_images.broker_runtime_id),
+                    *BROKER_IMAGE_PROJECTIONS[1:],
+                ),
             )
             self._require_absent_name("network", self.network_name)
             self._require_absent_name("container", self.container_name)
@@ -1296,7 +1399,7 @@ class BrowserSidecarJob:
                 "/home/pwuser:rw,nosuid,nodev,size=64m,uid=1001,gid=1001,mode=700",
                 "-e",
                 f"BROWSER_SIDECAR_JOB_ID={self.job_id}",
-                IMAGE_ID,
+                self.runtime_images.sidecar_address,
             )
             container_id = created.stdout.strip()
             if RESOURCE_ID.fullmatch(container_id) is None:
@@ -1346,7 +1449,7 @@ class BrowserSidecarJob:
                     "type=bind,src="
                     f"{self.broker_capability_dir},dst=/run/meshshot-browser"
                 ),
-                BROKER_IMAGE_ID,
+                self.runtime_images.broker_address,
                 "--job-id",
                 self.job_id,
             )
