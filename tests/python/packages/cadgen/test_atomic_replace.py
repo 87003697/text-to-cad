@@ -91,6 +91,122 @@ class ReplaceAtomicTest(unittest.TestCase):
                         atomic_replace.replace_atomic("from.tmp", "to.glb")
                 sleep.assert_not_called()
 
+    def test_an_exhausted_ladder_retries_from_a_copy_the_server_has_not_seen(self) -> None:
+        """Issue #274 after 0.4.13, and the gate run on #283.
+
+        The remeasured tail is long and thin (p99 265 ms, max 797 ms), so a bigger window only
+        creeps. The violation is pinned to the handle the server holds on the temp file, and a
+        copy carries no handle of its own.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="cad-atomic-") as temp_dir:
+            source = Path(temp_dir) / "artifact.glb.tmp"
+            source.write_bytes(b"glTF")
+            target = Path(temp_dir) / "artifact.glb"
+            seen = []
+            real_replace = os.replace
+
+            def blocked_until_a_new_file(src, dst):
+                seen.append(Path(src).name)
+                if len(seen) <= len(atomic_replace.RETRY_DELAYS_SECONDS) + 1:
+                    raise sharing_violation()
+                real_replace(src, dst)
+
+            with mock.patch.object(atomic_replace.os, "replace",
+                                   side_effect=blocked_until_a_new_file), \
+                 mock.patch.object(atomic_replace.time, "sleep"):
+                atomic_replace.replace_atomic(source, target)
+
+            self.assertEqual(b"glTF", target.read_bytes())
+            first_ladder = set(seen[: len(atomic_replace.RETRY_DELAYS_SECONDS) + 1])
+            self.assertEqual(1, len(first_ladder), "the first ladder must reuse one file")
+            self.assertNotIn(
+                seen[-1], first_ladder,
+                "the retry must use a file the server has never seen",
+            )
+            self.assertTrue(seen[-1].endswith(".tmp"), seen[-1] + " must stay gitignored")
+            self.assertEqual([target.name], [q.name for q in Path(temp_dir).iterdir()])
+
+    def test_the_copy_survives_a_pinned_source(self) -> None:
+        """The rescue must not depend on deleting the file that blocked the rename.
+
+        That delete hits the same handle, so requiring it would abort the retry in exactly the
+        case it was written for.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="cad-atomic-") as temp_dir:
+            source = Path(temp_dir) / "artifact.glb.tmp"
+            source.write_bytes(b"glTF")
+            target = Path(temp_dir) / "artifact.glb"
+            seen = []
+            real_replace = os.replace
+            real_unlink = Path.unlink
+
+            def blocked_until_a_new_file(src, dst):
+                seen.append(Path(src).name)
+                if len(seen) <= len(atomic_replace.RETRY_DELAYS_SECONDS) + 1:
+                    raise sharing_violation()
+                real_replace(src, dst)
+
+            def pinned_unlink(self, missing_ok=False):
+                if self.name == source.name:
+                    raise sharing_violation()
+                return real_unlink(self, missing_ok=missing_ok)
+
+            with mock.patch.object(atomic_replace.os, "replace",
+                                   side_effect=blocked_until_a_new_file), \
+                 mock.patch.object(atomic_replace.time, "sleep"), \
+                 mock.patch.object(Path, "unlink", pinned_unlink):
+                atomic_replace.replace_atomic(source, target)
+
+            self.assertEqual(b"glTF", target.read_bytes())
+
+    def test_the_rescue_is_bounded_and_reports_the_rename_failure(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="cad-atomic-") as temp_dir:
+            source = Path(temp_dir) / "artifact.glb.tmp"
+            source.write_bytes(b"glTF")
+            target = Path(temp_dir) / "artifact.glb"
+            error = sharing_violation()
+
+            with mock.patch.object(atomic_replace.os, "replace", side_effect=error) as replace, \
+                 mock.patch.object(atomic_replace.time, "sleep"):
+                with self.assertRaises(PermissionError) as raised:
+                    atomic_replace.replace_atomic(source, target)
+
+            self.assertIs(error, raised.exception, "the original error must survive")
+            self.assertEqual(
+                2 * (len(atomic_replace.RETRY_DELAYS_SECONDS) + 1),
+                replace.call_count,
+                "two ladders, then give up -- a build that retries forever is worse",
+            )
+            # Both the copy and the original are cleaned up when the delete is permitted; only
+            # a genuinely pinned file survives, which the case above covers.
+            self.assertEqual(
+                [], [q.name for q in Path(temp_dir).iterdir()],
+                "the copy must not be left behind",
+            )
+
+    def test_a_source_that_cannot_be_copied_reports_the_rename_failure(self) -> None:
+        error = sharing_violation()
+        with mock.patch.object(atomic_replace.os, "replace", side_effect=error), \
+             mock.patch.object(atomic_replace.time, "sleep"), \
+             mock.patch.object(atomic_replace.shutil, "copyfile", side_effect=OSError("pinned")):
+            with self.assertRaises(PermissionError) as raised:
+                atomic_replace.replace_atomic("from.tmp", "to.glb")
+        self.assertIs(error, raised.exception)
+
+    def test_temp_suffix_is_unique_without_a_clock(self) -> None:
+        # Two calls inside one clock tick must still differ: the rescue's premise is a name the
+        # server has never seen, which must not rest on timer resolution.
+        with mock.patch.object(atomic_replace.time, "time_ns", return_value=1):
+            suffixes = {atomic_replace.temp_suffix() for _ in range(200)}
+        self.assertEqual(200, len(suffixes))
+        self.assertTrue(all(suffix.endswith(".tmp") for suffix in suffixes))
+
     def test_the_happy_path_does_not_sleep(self) -> None:
         with mock.patch.object(atomic_replace.os, "replace") as replace, \
              mock.patch.object(atomic_replace.time, "sleep") as sleep:
@@ -129,6 +245,30 @@ class WriteBytesAtomicTest(unittest.TestCase):
                 with self.assertRaises(OSError):
                     atomic_replace.write_bytes_atomic(target, b"glTF")
             self.assertEqual([], list(Path(temp_dir).iterdir()), "a temp file was left behind")
+
+    def test_a_pinned_temp_file_may_survive_rather_than_mask_the_failure(self) -> None:
+        """Knowingly weaker than the case above, and the better half of the trade.
+
+        On Windows the handle that refuses the rename refuses the delete too. Letting that
+        escape replaces the rename failure with a cleanup error, and aborts the rescue in
+        exactly the case it was written for. Today that case leaks the file AND fails the
+        build, so both halves improve.
+        """
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="cad-atomic-") as temp_dir:
+            target = Path(temp_dir) / "artifact.glb"
+            with mock.patch.object(atomic_replace.os, "replace", side_effect=sharing_violation()), \
+                 mock.patch.object(atomic_replace.time, "sleep"), \
+                 mock.patch.object(atomic_replace.shutil, "copyfile", side_effect=OSError("pinned")), \
+                 mock.patch.object(Path, "unlink", side_effect=sharing_violation()):
+                with self.assertRaises(PermissionError) as raised:
+                    atomic_replace.write_bytes_atomic(target, b"glTF")
+            self.assertEqual(
+                atomic_replace.WINDOWS_SHARING_VIOLATION,
+                raised.exception.winerror,
+                "the rename failure must reach the caller, not the cleanup failure",
+            )
 
 
 class EveryRenameGoesThroughTheHelperTest(unittest.TestCase):
