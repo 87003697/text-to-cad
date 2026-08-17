@@ -49,11 +49,16 @@ the session JSONL. The dirty `develop` root was not used or modified.
   removes every descendant mask. The outer bwrap builder and nested gate reject
   any non-antichain manifest, so parent-empty and child-exists predicates cannot
   conflict.
-- One fixed non-browser host executable is the only non-finding mask:
-  `/usr/bin/sudoreplay` is pre-scanned strictly on the host, then bound to
-  `/dev/null` only inside the nested bwrap namespace because it is executable
-  but unreadable after `--cap-drop ALL`. The Agent does not require it, the
-  nested scanner cannot safely audit its bytes without capabilities, and all
+- Two fixed non-browser host paths are the only non-finding masks.
+  `/usr/bin/sudoreplay` is scanned on the host, then bound to `/dev/null` inside
+  the nested bwrap namespace because it is executable but unreadable after
+  `--cap-drop ALL`. For `/usr/share/polkit-1/rules.d`, the host preflight
+  verifies the fixed path is an in-surface, non-symlink directory but
+  intentionally does not traverse its contents; the directory is replaced by
+  an empty `tmpfs` in the nested namespace because its `0700` `polkitd`
+  ownership prevents traversal there. A separate read-only CVM enumeration
+  found no other inaccessible `/usr` directory and no other unreadable regular
+  file outside already masked roots. The Agent requires neither path, and all
   other required host and nested `lstat`/`open`/`read`/`scandir` results remain
   fail-closed. This does not change the two-image Sidecar/Broker boundary or
   add capabilities to the bwrap Agent.
@@ -171,7 +176,7 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Broker OCI revision:
   `091b9d3b95f2b7797c1cac9414f05439923a439c`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:761076c4a3d46fd36d0b5e8992c717fbef586aa68f097556804b4b299e4fe6df`
+  `sha256:0a8ef4357fd8029d4d99516a62044094b2c20f554e7f88ee1f5edff3dfff7d0d`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with

@@ -10,6 +10,7 @@ AGENT_SYSTEM_EMPTY_ROOTS = (
     "/usr/local",
     "/usr/share/doc",
     "/usr/share/licenses",
+    "/usr/share/polkit-1/rules.d",
     "/usr/share/sgml",
     "/usr/src",
 )

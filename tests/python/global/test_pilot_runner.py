@@ -2203,6 +2203,8 @@ class ProductionPathContractTests(unittest.TestCase):
             ]
             system_empty = source_usr / "lib/.build-id"
             system_empty.mkdir(parents=True)
+            unreadable_directory = source_usr / "share/polkit-1/rules.d"
+            unreadable_directory.mkdir(parents=True)
             unreadable_executable = source_usr / "bin/sudoreplay"
             unreadable_executable.parent.mkdir(parents=True)
             unreadable_executable.write_bytes(b"fixed host executable")
@@ -2222,7 +2224,7 @@ class ProductionPathContractTests(unittest.TestCase):
                 mock.patch.object(
                     runner,
                     "existing_system_empty_paths",
-                    return_value=[system_empty],
+                    return_value=[system_empty, unreadable_directory],
                 ),
                 mock.patch.object(
                     runner,
@@ -2257,7 +2259,7 @@ class ProductionPathContractTests(unittest.TestCase):
                     source_etc,
                     *system_aliases,
                 ],
-                "masked_source_roots": [system_empty],
+                "masked_source_roots": [system_empty, unreadable_directory],
             },
         )
         self.assertNotIn(
@@ -2276,7 +2278,12 @@ class ProductionPathContractTests(unittest.TestCase):
                     "kind": "system",
                     "target": "/usr/lib/.build-id",
                     "mask": "tmpfs",
-                }
+                },
+                {
+                    "kind": "system",
+                    "target": "/usr/share/polkit-1/rules.d",
+                    "mask": "tmpfs",
+                },
             ],
         )
 
