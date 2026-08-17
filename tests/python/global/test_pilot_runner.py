@@ -69,6 +69,30 @@ def nested_gate_proof(
     }
 
 
+def failed_nested_gate_proof(stage: str) -> dict[str, object]:
+    """Return one identity-shaped closed failed proof."""
+
+    proof = nested_gate_proof()
+    proof["status"] = f"failed:{stage}"
+    proof["predicates"] = {
+        name: False for name in proof["predicates"]
+    }
+    proof["residual"] = {
+        "pngSha256": "0" * 64,
+        "mode": "",
+        "size": [0, 0],
+        "profileSha256": "0" * 64,
+        "views": [],
+    }
+    proof["viewer"] = {
+        "before": "",
+        "after": "",
+        "bodyMentionsFixture": False,
+        "bodyHasArtifactError": True,
+    }
+    return proof
+
+
 def load_runner():
     """Load the hyphenated executable as a module for focused unit tests."""
 
@@ -906,6 +930,41 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(receipt["status"], "failed")
         self.assertTrue(receipt["predicates"]["absenceProved"])
         self.assertEqual(receipt["failureCheck"], "sidecar-readiness")
+
+    def test_nested_gate_failure_check_accepts_only_contract_stages(self) -> None:
+        """The parent reports a fixed gate stage and rejects caller text."""
+
+        self.assertEqual(
+            self.supervisor.nested_gate_failure_check(
+                failed_nested_gate_proof("surface-discovery"),
+                expected_job_id="pilot-test-job",
+                expected_nonce="a" * 32,
+                expected_artifact_sha256="b" * 64,
+                expected_surface_manifest_sha256="c" * 64,
+            ),
+            "nested-gate-surface-discovery",
+        )
+        for label, proof in (
+            ("unknown-stage", failed_nested_gate_proof("secret-path-/root")),
+            ("missing-stage", {**failed_nested_gate_proof("authority"), "status": "failed:"}),
+            ("non-string", {**failed_nested_gate_proof("authority"), "status": 1}),
+            ("success", nested_gate_proof()),
+            ("missing-shape", {"status": "failed:authority"}),
+            (
+                "foreign-job",
+                {**failed_nested_gate_proof("authority"), "jobId": "foreign-job"},
+            ),
+        ):
+            with self.subTest(label=label):
+                self.assertIsNone(
+                    self.supervisor.nested_gate_failure_check(
+                        proof,
+                        expected_job_id="pilot-test-job",
+                        expected_nonce="a" * 32,
+                        expected_artifact_sha256="b" * 64,
+                        expected_surface_manifest_sha256="c" * 64,
+                    )
+                )
 
     def test_nested_gate_channel_is_one_shot_exact_and_bounded(self) -> None:
         """The outer-owned channel rejects absent, malformed, duplicate, and late proof."""

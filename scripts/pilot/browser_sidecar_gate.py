@@ -58,6 +58,27 @@ MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
 
 
+class GateCheckError(ValueError):
+    """One closed nested-gate stage failed without exporting its exception."""
+
+    def __init__(self, stage: str) -> None:
+        if stage not in GATE["failureStages"]:
+            raise ValueError("nested gate failure stage is invalid")
+        self.stage = stage
+        super().__init__(stage)
+
+
+def _checked(stage: str, operation: Any) -> Any:
+    """Run one operation and replace arbitrary failure text with a fixed stage."""
+
+    try:
+        return operation()
+    except GateCheckError:
+        raise
+    except Exception as exc:
+        raise GateCheckError(stage) from exc
+
+
 def _strict_json(raw: bytes, label: str) -> Any:
     """Decode one duplicate-free JSON value."""
 
@@ -276,7 +297,7 @@ def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, A
     """Run public parity and prove the fixed Agent browser surface is empty."""
 
     identity = load_gate_identity() if identity is None else identity
-    _authority(identity)
+    _checked("authority", lambda: _authority(identity))
     reference = MeshGeometry(
         vertices=[[-0.46, -0.2, 0.0], [-0.2, -0.2, 0.0], [-0.33, 0.2, 0.0]],
         faces=[[0, 1, 2]],
@@ -285,16 +306,21 @@ def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, A
         vertices=[[0.2, -0.2, 0.0], [0.46, -0.2, 0.0], [0.33, 0.2, 0.0]],
         faces=[[0, 1, 2]],
     )
-    rendered = render_residual_preview(reference, candidate, variant="step", exterior_directions=[])
-    with Image.open(BytesIO(rendered.png_bytes)) as image:
-        image.load()
-        residual = {
-            "pngSha256": hashlib.sha256(rendered.png_bytes).hexdigest(),
-            "mode": image.mode,
-            "size": list(image.size),
-            "profileSha256": rendered.profile_sha256,
-            "views": [view["name"] for view in rendered.views],
-        }
+    def render_public_residual() -> Mapping[str, Any]:
+        rendered = render_residual_preview(
+            reference, candidate, variant="step", exterior_directions=[]
+        )
+        with Image.open(BytesIO(rendered.png_bytes)) as image:
+            image.load()
+            return {
+                "pngSha256": hashlib.sha256(rendered.png_bytes).hexdigest(),
+                "mode": image.mode,
+                "size": list(image.size),
+                "profileSha256": rendered.profile_sha256,
+                "views": [view["name"] for view in rendered.views],
+            }
+
+    residual = _checked("residual-render", render_public_residual)
     expected_residual = {
         "pngSha256": GATE["publicPngSha256"],
         "mode": "RGB",
@@ -303,8 +329,8 @@ def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, A
         "views": GATE["views"],
     }
     if residual != expected_residual:
-        raise ValueError("public residual parity predicate failed")
-    viewer_result = _viewer_request(identity)
+        raise GateCheckError("residual-parity")
+    viewer_result = _checked("viewer-request", lambda: _viewer_request(identity))
     viewer = {
         "before": viewer_result["inspection"]["before"],
         "after": viewer_result["inspection"]["after"],
@@ -313,20 +339,23 @@ def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, A
     }
     manifest = identity["surfaceManifest"]
     if not _exclusions_closed(manifest["browserExclusions"]):
-        raise ValueError("nested browser exclusion predicate failed")
-    visible = discover_browser_roots(
-        ((Path(root), Path(root), True) for root in manifest["scanRoots"]),
-        permitted_symlink_roots=[
-            *(Path(root) for root in manifest["scanRoots"]),
-            *(Path(root) for root in CONFORMANCE_SYSTEM_ALIAS_ROOTS),
-            Path("/dev/null"),
-            Path("/proc/mounts"),
-            Path("/proc/self/mounts"),
-        ],
+        raise GateCheckError("exclusion-closure")
+    visible = _checked(
+        "surface-discovery",
+        lambda: discover_browser_roots(
+            ((Path(root), Path(root), True) for root in manifest["scanRoots"]),
+            permitted_symlink_roots=[
+                *(Path(root) for root in manifest["scanRoots"]),
+                *(Path(root) for root in CONFORMANCE_SYSTEM_ALIAS_ROOTS),
+                Path("/dev/null"),
+                Path("/proc/mounts"),
+                Path("/proc/self/mounts"),
+            ],
+        ),
     )
     excluded_targets = {item["target"] for item in manifest["browserExclusions"]}
     visible = [item for item in visible if item["target"] not in excluded_targets]
-    processes = _browser_processes()
+    processes = _checked("process-inventory", _browser_processes)
     inventory = {
         "browserExecutables": [item["target"] for item in visible if item["kind"] == "executable"],
         "browserPackages": [item["target"] for item in visible if item["kind"] == "package"],
@@ -341,7 +370,7 @@ def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, A
         "browserProcessZero": not processes,
     }
     if any(value is not True for value in predicates.values()):
-        raise ValueError("nested browser predicate failed")
+        raise GateCheckError("predicate")
     return {
         "schema": GATE["schema"],
         "status": "succeeded",
@@ -406,11 +435,11 @@ def discover_conformance_surface() -> Mapping[str, Any]:
     }
 
 
-def _failed_proof(identity: Mapping[str, Any]) -> Mapping[str, Any]:
+def _failed_proof(identity: Mapping[str, Any], stage: str) -> Mapping[str, Any]:
     """Return one identity-bound closed proof without exception text."""
 
     return {
-        "schema": GATE["schema"], "status": "failed",
+        "schema": GATE["schema"], "status": f"failed:{stage}",
         "jobId": identity["jobId"], "nonce": identity["nonce"],
         "artifactSha256": identity["artifactSha256"],
         "surfaceManifestSha256": identity["surfaceManifestSha256"],
@@ -457,8 +486,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     try:
         proof = run_gate_checks(identity)
+    except GateCheckError as exc:
+        publish_and_wait(_failed_proof(identity, exc.stage))
+        return 1
     except Exception:
-        publish_and_wait(_failed_proof(identity))
+        publish_and_wait(_failed_proof(identity, "predicate"))
         return 1
     if not publish_and_wait(proof):
         return 1

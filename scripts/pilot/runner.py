@@ -367,6 +367,73 @@ class NestedGateChannel:
             raise errors[0]
 
 
+def nested_gate_failure_check(
+    proof: Mapping[str, object],
+    *,
+    expected_job_id: str,
+    expected_nonce: str,
+    expected_artifact_sha256: str,
+    expected_surface_manifest_sha256: str,
+) -> str | None:
+    """Validate an identity-bound failed proof and return its closed stage."""
+
+    status = proof.get("status")
+    if not isinstance(status, str) or not status.startswith("failed:"):
+        return None
+    stage = status.removeprefix("failed:")
+    if stage not in NESTED_GATE["failureStages"]:
+        return None
+    predicates = proof.get("predicates")
+    if (
+        set(proof)
+        != {
+            "schema",
+            "status",
+            "jobId",
+            "nonce",
+            "artifactSha256",
+            "surfaceManifestSha256",
+            "predicates",
+            "residual",
+            "viewer",
+            "inventory",
+        }
+        or proof.get("schema") != NESTED_GATE["schema"]
+        or proof.get("jobId") != expected_job_id
+        or proof.get("nonce") != expected_nonce
+        or proof.get("artifactSha256") != expected_artifact_sha256
+        or proof.get("surfaceManifestSha256")
+        != expected_surface_manifest_sha256
+        or not isinstance(predicates, dict)
+        or set(predicates) != set(NESTED_GATE["predicates"])
+        or any(value is not False for value in predicates.values())
+        or proof.get("residual")
+        != {
+            "pngSha256": "0" * 64,
+            "mode": "",
+            "size": [0, 0],
+            "profileSha256": "0" * 64,
+            "views": [],
+        }
+        or proof.get("viewer")
+        != {
+            "before": "",
+            "after": "",
+            "bodyMentionsFixture": False,
+            "bodyHasArtifactError": True,
+        }
+        or proof.get("inventory")
+        != {
+            "browserExecutables": [],
+            "browserPackages": [],
+            "browserCaches": [],
+            "browserProcesses": [],
+        }
+    ):
+        return None
+    return f"nested-gate-{stage}"
+
+
 def signal_process_group(process: subprocess.Popen[bytes], signum: int) -> None:
     """Signal bwrap and all descendants without searching the process table."""
 
@@ -1390,6 +1457,28 @@ def run_supervised(
                                 proof = gate_channel.receive(
                                     lambda: active_relay.cancelled
                                 )
+                                proof_status = proof.get("status")
+                                failure_check = (
+                                    nested_gate_failure_check(
+                                        proof,
+                                        expected_job_id=sidecar.job_id,
+                                        expected_nonce=sidecar.gate_nonce,
+                                        expected_artifact_sha256=(
+                                            sidecar.gate_artifact_sha256 or ""
+                                        ),
+                                        expected_surface_manifest_sha256=(
+                                            sidecar.surface_manifest_sha256 or ""
+                                        ),
+                                    )
+                                    if isinstance(proof_status, str)
+                                    and proof_status.startswith("failed:")
+                                    else None
+                                )
+                                if failure_check is not None:
+                                    raise BrowserSidecarError(
+                                        "nested Browser Gate check failed",
+                                        check=failure_check,
+                                    )
                                 sidecar.record_nested_gate(proof)
                                 if active_relay.cancelled:
                                     raise PilotError(
@@ -1403,9 +1492,14 @@ def run_supervised(
                                 sidecar,
                             )
                         except Exception as exc:
+                            detail = (
+                                exc.check
+                                if isinstance(exc, BrowserSidecarError)
+                                else type(exc).__name__
+                            )
                             print(
                                 "pilot-runner: nested Browser Gate failed "
-                                f"({type(exc).__name__})",
+                                f"({detail})",
                                 file=sys.stderr,
                             )
                             child_status = 1

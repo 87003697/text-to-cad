@@ -3,6 +3,16 @@
   "authoritySchema": "meshshot.browser-authority/1",
   "nestedGate": {
     "artifactPath": "/run/meshshot-browser/browser-gate.pyz",
+    "failureStages": [
+      "authority",
+      "residual-render",
+      "residual-parity",
+      "viewer-request",
+      "exclusion-closure",
+      "surface-discovery",
+      "process-inventory",
+      "predicate"
+    ],
     "inputPath": "/run/meshshot-browser/gate-input.json",
     "inputSchema": "meshshot.browser-sidecar.nested-gate-input/1",
     "maxProofBytes": 16384,

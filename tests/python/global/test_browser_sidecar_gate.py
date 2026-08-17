@@ -155,6 +155,32 @@ class BrowserSidecarGateTests(unittest.TestCase):
             "exterior_directions": [],
         })
 
+    def test_gate_failure_reports_only_a_closed_stage(self) -> None:
+        """A failed gate exposes one fixed stage without exception details."""
+
+        gate = load_gate()
+        identity = {
+            "jobId": "formal-job-1",
+            "nonce": "a" * 32,
+            "artifactSha256": "b" * 64,
+            "surfaceManifestSha256": "c" * 64,
+        }
+        with (
+            mock.patch.object(gate, "_authority", return_value={}),
+            mock.patch.object(
+                gate,
+                "render_residual_preview",
+                side_effect=RuntimeError("secret detail must not escape"),
+            ),
+        ):
+            with self.assertRaises(gate.GateCheckError) as caught:
+                gate.run_gate_checks(identity)
+
+        self.assertEqual(caught.exception.stage, "residual-render")
+        proof = gate._failed_proof(identity, caught.exception.stage)
+        self.assertEqual(proof["status"], "failed:residual-render")
+        self.assertNotIn("secret", json.dumps(proof, sort_keys=True))
+
     def test_gate_exec_surface_has_no_render_arguments_or_shell(self) -> None:
         source = GATE_PATH.read_text(encoding="utf-8")
         self.assertIn("os.execvpe(workload[0], workload", source)
