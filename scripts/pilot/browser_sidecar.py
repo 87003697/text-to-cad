@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 from collections.abc import Callable
+import fcntl
 import hashlib
 import json
 import math
@@ -22,7 +23,7 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, BinaryIO, Mapping, Sequence
 from urllib.request import urlopen
 
 
@@ -67,6 +68,12 @@ def _broker_lock() -> tuple[str, str]:
 
 
 BROKER_IMAGE_ID, BROKER_IMAGE_SOURCE_REVISION = _broker_lock()
+BROWSER_RUNTIME_JOB_BYTES = 3 * 1024**3
+BROWSER_RUNTIME_HOST_RESERVE_BYTES = 4 * 1024**3
+BROWSER_RUNTIME_MAX_SLOTS = 4
+BROWSER_RUNTIME_ADMISSION_ROOT = (
+    Path(tempfile.gettempdir()) / "text-to-cad-browser-runtime-admission-v1"
+)
 PROGRAMS = CONTRACT["programs"]
 AUTHORITY_SCHEMA = CONTRACT["authoritySchema"]
 BROKER_SCHEMA = "meshshot.browser-sidecar.broker/1"
@@ -132,6 +139,106 @@ BROKER_IMAGE_PROJECTIONS = (
         BROKER_BASE_IMAGE_ID,
     ),
 )
+
+
+def _physical_memory_bytes() -> int:
+    """Return host physical memory without admitting on an unknown value."""
+
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+    except (OSError, ValueError):
+        return 0
+    if not isinstance(pages, int) or not isinstance(page_size, int):
+        return 0
+    return pages * page_size if pages > 0 and page_size > 0 else 0
+
+
+def _browser_runtime_slot_count(total_memory_bytes: int | None = None) -> int:
+    """Derive a bounded aggregate concurrency limit from host memory."""
+
+    total = _physical_memory_bytes() if total_memory_bytes is None else total_memory_bytes
+    if total < BROWSER_RUNTIME_HOST_RESERVE_BYTES + BROWSER_RUNTIME_JOB_BYTES:
+        return 0
+    return min(
+        BROWSER_RUNTIME_MAX_SLOTS,
+        (total - BROWSER_RUNTIME_HOST_RESERVE_BYTES) // BROWSER_RUNTIME_JOB_BYTES,
+    )
+
+
+def _acquire_browser_runtime_slot(
+    cancelled: Callable[[], bool],
+    *,
+    total_memory_bytes: int | None = None,
+) -> BinaryIO:
+    """Hold one cross-process slot until the returned stream is closed."""
+
+    slot_count = _browser_runtime_slot_count(total_memory_bytes)
+    if slot_count < 1:
+        raise BrowserSidecarError(
+            "host memory cannot admit one Browser Sidecar job",
+            check="runtime-admission",
+        )
+    try:
+        BROWSER_RUNTIME_ADMISSION_ROOT.mkdir(mode=0o700, parents=False, exist_ok=True)
+        root_state = BROWSER_RUNTIME_ADMISSION_ROOT.lstat()
+    except OSError as exc:
+        raise BrowserSidecarError(
+            "Browser Sidecar admission root is unavailable",
+            check="runtime-admission",
+        ) from exc
+    if (
+        not stat.S_ISDIR(root_state.st_mode)
+        or stat.S_IMODE(root_state.st_mode) != 0o700
+        or root_state.st_uid != os.getuid()
+    ):
+        raise BrowserSidecarError(
+            "Browser Sidecar admission root is invalid",
+            check="runtime-admission",
+        )
+    flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    while True:
+        for index in range(slot_count):
+            try:
+                descriptor = os.open(
+                    BROWSER_RUNTIME_ADMISSION_ROOT / f"slot-{index}.lock",
+                    flags,
+                    0o600,
+                )
+                stream = os.fdopen(descriptor, "rb", buffering=0)
+                slot_state = os.fstat(stream.fileno())
+                if (
+                    not stat.S_ISREG(slot_state.st_mode)
+                    or slot_state.st_uid != os.getuid()
+                    or stat.S_IMODE(slot_state.st_mode) != 0o600
+                    or slot_state.st_nlink != 1
+                ):
+                    stream.close()
+                    raise BrowserSidecarError(
+                        "Browser Sidecar admission slot is invalid",
+                        check="runtime-admission",
+                    )
+                try:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    stream.close()
+                    continue
+                return stream
+            except BrowserSidecarError:
+                raise
+            except OSError as exc:
+                raise BrowserSidecarError(
+                    "Browser Sidecar admission slot is unavailable",
+                    check="runtime-admission",
+                ) from exc
+        if cancelled():
+            raise BrowserSidecarError(
+                "Browser Sidecar admission was cancelled",
+                check="runtime-admission",
+            )
+        time.sleep(0.2)
 VIEW_ORDER = ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
 OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
 MAX_REQUEST_BYTES = CONTRACT["maxRequestBytes"]
@@ -889,6 +996,7 @@ class BrowserSidecarJob:
         self.network_id: str | None = None
         self.container_id: str | None = None
         self.broker_container_id: str | None = None
+        self.admission_slot: BinaryIO | None = None
         self.socket_identity: tuple[int, int] | None = None
         self.readiness: Mapping[str, Any] | None = None
         self.broker_readiness: Mapping[str, Any] | None = None
@@ -1421,6 +1529,7 @@ class BrowserSidecarJob:
                     "Docker is required for the formal Browser Sidecar",
                     check="docker-access",
                 )
+            self.admission_slot = _acquire_browser_runtime_slot(self.cancelled)
         except BaseException as exc:
             self.first_error = (
                 exc.check if isinstance(exc, BrowserSidecarError) else "start-unexpected"
@@ -1541,9 +1650,9 @@ class BrowserSidecarJob:
                 "--pids-limit",
                 "64",
                 "--memory",
-                "384m",
+                "1536m",
                 "--memory-swap",
-                "384m",
+                "1536m",
                 "--cpus",
                 "0.5",
                 *_broker_runtime_user_options(),
@@ -1961,6 +2070,12 @@ class BrowserSidecarJob:
                 pass
             except OSError:
                 self.cleanup_errors.append("capability-dir-remove")
+        if self.admission_slot is not None:
+            try:
+                fcntl.flock(self.admission_slot.fileno(), fcntl.LOCK_UN)
+            finally:
+                self.admission_slot.close()
+                self.admission_slot = None
         terminal_record = self.broker_terminal or {}
         accepted = terminal_record.get("acceptedRequests")
         fresh_contexts = terminal_record.get("freshContexts")

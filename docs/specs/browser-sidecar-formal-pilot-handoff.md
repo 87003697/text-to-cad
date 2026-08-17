@@ -176,6 +176,16 @@ the session JSONL. The dirty `develop` root was not used or modified.
   the exact 76,483,810-byte production serialization of the retained depth-8
   airplane pair with bounded headroom while preserving one finite limit in both
   the browser-less client and Broker.
+- The Broker has a fixed 1536 MiB memory/swap envelope. The former 384 MiB
+  envelope emitted a Docker `oom` event for the exact retained-request Broker
+  before accepting the request; canonical geometry expands substantially beyond
+  its wire representation.
+- Outer-owned host admission reserves 3 GiB for each Sidecar/Broker pair and 4
+  GiB for the host, caps the computed capacity at four concurrent jobs, and
+  holds one cross-process file lock for the complete container lifecycle. A
+  host below 7 GiB admits none. The current 16,497,991,680-byte CVM therefore
+  admits three jobs, including the requested two-job run, without aggregate
+  container-memory overcommit.
 - The successor adversarial matrix covers missing/wrong Broker identity,
   platform/revision/base mismatch, foreign Broker name, malformed/late/wrong
   readiness, pre-existing/non-socket/replaced socket, premature exits, exact

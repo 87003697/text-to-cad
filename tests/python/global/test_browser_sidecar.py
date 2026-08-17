@@ -81,6 +81,44 @@ def configure_gate(job: browser_sidecar.BrowserSidecarJob) -> None:
 
 
 class BrowserSidecarJobTests(unittest.TestCase):
+    def test_runtime_admission_caps_aggregate_container_memory(self) -> None:
+        """Host slots reserve 3 GiB per job and fail closed when occupied."""
+
+        gib = 1024**3
+        self.assertEqual(browser_sidecar._browser_runtime_slot_count(16 * gib), 4)
+        self.assertEqual(
+            browser_sidecar._browser_runtime_slot_count(16_497_991_680),
+            3,
+        )
+        self.assertEqual(browser_sidecar._browser_runtime_slot_count(10 * gib), 2)
+        self.assertEqual(browser_sidecar._browser_runtime_slot_count(6 * gib), 0)
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(
+            browser_sidecar,
+            "BROWSER_RUNTIME_ADMISSION_ROOT",
+            Path(temp) / "slots",
+        ):
+            first = browser_sidecar._acquire_browser_runtime_slot(
+                lambda: False,
+                total_memory_bytes=7 * gib,
+            )
+            try:
+                with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
+                    browser_sidecar._acquire_browser_runtime_slot(
+                        lambda: True,
+                        total_memory_bytes=7 * gib,
+                    )
+                self.assertEqual(caught.exception.check, "runtime-admission")
+            finally:
+                first.close()
+            slot_path = browser_sidecar.BROWSER_RUNTIME_ADMISSION_ROOT / "slot-0.lock"
+            slot_path.chmod(0o666)
+            with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
+                browser_sidecar._acquire_browser_runtime_slot(
+                    lambda: False,
+                    total_memory_bytes=7 * gib,
+                )
+            self.assertEqual(caught.exception.check, "runtime-admission")
+
     """Observe one complete exact-image lifecycle through its public adapter."""
 
     def test_broker_runtime_user_has_matching_private_home(self) -> None:
@@ -585,6 +623,10 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertIn("--read-only", broker_create)
         self.assertIn("--mount", broker_create)
         self.assertIn(browser_sidecar.BROKER_IMAGE_ID, broker_create)
+        memory_index = broker_create.index("--memory")
+        swap_index = broker_create.index("--memory-swap")
+        self.assertEqual(broker_create[memory_index + 1], "1536m")
+        self.assertEqual(broker_create[swap_index + 1], "1536m")
         broker_tmpfs = [
             broker_create[index + 1]
             for index, argument in enumerate(broker_create)
