@@ -118,9 +118,77 @@ class _Node:
     metadata: os.stat_result
     link_target: str | None = None
     is_elf: bool = False
+    elf_role: str | None = None
     package_marker: bool = False
     product_marker: bool = False
     cache_marker: bool = False
+
+
+def _elf_role(first: bytes) -> str | None:
+    """Classify a complete-in-prefix ELF as executable, shared, or unknown."""
+
+    if len(first) < 24 or not first.startswith(b"\x7fELF"):
+        return None
+    byte_order = {1: "little", 2: "big"}.get(first[5])
+    if byte_order is None or first[6] != 1:
+        return "unknown"
+    elf_type = int.from_bytes(first[16:18], byte_order)
+    if elf_type == 2:
+        return "executable"
+    if elf_type != 3 or int.from_bytes(first[20:24], byte_order) != 1:
+        return "unknown"
+    elf_class = first[4]
+    if elf_class == 1:
+        ehsize = 52
+        expected_phentsize = 32
+        offsets = (24, 4, 28, 4, 40, 42, 44)
+    elif elf_class == 2:
+        ehsize = 64
+        expected_phentsize = 56
+        offsets = (24, 8, 32, 8, 52, 54, 56)
+    else:
+        return "unknown"
+    (
+        entry_at,
+        entry_size,
+        phoff_at,
+        phoff_size,
+        ehsize_at,
+        phentsize_at,
+        phnum_at,
+    ) = offsets
+    if len(first) < phnum_at + 2:
+        return "unknown"
+    entry_point = int.from_bytes(
+        first[entry_at : entry_at + entry_size], byte_order
+    )
+    phoff = int.from_bytes(
+        first[phoff_at : phoff_at + phoff_size], byte_order
+    )
+    observed_ehsize = int.from_bytes(first[ehsize_at : ehsize_at + 2], byte_order)
+    phentsize = int.from_bytes(first[phentsize_at : phentsize_at + 2], byte_order)
+    phnum = int.from_bytes(first[phnum_at : phnum_at + 2], byte_order)
+    if (
+        observed_ehsize != ehsize
+        or phentsize != expected_phentsize
+        or phnum == 0
+        or phoff < ehsize
+    ):
+        return "unknown"
+    table_end = phoff + phentsize * phnum
+    if table_end > len(first):
+        return "unknown"
+    program_types: set[int] = set()
+    for index in range(phnum):
+        program_offset = phoff + phentsize * index
+        program_types.add(
+            int.from_bytes(first[program_offset : program_offset + 4], byte_order)
+        )
+    if 3 in program_types or entry_point != 0:
+        return "executable"
+    if {1, 2}.issubset(program_types):
+        return "shared"
+    return "unknown"
 
 
 def _closed(exc: OSError) -> BrowserSurfaceError:
@@ -177,6 +245,7 @@ def _inspect_file(
             raise BrowserSurfaceError("mounted browser surface identity changed")
         first = filesystem.read(descriptor, 4096)
         node.is_elf = first.startswith(b"\x7fELF")
+        node.elf_role = _elf_role(first) if node.is_elf else None
         observed_cache = "cache" in {part.casefold() for part in node.relative}
         complete = (
             force_complete
@@ -247,7 +316,9 @@ def _classify(
     elif stat.S_ISREG(node.metadata.st_mode) and (
         node.metadata.st_mode & 0o111 or node.is_elf
     ):
-        if _BROWSER_NAME.fullmatch(name) or node.product_marker:
+        if _BROWSER_NAME.fullmatch(name) or (
+            node.product_marker and node.elf_role != "shared"
+        ):
             _finding(findings, kind="executable", target=target, directory=False)
     elif stat.S_ISREG(node.metadata.st_mode) and "cache" in cache_parts:
         if node.cache_marker:

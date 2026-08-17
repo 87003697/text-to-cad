@@ -242,6 +242,102 @@ class BrowserSurfaceTests(unittest.TestCase):
             {"vendor-render": 1, "cache-payload": 1},
         )
 
+    def test_product_marker_does_not_turn_shared_library_into_executable(self) -> None:
+        """A V8/Chromium string inside libnode-style ELF data is not a browser."""
+
+        def elf(
+            *,
+            interpreter: bool,
+            entry: int = 0,
+            elf_class: int = 2,
+            byte_order: str = "little",
+            malformed_phdr: bool = False,
+        ) -> bytes:
+            payload = bytearray(512)
+            payload[:7] = b"\x7fELF" + bytes([
+                elf_class,
+                1 if byte_order == "little" else 2,
+                1,
+            ])
+            payload[16:18] = (3).to_bytes(2, byte_order)
+            payload[20:24] = (1).to_bytes(4, byte_order)
+            if elf_class == 1:
+                ehsize, phentsize = 52, 32
+                payload[24:28] = entry.to_bytes(4, byte_order)
+                payload[28:32] = ehsize.to_bytes(4, byte_order)
+                payload[40:42] = ehsize.to_bytes(2, byte_order)
+                payload[42:44] = (
+                    4 if malformed_phdr else phentsize
+                ).to_bytes(2, byte_order)
+                payload[44:46] = (3 if interpreter else 2).to_bytes(2, byte_order)
+            else:
+                ehsize, phentsize = 64, 56
+                payload[24:32] = entry.to_bytes(8, byte_order)
+                payload[32:40] = ehsize.to_bytes(8, byte_order)
+                payload[52:54] = ehsize.to_bytes(2, byte_order)
+                payload[54:56] = (
+                    4 if malformed_phdr else phentsize
+                ).to_bytes(2, byte_order)
+                payload[56:58] = (3 if interpreter else 2).to_bytes(2, byte_order)
+            for index, program_type in enumerate(
+                [1, 2, *([3] if interpreter else [])]
+            ):
+                offset = ehsize + phentsize * index
+                payload[offset : offset + 4] = program_type.to_bytes(4, byte_order)
+            payload.extend(b"Chromium 120 compatibility string")
+            return bytes(payload)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "usr"
+            library = root / "lib64/libnode.so.115"
+            library.parent.mkdir(parents=True)
+            library.write_bytes(elf(interpreter=False))
+            library.chmod(0o755)
+            renamed_browser = root / "lib64/renderer.so.1"
+            renamed_browser.write_bytes(elf(interpreter=True))
+            renamed_browser.chmod(0o755)
+            static_pie = root / "lib64/static-renderer.so.2"
+            static_pie.write_bytes(elf(interpreter=False, entry=0x1000))
+            static_pie.chmod(0o755)
+            malformed = root / "lib64/malformed-renderer.so.3"
+            malformed.write_bytes(elf(interpreter=False, malformed_phdr=True))
+            malformed.chmod(0o755)
+
+            self.assertEqual(
+                browser_surface.discover_browser_roots(
+                    [(root, Path("/usr"), True)]
+                ),
+                [
+                    {
+                        "kind": "executable",
+                        "target": "/usr/lib64/malformed-renderer.so.3",
+                        "mask": "dev-null",
+                    },
+                    {
+                        "kind": "executable",
+                        "target": "/usr/lib64/renderer.so.1",
+                        "mask": "dev-null",
+                    },
+                    {
+                        "kind": "executable",
+                        "target": "/usr/lib64/static-renderer.so.2",
+                        "mask": "dev-null",
+                    },
+                ],
+            )
+            self.assertEqual(
+                browser_surface._elf_role(
+                    elf(interpreter=False, elf_class=1)
+                ),
+                "shared",
+            )
+            self.assertEqual(
+                browser_surface._elf_role(
+                    elf(interpreter=False, byte_order="big")
+                ),
+                "shared",
+            )
+
     def test_declared_read_only_roots_close_cross_root_aliases(self) -> None:
         """Image roots may cross-link, but aliases and cycles remain closed."""
 

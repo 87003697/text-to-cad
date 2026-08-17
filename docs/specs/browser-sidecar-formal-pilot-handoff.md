@@ -39,7 +39,14 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Before Sidecar startup, the runner enumerates every exact read-only execution
   mount plus writable experiment/Codex state. It detects named and renamed
   Chromium/Chrome/Playwright packages, executables, caches, ELF and product
-  markers through a shared descriptor/no-follow walker. Every required root and
+  markers through a shared descriptor/no-follow walker. A structurally valid
+  ELF `ET_DYN` object with a zero entry point, exact class/version/header and
+  program-header layout, `PT_LOAD` plus `PT_DYNAMIC`, and no `PT_INTERP`
+  remains fully inspected, but an embedded product string alone does not
+  reclassify that shared object as a launchable browser executable. `ET_EXEC`,
+  PIE (including static PIE with a nonzero entry point), malformed/unknown ELF,
+  browser names, packages, caches, and renamed executables remain closed.
+  Every required root and
   lstat/open/read/scandir result is closed; only an explicitly optional absent
   non-mounted root is ignored. Every link is resolved explicitly: dangling,
   escaping, cyclic, or uninspectable targets close, and reachable in-root
@@ -183,7 +190,7 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Broker OCI revision:
   `091b9d3b95f2b7797c1cac9414f05439923a439c`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:85795dbdcc37cda8a2c2ff7793703e7fd63ab495e9b42f3d5c7a1cdfb2f703c1`
+  `sha256:a2f49dea284a537587395b7727899c60ef3db23f42b233fa4c4b95e6a86ab829`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with
