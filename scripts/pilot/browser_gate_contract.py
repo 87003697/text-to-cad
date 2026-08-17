@@ -13,6 +13,7 @@ AGENT_SYSTEM_EMPTY_ROOTS = (
     "/usr/share/sgml",
     "/usr/src",
 )
+AGENT_SYSTEM_EMPTY_FILES = ("/usr/bin/sudoreplay",)
 AGENT_EXTERNAL_EMPTY_ROOTS = ("/sys", "/var/tmp")
 CONFORMANCE_OPTIONAL_ROOTS = (
     "/app",

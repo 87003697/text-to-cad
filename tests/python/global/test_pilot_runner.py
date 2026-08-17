@@ -1961,7 +1961,13 @@ class ProductionPathContractTests(unittest.TestCase):
                             "/home/pilot/.codex",
                             "/home/pilot/.codex/skills/fake",
                         ]),
-                        "browserExclusions": [],
+                        "browserExclusions": [
+                            {
+                                "kind": "system",
+                                "target": "/usr/bin/sudoreplay",
+                                "mask": "dev-null",
+                            }
+                        ],
                     }
                 }) + "\n",
                 encoding="utf-8",
@@ -2064,6 +2070,10 @@ class ProductionPathContractTests(unittest.TestCase):
                 str((repo_root / "browser-capability").resolve()),
                 "/run/meshshot-browser",
             ],
+            triples,
+        )
+        self.assertIn(
+            ["--ro-bind", "/dev/null", "/usr/bin/sudoreplay"],
             triples,
         )
         self.assertNotIn("/run/meshshot-gate/meshshot-src", argv)
@@ -2193,6 +2203,9 @@ class ProductionPathContractTests(unittest.TestCase):
             ]
             system_empty = source_usr / "lib/.build-id"
             system_empty.mkdir(parents=True)
+            unreadable_executable = source_usr / "bin/sudoreplay"
+            unreadable_executable.parent.mkdir(parents=True)
+            unreadable_executable.write_bytes(b"fixed host executable")
             sidecar = mock.Mock()
             with (
                 mock.patch.object(
@@ -2210,6 +2223,11 @@ class ProductionPathContractTests(unittest.TestCase):
                     runner,
                     "existing_system_empty_paths",
                     return_value=[system_empty],
+                ),
+                mock.patch.object(
+                    runner,
+                    "existing_system_empty_files",
+                    return_value=[unreadable_executable],
                 ),
                 mock.patch.object(runner, "prepare_sandbox", return_value=upper),
                 mock.patch.object(
@@ -2249,6 +2267,11 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertEqual(
             manifest["browserExclusions"],
             [
+                {
+                    "kind": "system",
+                    "target": "/usr/bin/sudoreplay",
+                    "mask": "dev-null",
+                },
                 {
                     "kind": "system",
                     "target": "/usr/lib/.build-id",

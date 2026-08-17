@@ -26,6 +26,7 @@ from typing import Callable, Mapping
 try:
     from scripts.pilot.browser_gate_contract import (
         AGENT_EXTERNAL_EMPTY_ROOTS,
+        AGENT_SYSTEM_EMPTY_FILES,
         AGENT_SYSTEM_EMPTY_ROOTS,
         CONFORMANCE_SYSTEM_ALIAS_ROOTS,
     )
@@ -55,6 +56,7 @@ except ModuleNotFoundError as exc:
         raise
     from browser_gate_contract import (  # type: ignore[no-redef]
         AGENT_EXTERNAL_EMPTY_ROOTS,
+        AGENT_SYSTEM_EMPTY_FILES,
         AGENT_SYSTEM_EMPTY_ROOTS,
         CONFORMANCE_SYSTEM_ALIAS_ROOTS,
     )
@@ -836,6 +838,13 @@ def existing_system_empty_paths() -> list[Path]:
     return [path for path in paths if path.is_dir() and not path.is_symlink()]
 
 
+def existing_system_empty_files() -> list[Path]:
+    """Return fixed non-runtime host executables masked inside bwrap."""
+
+    paths = [Path(root) for root in AGENT_SYSTEM_EMPTY_FILES]
+    return [path for path in paths if path.is_file() and not path.is_symlink()]
+
+
 def existing_external_empty_paths() -> list[Path]:
     """Return fixed empty runtime roots created instead of mounting host data."""
 
@@ -848,6 +857,8 @@ def existing_external_empty_paths() -> list[Path]:
 def _empty_surface_exclusions(
     mounts: list[tuple[Path, Path, bool]],
     empty_paths: list[Path],
+    *,
+    mask: str = "tmpfs",
 ) -> list[dict[str, str]]:
     """Map fixed host metadata masks onto their exact sandbox targets."""
 
@@ -864,7 +875,7 @@ def _empty_surface_exclusions(
             {
                 "kind": "system",
                 "target": matches[0].as_posix(),
-                "mask": "tmpfs",
+                "mask": mask,
             }
         )
     return exclusions
@@ -1114,6 +1125,14 @@ def prepare_nested_browser_gate(
             for source, _, _ in mounts
         )
     ]
+    empty_files = [
+        path
+        for path in existing_system_empty_files()
+        if any(
+            path != source and path.is_relative_to(source)
+            for source, _, _ in mounts
+        )
+    ]
     external_empty_paths = existing_external_empty_paths()
     try:
         browser_exclusions = discover_browser_roots(
@@ -1139,6 +1158,7 @@ def prepare_nested_browser_gate(
         [
             *browser_exclusions,
             *_empty_surface_exclusions(mounts, empty_paths),
+            *_empty_surface_exclusions(mounts, empty_files, mask="dev-null"),
             *(
                 {
                     "kind": "system",

@@ -49,6 +49,14 @@ the session JSONL. The dirty `develop` root was not used or modified.
   removes every descendant mask. The outer bwrap builder and nested gate reject
   any non-antichain manifest, so parent-empty and child-exists predicates cannot
   conflict.
+- One fixed non-browser host executable is the only non-finding mask:
+  `/usr/bin/sudoreplay` is pre-scanned strictly on the host, then bound to
+  `/dev/null` only inside the nested bwrap namespace because it is executable
+  but unreadable after `--cap-drop ALL`. The Agent does not require it, the
+  nested scanner cannot safely audit its bytes without capabilities, and all
+  other required host and nested `lstat`/`open`/`read`/`scandir` results remain
+  fail-closed. This does not change the two-image Sidecar/Broker boundary or
+  add capabilities to the bwrap Agent.
 - Immediately before Agent exec, the runner starts the fixed repository-owned
   Browser Gate inside the exact same bwrap PID/filesystem/network environment.
   The gate calls the real unchanged public residual API with one literal
@@ -163,7 +171,7 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Broker OCI revision:
   `091b9d3b95f2b7797c1cac9414f05439923a439c`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:f2a80453c5a5f5e3a6f81c162cefd8e6fbe6989fc39a95c6434f473b1649351a`
+  `sha256:761076c4a3d46fd36d0b5e8992c717fbef586aa68f097556804b4b299e4fe6df`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with
