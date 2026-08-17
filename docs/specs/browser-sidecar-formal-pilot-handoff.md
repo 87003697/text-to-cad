@@ -172,9 +172,10 @@ the session JSONL. The dirty `develop` root was not used or modified.
   fixed browser-less conformance client is sealed at the exact path released by
   that gate. Its host-only runner/contract dependencies are lazy imports and are
   not copied into the Broker.
-- Registered requests have one shared package-owned 32 MiB bound. This admits
-  the observed 27,176,700-byte depth-8 airplane residual request while retaining
-  a closed finite limit in both the browser-less client and Broker.
+- Registered requests have one shared package-owned 96 MiB bound. This admits
+  the exact 76,483,810-byte production serialization of the retained depth-8
+  airplane pair with bounded headroom while preserving one finite limit in both
+  the browser-less client and Broker.
 - The successor adversarial matrix covers missing/wrong Broker identity,
   platform/revision/base mismatch, foreign Broker name, malformed/late/wrong
   readiness, pre-existing/non-socket/replaced socket, premature exits, exact
@@ -193,7 +194,7 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Broker OCI revision:
   `dec10a4441742f5b55a940a64d5246a8a73e4fae`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:60e075e243bc17b6c9f53456b5537faac75c637e90202e73ea083057324266d0`
+  `sha256:981e37d808e5ba237385c290a502166043a668b3eeb1c4ac637b9eb43e528a28`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with
