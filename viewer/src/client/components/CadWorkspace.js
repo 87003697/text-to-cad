@@ -245,7 +245,7 @@ import {
   shouldDeferFileParamSelection,
   writeCadParam,
 } from "@/workbench/sidebar";
-import { buildCadRefToken } from "cadjs/lib/cadRefs.js";
+import { buildCadRefToken, isNativeCadSelector } from "cadjs/lib/cadRefs.js";
 import {
   applyUrdfPoseToMeshData,
   buildDefaultUrdfJointValues,
@@ -426,11 +426,9 @@ function stepTreeNodeIdForWorkspace(node) {
   return String(node?.id || node?.occurrenceId || "").trim();
 }
 
-const NATIVE_CAD_SELECTOR_RE = /^(?:o\d+(?:\.\d+)*(?:\.[sfev]\d+)?|[sfev]\d+|m\d+)$/i;
-
 function nativeCadSelectorCandidate(value) {
   const selector = String(value || "").trim();
-  return NATIVE_CAD_SELECTOR_RE.test(selector) ? selector : "";
+  return isNativeCadSelector(selector) ? selector : "";
 }
 
 function selectorFromStepTreeInternalId(value) {

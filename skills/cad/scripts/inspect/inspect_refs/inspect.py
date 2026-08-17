@@ -442,9 +442,17 @@ def _occurrence_detail(row: dict[str, object], selector_index: lookup.SelectorIn
                 for grandchild in reversed(selector_index.occurrences)
                 if str(grandchild.get("parentId") or "").strip() == child_id
             )
+    # The exact spelling to paste to address this part by its label -- including the numbered
+    # form when several parts share a label, which is the one case a reader cannot guess from
+    # `name` alone. Omitted when the part has no usable label; then its numeric ref is the only
+    # way in, exactly as before labels existed.
+    from cadgen.label_refs import label_ref_for_occurrence
+
+    label_ref = label_ref_for_occurrence(getattr(selector_index, "label_aliases", {}) or {}, occurrence_id)
     return {
         "path": row.get("path"),
         "name": row.get("name"),
+        **({"labelRef": label_ref} if label_ref else {}),
         "sourceName": row.get("sourceName"),
         "parentId": lookup.display_selector(str(row.get("parentId") or ""), selector_index),
         "childCount": len(child_rows),
