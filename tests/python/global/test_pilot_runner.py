@@ -2065,6 +2065,8 @@ class ProductionPathContractTests(unittest.TestCase):
                 Path("/lib64"),
                 Path("/sbin"),
             ]
+            system_empty = source_usr / "lib/.build-id"
+            system_empty.mkdir(parents=True)
             sidecar = mock.Mock()
             with (
                 mock.patch.object(
@@ -2078,6 +2080,11 @@ class ProductionPathContractTests(unittest.TestCase):
                     "existing_system_alias_paths",
                     return_value=system_aliases,
                 ),
+                mock.patch.object(
+                    runner,
+                    "existing_system_empty_paths",
+                    return_value=[system_empty],
+                ),
                 mock.patch.object(runner, "prepare_sandbox", return_value=upper),
                 mock.patch.object(
                     runner,
@@ -2086,7 +2093,7 @@ class ProductionPathContractTests(unittest.TestCase):
                 ) as discover,
                 mock.patch.object(
                     runner, "_prepare_nested_browser_gate_from_manifest"
-                ),
+                ) as prepare_manifest,
             ):
                 runner.prepare_nested_browser_gate(
                     repo_root,
@@ -2105,11 +2112,23 @@ class ProductionPathContractTests(unittest.TestCase):
                     source_usr,
                     source_etc,
                     *system_aliases,
-                ]
+                ],
+                "masked_source_roots": [system_empty],
             },
         )
         self.assertNotIn(
             "permitted_symlink_roots", discover.call_args_list[1].kwargs
+        )
+        manifest = prepare_manifest.call_args.args[2]
+        self.assertEqual(
+            manifest["browserExclusions"],
+            [
+                {
+                    "kind": "system",
+                    "target": "/usr/lib/.build-id",
+                    "mask": "tmpfs",
+                }
+            ],
         )
 
     def test_surface_failure_names_fixed_target_and_reason(self) -> None:

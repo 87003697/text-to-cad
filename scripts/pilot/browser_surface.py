@@ -472,6 +472,7 @@ def _walk_mount(
     filesystem: SurfaceFilesystem,
     findings: list[dict[str, str]],
     permitted_symlink_roots: tuple[str, ...],
+    masked_source_roots: frozenset[str],
 ) -> None:
     """Walk one declared root with directory descriptors and no implicit links."""
 
@@ -547,6 +548,9 @@ def _walk_mount(
         if stat.S_ISREG(metadata.st_mode):
             return node
         if not stat.S_ISDIR(metadata.st_mode):
+            return node
+        current_path = os.path.abspath(os.path.join(source_text, *relative))
+        if current_path in masked_source_roots:
             return node
         flags = _OPEN_BASE | getattr(os, "O_DIRECTORY", 0)
         descriptor = filesystem.open(name, flags, dir_fd=parent_descriptor)
@@ -724,6 +728,7 @@ def discover_browser_roots(
     *,
     filesystem: SurfaceFilesystem | None = None,
     permitted_symlink_roots: Iterable[Path] = (),
+    masked_source_roots: Iterable[Path] = (),
 ) -> list[dict[str, str]]:
     """Return exact masks, optionally closing immutable cross-root aliases."""
 
@@ -751,6 +756,31 @@ def discover_browser_roots(
             closed = _closed(exc)
             raise BrowserSurfaceRootError(public_target, str(closed)) from exc
     permitted = tuple(sorted(declared | resolved_declared))
+    declared_masks = frozenset(
+        os.path.abspath(os.fspath(path)) for path in masked_source_roots
+    )
+    resolved_sources: set[str] = set()
+    if declared_masks:
+        for source in source_targets:
+            try:
+                resolved_sources.add(os.path.realpath(source, strict=True))
+            except OSError:
+                continue
+    resolved_masks: set[str] = set()
+    for path in sorted(declared_masks):
+        if not any(
+            path != source and _inside_root(source, path)
+            for source in {*source_targets, *resolved_sources}
+        ):
+            raise BrowserSurfaceError("mounted empty surface mask escapes roots")
+        try:
+            metadata = adapter.lstat(path)
+        except OSError as exc:
+            raise _closed(exc) from exc
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            raise BrowserSurfaceError("mounted empty surface mask is not a directory")
+        resolved_masks.add(os.path.realpath(path, strict=True))
+    masked = frozenset(resolved_masks)
     findings: list[dict[str, str]] = []
     for source_root, target_root, required in mount_list:
         try:
@@ -761,6 +791,7 @@ def discover_browser_roots(
                 adapter,
                 findings,
                 permitted,
+                masked,
             )
         except BrowserSurfaceError as exc:
             raise BrowserSurfaceRootError(

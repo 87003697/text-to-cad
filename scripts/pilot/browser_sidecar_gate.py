@@ -131,7 +131,8 @@ def load_gate_identity() -> Mapping[str, Any]:
         or any(
             not isinstance(item, dict)
             or set(item) != {"kind", "target", "mask"}
-            or item.get("kind") not in {"package", "executable", "cache"}
+            or item.get("kind")
+            not in {"package", "executable", "cache", "system"}
             or not isinstance(item.get("target"), str)
             or not item["target"].startswith("/")
             or item.get("mask") not in {"tmpfs", "dev-null"}

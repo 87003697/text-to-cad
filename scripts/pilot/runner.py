@@ -24,7 +24,10 @@ from types import FrameType
 from typing import Callable, Mapping
 
 try:
-    from scripts.pilot.browser_gate_contract import CONFORMANCE_SYSTEM_ALIAS_ROOTS
+    from scripts.pilot.browser_gate_contract import (
+        AGENT_SYSTEM_EMPTY_ROOTS,
+        CONFORMANCE_SYSTEM_ALIAS_ROOTS,
+    )
     from scripts.pilot.venus_retry_proxy import RetryProxy
     from scripts.pilot.browser_sidecar import (
         BROKER_BASE_IMAGE_ID,
@@ -49,6 +52,7 @@ except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
     from browser_gate_contract import (  # type: ignore[no-redef]
+        AGENT_SYSTEM_EMPTY_ROOTS,
         CONFORMANCE_SYSTEM_ALIAS_ROOTS,
     )
     from venus_retry_proxy import RetryProxy
@@ -754,6 +758,38 @@ def existing_system_alias_paths() -> list[Path]:
     return [path for path in aliases if path.exists() or path.is_symlink()]
 
 
+def existing_system_empty_paths() -> list[Path]:
+    """Return fixed non-runtime metadata directories masked inside bwrap."""
+
+    paths = [Path(root) for root in AGENT_SYSTEM_EMPTY_ROOTS]
+    return [path for path in paths if path.is_dir() and not path.is_symlink()]
+
+
+def _empty_surface_exclusions(
+    mounts: list[tuple[Path, Path, bool]],
+    empty_paths: list[Path],
+) -> list[dict[str, str]]:
+    """Map fixed host metadata masks onto their exact sandbox targets."""
+
+    exclusions: list[dict[str, str]] = []
+    for empty_path in empty_paths:
+        matches = [
+            target / empty_path.relative_to(source)
+            for source, target, _ in mounts
+            if empty_path != source and empty_path.is_relative_to(source)
+        ]
+        if len(matches) != 1:
+            raise PilotError("fixed empty system surface is outside one mount")
+        exclusions.append(
+            {
+                "kind": "system",
+                "target": matches[0].as_posix(),
+                "mask": "tmpfs",
+            }
+        )
+    return exclusions
+
+
 def build_sandbox_environment(
     environ: Mapping[str, str],
     tap_url: str,
@@ -889,7 +925,8 @@ def _prepare_nested_browser_gate_from_manifest(
         or any(
             not isinstance(item, dict)
             or set(item) != {"kind", "target", "mask"}
-            or item.get("kind") not in {"package", "executable", "cache"}
+            or item.get("kind")
+            not in {"package", "executable", "cache", "system"}
             or not isinstance(item.get("target"), str)
             or not Path(item["target"]).is_absolute()
             or Path(item["target"]).as_posix() != item["target"]
@@ -989,13 +1026,22 @@ def prepare_nested_browser_gate(
         (exp_dir.resolve(), SANDBOX_REPO_ROOT / relative_exp, True),
         (upper.resolve(), SANDBOX_CODEX_HOME, True),
     ]
+    empty_paths = [
+        path
+        for path in existing_system_empty_paths()
+        if any(
+            path != source and path.is_relative_to(source)
+            for source, _, _ in mounts
+        )
+    ]
     try:
-        exclusions = discover_browser_roots(
+        browser_exclusions = discover_browser_roots(
             mounts,
             permitted_symlink_roots=[
                 *(source for source, _, _ in mounts),
                 *existing_system_alias_paths(),
             ],
+            masked_source_roots=empty_paths,
         )
         writable_findings = discover_browser_roots(writable_mounts)
     except BrowserSurfaceRootError as exc:
@@ -1007,6 +1053,9 @@ def prepare_nested_browser_gate(
         raise PilotError("cannot close mounted Agent browser surface") from exc
     if writable_findings:
         raise PilotError("writable Agent surface contains a browser artifact")
+    exclusions = canonicalize_browser_masks(
+        [*browser_exclusions, *_empty_surface_exclusions(mounts, empty_paths)]
+    )
     scan_roots = sorted(
         {target.as_posix() for _, target, _ in [*mounts, *writable_mounts]}
     )
@@ -1193,7 +1242,8 @@ def build_bwrap_argv(
             if (
                 not isinstance(exclusion, dict)
                 or set(exclusion) != {"kind", "target", "mask"}
-                or exclusion.get("kind") not in {"package", "executable", "cache"}
+                or exclusion.get("kind")
+                not in {"package", "executable", "cache", "system"}
                 or not isinstance(exclusion.get("target"), str)
                 or exclusion.get("mask") not in {"tmpfs", "dev-null"}
             ):

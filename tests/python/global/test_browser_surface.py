@@ -24,6 +24,28 @@ class BrowserSurfaceTests(unittest.TestCase):
             inspect.signature(browser_surface.discover_browser_roots).parameters,
         )
 
+    def test_explicit_empty_mount_masks_are_not_part_of_the_scanned_surface(self) -> None:
+        """A fixed tmpfs mount may hide inert host metadata before traversal."""
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "usr"
+            metadata = root / "lib/.build-id"
+            metadata.mkdir(parents=True)
+            (metadata / "stale").symlink_to("../../../../usr/bin/missing")
+
+            with self.assertRaises(browser_surface.BrowserSurfaceError):
+                browser_surface.discover_browser_roots(
+                    [(root, Path("/usr"), True)]
+                )
+
+            self.assertEqual(
+                browser_surface.discover_browser_roots(
+                    [(root, Path("/usr"), True)],
+                    masked_source_roots=[metadata],
+                ),
+                [],
+            )
+
     def test_declared_root_closure_rejects_undeclared_transit(self) -> None:
         """A link chain cannot leave declared roots and return at its final inode."""
 
