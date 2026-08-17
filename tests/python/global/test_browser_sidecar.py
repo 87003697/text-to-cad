@@ -707,6 +707,8 @@ class BrowserSidecarJobTests(unittest.TestCase):
             browser_sidecar.REPO_ROOT
             / "packages/meshshot/browser_sidecar_broker/Dockerfile"
         ).read_text(encoding="utf-8")
+        self.assertIn(f"FROM {browser_sidecar.BROKER_BASE_IMAGE_ID}\n", dockerfile)
+        self.assertNotIn("meshshot-sidecar-agent-client-prototype@", dockerfile)
         self.assertIn("-xtype l -delete", dockerfile)
         self.assertIn(
             "COPY packages/meshshot/src/meshshot ./packages/meshshot/src/meshshot",

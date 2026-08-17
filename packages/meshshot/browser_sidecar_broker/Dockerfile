@@ -1,4 +1,4 @@
-FROM meshshot-sidecar-agent-client-prototype@sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373
+FROM sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373
 
 ARG BROKER_SOURCE_REVISION
 LABEL org.opencontainers.image.title="meshshot-render-program-broker" \
