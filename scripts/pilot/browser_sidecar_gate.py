@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import errno
 import hashlib
 from importlib.resources import files
 import json
@@ -73,6 +74,32 @@ SURFACE_FAILURE_STAGES = {
     "mounted browser surface symlink escapes root": "surface-symlink-escapes-root",
     "mounted browser surface symlink is unresolved": "surface-symlink-unresolved",
 }
+SURFACE_ERRNO_STAGES = {
+    errno.EACCES: "surface-os-permission",
+    errno.EPERM: "surface-os-permission",
+    errno.ENOENT: "surface-os-missing",
+    errno.ELOOP: "surface-os-loop",
+    errno.ENOTDIR: "surface-os-not-directory",
+    errno.ESTALE: "surface-os-stale",
+    errno.EIO: "surface-os-io",
+    errno.EMFILE: "surface-os-descriptor-exhausted",
+    errno.ENFILE: "surface-os-descriptor-exhausted",
+}
+
+
+def _surface_os_stage(exc: BaseException) -> str | None:
+    """Map a chained OS failure to one fixed stage without exporting its path."""
+
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, OSError):
+            stage = SURFACE_ERRNO_STAGES.get(current.errno)
+            if stage is not None:
+                return stage
+        current = current.__cause__
+    return None
 
 
 class GateCheckError(ValueError):
@@ -94,7 +121,11 @@ def _checked(stage: str, operation: Any) -> Any:
         raise
     except BrowserSurfaceRootError as exc:
         closed_stage = (
-            SURFACE_FAILURE_STAGES.get(exc.reason)
+            (
+                _surface_os_stage(exc)
+                if exc.reason == "cannot inspect mounted browser surface"
+                else SURFACE_FAILURE_STAGES.get(exc.reason)
+            )
             if stage == "surface-discovery"
             else None
         )

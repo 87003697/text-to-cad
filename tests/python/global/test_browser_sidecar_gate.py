@@ -247,6 +247,28 @@ class BrowserSidecarGateTests(unittest.TestCase):
             "surface-symlink-unresolved",
         )
 
+    def test_surface_os_failure_reports_errno_class_without_path(self) -> None:
+        """An OS failure exposes only its fixed errno class."""
+
+        gate = load_gate()
+        failure = gate.BrowserSurfaceRootError(
+            "/private/secret/root", "cannot inspect mounted browser surface"
+        )
+        wrapper = OSError("closed wrapper")
+        wrapper.__cause__ = PermissionError(
+            gate.errno.EACCES, "private detail", "/private/secret/file"
+        )
+        failure.__cause__ = wrapper
+
+        with self.assertRaises(gate.GateCheckError) as caught:
+            gate._checked(
+                "surface-discovery",
+                mock.Mock(side_effect=failure),
+            )
+
+        self.assertEqual(caught.exception.stage, "surface-os-permission")
+        self.assertNotIn("private", str(caught.exception))
+
     def test_gate_exec_surface_has_no_render_arguments_or_shell(self) -> None:
         source = GATE_PATH.read_text(encoding="utf-8")
         self.assertIn("os.execvpe(workload[0], workload", source)
