@@ -424,22 +424,29 @@ def run_gate_checks(identity: Mapping[str, Any] | None = None) -> Mapping[str, A
     manifest = identity["surfaceManifest"]
     if not _exclusions_closed(manifest["browserExclusions"]):
         raise GateCheckError("exclusion-closure")
+    surface_roots = [Path(root) for root in manifest["scanRoots"]]
+    masked_surface_roots = [
+        target
+        for item in manifest["browserExclusions"]
+        if item["mask"] == "tmpfs"
+        for target in [Path(item["target"])]
+        if any(
+            target != root and target.is_relative_to(root)
+            for root in surface_roots
+        )
+    ]
     visible = _checked(
         "surface-discovery",
         lambda: discover_browser_roots(
-            ((Path(root), Path(root), True) for root in manifest["scanRoots"]),
+            ((root, root, True) for root in surface_roots),
             permitted_symlink_roots=[
-                *(Path(root) for root in manifest["scanRoots"]),
+                *surface_roots,
                 *(Path(root) for root in CONFORMANCE_SYSTEM_ALIAS_ROOTS),
                 Path("/dev/null"),
                 Path("/proc/mounts"),
                 Path("/proc/self/mounts"),
             ],
-            masked_source_roots=[
-                Path(item["target"])
-                for item in manifest["browserExclusions"]
-                if item["mask"] == "tmpfs"
-            ],
+            masked_source_roots=masked_surface_roots,
         ),
     )
     excluded_targets = {item["target"] for item in manifest["browserExclusions"]}

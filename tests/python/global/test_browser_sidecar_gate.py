@@ -61,8 +61,13 @@ class BrowserSidecarGateTests(unittest.TestCase):
         gate = load_gate()
         surface = {
             "schema": "meshshot.browser-sidecar.agent-browser-surface/1",
-            "scanRoots": ["/usr"],
+            "scanRoots": ["/sys", "/usr"],
             "browserExclusions": [
+                {
+                    "kind": "system",
+                    "target": "/sys",
+                    "mask": "tmpfs",
+                },
                 {
                     "kind": "system",
                     "target": "/usr/share/polkit-1/rules.d",
