@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -19,12 +20,18 @@ import sys
 import time
 import zipfile
 from contextlib import closing, nullcontext
+from decimal import Decimal
 from pathlib import Path
 from types import FrameType
 from typing import Callable, Mapping
 
 try:
     from scripts.pilot.venus_retry_proxy import RetryProxy
+    from scripts.pilot.agent_runtime.development_venus_proxy import (
+        CostPolicy,
+        DevelopmentProxy,
+        VENUS_BASE_URL,
+    )
     from scripts.pilot.browser_sidecar import (
         BROKER_BASE_IMAGE_ID,
         BROKER_IMAGE_ID,
@@ -48,6 +55,11 @@ except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
     from venus_retry_proxy import RetryProxy
+    from agent_runtime.development_venus_proxy import (  # type: ignore[no-redef]
+        CostPolicy,
+        DevelopmentProxy,
+        VENUS_BASE_URL,
+    )
     from browser_sidecar import (  # type: ignore[no-redef]
         BROKER_BASE_IMAGE_ID,
         BROKER_IMAGE_ID,
@@ -122,6 +134,45 @@ __pycache__/
 
 class PilotError(RuntimeError):
     """The pilot could not prepare or finalize its local experiment state."""
+
+
+class DevelopmentProxyConfig:
+    """Generic one-job Development accounting parameters."""
+
+    def __init__(self, job_id: str, ledger: Path, total_ledger: Path) -> None:
+        """Bind one job identity to its job and cumulative ledgers."""
+
+        self.job_id = job_id
+        self.ledger = ledger
+        self.total_ledger = total_ledger
+
+
+def create_development_proxy(
+    config: DevelopmentProxyConfig,
+    environ: Mapping[str, str],
+) -> tuple[DevelopmentProxy, dict[str, str]]:
+    """Create the fixed four-job Development proxy and child capability view."""
+
+    client_capability = secrets.token_urlsafe(32)
+    proxy = DevelopmentProxy(
+        VENUS_BASE_URL,
+        config.ledger,
+        total_ledger_path=config.total_ledger,
+        upstream_token=environ.get("VENUS_TOKEN"),
+        client_token=client_capability,
+        job_id=config.job_id,
+        policy=CostPolicy(
+            max_attempts=16,
+            max_request_bytes=200_000,
+            max_output_tokens=40_000,
+            per_job_usd=Decimal("39.2"),
+            total_usd=Decimal("156.8"),
+            max_jobs=4,
+        ),
+    )
+    child_environ = dict(environ)
+    child_environ["VENUS_TOKEN"] = client_capability
+    return proxy, child_environ
 
 
 class LifecycleState:
@@ -1219,6 +1270,7 @@ def run_supervised(
     state: LifecycleState | None = None,
     sidecar: BrowserSidecarJob | None = None,
     relay: SignalRelay | None = None,
+    development: DevelopmentProxyConfig | None = None,
 ) -> int:
     """Run command behind mandatory tap and return a shell-compatible status."""
 
@@ -1252,13 +1304,19 @@ def run_supervised(
     # the start_tap -> relay-enter window from orphaning the new proxy.
     relay_context = nullcontext(relay) if relay is not None else SignalRelay()
     with relay_context as active_relay:
-        retry_proxy = RetryProxy(
-            TAP_TARGET,
-            exp_dir / "run/venus-retry.jsonl",
-        )
+        proxy_environ = dict(environ)
+        if development is None:
+            retry_proxy = RetryProxy(
+                TAP_TARGET,
+                exp_dir / "run/venus-retry.jsonl",
+            )
+        else:
+            retry_proxy, proxy_environ = create_development_proxy(
+                development, environ
+            )
         retry_proxy.start()
         try:
-            tap = start_tap(tap_bin, exp_dir, environ, retry_proxy.url)
+            tap = start_tap(tap_bin, exp_dir, proxy_environ, retry_proxy.url)
             try:
                 port = wait_ready(
                     tap,
@@ -1269,7 +1327,7 @@ def run_supervised(
                 if port is not None:
                     tap_url = f"http://127.0.0.1:{port}/v1"
                     child_env = build_sandbox_environment(
-                        environ,
+                        proxy_environ,
                         tap_url,
                     )
                     gate_channel = (
@@ -1694,10 +1752,28 @@ def run_pilot(
     input_paths: list[Path],
     command: list[str],
     environ: Mapping[str, str],
+    development: DevelopmentProxyConfig | None = None,
 ) -> int:
     """Prepare, supervise, and finalize one complete pilot transaction."""
 
     exp_dir = validate_exp_dir(REPO_ROOT, exp_dir)
+    if development is not None:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{7,127}", development.job_id):
+            raise PilotError("Development job identity is invalid")
+        expected_job_ledger = (
+            exp_dir / "run/development-ledger.jsonl"
+        ).resolve()
+        expected_total_ledger = (
+            exp_dir.parent / "development-total-ledger.jsonl"
+        ).resolve()
+        if (
+            development.ledger.resolve() != expected_job_ledger
+            or development.total_ledger.resolve() != expected_total_ledger
+        ):
+            raise PilotError("Development ledger paths do not match the experiment/group authority")
+        for path in (development.ledger, development.total_ledger):
+            if path.is_symlink():
+                raise PilotError("Development ledger authority cannot be a symlink")
     prepare_exp(exp_dir)
     state = LifecycleState()
     relative_exp = exp_dir.relative_to(REPO_ROOT.resolve())
@@ -1728,6 +1804,11 @@ def run_pilot(
             if relay.cancelled:
                 workload_status = 128 + (relay.signum or signal.SIGTERM)
             else:
+                development_options = (
+                    {"development": development}
+                    if development is not None
+                    else {}
+                )
                 workload_status = run_supervised(
                     exp_dir,
                     input_paths,
@@ -1736,6 +1817,7 @@ def run_pilot(
                     state,
                     sidecar,
                     relay,
+                    **development_options,
                 )
         except (OSError, PilotError, TapError, subprocess.SubprocessError) as exc:
             print(f"pilot-runner: {exc}", file=sys.stderr)
@@ -1792,12 +1874,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="action", required=True)
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--input", action="append", type=Path, required=True)
+    run_parser.add_argument("--development-job-id")
+    run_parser.add_argument("--development-ledger", type=Path)
+    run_parser.add_argument("--development-total-ledger", type=Path)
     run_parser.add_argument("exp_dir", type=Path)
     run_parser.add_argument("command", nargs=argparse.REMAINDER)
     clean_parser = subparsers.add_parser("clean")
     clean_parser.add_argument("exp_dir", type=Path)
     args = parser.parse_args(argv)
     if args.action == "run":
+        development_values = (
+            args.development_job_id,
+            args.development_ledger,
+            args.development_total_ledger,
+        )
+        if any(value is not None for value in development_values) and not all(
+            value is not None for value in development_values
+        ):
+            run_parser.error("Development proxy arguments must be supplied together")
         if args.command and args.command[0] == "--":
             args.command = args.command[1:]
         if not args.command:
@@ -1814,11 +1908,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "clean":
             cleanup_sandbox(exp_dir)
             return 0
+        development = None
+        if args.development_job_id is not None:
+            development = DevelopmentProxyConfig(
+                args.development_job_id,
+                args.development_ledger,
+                args.development_total_ledger,
+            )
         return run_pilot(
             exp_dir,
             args.input,
             args.command,
             dict(os.environ),
+            development,
         )
     except PilotError as exc:
         print(f"pilot-runner: {exc}", file=sys.stderr)

@@ -1420,6 +1420,25 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertIn("Do not call `view_image`", pilot)
         self.assertIn("danger-full-access", pilot)
         self.assertNotIn("workspace-write", pilot)
+        self.assertIn("--development-job-id", pilot)
+        self.assertIn("--development-ledger", pilot)
+        self.assertIn("--development-total-ledger", pilot)
+        for fixture in (
+            "bottle_bottle_089", "toaster_toaster_005",
+            "mushroom_mushroom_018", "airplane_airplane_016",
+        ):
+            self.assertIn(fixture, pilot)
+        for digest in (
+            "80353ef44563ac1eaeec84d1188059ad5ab373aa1e258d710588e6650789e214",
+            "ee28c82344d82425d4c10840aff55365679f6d7154f09bdb753d112e776cd605",
+            "49d27f6e853a80fc9450e5e650deaa34b0d731c37cba39838a88901385362990",
+            "72abf42e0efc7cb7023d10b7677a20c16a28b03adf05ed6414eae6e102f562d9",
+        ):
+            self.assertIn(digest, pilot)
+        self.assertIn("Depth 1 through 8", pilot)
+        self.assertIn("current PLY header element face 305796", pilot)
+        self.assertIn("skills/mesh-to-cad/references/routing-rubric.md", pilot)
+        self.assertFalse((PILOT_ROOT / "toys4k-depth8-development.py").exists())
         self.assertTrue(gateway.startswith("#!/usr/bin/env bash\n"))
         self.assertIn('readonly CODEX_BIN="codex"', gateway)
         self.assertNotIn("/opt/homebrew", gateway)
@@ -1437,6 +1456,78 @@ class ProductionPathContractTests(unittest.TestCase):
             "sandbox-clean.sh",
         ):
             self.assertFalse((UTILS_ROOT / legacy_path).exists())
+
+    def test_development_proxy_cli_arguments_are_all_or_none(self) -> None:
+        runner = load_runner()
+        with self.assertRaises(SystemExit):
+            runner.parse_args(
+                [
+                    "run", "--development-job-id", "job", "--input",
+                    "models/toys4k/input.ply", "outputs/g/e", "--", "/bin/true",
+                ]
+            )
+        parsed = runner.parse_args(
+            [
+                "run", "--development-job-id", "job",
+                "--development-ledger", "outputs/g/e/run/job-ledger.jsonl",
+                "--development-total-ledger", "outputs/g/total-ledger.jsonl",
+                "--input", "models/toys4k/input.ply", "outputs/g/e", "--",
+                "/bin/true",
+            ]
+        )
+        self.assertEqual("job", parsed.development_job_id)
+
+    def test_toys4k_unknown_key_fails_before_secret_file_is_sourced(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            secret_dir = home / ".secrets"
+            secret_dir.mkdir()
+            marker = home / "secret-sourced"
+            (secret_dir / "text-to-cad.env").write_text(
+                f"touch {marker}\nVENUS_TOKEN=not-used\n", encoding="utf-8"
+            )
+            environment = dict(os.environ)
+            environment["HOME"] = str(home)
+            environment.pop("VENUS_TOKEN", None)
+            result = subprocess.run(
+                [
+                    str(PILOT_ROOT / "toys4k-pilot.sh"),
+                    "../not-allowlisted",
+                    "20260817-000000-test",
+                ],
+                cwd=REPO_ROOT, env=environment, text=True, capture_output=True,
+            )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Unknown Toys4K fixture key", result.stderr)
+        self.assertFalse(marker.exists())
+
+    def test_generic_development_proxy_uses_fixed_caps_and_separates_capability(self) -> None:
+        runner = load_runner()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            config = runner.DevelopmentProxyConfig(
+                "development-job-01", root / "job.jsonl", root / "total.jsonl"
+            )
+            proxy, child = runner.create_development_proxy(
+                config, {"VENUS_TOKEN": "upstream-authority"}
+            )
+            proxy.start()
+            try:
+                self.assertEqual(16, proxy.policy.max_attempts)
+                self.assertEqual(4, proxy.policy.max_jobs)
+                self.assertEqual("39.2", str(proxy.policy.per_job_usd))
+                self.assertEqual("156.8", str(proxy.policy.total_usd))
+                self.assertEqual("upstream-authority", proxy.upstream_token)
+                self.assertNotEqual("upstream-authority", child["VENUS_TOKEN"])
+                self.assertEqual(child["VENUS_TOKEN"], proxy.client_token)
+            finally:
+                proxy.stop()
+            rows = [
+                json.loads(line)
+                for line in (root / "job.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual("terminal", rows[-1]["event"])
+            self.assertTrue(rows[-1]["listenerAbsent"])
 
     def test_gateway_rejects_missing_url_before_codex(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
