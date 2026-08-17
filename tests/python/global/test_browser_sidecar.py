@@ -103,6 +103,25 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 ),
             )
 
+    def test_sidecar_endpoint_path_accepts_native_guid_without_url_escape(self) -> None:
+        for accepted in (
+            "/01234567-89ab-cdef-0123-456789abcdef",
+            "/browser/session-token",
+        ):
+            self.assertTrue(browser_sidecar._valid_sidecar_endpoint_path(accepted))
+        for rejected in (
+            "/",
+            "//peer",
+            "/browser/",
+            "/x?peer",
+            "/x#peer",
+            "x",
+            "/./peer",
+            "/a/../peer",
+            "/..",
+        ):
+            self.assertFalse(browser_sidecar._valid_sidecar_endpoint_path(rejected))
+
     def test_broker_startup_failure_reports_only_closed_stage(self) -> None:
         output = StringIO()
         with mock.patch("sys.stdout", new=output):

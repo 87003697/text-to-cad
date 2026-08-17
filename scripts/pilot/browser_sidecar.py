@@ -102,6 +102,9 @@ RECEIPT_PREDICATES = (
     "absenceProved",
 )
 JOB_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,47}\Z")
+SIDECAR_ENDPOINT_PATH = re.compile(
+    r"/[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*\Z"
+)
 RUNTIME_PROVISION_HANDLE = re.compile(r"cvmsp-[0-9a-f]{24}\Z")
 RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
 IMAGE_PROJECTIONS = (
@@ -160,6 +163,16 @@ def _broker_runtime_user_options() -> tuple[str, ...]:
         ),
         "--user",
         f"{uid}:{gid}",
+    )
+
+
+def _valid_sidecar_endpoint_path(value: object) -> bool:
+    """Accept one absolute safe path without URL-normalizing dot segments."""
+
+    return (
+        isinstance(value, str)
+        and SIDECAR_ENDPOINT_PATH.fullmatch(value) is not None
+        and all(segment not in {".", ".."} for segment in value.split("/")[1:])
     )
 
 
@@ -1190,8 +1203,7 @@ class BrowserSidecarJob:
                     and record.get("event") == "ready"
                     and record.get("jobId") == self.job_id
                     and record.get("programs") == PROGRAMS
-                    and isinstance(record.get("endpointPath"), str)
-                    and str(record["endpointPath"]).startswith("/")
+                    and _valid_sidecar_endpoint_path(record.get("endpointPath"))
                 ):
                     return record
             state = self._docker(
@@ -2167,8 +2179,7 @@ def run_broker(args: argparse.Namespace) -> int:
             or authority.get("schema") != "meshshot.browser-sidecar.prototype/1"
             or authority.get("jobId") != args.job_id
             or authority.get("programs") != PROGRAMS
-            or not isinstance(authority.get("endpointPath"), str)
-            or not authority["endpointPath"].startswith("/browser/")
+            or not _valid_sidecar_endpoint_path(authority.get("endpointPath"))
         ):
             raise BrowserSidecarError("Sidecar authority is invalid", check=stage)
         browser_endpoint = f"ws://sidecar:3000{authority['endpointPath']}"
