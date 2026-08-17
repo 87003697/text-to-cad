@@ -328,41 +328,6 @@ class DevelopmentSupervisorTests(unittest.TestCase):
                 engine.calls.index(("container_absent", "container-exact")),
                 engine.calls.index(("owner_absent", receipt["ownerNonce"])),
             )
-
-    def test_route_aware_request_accepts_empty_bootstrap_without_substituting_cup(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            source, input_root, output = root / "source", root / "input", root / "output"
-            source.mkdir(); input_root.mkdir(); output.mkdir()
-            payload = b"ply\nformat ascii 1.0\nend_header\n"
-            (input_root / "bottle_bottle_089.ply").write_bytes(payload)
-            authority = supervisor.FixtureAuthority(
-                fixture_id="bottle_bottle_089", route="cad",
-                input_filename="bottle_bottle_089.ply",
-                input_digest=_digest(payload), input_bytes=len(payload), source_files=(),
-            )
-            request = supervisor.DevelopmentRequest(
-                image_id="sha256:" + "1" * 64,
-                image_manifest_digest="sha256:" + "2" * 64,
-                image_config_digest="sha256:" + "3" * 64,
-                runtime_manifest_digest="sha256:" + "4" * 64,
-                entrypoint_digest="sha256:" + "5" * 64,
-                source_dir=source, input_dir=input_root, output_dir=output,
-                workload=("/usr/bin/true",), fixture_authority=authority,
-            )
-            engine = FakeEngine()
-            receipt = supervisor.execute(
-                request, engine=engine,
-                broker_factory=lambda path, control, secret: FakeBroker(engine, path, control, secret),
-            )
-            self.assertEqual("bottle_bottle_089", receipt["fixtureId"])
-            self.assertEqual("cad", receipt["route"])
-            self.assertEqual(
-                "Development/MVP - Not Sealed, Not Formal, Not Verified, Not Production",
-                receipt["classification"],
-            )
-            self.assertEqual("bottle_bottle_089", engine.spec.labels["org.text-to-cad.fixture"])
-            self.assertNotIn("cup_cup_033", json.dumps(receipt, sort_keys=True))
             self.assertEqual(json.loads(engine.release), {
                 "brokerProofDigest": receipt["brokerProofDigest"],
                 "release": True,

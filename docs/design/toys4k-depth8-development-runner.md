@@ -6,25 +6,13 @@ Status: Development/MVP — Not Sealed, Not Formal, Not Verified, Not Production
 terminal-evidence seam for the four-fixture milestone. It accepts one fixture
 key, derives the immutable input identity and route internally, validates the
 serialized prefix and cumulative Development ledger, and either emits a
-provider-free preparation receipt, supervises one adapter execution, or
-validates one terminal evidence package. It never accepts a provider URL and
-never retries a job.
+provider-free preparation receipt or validates one terminal evidence package.
+It never reads a credential, accepts a provider URL, or retries a job.
 
 The provider-free conformance override can replace only bytes and digest. It
 requires the fixed route, records `paidDispatchCount=0`, and cannot authorize a
-paid transport. Its executable adapter is an explicit external-system-boundary
-fake: the runner passes one canonical request on stdin, launches it in a fresh
-process group with a sanitized environment, enforces the 45-minute ceiling,
-terminates the whole group on timeout, never retries, and validates the returned
-ledger and evidence through the same public gate. Production use has no input
-override and resolves `models/toys4k/<key>.ply` against the four constants.
-
-The shared Development supervisor now accepts an outer-owned
-`FixtureAuthority`. The Cup factory still supplies the original Cup source and
-input identities. A route-aware request supplies an empty bootstrap source and
-one frozen Toys4K input, so historical Cup source can never be substituted as a
-reconstruction result. Fixture and route are bound into Agent configuration,
-container labels, and the terminal receipt.
+transport. Production use has no override and resolves `models/toys4k/<key>.ply`
+against the four constants embedded in the runner.
 
 ## Closed route decisions
 
@@ -59,20 +47,19 @@ receipt and made GREEN through the smallest corresponding gate.
 | attempts, request, token, job and USD caps | `test_attempt_request_token_job_and_total_caps_fail_closed` |
 | reserve/settle order, duplicates, release, pricing and replay | `test_ledger_order_duplicate_release_pricing_and_replay_are_rejected` |
 | ambiguous timeout reservation, no retry, process-group absence | `test_ambiguous_timeout_retains_reservation_with_no_whole_job_retry_and_cleanup_absence` |
-| one fresh supervised adapter execution | `test_execute_supervises_one_fresh_provider_free_adapter_and_validates_its_terminal_evidence` |
-| timeout process-group termination | `test_execute_timeout_kills_the_adapter_process_group_without_retry` |
 | secret/capability non-disclosure | `test_secret_or_capability_material_is_rejected_from_evidence_and_logs` |
 | exact cleanup ownership and absence | `test_cleanup_requires_exact_owned_resources_and_absence` |
 | honest evidence-complete unaccepted selection | `test_valid_unaccepted_selection_stays_unaccepted_and_is_evidence_complete` |
 | serialized next-sample safety barrier | `test_next_sample_blocks_only_on_serialized_safety_barrier` |
 
-## Backend closure
+## Boundary discovered during implementation
 
-Adapter execution is admitted only in provider-free conformance until Milestone
-4 selects a reviewed real backend. Without that selection the production path
-fails `backend-closure` before reading credentials or starting a process. This
-is deliberate: the current Cup OCI capability manifest excludes build123d and
-other CAD-route tools, so its image cannot be silently presented as closure for
-bottle or toaster. The zero-paid backend preflight must either prove a compatible
-Colima adapter or select the authorized CVM direct-repo adapter before any paid
-dispatch.
+The merged Development supervisor and real-Colima launcher remain hard-coded to
+`cup_cup_033`: they require its implicit source and input digests and publish a
+Cup-specific receipt. Therefore this change does **not** claim that the four
+route-aware candidate jobs can yet be transported by that runtime. Turning the
+gate into the requested execution runner requires a separately decided change
+to the Development supervisor/launcher public protocol plus current backend
+closure for both CAD and implicit routes. Reusing the Cup transport without
+that decision would silently substitute source/input authority and violate the
+fixture and route contracts above.
