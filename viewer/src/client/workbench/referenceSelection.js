@@ -376,6 +376,21 @@ export function buildSelectionCopyButtonLabel(lines, { limit = 1 } = {}) {
   return `Copy ${visibleTokens.join(", ")}`;
 }
 
+/**
+ * The label to fall back to when the ref itself will not fit: "Copy 3 refs".
+ *
+ * A ref cut off mid-token ("Copy motorcycle_shock_absor…") tells the user less than a count
+ * does — it looks like the ref is wrong rather than merely long. The clipboard carries the
+ * whole thing either way.
+ */
+export function buildSelectionCopyCountLabel(count) {
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  if (!n) {
+    return "Copy refs";
+  }
+  return `Copy ${n} ref${n === 1 ? "" : "s"}`;
+}
+
 export function orderedStringListEqual(a, b) {
   if (a === b) {
     return true;

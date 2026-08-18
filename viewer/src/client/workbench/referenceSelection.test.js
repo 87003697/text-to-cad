@@ -8,6 +8,7 @@ import {
   buildNormalizedReferenceState,
   buildReferenceCacheKey,
   buildSelectionCopyButtonLabel,
+  buildSelectionCopyCountLabel,
   buildSelectionCopyPayload,
   buildWholeStepEntryCopyReference,
   canonicalCadRefCopyText,
@@ -277,4 +278,16 @@ test("withFileRefPrefix is idempotent, which is what lets it run at one funnel",
   assert.equal(withFileRefPrefix("#o1.2", ""), "#o1.2");
   assert.equal(withFileRefPrefix("plain text", "plate.stl"), "plain text");
   assert.equal(withFileRefPrefix("", "plate.stl"), "");
+});
+
+test("the count label stands in for a ref that will not fit", () => {
+  // Singular vs plural matters: this is the primary label whenever the viewport is narrow.
+  assert.equal(buildSelectionCopyCountLabel(1), "Copy 1 ref");
+  assert.equal(buildSelectionCopyCountLabel(3), "Copy 3 refs");
+  assert.equal(buildSelectionCopyCountLabel(12), "Copy 12 refs");
+  // Nothing selected falls back to the same wording the ref label uses.
+  assert.equal(buildSelectionCopyCountLabel(0), "Copy refs");
+  assert.equal(buildSelectionCopyCountLabel(null), "Copy refs");
+  assert.equal(buildSelectionCopyCountLabel(-2), "Copy refs");
+  assert.equal(buildSelectionCopyCountLabel(2.7), "Copy 2 refs");
 });

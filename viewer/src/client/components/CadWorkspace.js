@@ -128,6 +128,7 @@ import {
   buildNormalizedReferenceState,
   buildReferenceCacheKey,
   buildSelectionCopyButtonLabel,
+  buildSelectionCopyCountLabel,
   buildSelectionCopyPayload,
   buildWholeStepEntryCopyReference,
   canonicalCadRefCopyText,
@@ -6475,6 +6476,14 @@ export default function CadWorkspace({
     () => buildSelectionCopyButtonLabel(canonicalCopySelectionLines, { count: copySelectionPayload.copiedCount }),
     [canonicalCopySelectionLines, copySelectionPayload.copiedCount]
   );
+  // Shown instead of the ref when the ref will not fit. CadRenderPane decides that by
+  // measuring, since whether it fits depends on the viewport, not the string.
+  const copyButtonCountLabel = useMemo(
+    () => buildSelectionCopyCountLabel(
+      copySelectionPayload.copiedCount || canonicalCopySelectionLines.length
+    ),
+    [copySelectionPayload.copiedCount, canonicalCopySelectionLines.length]
+  );
   // The tip teaches reference syntax, so it fires on the first pick that yields
   // a reference to copy — a component, a subassembly, or a face/edge. Gating it
   // on topology alone would hide it from anyone who only ever clicks parts.
@@ -8552,6 +8561,7 @@ export default function CadWorkspace({
           handleStepModuleTransformDetectedChange={handleStepModuleTransformDetectedChange}
           selectionCount={selectionCount}
           copyButtonLabel={copyButtonLabel}
+          copyButtonCountLabel={copyButtonCountLabel}
           copyReferenceTipActive={copyReferenceTipActive}
           panToolActive={panToolActive}
           handleCopySelection={handleCopySelection}
