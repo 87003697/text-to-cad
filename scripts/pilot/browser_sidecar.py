@@ -80,6 +80,8 @@ BROKER_SCHEMA = "meshshot.browser-sidecar.broker/1"
 RECEIPT_SCHEMA = "meshshot.browser-sidecar.job-receipt/2"
 REQUEST_SCHEMA = CONTRACT["requestSchema"]
 RESPONSE_SCHEMA = CONTRACT["responseSchema"]
+MAX_GEOMETRY_VERTICES = CONTRACT["maxGeometryVertices"]
+MAX_GEOMETRY_FACES = CONTRACT["maxGeometryFaces"]
 SANDBOX_AUTHORITY_PATH = Path(CONTRACT["authorityPath"])
 SANDBOX_SOCKET_PATH = Path(CONTRACT["socketPath"])
 NESTED_GATE = CONTRACT["nestedGate"]
@@ -559,7 +561,7 @@ def _geometry(value: Any, label: str) -> dict[str, Any]:
     faces = geometry["faces"]
     if (
         not isinstance(vertices, list)
-        or not 0 < len(vertices) <= 10_000
+        or not 0 < len(vertices) <= MAX_GEOMETRY_VERTICES
         or any(
             not isinstance(vertex, list)
             or len(vertex) != 3
@@ -578,7 +580,7 @@ def _geometry(value: Any, label: str) -> dict[str, Any]:
         )
     if (
         not isinstance(faces, list)
-        or not 0 < len(faces) <= 20_000
+        or not 0 < len(faces) <= MAX_GEOMETRY_FACES
         or any(
             not isinstance(face, list)
             or len(face) != 3

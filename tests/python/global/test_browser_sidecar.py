@@ -119,6 +119,39 @@ class BrowserSidecarJobTests(unittest.TestCase):
                 )
             self.assertEqual(caught.exception.check, "runtime-admission")
 
+    def test_geometry_enforces_package_owned_production_bounds(self) -> None:
+        """The exact package bounds admit their edge and reject edge plus one."""
+
+        vertices = [[0.0, 0.0, 0.0]] * browser_sidecar.MAX_GEOMETRY_VERTICES
+        faces = [[0, 0, 0]] * browser_sidecar.MAX_GEOMETRY_FACES
+        geometry = browser_sidecar._geometry(
+            {"vertices": vertices, "faces": faces},
+            "reference",
+        )
+        self.assertIs(geometry["vertices"], vertices)
+        self.assertIs(geometry["faces"], faces)
+        for label, payload in (
+            (
+                "vertices",
+                {
+                    "vertices": vertices + [[0.0, 0.0, 0.0]],
+                    "faces": [[0, 0, 0]],
+                },
+            ),
+            (
+                "faces",
+                {
+                    "vertices": [[0.0, 0.0, 0.0]],
+                    "faces": faces + [[0, 0, 0]],
+                },
+            ),
+        ):
+            with self.subTest(label=label), self.assertRaises(
+                browser_sidecar.BrowserSidecarError
+            ) as caught:
+                browser_sidecar._geometry(payload, "reference")
+            self.assertEqual(caught.exception.check, "reference-geometry")
+
     """Observe one complete exact-image lifecycle through its public adapter."""
 
     def test_broker_runtime_user_has_matching_private_home(self) -> None:
@@ -966,6 +999,16 @@ class BrowserSidecarJobTests(unittest.TestCase):
         # retained airplane depth-eight reference/candidate pair.
         self.assertGreater(contract["maxRequestBytes"], 76_483_810)
         self.assertEqual(contract["maxRequestBytes"], browser_sidecar.MAX_REQUEST_BYTES)
+        self.assertEqual(contract["maxGeometryVertices"], 1_000_000)
+        self.assertEqual(contract["maxGeometryFaces"], 400_000)
+        self.assertEqual(
+            contract["maxGeometryVertices"],
+            browser_sidecar.MAX_GEOMETRY_VERTICES,
+        )
+        self.assertEqual(
+            contract["maxGeometryFaces"],
+            browser_sidecar.MAX_GEOMETRY_FACES,
+        )
         package_data = (
             browser_sidecar.REPO_ROOT / "packages/meshshot/pyproject.toml"
         ).read_text(encoding="utf-8")

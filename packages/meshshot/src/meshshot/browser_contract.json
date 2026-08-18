@@ -1,6 +1,8 @@
 {
   "authorityPath": "/run/meshshot-browser/authority.json",
   "authoritySchema": "meshshot.browser-authority/1",
+  "maxGeometryFaces": 400000,
+  "maxGeometryVertices": 1000000,
   "maxRequestBytes": 100663296,
   "nestedGate": {
     "artifactPath": "/run/meshshot-browser/browser-gate.pyz",

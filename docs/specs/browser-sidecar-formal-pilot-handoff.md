@@ -176,6 +176,10 @@ the session JSONL. The dirty `develop` root was not used or modified.
   the exact 76,483,810-byte production serialization of the retained depth-8
   airplane pair with bounded headroom while preserving one finite limit in both
   the browser-less client and Broker.
+- The same package contract bounds each geometry at 1,000,000 vertices and
+  400,000 indexed triangles. The retained airplane reference has 917,388
+  vertices and 305,796 triangles; the former 10,000/20,000 Broker-only limits
+  rejected the real request after the wire and memory bounds passed.
 - The Broker has a fixed 1536 MiB memory/swap envelope. The former 384 MiB
   envelope emitted a Docker `oom` event for the exact retained-request Broker
   before accepting the request; canonical geometry expands substantially beyond
@@ -204,7 +208,7 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Broker OCI revision:
   `9d3b191e72465ef4fca02145c2eb0ec7f289acc4`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:981e37d808e5ba237385c290a502166043a668b3eeb1c4ac637b9eb43e528a28`
+  `sha256:a2305023bce8e7cd9db804d73bc3ebe29d48b38f3481b5705cd2dc14dee837f8`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with
