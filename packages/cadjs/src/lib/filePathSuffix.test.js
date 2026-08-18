@@ -2,10 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  pathHasSuffix,
   refDisplayName,
-  refDisplayNameCandidates,
-  shortestUniquePathSuffix,
   shortestUniquePathSuffixes
 } from "./filePathSuffix.js";
 
@@ -73,9 +70,6 @@ test("edge inputs do not throw", () => {
   assert.equal(shortestUniquePathSuffixes([]).size, 0);
   assert.equal(shortestUniquePathSuffixes(null).size, 0);
   assert.equal(shortestUniquePathSuffixes(["plate.stl"]).get("plate.stl"), "plate.stl");
-  assert.equal(shortestUniquePathSuffix("", ["a.stl"]), "");
-  // A path outside the set still yields something usable rather than undefined.
-  assert.equal(shortestUniquePathSuffix("other/x.stl", ["a.stl"]), "other/x.stl");
 });
 
 test("duplicate and windows-style paths normalize rather than colliding with themselves", () => {
@@ -86,17 +80,6 @@ test("duplicate and windows-style paths normalize rather than colliding with the
   ]);
   assert.equal(suffixes.size, 1, "the same path listed three ways is one entry");
   assert.equal(suffixes.get("models/a/plate.stl"), "plate.stl");
-});
-
-test("suffix matching is segment aligned, never substring", () => {
-  assert.ok(pathHasSuffix("models/mesh/stl/mounting_plate.stl", "mounting_plate.stl"));
-  assert.ok(pathHasSuffix("models/mesh/stl/mounting_plate.stl", "stl/mounting_plate.stl"));
-  assert.ok(pathHasSuffix("models/a/plate.stl", "models/a/plate.stl"));
-  // The bug this rule exists to prevent: a ref resolving to the wrong file by string luck.
-  assert.ok(!pathHasSuffix("models/mesh/stl/mounting_plate.stl", "late.stl"));
-  assert.ok(!pathHasSuffix("models/a/plate.stl", "b/plate.stl"));
-  assert.ok(!pathHasSuffix("plate.stl", "models/a/plate.stl"), "suffix longer than the path");
-  assert.ok(!pathHasSuffix("models/a/plate.stl", ""));
 });
 
 test("`.step` is dropped from the displayed name, other formats keep theirs", () => {
@@ -113,20 +96,3 @@ test("`.step` is dropped from the displayed name, other formats keep theirs", ()
   assert.equal(refDisplayName("helper.py"), "helper.py");
 });
 
-test("a displayed name expands to every file it could have come from", () => {
-  // Dropping `.step` means the name is no longer a literal path suffix, so resolving one back
-  // to a file is an expansion rather than a match. This is the inverse the skill docs teach.
-  assert.deepEqual(refDisplayNameCandidates("bracket.py"), ["bracket.py", "bracket.step.py", "bracket.stp.py"]);
-  assert.deepEqual(refDisplayNameCandidates("bracket"), ["bracket", "bracket.step", "bracket.stp"]);
-  assert.deepEqual(refDisplayNameCandidates("plate.stl"), ["plate.stl"]);
-  assert.deepEqual(refDisplayNameCandidates(""), []);
-});
-
-test("suffix matching sees through the dropped .step", () => {
-  // What the viewer emits must match the file it came from, or the CLI guard and the paste
-  // round-trip both reject a legitimate ref.
-  assert.ok(pathHasSuffix("models/step/parts/bracket.step.py", "bracket.py"));
-  assert.ok(pathHasSuffix("models/step/parts/bracket.step", "bracket"));
-  assert.ok(pathHasSuffix("models/step/parts/bracket.step.py", "parts/bracket.py"));
-  assert.ok(!pathHasSuffix("models/step/parts/bracket.step.py", "other.py"));
-});

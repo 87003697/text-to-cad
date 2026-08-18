@@ -4,7 +4,6 @@ import { test } from "node:test";
 import {
   buildAssemblyPartCopyText,
   buildAssemblyMateCopyText,
-  buildEntryLabelAliasMap,
   fileRefPrefixForEntry,
   buildNormalizedReferenceState,
   buildReferenceCacheKey,
@@ -18,7 +17,6 @@ import {
   orderedStringListEqual,
   parseAssemblyPartReferenceSelectionId,
   resolveTopologyRelativeFile,
-  resolveViewerSelector,
   selectRequestedAssemblyComponents,
   uniqueStringList,
   withFileRefPrefix
@@ -239,47 +237,6 @@ test("selectRequestedAssemblyComponents loads only the expanded occurrences' com
   assert.equal(part.loadedTopologyKey, "*");
 });
 
-test("the viewer resolves a pasted label ref against the parts it already holds", () => {
-  const aliasMap = buildEntryLabelAliasMap([
-    { occurrenceId: "o1.1.2", name: "eye_shank" },
-    { occurrenceId: "o1.3", name: "pressure_tube" }
-  ]);
-
-  assert.equal(resolveViewerSelector("#eye_shank", aliasMap), "o1.1.2");
-  assert.equal(resolveViewerSelector("eye_shank.f45", aliasMap), "o1.1.2.f45");
-  assert.equal(resolveViewerSelector("#pressure_tube", aliasMap), "o1.3");
-});
-
-test("a pasted numeric ref is returned untouched, with or without an alias map", () => {
-  // Backwards compatibility: every ref that worked before labels existed still works, and a
-  // model with no labels at all behaves exactly as it did.
-  const aliasMap = buildEntryLabelAliasMap([{ occurrenceId: "o1.1", name: "eye_shank" }]);
-  for (const selector of ["o1.2", "o12.f19", "f45", "m1"]) {
-    assert.equal(resolveViewerSelector(selector, aliasMap), selector, selector);
-    assert.equal(resolveViewerSelector(selector, null), selector, `${selector} without aliases`);
-  }
-  assert.equal(resolveViewerSelector("#o1.12.f19", null), "o1.12.f19");
-});
-
-test("an unknown or duplicated label is rejected rather than guessed at", () => {
-  const aliasMap = buildEntryLabelAliasMap([
-    { occurrenceId: "o1.3", name: "cast_rim" },
-    { occurrenceId: "o1.7", name: "cast_rim" }
-  ]);
-
-  // Both wheels honestly carry the same label, so the bare name must not pick one.
-  assert.equal(resolveViewerSelector("#cast_rim", aliasMap), "");
-  assert.equal(resolveViewerSelector("#cast_rim_1", aliasMap), "o1.3");
-  assert.equal(resolveViewerSelector("#cast_rim_2", aliasMap), "o1.7");
-  assert.equal(resolveViewerSelector("#no_such_part", aliasMap), "");
-  assert.equal(resolveViewerSelector("#eye_shank", null), "", "no alias map means no label refs");
-});
-
-test("an entry whose parts carry no usable labels has no alias map at all", () => {
-  assert.equal(buildEntryLabelAliasMap([]), null);
-  assert.equal(buildEntryLabelAliasMap([{ occurrenceId: "o1.1", name: "" }]), null);
-});
-
 test("copy text carries the entry's shortest unique path suffix", () => {
   const entry = { ...STEP_ENTRY, fileRefPrefix: "assy.step" };
   assert.equal(
@@ -301,22 +258,6 @@ test("an entry with no prefix emits the bare refs it always did", () => {
   assert.equal(buildAssemblyMateCopyText({ id: "m1" }, STEP_ENTRY), "#m1");
   assert.equal(buildWholeStepEntryCopyReference(STEP_ENTRY).copyText, "#");
   assert.equal(fileRefPrefixForEntry(STEP_ENTRY), "");
-});
-
-test("a pasted ref for THIS file is accepted, one for another file is refused", () => {
-  const entry = { file: "models/mesh/stl/mounting_plate.stl" };
-  // Same file, named by the suffix the copy button emits.
-  assert.equal(resolveViewerSelector("mounting_plate.stl#o1.2", null, { entry }), "o1.2");
-  // Same file, named by a longer (still valid) suffix.
-  assert.equal(resolveViewerSelector("stl/mounting_plate.stl#o1.2", null, { entry }), "o1.2");
-  // A DIFFERENT file: refusing is the point. Resolving this against the open model would
-  // silently select the wrong geometry.
-  assert.equal(resolveViewerSelector("other_part.step.py#o1.2", null, { entry }), "");
-  // Segment-aligned, so a substring of the filename is not a match.
-  assert.equal(resolveViewerSelector("late.stl#o1.2", null, { entry }), "");
-  // Bare refs are unaffected, with or without an entry.
-  assert.equal(resolveViewerSelector("#o1.2", null, { entry }), "o1.2");
-  assert.equal(resolveViewerSelector("o1.2", null, {}), "o1.2");
 });
 
 test("canonical copy text keeps a file prefix instead of dropping the line", () => {

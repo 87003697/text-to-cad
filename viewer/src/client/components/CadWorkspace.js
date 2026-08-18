@@ -6674,7 +6674,16 @@ export default function CadWorkspace({
     }
 
     try {
-      await copyTextToClipboard(lines.map((line) => canonicalCadRefCopyText(line)).filter(Boolean).join("\n"));
+      // The SAME prefixing the button label gets. This is the write that matters, and it
+      // built its own payload rather than reusing canonicalCopySelectionLines, so leaving it
+      // out made the label promise a file prefix the clipboard never carried.
+      await copyTextToClipboard(
+        lines
+          .map((line) => canonicalCadRefCopyText(line))
+          .map((line) => withFileRefPrefix(line, selectedEntry?.fileRefPrefix))
+          .filter(Boolean)
+          .join("\n")
+      );
       const copiedCount = payload.copiedCount ||
         selectedReferencesForCopy.length +
         selectedPartReferencesForCopy.length +

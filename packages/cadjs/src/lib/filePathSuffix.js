@@ -15,7 +15,8 @@
  * word earns nothing in a ref: `bracket.step.py` shows as `bracket.py`, raw `bracket.step` as
  * `bracket`. That costs no uniqueness — both schemes leave the same three filenames colliding
  * — but it does mean a displayed name is NOT a literal path suffix, so resolving one back to a
- * file means expanding it (see refDisplayNameCandidates), not matching it verbatim.
+ * file means expanding it -- `<name>.py` widens to `<name>.step.py` -- rather than matching it
+ * verbatim. cadgen.cad_ref_syntax owns that expansion, since the CLI guard is its only caller.
  *
  * Emission is allowed to drift: adding a file that collides lengthens another entry's suffix.
  * Acceptance is not, which is why resolvers match any unambiguous suffix rather than only the
@@ -61,28 +62,6 @@ function displayPath(path) {
   }
   segments[segments.length - 1] = refDisplayName(segments[segments.length - 1]);
   return segments.join("/");
-}
-
-/**
- * Every real filename a displayed name could have come from — the inverse of refDisplayName.
- *
- * `bracket.py` may be `bracket.step.py` or a literal `bracket.py`; a bare `bracket` may be
- * `bracket.step`, `bracket.stp`, or literally `bracket`. Resolution has to try all of them,
- * which is why the skill docs tell an agent to expand rather than match the prefix literally.
- */
-export function refDisplayNameCandidates(displayName) {
-  const name = String(displayName || "").trim();
-  if (!name) {
-    return [];
-  }
-  const candidates = [name];
-  if (name.toLowerCase().endsWith(".py")) {
-    const stem = name.slice(0, name.length - ".py".length);
-    candidates.push(`${stem}.step.py`, `${stem}.stp.py`);
-  } else if (!name.includes(".")) {
-    candidates.push(`${name}.step`, `${name}.stp`);
-  }
-  return candidates;
 }
 
 /**
@@ -141,30 +120,4 @@ export function shortestUniquePathSuffixes(paths) {
     result.set(originalByDisplay.get(path) || path, suffix);
   }
   return result;
-}
-
-/** The SUFP for one path within a known set, or the path itself when it is not in the set. */
-export function shortestUniquePathSuffix(path, paths) {
-  const normalized = segmentsOf(path).join("/");
-  if (!normalized) {
-    return "";
-  }
-  return shortestUniquePathSuffixes(paths).get(normalized) || normalized;
-}
-
-/**
- * Does `suffix` name `path`? Segment-aligned, so `plate.stl` matches `a/b/plate.stl` but
- * `late.stl` matches nothing.
- *
- * This is the same rule the CLIs apply when deciding whether a ref's file prefix refers to the
- * entry they were pointed at, and the rule an agent should use resolving a prefix to a file.
- */
-export function pathHasSuffix(path, suffix) {
-  const pathSegments = segmentsOf(displayPath(path));
-  const suffixSegments = segmentsOf(displayPath(suffix));
-  if (!suffixSegments.length || suffixSegments.length > pathSegments.length) {
-    return false;
-  }
-  const tail = pathSegments.slice(pathSegments.length - suffixSegments.length);
-  return tail.every((segment, index) => segment === suffixSegments[index]);
 }

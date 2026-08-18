@@ -1,15 +1,12 @@
-import { pathHasSuffix } from "cadjs/lib/filePathSuffix.js";
 import {
   buildCadRefToken,
-  buildLabelAliasMap,
   isNativeCadSelector,
   parseCadRefToken,
-  resolveLabelSelector,
   sortCadRefSelectors
 } from "cadjs/lib/cadRefs.js";
 import { entryReferenceAssetSignature } from "cadjs/lib/entryAssets.js";
 import { buildSelectorRuntime } from "cadjs/lib/selectors/runtime.js";
-import { cadFileParamForEntry, cadPathForEntry, fileKey } from "./sidebar.js";
+import { cadPathForEntry, fileKey } from "./sidebar.js";
 
 export function buildReferenceCacheKey(entry) {
   const fileRef = fileKey(entry);
@@ -210,56 +207,6 @@ function appendCadRefText(groups, plainLines, outputOrder, text, key = "") {
     addedCount += 1;
   }
   return addedCount;
-}
-
-/**
- * The alias map for an entry's parts, or null when the entry has none.
- *
- * The viewer already holds every part with its name, so labels resolve client-side with no
- * extra request. Built per call site rather than cached because the parts list is small and
- * already in memory; if that stops being true this is the one place to memoize.
- */
-export function buildEntryLabelAliasMap(parts) {
-  const rows = (Array.isArray(parts) ? parts : [])
-    .map((part) => ({
-      id: String(part?.occurrenceId || part?.id || "").trim(),
-      name: String(part?.name || part?.label || "").trim()
-    }))
-    .filter((row) => row.id && row.name);
-  return rows.length ? buildLabelAliasMap(rows) : null;
-}
-
-/**
- * Turn a selector a user pasted into one the viewer can act on.
- *
- * Numeric selectors are returned untouched -- a ref that worked before labels existed keeps
- * working and keeps meaning the same thing. A label resolves through the alias map; an unknown
- * or ambiguous label returns "" so the caller rejects it exactly as it rejects any other
- * selector it cannot use.
- */
-export function resolveViewerSelector(selector, aliasMap = null, { entry = null } = {}) {
-  const raw = String(selector || "").trim();
-  // A pasted ref may carry a file prefix (`plate.stl#o1.2`). Strip it when it names the file
-  // that is open, and refuse when it names a different one -- resolving a foreign ref against
-  // the current model would silently select the wrong geometry.
-  let text = raw.replace(/^#/, "");
-  if (raw.includes("#")) {
-    const prefix = raw.slice(0, raw.indexOf("#")).trim();
-    if (prefix) {
-      const entryPath = cadFileParamForEntry(entry);
-      if (!entryPath || !pathHasSuffix(entryPath, prefix)) {
-        return "";
-      }
-    }
-    text = raw.slice(raw.indexOf("#") + 1).trim();
-  }
-  if (!text) {
-    return "";
-  }
-  if (isNativeCadSelector(text)) {
-    return text;
-  }
-  return aliasMap ? resolveLabelSelector(text, aliasMap) : "";
 }
 
 export function canonicalCadRefCopyText(text, { allowPlain = false } = {}) {
