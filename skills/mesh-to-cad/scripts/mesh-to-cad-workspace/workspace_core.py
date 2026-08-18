@@ -13,6 +13,7 @@ import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -37,6 +38,7 @@ MAX_TOOL_FAILURES_PER_STEP = 2
 MAX_COMMANDS_PER_ATTEMPT = 8
 MAX_LOG_BYTES = 65536
 MAX_COMMAND_SECONDS = 900
+COMMAND_TERMINATION_GRACE_SECONDS = 2
 TOOL_FAILURE_RESULT = "tool_failure"
 FINAL_SELECTION_SCHEMA = "mesh-to-cad.final-selection/1"
 FINAL_DELIVERY_SCHEMA = "mesh-to-cad.final-delivery/1"
@@ -47,6 +49,72 @@ FAILED_ATTEMPT_RESULTS = (
     "strategy_changed",
     "no_feasible_strategy",
 )
+
+
+def _signal_command_tree(process: subprocess.Popen[Any], signum: int) -> None:
+    """Signal a bounded command and every descendant in its process group."""
+
+    try:
+        os.killpg(process.pid, signum)
+    except ProcessLookupError:
+        pass
+
+
+def _command_tree_exists(process: subprocess.Popen[Any]) -> bool:
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _run_bounded_command(
+    argv: list[str],
+    *,
+    cwd: Path,
+    timeout_seconds: int,
+    text: bool = False,
+) -> tuple[subprocess.CompletedProcess[Any], bool]:
+    """Run argv under the Workspace deadline and cancel its complete process tree."""
+
+    if os.name != "posix":
+        raise OSError("bounded command tree cancellation requires a POSIX host")
+    process = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=text,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+        return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr), False
+    except subprocess.TimeoutExpired:
+        _signal_command_tree(process, signal.SIGTERM)
+        termination_deadline = (
+            time.monotonic() + COMMAND_TERMINATION_GRACE_SECONDS
+        )
+        stdout = None
+        stderr = None
+        try:
+            stdout, stderr = process.communicate(
+                timeout=COMMAND_TERMINATION_GRACE_SECONDS
+            )
+        except subprocess.TimeoutExpired:
+            pass
+        while (
+            _command_tree_exists(process)
+            and time.monotonic() < termination_deadline
+        ):
+            time.sleep(0.05)
+        if _command_tree_exists(process):
+            _signal_command_tree(process, signal.SIGKILL)
+        if stdout is None or stderr is None:
+            stdout, stderr = process.communicate()
+        return subprocess.CompletedProcess(argv, 124, stdout, stderr), True
 
 _EXPERIMENT_FIELDS = {
     "schema",
@@ -474,23 +542,16 @@ def run_attempt_command(
     command_id = max(existing, default=0) + 1
     started = time.monotonic()
     try:
-        completed = subprocess.run(
+        completed, timed_out = _run_bounded_command(
             argv,
             cwd=workspace,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout_seconds,
-            check=False,
+            timeout_seconds=timeout_seconds,
         )
         exit_code = completed.returncode
         stdout = completed.stdout
         stderr = completed.stderr
-        timed_out = False
-    except subprocess.TimeoutExpired as exc:
-        exit_code = 124
-        stdout = exc.stdout or b""
-        stderr = (exc.stderr or b"") + b"\ncommand timed out\n"
-        timed_out = True
+        if timed_out:
+            stderr += b"\ncommand timed out\n"
     except OSError as exc:
         exit_code = 127
         stdout = b""
@@ -1253,14 +1314,11 @@ def _run_registered_rebuild(
             "rebuilt",
             "--json",
         ]
-    result = subprocess.run(
+    result, _timed_out = _run_bounded_command(
         argv,
         cwd=rebuild_root,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
         text=True,
-        timeout=MAX_COMMAND_SECONDS,
-        check=False,
+        timeout_seconds=MAX_COMMAND_SECONDS,
     )
     if result.returncode != 0:
         detail = _compact_process_detail(result.stderr or result.stdout)
@@ -1427,7 +1485,12 @@ def _run_voxblame_verify(
         "--output",
         str(output),
     ]
-    result = subprocess.run(argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=MAX_COMMAND_SECONDS, check=False)
+    result, _timed_out = _run_bounded_command(
+        argv,
+        cwd=workspace,
+        text=True,
+        timeout_seconds=MAX_COMMAND_SECONDS,
+    )
     if result.returncode != 0 or not output.is_file():
         _fail("verification_mismatch", _compact_process_detail(result.stderr or result.stdout) or "rebuilt Observable Geometry does not match Selected Step")
 
@@ -1461,7 +1524,12 @@ def _run_final_preview(
     ]
     last_detail = ""
     for _attempt in range(2):
-        result = subprocess.run(argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=MAX_COMMAND_SECONDS, check=False)
+        result, _timed_out = _run_bounded_command(
+            argv,
+            cwd=workspace,
+            text=True,
+            timeout_seconds=MAX_COMMAND_SECONDS,
+        )
         if result.returncode == 0 and (output / "preview.json").is_file() and (output / "preview.png").is_file():
             return
         last_detail = _compact_process_detail(result.stderr or result.stdout)

@@ -19,7 +19,6 @@ _RENDER_URL = f"{_ORIGIN}/render.html"
 _ROUTE_GLOB = f"{_ORIGIN}/**"
 _RUNTIME_DIR = Path(__file__).resolve().parent / "runtime"
 _BROWSER_STARTUP_TIMEOUT_MS = 15_000
-_RENDER_TIMEOUT_MS = 120_000
 _CONTRACT = json.loads(
     files("meshshot").joinpath("browser_contract.json").read_text(encoding="utf-8")
 )
@@ -105,10 +104,13 @@ def _legacy_browser_render(payload: dict[str, Any]) -> dict[str, Any]:
                         )
 
                 page.route(_ROUTE_GLOB, handle_route)
-                page.goto(_RENDER_URL, wait_until="load", timeout=_RENDER_TIMEOUT_MS)
+                # Residual rendering is data-dependent. The Workspace command
+                # owns cancellation; Playwright must not impose a second
+                # page-level deadline on the same operation.
+                page.goto(_RENDER_URL, wait_until="load", timeout=0)
                 page.wait_for_function(
                     "typeof window.__meshshotRender === 'function'",
-                    timeout=_RENDER_TIMEOUT_MS,
+                    timeout=0,
                 )
                 result = page.evaluate(
                     "(renderPayload) => window.__meshshotRender(renderPayload)",

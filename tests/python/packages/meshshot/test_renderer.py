@@ -34,6 +34,38 @@ def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometr
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_legacy_render_delegates_deadline_to_caller(self) -> None:
+        from meshshot import renderer
+
+        page = mock.MagicMock()
+        page.evaluate.return_value = {"ok": True}
+        context = mock.MagicMock()
+        context.new_page.return_value = page
+        browser = mock.MagicMock()
+        browser.new_context.return_value = context
+        playwright = mock.MagicMock()
+        playwright.chromium.launch.return_value = browser
+        manager = mock.MagicMock()
+        manager.__enter__.return_value = playwright
+        manager.__exit__.return_value = False
+
+        with mock.patch(
+            "playwright.sync_api.sync_playwright",
+            return_value=manager,
+        ):
+            result = renderer._legacy_browser_render({"candidate": "payload"})
+
+        self.assertEqual(result, {"ok": True})
+        page.goto.assert_called_once_with(
+            renderer._RENDER_URL,
+            wait_until="load",
+            timeout=0,
+        )
+        page.wait_for_function.assert_called_once_with(
+            "typeof window.__meshshotRender === 'function'",
+            timeout=0,
+        )
+
     def test_formal_authority_rejects_symlink_without_local_fallback(self) -> None:
         triangle = ((-0.35, -0.3, 0.0), (0.35, -0.3, 0.0), (0.0, 0.35, 0.0))
         geometry = _geometry(triangle)

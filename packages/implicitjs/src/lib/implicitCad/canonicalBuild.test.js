@@ -48,6 +48,15 @@ function collectStrings(value, result = []) {
   return result;
 }
 
+test("restricted canonical worker delegates cancellation to its caller", () => {
+  const implementation = fs.readFileSync(
+    fileURLToPath(new URL("./canonicalBuild.js", import.meta.url)),
+    "utf-8",
+  );
+  assert.doesNotMatch(implementation, /setTimeout\(/u);
+  assert.doesNotMatch(implementation, /child\.kill\("SIGKILL"\)/u);
+});
+
 test("canonical implicit build publishes traceable artifacts without moving source geometry", async () => {
   const workspaceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "implicit-canonical-build-"));
   const sourcePath = writeCanonicalSphere(workspaceDirectory);

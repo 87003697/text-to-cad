@@ -14,6 +14,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -1404,6 +1405,101 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertFalse((self.workspace / "final").exists())
         self.assertFalse(transaction.exists())
         self.assertEqual("", self.git("status", "--short"))
+
+    @unittest.skipUnless(os.name == "posix", "process-group cancellation requires POSIX")
+    def test_timed_out_command_terminates_descendant_processes(self) -> None:
+        self.publish_initial_flow()
+        plan = self.repair_plan("timeout-plan", from_step=0)
+        status, started, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(plan),
+            "--intended-step",
+            "1",
+            "--from-step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+
+        child_pid = self.root / "child.pid"
+        child_script = self.root / "timeout-child.py"
+        child_script.write_text(
+            """import os
+from pathlib import Path
+import signal
+import sys
+import time
+
+pid_path = Path(sys.argv[1])
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+pid_path.write_text(str(os.getpid()), encoding="utf-8")
+time.sleep(60)
+""",
+            encoding="utf-8",
+        )
+        parent_script = self.root / "timeout-parent.py"
+        parent_script.write_text(
+            """import subprocess
+import sys
+import time
+
+subprocess.Popen(
+    [sys.executable, sys.argv[1], sys.argv[2]],
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+time.sleep(60)
+""",
+            encoding="utf-8",
+        )
+
+        stdout = io.StringIO()
+        command_stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(command_stderr):
+            command_status = self.cli.main(
+                [
+                    "run",
+                    "--workspace",
+                    str(self.workspace),
+                    "--attempt",
+                    str(started["attempt"]["attempt"]),
+                    "--phase",
+                    "build",
+                    "--timeout-seconds",
+                    "1",
+                    "--",
+                    sys.executable,
+                    str(parent_script),
+                    str(child_script),
+                    str(child_pid),
+                ]
+            )
+
+        command = json.loads(stdout.getvalue())
+        self.assertEqual(124, command_status, command_stderr.getvalue())
+        self.assertTrue(command["command"]["timed_out"])
+        self.assertTrue(child_pid.is_file())
+        pid = int(child_pid.read_text(encoding="utf-8"))
+
+        def kill_surviving_child() -> None:
+            try:
+                os.kill(pid, 9)
+            except ProcessLookupError:
+                pass
+
+        self.addCleanup(kill_surviving_child)
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            if time.monotonic() >= deadline:
+                self.fail("the SIGTERM-ignoring command descendant is still running")
+            time.sleep(0.05)
 
     def test_failed_attempt_is_auditable_but_does_not_consume_cycle_budget(self) -> None:
         self.publish_initial_flow()
