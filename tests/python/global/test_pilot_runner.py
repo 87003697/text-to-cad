@@ -23,49 +23,43 @@ PILOT_ROOT = REPO_ROOT / "scripts" / "pilot"
 UTILS_ROOT = REPO_ROOT / "scripts" / "utils"
 
 
-def nested_gate_proof(
-    *,
-    job_id: str = "pilot-test-job",
-    nonce: str = "a" * 32,
-    artifact_sha256: str = "b" * 64,
-    surface_manifest_sha256: str = "c" * 64,
-) -> dict[str, object]:
-    """Return the fixed successful proof accepted before Agent exec."""
+class FakeBrowserRuntimeJob:
+    """Minimal stand-in matching the BrowserRuntimeJob seam used by runner.py."""
 
-    return {
-        "schema": "meshshot.browser-sidecar.nested-gate-proof/1",
-        "status": "succeeded",
-        "jobId": job_id,
-        "nonce": nonce,
-        "artifactSha256": artifact_sha256,
-        "surfaceManifestSha256": surface_manifest_sha256,
-        "predicates": {
-            "publicResidualParity": True,
-            "viewerProjectionChanged": True,
-            "viewerArtifactClean": True,
-            "browserInventoryEmpty": True,
-            "browserProcessZero": True,
-        },
-        "residual": {
-            "pngSha256": "b498c55c68662989a3a95c4925432d61f979183d30c2cdf593e154c7b0ca9d5b",
-            "mode": "RGB",
-            "size": [504, 1008],
-            "profileSha256": "87da3cc3f625cb9c24f51bed41dcdc70402a4d461b2af29eaa19846b1e8f7241",
-            "views": ["+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso"],
-        },
-        "viewer": {
-            "before": "Display and projection: Solid, Orthographic",
-            "after": "Display and projection: Solid, Perspective",
-            "bodyMentionsFixture": True,
-            "bodyHasArtifactError": False,
-        },
-        "inventory": {
-            "browserExecutables": [],
-            "browserPackages": [],
-            "browserCaches": [],
-            "browserProcesses": [],
-        },
-    }
+    def __init__(
+        self,
+        *,
+        mcp_url: str = "http://127.0.0.1:12345/mcp",
+        capability_dir: Path | None = None,
+    ) -> None:
+        self.mcp_url = mcp_url
+        self.container_name = "ttc-br-fake-runtime"
+        self.network_name = "ttc-br-fake-net"
+        self.capability_dir = capability_dir or Path("/tmp/fake-br-cap")
+        self.started = False
+        self.stopped = False
+
+    @classmethod
+    def create(cls, exp_dir, **kw):
+        """Match BrowserRuntimeJob.create's classmethod signature."""
+
+        return cls()
+
+    def start(self):
+        """Record lifecycle start without touching Docker."""
+
+        self.started = True
+
+    def stop(self):
+        """Record lifecycle stop without touching Docker."""
+
+        self.started = False
+        self.stopped = True
+
+    def poll_failed(self):
+        """Report a healthy container so wait_workload does not tear down."""
+
+        return False
 
 
 def load_runner():
@@ -152,24 +146,6 @@ class FakeRetryProxy:
 
 class RunnerTests(unittest.TestCase):
     """Validate mandatory tap behavior without bwrap, network, or Venus."""
-
-    def test_handoff_gate_digest_matches_deterministic_artifact(self) -> None:
-        """The formal handoff must publish the current sealed Gate identity."""
-
-        handoff = (
-            REPO_ROOT / "docs/specs/browser-sidecar-formal-pilot-handoff.md"
-        ).read_text(encoding="utf-8")
-        match = re.search(
-            r"Deterministic sealed Browser Gate zipapp for the current scanner source:\n"
-            r"\s+`sha256:([0-9a-f]{64})`",
-            handoff,
-        )
-        self.assertIsNotNone(match)
-        with tempfile.TemporaryDirectory() as temporary:
-            actual = self.supervisor._build_gate_artifact(
-                REPO_ROOT, Path(temporary) / "browser-gate.pyz"
-            )
-        self.assertEqual(match.group(1), actual)
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -645,609 +621,11 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(retry_proxy.stopped)
         popen.assert_not_called()
 
-    def test_nested_gate_failure_never_executes_agent_workload(self) -> None:
-        """Missing, malformed, duplicate, or late proof closes before Agent exec."""
+    def test_run_pilot_installs_relay_before_browser_runtime_and_cleans_startup_signal(
+        self,
+    ) -> None:
+        """SignalRelay must wrap browser runtime lifecycle; cancelled start skips workload."""
 
-        for classification in (
-            "nested-gate-missing",
-            "nested-gate-malformed",
-            "nested-gate-duplicate",
-            "nested-gate-timeout",
-        ):
-            with self.subTest(classification=classification):
-                tap = FakeProcess()
-                gate_process = FakeProcess()
-                retry_proxy = FakeRetryProxy()
-                state = self.supervisor.LifecycleState()
-
-                class FakeSidecar:
-                    capability_dir = self.exp_dir
-
-                    def record_nested_gate(self, proof):
-                        raise AssertionError("failed proof must not be recorded")
-
-                class FakeGateChannel:
-                    def __init__(self, capability_dir):
-                        self.capability_dir = capability_dir
-
-                    def receive(self, cancelled):
-                        raise self_error
-
-                    def release(self):
-                        raise AssertionError("failed proof must not release Agent")
-
-                    def close(self):
-                        return None
-
-                self_error = self.supervisor.PilotError(classification)
-                with (
-                    mock.patch.object(
-                        self.supervisor,
-                        "resolve_tap",
-                        return_value="/fake/claude-tap",
-                    ),
-                    mock.patch.object(
-                        self.supervisor,
-                        "RetryProxy",
-                        return_value=retry_proxy,
-                    ),
-                    mock.patch.object(self.supervisor, "start_tap", return_value=tap),
-                    mock.patch.object(self.supervisor, "wait_ready", return_value=18888),
-                    mock.patch.object(
-                        self.supervisor,
-                        "build_bwrap_argv",
-                        return_value=["/fake/bwrap", "--", "/fixed/gate"],
-                    ),
-                    mock.patch.object(
-                        self.supervisor,
-                        "NestedGateChannel",
-                        FakeGateChannel,
-                        create=True,
-                    ),
-                    mock.patch.object(
-                        self.supervisor.subprocess,
-                        "Popen",
-                        return_value=gate_process,
-                    ),
-                    mock.patch.object(self.supervisor, "signal_process_group"),
-                    mock.patch.object(self.supervisor, "wait_workload") as wait_workload,
-                    mock.patch.object(self.supervisor, "stop_tap"),
-                    mock.patch.object(
-                        self.supervisor,
-                        "read_trace",
-                        side_effect=self.supervisor.TapError("missing trace"),
-                    ),
-                ):
-                    status = self.supervisor.run_supervised(
-                        self.exp_dir,
-                        [],
-                        ["/fixed/agent"],
-                        self.environ,
-                        state,
-                        FakeSidecar(),
-                    )
-                self.assertEqual(status, 1)
-                self.assertFalse(state.workload_started)
-                wait_workload.assert_not_called()
-
-    def test_surface_proof_mismatch_withholds_exec_and_cleans_gate_process(self) -> None:
-        """A different surface proof cannot release the Agent and is terminated."""
-
-        tap = FakeProcess()
-        gate_process = FakeProcess()
-        state = self.supervisor.LifecycleState()
-        events: list[str] = []
-
-        class FakeSidecar:
-            capability_dir = self.exp_dir
-
-            def record_nested_gate(self, proof):
-                events.append("reject-proof")
-                raise self_error
-
-        class FakeGateChannel:
-            def __init__(self, capability_dir):
-                events.append("open")
-
-            def receive(self, cancelled):
-                events.append("receive")
-                return nested_gate_proof(surface_manifest_sha256="d" * 64)
-
-            def release(self):
-                raise AssertionError("mismatched surface must not release Agent")
-
-            def close(self):
-                events.append("close")
-
-        self_error = self.supervisor.PilotError("nested-gate surface mismatch")
-        with (
-            mock.patch.object(self.supervisor, "resolve_tap", return_value="/fake/tap"),
-            mock.patch.object(
-                self.supervisor, "RetryProxy", return_value=FakeRetryProxy()
-            ),
-            mock.patch.object(self.supervisor, "start_tap", return_value=tap),
-            mock.patch.object(self.supervisor, "wait_ready", return_value=18888),
-            mock.patch.object(
-                self.supervisor,
-                "build_bwrap_argv",
-                return_value=["/fake/bwrap", "--", "/fixed/gate", "--", "/fixed/agent"],
-            ),
-            mock.patch.object(
-                self.supervisor, "NestedGateChannel", FakeGateChannel, create=True
-            ),
-            mock.patch.object(
-                self.supervisor.subprocess, "Popen", return_value=gate_process
-            ),
-            mock.patch.object(self.supervisor, "signal_process_group") as terminate,
-            mock.patch.object(self.supervisor, "wait_workload") as wait_workload,
-            mock.patch.object(self.supervisor, "stop_tap"),
-            mock.patch.object(
-                self.supervisor,
-                "read_trace",
-                side_effect=self.supervisor.TapError("no Agent trace"),
-            ),
-        ):
-            status = self.supervisor.run_supervised(
-                self.exp_dir,
-                [],
-                ["/fixed/agent"],
-                self.environ,
-                state,
-                FakeSidecar(),
-            )
-
-        self.assertEqual(status, 1)
-        self.assertFalse(state.workload_started)
-        self.assertEqual(events, ["open", "receive", "reject-proof", "close"])
-        terminate.assert_called_once_with(gate_process, signal.SIGTERM)
-        wait_workload.assert_not_called()
-
-    def test_run_pilot_real_validator_rejects_surface_and_closes_job(self) -> None:
-        """The production validator withholds Agent release and publishes failure."""
-
-        runner = self.supervisor
-        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
-            repo_root = Path(temp) / "repo"
-            exp_dir = repo_root / "outputs/group/exp"
-            exp_dir.mkdir(parents=True)
-            relative = exp_dir.relative_to(repo_root)
-            job_id = "pilot-" + runner.hashlib.sha256(
-                relative.as_posix().encode("utf-8")
-            ).hexdigest()[:24]
-            job = runner.BrowserSidecarJob.create(
-                exp_dir,
-                runner.SANDBOX_REPO_ROOT / relative,
-                job_id=job_id,
-            )
-            job.configure_nested_gate(
-                artifact_sha256="b" * 64,
-                surface_manifest_sha256="c" * 64,
-            )
-            gate_process = FakeProcess()
-            tap = FakeProcess()
-            released: list[bool] = []
-
-            class GateChannel:
-                def __init__(self, capability_dir):
-                    self.capability_dir = capability_dir
-
-                def receive(self, cancelled):
-                    return nested_gate_proof(
-                        job_id=job.job_id,
-                        nonce=job.gate_nonce,
-                        artifact_sha256="b" * 64,
-                        surface_manifest_sha256="d" * 64,
-                    )
-
-                def release(self):
-                    released.append(True)
-
-                def close(self):
-                    return None
-
-            with (
-                mock.patch.object(runner, "REPO_ROOT", repo_root),
-                mock.patch.object(runner, "prepare_exp"),
-                mock.patch.object(runner, "prepare_nested_browser_gate"),
-                mock.patch.object(
-                    runner.BrowserSidecarJob,
-                    "create",
-                    return_value=job,
-                ),
-                mock.patch.object(job, "start"),
-                mock.patch.object(job, "close", wraps=job.close) as close_job,
-                mock.patch.object(runner, "resolve_tap", return_value="/fake/tap"),
-                mock.patch.object(
-                    runner, "RetryProxy", return_value=FakeRetryProxy()
-                ),
-                mock.patch.object(runner, "start_tap", return_value=tap),
-                mock.patch.object(runner, "wait_ready", return_value=18888),
-                mock.patch.object(
-                    runner,
-                    "build_bwrap_argv",
-                    return_value=["/fake/bwrap", "--", "/fixed/gate"],
-                ),
-                mock.patch.object(runner, "NestedGateChannel", GateChannel),
-                mock.patch.object(
-                    runner.subprocess, "Popen", return_value=gate_process
-                ),
-                mock.patch.object(runner, "signal_process_group") as terminate,
-                mock.patch.object(runner, "wait_workload") as agent_workload,
-                mock.patch.object(runner, "stop_tap"),
-                mock.patch.object(
-                    runner,
-                    "read_trace",
-                    side_effect=runner.TapError("no Agent trace"),
-                ),
-                mock.patch.object(
-                    runner,
-                    "finalize_pilot",
-                    side_effect=lambda exp, status, env, **kwargs: status,
-                ),
-            ):
-                status = runner.run_pilot(
-                    exp_dir,
-                    [],
-                    ["/fixed/agent"],
-                    self.environ,
-                )
-            receipt = json.loads(
-                (exp_dir / "run/browser-sidecar-receipt.json").read_text(
-                    encoding="utf-8"
-                )
-            )
-
-        self.assertEqual(status, 1)
-        self.assertEqual(released, [])
-        agent_workload.assert_not_called()
-        terminate.assert_called_once_with(gate_process, signal.SIGTERM)
-        close_job.assert_called_once_with(workload_status=1)
-        self.assertEqual(receipt["status"], "failed")
-        self.assertTrue(receipt["predicates"]["absenceProved"])
-        self.assertEqual(receipt["failureCheck"], "sidecar-readiness")
-
-    def test_nested_gate_channel_is_one_shot_exact_and_bounded(self) -> None:
-        """The outer-owned channel rejects absent, malformed, duplicate, and late proof."""
-
-        runner = self.supervisor
-
-        def send(path: Path, payload: bytes, ack: list[bytes]) -> threading.Thread:
-            def client() -> None:
-                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-                    connection.connect(os.fspath(path))
-                    if payload:
-                        connection.sendall(payload)
-                    connection.shutdown(socket.SHUT_WR)
-                    ack.append(connection.recv(2))
-
-            thread = threading.Thread(target=client)
-            thread.start()
-            return thread
-
-        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
-            channel = runner.NestedGateChannel(Path(temp), timeout=0.05)
-            ack: list[bytes] = []
-            thread = send(channel.path, b"", ack)
-            with self.assertRaisesRegex(runner.PilotError, "missing"):
-                channel.receive(lambda: False)
-            channel.close()
-            thread.join(timeout=1)
-            self.assertEqual(ack, [b""])
-
-        for label, wire in (
-            ("malformed", b"{]\n"),
-            (
-                "duplicate",
-                json.dumps(nested_gate_proof()).encode("ascii")
-                + b"\n"
-                + json.dumps(nested_gate_proof()).encode("ascii")
-                + b"\n",
-            ),
-        ):
-            with self.subTest(label=label), tempfile.TemporaryDirectory(dir="/tmp") as temp:
-                channel = runner.NestedGateChannel(Path(temp), timeout=0.2)
-                ack = []
-                thread = send(channel.path, wire, ack)
-                with self.assertRaisesRegex(runner.PilotError, label):
-                    channel.receive(lambda: False)
-                channel.close()
-                thread.join(timeout=1)
-                self.assertEqual(ack, [b""])
-
-        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
-            channel = runner.NestedGateChannel(Path(temp), timeout=0.01)
-            with self.assertRaisesRegex(runner.PilotError, "timeout"):
-                channel.receive(lambda: False)
-            channel.close()
-
-        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
-            channel = runner.NestedGateChannel(Path(temp), timeout=0.2)
-            ack = []
-            thread = send(
-                channel.path,
-                json.dumps(nested_gate_proof()).encode("ascii") + b"\n",
-                ack,
-            )
-            proof = channel.receive(lambda: False)
-            channel.release()
-            channel.close()
-            thread.join(timeout=1)
-            self.assertEqual(proof, nested_gate_proof())
-            self.assertEqual(ack, [b"\x01"])
-
-    def test_successful_nested_gate_releases_then_executes_workload_once(self) -> None:
-        """The same bwrap PID is released only after exact outer proof acceptance."""
-
-        tap = FakeProcess()
-        gate_process = FakeProcess(returncode=0)
-        recorded: list[object] = []
-        events: list[str] = []
-        state = self.supervisor.LifecycleState()
-
-        class FakeSidecar:
-            capability_dir = self.exp_dir
-
-            def record_nested_gate(self, proof):
-                events.append("record")
-                recorded.append(proof)
-
-        class FakeGateChannel:
-            def __init__(self, capability_dir):
-                events.append("open")
-
-            def receive(self, cancelled):
-                events.append("receive")
-                return nested_gate_proof()
-
-            def release(self):
-                events.append("release")
-
-            def close(self):
-                events.append("close")
-
-        def wait_workload(*args):
-            events.append("workload")
-            return 0, False
-
-        with (
-            mock.patch.object(self.supervisor, "resolve_tap", return_value="/fake/tap"),
-            mock.patch.object(
-                self.supervisor,
-                "RetryProxy",
-                return_value=FakeRetryProxy(),
-            ),
-            mock.patch.object(self.supervisor, "start_tap", return_value=tap),
-            mock.patch.object(self.supervisor, "wait_ready", return_value=18888),
-            mock.patch.object(
-                self.supervisor,
-                "build_bwrap_argv",
-                return_value=["/fake/bwrap", "--", "/fixed/gate", "--", "/fixed/agent"],
-            ),
-            mock.patch.object(
-                self.supervisor,
-                "NestedGateChannel",
-                FakeGateChannel,
-                create=True,
-            ),
-            mock.patch.object(
-                self.supervisor.subprocess,
-                "Popen",
-                return_value=gate_process,
-            ) as popen,
-            mock.patch.object(
-                self.supervisor,
-                "wait_workload",
-                side_effect=wait_workload,
-            ),
-            mock.patch.object(self.supervisor, "stop_tap"),
-            mock.patch.object(
-                self.supervisor,
-                "read_trace",
-                return_value=("session-1", "complete", 1),
-            ),
-            mock.patch.object(self.supervisor, "export_html"),
-        ):
-            status = self.supervisor.run_supervised(
-                self.exp_dir,
-                [],
-                ["/fixed/agent"],
-                self.environ,
-                state,
-                FakeSidecar(),
-            )
-        self.assertEqual(status, 0)
-        self.assertEqual(recorded, [nested_gate_proof()])
-        self.assertEqual(events, ["open", "receive", "record", "release", "workload", "close"])
-        self.assertTrue(state.workload_started)
-        popen.assert_called_once()
-
-    def test_signal_during_nested_gate_preserves_143_without_agent_exec(self) -> None:
-        """A signal while proof is pending withholds release and keeps signal status."""
-
-        tap = FakeProcess()
-        gate_process = FakeProcess()
-        state = self.supervisor.LifecycleState()
-        supervisor = self.supervisor
-
-        class FakeRelay:
-            signum = None
-            child = None
-
-            @property
-            def cancelled(self):
-                return self.signum is not None
-
-            def attach(self, child):
-                self.child = child
-
-            def detach(self):
-                self.child = None
-
-        relay = FakeRelay()
-
-        class FakeSidecar:
-            capability_dir = self.exp_dir
-
-            def record_nested_gate(self, proof):
-                raise AssertionError("signalled proof must not be recorded")
-
-        class FakeGateChannel:
-            def __init__(self, capability_dir):
-                self.released = False
-
-            def receive(self, cancelled):
-                relay.signum = signal.SIGTERM
-                raise supervisor.PilotError("nested-gate interrupted")
-
-            def release(self):
-                self.released = True
-                raise AssertionError("signalled gate must not release")
-
-            def close(self):
-                return None
-
-        with (
-            mock.patch.object(self.supervisor, "resolve_tap", return_value="/fake/tap"),
-            mock.patch.object(
-                self.supervisor,
-                "RetryProxy",
-                return_value=FakeRetryProxy(),
-            ),
-            mock.patch.object(self.supervisor, "start_tap", return_value=tap),
-            mock.patch.object(self.supervisor, "wait_ready", return_value=18888),
-            mock.patch.object(
-                self.supervisor,
-                "build_bwrap_argv",
-                return_value=["/fake/bwrap", "--", "/fixed/gate"],
-            ),
-            mock.patch.object(
-                self.supervisor,
-                "NestedGateChannel",
-                FakeGateChannel,
-            ),
-            mock.patch.object(
-                self.supervisor.subprocess,
-                "Popen",
-                return_value=gate_process,
-            ),
-            mock.patch.object(self.supervisor, "signal_process_group"),
-            mock.patch.object(self.supervisor, "wait_workload") as wait_workload,
-            mock.patch.object(self.supervisor, "stop_tap"),
-            mock.patch.object(
-                self.supervisor,
-                "read_trace",
-                side_effect=self.supervisor.TapError("missing trace"),
-            ),
-        ):
-            status = self.supervisor.run_supervised(
-                self.exp_dir,
-                [],
-                ["/fixed/agent"],
-                self.environ,
-                state,
-                FakeSidecar(),
-                relay,
-            )
-        self.assertEqual(status, 143)
-        self.assertFalse(state.workload_started)
-        wait_workload.assert_not_called()
-
-    def test_run_pilot_owns_sidecar_around_nested_workload(self) -> None:
-        events: list[object] = []
-        supervisor = self.supervisor
-
-        class FakeSidecar:
-            @classmethod
-            def create(cls, *args, **kwargs):
-                return cls(*args, **kwargs)
-
-            def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled=None):
-                events.append(("construct", exp_dir, sandbox_exp_dir, job_id))
-                self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
-                self.capability_dir = Path("/private/tmp/fixed-capability")
-                self.cancelled = cancelled
-
-            def start(self):
-                events.append("sidecar-start")
-
-            def close(self, *, workload_status):
-                events.append(("sidecar-close", workload_status))
-                return {
-                    "schema": supervisor.RECEIPT_SCHEMA,
-                    "status": "succeeded",
-                    "imageId": supervisor.IMAGE_ID,
-                    "imageSourceRevision": supervisor.IMAGE_SOURCE_REVISION,
-                    "brokerImageId": supervisor.BROKER_IMAGE_ID,
-                    "brokerImageSourceRevision": supervisor.BROKER_IMAGE_SOURCE_REVISION,
-                    "brokerBaseImageId": supervisor.BROKER_BASE_IMAGE_ID,
-                    "programs": supervisor.PROGRAMS,
-                    "predicates": {
-                        name: True for name in supervisor.RECEIPT_PREDICATES
-                    },
-                    "counts": {
-                        "acceptedRequests": 2,
-                        "freshContexts": 3,
-                        "programCounts": {"residual": 1, "viewer": 1},
-                    },
-                    "failureCheck": None,
-                    "retryAllowed": False,
-                }
-
-        def run_supervised(
-            exp_dir, inputs, command, environ, state, sidecar, relay=None
-        ):
-            events.append(("workload", sidecar.sandbox_authority_path))
-            state.workload_started = True
-            return 0
-
-        def finalize(exp_dir, status, environ, *, require_rollout):
-            events.append(("finalize", status, require_rollout))
-            return status
-
-        with (
-            mock.patch.object(self.supervisor, "prepare_exp"),
-            mock.patch.object(
-                self.supervisor,
-                "prepare_nested_browser_gate",
-                side_effect=lambda *args: events.append("gate-prepare"),
-            ),
-            mock.patch.object(self.supervisor, "BrowserSidecarJob", FakeSidecar),
-            mock.patch.object(self.supervisor, "run_supervised", side_effect=run_supervised),
-            mock.patch.object(self.supervisor, "finalize_pilot", side_effect=finalize),
-            mock.patch.object(
-                self.supervisor,
-                "validate_exp_dir",
-                return_value=self.supervisor.REPO_ROOT / "outputs/group/exp",
-            ),
-        ):
-            status = self.supervisor.run_pilot(
-                self.supervisor.REPO_ROOT / "outputs/group/exp",
-                [],
-                ["/fake/workload"],
-                self.environ,
-            )
-
-        self.assertEqual(status, 0)
-        self.assertEqual(
-            [
-                event if isinstance(event, str) else event[0]
-                for event in events
-            ],
-            [
-                "construct",
-                "gate-prepare",
-                "sidecar-start",
-                "workload",
-                "sidecar-close",
-                "finalize",
-            ],
-        )
-        self.assertEqual(
-            events[3][1],
-            Path("/run/meshshot-browser/authority.json"),
-        )
-
-    def test_run_pilot_installs_relay_before_sidecar_and_cleans_startup_signal(self) -> None:
         events: list[object] = []
 
         class FakeRelay:
@@ -1265,36 +643,31 @@ class RunnerTests(unittest.TestCase):
 
         relay = FakeRelay()
 
-        class FakeSidecar:
+        class FakeRuntime:
             @classmethod
             def create(cls, *args, **kwargs):
-                return cls(*args, **kwargs)
-
-            def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled):
-                self.capability_dir = Path("/private/tmp/fixed-capability")
-                self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
-                self.cancelled = cancelled
                 events.append("construct")
+                return cls()
+
+            def __init__(self):
+                self.capability_dir = Path("/tmp/fake-br-cap")
+                self.mcp_url = "http://127.0.0.1:12345/mcp"
 
             def start(self):
-                events.append("sidecar-start")
+                events.append("runtime-start")
                 relay.cancelled = True
                 relay.signum = signal.SIGTERM
 
-            def close(self, *, workload_status):
-                events.append(("sidecar-close", workload_status))
-                return {
-                    "schema": "meshshot.browser-sidecar.job-receipt/2",
-                    "status": "failed",
-                    "cleanupErrors": [],
-                    "absenceProof": {"proved": True},
-                }
+            def stop(self):
+                events.append("runtime-stop")
+
+            def poll_failed(self):
+                return False
 
         with (
             mock.patch.object(self.supervisor, "prepare_exp"),
-            mock.patch.object(self.supervisor, "prepare_nested_browser_gate"),
             mock.patch.object(self.supervisor, "SignalRelay", return_value=relay),
-            mock.patch.object(self.supervisor, "BrowserSidecarJob", FakeSidecar),
+            mock.patch.object(self.supervisor, "BrowserRuntimeJob", FakeRuntime),
             mock.patch.object(self.supervisor, "run_supervised") as supervised,
             mock.patch.object(
                 self.supervisor,
@@ -1315,64 +688,13 @@ class RunnerTests(unittest.TestCase):
             )
 
         self.assertEqual(status, 128 + signal.SIGTERM)
-        self.assertEqual(events[0:3], ["relay-enter", "construct", "sidecar-start"])
-        self.assertIn(("sidecar-close", 128 + signal.SIGTERM), events)
+        self.assertEqual(
+            events[0:3],
+            ["relay-enter", "construct", "runtime-start"],
+        )
+        self.assertIn("runtime-stop", events)
         self.assertEqual(events[-1], "relay-exit")
         supervised.assert_not_called()
-
-    def test_runner_rejects_failed_receipt_after_successful_workload(self) -> None:
-        class FakeSidecar:
-            @classmethod
-            def create(cls, *args, **kwargs):
-                return cls(*args, **kwargs)
-
-            def __init__(self, exp_dir, sandbox_exp_dir, *, job_id, cancelled=None):
-                self.capability_dir = Path("/private/tmp/fixed-capability")
-                self.sandbox_authority_path = Path("/run/meshshot-browser/authority.json")
-
-            def start(self):
-                return None
-
-            def close(self, *, workload_status):
-                return {
-                    "schema": "meshshot.browser-sidecar.job-receipt/2",
-                    "status": "failed",
-                    "cleanupErrors": [],
-                    "absenceProof": {"proved": True},
-                }
-
-        with (
-            mock.patch.object(self.supervisor, "prepare_exp"),
-            mock.patch.object(self.supervisor, "BrowserSidecarJob", FakeSidecar),
-            mock.patch.object(self.supervisor, "run_supervised", return_value=0),
-            mock.patch.object(
-                self.supervisor,
-                "finalize_pilot",
-                side_effect=lambda exp, status, env, **kwargs: status,
-            ),
-            mock.patch.object(
-                self.supervisor,
-                "validate_exp_dir",
-                return_value=self.supervisor.REPO_ROOT / "outputs/group/exp",
-            ),
-        ):
-            status = self.supervisor.run_pilot(
-                self.supervisor.REPO_ROOT / "outputs/group/exp",
-                [],
-                ["/fake/workload"],
-                self.environ,
-            )
-        self.assertEqual(status, 1)
-
-    def test_runner_rejects_succeeded_receipt_with_absent_closed_predicate(self) -> None:
-        self.assertFalse(
-            self.supervisor.sidecar_receipt_succeeded(
-                {
-                    "schema": self.supervisor.RECEIPT_SCHEMA,
-                    "status": "succeeded",
-                }
-            )
-        )
 
 
 class ProductionPathContractTests(unittest.TestCase):
@@ -1810,43 +1132,17 @@ class ProductionPathContractTests(unittest.TestCase):
             other_exp = repo_root / "outputs" / "group" / "other-exp"
             gateway = repo_root / "gateway" / "codex-tap-gpt56"
             venv = repo_root / ".venv"
-            gate_script = repo_root / "scripts/pilot/browser_sidecar_gate.py"
-            meshshot_source = repo_root / "packages/meshshot/src/meshshot"
             host_home = Path(temp) / "host-home"
             playwright = host_home / ".cache" / "ms-playwright"
             installed_skills = host_home / ".codex" / "skills"
+            capability_dir = repo_root / "browser-capability"
             exp_dir.mkdir(parents=True)
             skill_dir.mkdir(parents=True)
             outside_skill.mkdir()
-            (repo_root / "browser-capability").mkdir()
-            (repo_root / "browser-capability" / "browser-gate.pyz").write_bytes(
-                b"sealed-gate"
-            )
-            (repo_root / "browser-capability" / "browser-gate.pyz").chmod(0o444)
-            (repo_root / "browser-capability" / "gate-input.json").write_text(
-                json.dumps({
-                    "surfaceManifest": {
-                        "schema": "meshshot.browser-sidecar.agent-browser-surface/1",
-                        "scanRoots": sorted([
-                            "/usr",
-                            "/workspace/repo/.venv",
-                            "/workspace/repo/gateway/codex-tap-gpt56",
-                            "/workspace/repo/models/toys4k/input.ply",
-                            "/workspace/repo/outputs/group/exp with spaces",
-                            "/workspace/repo/skills/fake",
-                            "/home/pilot/.codex",
-                            "/home/pilot/.codex/skills/fake",
-                        ]),
-                        "browserExclusions": [],
-                    }
-                }) + "\n",
-                encoding="utf-8",
-            )
+            capability_dir.mkdir()
             input_path.parent.mkdir(parents=True)
             gateway.parent.mkdir(parents=True)
             venv.mkdir()
-            gate_script.parent.mkdir(parents=True)
-            meshshot_source.mkdir(parents=True)
             playwright.mkdir(parents=True)
             installed_skills.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text("# fake\n", encoding="utf-8")
@@ -1866,7 +1162,6 @@ class ProductionPathContractTests(unittest.TestCase):
             input_path.write_text("ply\n", encoding="utf-8")
             other_input.write_text("ply\n", encoding="utf-8")
             gateway.write_text("#!/bin/sh\n", encoding="utf-8")
-            gate_script.write_text("# artifact builder only\n", encoding="utf-8")
             environ = {
                 "HOME": str(host_home),
                 "PATH": "/fake/bin",
@@ -1894,16 +1189,16 @@ class ProductionPathContractTests(unittest.TestCase):
                     [input_path],
                     ["/fake/codex", "prompt with spaces"],
                     environ,
-                    browser_capability_dir=repo_root / "browser-capability",
+                    browser_capability_dir=capability_dir,
+                    browser_mcp_url="http://127.0.0.1:12345/mcp",
                 )
         triples = [argv[index : index + 3] for index in range(len(argv) - 2)]
         self.assertIn(Path("/etc/crypto-policies"), runner.SYSTEM_RO_PATHS)
+        # After the browser-runtime refactor the sandbox execs the workload
+        # directly; there is no nested gate zipapp wrapping the Agent.
         self.assertEqual(
-            argv[-6:],
+            argv[-3:],
             [
-                "--",
-                "/workspace/repo/.venv/bin/python",
-                "/run/meshshot-browser/browser-gate.pyz",
                 "--",
                 "/fake/codex",
                 "prompt with spaces",
@@ -1935,16 +1230,10 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertIn(
             [
                 "--ro-bind",
-                str((repo_root / "browser-capability").resolve()),
-                "/run/meshshot-browser",
+                str(capability_dir.resolve()),
+                runner.SANDBOX_MOUNT_ROOT,
             ],
             triples,
-        )
-        self.assertNotIn("/run/meshshot-gate/meshshot-src", argv)
-        self.assertNotIn(str((repo_root / "packages/meshshot/src").resolve()), argv)
-        self.assertNotIn(
-            str((repo_root / "scripts/pilot/browser_sidecar_gate.py").resolve()),
-            argv,
         )
         self.assertIn(
             [
@@ -1980,214 +1269,6 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertNotIn("PLAYWRIGHT_BROWSERS_PATH", child_env)
         self.assertNotIn("MESHSHOT_BROWSER_AUTHORITY_FILE", child_env)
 
-    def test_mounted_surface_browser_discovery_catches_renames_distros_and_caches(self) -> None:
-        """Every browser root in a mounted read-only surface becomes an exact mask."""
-
-        with tempfile.TemporaryDirectory() as temp:
-            source = Path(temp) / "runtime"
-            renamed_package = source / "lib/python/site-packages/runtime_tools"
-            distro_binary = source / "bin/web-renderer"
-            renamed_cache = source / "var/cache/vendor-build-1223"
-            renamed_package.mkdir(parents=True)
-            distro_binary.parent.mkdir(parents=True)
-            renamed_cache.mkdir(parents=True)
-            (renamed_package / "METADATA").write_text(
-                "Metadata-Version: 2.1\nName: playwright\n", encoding="utf-8"
-            )
-            distro_binary.write_bytes(
-                b"\x7fELF" + b"\0" * 64 + b"Chromium 148.0.7778.96 HeadlessChrome"
-            )
-            distro_binary.chmod(0o755)
-            (renamed_cache / "browser-marker.json").write_text(
-                '{"product":"chromium","revision":"1223"}\n', encoding="utf-8"
-            )
-            runner = load_runner()
-            result = runner.discover_browser_roots(
-                [(source, Path("/usr"), True)]
-            )
-
-        self.assertEqual(
-            {(item["kind"], item["target"]) for item in result},
-            {
-                ("package", "/usr/lib/python/site-packages/runtime_tools"),
-                ("executable", "/usr/bin/web-renderer"),
-                ("cache", "/usr/var/cache/vendor-build-1223"),
-            },
-        )
-        self.assertTrue(all(set(item) == {"kind", "target", "mask"} for item in result))
-
-    def test_browser_surface_preflight_failure_precedes_sidecar_start(self) -> None:
-        """An unclosed mounted surface fails before any Docker lifecycle mutation."""
-
-        runner = load_runner()
-        with tempfile.TemporaryDirectory() as temp:
-            exp = (Path(temp) / "repo/outputs/group/exp").resolve()
-            exp.mkdir(parents=True)
-            sidecar = mock.Mock()
-            sidecar_type = mock.Mock()
-            sidecar_type.create.return_value = sidecar
-            with (
-                mock.patch.object(runner, "REPO_ROOT", (Path(temp) / "repo").resolve()),
-                mock.patch.object(runner, "prepare_exp"),
-                mock.patch.object(runner, "validate_exp_dir", return_value=exp),
-                mock.patch.object(runner, "BrowserSidecarJob", sidecar_type),
-                mock.patch.object(
-                    runner,
-                    "prepare_nested_browser_gate",
-                    side_effect=runner.PilotError("browser surface is not closed"),
-                ),
-                mock.patch.object(runner, "finalize_pilot", return_value=1),
-            ):
-                status = runner.run_pilot(exp, [], ["/fixed/agent"], {})
-        self.assertEqual(status, 1)
-        sidecar.start.assert_not_called()
-
-    def test_readonly_surface_scan_permits_links_between_declared_roots(self) -> None:
-        """Read-only aliases may cross only within the complete declared closure."""
-
-        runner = load_runner()
-        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
-            root = Path(temp)
-            repo_root = root / "repo"
-            exp_dir = repo_root / "outputs/group/exp"
-            source_usr = root / "usr"
-            source_etc = root / "etc"
-            upper = exp_dir / "run/.codex-upper"
-            for path in (exp_dir, source_usr, source_etc, upper):
-                path.mkdir(parents=True, exist_ok=True)
-            mounts = [
-                (source_usr, Path("/usr"), True),
-                (source_etc, Path("/etc"), True),
-            ]
-            sidecar = mock.Mock()
-            with (
-                mock.patch.object(
-                    runner, "_readonly_surface_mounts", return_value=mounts
-                ),
-                mock.patch.object(
-                    runner, "resolve_installed_skill_dirs", return_value=[]
-                ),
-                mock.patch.object(runner, "prepare_sandbox", return_value=upper),
-                mock.patch.object(
-                    runner,
-                    "discover_browser_roots",
-                    side_effect=[[], []],
-                ) as discover,
-                mock.patch.object(
-                    runner, "_prepare_nested_browser_gate_from_manifest"
-                ),
-            ):
-                runner.prepare_nested_browser_gate(
-                    repo_root,
-                    exp_dir,
-                    [],
-                    {"HOME": str(root / "home")},
-                    sidecar,
-                )
-
-        self.assertEqual(discover.call_count, 2)
-        self.assertEqual(discover.call_args_list[0].args, (mounts,))
-        self.assertEqual(
-            discover.call_args_list[0].kwargs,
-            {"permitted_symlink_roots": [source_usr, source_etc]},
-        )
-        self.assertNotIn(
-            "permitted_symlink_roots", discover.call_args_list[1].kwargs
-        )
-
-    def test_surface_failure_names_fixed_target_and_reason(self) -> None:
-        """Preflight can discriminate a root without exposing its host source."""
-
-        runner = load_runner()
-        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
-            root = Path(temp)
-            repo_root = root / "repo"
-            exp_dir = repo_root / "outputs/group/exp"
-            upper = exp_dir / "run/.codex-upper"
-            exp_dir.mkdir(parents=True)
-            upper.mkdir(parents=True)
-            mounts = [(root / "host-usr", Path("/usr"), True)]
-            with (
-                mock.patch.object(
-                    runner, "_readonly_surface_mounts", return_value=mounts
-                ),
-                mock.patch.object(
-                    runner, "resolve_installed_skill_dirs", return_value=[]
-                ),
-                mock.patch.object(runner, "prepare_sandbox", return_value=upper),
-                mock.patch.object(
-                    runner,
-                    "discover_browser_roots",
-                    side_effect=runner.BrowserSurfaceRootError(
-                        "/usr", "mounted browser surface symlink is dangling"
-                    ),
-                ),
-            ):
-                with self.assertRaisesRegex(
-                    runner.PilotError,
-                    "at /usr: mounted browser surface symlink is dangling",
-                ):
-                    runner.prepare_nested_browser_gate(
-                        repo_root,
-                        exp_dir,
-                        [],
-                        {"HOME": str(root / "home")},
-                        mock.Mock(),
-                    )
-
-    def test_writable_browser_artifact_fails_actual_gate_preparation(self) -> None:
-        """Writable experiment/cache discovery closes before any Sidecar resource."""
-
-        runner = load_runner()
-        with tempfile.TemporaryDirectory(dir="/tmp") as temp:
-            root = Path(temp)
-            repo_root = root / "repo"
-            exp_dir = repo_root / "outputs/group/exp"
-            input_path = repo_root / "models/toys4k/input.ply"
-            gateway = repo_root / "gateway/codex-tap-gpt56"
-            skill = repo_root / "skills/fake"
-            installed = root / "home/.codex/skills"
-            capability = root / "capability"
-            (repo_root / ".venv").mkdir(parents=True)
-            exp_dir.mkdir(parents=True)
-            input_path.parent.mkdir(parents=True)
-            input_path.write_text("ply\n", encoding="utf-8")
-            gateway.parent.mkdir(parents=True)
-            gateway.write_text("#!/bin/sh\n", encoding="utf-8")
-            skill.mkdir(parents=True)
-            (skill / "SKILL.md").write_text("# fake\n", encoding="utf-8")
-            installed.mkdir(parents=True)
-            (installed / "fake").symlink_to(skill, target_is_directory=True)
-            capability.mkdir()
-            writable_browser = exp_dir / ".cache/ms-playwright/chrome"
-            writable_browser.parent.mkdir(parents=True)
-            writable_browser.write_bytes(b"\x7fELF" + b"\0" * 32)
-            writable_browser.chmod(0o755)
-            sidecar = mock.Mock(
-                capability_dir=capability,
-                job_id="formal-job-1",
-                gate_nonce="1" * 16,
-            )
-            with mock.patch.object(
-                runner, "existing_system_paths", return_value=[]
-            ):
-                with self.assertRaisesRegex(
-                    runner.PilotError,
-                    "writable Agent surface",
-                ):
-                    runner.prepare_nested_browser_gate(
-                        repo_root,
-                        exp_dir,
-                        [input_path],
-                        {"HOME": str(root / "home")},
-                        sidecar,
-                    )
-            capability_entries = list(capability.iterdir())
-
-        sidecar.start.assert_not_called()
-        sidecar.configure_nested_gate.assert_not_called()
-        self.assertEqual(capability_entries, [])
-
     def test_preflight_failure_skips_rollout_contract_and_writes_manifest(
         self,
     ) -> None:
@@ -2196,26 +1277,13 @@ class ProductionPathContractTests(unittest.TestCase):
             exp_dir = repo_root / "outputs/group/exp"
             runner = load_runner()
 
-            class FakeSidecar:
-                @classmethod
-                def create(cls, *args, **kwargs):
-                    return cls(*args, **kwargs)
-
-                def __init__(self, *args, **kwargs):
-                    pass
-
-                def start(self):
-                    return None
-
-                def close(self, *, workload_status):
-                    return {
-                        "cleanupErrors": [],
-                        "absenceProof": {"proved": True},
-                    }
-
             with (
                 mock.patch.object(runner, "REPO_ROOT", repo_root),
-                mock.patch.object(runner, "BrowserSidecarJob", FakeSidecar),
+                mock.patch.object(
+                    runner,
+                    "BrowserRuntimeJob",
+                    FakeBrowserRuntimeJob,
+                ),
                 mock.patch.object(
                     runner,
                     "build_bwrap_argv",
