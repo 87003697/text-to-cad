@@ -14,6 +14,7 @@
 # - skills/srdf/requirements.txt
 # - skills/sdf/requirements.txt
 # - skills/mesh-compare/requirements.txt
+--editable ./packages/browser_runtime
 --editable ./packages/cadpy
 --editable ./packages/cadpy_metadata
 --editable ./packages/meshscope

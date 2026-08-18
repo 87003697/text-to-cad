@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "image": {
+    "name": "text-to-cad-browser-runtime",
+    "tag": "build",
+    "id": "sha256:2010ac850361e909b967dd09df994f5d2ecde8826eaacdd23c06506d594d97e6",
+    "base_image": "mcr.microsoft.com/playwright:v1.51.1-jammy",
+    "base_id": "sha256:79da45705a7c3f147c435ac6d0beeddf2e132f53263cb27bed90beafbb2e552b",
+    "playwright_mcp_version": "0.0.79",
+    "content_size_bytes": 864328211,
+    "architecture": "amd64"
+  },
+  "built_from_ref": "6b3cb1febcaa7ca5f0f4724504e1ee2aa0206cb6",
+  "notes": "Local development build. `id` is the docker image content ID; use it as the image ref. On CVM transport via `docker save | docker load`, the same ID is preserved. Rebuild before CVM smoke to lock the final CVM-target digest."
+}
