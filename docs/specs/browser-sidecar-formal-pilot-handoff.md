@@ -209,9 +209,9 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Browser-less Broker base:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Final corrected Broker:
-  `sha256:64b260db91e3a64ec97e34ffaae0d18b2f425bf807e64fd976fd37ce93dc62cc`
+  `sha256:df78e1ead4da42dc7d7f9aaa10569cc826e8e833732424c1af925e09dd5c0a88`
 - Broker OCI revision:
-  `d4908a048339d48270fa85c2ee4ddbe5c75a606c`
+  `6954ccc6fa8780d8002863b9d1fc96a351f40b65`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
   `sha256:41766e2f35377dc00c8868780f2ce6aabfaf1c400beab20802d4335af82efdd0`
 - Platform: `linux/amd64`
