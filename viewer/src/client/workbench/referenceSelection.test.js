@@ -5,6 +5,7 @@ import {
   buildAssemblyPartCopyText,
   buildAssemblyMateCopyText,
   buildEntryLabelAliasMap,
+  fileRefPrefixForEntry,
   buildNormalizedReferenceState,
   buildReferenceCacheKey,
   buildSelectionCopyButtonLabel,
@@ -19,7 +20,8 @@ import {
   resolveTopologyRelativeFile,
   resolveViewerSelector,
   selectRequestedAssemblyComponents,
-  uniqueStringList
+  uniqueStringList,
+  withFileRefPrefix
 } from "./referenceSelection.js";
 
 const STEP_ENTRY = {
@@ -276,4 +278,62 @@ test("an unknown or duplicated label is rejected rather than guessed at", () => 
 test("an entry whose parts carry no usable labels has no alias map at all", () => {
   assert.equal(buildEntryLabelAliasMap([]), null);
   assert.equal(buildEntryLabelAliasMap([{ occurrenceId: "o1.1", name: "" }]), null);
+});
+
+test("copy text carries the entry's shortest unique path suffix", () => {
+  const entry = { ...STEP_ENTRY, fileRefPrefix: "assy.step" };
+  assert.equal(
+    buildAssemblyPartCopyText({ occurrenceId: "o1.6", name: "prism" }, entry),
+    "assy.step#o1.6"
+  );
+  assert.equal(buildAssemblyMateCopyText({ id: "m1" }, entry), "assy.step#m1");
+  assert.equal(buildWholeStepEntryCopyReference(entry).copyText, "assy.step#");
+  assert.equal(fileRefPrefixForEntry(entry), "assy.step");
+});
+
+test("an entry with no prefix emits the bare refs it always did", () => {
+  // The prefix is opt-in per call site: every existing caller that builds a minimal entry keeps
+  // producing exactly the copy text it produced before.
+  assert.equal(
+    buildAssemblyPartCopyText({ occurrenceId: "o1.6", name: "prism" }, STEP_ENTRY),
+    "#o1.6"
+  );
+  assert.equal(buildAssemblyMateCopyText({ id: "m1" }, STEP_ENTRY), "#m1");
+  assert.equal(buildWholeStepEntryCopyReference(STEP_ENTRY).copyText, "#");
+  assert.equal(fileRefPrefixForEntry(STEP_ENTRY), "");
+});
+
+test("a pasted ref for THIS file is accepted, one for another file is refused", () => {
+  const entry = { file: "models/mesh/stl/mounting_plate.stl" };
+  // Same file, named by the suffix the copy button emits.
+  assert.equal(resolveViewerSelector("mounting_plate.stl#o1.2", null, { entry }), "o1.2");
+  // Same file, named by a longer (still valid) suffix.
+  assert.equal(resolveViewerSelector("stl/mounting_plate.stl#o1.2", null, { entry }), "o1.2");
+  // A DIFFERENT file: refusing is the point. Resolving this against the open model would
+  // silently select the wrong geometry.
+  assert.equal(resolveViewerSelector("other_part.step.py#o1.2", null, { entry }), "");
+  // Segment-aligned, so a substring of the filename is not a match.
+  assert.equal(resolveViewerSelector("late.stl#o1.2", null, { entry }), "");
+  // Bare refs are unaffected, with or without an entry.
+  assert.equal(resolveViewerSelector("#o1.2", null, { entry }), "o1.2");
+  assert.equal(resolveViewerSelector("o1.2", null, {}), "o1.2");
+});
+
+test("canonical copy text keeps a file prefix instead of dropping the line", () => {
+  assert.equal(canonicalCadRefCopyText("assy.step#o1.7.1.f4 plane area=35"), "assy.step#o1.7.1.f4");
+  assert.equal(canonicalCadRefCopyText("#o1.7.1.f4 plane area=35"), "#o1.7.1.f4");
+});
+
+test("withFileRefPrefix is idempotent, which is what lets it run at one funnel", () => {
+  // Copy text arrives at the funnel from several builders: some already carry a prefix (parts
+  // and mates, built from the entry), some do not (tree-node selections). Applying this once at
+  // the end is only safe because a second application is a no-op.
+  assert.equal(withFileRefPrefix("#o1.2", "plate.stl"), "plate.stl#o1.2");
+  assert.equal(withFileRefPrefix("plate.stl#o1.2", "plate.stl"), "plate.stl#o1.2");
+  assert.equal(withFileRefPrefix("other.stl#o1.2", "plate.stl"), "other.stl#o1.2");
+  assert.equal(withFileRefPrefix("#", "plate.stl"), "plate.stl#");
+  // No prefix available, or nothing ref-like: leave it exactly as it was.
+  assert.equal(withFileRefPrefix("#o1.2", ""), "#o1.2");
+  assert.equal(withFileRefPrefix("plain text", "plate.stl"), "plain text");
+  assert.equal(withFileRefPrefix("", "plate.stl"), "");
 });

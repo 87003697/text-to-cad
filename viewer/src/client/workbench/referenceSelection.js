@@ -1,3 +1,4 @@
+import { pathHasSuffix } from "cadjs/lib/filePathSuffix.js";
 import {
   buildCadRefToken,
   buildLabelAliasMap,
@@ -8,7 +9,7 @@ import {
 } from "cadjs/lib/cadRefs.js";
 import { entryReferenceAssetSignature } from "cadjs/lib/entryAssets.js";
 import { buildSelectorRuntime } from "cadjs/lib/selectors/runtime.js";
-import { cadPathForEntry, fileKey } from "./sidebar.js";
+import { cadFileParamForEntry, cadPathForEntry, fileKey } from "./sidebar.js";
 
 export function buildReferenceCacheKey(entry) {
   const fileRef = fileKey(entry);
@@ -50,7 +51,11 @@ export function buildNormalizedReferenceState(entry, referencePayload = null, {
   // A component-GLB package has no whole-assembly selector bundle; the caller composes the
   // per-component runtimes and passes the result here instead of a single bundle to parse.
   const selectorRuntime = prebuiltSelectorRuntime || buildSelectorRuntime(referencePayload, {
-    copyCadPath: copyCadPath || cadPathForEntry(entry),
+    // fileRefPrefix is the shortest path suffix that names this entry uniquely, extension
+    // included -- the extension is what separates format siblings (plate.stl vs plate.3mf),
+    // which is why cadPathForEntry (which strips it) is NOT used here. An entry without the
+    // field emits bare "#..." exactly as before, so the prefix is opt-in per call site.
+    copyCadPath: copyCadPath || fileRefPrefixForEntry(entry),
     partId,
     transform,
     remapOccurrenceId,
@@ -232,8 +237,22 @@ export function buildEntryLabelAliasMap(parts) {
  * or ambiguous label returns "" so the caller rejects it exactly as it rejects any other
  * selector it cannot use.
  */
-export function resolveViewerSelector(selector, aliasMap = null) {
-  const text = String(selector || "").trim().replace(/^#/, "");
+export function resolveViewerSelector(selector, aliasMap = null, { entry = null } = {}) {
+  const raw = String(selector || "").trim();
+  // A pasted ref may carry a file prefix (`plate.stl#o1.2`). Strip it when it names the file
+  // that is open, and refuse when it names a different one -- resolving a foreign ref against
+  // the current model would silently select the wrong geometry.
+  let text = raw.replace(/^#/, "");
+  if (raw.includes("#")) {
+    const prefix = raw.slice(0, raw.indexOf("#")).trim();
+    if (prefix) {
+      const entryPath = cadFileParamForEntry(entry);
+      if (!entryPath || !pathHasSuffix(entryPath, prefix)) {
+        return "";
+      }
+    }
+    text = raw.slice(raw.indexOf("#") + 1).trim();
+  }
   if (!text) {
     return "";
   }
@@ -248,7 +267,9 @@ export function canonicalCadRefCopyText(text, { allowPlain = false } = {}) {
   if (!normalizedText) {
     return "";
   }
-  if (!normalizedText.startsWith("#")) {
+  // Copy text now may be `<file>#<refs>`, so a bare startsWith("#") test would reject exactly
+  // what the copy buttons produce.
+  if (!normalizedText.includes("#")) {
     return allowPlain ? normalizedText : "";
   }
   const token = normalizedText.split(/\s+/)[0];
@@ -292,9 +313,27 @@ export function copySelectedReferenceText(references) {
   };
 }
 
-export function buildAssemblyPartCopyText(part, entry) {
-  void entry;
+/**
+ * Put `prefix` in front of a copy line that has none, leaving one that already has a prefix
+ * alone. Idempotent on purpose: copy text reaches the clipboard through several builders, and
+ * applying this at the one funnel they all pass through is what keeps them consistent without
+ * threading an entry through every one of them.
+ */
+export function withFileRefPrefix(line, prefix) {
+  const text = String(line || "").trim();
+  const filePrefix = String(prefix || "").trim();
+  if (!text || !filePrefix || !text.includes("#")) {
+    return text;
+  }
+  return text.startsWith("#") ? `${filePrefix}${text}` : text;
+}
 
+/** The file prefix a copied ref should carry, or "" when the entry has none. */
+export function fileRefPrefixForEntry(entry) {
+  return String(entry?.fileRefPrefix || "").trim();
+}
+
+export function buildAssemblyPartCopyText(part, entry) {
   const selector = [
     part?.displaySelector,
     part?.occurrenceId,
@@ -308,9 +347,7 @@ export function buildAssemblyPartCopyText(part, entry) {
   if (!selector) {
     return "";
   }
-  return buildCadRefToken({
-    selector
-  });
+  return buildCadRefToken({ cadPath: fileRefPrefixForEntry(entry), selector });
 }
 
 export function buildWholeStepEntryCopyReference(entry) {
@@ -319,7 +356,8 @@ export function buildWholeStepEntryCopyReference(entry) {
   }
   return {
     id: "step-entry:whole",
-    copyText: buildCadRefToken()
+    // `<prefix>#` names the whole file; with no prefix this stays the bare "#" it always was.
+    copyText: buildCadRefToken({ cadPath: fileRefPrefixForEntry(entry) })
   };
 }
 
@@ -328,12 +366,11 @@ export function buildAssemblyMateSelector(mate) {
 }
 
 export function buildAssemblyMateCopyText(mate, entry) {
-  void entry;
   const selector = buildAssemblyMateSelector(mate);
   if (!selector) {
     return "";
   }
-  return buildCadRefToken({ selector });
+  return buildCadRefToken({ cadPath: fileRefPrefixForEntry(entry), selector });
 }
 
 export function buildSelectionCopyPayload({ references = [], parts = [], mates = [], entry = null } = {}) {

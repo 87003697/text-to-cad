@@ -131,6 +131,7 @@ import {
   buildSelectionCopyPayload,
   buildWholeStepEntryCopyReference,
   canonicalCadRefCopyText,
+  withFileRefPrefix,
   computeNextSelectionIds,
   orderedStringListEqual,
   parseAssemblyPartReferenceSelectionId,
@@ -246,6 +247,7 @@ import {
   writeCadParam,
 } from "@/workbench/sidebar";
 import { buildCadRefToken, isNativeCadSelector } from "cadjs/lib/cadRefs.js";
+import { shortestUniquePathSuffixes } from "cadjs/lib/filePathSuffix.js";
 import {
   applyUrdfPoseToMeshData,
   buildDefaultUrdfJointValues,
@@ -1511,11 +1513,25 @@ export default function CadWorkspace({
   );
   // While the artifact is missing/stale/building/broken, hide the (possibly stale) render assets so
   // the viewer shows a loading or error state and renders only the fresh artifact once ready.
+  // The shortest path suffix that names each catalog entry uniquely -- almost always just the
+  // filename. Copied refs carry it so they still say which file they belong to when pasted
+  // into a prompt spanning several files, without the length of a full relative path.
+  const fileRefPrefixByPath = useMemo(
+    () => shortestUniquePathSuffixes(catalogEntries.map((entry) => cadFileParamForEntry(entry))),
+    [catalogEntries]
+  );
   const selectedEntry = useMemo(
-    () => (!catalogSelectedEntry || selectedArtifact.status === "ready"
-      ? catalogSelectedEntry
-      : entryWithoutRenderAssets(catalogSelectedEntry)),
-    [catalogSelectedEntry, selectedArtifact.status]
+    () => {
+      const base = !catalogSelectedEntry || selectedArtifact.status === "ready"
+        ? catalogSelectedEntry
+        : entryWithoutRenderAssets(catalogSelectedEntry);
+      if (!base) {
+        return base;
+      }
+      const fileRefPrefix = fileRefPrefixByPath.get(cadFileParamForEntry(base)) || "";
+      return fileRefPrefix ? { ...base, fileRefPrefix } : base;
+    },
+    [catalogSelectedEntry, selectedArtifact.status, fileRefPrefixByPath]
   );
   // Cache states never become user-facing "issues"; only a fatal build/source failure does.
   const selectedStepSourceStatus = selectedArtifact.status === "error"
@@ -6444,11 +6460,16 @@ export default function CadWorkspace({
     stepTreeCopyReferenceMap,
     stepTreeRoot
   ]);
+  // Every copied line funnels through here, from all three of the copy builders above and the
+  // selector runtime, so the file prefix is applied once at this point rather than threaded
+  // through each of them. withFileRefPrefix is idempotent, so lines that already carry one
+  // (parts and mates, which are built from the entry) pass through untouched.
   const canonicalCopySelectionLines = useMemo(
     () => copySelectionPayload.lines
       .map((line) => canonicalCadRefCopyText(line))
+      .map((line) => withFileRefPrefix(line, selectedEntry?.fileRefPrefix))
       .filter(Boolean),
-    [copySelectionPayload.lines]
+    [copySelectionPayload.lines, selectedEntry]
   );
   const copyButtonLabel = useMemo(
     () => buildSelectionCopyButtonLabel(canonicalCopySelectionLines, { count: copySelectionPayload.copiedCount }),

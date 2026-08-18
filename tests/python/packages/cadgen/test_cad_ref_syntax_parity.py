@@ -13,7 +13,14 @@ import unittest
 
 from tests.python.support.paths import repo_path
 
-from cadgen.cad_ref_syntax import normalize_selector_list, parse_selector
+from cadgen.cad_ref_syntax import (
+    build_cad_token,
+    ensure_ref_file_matches,
+    normalize_selector_list,
+    parse_cad_tokens,
+    parse_selector,
+    path_has_suffix,
+)
 
 
 FIXTURE_PATH = repo_path("packages", "cadjs", "src", "lib", "cadRefs.parity.json")
@@ -100,3 +107,89 @@ class BackwardsCompatibilityTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TokenParityTest(unittest.TestCase):
+    """The token layer: `<file>#<selectors>`.
+
+    The prefix half of the token was always in the grammar's shape -- ParsedToken has carried a
+    `cad_path` field filled with "" since it was written -- and this is where it gets populated.
+    It sits LEFT of the '#', which is why it cannot collide with the selector grammar: labels,
+    their ':' qualifiers, and entity dots all live on the right.
+    """
+
+    def test_every_token_case_parses_as_the_fixture_says(self) -> None:
+        for case in _fixture()["tokenCases"]:
+            with self.subTest(text=case["text"], why=case.get("why", "")):
+                tokens = parse_cad_tokens(case["text"])
+                if case["selectors"] is None:
+                    self.assertEqual([], tokens, "text without '#' is not a token")
+                    continue
+                self.assertEqual(1, len(tokens), f"expected one token from {case['text']!r}")
+                self.assertEqual(case["cadPath"], tokens[0].cad_path)
+                self.assertEqual(case["selectors"], list(tokens[0].selectors))
+
+    def test_a_token_round_trips_through_build_cad_token(self) -> None:
+        # build_cad_token took a cad_path and discarded it (`_ = cad_path`). It no longer does,
+        # so what the viewer copies is what the grammar parses.
+        self.assertEqual("plate.stl#o1.2", build_cad_token("plate.stl", "o1.2"))
+        self.assertEqual("#o1.2", build_cad_token("", "o1.2"))
+        self.assertEqual("plate.stl#", build_cad_token("plate.stl", ""))
+        self.assertEqual("#", build_cad_token("", ""))
+
+
+class TokenBackwardsCompatibilityTest(unittest.TestCase):
+    def test_bare_tokens_are_untouched(self) -> None:
+        for text in ("#o1", "#o1.2.f3", "#f45", "#m1", "#", "#o1.2,f3"):
+            with self.subTest(text=text):
+                tokens = parse_cad_tokens(text)
+                self.assertEqual(1, len(tokens))
+                self.assertEqual("", tokens[0].cad_path, f"{text} must carry no file prefix")
+
+
+class RefFileGuardTest(unittest.TestCase):
+    """A ref's file prefix must match the file the command is looking at, or be refused.
+
+    CLIs never resolve a prefix to a path -- the agent does that and passes the file separately.
+    What a CLI must do is refuse a prefix naming some OTHER file, because the alternative is
+    inspecting the file it was pointed at and reporting a confident answer about geometry the
+    user did not ask about.
+    """
+
+    TARGET = "models/step/assemblies/motorcycle_shock_absorber"
+
+    def test_matching_prefixes_pass_in_every_spelling(self) -> None:
+        for prefix in (
+            "motorcycle_shock_absorber.step.py",
+            "motorcycle_shock_absorber.step",
+            "motorcycle_shock_absorber",
+            "assemblies/motorcycle_shock_absorber.step.py",
+            "models/step/assemblies/motorcycle_shock_absorber",
+        ):
+            with self.subTest(prefix=prefix):
+                ensure_ref_file_matches(prefix, self.TARGET)
+
+    def test_an_empty_prefix_is_always_fine(self) -> None:
+        ensure_ref_file_matches("", self.TARGET)
+
+    def test_a_foreign_file_is_refused_and_the_message_names_both(self) -> None:
+        with self.assertRaises(ValueError) as raised:
+            ensure_ref_file_matches("other_part.step.py", self.TARGET)
+        message = str(raised.exception)
+        self.assertIn("other_part.step.py", message)
+        self.assertIn("motorcycle_shock_absorber", message)
+
+    def test_matching_is_segment_aligned_not_substring(self) -> None:
+        # `absorber.step.py` is a substring of the target's filename but not a path segment;
+        # accepting it would resolve a ref to a file the user never named.
+        with self.assertRaises(ValueError):
+            ensure_ref_file_matches("absorber.step.py", self.TARGET)
+        with self.assertRaises(ValueError):
+            ensure_ref_file_matches("other/motorcycle_shock_absorber", self.TARGET)
+
+    def test_path_has_suffix_is_segment_aligned(self) -> None:
+        self.assertTrue(path_has_suffix("a/b/plate.stl", "plate.stl"))
+        self.assertTrue(path_has_suffix("a/b/plate.stl", "b/plate.stl"))
+        self.assertFalse(path_has_suffix("a/b/plate.stl", "late.stl"))
+        self.assertFalse(path_has_suffix("plate.stl", "a/plate.stl"))
+        self.assertFalse(path_has_suffix("a/b/plate.stl", ""))

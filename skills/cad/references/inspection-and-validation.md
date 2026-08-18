@@ -28,7 +28,7 @@ A `<name>.step.py` generator target resolves to the same entry as its logical `<
 
 Selector-backed queries (`refs --facts`, planes, measures) on generated assemblies extract whole-model topology on demand and cache it as `topology.glb` inside the entry's render package; repeat queries read the cache (seconds instead of a full re-extraction) until the package is rebuilt, which invalidates the sidecar.
 
-Selector refs are local to the STEP/CAD entry target passed to the command. They do not include file paths:
+Selector refs are local to the STEP/CAD entry target passed to the command:
 
 ```text
 #o1.2
@@ -37,6 +37,48 @@ Selector refs are local to the STEP/CAD entry target passed to the command. They
 ```
 
 Pass selector refs as `#...` tokens. The STEP/CAD file path or entry target is a separate CLI argument.
+
+### File-prefixed refs (the CAD Viewer copy format)
+
+A ref copied from the CAD Viewer carries the file it came from, so it stays meaningful in a
+prompt that spans several files:
+
+```text
+bracket.step.py#o1.2.f1
+starship/super_heavy.step.py#o1.3
+mounting_plate.stl#
+```
+
+The prefix is the **shortest path suffix that names exactly one file** — the filename with its
+extension for almost every model, plus as many leading directories as it takes to be unique.
+The extension is always part of it, because `plate.step.py`, `plate.stl` and `plate.3mf` are
+different files. A prefix with no selectors after the `#` names the whole file.
+
+**These CLIs do not resolve prefixes. You do.** When you receive a file-prefixed ref:
+
+1. Split it at the first `#`. The left side is the file prefix; the right side is the ref.
+2. Resolve the prefix to a real path by matching it against project files as a **path suffix
+   on segment boundaries** — `git ls-files '*<prefix>'`, or a glob. `plate.stl` matches
+   `models/mesh/stl/plate.stl`; it must not match `mounting_plate.stl`.
+3. Pass the resolved path as the entry/input argument and the `#...` part as the ref, exactly
+   as you would for a bare ref.
+
+```bash
+# received: bracket.step.py#o1.2.f1
+python scripts/inspect refs models/step/parts/bracket.step.py '#o1.2.f1'
+```
+
+Passing the prefixed ref through unsplit also works **when the prefix names the file the
+command already targets** — the CLI strips it. A prefix naming a *different* file is a hard
+error, never ignored: silently inspecting the file the command was pointed at would produce a
+confident answer about geometry nobody asked about.
+
+```text
+ref 'other_part.step.py#o1.2' names file 'other_part.step.py' but this command targets
+'models/step/parts/bracket'; pass the file as the entry argument and the '#...' part as the ref
+```
+
+Bare `#...` refs are unchanged and work everywhere they always did.
 
 ### Referencing a part by its label
 
