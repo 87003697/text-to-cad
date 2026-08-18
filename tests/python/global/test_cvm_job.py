@@ -643,6 +643,81 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
         self.assertIn("VENUS_TOKEN_SLOT='1'", command)
         self.assertNotIn("secret-", command)
 
+    def test_submit_model_slot_combines_with_token_slot(self) -> None:
+        fake_bin = self.workspace / "model-bin"
+        fake_bin.mkdir()
+        command_log = self.workspace / "model-commands.log"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$CVM_WRAPPER_LOG"
+printf '%s\n' '{"job":"group/exp","state":"submitted"}'
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_WRAPPER_LOG": os.fspath(command_log),
+        }
+        result = subprocess.run(
+            [
+                os.fspath(SUBMIT_SCRIPT),
+                "pilot",
+                "airplane",
+                "20260805-170000-audit",
+                "--token-slot",
+                "1",
+                "--model",
+                "gpt-5.5",
+            ],
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        command = command_log.read_text(encoding="utf-8")
+        self.assertIn("VENUS_TOKENS[1]", command)
+        self.assertIn("VENUS_TOKEN_SLOT='1'", command)
+        self.assertIn("MODEL='gpt-5.5'", command)
+
+    def test_submit_rejects_unlisted_model_without_ssh(self) -> None:
+        fake_bin = self.workspace / "invalid-model-bin"
+        fake_bin.mkdir()
+        marker = self.workspace / "invalid-model-ssh-called"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+touch "$CVM_SSH_MARKER"
+exit 99
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_SSH_MARKER": os.fspath(marker),
+        }
+        result = subprocess.run(
+            [
+                os.fspath(SUBMIT_SCRIPT),
+                "pilot",
+                "airplane",
+                "20260805-170000-audit",
+                "--model",
+                "gpt-unknown;touch-pwned",
+            ],
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(marker.exists())
+
     def test_submit_rejects_noncanonical_token_slot_without_ssh(self) -> None:
         fake_bin = self.workspace / "invalid-slot-bin"
         fake_bin.mkdir()
