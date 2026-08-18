@@ -17,6 +17,13 @@ const pluginInstallCommands = [
     command:
       "claude plugin marketplace add earthtojake/text-to-cad\nclaude plugin install cad@text-to-cad",
   },
+  // Grok Build reads the same .claude-plugin/marketplace.json as Claude Code -- there is no
+  // separate Grok manifest -- and installs straight from the repo rather than adding a
+  // marketplace first, so it is one command, not two.
+  {
+    agent: "Grok Build",
+    command: "grok plugin install earthtojake/text-to-cad --trust",
+  },
 ];
 
 const skillGroups = [
