@@ -743,7 +743,7 @@ export default function CadRenderPane({
               type="button"
               variant="default"
               size="sm"
-              className="pointer-events-auto h-9 w-fit min-w-0 max-w-[min(28rem,100%)] shrink overflow-hidden border border-primary/20 bg-primary/85 px-4 text-[12px] font-semibold text-primary-foreground shadow-lg shadow-black/20 hover:bg-primary/75 focus-visible:ring-primary/35 max-sm:w-full max-sm:pr-32"
+              className="pointer-events-auto h-9 w-fit min-w-0 max-w-full sm:max-w-[min(28rem,calc(100%-16rem))] shrink overflow-hidden border border-primary/20 bg-primary/85 px-4 text-[12px] font-semibold text-primary-foreground shadow-lg shadow-black/20 hover:bg-primary/75 focus-visible:ring-primary/35 max-sm:w-full max-sm:pr-32"
               disabled={ctaDisabled}
               onClick={() => {
                 if (ctaMode === "screenshot") {
