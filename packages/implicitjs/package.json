@@ -39,7 +39,7 @@
   "dependencies": {
     "gifenc": "^1.0.3",
     "playwright": "^1.52.0",
-    "three": "0.160.0"
+    "three": "0.161.0"
   },
   "devDependencies": {
     "meshoptimizer": "^1.2.0"
