@@ -86,13 +86,19 @@ const skillGroups = [
   },
 ];
 
+// Command boxes cap at half the 1200px content shell rather than filling it: a command is a
+// short line, and a full-bleed box puts a lot of empty card to the right of it. A cap, not a
+// width -- a narrow screen still gets the whole column.
+const COMMAND_BOX_CLASS =
+  "min-w-0 max-w-[min(600px,100%)] overflow-hidden border border-border bg-card";
+
 function InstallCommand({
   item,
 }: {
   item: (typeof pluginInstallCommands)[number];
 }) {
   return (
-    <div className="min-w-0 max-w-full overflow-hidden border border-border bg-card">
+    <div className={COMMAND_BOX_CLASS}>
       <div className="border-b border-border px-3 py-2 text-label uppercase tracking-[1.5px] text-muted-foreground">
         {item.agent}
       </div>
@@ -122,7 +128,7 @@ function InstallCommands() {
 
 function SkillsInstallCommand() {
   return (
-    <div className="min-w-0 max-w-full overflow-hidden border border-border bg-card">
+    <div className={COMMAND_BOX_CLASS}>
       <div className="flex min-h-[54px] min-w-0 max-w-full items-stretch">
         <code className="flex min-w-0 flex-1 items-center overflow-x-auto whitespace-pre px-3 py-2 text-sm leading-6 text-foreground">
           {skillsInstallCommand}

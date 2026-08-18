@@ -971,7 +971,7 @@ function VersionReleaseLink({ version, releaseUrl, releaseCheck = emptyLatestRel
             />
           )}
           <div className="flex min-w-0 flex-col gap-1.5">
-            <div className="px-0.5 text-[11px] font-medium leading-none text-muted-foreground">Update Command</div>
+            <div className="px-0.5 text-[11px] font-medium leading-none text-muted-foreground">In your terminal</div>
             <div className="flex h-8 min-w-0 items-center gap-2 rounded-sm border border-border/60 bg-muted/35 p-1 pl-2">
               <code className="min-w-0 flex-1 whitespace-nowrap font-mono text-[11px] leading-5 text-foreground">
                 {installCommand}
@@ -998,9 +998,13 @@ function VersionReleaseLink({ version, releaseUrl, releaseCheck = emptyLatestRel
             <div className="px-0.5 text-[11px] font-medium leading-none text-muted-foreground">
               Or ask your agent
             </div>
-            <div className="flex h-8 min-w-0 items-center gap-2 rounded-sm border border-border/60 bg-muted/35 p-1 pl-2">
-              <span className="min-w-0 flex-1 truncate text-[11px] leading-5 text-foreground">
-                Update the text-to-cad skills
+            {/* Shows the message VERBATIM, wrapped rather than truncated: the row above it is
+                the literal command it copies, so a summarised label here reads as though the
+                agent were being sent something vaguer than the terminal option. It is not --
+                the same command is in it. The width cap is what makes it wrap. */}
+            <div className="flex min-h-8 min-w-0 items-center gap-2 rounded-sm border border-border/60 bg-muted/35 p-1 pl-2">
+              <span className="min-w-0 max-w-[15.5rem] flex-1 text-[11px] leading-4 text-foreground">
+                {updatePrompt}
               </span>
               <Button
                 type="button"
