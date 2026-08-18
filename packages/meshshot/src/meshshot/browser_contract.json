@@ -69,6 +69,6 @@
   },
   "requestSchema": "meshshot.browser-sidecar.render-request/3",
   "responseSchema": "meshshot.browser-sidecar.render-response/1",
-  "sidecarImageId": "sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
+  "sidecarImageId": "sha256:071d17155480044647e94aee933200bff4fe8d4e8fcc92603828062a478537e5",
   "socketPath": "/run/meshshot-browser/browser.sock"
 }

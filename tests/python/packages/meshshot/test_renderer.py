@@ -68,7 +68,7 @@ class ResidualRendererTests(unittest.TestCase):
                         "jobId": "formal-job-1",
                         "gateNonce": "a" * 32,
                         "imageId": "sha256:"
-                        + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
+                        + "071d17155480044647e94aee933200bff4fe8d4e8fcc92603828062a478537e5",
                         "programs": {
                             "residual": "06d7fe1efae38aeeb7252a9f81683fc97b4b914d4a9fbd79169b2d58e95fa491",
                             "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
@@ -106,7 +106,7 @@ class ResidualRendererTests(unittest.TestCase):
                         "jobId": "formal-job-1",
                         "gateNonce": "a" * 32,
                         "imageId": "sha256:"
-                        + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
+                        + "071d17155480044647e94aee933200bff4fe8d4e8fcc92603828062a478537e5",
                         "programs": {
                             "residual": "06d7fe1efae38aeeb7252a9f81683fc97b4b914d4a9fbd79169b2d58e95fa491",
                             "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
@@ -123,7 +123,7 @@ class ResidualRendererTests(unittest.TestCase):
                 "schema": "meshshot.browser-sidecar.render-response/1",
                 "jobId": "formal-job-1",
                 "imageId": "sha256:"
-                + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
+                + "071d17155480044647e94aee933200bff4fe8d4e8fcc92603828062a478537e5",
                 "program": "residual",
                 "result": {
                     "ok": True,
@@ -229,7 +229,7 @@ class ResidualRendererTests(unittest.TestCase):
                         "jobId": "formal-job-1",
                         "gateNonce": "a" * 32,
                         "imageId": "sha256:"
-                        + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
+                        + "071d17155480044647e94aee933200bff4fe8d4e8fcc92603828062a478537e5",
                         "programs": {
                             "residual": "06d7fe1efae38aeeb7252a9f81683fc97b4b914d4a9fbd79169b2d58e95fa491",
                             "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",

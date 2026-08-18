@@ -203,9 +203,9 @@ the session JSONL. The dirty `develop` root was not used or modified.
 ## Exact artifact identities
 
 - Sidecar:
-  `sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1`
+  `sha256:071d17155480044647e94aee933200bff4fe8d4e8fcc92603828062a478537e5`
 - Sidecar source revision:
-  `1abe4c97929906b5c0b28b0f3f38857bd923952f`
+  `e465dc3659a08c45248fdb06ea0ab21397c6330f`
 - Browser-less Broker base:
   `sha256:a2dae48401a6918a15e68a97c4c0290ba6a58ec47a3448498aec12885be46373`
 - Final corrected Broker:
@@ -213,7 +213,7 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Broker OCI revision:
   `d4908a048339d48270fa85c2ee4ddbe5c75a606c`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:3d97a314dad3f75630238d89602927812f32bae4529c0f3c11118cd0bd8cd33f`
+  `sha256:41766e2f35377dc00c8868780f2ce6aabfaf1c400beab20802d4335af82efdd0`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with
