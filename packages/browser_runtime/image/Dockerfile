@@ -15,7 +15,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PW_MCP_VERSION=0.0.79 \
     PW_MCP_HOST=0.0.0.0 \
     PW_MCP_PORT=9223 \
-    NODE_ENV=production
+    NODE_ENV=production \
+    PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0
 
 RUN npm install --global --omit=dev @playwright/mcp@0.0.79
 
