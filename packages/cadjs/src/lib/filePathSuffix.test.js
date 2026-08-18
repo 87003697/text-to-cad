@@ -13,8 +13,8 @@ test("a filename that is unique in the tree is the whole suffix", () => {
   ]);
   // `.step` is dropped from the displayed name; the `.py` that remains still says it is a
   // generator rather than a mesh.
-  assert.equal(suffixes.get("models/step/assemblies/motorcycle_shock_absorber.step.py"), "motorcycle_shock_absorber.py");
-  assert.equal(suffixes.get("models/step/parts/print_in_place_hinge.step.py"), "print_in_place_hinge.py");
+  assert.equal(suffixes.get("models/step/assemblies/motorcycle_shock_absorber.step.py"), "motorcycle_shock_absorber");
+  assert.equal(suffixes.get("models/step/parts/print_in_place_hinge.step.py"), "print_in_place_hinge");
 });
 
 test("format siblings stay distinct because the extension is kept", () => {
@@ -29,7 +29,7 @@ test("format siblings stay distinct because the extension is kept", () => {
   const suffixes = shortestUniquePathSuffixes(paths);
   assert.deepEqual(
     paths.map((path) => suffixes.get(path)),
-    ["mounting_plate.py", "mounting_plate.stl", "mounting_plate.3mf", "mounting_plate.glb"]
+    ["mounting_plate", "mounting_plate.stl", "mounting_plate.3mf", "mounting_plate.glb"]
   );
 });
 
@@ -40,9 +40,9 @@ test("a genuinely colliding filename gains directory segments until it is unique
     "models/renders/falcon_heavy/super_heavy.step.py",
     "models/step/parts/unique_part.step.py"
   ]);
-  assert.equal(suffixes.get("models/renders/starship/super_heavy.step.py"), "starship/super_heavy.py");
-  assert.equal(suffixes.get("models/renders/falcon_heavy/super_heavy.step.py"), "falcon_heavy/super_heavy.py");
-  assert.equal(suffixes.get("models/step/parts/unique_part.step.py"), "unique_part.py");
+  assert.equal(suffixes.get("models/renders/starship/super_heavy.step.py"), "starship/super_heavy");
+  assert.equal(suffixes.get("models/renders/falcon_heavy/super_heavy.step.py"), "falcon_heavy/super_heavy");
+  assert.equal(suffixes.get("models/step/parts/unique_part.step.py"), "unique_part");
 });
 
 test("three-way collisions keep growing until unique", () => {
@@ -51,10 +51,10 @@ test("three-way collisions keep growing until unique", () => {
     "b/shared/part.step",
     "c/shared/part.step"
   ]);
-  // A raw STEP shows with no extension at all.
-  assert.equal(suffixes.get("a/shared/part.step"), "a/shared/part");
-  assert.equal(suffixes.get("b/shared/part.step"), "b/shared/part");
-  assert.equal(suffixes.get("c/shared/part.step"), "c/shared/part");
+  // A raw STEP keeps its .step, which is what distinguishes it from the generator.
+  assert.equal(suffixes.get("a/shared/part.step"), "a/shared/part.step");
+  assert.equal(suffixes.get("b/shared/part.step"), "b/shared/part.step");
+  assert.equal(suffixes.get("c/shared/part.step"), "c/shared/part.step");
 });
 
 test("adding a colliding file lengthens the incumbent's suffix", () => {
@@ -82,11 +82,13 @@ test("duplicate and windows-style paths normalize rather than colliding with the
   assert.equal(suffixes.get("models/a/plate.stl"), "plate.stl");
 });
 
-test("`.step` is dropped from the displayed name, other formats keep theirs", () => {
-  assert.equal(refDisplayName("bracket.step.py"), "bracket.py");
-  assert.equal(refDisplayName("bracket.stp.py"), "bracket.py");
-  assert.equal(refDisplayName("bracket.step"), "bracket");
-  assert.equal(refDisplayName("bracket.stp"), "bracket");
+test("a generator shows as a bare stem; every other file keeps its suffix", () => {
+  // Generators are the common case, so they get the shortest name. The raw STEP keeps `.step`,
+  // which is exactly what tells `bracket.step` apart from the `bracket.step.py` that builds it.
+  assert.equal(refDisplayName("bracket.step.py"), "bracket");
+  assert.equal(refDisplayName("bracket.stp.py"), "bracket");
+  assert.equal(refDisplayName("bracket.step"), "bracket.step");
+  assert.equal(refDisplayName("bracket.stp"), "bracket.stp");
   // Meshes and drawings are not STEP, so their extension is the thing that identifies them.
   assert.equal(refDisplayName("plate.stl"), "plate.stl");
   assert.equal(refDisplayName("plate.3mf"), "plate.3mf");

@@ -6,17 +6,18 @@
  * put in front of every ref. The shortest trailing run of path segments that names exactly one
  * entry is almost always just the filename.
  *
- * Keeping the format extension is what makes that true. Across the repo's model tree, bare
- * stems collide for 71 of 315 names — `mounting_plate` exists as `.step.py`, `.stl`, `.3mf`
- * and `.glb` — while the displayed filename collides for only 3 of 415. Format siblings are
- * the dominant collision and the extension is exactly what separates them.
+ * A `.step.py` generator shows as a bare stem — `bracket.step.py` is just `bracket` — because
+ * generators are what people actually work in, so the common case gets the shortest name. A raw
+ * `bracket.step` keeps its suffix, which is what tells the two apart.
  *
- * `.step` itself is dropped, because STEP is the default subject of the whole tool and the
- * word earns nothing in a ref: `bracket.step.py` shows as `bracket.py`, raw `bracket.step` as
- * `bracket`. That costs no uniqueness — both schemes leave the same three filenames colliding
- * — but it does mean a displayed name is NOT a literal path suffix, so resolving one back to a
- * file means expanding it -- `<name>.py` widens to `<name>.step.py` -- rather than matching it
- * verbatim. cadgen.cad_ref_syntax owns that expansion, since the CLI guard is its only caller.
+ * Meshes and drawings keep their extension too, and that is what makes the stripping safe:
+ * `mounting_plate` (the generator) and `mounting_plate.stl` stay distinct. Stripping extensions
+ * from EVERYTHING would collide 71 of 315 names in this repo; this scheme collides 6 of 407,
+ * exactly the same three filenames as keeping them in full.
+ *
+ * The cost is that a bare displayed name is NOT a literal path suffix, so resolving one back to
+ * a file means expanding it (`bracket` -> `bracket.step.py`) rather than matching verbatim.
+ * cadgen.cad_ref_syntax owns that expansion, since the CLI guard is its only caller.
  *
  * Emission is allowed to drift: adding a file that collides lengthens another entry's suffix.
  * Acceptance is not, which is why resolvers match any unambiguous suffix rather than only the
@@ -31,24 +32,18 @@ function segmentsOf(path) {
     .filter(Boolean);
 }
 
-// `.step` carries no information in a ref -- STEP is the default subject of the whole tool -- so
-// it is dropped from the displayed name: `bracket.step.py` shows as `bracket.py`, and a raw
-// `bracket.step` shows as `bracket`. What remains still separates the format families, which is
-// the job the extension was kept for: on this repo's tree both schemes leave exactly the same
-// three filenames colliding, so this costs nothing in uniqueness.
-const STEP_DISPLAY_SUFFIXES = [
-  [".step.py", ".py"],
-  [".stp.py", ".py"],
-  [".step", ""],
-  [".stp", ""]
-];
+// Only the generator suffix is stripped. `.step`, `.stp`, `.stl`, `.3mf`, `.glb` and `.dxf`
+// all keep theirs -- for meshes because the extension is what identifies them, and for raw
+// STEP because it is what distinguishes `bracket.step` from the `bracket.step.py` that builds
+// it.
+const GENERATOR_SUFFIXES = [".step.py", ".stp.py"];
 
-/** The name a ref shows for this file: `bracket.step.py` -> `bracket.py`, `x.step` -> `x`. */
+/** The name a ref shows: `bracket.step.py` -> `bracket`; every other file keeps its suffix. */
 export function refDisplayName(fileName) {
   const name = String(fileName || "").trim();
-  for (const [suffix, replacement] of STEP_DISPLAY_SUFFIXES) {
+  for (const suffix of GENERATOR_SUFFIXES) {
     if (name.toLowerCase().endsWith(suffix)) {
-      return name.slice(0, name.length - suffix.length) + replacement;
+      return name.slice(0, name.length - suffix.length);
     }
   }
   return name;

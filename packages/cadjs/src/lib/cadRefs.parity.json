@@ -410,8 +410,8 @@
     {
       "phase": 2,
       "why": "directory-qualified prefix; `.step` is dropped so a generator shows as .py",
-      "text": "starship/super_heavy.py#o1.3",
-      "cadPath": "starship/super_heavy.py",
+      "text": "starship/super_heavy#o1.3",
+      "cadPath": "starship/super_heavy",
       "selectors": [
         "o1.3"
       ]
@@ -419,8 +419,8 @@
     {
       "phase": 2,
       "why": "prefix + comma list; inheritance still applies inside the token",
-      "text": "plate.step.py#o1.2,f3,f4",
-      "cadPath": "plate.step.py",
+      "text": "plate#o1.2,f3,f4",
+      "cadPath": "plate",
       "selectors": [
         "o1.2",
         "o1.2.f3",
@@ -437,17 +437,17 @@
     {
       "phase": 2,
       "why": "a label selector behind a prefix \u2014 the two features compose",
-      "text": "shock.step.py#eye_shank.f45",
-      "cadPath": "shock.step.py",
+      "text": "shock#eye_shank.f45",
+      "cadPath": "shock",
       "selectors": [
         "eye_shank.f45"
       ]
     },
     {
       "phase": 2,
-      "why": "the prefix is kept RAW by the parser; expanding .py back to .step.py is resolution's job",
-      "text": "a/b/c.py#o1",
-      "cadPath": "a/b/c.py",
+      "why": "the prefix is kept RAW by the parser; expanding a bare stem to .step.py is resolution's job",
+      "text": "a/b/c#o1",
+      "cadPath": "a/b/c",
       "selectors": [
         "o1"
       ]

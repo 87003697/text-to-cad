@@ -23,12 +23,12 @@ Load this only when a task needs Viewer file-support details or UI control guida
 - Theme sidebar: a "Preset" dropdown (System, then the built-in presets, each with a two-box swatch showing its backdrop and default part colour) followed by the settings groups. Presets are read-only and there is only one custom theme: editing any setting writes it into that single custom slot and the dropdown reads "Custom", and picking a preset again is how you reset. Custom is a state, not a list entry — you leave it by choosing a preset. There is no save, restore, rename, or delete.
 - Sidebars: the file sheet and the theme sidebar are mutually exclusive. Each navbar button toggles its own sidebar; opening one replaces the other, and closing one leaves nothing open.
 - Copied references carry their file: the Viewer prefixes every copied ref with the shortest
-  path suffix that names that file uniquely (`bracket.py#o1.2.f1`, or
-  `starship/super_heavy.py#o1.3` where a filename is not unique), so a ref pasted into a prompt
-  still says which model it belongs to. `.step` is dropped from the name — a `bracket.step.py`
-  generator shows as `bracket.py` and a raw `bracket.step` as `bracket` — while non-STEP
-  formats keep their extension (`plate.stl`, `plate.3mf`). That means the prefix is NOT a
-  literal path suffix, so resolving one back to a file means expanding it; the CAD skill's
+  path suffix that names that file uniquely (`bracket#o1.2.f1`, or
+  `starship/super_heavy#o1.3` where a filename is not unique), so a ref pasted into a prompt
+  still says which model it belongs to. A `.step.py` generator shows as a bare stem — the common
+  case, so it gets the shortest name — while everything else keeps its suffix (`bracket.step`,
+  `plate.stl`, `plate.3mf`). That means a bare stem is NOT a literal path suffix, so resolving
+  one back to a file means expanding it; the CAD skill's
   `references/inspection-and-validation.md` documents the split-and-expand steps. Bare `#...`
   refs remain valid everywhere.
 - Tutorial tips: the first time a selection produces a copyable reference — a component, a subassembly, or a face/edge — a one-shot tip above the "Copy #…" button explains that references can be pasted into prompts to edit specific parts. Only its X closes it; clicking away, Escape, and reloads leave it to reappear on the next selection, and once dismissed it never returns. Append `?resetTips=1` to a Viewer URL to clear the record and re-arm every tip; the param applies once and is stripped from the address bar.

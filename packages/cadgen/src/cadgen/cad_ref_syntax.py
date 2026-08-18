@@ -99,21 +99,17 @@ def path_has_suffix(path: str, suffix: str) -> bool:
 def _ref_display_candidates(display_name: str) -> set[str]:
     """Every real path a displayed ref prefix could name.
 
-    A ref drops ``.step``, so ``bracket.py`` is what the Viewer shows for ``bracket.step.py``
-    and a bare ``bracket`` is what it shows for ``bracket.step``. Neither is a literal suffix of
-    the file it names, so matching one means expanding it back. Mirrors
-    ``refDisplayNameCandidates`` in ``cadjs/lib/filePathSuffix.js``.
+    A ref shows a ``.step.py`` generator as a bare stem, so ``bracket`` is what the Viewer emits
+    for ``bracket.step.py``. Every other file keeps its suffix and is already literal, which is
+    why only the bare form expands. Mirrors ``refDisplayName`` in ``cadjs/lib/filePathSuffix.js``.
     """
     name = str(display_name or "").strip()
     if not name:
         return set()
     head, _, tail = name.rpartition("/")
     prefix = f"{head}/" if head else ""
-    if tail.lower().endswith(".py"):
-        stem = tail[: -len(".py")]
-        return {f"{prefix}{stem}.step.py", f"{prefix}{stem}.stp.py"}
     if "." not in tail:
-        return {f"{prefix}{tail}.step", f"{prefix}{tail}.stp"}
+        return {f"{prefix}{tail}.step.py", f"{prefix}{tail}.stp.py"}
     return set()
 
 
