@@ -68,7 +68,7 @@ def _broker_lock() -> tuple[str, str]:
 
 
 BROKER_IMAGE_ID, BROKER_IMAGE_SOURCE_REVISION = _broker_lock()
-BROWSER_RUNTIME_JOB_BYTES = 3 * 1024**3
+BROWSER_RUNTIME_JOB_BYTES = 4608 * 1024**2
 BROWSER_RUNTIME_HOST_RESERVE_BYTES = 4 * 1024**3
 BROWSER_RUNTIME_MAX_SLOTS = 4
 BROWSER_RUNTIME_ADMISSION_ROOT = (
@@ -1652,9 +1652,9 @@ class BrowserSidecarJob:
                 "--pids-limit",
                 "64",
                 "--memory",
-                "1536m",
+                "3072m",
                 "--memory-swap",
-                "1536m",
+                "3072m",
                 "--cpus",
                 "0.5",
                 *_broker_runtime_user_options(),

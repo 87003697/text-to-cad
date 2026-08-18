@@ -82,16 +82,16 @@ def configure_gate(job: browser_sidecar.BrowserSidecarJob) -> None:
 
 class BrowserSidecarJobTests(unittest.TestCase):
     def test_runtime_admission_caps_aggregate_container_memory(self) -> None:
-        """Host slots reserve 3 GiB per job and fail closed when occupied."""
+        """Host slots reserve 4.5 GiB per job and fail closed when occupied."""
 
         gib = 1024**3
-        self.assertEqual(browser_sidecar._browser_runtime_slot_count(16 * gib), 4)
+        self.assertEqual(browser_sidecar._browser_runtime_slot_count(16 * gib), 2)
         self.assertEqual(
             browser_sidecar._browser_runtime_slot_count(16_497_991_680),
-            3,
+            2,
         )
-        self.assertEqual(browser_sidecar._browser_runtime_slot_count(10 * gib), 2)
-        self.assertEqual(browser_sidecar._browser_runtime_slot_count(6 * gib), 0)
+        self.assertEqual(browser_sidecar._browser_runtime_slot_count(10 * gib), 1)
+        self.assertEqual(browser_sidecar._browser_runtime_slot_count(8 * gib), 0)
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(
             browser_sidecar,
             "BROWSER_RUNTIME_ADMISSION_ROOT",
@@ -99,13 +99,13 @@ class BrowserSidecarJobTests(unittest.TestCase):
         ):
             first = browser_sidecar._acquire_browser_runtime_slot(
                 lambda: False,
-                total_memory_bytes=7 * gib,
+                total_memory_bytes=9 * gib,
             )
             try:
                 with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
                     browser_sidecar._acquire_browser_runtime_slot(
                         lambda: True,
-                        total_memory_bytes=7 * gib,
+                        total_memory_bytes=9 * gib,
                     )
                 self.assertEqual(caught.exception.check, "runtime-admission")
             finally:
@@ -115,7 +115,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
             with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
                 browser_sidecar._acquire_browser_runtime_slot(
                     lambda: False,
-                    total_memory_bytes=7 * gib,
+                    total_memory_bytes=9 * gib,
                 )
             self.assertEqual(caught.exception.check, "runtime-admission")
 
@@ -658,8 +658,8 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertIn(browser_sidecar.BROKER_IMAGE_ID, broker_create)
         memory_index = broker_create.index("--memory")
         swap_index = broker_create.index("--memory-swap")
-        self.assertEqual(broker_create[memory_index + 1], "1536m")
-        self.assertEqual(broker_create[swap_index + 1], "1536m")
+        self.assertEqual(broker_create[memory_index + 1], "3072m")
+        self.assertEqual(broker_create[swap_index + 1], "3072m")
         broker_tmpfs = [
             broker_create[index + 1]
             for index, argument in enumerate(broker_create)

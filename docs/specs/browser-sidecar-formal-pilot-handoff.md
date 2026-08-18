@@ -180,15 +180,16 @@ the session JSONL. The dirty `develop` root was not used or modified.
   400,000 indexed triangles. The retained airplane reference has 917,388
   vertices and 305,796 triangles; the former 10,000/20,000 Broker-only limits
   rejected the real request after the wire and memory bounds passed.
-- The Broker has a fixed 1536 MiB memory/swap envelope. The former 384 MiB
-  envelope emitted a Docker `oom` event for the exact retained-request Broker
-  before accepting the request; canonical geometry expands substantially beyond
-  its wire representation.
-- Outer-owned host admission reserves 3 GiB for each Sidecar/Broker pair and 4
+- The Broker has a fixed 3072 MiB memory/swap envelope. Both the former 384 MiB
+  parse attempt and the 1536 MiB full-geometry attempt emitted Docker `oom`
+  events for the exact retained-request Broker; canonical geometry expands
+  substantially beyond its wire representation during validation and browser
+  transport.
+- Outer-owned host admission reserves 4.5 GiB for each Sidecar/Broker pair and 4
   GiB for the host, caps the computed capacity at four concurrent jobs, and
   holds one cross-process file lock for the complete container lifecycle. A
-  host below 7 GiB admits none. The current 16,497,991,680-byte CVM therefore
-  admits three jobs, including the requested two-job run, without aggregate
+  host below 8.5 GiB admits none. The current 16,497,991,680-byte CVM therefore
+  admits two jobs, exactly the requested two-job run, without aggregate
   container-memory overcommit.
 - The successor adversarial matrix covers missing/wrong Broker identity,
   platform/revision/base mismatch, foreign Broker name, malformed/late/wrong
