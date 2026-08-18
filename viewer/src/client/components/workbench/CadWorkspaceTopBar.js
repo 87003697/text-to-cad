@@ -11,6 +11,7 @@ import {
 import EntryIcon from "./EntryIcon";
 import {
   DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND,
+  DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT,
   isViewerReleaseNewer,
   isViewerReleaseUpdateSuggested,
   viewerGithubLatestReleaseApiUrl,
@@ -824,6 +825,7 @@ function VersionTooltipRow({ label, version, action = null }) {
 function VersionReleaseLink({ version, releaseUrl, releaseCheck = emptyLatestReleaseCheck }) {
   const normalizedVersion = String(version || "").trim();
   const [installCopyStatus, setInstallCopyStatus] = useState("");
+  const [promptCopyStatus, setPromptCopyStatus] = useState("");
   const copyGestureHandledRef = useRef(false);
 
   if (!normalizedVersion) {
@@ -843,6 +845,7 @@ function VersionReleaseLink({ version, releaseUrl, releaseCheck = emptyLatestRel
   const installCommand = String(
     releaseCheck?.installCommand || DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND
   ).trim() || DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND;
+  const updatePrompt = DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT;
   const upToDate = Boolean(latestVersion) && !latestReleaseNewer;
   const label = updateAvailable
     ? "Update CAD Viewer"
@@ -866,6 +869,27 @@ function VersionReleaseLink({ version, releaseUrl, releaseCheck = emptyLatestRel
       }, 1600);
     } catch {
       setInstallCopyStatus("failed");
+    }
+  };
+
+  const handleCopyUpdatePrompt = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (copyGestureHandledRef.current) {
+      return;
+    }
+    copyGestureHandledRef.current = true;
+    globalThis.setTimeout(() => {
+      copyGestureHandledRef.current = false;
+    }, 250);
+    try {
+      await copyTextToClipboard(updatePrompt);
+      setPromptCopyStatus("copied");
+      globalThis.setTimeout(() => {
+        setPromptCopyStatus("");
+      }, 1600);
+    } catch {
+      setPromptCopyStatus("failed");
     }
   };
 
@@ -969,7 +993,35 @@ function VersionReleaseLink({ version, releaseUrl, releaseCheck = emptyLatestRel
               </Button>
             </div>
           </div>
-          {installCopyStatus === "failed" ? (
+          <div className="flex min-w-0 flex-col gap-1.5">
+            {/* Running the command updates the skills but leaves the Viewer serving the bundle
+                it started with, so this second option hands the whole job to an agent. */}
+            <div className="px-0.5 text-[11px] font-medium leading-none text-muted-foreground">
+              Or ask your agent
+            </div>
+            <div className="flex h-8 min-w-0 items-center gap-2 rounded-sm border border-border/60 bg-muted/35 p-1 pl-2">
+              <span className="min-w-0 flex-1 truncate text-[11px] leading-5 text-foreground">
+                Update the skills and restart the Viewer
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                aria-label={promptCopyStatus === "copied" ? "Agent message copied" : "Copy agent message"}
+                title={updatePrompt}
+                onPointerDown={handleCopyUpdatePrompt}
+                onClick={handleCopyUpdatePrompt}
+              >
+                {promptCopyStatus === "copied" ? (
+                  <Check className="size-3" aria-hidden="true" />
+                ) : (
+                  <Copy className="size-3" aria-hidden="true" />
+                )}
+              </Button>
+            </div>
+          </div>
+          {installCopyStatus === "failed" || promptCopyStatus === "failed" ? (
             <div className="text-[11px] text-muted-foreground">Copy failed</div>
           ) : null}
           {upToDate ? (

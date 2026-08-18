@@ -2,6 +2,21 @@ export const DEFAULT_VIEWER_GITHUB_URL = "https://github.com/earthtojake/text-to
 export const DEFAULT_VIEWER_DISCORD_URL = "https://discord.gg/5FGB9DwJYU";
 export const DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND = "npx skills install earthtojake/text-to-cad";
 
+// The other way to take an update: hand this to your agent instead of running the command
+// yourself. It exists because installing is only half the job -- a running Viewer keeps serving
+// the bundle it started with, so the update is invisible until it is restarted.
+//
+// `install` is an alias for `add`, and `add` re-fetches and OVERWRITES an existing install
+// rather than skipping it, so this is safe to run whether or not the skills are already there.
+// The stop-then-start is spelled out because the Viewer holds a fixed port and a second one
+// cannot simply be launched alongside it.
+export const DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT = [
+  "Update the text-to-cad agent skills and restart the CAD Viewer:",
+  "1. Run `npx skills install earthtojake/text-to-cad` (this overwrites the installed skills with the latest release).",
+  "2. Stop the running CAD Viewer, then start it again from the cad-viewer skill so it serves the new bundle.",
+  "3. Reopen the Viewer URL I was using and confirm the version in the top bar has changed."
+].join("\n");
+
 export function normalizeViewerDefaultFile(value = "") {
   const rawValue = String(value ?? "").trim();
   return rawValue.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
@@ -115,6 +130,19 @@ export function normalizeViewerSkillsInstallCommand(
   const command = cleanInstallCommandCandidate(value);
   if (/^npx\s+skills\s+install(?:\s+\S+)+$/iu.test(command)) {
     return command;
+  }
+  return String(fallback || "").trim();
+}
+
+export function normalizeViewerSkillsUpdatePrompt(
+  value = "",
+  fallback = DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT
+) {
+  const prompt = String(value ?? "").replace(/\r\n/gu, "\n").trim();
+  // Must still tell the agent to do both halves; a prompt that only installs leaves the user
+  // staring at the old bundle and concluding the update did not work.
+  if (prompt && /\bnpx\s+skills\s+(?:install|add)\b/iu.test(prompt) && /restart|start it again/iu.test(prompt)) {
+    return prompt;
   }
   return String(fallback || "").trim();
 }

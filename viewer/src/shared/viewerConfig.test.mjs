@@ -5,6 +5,7 @@ import {
   DEFAULT_VIEWER_DISCORD_URL,
   DEFAULT_VIEWER_GITHUB_URL,
   DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND,
+  DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT,
   isViewerReleaseMajorMinorNewer,
   isViewerReleaseNewer,
   isViewerReleaseUpdateSuggested,
@@ -12,6 +13,7 @@ import {
   normalizeViewerDiscordUrl,
   normalizeViewerGithubUrl,
   normalizeViewerSkillsInstallCommand,
+  normalizeViewerSkillsUpdatePrompt,
   viewerGithubLatestReleaseApiUrl,
   viewerGithubLatestReleaseUrl,
   viewerGithubReleaseUrl,
@@ -155,4 +157,30 @@ test("viewerSkillsInstallCommandFromText extracts release-body install commands"
     viewerSkillsInstallCommandFromText("No command here."),
     DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND
   );
+});
+
+test("the agent update prompt covers both halves of an update", () => {
+  // Installing is only half the job: a running Viewer keeps serving the bundle it started
+  // with, so a prompt that stops at the install leaves the user looking at the old version and
+  // concluding the update failed.
+  assert.match(DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT, /npx skills install earthtojake\/text-to-cad/u);
+  assert.match(DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT, /restart|start it again/iu);
+  // It should also tell the agent how to confirm it worked.
+  assert.match(DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT, /version/iu);
+});
+
+test("normalizeViewerSkillsUpdatePrompt rejects a prompt that would not finish the job", () => {
+  const custom = "Run `npx skills add earthtojake/text-to-cad`, then restart the Viewer.";
+  assert.equal(normalizeViewerSkillsUpdatePrompt(custom), custom);
+  // Missing the restart, or missing the install: fall back rather than ship half an update.
+  assert.equal(
+    normalizeViewerSkillsUpdatePrompt("Run `npx skills install earthtojake/text-to-cad`."),
+    DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT
+  );
+  assert.equal(
+    normalizeViewerSkillsUpdatePrompt("Restart the Viewer."),
+    DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT
+  );
+  assert.equal(normalizeViewerSkillsUpdatePrompt(""), DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT);
+  assert.equal(normalizeViewerSkillsUpdatePrompt(null), DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT);
 });
