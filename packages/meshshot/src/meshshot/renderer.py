@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import base64
+from array import array
 from collections.abc import Sequence
 from dataclasses import dataclass
+import hashlib
 from io import BytesIO
 from importlib.resources import files
 import json
@@ -14,6 +16,8 @@ from pathlib import Path
 import re
 import socket
 import stat
+import struct
+import sys
 from typing import Any
 
 from PIL import Image
@@ -72,6 +76,67 @@ class MeshGeometry:
         ):
             raise MeshshotError("mesh geometry requires valid triangle indices")
         return {"vertices": vertices, "faces": faces}
+
+
+def _packed_geometry(geometry: MeshGeometry) -> dict[str, Any]:
+    """Encode the renderer's native float32/uint32 buffers without approximation."""
+
+    vertex_count = len(geometry.vertices)
+    face_count = len(geometry.faces)
+    if vertex_count < 1 or vertex_count > _CONTRACT["maxGeometryVertices"]:
+        raise MeshshotError("mesh geometry exceeds its vertex bound")
+    if face_count < 1 or face_count > _CONTRACT["maxGeometryFaces"]:
+        raise MeshshotError("mesh geometry exceeds its face bound")
+    vertices = array("f")
+    for vertex in geometry.vertices:
+        if len(vertex) != 3:
+            raise MeshshotError(
+                "mesh geometry requires finite three-dimensional vertices"
+            )
+        for value in vertex:
+            converted = float(value)
+            if not math.isfinite(converted):
+                raise MeshshotError(
+                    "mesh geometry requires finite three-dimensional vertices"
+                )
+            vertices.append(converted)
+    if any(not math.isfinite(value) for value in vertices):
+        raise MeshshotError("mesh geometry exceeds the float32 range")
+    faces = array("I")
+    for face in geometry.faces:
+        if (
+            len(face) != 3
+            or any(
+                not isinstance(index, int)
+                or isinstance(index, bool)
+                or index < 0
+                or index >= vertex_count
+                for index in face
+            )
+        ):
+            raise MeshshotError("mesh geometry requires valid triangle indices")
+        faces.extend(face)
+    if vertices.itemsize != 4 or faces.itemsize != 4:
+        raise MeshshotError("mesh geometry packing is unavailable")
+    if sys.byteorder != "little":
+        vertices.byteswap()
+        faces.byteswap()
+    vertex_bytes = vertices.tobytes()
+    face_bytes = faces.tobytes()
+    digest = hashlib.sha256(
+        b"meshshot.packed-geometry/1\0"
+        + struct.pack("<II", vertex_count, face_count)
+        + vertex_bytes
+        + face_bytes
+    ).hexdigest()
+    return {
+        "encoding": "meshshot.packed-geometry/1",
+        "vertexCount": vertex_count,
+        "faceCount": face_count,
+        "verticesData": base64.b64encode(vertex_bytes).decode("ascii"),
+        "facesData": base64.b64encode(face_bytes).decode("ascii"),
+        "sha256": digest,
+    }
 
 
 @dataclass(frozen=True)
@@ -306,22 +371,22 @@ def render_residual_preview(
         value not in _OUTSIDE_DIRECTIONS for value in directions
     ):
         raise MeshshotError("exterior directions must be unique signed x/y/z values")
-    payload = {
-        "profile": loaded.profile,
-        "variant": variant,
-        "reference": reference.to_json(),
-        "candidate": candidate.to_json(),
-        "exteriorDirections": list(directions),
-    }
     authority = _load_browser_authority()
     if authority is None:
+        payload = {
+            "profile": loaded.profile,
+            "variant": variant,
+            "reference": reference.to_json(),
+            "candidate": candidate.to_json(),
+            "exteriorDirections": list(directions),
+        }
         result = _legacy_browser_render(payload)
     else:
         result = _registered_residual_render(
             authority,
             {
-                "reference": payload["reference"],
-                "candidate": payload["candidate"],
+                "reference": _packed_geometry(reference),
+                "candidate": _packed_geometry(candidate),
                 "variant": variant,
                 "exteriorDirections": list(directions),
                 "options": {

@@ -12,11 +12,18 @@ const DIRECTION_VECTOR = Object.freeze({
 
 function geometryFromPayload(payload) {
   const geometry = new THREE.BufferGeometry();
+  const packed = payload.vertices instanceof Float32Array
+    && payload.faces instanceof Uint32Array;
   geometry.setAttribute(
     "position",
-    new THREE.Float32BufferAttribute(payload.vertices.flat(), 3),
+    new THREE.Float32BufferAttribute(
+      packed ? payload.vertices : payload.vertices.flat(),
+      3,
+    ),
   );
-  geometry.setIndex(payload.faces.flat());
+  geometry.setIndex(
+    packed ? new THREE.Uint32BufferAttribute(payload.faces, 1) : payload.faces.flat(),
+  );
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   return geometry;
@@ -331,3 +338,5 @@ window.__meshshotRender = async (payload) => {
     return { ok: false, error: String(error?.stack || error) };
   }
 };
+
+window.__meshshotRenderPacked = window.__meshshotRender;

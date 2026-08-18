@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import socket
 import statistics
+import struct
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -21,6 +22,7 @@ from tests.python.support.paths import add_repo_path
 add_repo_path("packages/meshshot/src")
 
 from meshshot import MeshGeometry, MeshshotError, render_residual_preview  # noqa: E402
+from meshshot import renderer  # noqa: E402
 
 
 def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometry:
@@ -34,6 +36,25 @@ def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometr
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_packed_geometry_preserves_native_renderer_buffers(self) -> None:
+        packed = renderer._packed_geometry(
+            MeshGeometry(
+                vertices=[[0.25, -0.5, 1.0], [0.0, 0.0, 0.0]],
+                faces=[[0, 1, 0]],
+            )
+        )
+        self.assertEqual(packed["encoding"], "meshshot.packed-geometry/1")
+        self.assertEqual(packed["vertexCount"], 2)
+        self.assertEqual(packed["faceCount"], 1)
+        self.assertEqual(
+            struct.unpack("<6f", base64.b64decode(packed["verticesData"])),
+            (0.25, -0.5, 1.0, 0.0, 0.0, 0.0),
+        )
+        self.assertEqual(
+            struct.unpack("<3I", base64.b64decode(packed["facesData"])),
+            (0, 1, 0),
+        )
+
     def test_formal_authority_rejects_symlink_without_local_fallback(self) -> None:
         triangle = ((-0.35, -0.3, 0.0), (0.35, -0.3, 0.0), (0.0, 0.35, 0.0))
         geometry = _geometry(triangle)
@@ -49,7 +70,7 @@ class ResidualRendererTests(unittest.TestCase):
                         "imageId": "sha256:"
                         + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
                         "programs": {
-                            "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
+                            "residual": "06d7fe1efae38aeeb7252a9f81683fc97b4b914d4a9fbd79169b2d58e95fa491",
                             "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
                         },
                     }
@@ -87,7 +108,7 @@ class ResidualRendererTests(unittest.TestCase):
                         "imageId": "sha256:"
                         + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
                         "programs": {
-                            "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
+                            "residual": "06d7fe1efae38aeeb7252a9f81683fc97b4b914d4a9fbd79169b2d58e95fa491",
                             "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
                         },
                     }
@@ -173,6 +194,13 @@ class ResidualRendererTests(unittest.TestCase):
             observed["payload"]["options"],
             {"cameraPolicy": "profile-fixed", "canonicalPostprocess": True},
         )
+        reference = observed["payload"]["reference"]
+        self.assertEqual(reference["vertexCount"], 3)
+        self.assertEqual(reference["faceCount"], 1)
+        self.assertEqual(
+            struct.unpack("<3I", base64.b64decode(reference["facesData"])),
+            (0, 1, 2),
+        )
 
     def test_attacker_env_authority_cannot_redirect_or_select_formal_mode(self) -> None:
         triangle = ((-0.35, -0.3, 0.0), (0.35, -0.3, 0.0), (0.0, 0.35, 0.0))
@@ -203,7 +231,7 @@ class ResidualRendererTests(unittest.TestCase):
                         "imageId": "sha256:"
                         + "22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
                         "programs": {
-                            "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
+                            "residual": "06d7fe1efae38aeeb7252a9f81683fc97b4b914d4a9fbd79169b2d58e95fa491",
                             "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
                         },
                     }
@@ -247,7 +275,7 @@ class ResidualRendererTests(unittest.TestCase):
             renderer._SOCKET_PATH,
             Path("/run/meshshot-browser/browser.sock"),
         )
-        self.assertEqual(renderer._MAX_REQUEST_BYTES, 96 * 1024 * 1024)
+        self.assertEqual(renderer._MAX_REQUEST_BYTES, 48 * 1024 * 1024)
         self.assertTrue(
             (Path(renderer.__file__).resolve().parent / "browser_contract.json").is_file()
         )

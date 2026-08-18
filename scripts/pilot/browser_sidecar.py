@@ -68,7 +68,7 @@ def _broker_lock() -> tuple[str, str]:
 
 
 BROKER_IMAGE_ID, BROKER_IMAGE_SOURCE_REVISION = _broker_lock()
-BROWSER_RUNTIME_JOB_BYTES = 4608 * 1024**2
+BROWSER_RUNTIME_JOB_BYTES = 2304 * 1024**2
 BROWSER_RUNTIME_HOST_RESERVE_BYTES = 4 * 1024**3
 BROWSER_RUNTIME_MAX_SLOTS = 4
 BROWSER_RUNTIME_ADMISSION_ROOT = (
@@ -116,6 +116,65 @@ SIDECAR_ENDPOINT_PATH = re.compile(
 )
 RUNTIME_PROVISION_HANDLE = re.compile(r"cvmsp-[0-9a-f]{24}\Z")
 RESOURCE_ID = re.compile(r"[0-9a-f]{64}\Z")
+RESIDUAL_BROWSER_PROGRAM = r"""async ({payload, profile}) => {
+  const decode = async (geometry) => {
+    const bytes = (value) => {
+      const binary = atob(value);
+      const result = new Uint8Array(binary.length);
+      for (let index = 0; index < binary.length; index += 1) {
+        result[index] = binary.charCodeAt(index);
+      }
+      return result;
+    };
+    const vertexBytes = bytes(geometry.verticesData);
+    const faceBytes = bytes(geometry.facesData);
+    const domain = new TextEncoder().encode("meshshot.packed-geometry/1\0");
+    const header = new ArrayBuffer(8);
+    const headerView = new DataView(header);
+    headerView.setUint32(0, geometry.vertexCount, true);
+    headerView.setUint32(4, geometry.faceCount, true);
+    const digestInput = new Uint8Array(
+      domain.length + header.byteLength + vertexBytes.length + faceBytes.length
+    );
+    digestInput.set(domain, 0);
+    digestInput.set(new Uint8Array(header), domain.length);
+    digestInput.set(vertexBytes, domain.length + header.byteLength);
+    digestInput.set(
+      faceBytes,
+      domain.length + header.byteLength + vertexBytes.length,
+    );
+    const digest = [...new Uint8Array(
+      await crypto.subtle.digest("SHA-256", digestInput)
+    )].map((value) => value.toString(16).padStart(2, "0")).join("");
+    if (digest !== geometry.sha256) throw new Error("packed geometry digest mismatch");
+    const vertexView = new DataView(
+      vertexBytes.buffer, vertexBytes.byteOffset, vertexBytes.byteLength
+    );
+    const faceView = new DataView(
+      faceBytes.buffer, faceBytes.byteOffset, faceBytes.byteLength
+    );
+    const vertices = new Float32Array(geometry.vertexCount * 3);
+    const faces = new Uint32Array(geometry.faceCount * 3);
+    for (let index = 0; index < vertices.length; index += 1) {
+      const value = vertexView.getFloat32(index * 4, true);
+      if (!Number.isFinite(value)) throw new Error("packed geometry vertex invalid");
+      vertices[index] = value;
+    }
+    for (let index = 0; index < faces.length; index += 1) {
+      const value = faceView.getUint32(index * 4, true);
+      if (value >= geometry.vertexCount) throw new Error("packed geometry face invalid");
+      faces[index] = value;
+    }
+    return {vertices, faces};
+  };
+  return window.__meshshotRenderPacked({
+    profile,
+    variant: payload.variant,
+    reference: await decode(payload.reference),
+    candidate: await decode(payload.candidate),
+    exteriorDirections: payload.exteriorDirections,
+  });
+}"""
 IMAGE_PROJECTIONS = (
     ("id", "{{.Id}}", IMAGE_ID),
     ("os", "{{.Os}}", "linux"),
@@ -704,19 +763,16 @@ class RegisteredProgramBroker:
         }
 
     def _residual_payload(self, value: Any) -> dict[str, Any]:
-        """Validate the only formal eight-view residual input schema."""
+        """Validate the closed residual control plane and packed buffer bounds."""
 
         payload = _exact_object(
             value,
             {"reference", "candidate", "variant", "exteriorDirections", "options"},
             "residual-payload",
         )
-        reference = _geometry(payload["reference"], "reference")
-        candidate = _geometry(payload["candidate"], "candidate")
         if payload["variant"] not in {"step", "final"}:
             raise BrowserSidecarError(
-                "residual variant is invalid",
-                check="residual-variant",
+                "residual variant is invalid", check="residual-variant"
             )
         directions = payload["exteriorDirections"]
         if (
@@ -725,8 +781,7 @@ class RegisteredProgramBroker:
             or any(direction not in OUTSIDE_DIRECTIONS for direction in directions)
         ):
             raise BrowserSidecarError(
-                "residual directions are invalid",
-                check="residual-directions",
+                "residual directions are invalid", check="residual-directions"
             )
         options = _exact_object(
             payload["options"],
@@ -738,16 +793,54 @@ class RegisteredProgramBroker:
             "canonicalPostprocess": True,
         }:
             raise BrowserSidecarError(
-                "residual options are not registered",
-                check="residual-options",
+                "residual options are not registered", check="residual-options"
             )
-        return {
-            "profile": self.profile,
-            "variant": payload["variant"],
-            "reference": reference,
-            "candidate": candidate,
-            "exteriorDirections": directions,
-        }
+        for label in ("reference", "candidate"):
+            geometry = _exact_object(
+                payload[label],
+                {
+                    "encoding",
+                    "vertexCount",
+                    "faceCount",
+                    "verticesData",
+                    "facesData",
+                    "sha256",
+                },
+                f"{label}-geometry",
+            )
+            vertex_count = geometry["vertexCount"]
+            face_count = geometry["faceCount"]
+            if (
+                geometry["encoding"] != "meshshot.packed-geometry/1"
+                or not isinstance(vertex_count, int)
+                or isinstance(vertex_count, bool)
+                or not 1 <= vertex_count <= MAX_GEOMETRY_VERTICES
+                or not isinstance(face_count, int)
+                or isinstance(face_count, bool)
+                or not 1 <= face_count <= MAX_GEOMETRY_FACES
+                or not isinstance(geometry["sha256"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", geometry["sha256"]) is None
+            ):
+                raise BrowserSidecarError(
+                    f"{label} packed geometry metadata is invalid",
+                    check=f"{label}-geometry",
+                )
+            for field, byte_count in (
+                ("verticesData", vertex_count * 3 * 4),
+                ("facesData", face_count * 3 * 4),
+            ):
+                encoded = geometry[field]
+                expected_length = 4 * ((byte_count + 2) // 3)
+                if (
+                    not isinstance(encoded, str)
+                    or len(encoded) != expected_length
+                    or re.fullmatch(r"[A-Za-z0-9+/]*={0,2}", encoded) is None
+                ):
+                    raise BrowserSidecarError(
+                        f"{label} packed geometry data is invalid",
+                        check=f"{label}-geometry",
+                    )
+        return payload
 
     def execute(self, value: Any) -> Mapping[str, object]:
         """Execute one exact Render Program in a fresh context and page."""
@@ -907,13 +1000,20 @@ class RegisteredProgramBroker:
                 timeout=120_000,
             )
             page.wait_for_function(
-                "typeof window.__meshshotRender === 'function'",
+                "typeof window.__meshshotRender === 'function' && "
+                "typeof window.__meshshotRenderPacked === 'function'",
                 timeout=120_000,
             )
-            result = page.evaluate(
-                "(renderPayload) => window.__meshshotRender(renderPayload)",
-                payload,
-            )
+            try:
+                result = page.evaluate(
+                    RESIDUAL_BROWSER_PROGRAM,
+                    {"payload": payload, "profile": self.profile},
+                )
+            except Exception as exc:
+                raise BrowserSidecarError(
+                    "Sidecar rejected packed residual input",
+                    check="residual-input",
+                ) from exc
             result = _exact_object(
                 result,
                 {"ok", "pngDataUrl", "views"},
@@ -1652,9 +1752,9 @@ class BrowserSidecarJob:
                 "--pids-limit",
                 "64",
                 "--memory",
-                "3072m",
+                "768m",
                 "--memory-swap",
-                "3072m",
+                "768m",
                 "--cpus",
                 "0.5",
                 *_broker_runtime_user_options(),

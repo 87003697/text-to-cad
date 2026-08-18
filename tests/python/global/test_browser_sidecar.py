@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 from io import StringIO
+import hashlib
 import json
 import os
 from pathlib import Path
 import socket
 import subprocess
+import struct
 import tempfile
 import unittest
 from unittest import mock
@@ -18,12 +21,30 @@ from scripts.pilot import browser_sidecar
 IMAGE_ID = "sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1"
 SOURCE_REVISION = "1abe4c97929906b5c0b28b0f3f38857bd923952f"
 PROGRAMS = {
-    "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
+    "residual": "06d7fe1efae38aeeb7252a9f81683fc97b4b914d4a9fbd79169b2d58e95fa491",
     "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b",
 }
 NETWORK_ID = "a" * 64
 CONTAINER_ID = "b" * 64
 BROKER_CONTAINER_ID = "c" * 64
+
+
+def packed_triangle() -> dict[str, object]:
+    vertices = struct.pack("<9f", 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0)
+    faces = struct.pack("<3I", 0, 1, 2)
+    return {
+        "encoding": "meshshot.packed-geometry/1",
+        "vertexCount": 3,
+        "faceCount": 1,
+        "verticesData": base64.b64encode(vertices).decode("ascii"),
+        "facesData": base64.b64encode(faces).decode("ascii"),
+        "sha256": hashlib.sha256(
+            b"meshshot.packed-geometry/1\0"
+            + struct.pack("<II", 3, 1)
+            + vertices
+            + faces
+        ).hexdigest(),
+    }
 
 
 def nested_gate_proof(
@@ -82,16 +103,16 @@ def configure_gate(job: browser_sidecar.BrowserSidecarJob) -> None:
 
 class BrowserSidecarJobTests(unittest.TestCase):
     def test_runtime_admission_caps_aggregate_container_memory(self) -> None:
-        """Host slots reserve 4.5 GiB per job and fail closed when occupied."""
+        """Host slots reserve 2.25 GiB per job and fail closed when occupied."""
 
         gib = 1024**3
-        self.assertEqual(browser_sidecar._browser_runtime_slot_count(16 * gib), 2)
+        self.assertEqual(browser_sidecar._browser_runtime_slot_count(16 * gib), 4)
         self.assertEqual(
             browser_sidecar._browser_runtime_slot_count(16_497_991_680),
-            2,
+            4,
         )
-        self.assertEqual(browser_sidecar._browser_runtime_slot_count(10 * gib), 1)
-        self.assertEqual(browser_sidecar._browser_runtime_slot_count(8 * gib), 0)
+        self.assertEqual(browser_sidecar._browser_runtime_slot_count(10 * gib), 2)
+        self.assertEqual(browser_sidecar._browser_runtime_slot_count(6 * gib), 0)
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(
             browser_sidecar,
             "BROWSER_RUNTIME_ADMISSION_ROOT",
@@ -99,13 +120,13 @@ class BrowserSidecarJobTests(unittest.TestCase):
         ):
             first = browser_sidecar._acquire_browser_runtime_slot(
                 lambda: False,
-                total_memory_bytes=9 * gib,
+                total_memory_bytes=7 * gib,
             )
             try:
                 with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
                     browser_sidecar._acquire_browser_runtime_slot(
                         lambda: True,
-                        total_memory_bytes=9 * gib,
+                        total_memory_bytes=7 * gib,
                     )
                 self.assertEqual(caught.exception.check, "runtime-admission")
             finally:
@@ -115,7 +136,7 @@ class BrowserSidecarJobTests(unittest.TestCase):
             with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
                 browser_sidecar._acquire_browser_runtime_slot(
                     lambda: False,
-                    total_memory_bytes=9 * gib,
+                    total_memory_bytes=7 * gib,
                 )
             self.assertEqual(caught.exception.check, "runtime-admission")
 
@@ -658,8 +679,8 @@ class BrowserSidecarJobTests(unittest.TestCase):
         self.assertIn(browser_sidecar.BROKER_IMAGE_ID, broker_create)
         memory_index = broker_create.index("--memory")
         swap_index = broker_create.index("--memory-swap")
-        self.assertEqual(broker_create[memory_index + 1], "3072m")
-        self.assertEqual(broker_create[swap_index + 1], "3072m")
+        self.assertEqual(broker_create[memory_index + 1], "768m")
+        self.assertEqual(broker_create[swap_index + 1], "768m")
         broker_tmpfs = [
             broker_create[index + 1]
             for index, argument in enumerate(broker_create)
@@ -989,15 +1010,21 @@ class BrowserSidecarJobTests(unittest.TestCase):
         )
         self.assertEqual(contract["sidecarImageId"], browser_sidecar.IMAGE_ID)
         self.assertEqual(contract["programs"], browser_sidecar.PROGRAMS)
+        self.assertEqual(
+            contract["programs"]["residual"],
+            hashlib.sha256(
+                (
+                    browser_sidecar.REPO_ROOT
+                    / "packages/meshshot/src/meshshot/runtime/residual-render.js"
+                ).read_bytes()
+            ).hexdigest(),
+        )
         self.assertEqual(contract["authoritySchema"], browser_sidecar.AUTHORITY_SCHEMA)
         self.assertEqual(contract["requestSchema"], browser_sidecar.REQUEST_SCHEMA)
         self.assertEqual(contract["responseSchema"], browser_sidecar.RESPONSE_SCHEMA)
         self.assertEqual(contract["authorityPath"], "/run/meshshot-browser/authority.json")
         self.assertEqual(contract["socketPath"], "/run/meshshot-browser/browser.sock")
-        self.assertEqual(contract["maxRequestBytes"], 96 * 1024 * 1024)
-        # The exact production serializer emitted 76,483,810 bytes for the
-        # retained airplane depth-eight reference/candidate pair.
-        self.assertGreater(contract["maxRequestBytes"], 76_483_810)
+        self.assertEqual(contract["maxRequestBytes"], 48 * 1024 * 1024)
         self.assertEqual(contract["maxRequestBytes"], browser_sidecar.MAX_REQUEST_BYTES)
         self.assertEqual(contract["maxGeometryVertices"], 1_000_000)
         self.assertEqual(contract["maxGeometryFaces"], 400_000)
@@ -1335,6 +1362,8 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
         view_names = ["+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso"]
 
         class FakePage:
+            reject_packed_input = False
+
             def __init__(self) -> None:
                 self.goto_calls: list[tuple[str, dict[str, object]]] = []
 
@@ -1347,6 +1376,8 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
             def evaluate(self, expression, payload):
                 self.expression = expression
                 self.payload = payload
+                if self.reject_packed_input:
+                    raise RuntimeError("browser rejected input")
                 return {
                     "ok": True,
                     "pngDataUrl": "data:image/png;base64,aGVsbG8=",
@@ -1374,18 +1405,14 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
                 self.contexts.append(context)
                 return context
 
-        geometry = {
-            "vertices": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
-            "faces": [[0, 1, 2]],
-        }
         request = {
-            "schema": "meshshot.browser-sidecar.render-request/2",
+            "schema": "meshshot.browser-sidecar.render-request/3",
             "jobId": "formal-job-1",
             "imageId": IMAGE_ID,
             "program": "residual",
             "payload": {
-                "reference": geometry,
-                "candidate": geometry,
+                "reference": packed_triangle(),
+                "candidate": packed_triangle(),
                 "variant": "step",
                 "exteriorDirections": [],
                 "options": {
@@ -1407,13 +1434,28 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
             browser.contexts[0].page.goto_calls[0][0],
             "http://127.0.0.1:4174/render.html",
         )
-        self.assertNotIn("options", browser.contexts[0].page.payload)
+        self.assertEqual(
+            browser.contexts[0].page.payload["payload"], request["payload"]
+        )
 
         malformed = dict(request)
         malformed["url"] = "https://attacker.invalid/"
         with self.assertRaisesRegex(browser_sidecar.BrowserSidecarError, "schema"):
             broker.execute(malformed)
         self.assertEqual(len(browser.contexts), 1)
+
+        malformed_buffer = json.loads(json.dumps(request))
+        malformed_buffer["payload"]["reference"]["verticesData"] = "AAAA"
+        with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
+            broker.execute(malformed_buffer)
+        self.assertEqual(caught.exception.check, "reference-geometry")
+        self.assertEqual(len(browser.contexts), 1)
+
+        FakePage.reject_packed_input = True
+        with self.assertRaises(browser_sidecar.BrowserSidecarError) as caught:
+            broker.execute(request)
+        self.assertEqual(caught.exception.check, "residual-input")
+        self.assertTrue(browser.contexts[-1].closed)
 
     def test_viewer_program_uses_real_registered_projection_control(self) -> None:
         class FakeKeyboard:
@@ -1481,7 +1523,7 @@ class RegisteredProgramBrokerTests(unittest.TestCase):
 
         response = broker.execute(
             {
-                "schema": "meshshot.browser-sidecar.render-request/2",
+                "schema": "meshshot.browser-sidecar.render-request/3",
                 "jobId": "formal-job-1",
                 "imageId": IMAGE_ID,
                 "program": "viewer",

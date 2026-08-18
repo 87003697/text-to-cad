@@ -3,7 +3,7 @@
   "authoritySchema": "meshshot.browser-authority/1",
   "maxGeometryFaces": 400000,
   "maxGeometryVertices": 1000000,
-  "maxRequestBytes": 100663296,
+  "maxRequestBytes": 50331648,
   "nestedGate": {
     "artifactPath": "/run/meshshot-browser/browser-gate.pyz",
     "failureStages": [
@@ -64,10 +64,10 @@
     "views": ["+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso"]
   },
   "programs": {
-    "residual": "d2138ad7f3b74094862cfa8bd4d3ee0fb59ba8bde89a82962afae9ae02b0180b",
+    "residual": "06d7fe1efae38aeeb7252a9f81683fc97b4b914d4a9fbd79169b2d58e95fa491",
     "viewer": "e2e1bfd1a28c4ef7ce312f477a301f8ef5386ecbcb64eb5d586b29bcdbb4728b"
   },
-  "requestSchema": "meshshot.browser-sidecar.render-request/2",
+  "requestSchema": "meshshot.browser-sidecar.render-request/3",
   "responseSchema": "meshshot.browser-sidecar.render-response/1",
   "sidecarImageId": "sha256:22ff2413ffd9dcdb5f62e5dbb2c6e46d6b4e98f0e45dc4698f80eb8f06b146f1",
   "socketPath": "/run/meshshot-browser/browser.sock"

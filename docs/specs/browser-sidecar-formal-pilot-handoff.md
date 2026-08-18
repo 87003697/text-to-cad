@@ -172,24 +172,28 @@ the session JSONL. The dirty `develop` root was not used or modified.
   fixed browser-less conformance client is sealed at the exact path released by
   that gate. Its host-only runner/contract dependencies are lazy imports and are
   not copied into the Broker.
-- Registered requests have one shared package-owned 96 MiB bound. This admits
-  the exact 76,483,810-byte production serialization of the retained depth-8
-  airplane pair with bounded headroom while preserving one finite limit in both
-  the browser-less client and Broker.
+- Registered residual requests carry the exact renderer-native geometry as
+  little-endian float32 vertex buffers and uint32 index buffers in a closed
+  Base64 envelope. The shared package contract bounds the complete wire request
+  at 48 MiB. Before any buffer decode, the Broker validates the exact control
+  schema, counts, Base64 alphabet, and the only possible encoded lengths. The
+  isolated Sidecar browser then verifies a domain-separated SHA-256 binding the
+  counts and both buffer boundaries, every finite vertex, and every in-range
+  index before invoking the fixed packed renderer.
 - The same package contract bounds each geometry at 1,000,000 vertices and
-  400,000 indexed triangles. The retained airplane reference has 917,388
-  vertices and 305,796 triangles; the former 10,000/20,000 Broker-only limits
-  rejected the real request after the wire and memory bounds passed.
-- The Broker has a fixed 3072 MiB memory/swap envelope. Both the former 384 MiB
-  parse attempt and the 1536 MiB full-geometry attempt emitted Docker `oom`
-  events for the exact retained-request Broker; canonical geometry expands
-  substantially beyond its wire representation during validation and browser
-  transport.
-- Outer-owned host admission reserves 4.5 GiB for each Sidecar/Broker pair and 4
+  400,000 indexed triangles. Three.js already converts legacy JSON positions to
+  float32 and indices to a typed index buffer, so the packed path preserves its
+  native rendering semantics while avoiding an unbounded JSON object graph. No
+  face sampling or render-only surrogate is used.
+- The Broker has a fixed 768 MiB memory/swap envelope. Earlier full-geometry
+  parsing attempts at 384, 1536, and 3072 MiB emitted Docker `oom` events; the
+  packed transport avoids building that large Python/JSON object graph in the
+  Broker.
+- Outer-owned host admission reserves 2.25 GiB for each Sidecar/Broker pair and 4
   GiB for the host, caps the computed capacity at four concurrent jobs, and
   holds one cross-process file lock for the complete container lifecycle. A
-  host below 8.5 GiB admits none. The current 16,497,991,680-byte CVM therefore
-  admits two jobs, exactly the requested two-job run, without aggregate
+  host below 6.25 GiB admits none. The current 16,497,991,680-byte CVM therefore
+  admits four jobs, including the requested two-job run, without aggregate
   container-memory overcommit.
 - The successor adversarial matrix covers missing/wrong Broker identity,
   platform/revision/base mismatch, foreign Broker name, malformed/late/wrong
@@ -209,7 +213,7 @@ the session JSONL. The dirty `develop` root was not used or modified.
 - Broker OCI revision:
   `d4908a048339d48270fa85c2ee4ddbe5c75a606c`
 - Deterministic sealed Browser Gate zipapp for the current scanner source:
-  `sha256:a2305023bce8e7cd9db804d73bc3ebe29d48b38f3481b5705cd2dc14dee837f8`
+  `sha256:3d97a314dad3f75630238d89602927812f32bae4529c0f3c11118cd0bd8cd33f`
 - Platform: `linux/amd64`
 
 The corrected Broker was rebuilt cleanly with
