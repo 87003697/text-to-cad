@@ -90,11 +90,22 @@ generated skill outputs needed by provider installers.
 Install text-to-cad with the Skills CLI:
 
 ```bash
-npx skills install earthtojake/text-to-cad
+npx skills add earthtojake/text-to-cad
 ```
 
 This is the preferred installation path. It installs the individual skills
 directly for supported agents.
+
+**Use the same command to update.** `add` re-fetches the package and overwrites
+what is already installed, so it both refreshes existing skills and installs any
+skill added in a newer release. `npx skills update` only refreshes skills already
+in your lockfile, so it silently misses new ones — which matters here, because
+releases do add skills.
+
+Neither command removes a skill that was retired upstream; drop one with
+`npx skills remove <skill>` if you need to.
+
+(`npx skills install …` still works — it is an undocumented alias for `add`.)
 
 ### Plugins
 

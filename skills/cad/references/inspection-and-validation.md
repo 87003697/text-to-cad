@@ -28,7 +28,7 @@ A `<name>.step.py` generator target resolves to the same entry as its logical `<
 
 Selector-backed queries (`refs --facts`, planes, measures) on generated assemblies extract whole-model topology on demand and cache it as `topology.glb` inside the entry's render package; repeat queries read the cache (seconds instead of a full re-extraction) until the package is rebuilt, which invalidates the sidecar.
 
-Selector refs are local to the STEP/CAD entry target passed to the command. They do not include file paths:
+Selector refs are local to the STEP/CAD entry target passed to the command:
 
 ```text
 #o1.2
@@ -37,6 +37,68 @@ Selector refs are local to the STEP/CAD entry target passed to the command. They
 ```
 
 Pass selector refs as `#...` tokens. The STEP/CAD file path or entry target is a separate CLI argument.
+
+### File-prefixed refs (the CAD Viewer copy format)
+
+A ref copied from the CAD Viewer carries the file it came from, so it stays meaningful in a
+prompt that spans several files:
+
+```text
+bracket#o1.2.f1               the generator models/step/parts/bracket.step.py
+imported_housing.step#o1.3    a raw STEP, models/step/imports/imported_housing.step
+mounting_plate.stl#           a whole mesh file
+```
+
+The prefix is the **shortest path suffix that names exactly one file**, plus as many leading
+directories as it takes to be unique. A prefix with no selectors after the `#` names the whole
+file.
+
+A `.step.py` generator shows as a bare stem, because generators are what you normally work in
+and the common case deserves the shortest name. Everything else keeps its suffix:
+
+| File | Prefix |
+| --- | --- |
+| `bracket.step.py` | `bracket` |
+| `bracket.step`, `bracket.stp` | `bracket.step`, `bracket.stp` |
+| `plate.stl`, `plate.3mf`, `plate.glb`, `outline.dxf` | unchanged |
+
+Keeping those suffixes is what makes the stripping safe: `bracket` (the generator) stays
+distinct from `bracket.step` (its export) and from `bracket.stl` (a mesh of it).
+
+**These CLIs do not resolve prefixes. You do.** When you receive a file-prefixed ref:
+
+1. Split it at the first `#`. The left side is the file prefix; the right side is the ref.
+2. Resolve the prefix to a real path. A bare stem is **not** a literal path suffix, so expand
+   it before searching:
+   - `<name>` with no extension → look for `<name>.step.py`, then `<name>.stp.py`
+   - anything carrying a suffix (`.step`, `.stp`, `.stl`, `.3mf`, `.glb`, `.dxf`) → use as-is
+
+   Match on **segment boundaries**, so `plate.stl` names `models/mesh/stl/plate.stl` and never
+   `models/mesh/stl/mounting_plate.stl`.
+3. Pass the resolved path as the entry/input argument and the `#...` part as the ref, exactly
+   as you would for a bare ref.
+
+```bash
+# received: bracket#o1.2.f1   ->  expand the bare stem, then search
+git ls-files '*/bracket.step.py' '*/bracket.stp.py'
+python scripts/inspect refs models/step/parts/bracket.step.py '#o1.2.f1'
+```
+
+If the search returns more than one file the prefix was ambiguous — ask rather than guess; the
+Viewer only emits prefixes that were unique when it copied them.
+
+Passing the prefixed ref through unsplit also works **when the prefix names the file the
+command already targets** — the CLI strips it, and it accepts every spelling of that file
+(`bracket`, `bracket.step.py`, `bracket.step`). A prefix naming a *different* file is a hard
+error, never ignored: silently inspecting the file the command was pointed at would produce a
+confident answer about geometry nobody asked about.
+
+```text
+ref 'other_part#o1.2' names file 'other_part' but this command targets
+'models/step/parts/bracket'; pass the file as the entry argument and the '#...' part as the ref
+```
+
+Bare `#...` refs are unchanged and work everywhere they always did.
 
 ### Referencing a part by its label
 
