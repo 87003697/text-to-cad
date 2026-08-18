@@ -98,7 +98,8 @@ directly for supported agents.
 
 ### Plugins
 
-Provider-native plugin installs are also available for Codex and Claude Code:
+Provider-native plugin installs are also available for Codex, Claude Code, and
+Grok Build:
 
 ```bash
 # Codex (requires Codex 0.142.0 or newer)
@@ -115,6 +116,15 @@ upgrade with `npm install -g @openai/codex@latest`.
 claude plugin marketplace add earthtojake/text-to-cad
 claude plugin install cad@text-to-cad
 ```
+
+```bash
+# Grok Build
+grok plugin install earthtojake/text-to-cad --trust
+grok plugin enable cad
+```
+
+Grok Build uses the existing `.claude-plugin/marketplace.json`; there is no
+separate Grok plugin manifest.
 
 Restart your agent if newly installed skills do not appear. For local
 development, branch from `develop`, open PRs against `develop`, and use the symlink
