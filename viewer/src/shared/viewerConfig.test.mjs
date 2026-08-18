@@ -128,17 +128,30 @@ test("a patch release is worth prompting about, at this cadence", () => {
   assert.equal(isViewerReleaseMajorMinorNewer("0.4.9", "0.4.10"), false);
 });
 
-test("normalizeViewerSkillsInstallCommand accepts only skills install commands", () => {
+test("normalizeViewerSkillsInstallCommand accepts skills add/install and nothing else", () => {
+  // A shell prompt and padding are stripped, so a command pasted out of a release body works.
   assert.equal(
-    normalizeViewerSkillsInstallCommand("$ npx   skills install   earthtojake/text-to-cad"),
+    normalizeViewerSkillsInstallCommand("$ npx   skills add   earthtojake/text-to-cad"),
+    "npx skills add earthtojake/text-to-cad"
+  );
+  // `install` is an undocumented alias for `add`, and older release bodies use it, so it stays
+  // acceptable rather than being rewritten into the fallback.
+  assert.equal(
+    normalizeViewerSkillsInstallCommand("npx skills install earthtojake/text-to-cad"),
+    "npx skills install earthtojake/text-to-cad"
+  );
+  assert.equal(
+    normalizeViewerSkillsInstallCommand("npx skills add example/repo --channel beta"),
+    "npx skills add example/repo --channel beta"
+  );
+  // Anything that is not a skills add/install falls back: this string is put in front of the
+  // user to run, so an unrecognised command must never pass through.
+  assert.equal(
+    normalizeViewerSkillsInstallCommand("npm install example/repo"),
     DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND
   );
   assert.equal(
-    normalizeViewerSkillsInstallCommand("npx skills install example/repo --channel beta"),
-    "npx skills install example/repo --channel beta"
-  );
-  assert.equal(
-    normalizeViewerSkillsInstallCommand("npm install example/repo"),
+    normalizeViewerSkillsInstallCommand("npx skills remove cad"),
     DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND
   );
 });
@@ -159,26 +172,24 @@ test("viewerSkillsInstallCommandFromText extracts release-body install commands"
   );
 });
 
-test("the agent update prompt covers both halves of an update", () => {
-  // Installing is only half the job: a running Viewer keeps serving the bundle it started
-  // with, so a prompt that stops at the install leaves the user looking at the old version and
-  // concluding the update failed.
-  assert.match(DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT, /npx skills install earthtojake\/text-to-cad/u);
-  assert.match(DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT, /restart|start it again/iu);
-  // It should also tell the agent how to confirm it worked.
-  assert.match(DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT, /version/iu);
+test("the agent update prompt names the command, in one short line", () => {
+  assert.match(DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT, /npx skills add earthtojake\/text-to-cad/u);
+  // `add`, not `update`: only `add` picks up a skill that is new in a release.
+  assert.doesNotMatch(DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT, /npx skills update/u);
+  // It is read at a glance in a popover, so it stays one short line.
+  assert.equal(DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT.split("\n").length, 1);
+  assert.ok(DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT.length < 90);
 });
 
-test("normalizeViewerSkillsUpdatePrompt rejects a prompt that would not finish the job", () => {
-  const custom = "Run `npx skills add earthtojake/text-to-cad`, then restart the Viewer.";
+test("normalizeViewerSkillsUpdatePrompt rejects a prompt with no command in it", () => {
+  const custom = "Run `npx skills add earthtojake/text-to-cad` for me.";
   assert.equal(normalizeViewerSkillsUpdatePrompt(custom), custom);
-  // Missing the restart, or missing the install: fall back rather than ship half an update.
+  // The `install` spelling is an accepted alias, so an older prompt still passes through.
+  const legacy = "Run `npx skills install earthtojake/text-to-cad`.";
+  assert.equal(normalizeViewerSkillsUpdatePrompt(legacy), legacy);
+  // Prose with no command leaves the agent guessing at a channel: fall back instead.
   assert.equal(
-    normalizeViewerSkillsUpdatePrompt("Run `npx skills install earthtojake/text-to-cad`."),
-    DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT
-  );
-  assert.equal(
-    normalizeViewerSkillsUpdatePrompt("Restart the Viewer."),
+    normalizeViewerSkillsUpdatePrompt("Please update the skills."),
     DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT
   );
   assert.equal(normalizeViewerSkillsUpdatePrompt(""), DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT);

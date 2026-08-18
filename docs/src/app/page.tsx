@@ -4,7 +4,7 @@ import { HeroSection } from "@/components/hero-section";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
-const skillsInstallCommand = "npx skills install earthtojake/text-to-cad";
+const skillsInstallCommand = "npx skills add earthtojake/text-to-cad";
 
 const pluginInstallCommands = [
   {
@@ -251,6 +251,16 @@ export default function Home() {
 
             <div className="max-w-3xl space-y-3">
               <SkillsInstallCommand />
+              <p className="text-sm leading-6 text-muted-foreground">
+                <span className="text-foreground">Run the same command to update.</span>{" "}
+                <code className="text-foreground">add</code> re-fetches the package and
+                overwrites what is installed, so it refreshes existing skills and picks up any
+                skill added in a newer release.{" "}
+                <code className="text-foreground">npx skills update</code> only walks your
+                lockfile, so it silently misses new ones. Neither removes a skill that was
+                retired upstream — drop one with{" "}
+                <code className="text-foreground">npx skills remove &lt;skill&gt;</code>.
+              </p>
               <div className="pt-3">
                 <h3 className="mb-3 text-sm font-medium uppercase tracking-[1.5px] text-foreground">
                   Plugin Installs

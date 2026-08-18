@@ -1,21 +1,15 @@
 export const DEFAULT_VIEWER_GITHUB_URL = "https://github.com/earthtojake/text-to-cad";
 export const DEFAULT_VIEWER_DISCORD_URL = "https://discord.gg/5FGB9DwJYU";
-export const DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND = "npx skills install earthtojake/text-to-cad";
+// `add` rather than `update`: both refresh what is installed, but only `add` picks up a skill
+// that is NEW in a release, because `update` walks the lockfile. Releases here do add skills,
+// so `update` would quietly leave them out. (`install` is an undocumented alias for `add`.)
+export const DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND = "npx skills add earthtojake/text-to-cad";
 
 // The other way to take an update: hand this to your agent instead of running the command
-// yourself. It exists because installing is only half the job -- a running Viewer keeps serving
-// the bundle it started with, so the update is invisible until it is restarted.
-//
-// `install` is an alias for `add`, and `add` re-fetches and OVERWRITES an existing install
-// rather than skipping it, so this is safe to run whether or not the skills are already there.
-// The stop-then-start is spelled out because the Viewer holds a fixed port and a second one
-// cannot simply be launched alongside it.
-export const DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT = [
-  "Update the text-to-cad agent skills and restart the CAD Viewer:",
-  "1. Run `npx skills install earthtojake/text-to-cad` (this overwrites the installed skills with the latest release).",
-  "2. Stop the running CAD Viewer, then start it again from the cad-viewer skill so it serves the new bundle.",
-  "3. Reopen the Viewer URL I was using and confirm the version in the top bar has changed."
-].join("\n");
+// yourself. One short line -- it is read at a glance in a popover, and it is pasted into a chat
+// where the agent already knows the rest of the job.
+export const DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT =
+  "Update the text-to-cad skills with `npx skills add earthtojake/text-to-cad`.";
 
 export function normalizeViewerDefaultFile(value = "") {
   const rawValue = String(value ?? "").trim();
@@ -128,7 +122,8 @@ export function normalizeViewerSkillsInstallCommand(
   fallback = DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND
 ) {
   const command = cleanInstallCommandCandidate(value);
-  if (/^npx\s+skills\s+install(?:\s+\S+)+$/iu.test(command)) {
+  // Both spellings: `install` is an alias for `add`, and release bodies may use either.
+  if (/^npx\s+skills\s+(?:install|add)(?:\s+\S+)+$/iu.test(command)) {
     return command;
   }
   return String(fallback || "").trim();
@@ -139,9 +134,9 @@ export function normalizeViewerSkillsUpdatePrompt(
   fallback = DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT
 ) {
   const prompt = String(value ?? "").replace(/\r\n/gu, "\n").trim();
-  // Must still tell the agent to do both halves; a prompt that only installs leaves the user
-  // staring at the old bundle and concluding the update did not work.
-  if (prompt && /\bnpx\s+skills\s+(?:install|add)\b/iu.test(prompt) && /restart|start it again/iu.test(prompt)) {
+  // The prompt is pasted into an agent chat, so it has to actually name the command to run --
+  // prose alone ("please update the skills") would leave the agent guessing at a channel.
+  if (prompt && /\bnpx\s+skills\s+(?:install|add)\b/iu.test(prompt)) {
     return prompt;
   }
   return String(fallback || "").trim();
@@ -153,8 +148,8 @@ export function viewerSkillsInstallCommandFromText(
 ) {
   const source = String(value || "");
   const candidates = [
-    ...Array.from(source.matchAll(/`([^`\r\n]*\bnpx\s+skills\s+install\b[^`\r\n]*)`/giu), (match) => match[1]),
-    ...Array.from(source.matchAll(/(?:^|\n)\s*([^\r\n]*\bnpx\s+skills\s+install\b[^\r\n]*)/giu), (match) => match[1])
+    ...Array.from(source.matchAll(/`([^`\r\n]*\bnpx\s+skills\s+(?:install|add)\b[^`\r\n]*)`/giu), (match) => match[1]),
+    ...Array.from(source.matchAll(/(?:^|\n)\s*([^\r\n]*\bnpx\s+skills\s+(?:install|add)\b[^\r\n]*)/giu), (match) => match[1])
   ];
 
   for (const candidate of candidates) {

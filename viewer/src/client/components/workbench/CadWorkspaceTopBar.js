@@ -994,14 +994,13 @@ function VersionReleaseLink({ version, releaseUrl, releaseCheck = emptyLatestRel
             </div>
           </div>
           <div className="flex min-w-0 flex-col gap-1.5">
-            {/* Running the command updates the skills but leaves the Viewer serving the bundle
-                it started with, so this second option hands the whole job to an agent. */}
+            {/* The same update, handed to an agent instead of run in a terminal. */}
             <div className="px-0.5 text-[11px] font-medium leading-none text-muted-foreground">
               Or ask your agent
             </div>
             <div className="flex h-8 min-w-0 items-center gap-2 rounded-sm border border-border/60 bg-muted/35 p-1 pl-2">
               <span className="min-w-0 flex-1 truncate text-[11px] leading-5 text-foreground">
-                Update the skills and restart the Viewer
+                Update the text-to-cad skills
               </span>
               <Button
                 type="button"
