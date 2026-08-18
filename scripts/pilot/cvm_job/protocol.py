@@ -234,6 +234,8 @@ def public_state(state: dict[str, Any], stale_after: float) -> dict[str, Any]:
         "health": health,
         "heartbeat_age_seconds": age,
     }
+    if state.get("token_slot") is not None:
+        result["token_slot"] = state["token_slot"]
     if state["state"] in TERMINAL_STATES:
         result.update(
             {

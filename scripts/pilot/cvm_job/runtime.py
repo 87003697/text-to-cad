@@ -85,6 +85,12 @@ def _pilot_record(
     exp: str,
     root: Path,
 ) -> dict[str, Any]:
+    raw_token_slot = os.environ.get("VENUS_TOKEN_SLOT")
+    token_slot: int | None = None
+    if raw_token_slot is not None:
+        if not raw_token_slot.isdigit() or int(raw_token_slot) > 49:
+            raise ProtocolError("VENUS_TOKEN_SLOT must be an integer in [0, 49]")
+        token_slot = int(raw_token_slot)
     now = utc_now()
     handle = f"{group}/{exp}"
     return {
@@ -94,6 +100,7 @@ def _pilot_record(
         "group": group,
         "exp": exp,
         "object": object_name,
+        "token_slot": token_slot,
         "exp_dir": f"outputs/{handle}",
         "state": "submitted",
         "submitted_at": now,

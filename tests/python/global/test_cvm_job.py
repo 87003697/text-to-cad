@@ -70,6 +70,20 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(self.detached[0], handle)
         self.assertIn("supervise-pilot", self.detached[1])
 
+    def test_submit_records_nonsecret_token_slot(self) -> None:
+        with mock.patch.dict(os.environ, {"VENUS_TOKEN_SLOT": "3"}):
+            handle = self.submit()
+        state = protocol.load_state(self.state_root, handle)
+        self.assertEqual(state["token_slot"], 3)
+        self.assertEqual(protocol.public_state(state, 60)["token_slot"], 3)
+
+    def test_submit_rejects_invalid_token_slot(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"VENUS_TOKEN_SLOT": "50"}),
+            self.assertRaisesRegex(protocol.ProtocolError, "in \\[0, 49\\]"),
+        ):
+            self.submit()
+
     def test_submit_launch_failure_is_terminal(self) -> None:
         def fail_detach(handle, command, root):
             raise OSError("no process")
@@ -590,6 +604,80 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
         self.assertIn("20260805-170000-audit", commands[0])
         self.assertIn("ServerAliveInterval=30", commands[1])
         self.assertIn("scripts.pilot.cvm_job wait", commands[1])
+
+    def test_submit_token_slot_selects_remote_pool_entry_without_exposing_it(self) -> None:
+        fake_bin = self.workspace / "token-bin"
+        fake_bin.mkdir()
+        command_log = self.workspace / "token-commands.log"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$CVM_WRAPPER_LOG"
+printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_WRAPPER_LOG": os.fspath(command_log),
+        }
+        result = subprocess.run(
+            [
+                os.fspath(SUBMIT_SCRIPT),
+                "pilot",
+                "airplane",
+                "20260805-170000-audit",
+                "--token-slot",
+                "1",
+            ],
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        command = command_log.read_text(encoding="utf-8")
+        self.assertIn("VENUS_TOKENS[1]", command)
+        self.assertIn("VENUS_TOKEN_SLOT='1'", command)
+        self.assertNotIn("secret-", command)
+
+    def test_submit_rejects_noncanonical_token_slot_without_ssh(self) -> None:
+        fake_bin = self.workspace / "invalid-slot-bin"
+        fake_bin.mkdir()
+        marker = self.workspace / "invalid-slot-ssh-called"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+touch "$CVM_SSH_MARKER"
+exit 99
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_SSH_MARKER": os.fspath(marker),
+        }
+        for slot in ("010", "50", "18446744073709551616"):
+            result = subprocess.run(
+                [
+                    os.fspath(SUBMIT_SCRIPT),
+                    "pilot",
+                    "airplane",
+                    "20260805-170000-audit",
+                    "--token-slot",
+                    slot,
+                ],
+                env=env,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(result.returncode, 2)
+        self.assertFalse(marker.exists())
 
     def test_submit_and_monitor_reject_batch_without_ssh(self) -> None:
         fake_bin = self.workspace / "bin"
