@@ -732,6 +732,10 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertNotIn("CODEX_RUN", pilot)
         self.assertNotIn('$REPO_ROOT/gateway', pilot)
         self.assertIn('run --input "$PLY"', pilot)
+        self.assertIn(
+            'PYTHONPATH="$REPO_ROOT/packages/browser_runtime/src${PYTHONPATH:+:$PYTHONPATH}"',
+            pilot,
+        )
         self.assertNotIn("--skill", pilot)
         self.assertNotIn("PILOT_SKILLS", pilot)
         self.assertIn("build_bwrap_argv", runner)

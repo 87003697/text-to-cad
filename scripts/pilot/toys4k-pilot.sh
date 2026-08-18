@@ -77,6 +77,7 @@ WORKLOAD=(
 )
 
 PILOT_EXIT=0
+PYTHONPATH="$REPO_ROOT/packages/browser_runtime/src${PYTHONPATH:+:$PYTHONPATH}" \
 "$PYTHON_BIN" "$SCRIPT_DIR/runner.py" run --input "$PLY" "$EXP_DIR" -- \
     "${WORKLOAD[@]}" < /dev/null > /dev/null \
     2> "${EXP_DIR}/run/stderr.log" || PILOT_EXIT=$?
