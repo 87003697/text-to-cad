@@ -168,6 +168,10 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn("CVM_JOB", pilot_script)
         prompt = pilot_script[pilot_script.index("PROMPT=$(cat") : pilot_script.index("echo \"[pilot]")]
         self.assertNotIn("monitor", prompt.lower())
+        self.assertIsNone(
+            re.search(r"(?<!\\)`", prompt),
+            "unescaped backticks in the heredoc execute shell commands",
+        )
         workload = pilot_script[pilot_script.index("WORKLOAD=(") : pilot_script.index("PILOT_EXIT=0")]
         self.assertNotIn("cvm", workload.lower())
 
@@ -739,7 +743,7 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertIn("--skip-git-repo-check", pilot)
         self.assertIn("--disable\n    plugins", pilot)
         self.assertNotIn("--disable\n    view_image", pilot)
-        self.assertIn("Do not call `view_image`", pilot)
+        self.assertIn("Do not call \\`view_image\\`", pilot)
         self.assertIn("danger-full-access", pilot)
         self.assertNotIn("workspace-write", pilot)
         self.assertTrue(gateway.startswith("#!/usr/bin/env bash\n"))

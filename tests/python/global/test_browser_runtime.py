@@ -7,6 +7,7 @@ callable so tests never touch a real Docker daemon.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -141,6 +142,51 @@ class JobFactoryTests(unittest.TestCase):
                     capability_dir=Path(tmp),
                     image_ref="sha:x",
                 )
+
+    def test_locked_id_falls_back_to_locked_tag_after_transport(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock = root / "image-lock.json"
+            lock.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "image": {
+                            "name": "text-to-cad-browser-runtime",
+                            "tag": "build",
+                            "id": "sha256:mac-only",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            base = _fake_docker()
+
+            def transported_docker(argv):
+                argv = list(argv)
+                if argv[:3] == ["docker", "image", "inspect"]:
+                    if argv[-1] == "sha256:mac-only":
+                        raise subprocess.CalledProcessError(1, argv)
+                    self.assertEqual(
+                        argv[-1], "text-to-cad-browser-runtime:build"
+                    )
+                    return _completed()
+                return base(argv)
+
+            job = BrowserRuntimeJob.create(
+                root,
+                image_lock_path=lock,
+                docker=transported_docker,
+            )
+            job._wait_for_port = lambda: None  # type: ignore[method-assign]
+            job.start()
+            self.assertEqual(
+                job.image_ref, "text-to-cad-browser-runtime:build"
+            )
+            run_call = next(
+                call for call in base.calls if call[:2] == ["docker", "run"]
+            )
+            self.assertEqual(run_call[-1], "text-to-cad-browser-runtime:build")
 
 
 class LifecycleTests(unittest.TestCase):

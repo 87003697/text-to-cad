@@ -51,7 +51,7 @@ success. Optional additional human review material belongs under
 ${EXP_DIR}/reviews/ and never substitutes for formal Measured Step or Final
 Delivery previews.
 
-Do not call `view_image` in this Venus-backed pilot: its Responses
+Do not call \`view_image\` in this Venus-backed pilot: its Responses
 continuation rejects image tool output. Still generate and cite every required
 PNG, and use the formal preview JSON plus objective measurements for decisions.
 
