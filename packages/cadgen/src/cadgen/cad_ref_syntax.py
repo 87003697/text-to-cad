@@ -96,6 +96,27 @@ def path_has_suffix(path: str, suffix: str) -> bool:
     return path_segments[len(path_segments) - len(suffix_segments) :] == suffix_segments
 
 
+def _ref_display_candidates(display_name: str) -> set[str]:
+    """Every real path a displayed ref prefix could name.
+
+    A ref drops ``.step``, so ``bracket.py`` is what the Viewer shows for ``bracket.step.py``
+    and a bare ``bracket`` is what it shows for ``bracket.step``. Neither is a literal suffix of
+    the file it names, so matching one means expanding it back. Mirrors
+    ``refDisplayNameCandidates`` in ``cadjs/lib/filePathSuffix.js``.
+    """
+    name = str(display_name or "").strip()
+    if not name:
+        return set()
+    head, _, tail = name.rpartition("/")
+    prefix = f"{head}/" if head else ""
+    if tail.lower().endswith(".py"):
+        stem = tail[: -len(".py")]
+        return {f"{prefix}{stem}.step.py", f"{prefix}{stem}.stp.py"}
+    if "." not in tail:
+        return {f"{prefix}{tail}.step", f"{prefix}{tail}.stp"}
+    return set()
+
+
 def ensure_ref_file_matches(file_prefix: str, entry_target: str, *, source_label: str = "ref") -> None:
     """Reject a ref whose file prefix names a file this command is not looking at.
 
@@ -118,7 +139,8 @@ def ensure_ref_file_matches(file_prefix: str, entry_target: str, *, source_label
     # already been reduced to its logical form (`models/parts/bracket`). Matching either way
     # means `bracket.step.py`, `bracket.step` and `bracket` all name the same entry, which is
     # the same equivalence normalize_cad_path exists to express.
-    candidates = {prefix, normalize_cad_path(prefix) or prefix}
+    candidates = {prefix, *_ref_display_candidates(prefix)}
+    candidates |= {normalize_cad_path(candidate) or candidate for candidate in set(candidates)}
     targets = {target, normalize_cad_path(target) or target}
     for candidate in candidates:
         for entry in targets:

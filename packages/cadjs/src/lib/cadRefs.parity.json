@@ -400,7 +400,7 @@
     },
     {
       "phase": 2,
-      "why": "file prefix, the viewer's new copy format",
+      "why": "file prefix, the viewer's copy format (a mesh keeps its extension)",
       "text": "mounting_plate.stl#o1.2.f3",
       "cadPath": "mounting_plate.stl",
       "selectors": [
@@ -409,9 +409,9 @@
     },
     {
       "phase": 2,
-      "why": "a directory-qualified prefix, needed where filenames collide",
-      "text": "starship/super_heavy.step.py#o1.3",
-      "cadPath": "starship/super_heavy.step.py",
+      "why": "directory-qualified prefix; `.step` is dropped so a generator shows as .py",
+      "text": "starship/super_heavy.py#o1.3",
+      "cadPath": "starship/super_heavy.py",
       "selectors": [
         "o1.3"
       ]
@@ -445,9 +445,9 @@
     },
     {
       "phase": 2,
-      "why": "the prefix is NOT normalized: .step.py survives for the agent's literal suffix match",
-      "text": "a/b/c.step.py#o1",
-      "cadPath": "a/b/c.step.py",
+      "why": "the prefix is kept RAW by the parser; expanding .py back to .step.py is resolution's job",
+      "text": "a/b/c.py#o1",
+      "cadPath": "a/b/c.py",
       "selectors": [
         "o1"
       ]
