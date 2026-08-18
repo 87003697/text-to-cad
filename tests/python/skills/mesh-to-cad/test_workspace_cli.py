@@ -92,6 +92,24 @@ class WorkspaceCliTests(unittest.TestCase):
         )
         return result.stdout.strip()
 
+    def test_run_command_defaults_to_thirty_minute_workspace_budget(self) -> None:
+        parsed = self.cli._parser().parse_args(
+            [
+                "run",
+                "--workspace",
+                str(self.workspace),
+                "--attempt",
+                "1",
+                "--phase",
+                "build",
+                "--",
+                "true",
+            ]
+        )
+
+        self.assertEqual(1800, parsed.timeout_seconds)
+        self.assertEqual(1800, self.cli.run_attempt_command.__globals__["MAX_COMMAND_SECONDS"])
+
     def invoke(self, *arguments: str) -> tuple[int, dict, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()

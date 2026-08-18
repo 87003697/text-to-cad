@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from workspace_core import (
+    DEFAULT_COMMAND_SECONDS,
     FAILED_ATTEMPT_RESULTS,
     WorkspaceError,
     begin_attempt,
@@ -91,7 +92,9 @@ def _parser() -> argparse.ArgumentParser:
     _workspace_argument(run)
     run.add_argument("--attempt", type=int, required=True)
     run.add_argument("--phase", required=True)
-    run.add_argument("--timeout-seconds", type=int, default=300)
+    run.add_argument(
+        "--timeout-seconds", type=int, default=DEFAULT_COMMAND_SECONDS
+    )
     run.add_argument("argv", nargs=argparse.REMAINDER)
 
     record = commands.add_parser("record-attempt", help="Publish a failed Attempt")
