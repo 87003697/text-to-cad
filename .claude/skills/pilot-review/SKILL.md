@@ -179,7 +179,7 @@ Canonical Reference + setup
   → Measured Step 0
   → Repair Batch → Attempt → Region Diff → Measured Step + Repair Cycle
   → at most five successful Repair Cycles
-  → final selection
+  → final selection of a Selected Step
   → isolated registered rebuild
   → provenance validation + non-publishing verification + final preview
   → atomic Final Delivery
