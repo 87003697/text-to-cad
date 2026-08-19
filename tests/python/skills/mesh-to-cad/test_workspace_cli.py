@@ -110,6 +110,31 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertEqual(1800, parsed.timeout_seconds)
         self.assertEqual(1800, self.cli.run_attempt_command.__globals__["MAX_COMMAND_SECONDS"])
 
+    def test_incomplete_transaction_scan_skips_runtime_telemetry_tree(self) -> None:
+        runtime_stage = self.workspace / "run/playwright/.tmp-browser-cache"
+        authority_stage = self.workspace / "work/attempts/000001/.tmp-command"
+        runtime_stage.mkdir(parents=True)
+        authority_stage.mkdir(parents=True)
+        scanned_roots: list[Path] = []
+        original_rglob = Path.rglob
+
+        def tracked_rglob(root: Path, pattern: str):
+            scanned_roots.append(root)
+            return original_rglob(root, pattern)
+
+        finder = self.cli.validate_workspace.__globals__[
+            "_find_incomplete_transactions"
+        ]
+        with mock.patch.object(Path, "rglob", tracked_rglob):
+            recovery = finder(self.workspace)
+
+        self.assertEqual(
+            ["work/attempts/000001/.tmp-command"],
+            [item["path"] for item in recovery],
+        )
+        self.assertNotIn(self.workspace, scanned_roots)
+        self.assertNotIn(self.workspace / "run", scanned_roots)
+
     def invoke(self, *arguments: str) -> tuple[int, dict, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -1964,11 +1989,23 @@ time.sleep(60)
         (self.workspace / "run/fake-authority.json").write_text(
             '{"accepted":true}\n', encoding="utf-8"
         )
+        (self.workspace / "run/playwright/.tmp-browser-cache").mkdir(
+            parents=True
+        )
         status, valid, stderr = self.invoke(
             "validate", "--workspace", str(self.workspace)
         )
         self.assertEqual(0, status, stderr)
         self.assertTrue(valid["valid"])
+
+        nested_stage = self.workspace / "work/attempts/000001/.tmp-command"
+        nested_stage.mkdir(parents=True)
+        status, staged, _stderr = self.invoke(
+            "validate", "--workspace", str(self.workspace)
+        )
+        self.assertEqual(2, status)
+        self.assertEqual("incomplete_transaction", staged["error"]["classification"])
+        nested_stage.rmdir()
 
         legacy = self.root / "legacy"
         legacy.mkdir()

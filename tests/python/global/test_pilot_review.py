@@ -227,13 +227,43 @@ class PilotReviewTests(unittest.TestCase):
             "recovery": [],
         }
 
-    def review_draft(self, *, evidence_path: str = "workspace.json") -> dict:
+    def review_draft(
+        self,
+        *,
+        evidence_path: str = "workspace.json",
+        omitted_check_id: str | None = None,
+        extra_check_id: str | None = None,
+    ) -> dict:
+        assessments = [
+            {
+                "check_id": check["check_id"],
+                "status": "observed",
+                "rationale": "Synthetic canonical authority records this protocol stage.",
+                "evidence": [
+                    {"scope": "experiment", "path": "workspace.json"}
+                ],
+            }
+            for check in self.reviewer.PROTOCOL_CHECKS
+            if check["check_id"] != omitted_check_id
+        ]
+        if extra_check_id is not None:
+            assessments.append(
+                {
+                    "check_id": extra_check_id,
+                    "status": "observed",
+                    "rationale": "This check was not requested by the compiler.",
+                    "evidence": [
+                        {"scope": "experiment", "path": "workspace.json"}
+                    ],
+                }
+            )
         return {
-            "schema": "pilot-review.draft/1",
+            "schema": "pilot-review.draft/2",
             "semantic_verdicts": {
                 "reconstruction_quality": "accepted",
                 "production_runtime_integration": "not_auditable",
             },
+            "protocol_assessments": assessments,
             "issues": [
                 {
                     "classification": "observability-gap",
@@ -394,6 +424,10 @@ class PilotReviewTests(unittest.TestCase):
         bicycle_input = json.loads(
             (bicycle / "review-input.json").read_text(encoding="utf-8")
         )
+        self.assertEqual(
+            [check["check_id"] for check in self.reviewer.PROTOCOL_CHECKS],
+            [check["check_id"] for check in bicycle_input["protocol_checks"]],
+        )
         command = bicycle_input["execution"]["commands"][0]
         self.assertEqual(124, command["exit_code"])
         self.assertTrue(command["timed_out"])
@@ -437,10 +471,36 @@ class PilotReviewTests(unittest.TestCase):
             self.assertEqual(
                 "accepted", review["verdicts"]["reconstruction_quality"]
             )
+            self.assertEqual(
+                len(self.reviewer.PROTOCOL_CHECKS),
+                len(review["protocol_assessments"]),
+            )
             self.assertTrue((experiment / "review.md").is_file())
         summary = (group / "review-summary.md").read_text(encoding="utf-8")
         self.assertIn("Only the bicycle command timed out", summary)
         self.assertIn("| airplane | pass | pass | accepted |", summary)
+        airplane_markdown = (airplane / "review.md").read_text(encoding="utf-8")
+        self.assertIn("## Protocol assessment", airplane_markdown)
+        self.assertIn("`atomic-final-delivery`: `observed`", airplane_markdown)
+        self.assertLess(
+            airplane_markdown.index("- workspace: `workspace.json`"),
+            airplane_markdown.index("## Protocol assessment"),
+        )
+
+    def test_skill_dispatches_one_subagent_for_complete_transaction(self) -> None:
+        skill = (
+            REPO_ROOT / ".claude/skills/pilot-review/SKILL.md"
+        ).read_text(encoding="utf-8")
+        contract = (
+            REPO_ROOT
+            / ".claude/skills/pilot-review/references/review-agent-contract.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("dispatch exactly one stable sub-agent", skill)
+        self.assertIn("caller performs no `prepare`", skill)
+        self.assertIn("execute every Workflow step locally", skill)
+        self.assertIn("Run Evidence\nCompiler `prepare`", contract)
+        self.assertIn("then run Evidence Compiler\n`publish`", contract)
 
     def test_external_review_root_keeps_source_immutable(self) -> None:
         payload = self.canonical_experiment()
@@ -729,6 +789,132 @@ class PilotReviewTests(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertFalse((self.exp / "review.json").exists())
         self.assertFalse((self.exp / "review.md").exists())
+
+    def test_publish_rejects_incomplete_protocol_check_coverage(self) -> None:
+        payload = self.canonical_experiment()
+        helper = self.helper(payload)
+        self.assertEqual(
+            0,
+            self.reviewer.main(
+                ["prepare", str(self.exp), "--workspace-helper", str(helper)]
+            ),
+        )
+        omitted = self.reviewer.PROTOCOL_CHECKS[-1]["check_id"]
+        write_json(
+            self.exp / "review-draft.json",
+            self.review_draft(omitted_check_id=omitted),
+        )
+
+        status = self.reviewer.main(["publish", str(self.exp)])
+
+        self.assertEqual(status, 1)
+        self.assertFalse((self.exp / "review.json").exists())
+        self.assertFalse((self.exp / "review.md").exists())
+
+    def test_publish_rejects_unknown_protocol_check(self) -> None:
+        payload = self.canonical_experiment()
+        helper = self.helper(payload)
+        self.assertEqual(
+            0,
+            self.reviewer.main(
+                ["prepare", str(self.exp), "--workspace-helper", str(helper)]
+            ),
+        )
+        write_json(
+            self.exp / "review-draft.json",
+            self.review_draft(extra_check_id="invented-check"),
+        )
+
+        status = self.reviewer.main(["publish", str(self.exp)])
+
+        self.assertEqual(status, 1)
+        self.assertFalse((self.exp / "review.json").exists())
+
+    def test_missing_protocol_check_requires_missing_evidence_detail(self) -> None:
+        payload = self.canonical_experiment()
+        helper = self.helper(payload)
+        self.assertEqual(
+            0,
+            self.reviewer.main(
+                ["prepare", str(self.exp), "--workspace-helper", str(helper)]
+            ),
+        )
+        draft = self.review_draft()
+        draft["protocol_assessments"][0] = {
+            "check_id": self.reviewer.PROTOCOL_CHECKS[0]["check_id"],
+            "status": "missing",
+            "rationale": "The expected authority is absent.",
+            "evidence": [],
+        }
+        write_json(self.exp / "review-draft.json", draft)
+
+        status = self.reviewer.main(["publish", str(self.exp)])
+
+        self.assertEqual(status, 1)
+        self.assertFalse((self.exp / "review.json").exists())
+
+    def test_publish_rejects_non_string_protocol_status_cleanly(self) -> None:
+        payload = self.canonical_experiment()
+        helper = self.helper(payload)
+        self.assertEqual(
+            0,
+            self.reviewer.main(
+                ["prepare", str(self.exp), "--workspace-helper", str(helper)]
+            ),
+        )
+        draft = self.review_draft()
+        draft["protocol_assessments"][0]["status"] = []
+        write_json(self.exp / "review-draft.json", draft)
+
+        status = self.reviewer.main(["publish", str(self.exp)])
+
+        self.assertEqual(status, 1)
+        self.assertFalse((self.exp / "review.json").exists())
+
+    def test_publish_rejects_non_string_assessment_evidence_scope_cleanly(self) -> None:
+        payload = self.canonical_experiment()
+        helper = self.helper(payload)
+        self.assertEqual(
+            0,
+            self.reviewer.main(
+                ["prepare", str(self.exp), "--workspace-helper", str(helper)]
+            ),
+        )
+        draft = self.review_draft()
+        draft["protocol_assessments"][0]["evidence"][0]["scope"] = []
+        write_json(self.exp / "review-draft.json", draft)
+
+        status = self.reviewer.main(["publish", str(self.exp)])
+
+        self.assertEqual(status, 1)
+        self.assertFalse((self.exp / "review.json").exists())
+
+    def test_missing_protocol_check_can_publish_with_gap_detail(self) -> None:
+        payload = self.canonical_experiment()
+        helper = self.helper(payload)
+        self.assertEqual(
+            0,
+            self.reviewer.main(
+                ["prepare", str(self.exp), "--workspace-helper", str(helper)]
+            ),
+        )
+        draft = self.review_draft()
+        draft["protocol_assessments"][0] = {
+            "check_id": self.reviewer.PROTOCOL_CHECKS[0]["check_id"],
+            "status": "missing",
+            "rationale": "The expected authority is absent.",
+            "evidence": [],
+            "missing_evidence": "canonical reference setup receipt",
+        }
+        write_json(self.exp / "review-draft.json", draft)
+
+        status = self.reviewer.main(["publish", str(self.exp)])
+
+        self.assertEqual(status, 0)
+        review = json.loads(
+            (self.exp / "review.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual("missing", review["protocol_assessments"][0]["status"])
 
     def test_prepare_group_preserves_coverage_after_one_compiler_failure(self) -> None:
         payload = self.canonical_experiment()

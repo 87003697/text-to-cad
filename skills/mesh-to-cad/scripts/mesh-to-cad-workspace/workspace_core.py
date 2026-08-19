@@ -3318,9 +3318,23 @@ def _validate_repair_plan_boundary(plan: Mapping[str, Any], from_step: int | Non
 
 def _find_incomplete_transactions(workspace: Path) -> list[dict[str, Any]]:
     recovery: list[dict[str, Any]] = []
-    for path in workspace.rglob(".tmp-*"):
-        if ".git" in path.parts:
-            continue
+    # Root-level runtime byproducts (especially run/) are telemetry. Search only
+    # roots that can contain canonical authority or mutable publication state.
+    staged_paths = list(workspace.glob(".tmp-*"))
+    for name in (
+        "input",
+        "setup",
+        "steps",
+        "cycles",
+        "attempts",
+        "voxblame",
+        "final",
+        "work",
+    ):
+        root = workspace / name
+        if root.exists():
+            staged_paths.extend(root.rglob(".tmp-*"))
+    for path in sorted(set(staged_paths)):
         recovery.append(
             {
                 "classification": "staged_transaction",

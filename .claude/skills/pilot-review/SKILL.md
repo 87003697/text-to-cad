@@ -1,9 +1,9 @@
 ---
 name: pilot-review
 description: >-
-  Audit canonical mesh-to-cad Workspace pilots with deterministic evidence
-  compilation and a local semantic Review Agent. Use for a pilot, output group,
-  rollout failure, CAD-skill iteration, or CVM result analysis.
+  Audit canonical mesh-to-cad Workspace pilots through one dedicated sub-agent
+  running deterministic evidence compilation and semantic review. Use for a
+  pilot, output group, rollout failure, CAD-skill iteration, or CVM result analysis.
 ---
 
 # pilot-review — Evidence Compiler + local Review Agent
@@ -26,8 +26,23 @@ Local Review Agent         → review-draft.json
 Evidence Compiler publish  → review.json / review.md / review-summary.md
 ```
 
-The compiler owns deterministic facts and publication. The current local Agent
-owns semantic interpretation. Do not dispatch another provider or reviewer.
+The compiler owns deterministic facts and publication. The Review Agent owns
+semantic interpretation. Keep them as two Modules inside one dedicated
+sub-agent workflow.
+
+## Execution role
+
+When invoking this skill as the caller, dispatch exactly one stable sub-agent
+for the complete review transaction. Give it the repository root, immutable
+source target, review root, and Workspace helper. Resume that same sub-agent for
+follow-ups. The caller performs no `prepare`, drafting, `publish`, or semantic
+interpretation.
+
+When assigned as that dedicated sub-agent, execute every Workflow step locally
+and spawn no further reviewer. Write only the declared review destination.
+Return the source target, review root, compiler status, per-experiment verdicts,
+report paths, phase timings, and unresolved questions. If sub-agent dispatch is
+unavailable to the caller, stop before preparation and report the missing seam.
 
 ## Input
 
@@ -37,7 +52,7 @@ only `workspace.json` with schema `mesh-to-cad.workspace/1`; unsupported or
 legacy experiments remain explicitly classified rather than reconstructed from
 filenames or telemetry.
 
-## Workflow
+## Workflow for the dedicated sub-agent
 
 ### 1. Prepare deterministic evidence
 
@@ -77,12 +92,12 @@ Preparation writes only:
 With `--review-root`, these paths are relative to the review root and the source
 experiment receives no writes.
 
-Each experiment input freezes Workspace validation, graph, runner manifest,
-artifact presence, immutable command records, bounded stderr previews, rollout
-location, and shipped snapshot HEAD when available. Compiler identity digests
-make later edits to deterministic baselines fail closed. Preparation is complete
-when every discovered experiment appears in the group input, including failed
-and unsupported experiments.
+Each experiment input freezes Workspace validation, graph, protocol checks,
+runner manifest, artifact presence, immutable command records, bounded stderr
+previews, rollout location, and shipped snapshot HEAD when available. Compiler
+identity digests make later edits to deterministic baselines fail closed.
+Preparation is complete when every discovered experiment appears in the group
+input, including failed and unsupported experiments.
 
 ### 2. Perform the local semantic review
 
@@ -104,10 +119,10 @@ telemetry. They can explain authority but cannot redefine it. Pair tool calls
 with results by call ID and record order. Agent prose is a claim until a tool
 result or authority artifact confirms it.
 
-For every expected graph edge, determine `observed`, `partial`, `missing`,
-`not_applicable`, or `not_auditable`. Locate the last good node and first
-failing node. Compare sibling Attempts before assigning a root cause. Missing
-evidence stays missing.
+Assess every compiler-issued `protocol_checks` entry as `observed`, `partial`,
+`missing`, `not_applicable`, or `not_auditable`. Locate the last good node and
+first failing node. Compare sibling Attempts before assigning a root cause.
+Missing evidence stays missing.
 
 ### 3. Write Review Agent drafts
 
@@ -118,14 +133,16 @@ Write:
 
 When preparation used `--review-root`, write drafts under the same review root.
 
-The draft supplies only semantic verdicts, findings, unresolved questions,
-evidence gaps, and the ordered fix playbook. Runner and Workspace verdicts come
-from the compiler and cannot be overridden. Every finding has one primary root
-cause, a concrete fix target, and at least one existing evidence file.
+The draft supplies protocol assessments, semantic verdicts, findings,
+unresolved questions, evidence gaps, and the ordered fix playbook. Runner and
+Workspace verdicts come from the compiler and cannot be overridden. Every
+finding has one primary root cause, a concrete fix target, and at least one
+existing evidence file.
 
 Drafting is complete when every experiment listed by the compiler has a draft,
-all plausible competitors and failed Attempts were considered, and every
-unresolved symptom names the cheapest discriminating next experiment.
+its assessments exactly cover the issued protocol check IDs, all plausible
+competitors and failed Attempts were considered, and every unresolved symptom
+names the cheapest discriminating next experiment.
 
 ### 4. Validate and publish
 
@@ -140,9 +157,10 @@ Pass the same source target and review root used by `prepare`. Omit
 `--review-root` only for the compatible in-place workflow.
 
 The compiler validates all drafts before publishing any final report. It
-rejects unknown root-cause classes, invalid semantic verdicts, missing evidence
-files, path escapes, altered compiler inputs, and incomplete group coverage. On
-success it writes only:
+rejects missing, duplicate, or unknown protocol check IDs, unknown root-cause
+classes, invalid semantic verdicts, missing evidence files, path escapes,
+altered compiler inputs, and incomplete group coverage. On success it writes
+only:
 
 - `<exp>/review.md`;
 - `<exp>/review.json`;
@@ -180,7 +198,10 @@ Step; explicit ancestry is authoritative.
   or already has reports that must remain unchanged.
 - Use finalized SQLite traces with `immutable=1` when trace inspection is
   necessary.
-- Keep the workflow local and read-only: no network request, model dispatch,
-  dependency installation, viewer, CAD rebuild, or experiment repair.
+- Keep the workflow local and read-only: no network request, external or paid
+  model dispatch, dependency installation, viewer, CAD rebuild, or experiment
+  repair.
+- Keep the dedicated sub-agent on the complete transaction; resume it instead
+  of replacing it or letting the caller author missing drafts.
 - The legacy `review.py <exp>` interface remains compatibility-only; new audits
   use `prepare` and `publish`.

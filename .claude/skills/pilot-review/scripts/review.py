@@ -36,6 +36,61 @@ SEMANTIC_VERDICTS = {
     },
     "production_runtime_integration": {"pass", "fail", "not_auditable"},
 }
+PROTOCOL_ASSESSMENT_STATUSES = {
+    "observed",
+    "partial",
+    "missing",
+    "not_applicable",
+    "not_auditable",
+}
+PROTOCOL_CHECKS = (
+    {
+        "check_id": "canonical-reference-and-setup",
+        "requirement": "Canonical reference and setup authority are present.",
+    },
+    {
+        "check_id": "workspace-initialization",
+        "requirement": "The canonical Workspace is initialized.",
+    },
+    {
+        "check_id": "initial-attempt",
+        "requirement": "An Attempt branches toward Measured Step 0.",
+    },
+    {
+        "check_id": "formal-preview-and-measurement",
+        "requirement": "The initial Attempt produces a formal preview and measurement.",
+    },
+    {
+        "check_id": "measured-step-zero",
+        "requirement": "The initial measurement publishes Measured Step 0.",
+    },
+    {
+        "check_id": "repair-cycle-chain",
+        "requirement": (
+            "Each applicable repair chain records its batch, Attempt, region diff, "
+            "Measured Step, and Repair Cycle within budget."
+        ),
+    },
+    {
+        "check_id": "final-selection",
+        "requirement": "Final selection identifies the chosen Measured Step.",
+    },
+    {
+        "check_id": "isolated-registered-rebuild",
+        "requirement": "The selected source is rebuilt through the registered isolated path.",
+    },
+    {
+        "check_id": "provenance-verification-and-preview",
+        "requirement": (
+            "Provenance validation, non-publishing verification, and final preview "
+            "support delivery."
+        ),
+    },
+    {
+        "check_id": "atomic-final-delivery",
+        "requirement": "Final Delivery is published atomically from verified evidence.",
+    },
+)
 
 
 class ReviewError(RuntimeError):
@@ -614,8 +669,8 @@ def _group_records(
     group: Path,
     experiments: list[Path],
 ) -> dict[str, dict[str, Any]]:
-    if group_input.get("schema") != "pilot-review.group-evidence/1":
-        raise ReviewError("group review input must use pilot-review.group-evidence/1")
+    if group_input.get("schema") != "pilot-review.group-evidence/2":
+        raise ReviewError("group review input must use pilot-review.group-evidence/2")
     if group_input.get("group") != group.name:
         raise ReviewError("group review input does not match its directory")
     if group_input.get("source_group") != str(group.resolve()):
@@ -950,7 +1005,7 @@ def _prepare_experiment(
         baseline = _compiler_error_review(workspace, detail)
         execution["compiler_errors"] = execution_errors
     evidence = _seal_compiler_output({
-        "schema": "pilot-review.evidence/1",
+        "schema": "pilot-review.evidence/2",
         "experiment": workspace.name,
         "group": group.name if group is not None else None,
         "source": {
@@ -962,6 +1017,7 @@ def _prepare_experiment(
             "classification": baseline["workspace_validation"]["classification"],
         },
         "snapshot_head": _snapshot_head(group, workspace),
+        "protocol_checks": list(PROTOCOL_CHECKS),
         "baseline": baseline,
         "execution": execution,
     })
@@ -1012,7 +1068,7 @@ def prepare_target(
             }
         )
     summary = _seal_compiler_output({
-        "schema": "pilot-review.group-evidence/1",
+        "schema": "pilot-review.group-evidence/2",
         "group": group.name if group is not None else None,
         "source_group": str(group.resolve()) if group is not None else None,
         "snapshot_head": _snapshot_head(group, experiments[0]),
@@ -1037,9 +1093,9 @@ def _validate_evidence_reference(
     group: Path,
 ) -> dict[str, str]:
     if not isinstance(reference, dict):
-        raise ReviewError("issue evidence entries must be objects")
+        raise ReviewError("evidence entries must be objects")
     scope = reference.get("scope", "experiment")
-    if scope not in {"experiment", "group"}:
+    if not isinstance(scope, str) or scope not in {"experiment", "group"}:
         raise ReviewError("evidence scope must be experiment or group")
     path_text = reference.get("path")
     if not isinstance(path_text, str) or not path_text:
@@ -1106,9 +1162,10 @@ def _validate_experiment_draft(
     draft: dict[str, Any],
     workspace: Path,
     group: Path,
+    protocol_checks: Any,
 ) -> dict[str, Any]:
-    if draft.get("schema") != "pilot-review.draft/1":
-        raise ReviewError("review draft must use pilot-review.draft/1")
+    if draft.get("schema") != "pilot-review.draft/2":
+        raise ReviewError("review draft must use pilot-review.draft/2")
     semantic = draft.get("semantic_verdicts")
     if not isinstance(semantic, dict) or set(semantic) != set(SEMANTIC_VERDICTS):
         raise ReviewError(
@@ -1121,8 +1178,83 @@ def _validate_experiment_draft(
     issues = draft.get("issues")
     if not isinstance(issues, list):
         raise ReviewError("issues must be a list")
+    if not isinstance(protocol_checks, list) or not protocol_checks:
+        raise ReviewError("review input omitted protocol_checks")
+    required_check_ids: list[str] = []
+    for check in protocol_checks:
+        if not isinstance(check, dict):
+            raise ReviewError("protocol_checks entries must be objects")
+        check_id = check.get("check_id")
+        requirement = check.get("requirement")
+        if not isinstance(check_id, str) or not check_id.strip():
+            raise ReviewError("protocol check_id must be a non-empty string")
+        if not isinstance(requirement, str) or not requirement.strip():
+            raise ReviewError("protocol requirement must be a non-empty string")
+        required_check_ids.append(check_id)
+    if len(required_check_ids) != len(set(required_check_ids)):
+        raise ReviewError("review input contains duplicate protocol check_ids")
+    assessments = draft.get("protocol_assessments")
+    if not isinstance(assessments, list):
+        raise ReviewError("protocol_assessments must be a list")
+    normalized_assessments: list[dict[str, Any]] = []
+    seen_check_ids: list[str] = []
+    for assessment in assessments:
+        if not isinstance(assessment, dict):
+            raise ReviewError("protocol assessments must be objects")
+        check_id = assessment.get("check_id")
+        if not isinstance(check_id, str) or not check_id.strip():
+            raise ReviewError("protocol assessment check_id must be non-empty")
+        status = assessment.get("status")
+        if not isinstance(status, str) or status not in PROTOCOL_ASSESSMENT_STATUSES:
+            raise ReviewError(f"invalid protocol assessment status: {status}")
+        rationale = assessment.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            raise ReviewError("protocol assessment rationale must be non-empty")
+        raw_evidence = assessment.get("evidence")
+        if not isinstance(raw_evidence, list):
+            raise ReviewError("protocol assessment evidence must be a list")
+        if status in {"observed", "partial", "not_applicable"} and not raw_evidence:
+            raise ReviewError(f"{status} protocol assessment requires evidence")
+        missing_evidence = assessment.get("missing_evidence")
+        if status in {"missing", "not_auditable"}:
+            if not isinstance(missing_evidence, str) or not missing_evidence.strip():
+                raise ReviewError(
+                    f"{status} protocol assessment requires missing_evidence"
+                )
+        elif missing_evidence is not None and (
+            not isinstance(missing_evidence, str) or not missing_evidence.strip()
+        ):
+            raise ReviewError("protocol assessment missing_evidence must be non-empty")
+        normalized = {
+            "check_id": check_id,
+            "status": status,
+            "rationale": rationale,
+            "evidence": [
+                _validate_evidence_reference(item, workspace, group)
+                for item in raw_evidence
+            ],
+        }
+        if missing_evidence is not None:
+            normalized["missing_evidence"] = missing_evidence
+        normalized_assessments.append(normalized)
+        seen_check_ids.append(check_id)
+    if len(seen_check_ids) != len(set(seen_check_ids)):
+        raise ReviewError("protocol_assessments contains duplicate check_ids")
+    missing = sorted(set(required_check_ids) - set(seen_check_ids))
+    unknown = sorted(set(seen_check_ids) - set(required_check_ids))
+    if missing or unknown:
+        raise ReviewError(
+            "protocol_assessments must exactly cover protocol_checks: "
+            f"missing={missing}, unknown={unknown}"
+        )
+    assessments_by_id = {
+        assessment["check_id"]: assessment for assessment in normalized_assessments
+    }
     return {
         "semantic_verdicts": semantic,
+        "protocol_assessments": [
+            assessments_by_id[check_id] for check_id in required_check_ids
+        ],
         "issues": [
             _validate_issue(issue, workspace, group) for issue in issues
         ],
@@ -1147,6 +1279,7 @@ def _final_review(evidence: dict[str, Any], draft: dict[str, Any]) -> dict[str, 
         "contract_provenance": baseline["contract_provenance"],
         "workspace_validation": baseline["workspace_validation"],
         "graph": baseline["graph"],
+        "protocol_assessments": draft["protocol_assessments"],
         "issues": [*baseline.get("issues", []), *draft["issues"]],
         "unresolved": draft["unresolved"],
         "evidence_gaps": draft["evidence_gaps"],
@@ -1172,6 +1305,18 @@ def _markdown(review: dict[str, Any]) -> str:
     )
     for name, value in review["contract_provenance"].items():
         lines.append(f"- {name}: `{value}`")
+    assessments = review.get("protocol_assessments", [])
+    if assessments:
+        lines.extend(["", "## Protocol assessment", ""])
+        for assessment in assessments:
+            lines.append(
+                f"- `{assessment['check_id']}`: `{assessment['status']}` — "
+                f"{assessment['rationale']}"
+            )
+            if assessment.get("missing_evidence"):
+                lines.append(
+                    f"  - missing evidence: {assessment['missing_evidence']}"
+                )
     lines.extend(
         [
             "",
@@ -1326,7 +1471,7 @@ def publish_target(
             evidence,
             review_workspace / "review-input.json",
         )
-        if evidence.get("schema") != "pilot-review.evidence/1":
+        if evidence.get("schema") != "pilot-review.evidence/2":
             raise ReviewError(
                 "unsupported review input schema in "
                 f"{review_workspace / 'review-input.json'}"
@@ -1354,6 +1499,7 @@ def publish_target(
             _read_json(review_workspace / "review-draft.json"),
             workspace,
             group_root,
+            evidence.get("protocol_checks"),
         )
         pending.append(
             (workspace, review_workspace, _final_review(evidence, draft))
