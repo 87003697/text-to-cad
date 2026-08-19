@@ -432,6 +432,14 @@ build_runtime() {
   # tests/test_worker.py not).
   sync_dir "$VIEWER_DIR/server_py" "$target_dir/server_py"
 
+  # The `npm start` launcher, which the skill documents as the way to start the Viewer. Named
+  # files rather than the whole scripts/ directory: that directory also carries e2e harnesses and
+  # a theme baseline, none of which belong in a runtime.
+  mkdir -p "$target_dir/scripts"
+  for launcher_file in start-viewer.mjs cad-python.mjs directoryRoot.mjs; do
+    cp "$VIEWER_DIR/scripts/$launcher_file" "$target_dir/scripts/$launcher_file"
+  done
+
   write_runtime_package_json "$target_dir"
   write_runtime_gitignore "$target_dir"
   write_runtime_requirements "$target_dir"
