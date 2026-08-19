@@ -1,4 +1,9 @@
-import { buildCadRefToken, parseCadRefToken, sortCadRefSelectors } from "cadjs/lib/cadRefs.js";
+import {
+  buildCadRefToken,
+  isNativeCadSelector,
+  parseCadRefToken,
+  sortCadRefSelectors
+} from "cadjs/lib/cadRefs.js";
 import { entryReferenceAssetSignature } from "cadjs/lib/entryAssets.js";
 import { buildSelectorRuntime } from "cadjs/lib/selectors/runtime.js";
 import { cadPathForEntry, fileKey } from "./sidebar.js";
@@ -36,10 +41,18 @@ export function buildNormalizedReferenceState(entry, referencePayload = null, {
   partId = "",
   transform = null,
   remapOccurrenceId = "",
-  remapOccurrencePrefix = null
+  remapOccurrencePrefix = null,
+  selectorRuntime: prebuiltSelectorRuntime = null,
+  loadedTopologyKey = ""
 } = {}) {
-  const selectorRuntime = buildSelectorRuntime(referencePayload, {
-    copyCadPath: copyCadPath || cadPathForEntry(entry),
+  // A component-GLB package has no whole-assembly selector bundle; the caller composes the
+  // per-component runtimes and passes the result here instead of a single bundle to parse.
+  const selectorRuntime = prebuiltSelectorRuntime || buildSelectorRuntime(referencePayload, {
+    // fileRefPrefix is the shortest path suffix that names this entry uniquely, extension
+    // included -- the extension is what separates format siblings (plate.stl vs plate.3mf),
+    // which is why cadPathForEntry (which strips it) is NOT used here. An entry without the
+    // field emits bare "#..." exactly as before, so the prefix is opt-in per call site.
+    copyCadPath: copyCadPath || fileRefPrefixForEntry(entry),
     partId,
     transform,
     remapOccurrenceId,
@@ -59,8 +72,41 @@ export function buildNormalizedReferenceState(entry, referencePayload = null, {
     parts: [],
     selectorRuntime,
     references,
+    loadedTopologyKey,
     disabledReason: ""
   };
+}
+
+// Lazy assembly topology: from a component-GLB package descriptor, pick only the occurrences whose
+// ids are in `requestedOccurrenceIds` (the tree nodes the user expanded) and the de-duplicated set
+// of component cids they need. A single-component part has no assembly tree, so it loads every
+// occurrence. `loadedTopologyKey` is a stable key over the requested set so callers can detect when
+// the expanded set grows and re-load only the newly-needed components.
+export function selectRequestedAssemblyComponents(
+  packageDescriptor,
+  requestedOccurrenceIds,
+  { singleComponentPart = false } = {}
+) {
+  const occurrences = Array.isArray(packageDescriptor?.occurrences) ? packageDescriptor.occurrences : [];
+  const requestedSet = new Set(
+    (Array.isArray(requestedOccurrenceIds) ? requestedOccurrenceIds : [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean)
+  );
+  const occurrencesToLoad = singleComponentPart
+    ? occurrences
+    : occurrences.filter((occurrence) => requestedSet.has(String(occurrence?.id || "").trim()));
+  const neededCids = [];
+  const seenCids = new Set();
+  for (const occurrence of occurrencesToLoad) {
+    const cid = String(occurrence?.component || "").trim();
+    if (cid && !seenCids.has(cid)) {
+      seenCids.add(cid);
+      neededCids.push(cid);
+    }
+  }
+  const loadedTopologyKey = singleComponentPart ? "*" : [...requestedSet].sort().join("|");
+  return { occurrencesToLoad, neededCids, loadedTopologyKey };
 }
 
 export function parseAssemblyPartReferenceSelectionId(referenceId) {
@@ -168,7 +214,9 @@ export function canonicalCadRefCopyText(text, { allowPlain = false } = {}) {
   if (!normalizedText) {
     return "";
   }
-  if (!normalizedText.startsWith("#")) {
+  // Copy text now may be `<file>#<refs>`, so a bare startsWith("#") test would reject exactly
+  // what the copy buttons produce.
+  if (!normalizedText.includes("#")) {
     return allowPlain ? normalizedText : "";
   }
   const token = normalizedText.split(/\s+/)[0];
@@ -212,9 +260,27 @@ export function copySelectedReferenceText(references) {
   };
 }
 
-export function buildAssemblyPartCopyText(part, entry) {
-  void entry;
+/**
+ * Put `prefix` in front of a copy line that has none, leaving one that already has a prefix
+ * alone. Idempotent on purpose: copy text reaches the clipboard through several builders, and
+ * applying this at the one funnel they all pass through is what keeps them consistent without
+ * threading an entry through every one of them.
+ */
+export function withFileRefPrefix(line, prefix) {
+  const text = String(line || "").trim();
+  const filePrefix = String(prefix || "").trim();
+  if (!text || !filePrefix || !text.includes("#")) {
+    return text;
+  }
+  return text.startsWith("#") ? `${filePrefix}${text}` : text;
+}
 
+/** The file prefix a copied ref should carry, or "" when the entry has none. */
+export function fileRefPrefixForEntry(entry) {
+  return String(entry?.fileRefPrefix || "").trim();
+}
+
+export function buildAssemblyPartCopyText(part, entry) {
   const selector = [
     part?.displaySelector,
     part?.occurrenceId,
@@ -223,16 +289,12 @@ export function buildAssemblyPartCopyText(part, entry) {
     part?.id
   ].map((value) => {
     const candidate = String(value || "").trim();
-    return /^(?:o\d+(?:\.\d+)*(?:\.[sfev]\d+)?|[sfev]\d+|m\d+)$/i.test(candidate)
-      ? candidate
-      : "";
+    return isNativeCadSelector(candidate) ? candidate : "";
   }).find(Boolean) || "";
   if (!selector) {
     return "";
   }
-  return buildCadRefToken({
-    selector
-  });
+  return buildCadRefToken({ cadPath: fileRefPrefixForEntry(entry), selector });
 }
 
 export function buildWholeStepEntryCopyReference(entry) {
@@ -241,7 +303,8 @@ export function buildWholeStepEntryCopyReference(entry) {
   }
   return {
     id: "step-entry:whole",
-    copyText: buildCadRefToken()
+    // `<prefix>#` names the whole file; with no prefix this stays the bare "#" it always was.
+    copyText: buildCadRefToken({ cadPath: fileRefPrefixForEntry(entry) })
   };
 }
 
@@ -250,12 +313,11 @@ export function buildAssemblyMateSelector(mate) {
 }
 
 export function buildAssemblyMateCopyText(mate, entry) {
-  void entry;
   const selector = buildAssemblyMateSelector(mate);
   if (!selector) {
     return "";
   }
-  return buildCadRefToken({ selector });
+  return buildCadRefToken({ cadPath: fileRefPrefixForEntry(entry), selector });
 }
 
 export function buildSelectionCopyPayload({ references = [], parts = [], mates = [], entry = null } = {}) {
@@ -312,6 +374,21 @@ export function buildSelectionCopyButtonLabel(lines, { limit = 1 } = {}) {
 
   const visibleTokens = tokens.slice(0, normalizedLimit);
   return `Copy ${visibleTokens.join(", ")}`;
+}
+
+/**
+ * The label to fall back to when the ref itself will not fit: "Copy 3 refs".
+ *
+ * A ref cut off mid-token ("Copy motorcycle_shock_absor…") tells the user less than a count
+ * does — it looks like the ref is wrong rather than merely long. The clipboard carries the
+ * whole thing either way.
+ */
+export function buildSelectionCopyCountLabel(count) {
+  const n = Math.max(0, Math.floor(Number(count) || 0));
+  if (!n) {
+    return "Copy refs";
+  }
+  return `Copy ${n} ref${n === 1 ? "" : "s"}`;
 }
 
 export function orderedStringListEqual(a, b) {

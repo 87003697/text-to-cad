@@ -1,27 +1,19 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
-  Bot,
-  Boxes,
   Check,
   CircleCheck,
-  Code,
+  Contrast,
   Copy,
-  Cuboid,
-  DraftingCompass,
-  FileBox,
   Folder,
-  Layers3,
   LoaderCircle,
-  Moon,
-  Package,
-  Route,
-  SlidersHorizontal,
-  Sun
+  SlidersHorizontal
 } from "lucide-react";
+import EntryIcon from "./EntryIcon";
 import {
   DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND,
-  isViewerReleaseMajorMinorNewer,
+  DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT,
   isViewerReleaseNewer,
+  isViewerReleaseUpdateSuggested,
   viewerGithubLatestReleaseApiUrl,
   viewerGithubLatestReleaseUrl,
   normalizeViewerDiscordUrl,
@@ -55,19 +47,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/ui/utils";
 import { copyTextToClipboard } from "@/ui/clipboard";
-import {
-  themeSettingsSupportsSystemColorMode
-} from "cadjs/lib/themeSettings";
-import {
-  DARK_COLOR_SCHEME_ID,
-  LIGHT_COLOR_SCHEME_ID
-} from "@/ui/colorScheme";
-import {
-  ENTRY_ICON_KIND,
-  entryIconKind
-} from "@/workbench/entryIconKind";
 import { entryIconStatus } from "@/workbench/entryIconStatus";
-import { ThemePresetDropdown } from "./ThemeSettingsPopover";
 import FileAccessContextMenu from "./FileAccessContextMenu";
 import {
   fileKey,
@@ -114,46 +94,23 @@ function entryStatusForMenu(entry, {
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true
 }) {
   const sourceFormat = sourceFormatForEntry(entry, entrySourceFormat);
   const hasDxf = typeof entryHasDxf === "function" ? entryHasDxf(entry) : true;
-  const hasGcode = typeof entryHasGcode === "function" ? entryHasGcode(entry) : true;
   const hasUrdf = typeof entryHasUrdf === "function" ? entryHasUrdf(entry) : true;
   const hasMesh = typeof entryHasMesh === "function" ? entryHasMesh(entry) : true;
 
   return entryIconStatus(entry, {
     sourceFormat,
-    entryKey: fileKey(entry),
     hasMesh,
     hasDxf,
-    hasGcode,
     hasUrdf,
-    activeGenerationFiles,
     activeStepArtifactGenerationFile,
     stepArtifactGenerationAvailable
   });
-}
-
-const ENTRY_ICON_COMPONENTS = {
-  [ENTRY_ICON_KIND.LOADING]: LoaderCircle,
-  [ENTRY_ICON_KIND.ASSEMBLY]: Boxes,
-  [ENTRY_ICON_KIND.DXF]: DraftingCompass,
-  [ENTRY_ICON_KIND.GCODE]: Route,
-  [ENTRY_ICON_KIND.IMPLICIT]: Code,
-  [ENTRY_ICON_KIND.ROBOT]: Bot,
-  [ENTRY_ICON_KIND.STEP_PART]: Package,
-  [ENTRY_ICON_KIND.STL_MESH]: Cuboid,
-  [ENTRY_ICON_KIND.THREE_MF_MESH]: Layers3,
-  [ENTRY_ICON_KIND.GLB_MESH]: FileBox
-};
-
-function iconForEntry(entry, sourceFormat, status) {
-  return ENTRY_ICON_COMPONENTS[entryIconKind(entry, { sourceFormat, status })] || Package;
 }
 
 function BreadcrumbEntryMenuItem({
@@ -164,9 +121,7 @@ function BreadcrumbEntryMenuItem({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true
 }) {
@@ -179,14 +134,11 @@ function BreadcrumbEntryMenuItem({
     entrySourceFormat,
     entryHasMesh,
     entryHasDxf,
-    entryHasGcode,
     entryHasUrdf,
-    activeGenerationFiles,
     activeStepArtifactGenerationFile,
     stepArtifactGenerationAvailable
   });
   const { sourceFormat } = status;
-  const EntryIcon = iconForEntry(entry, sourceFormat, status);
   const title = [
     label,
     status.statusLabel,
@@ -211,11 +163,11 @@ function BreadcrumbEntryMenuItem({
       }}
     >
       <EntryIcon
-        className={cn(
-          "size-3.5 shrink-0",
-          status.loading && "animate-spin"
-        )}
-        aria-hidden="true"
+        entry={entry}
+        sourceFormat={sourceFormat}
+        status={status}
+        className="size-3.5 shrink-0"
+        spinning={status.loading}
       />
       <span className="block min-w-0 flex-1 truncate">{label}</span>
     </DropdownMenuItem>
@@ -230,9 +182,7 @@ function BreadcrumbDirectoryMenuItems({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
@@ -240,7 +190,7 @@ function BreadcrumbDirectoryMenuItems({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
+  onExportModelFile,
   onRevealFileAsset,
   onCopyFileAssetReference
 }) {
@@ -267,9 +217,7 @@ function BreadcrumbDirectoryMenuItems({
           entrySourceFormat={entrySourceFormat}
           entryHasMesh={entryHasMesh}
           entryHasDxf={entryHasDxf}
-          entryHasGcode={entryHasGcode}
           entryHasUrdf={entryHasUrdf}
-          activeGenerationFiles={activeGenerationFiles}
           activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
           stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
           canRevealFileAssets={canRevealFileAssets}
@@ -277,7 +225,7 @@ function BreadcrumbDirectoryMenuItems({
           canCopyFileAssetPaths={canCopyFileAssetPaths}
           fileAccessBusyKey={fileAccessBusyKey}
           onDownloadFileAsset={onDownloadFileAsset}
-          onExportImplicitFile={onExportImplicitFile}
+          onExportModelFile={onExportModelFile}
           onRevealFileAsset={onRevealFileAsset}
           onCopyFileAssetReference={onCopyFileAssetReference}
         />
@@ -294,9 +242,7 @@ function BreadcrumbDirectoryMenuItems({
         entrySourceFormat={entrySourceFormat}
         entryHasMesh={entryHasMesh}
         entryHasDxf={entryHasDxf}
-        entryHasGcode={entryHasGcode}
         entryHasUrdf={entryHasUrdf}
-        activeGenerationFiles={activeGenerationFiles}
         activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
         stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
         canRevealFileAssets={canRevealFileAssets}
@@ -304,7 +250,7 @@ function BreadcrumbDirectoryMenuItems({
         canCopyFileAssetPaths={canCopyFileAssetPaths}
         fileAccessBusyKey={fileAccessBusyKey}
         onDownloadFileAsset={onDownloadFileAsset}
-        onExportImplicitFile={onExportImplicitFile}
+        onExportModelFile={onExportModelFile}
         onRevealFileAsset={onRevealFileAsset}
         onCopyFileAssetReference={onCopyFileAssetReference}
       />
@@ -334,9 +280,7 @@ function BreadcrumbDirectorySubMenu({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
@@ -344,7 +288,7 @@ function BreadcrumbDirectorySubMenu({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
+  onExportModelFile,
   onRevealFileAsset,
   onCopyFileAssetReference
 }) {
@@ -370,9 +314,7 @@ function BreadcrumbDirectorySubMenu({
             entrySourceFormat={entrySourceFormat}
             entryHasMesh={entryHasMesh}
             entryHasDxf={entryHasDxf}
-            entryHasGcode={entryHasGcode}
             entryHasUrdf={entryHasUrdf}
-            activeGenerationFiles={activeGenerationFiles}
             activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
             stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
             canRevealFileAssets={canRevealFileAssets}
@@ -380,7 +322,7 @@ function BreadcrumbDirectorySubMenu({
             canCopyFileAssetPaths={canCopyFileAssetPaths}
             fileAccessBusyKey={fileAccessBusyKey}
             onDownloadFileAsset={onDownloadFileAsset}
-            onExportImplicitFile={onExportImplicitFile}
+            onExportModelFile={onExportModelFile}
             onRevealFileAsset={onRevealFileAsset}
             onCopyFileAssetReference={onCopyFileAssetReference}
           />
@@ -399,9 +341,7 @@ function BreadcrumbNodeDropdown({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   selectedStepSourceStatus = null,
@@ -410,7 +350,7 @@ function BreadcrumbNodeDropdown({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
+  onExportModelFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
@@ -432,10 +372,10 @@ function BreadcrumbNodeDropdown({
         )}
         title={title}
       >
-        <span className="block min-w-0 truncate">{label}</span>
         {current && node?.type === "entry" ? (
           <FilenameLoadStatus activity={filenameLoadActivity} />
         ) : null}
+        <span className="block min-w-0 truncate">{label}</span>
       </span>
     );
 
@@ -452,7 +392,7 @@ function BreadcrumbNodeDropdown({
         canCopyFileAssetPaths={canCopyFileAssetPaths}
         busyKey={fileAccessBusyKey}
         onDownloadFileAsset={onDownloadFileAsset}
-        onExportImplicitFile={onExportImplicitFile}
+        onExportModelFile={onExportModelFile}
         onRevealFileAsset={onRevealFileAsset}
         onRevealInExplorerView={onRevealInExplorerView}
         onCopyFileAssetReference={onCopyFileAssetReference}
@@ -480,10 +420,10 @@ function BreadcrumbNodeDropdown({
         }
       }}
     >
-      <span className="block min-w-0 truncate">{label}</span>
       {current && node?.type === "entry" ? (
         <FilenameLoadStatus activity={filenameLoadActivity} />
       ) : null}
+      <span className="block min-w-0 truncate">{label}</span>
     </button>
   );
   const dropdownTrigger = (
@@ -500,7 +440,7 @@ function BreadcrumbNodeDropdown({
       canCopyFileAssetPaths={canCopyFileAssetPaths}
       busyKey={fileAccessBusyKey}
       onDownloadFileAsset={onDownloadFileAsset}
-      onExportImplicitFile={onExportImplicitFile}
+      onExportModelFile={onExportModelFile}
       onRevealFileAsset={onRevealFileAsset}
       onRevealInExplorerView={onRevealInExplorerView}
       onCopyFileAssetReference={onCopyFileAssetReference}
@@ -522,9 +462,7 @@ function BreadcrumbNodeDropdown({
             entrySourceFormat={entrySourceFormat}
             entryHasMesh={entryHasMesh}
             entryHasDxf={entryHasDxf}
-            entryHasGcode={entryHasGcode}
             entryHasUrdf={entryHasUrdf}
-            activeGenerationFiles={activeGenerationFiles}
             activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
             stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
             canRevealFileAssets={canRevealFileAssets}
@@ -532,7 +470,7 @@ function BreadcrumbNodeDropdown({
             canCopyFileAssetPaths={canCopyFileAssetPaths}
             fileAccessBusyKey={fileAccessBusyKey}
             onDownloadFileAsset={onDownloadFileAsset}
-            onExportImplicitFile={onExportImplicitFile}
+            onExportModelFile={onExportModelFile}
             onRevealFileAsset={onRevealFileAsset}
             onCopyFileAssetReference={onCopyFileAssetReference}
           />
@@ -550,9 +488,7 @@ function BreadcrumbEllipsisDropdown({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
   canRevealFileAssets = false,
@@ -560,7 +496,7 @@ function BreadcrumbEllipsisDropdown({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
+  onExportModelFile,
   onRevealFileAsset,
   onCopyFileAssetReference,
   title
@@ -597,9 +533,7 @@ function BreadcrumbEllipsisDropdown({
                   entrySourceFormat={entrySourceFormat}
                   entryHasMesh={entryHasMesh}
                   entryHasDxf={entryHasDxf}
-                  entryHasGcode={entryHasGcode}
                   entryHasUrdf={entryHasUrdf}
-                  activeGenerationFiles={activeGenerationFiles}
                   activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                   stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                   canRevealFileAssets={canRevealFileAssets}
@@ -607,7 +541,7 @@ function BreadcrumbEllipsisDropdown({
                   canCopyFileAssetPaths={canCopyFileAssetPaths}
                   fileAccessBusyKey={fileAccessBusyKey}
                   onDownloadFileAsset={onDownloadFileAsset}
-                  onExportImplicitFile={onExportImplicitFile}
+                  onExportModelFile={onExportModelFile}
                   onRevealFileAsset={onRevealFileAsset}
                   onCopyFileAssetReference={onCopyFileAssetReference}
                 />
@@ -625,9 +559,7 @@ function BreadcrumbEllipsisDropdown({
                   entrySourceFormat={entrySourceFormat}
                   entryHasMesh={entryHasMesh}
                   entryHasDxf={entryHasDxf}
-                  entryHasGcode={entryHasGcode}
                   entryHasUrdf={entryHasUrdf}
-                  activeGenerationFiles={activeGenerationFiles}
                   activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                   stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                   canRevealFileAssets={canRevealFileAssets}
@@ -635,7 +567,7 @@ function BreadcrumbEllipsisDropdown({
                   canCopyFileAssetPaths={canCopyFileAssetPaths}
                   fileAccessBusyKey={fileAccessBusyKey}
                   onDownloadFileAsset={onDownloadFileAsset}
-                  onExportImplicitFile={onExportImplicitFile}
+                  onExportModelFile={onExportModelFile}
                   onRevealFileAsset={onRevealFileAsset}
                   onCopyFileAssetReference={onCopyFileAssetReference}
                 />
@@ -654,23 +586,26 @@ function BreadcrumbEllipsisDropdown({
   );
 }
 
+/**
+ * A bare spinner, left of the filename. No chip, no text, no percent.
+ *
+ * The overlay already carries the words and the number; repeating them in the breadcrumb
+ * gave the same state two competing readouts that could disagree mid-poll. This says only
+ * "this file is busy" and leaves the detail to the one place that owns it. The label still
+ * rides on `title` and the screen-reader text, so nothing is lost for a11y or hover.
+ */
 function FilenameLoadStatus({ activity }) {
-  const label = String(activity?.label || "").trim();
-  if (!activity?.loading || !label) {
+  if (!activity?.loading) {
     return null;
   }
 
-  const title = String(activity?.title || label).trim();
+  const label = String(activity?.label || "").trim();
+  const title = String(activity?.title || label || "Loading").trim();
 
   return (
-    <span
-      role="status"
-      aria-live="polite"
-      title={title}
-      className="inline-flex min-w-0 max-w-36 shrink items-center gap-1 rounded-md border border-border/70 bg-sidebar-accent px-1.5 py-0.5 text-[10px] font-medium leading-none text-sidebar-accent-foreground"
-    >
-      <LoaderCircle className="size-3 shrink-0 animate-spin" aria-hidden="true" />
-      <span className="min-w-0 truncate">{label}</span>
+    <span role="status" aria-live="polite" title={title} className="inline-flex shrink-0 items-center">
+      <LoaderCircle className="size-3 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />
+      <span className="sr-only">{title}</span>
     </span>
   );
 }
@@ -704,12 +639,6 @@ const emptyLatestReleaseCheck = Object.freeze({
   installCommand: DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND,
   latestReleaseNewer: false
 });
-
-function nextColorMode(currentColorMode) {
-  return currentColorMode === DARK_COLOR_SCHEME_ID
-    ? LIGHT_COLOR_SCHEME_ID
-    : DARK_COLOR_SCHEME_ID;
-}
 
 function latestReleaseCacheKey(apiUrl) {
   return `${latestReleaseCacheKeyPrefix}${apiUrl}`;
@@ -783,7 +712,7 @@ function latestReleaseCheckState(currentVersion, release) {
   const latestReleaseNewer = isViewerReleaseNewer(currentVersion, latestVersion);
 
   return {
-    updateAvailable: isViewerReleaseMajorMinorNewer(currentVersion, latestVersion),
+    updateAvailable: isViewerReleaseUpdateSuggested(currentVersion, latestVersion),
     latestVersion,
     releaseUrl,
     installCommand,
@@ -896,6 +825,7 @@ function VersionTooltipRow({ label, version, action = null }) {
 function VersionReleaseLink({ version, releaseUrl, releaseCheck = emptyLatestReleaseCheck }) {
   const normalizedVersion = String(version || "").trim();
   const [installCopyStatus, setInstallCopyStatus] = useState("");
+  const [promptCopyStatus, setPromptCopyStatus] = useState("");
   const copyGestureHandledRef = useRef(false);
 
   if (!normalizedVersion) {
@@ -915,6 +845,7 @@ function VersionReleaseLink({ version, releaseUrl, releaseCheck = emptyLatestRel
   const installCommand = String(
     releaseCheck?.installCommand || DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND
   ).trim() || DEFAULT_VIEWER_SKILLS_INSTALL_COMMAND;
+  const updatePrompt = DEFAULT_VIEWER_SKILLS_UPDATE_PROMPT;
   const upToDate = Boolean(latestVersion) && !latestReleaseNewer;
   const label = updateAvailable
     ? "Update CAD Viewer"
@@ -938,6 +869,27 @@ function VersionReleaseLink({ version, releaseUrl, releaseCheck = emptyLatestRel
       }, 1600);
     } catch {
       setInstallCopyStatus("failed");
+    }
+  };
+
+  const handleCopyUpdatePrompt = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (copyGestureHandledRef.current) {
+      return;
+    }
+    copyGestureHandledRef.current = true;
+    globalThis.setTimeout(() => {
+      copyGestureHandledRef.current = false;
+    }, 250);
+    try {
+      await copyTextToClipboard(updatePrompt);
+      setPromptCopyStatus("copied");
+      globalThis.setTimeout(() => {
+        setPromptCopyStatus("");
+      }, 1600);
+    } catch {
+      setPromptCopyStatus("failed");
     }
   };
 
@@ -1019,7 +971,7 @@ function VersionReleaseLink({ version, releaseUrl, releaseCheck = emptyLatestRel
             />
           )}
           <div className="flex min-w-0 flex-col gap-1.5">
-            <div className="px-0.5 text-[11px] font-medium leading-none text-muted-foreground">Update Command</div>
+            <div className="px-0.5 text-[11px] font-medium leading-none text-muted-foreground">In your terminal</div>
             <div className="flex h-8 min-w-0 items-center gap-2 rounded-sm border border-border/60 bg-muted/35 p-1 pl-2">
               <code className="min-w-0 flex-1 whitespace-nowrap font-mono text-[11px] leading-5 text-foreground">
                 {installCommand}
@@ -1041,7 +993,38 @@ function VersionReleaseLink({ version, releaseUrl, releaseCheck = emptyLatestRel
               </Button>
             </div>
           </div>
-          {installCopyStatus === "failed" ? (
+          <div className="flex min-w-0 flex-col gap-1.5">
+            {/* The same update, handed to an agent instead of run in a terminal. */}
+            <div className="px-0.5 text-[11px] font-medium leading-none text-muted-foreground">
+              Or ask your agent
+            </div>
+            {/* Shows the message VERBATIM, wrapped rather than truncated: the row above it is
+                the literal command it copies, so a summarised label here reads as though the
+                agent were being sent something vaguer than the terminal option. It is not --
+                the same command is in it. The width cap is what makes it wrap. */}
+            <div className="flex min-h-8 min-w-0 items-center gap-2 rounded-sm border border-border/60 bg-muted/35 p-1 pl-2">
+              <span className="min-w-0 max-w-[15.5rem] flex-1 text-[11px] leading-4 text-foreground">
+                {updatePrompt}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="inline-flex size-6 shrink-0 items-center justify-center rounded-sm border border-border text-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                aria-label={promptCopyStatus === "copied" ? "Agent message copied" : "Copy agent message"}
+                title={updatePrompt}
+                onPointerDown={handleCopyUpdatePrompt}
+                onClick={handleCopyUpdatePrompt}
+              >
+                {promptCopyStatus === "copied" ? (
+                  <Check className="size-3" aria-hidden="true" />
+                ) : (
+                  <Copy className="size-3" aria-hidden="true" />
+                )}
+              </Button>
+            </div>
+          </div>
+          {installCopyStatus === "failed" || promptCopyStatus === "failed" ? (
             <div className="text-[11px] text-muted-foreground">Copy failed</div>
           ) : null}
           {upToDate ? (
@@ -1066,24 +1049,9 @@ export default function CadWorkspaceTopBar({
   entrySourceFormat,
   entryHasMesh,
   entryHasDxf,
-  entryHasGcode,
   entryHasUrdf,
-  activeGenerationFiles = [],
   activeStepArtifactGenerationFile = "",
   stepArtifactGenerationAvailable = true,
-  themePresets = [],
-  themeSettings,
-  themePresetId = "",
-  resolvedColorSchemeMode = LIGHT_COLOR_SCHEME_ID,
-  onColorSchemePreferenceChange,
-  updateThemeSettings,
-  handleResetThemeSettings,
-  handleSaveCustomThemePreset,
-  handleUpdateThemePresetSettings,
-  handleDeleteCustomThemePreset,
-  handleEditThemePreset,
-  handleResetThemePresetToDefault,
-  handleRestoreDefaultThemePresets,
   filenameLoadActivity = null,
   selectedStepSourceStatus = null,
   canRevealFileAssets = false,
@@ -1091,13 +1059,15 @@ export default function CadWorkspaceTopBar({
   canCopyFileAssetPaths = false,
   fileAccessBusyKey = "",
   onDownloadFileAsset,
-  onExportImplicitFile,
+  onExportModelFile,
   onRevealFileAsset,
   onRevealInExplorerView,
   onCopyFileAssetReference,
   fileSheetKind = "",
   fileSheetOpen = false,
   onToggleFileSheet,
+  themeEditing = false,
+  onToggleThemeEditor,
   navigationAvailable = true
 }) {
   const viewerVersion = String(viewerPackage.version || "").trim();
@@ -1144,22 +1114,7 @@ export default function CadWorkspaceTopBar({
   const fileSheetToggleLabel = fileSheetOpen
     ? `Collapse ${fileSheetLabel(fileSheetKind)}`
     : `Expand ${fileSheetLabel(fileSheetKind)}`;
-  const showThemeColorModeToggle = themeSettingsSupportsSystemColorMode(themeSettings);
-  const activeColorSchemeMode = resolvedColorSchemeMode === DARK_COLOR_SCHEME_ID
-    ? DARK_COLOR_SCHEME_ID
-    : LIGHT_COLOR_SCHEME_ID;
-  const nextColorSchemeMode = nextColorMode(activeColorSchemeMode);
-  const activeColorSchemeModeLabel = activeColorSchemeMode === DARK_COLOR_SCHEME_ID ? "dark" : "light";
-  const nextColorSchemeModeLabel = nextColorSchemeMode === DARK_COLOR_SCHEME_ID ? "dark" : "light";
-  const colorModeToggleLabel = `Browser color mode: ${activeColorSchemeModeLabel}. Switch to ${nextColorSchemeModeLabel} mode.`;
-  const ColorModeIcon = activeColorSchemeMode === DARK_COLOR_SCHEME_ID ? Moon : Sun;
-
-  const handleThemeColorModeToggle = () => {
-    if (typeof onColorSchemePreferenceChange !== "function") {
-      return;
-    }
-    onColorSchemePreferenceChange(nextColorSchemeMode);
-  };
+  const themeToggleLabel = themeEditing ? "Close theme settings" : "Open theme settings";
 
   return (
     <header
@@ -1174,7 +1129,7 @@ export default function CadWorkspaceTopBar({
       ) : null}
 
       {breadcrumbAvailable ? (
-      <Breadcrumb className="min-w-0 flex-1 overflow-hidden">
+      <Breadcrumb className="min-w-0 overflow-hidden">
         <ScrollArea
           className="h-8 min-w-0 whitespace-nowrap"
           type="auto"
@@ -1193,9 +1148,7 @@ export default function CadWorkspaceTopBar({
                   entrySourceFormat={entrySourceFormat}
                   entryHasMesh={entryHasMesh}
                   entryHasDxf={entryHasDxf}
-                  entryHasGcode={entryHasGcode}
                   entryHasUrdf={entryHasUrdf}
-                  activeGenerationFiles={activeGenerationFiles}
                   activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                   stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                   selectedStepSourceStatus={selectedStepSourceStatus}
@@ -1204,7 +1157,7 @@ export default function CadWorkspaceTopBar({
                   canCopyFileAssetPaths={canCopyFileAssetPaths}
                   fileAccessBusyKey={fileAccessBusyKey}
                   onDownloadFileAsset={onDownloadFileAsset}
-                  onExportImplicitFile={onExportImplicitFile}
+                  onExportModelFile={onExportModelFile}
                   onRevealFileAsset={onRevealFileAsset}
                   onRevealInExplorerView={onRevealInExplorerView}
                   onCopyFileAssetReference={onCopyFileAssetReference}
@@ -1226,9 +1179,7 @@ export default function CadWorkspaceTopBar({
                       entrySourceFormat={entrySourceFormat}
                       entryHasMesh={entryHasMesh}
                       entryHasDxf={entryHasDxf}
-                      entryHasGcode={entryHasGcode}
                       entryHasUrdf={entryHasUrdf}
-                      activeGenerationFiles={activeGenerationFiles}
                       activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                       stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                       canRevealFileAssets={canRevealFileAssets}
@@ -1236,7 +1187,7 @@ export default function CadWorkspaceTopBar({
                       canCopyFileAssetPaths={canCopyFileAssetPaths}
                       fileAccessBusyKey={fileAccessBusyKey}
                       onDownloadFileAsset={onDownloadFileAsset}
-                      onExportImplicitFile={onExportImplicitFile}
+                      onExportModelFile={onExportModelFile}
                       onRevealFileAsset={onRevealFileAsset}
                       onCopyFileAssetReference={onCopyFileAssetReference}
                       title={selectedFileTitle}
@@ -1251,9 +1202,7 @@ export default function CadWorkspaceTopBar({
                       entrySourceFormat={entrySourceFormat}
                       entryHasMesh={entryHasMesh}
                       entryHasDxf={entryHasDxf}
-                      entryHasGcode={entryHasGcode}
                       entryHasUrdf={entryHasUrdf}
-                      activeGenerationFiles={activeGenerationFiles}
                       activeStepArtifactGenerationFile={activeStepArtifactGenerationFile}
                       stepArtifactGenerationAvailable={stepArtifactGenerationAvailable}
                       selectedStepSourceStatus={selectedStepSourceStatus}
@@ -1262,7 +1211,7 @@ export default function CadWorkspaceTopBar({
                       canCopyFileAssetPaths={canCopyFileAssetPaths}
                       fileAccessBusyKey={fileAccessBusyKey}
                       onDownloadFileAsset={onDownloadFileAsset}
-                      onExportImplicitFile={onExportImplicitFile}
+                      onExportModelFile={onExportModelFile}
                       onRevealFileAsset={onRevealFileAsset}
                       onRevealInExplorerView={onRevealInExplorerView}
                       onCopyFileAssetReference={onCopyFileAssetReference}
@@ -1279,8 +1228,10 @@ export default function CadWorkspaceTopBar({
         </ScrollArea>
       </Breadcrumb>
       ) : (
-        <div className="min-w-0 flex-1" />
+        <div className="min-w-0" />
       )}
+
+      <div className="min-w-0 flex-1" />
 
       <TooltipProvider delayDuration={250}>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -1293,8 +1244,8 @@ export default function CadWorkspaceTopBar({
             asChild
             variant="ghost"
             size="icon-sm"
-            aria-label="Join the CAD Skills Discord"
-            title="Join the CAD Skills Discord"
+            aria-label="Join the text-to-cad Discord"
+            title="Join the text-to-cad Discord"
             className={topBarIconButtonClasses}
           >
             <a href={discordUrl} target="_blank" rel="noreferrer">
@@ -1316,37 +1267,21 @@ export default function CadWorkspaceTopBar({
             </Button>
           ) : null}
 
-          <ThemePresetDropdown
-            themePresets={themePresets}
-            themeSettings={themeSettings}
-            themePresetId={themePresetId}
-            updateThemeSettings={updateThemeSettings}
-            handleResetThemeSettings={handleResetThemeSettings}
-            handleSaveCustomThemePreset={handleSaveCustomThemePreset}
-            handleUpdateThemePresetSettings={handleUpdateThemePresetSettings}
-            handleDeleteCustomThemePreset={handleDeleteCustomThemePreset}
-            handleEditThemePreset={handleEditThemePreset}
-            handleResetThemePresetToDefault={handleResetThemePresetToDefault}
-            handleRestoreDefaultThemePresets={handleRestoreDefaultThemePresets}
-            triggerClassName={topBarIconButtonClasses}
-            iconClassName={topBarIconClasses}
-          />
-
-          {showThemeColorModeToggle ? (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={colorModeToggleLabel}
-              title={colorModeToggleLabel}
-              disabled={typeof onColorSchemePreferenceChange !== "function"}
-              onClick={handleThemeColorModeToggle}
-              className={topBarIconButtonClasses}
-            >
-              <ColorModeIcon className={topBarIconClasses} />
-              <span className="sr-only">{colorModeToggleLabel}</span>
-            </Button>
-          ) : null}
+          {/* A plain toggle for the theme sidebar, matching the file-sheet
+              button beside it. Theme selection lives inside the sidebar. */}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label={themeToggleLabel}
+            title={themeToggleLabel}
+            aria-pressed={themeEditing}
+            onClick={onToggleThemeEditor}
+            className={`${topBarIconButtonClasses} ${themeEditing ? activeIconButtonClasses : ""}`}
+          >
+            <Contrast className={topBarIconClasses} strokeWidth={2} aria-hidden="true" />
+            <span className="sr-only">{themeToggleLabel}</span>
+          </Button>
 
           {showFileSheetToggle ? (
             <Button
@@ -1355,9 +1290,9 @@ export default function CadWorkspaceTopBar({
               size="icon"
               aria-label={fileSheetToggleLabel}
               title={fileSheetToggleLabel}
-              aria-pressed={fileSheetOpen}
+              aria-pressed={fileSheetOpen && !themeEditing}
               onClick={onToggleFileSheet}
-              className={`${topBarIconButtonClasses} ${fileSheetOpen ? activeIconButtonClasses : ""}`}
+              className={`${topBarIconButtonClasses} ${fileSheetOpen && !themeEditing ? activeIconButtonClasses : ""}`}
             >
               <SlidersHorizontal className={topBarIconClasses} />
               <span className="sr-only">{fileSheetToggleLabel}</span>

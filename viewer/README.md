@@ -8,16 +8,17 @@ CAD references, and verify generated assets without leaving the browser.
 
 ## Features
 
-- Scans a `?dir=` local root directory and mirrors its folder
+- Scans the local directory named by the URL's path and mirrors its folder
   structure in the sidebar.
-- Opens `.step`, `.stp`, `.stl`, `.3mf`, `.glb`, `.gcode`, `.dxf`, `.urdf`,
-  `.srdf`, and `.sdf` entries.
+- Opens `.step`, `.stp`, `.stl`, `.3mf`, `.glb`, `.dxf`, `.urdf`, `.srdf`,
+  and `.sdf` entries.
 - Uses hidden STEP GLB/topology sidecars for assembly structure, face/edge
   picking, copied CAD references, and STEP parameter controls.
-- Previews mesh files, DXF flat patterns, G-code toolpaths, URDF/SDF robots,
-  and SRDF group states in one app shell.
+- Previews mesh files, DXF flat patterns, URDF/SDF robots, and SRDF group
+  states in one app shell.
 - Runs against either a local filesystem backend or hosted Vercel Blob storage.
-- Can regenerate STEP GLB/topology artifacts when the CAD Python runtime is
+- Can regenerate STEP GLB/topology artifacts and generated-DXF drawing
+  packages when the CAD Python runtime is
   available.
 - Provides optional MoveIt2 websocket controls for SRDF IK and planning.
 
@@ -38,25 +39,23 @@ directory-relative file path in the URL:
 npm run dev -- --host 127.0.0.1
 ```
 
-Open the URL printed by Vite and add paths, for example
-`?dir=/path/to/root&file=assemblies/robot-arm/robot-arm.step`.
-Local tools should not assume a fixed port. Use
-`npm run viewer:open -- --dir /path/to/root` for agent-driven review. It starts
-at port `4178`, reuses a compatible existing Viewer, skips viewers with a
-different launcher-provided `git` value or a different requested default
-`--dir`, and starts on the first free candidate port. Use Vite's standard
-`--port` argument only when a specific dev port is needed. Local dev and
-production servers stay running unless `VIEWER_SERVER_LIFETIME_MS` is set or
-production `serve` is started with `--shutdown-after <duration>`.
+Open the URL printed by Vite. A Viewer URL's PATH is the absolute directory to
+open, exactly as in a `file://` URL, and `?file=` selects one artifact within it:
 
-The local filesystem backend accepts absolute or startup-directory-relative
-`?dir=` values directly in the Viewer URL. Once seen, the active directory is
-stored in tab-local `sessionStorage`, so subsequent navigation can omit `?dir=`
-and continue using the same directory. The `--dir` startup path is the first
-active directory; when omitted, the startup directory is used. If multiple
-directories have been scanned and no `?dir=` or stored directory is active, the
-Viewer shows a directory picker. `?file=` is always relative to the active
-directory.
+```text
+http://127.0.0.1:3245/path/to/root?file=assemblies/robot-arm/robot-arm.step
+```
+
+The bare origin names no directory and falls back to the server's cwd. One Viewer
+serves any folder — change the path, no restart.
+
+Use `npm run dev` for iterating on the client/backend (HMR), and `npm run start`
+to serve the built `dist/` bundle via the Python backend (the production path the
+`cad-viewer` skill uses). Both listen on `--port`, defaulting to `3245`, and both
+exit with an error when that port is taken rather than reusing a running Viewer or
+rolling onto another port. Local dev and production servers stay running unless
+`VIEWER_SERVER_LIFETIME_MS` is set or production `serve` is started with
+`--shutdown-after <duration>`.
 
 Install the local Python artifact package when iterating on local STEP
 regeneration:
@@ -65,43 +64,44 @@ regeneration:
 python -m pip install -r requirements.txt
 ```
 
-Agent handoff links from the cad-viewer skill should still include an absolute
-`?dir=` on every returned URL, plus an absolute `file=` value for each requested
-file. The session-storage fallback is for same-tab navigation, not for durable
-review links.
+Agent handoff links from the cad-viewer skill must use an absolute directory as
+the URL path, with `?file=` relative to it. The URL is the only source of truth —
+there is no stored fallback, so the same URL always shows the same thing.
 
 ## Project Layout
 
-- `src/client/`: React app, browser state, styling, and viewer/workbench UI.
+- `src/client/`: React app, browser state, styling, and viewer + workbench UI.
 - `src/client/components/`: top-level CAD, DXF, workbench, and shadcn-style UI
   components.
 - `src/client/workbench/`: selection, persistence, file-sheet, alert, motion,
   and reference helpers that are not React components.
 - `src/client/ui/`: viewer-owned browser utilities such as clipboard, color
   scheme, class merging, and DOM helpers.
-- `src/server/`: local and hosted backend adapters, HTTP middleware, and the
-  local production server.
-- `api/cad/`: Vercel serverless shims for `/__cad/*` routes.
-- `scripts/`: developer and runtime launchers, plus the test runner.
+- `src/shared/`: config helpers shared by the client and the launchers.
+- `server_py/`: the Python backend — local filesystem CAD API (`/__cad/*`),
+  artifact generation, and the production static server for `dist/`.
+- `scripts/`: developer and runtime launchers, the test runner, and the
+  end-to-end sweeps.
 - `docs/`: workflow reference docs for backend storage, browser persistence,
-  and MoveIt2.
+  render types, settings UI, and MoveIt2.
 - `moveit2_server/`: optional Python websocket backend for SRDF controls.
+- `packages/cadjs`, `packages/implicitjs`, `packages/cadgen`: the shared
+  runtimes this app depends on. Keep reusable parsing, rendering, sidecar,
+  selector, topology, implicit shader, snapshot, and export logic in these
+  packages rather than in `src/`.
 
-The shared non-React CAD runtime source lives in `../packages/cadjs`, and the
-shared non-React implicit CAD runtime source lives in `../packages/implicitjs`.
-On `develop`, `viewer/packages/*` is a symlinked development layout; keep
-reusable parsing, rendering, sidecar, selector, topology, implicit shader,
-snapshot, and export logic in the source packages.
+`packages/*` is a symlinked development layout inside the text-to-cad workbench
+and a real vendored copy in a standalone checkout; every path in this app is
+written to work either way.
 
 ## Common Commands
 
 ```bash
-npm run dev          # Vite dev server with local CAD API middleware
-npm run viewer:open  # Launcher that chooses mode and reuses/selects a local port
-npm run build        # Production frontend build
-npm run serve        # Serve dist/ with the local or hosted backend
+npm run dev          # Vite dev server (HMR) + local CAD API middleware — use for iteration
+npm run build        # Production frontend build (writes dist/)
+npm run start        # Prod launcher: serve the built dist/ + CAD API on 3245 (or --port)
+npm run serve        # Low-level raw Python backend (what `start` spawns)
 npm run test         # Discover and run all JS tests
-npm run upload:blob  # Upload a hosted catalog and supported viewer assets
 ```
 
 `npm run test` uses `scripts/run-tests.mjs`, which discovers
@@ -109,20 +109,20 @@ npm run upload:blob  # Upload a hosted catalog and supported viewer assets
 
 ```bash
 node scripts/run-tests.mjs src/client/workbench/sidebar.test.js
-node scripts/run-tests.mjs src/server/localAssetBackend.test.mjs
+node scripts/run-tests.mjs src/shared/viewerConfig.test.mjs
+```
+
+Python backend tests run separately:
+
+```bash
+python -m unittest discover -s server_py/tests -t .
 ```
 
 ## Runtime Configuration
 
 Important environment variables:
 
-- `VIEWER_ASSET_BACKEND`: `local-fs` for local files or `vercel-blob` for hosted
-  Blob assets.
-- `VIEWER_DEFAULT_DIR`: default local directory used by Vite dev mode.
-  `npm run viewer:open -- --dir <path>` sets this automatically when it launches
-  Vite.
-- `VIEWER_DEFAULT_FILE`: active-directory-relative file opened when `?file=`
-  is absent and a `?dir=` or stored active directory is available.
+- `VIEWER_DEFAULT_FILE`: directory-relative file opened when `?file=` is absent.
 - `VIEWER_SERVER_LIFETIME_MS`: optional server lifetime in milliseconds for
   local dev and production servers. When unset, there is no automatic shutdown.
 - `VIEWER_GITHUB_URL`: optional top-bar GitHub link target. When set, the
@@ -133,64 +133,29 @@ Important environment variables:
 - `VIEWER_ALLOWED_HOSTS`: extra hostnames accepted by local Vite dev and
   production servers.
 - `VIEWER_MOVEIT2_WS_URL`: optional websocket URL for SRDF MoveIt2 controls.
-- `VIEWER_CAD_PYTHON`: optional Python executable for local STEP regeneration.
+- `VIEWER_CAD_PYTHON`: optional Python executable for local STEP/DXF artifact regeneration.
 - `VIEWER_CAD_PYTHONPATH` / `CAD_PYTHONPATH`: optional Python source path for
-  the `cadpy` package.
-- `VIEWER_SERVER_REGISTRY`: optional local server registry JSON path.
-- `VIEWER_GIT`: optional launcher-provided git identity, exposed as `git` by
-  `/__cad/server` and used by `npm run viewer:open` to avoid reusing viewers
-  from other git worktrees or branches. Ordinary users should not need to set it
-  manually.
+  the `cadgen` package.
 
 `VIEWER_LOCAL_ROOT_DIR` and `VIEWER_LOCAL_WORKSPACE_ROOT` are removed for local
-filesystem viewing. Setting either variable, or using the old fixed-root startup
-flag, is a hard startup error; use `--dir` for the startup default and an
-absolute `?dir=` URL parameter for review links.
-
-Vercel Blob backend variables:
-
-- `VIEWER_VERCEL_BLOB_PREFIX`: Blob prefix for all catalog assets. For token-free
-  hosted deployments, use the public Blob URL for the prefix, such as
-  `https://<store-id>.public.blob.vercel-storage.com/models2`. Trusted local
-  upload scripts may use the path prefix, such as `models2`.
-
-Hosted Vercel API routes are read-only. They serve the catalog and file assets
-but do not regenerate STEP artifacts or require a Blob read/write token at
-runtime. The hosted backend always reads `catalog.json` at the root of
-`VIEWER_VERCEL_BLOB_PREFIX`; for the example above, that is
-`https://<store-id>.public.blob.vercel-storage.com/models2/catalog.json`. Use
-`VIEWER_VERCEL_BLOB_READ_WRITE_TOKEN` or `BLOB_READ_WRITE_TOKEN` only for
-trusted local upload or maintenance scripts. Hosted server metadata derives the
-viewer URL from
-Vercel's system environment variables (`VERCEL_PROJECT_PRODUCTION_URL`,
-`VERCEL_URL`, then `VERCEL_BRANCH_URL`).
-
-Upload a catalog and supported viewer assets from a local directory with
-`npm run upload:blob -- /path/to/models`. Uploads exclude `mechbench/`,
-`mechbench2/`, `7dof_arm/`, and Python source files by default; public Blob
-catalogs omit Python source paths and URLs. Add a `.vieweruploadignore` file or
-pass `--exclude <pattern>` for project-specific upload filters. Pass
-`--skip-existing --fetch-missing-lfs` for publish-style uploads that reuse
-matching remote catalog assets and fetch only the Git LFS objects needed for
-new or changed uploads. The repository publish wrapper,
-`scripts/viewer/upload-viewer-models-catalog.sh`, owns the branch-defined Blob
-path prefix for model catalog uploads.
+filesystem viewing. Setting either variable is a hard startup error; the URL's
+path names the directory instead.
 
 Production builds contain the frontend and initial catalog module only. CAD
-assets are served by a backend and are not copied into `dist/`.
+assets are served by the local backend and are not copied into `dist/`.
 
 ## Reference Docs
 
-- [Backend storage](./docs/backend.md): local filesystem and Vercel Blob backend
-  contracts.
+- [Settings UI guidelines](./docs/settings-ui.md): the mandatory row grammar,
+  spacing, and control standards for file-sheet and theme settings panels.
+- [Backend storage](./docs/backend.md): local filesystem backend contracts.
 - [Browser storage](./docs/storage.md): URL, `localStorage`, and
   `sessionStorage` ownership.
 - [MoveIt2 server](./docs/moveit2-server.md): optional SRDF websocket backend.
-- `cadjs` render pipeline: shared render APIs used by the viewer, docs, and
-  snapshot runtime. In this workbench, see
-  `../packages/cadjs/docs/render-pipeline.md`.
-- `implicitjs` runtime: shared implicit CAD model, shader render, snapshot, and
-  export APIs. In this workbench, see `../packages/implicitjs/README.md`.
+- [`cadjs` render pipeline](./packages/cadjs/docs/render-pipeline.md): shared
+  render APIs used by the viewer, docs, and snapshot runtime.
+- [`implicitjs` runtime](./packages/implicitjs/README.md): shared implicit CAD
+  model, shader render, snapshot, and export APIs.
 
 ## Verification
 
@@ -202,6 +167,5 @@ npm run build
 ```
 
 For UI behavior changes, also run `npm run dev -- --host 127.0.0.1`, open the
-printed URL with `?dir=/absolute/root&file=path/to/model.step`,
-and check that the app renders, selection works, and the browser console is
-clean.
+printed URL with `/absolute/root?file=path/to/model.step`, and check that the app
+renders, selection works, and the browser console is clean.

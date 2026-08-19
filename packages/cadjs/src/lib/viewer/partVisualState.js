@@ -254,9 +254,13 @@ export function applyPartVisualState(THREE, records, {
         ? hoveredEdgeColor
         : null;
 
-    record.mesh.visible = !effectHidden && !isHidden;
+    // dxfHiddenForCurved is the drawing viewer's claim: a curved-bend preview mesh is
+    // standing in for this baked mesh, which must stay hidden however often this sync
+    // re-asserts visibility (it runs on every selection/hover/effect pass).
+    const displacedByCurvedPreview = record.mesh.userData?.dxfHiddenForCurved === true;
+    record.mesh.visible = !effectHidden && !isHidden && !displacedByCurvedPreview;
     if (record.edges) {
-      record.edges.visible = showEdges && !effectHidden && !isHidden;
+      record.edges.visible = showEdges && !effectHidden && !isHidden && !displacedByCurvedPreview;
     }
     syncHighlightRenderOrder(record, record.mesh, "baseMeshRenderOrder", isHighlighted, PART_HIGHLIGHT_SURFACE_RENDER_ORDER);
     syncHighlightRenderOrder(record, record.edges, "baseEdgeRenderOrder", isHighlighted, PART_HIGHLIGHT_EDGE_RENDER_ORDER);
@@ -294,7 +298,12 @@ export function applyPartVisualState(THREE, records, {
     record.material.opacity = nextSurfaceOpacity;
 
     if (record.baseColor && record.material.color) {
-      record.material.color.copy(highlightSurface || effectColor || record.baseColor);
+      // dxfMaterialTint is the drawing viewer's material-preset claim, set on the mesh the
+      // same way dxfHiddenForCurved claims visibility: this sync re-runs on every
+      // selection/hover pass, so a one-shot material.color write would be stomped.
+      record.material.color.copy(
+        highlightSurface || effectColor || record.mesh.userData?.dxfMaterialTint || record.baseColor
+      );
     }
 
     if ("emissive" in record.material && record.material.emissive) {

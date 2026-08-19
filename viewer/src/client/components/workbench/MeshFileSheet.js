@@ -1,12 +1,16 @@
-import {
-  Accordion
-} from "../ui/accordion";
 import FileSheet from "./FileSheet";
-import FileMetadataSection from "./FileMetadataSection";
-import FileStatusSection from "./FileStatusSection";
+import FileSheetTabbedSurface from "./FileSheetTabbedSurface";
+import { buildFileStatusTab } from "./FileStatusSection";
+import StepMeasurementsSection from "./StepMeasurementsSection";
+import { FILE_SHEET_SECTION_IDS } from "../../workbench/fileSheetSections";
 
+const EMPTY_MEASUREMENTS = [];
+
+// Status plus, for kind="mesh", the Measure tab. DXF reuses this sheet
+// with extra themeTabs and does not pass measurements.
 export default function MeshFileSheet({
   open,
+  kind = "mesh",
   title = "Mesh",
   isDesktop,
   width,
@@ -20,10 +24,38 @@ export default function MeshFileSheet({
   onOpenFileAsset,
   suppressDynamicMetadataStatus = false,
   statusItems = [],
-  themeSections = null,
+  themeTabs = [],
   openSectionIds = [],
-  onOpenSectionIdsChange
+  onOpenSectionIdsChange,
+  measurements = EMPTY_MEASUREMENTS,
+  activeMeasurementId = "",
+  measureModeActive = false,
+  onMeasurementActivate = null,
+  onMeasurementDelete = null,
+  onMeasurementsClear = null
 }) {
+  const measureTab = kind === "mesh"
+    ? {
+      id: FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS,
+      title: "Measure",
+      content: (
+        <StepMeasurementsSection
+          measurements={measurements}
+          activeId={activeMeasurementId}
+          measureModeActive={measureModeActive}
+          onActivate={onMeasurementActivate}
+          onDelete={onMeasurementDelete}
+          onClear={onMeasurementsClear}
+        />
+      )
+    }
+    : null;
+  const sections = [
+    buildFileStatusTab(statusItems),
+    ...(measureTab ? [measureTab] : []),
+    ...themeTabs
+  ];
+
   return (
     <FileSheet
       open={open}
@@ -32,25 +64,14 @@ export default function MeshFileSheet({
       width={width}
       onOpenChange={onOpenChange}
       onStartResize={onStartResize}
+      scrollBody={false}
     >
-      <Accordion
-        type="multiple"
-        value={openSectionIds}
-        onValueChange={onOpenSectionIdsChange}
-        className="text-sm"
-      >
-        <FileStatusSection items={statusItems} />
-        {themeSections}
-        <FileMetadataSection
-          entry={selectedEntry}
-          fileDownloadAvailable={fileDownloadAvailable}
-          viewerServerInfo={viewerServerInfo}
-          localFileOpenAvailable={localFileOpenAvailable}
-          fileAccessBusyKey={fileAccessBusyKey}
-          onOpenFileAsset={onOpenFileAsset}
-          suppressDynamicStatus={suppressDynamicMetadataStatus}
-        />
-      </Accordion>
+      <FileSheetTabbedSurface
+        kind={kind}
+        sections={sections}
+        openSectionIds={openSectionIds}
+        onOpenSectionIdsChange={onOpenSectionIdsChange}
+      />
     </FileSheet>
   );
 }

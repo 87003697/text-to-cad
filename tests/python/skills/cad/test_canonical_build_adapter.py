@@ -15,7 +15,7 @@ from tests.python.support.tmp_root import temporary_directory
 
 
 ADAPTER = repo_path("skills/cad/scripts/canonical-build")
-CADPY_SRC = repo_path("packages/cadpy/src")
+CADGEN_SRC = repo_path("packages/cadgen/src")
 
 
 def _write_canonical_source(root: Path, *, body: str | None = None) -> Path:
@@ -45,7 +45,7 @@ def _write_canonical_source(root: Path, *, body: str | None = None) -> Path:
 def _run_adapter(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
-        (str(CADPY_SRC), env["PYTHONPATH"]) if env.get("PYTHONPATH") else (str(CADPY_SRC),)
+        (str(CADGEN_SRC), env["PYTHONPATH"]) if env.get("PYTHONPATH") else (str(CADGEN_SRC),)
     )
     return subprocess.run(
         [sys.executable, str(ADAPTER), *args],

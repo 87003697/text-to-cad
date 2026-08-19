@@ -15,13 +15,15 @@ export function useCadWorkspaceShortcuts({
   sidebarOpen,
   previewUiStateRef,
   tabToolMode,
+  measureDraftActive = false,
+  onCancelMeasureDraft = null,
   drawingUndoStackRef,
   drawingRedoStackRef,
   handleUndoDrawing,
   handleRedoDrawing,
   setPreviewMode,
   setViewerAlertOpen,
-  setThemeMenuOpen,
+  setThemeEditing,
   setTabToolsOpen,
   setSidebarOpen,
   setTabToolMode
@@ -38,7 +40,7 @@ export function useCadWorkspaceShortcuts({
   }, [copyStatus, screenshotStatus, setCopyStatus, setScreenshotStatus]);
 
   useEffect(() => {
-    if (!(previewMode || viewerAlertOpen || themeSheetOpen || tabToolsOpen || (!isDesktop && sidebarOpen))) {
+    if (!(previewMode || viewerAlertOpen || themeSheetOpen || tabToolsOpen || (!isDesktop && sidebarOpen) || tabToolMode === TAB_TOOL_MODE.MEASURE)) {
       return undefined;
     }
 
@@ -74,15 +76,26 @@ export function useCadWorkspaceShortcuts({
           setPreviewMode(false);
           if (previousUiState) {
             setViewerAlertOpen(previousUiState.viewerAlertOpen);
-            setThemeMenuOpen(previousUiState.themeMenuOpen);
+            setThemeEditing(previousUiState.themeEditing);
             setSidebarOpen(previousUiState.sidebarOpen);
             setTabToolsOpen(previousUiState.tabToolsOpen);
             setTabToolMode(previousUiState.tabToolMode);
           }
           return;
         }
+        if (tabToolMode === TAB_TOOL_MODE.MEASURE) {
+          // Escape cancels the measurement in progress and leaves the tool
+          // armed, the way it does in a CAD measure tool. Only once there is
+          // nothing to cancel does it back out of the tool itself.
+          if (measureDraftActive) {
+            onCancelMeasureDraft?.();
+            return;
+          }
+          setTabToolMode(TAB_TOOL_MODE.REFERENCES);
+          return;
+        }
         setViewerAlertOpen(false);
-        setThemeMenuOpen(false);
+        setThemeEditing(false);
         setTabToolsOpen(false);
         if (!isDesktop) {
           setSidebarOpen(false);
@@ -103,13 +116,16 @@ export function useCadWorkspaceShortcuts({
     themeSheetOpen,
     previewMode,
     previewUiStateRef,
-    setThemeMenuOpen,
+    setThemeEditing,
     setPreviewMode,
     setSidebarOpen,
     setTabToolMode,
     setTabToolsOpen,
     setViewerAlertOpen,
     sidebarOpen,
+    measureDraftActive,
+    onCancelMeasureDraft,
+    tabToolMode,
     tabToolsOpen,
     viewerAlertOpen
   ]);

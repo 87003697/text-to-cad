@@ -9,7 +9,7 @@ const socialPreview = {
   url: "/social-preview-gear.png",
   width: 1200,
   height: 630,
-  alt: "CAD Skills homepage showing a planetary gear CAD model",
+  alt: "text-to-cad homepage showing a planetary gear CAD model",
 };
 
 const themeScript = `
@@ -75,13 +75,13 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
-      { url: "/favicon.ico?v=planetary-gear-workbench", type: "image/x-icon" },
+      { url: "/favicon.ico?v=star-tile", type: "image/x-icon" },
     ],
     shortcut: [
-      { url: "/favicon.ico?v=planetary-gear-workbench", type: "image/x-icon" },
+      { url: "/favicon.ico?v=star-tile", type: "image/x-icon" },
     ],
     apple: [
-      { url: "/favicon.png?v=planetary-gear-workbench", type: "image/png" },
+      { url: "/favicon.png?v=star-tile", type: "image/png" },
     ],
   },
   robots: {

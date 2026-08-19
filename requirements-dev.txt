@@ -15,8 +15,7 @@
 # - skills/sdf/requirements.txt
 # - skills/mesh-compare/requirements.txt
 --editable ./packages/browser_runtime
---editable ./packages/cadpy
---editable ./packages/cadpy_metadata
+--editable ./packages/cadgen
 --editable ./packages/meshscope
 --editable ./packages/meshshot
 --editable ./viewer/moveit2_server

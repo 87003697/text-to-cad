@@ -1,253 +1,47 @@
-import { useEffect, useState } from "react";
+import { Progress } from "@/components/ui/progress";
+import { formatArtifactProgress } from "@/workbench/artifactProgress.js";
 
-// Extracted from the published Claude spinner verb list the user linked.
-const CLAUDE_CODE_LOADING_VERBS = Object.freeze([
-  "Accomplishing",
-  "Actioning",
-  "Actualizing",
-  "Architecting",
-  "Baking",
-  "Beaming",
-  "Beboppin'",
-  "Befuddling",
-  "Billowing",
-  "Blanching",
-  "Bloviating",
-  "Boogieing",
-  "Boondoggling",
-  "Booping",
-  "Bootstrapping",
-  "Brewing",
-  "Bunning",
-  "Burrowing",
-  "Calculating",
-  "Canoodling",
-  "Caramelizing",
-  "Cascading",
-  "Catapulting",
-  "Cerebrating",
-  "Channeling",
-  "Channelling",
-  "Choreographing",
-  "Churning",
-  "Coalescing",
-  "Cogitating",
-  "Combobulating",
-  "Composing",
-  "Computing",
-  "Concocting",
-  "Considering",
-  "Contemplating",
-  "Cooking",
-  "Crafting",
-  "Creating",
-  "Crunching",
-  "Crystallizing",
-  "Cultivating",
-  "Deciphering",
-  "Deliberating",
-  "Determining",
-  "Dilly-dallying",
-  "Discombobulating",
-  "Doing",
-  "Doodling",
-  "Drizzling",
-  "Ebbing",
-  "Effecting",
-  "Elucidating",
-  "Embellishing",
-  "Enchanting",
-  "Envisioning",
-  "Evaporating",
-  "Fermenting",
-  "Fiddle-faddling",
-  "Finagling",
-  "Flambéing",
-  "Flibbertigibbeting",
-  "Flowing",
-  "Flummoxing",
-  "Fluttering",
-  "Forging",
-  "Forming",
-  "Frolicking",
-  "Frosting",
-  "Gallivanting",
-  "Galloping",
-  "Garnishing",
-  "Generating",
-  "Gesticulating",
-  "Germinating",
-  "Gitifying",
-  "Grooving",
-  "Gusting",
-  "Harmonizing",
-  "Hashing",
-  "Hatching",
-  "Herding",
-  "Honking",
-  "Hullaballooing",
-  "Hyperspacing",
-  "Ideating",
-  "Imagining",
-  "Improvising",
-  "Incubating",
-  "Inferring",
-  "Infusing",
-  "Ionizing",
-  "Jitterbugging",
-  "Julienning",
-  "Kneading",
-  "Leavening",
-  "Levitating",
-  "Lollygagging",
-  "Manifesting",
-  "Marinating",
-  "Meandering",
-  "Metamorphosing",
-  "Misting",
-  "Moonwalking",
-  "Moseying",
-  "Mulling",
-  "Mustering",
-  "Musing",
-  "Nebulizing",
-  "Nesting",
-  "Newspapering",
-  "Noodling",
-  "Nucleating",
-  "Orbiting",
-  "Orchestrating",
-  "Osmosing",
-  "Perambulating",
-  "Percolating",
-  "Perusing",
-  "Philosophising",
-  "Photosynthesizing",
-  "Pollinating",
-  "Pondering",
-  "Pontificating",
-  "Pouncing",
-  "Precipitating",
-  "Prestidigitating",
-  "Processing",
-  "Proofing",
-  "Propagating",
-  "Puttering",
-  "Puzzling",
-  "Quantumizing",
-  "Razzle-dazzling",
-  "Razzmatazzing",
-  "Recombobulating",
-  "Reticulating",
-  "Roosting",
-  "Ruminating",
-  "Sautéing",
-  "Scampering",
-  "Schlepping",
-  "Scurrying",
-  "Seasoning",
-  "Shenaniganing",
-  "Shimmying",
-  "Simmering",
-  "Skedaddling",
-  "Sketching",
-  "Slithering",
-  "Smooshing",
-  "Sock-hopping",
-  "Spelunking",
-  "Spinning",
-  "Sprouting",
-  "Stewing",
-  "Sublimating",
-  "Swirling",
-  "Swooping",
-  "Symbioting",
-  "Synthesizing",
-  "Tempering",
-  "Thinking",
-  "Thundering",
-  "Tinkering",
-  "Tomfoolering",
-  "Topsy-turvying",
-  "Transfiguring",
-  "Transmuting",
-  "Twisting",
-  "Undulating",
-  "Unfurling",
-  "Unravelling",
-  "Vibing",
-  "Waddling",
-  "Wandering",
-  "Warping",
-  "Whatchamacalliting",
-  "Whirlpooling",
-  "Whirring",
-  "Whisking",
-  "Wibbling",
-  "Working",
-  "Wrangling",
-  "Zesting",
-  "Zigzagging"
-]);
+// Two words, max. Anything longer starts wrapping over the 3D scene and stops being
+// scannable at a glance.
+const DEFAULT_STATUS = "Loading";
 
-function shuffledLoadingVerbs() {
-  const verbs = [...CLAUDE_CODE_LOADING_VERBS];
-  for (let index = verbs.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
-    [verbs[index], verbs[swapIndex]] = [verbs[swapIndex], verbs[index]];
-  }
-  return verbs;
-}
-
+/**
+ * The one loading indicator: what is happening on the left, how far along on the right, bar.
+ *
+ * Two lines, never more. The status line is as SPECIFIC as the build can make it — the phase
+ * plus the sub-unit in flight, on one line ("Building geometry · airframe") — because the
+ * phase alone goes stale for minutes at a time on a big model, and a status that has not
+ * changed in twenty minutes is the failure this whole pipeline exists to fix. Putting the
+ * sub-unit on its own row instead cost a third row and made the overlay resize whenever a
+ * phase started or stopped naming things; over a live 3D scene that was worse than the
+ * information was worth.
+ *
+ * The phase ordinal ("2 of 4") is the one thing deliberately dropped: it answers a question
+ * nobody asks mid-build, and it competed with the count for the eye.
+ *
+ * The bar takes one of two forms, chosen by what the build can honestly say. A phase that
+ * knows its work list fills it and shows the count ("312/1127"); a phase that does not gets
+ * an INDETERMINATE bar and NO number beside it. There is no overall percentage and no clock.
+ * Both were previously required to keep one bar moving across four phases of unknowable
+ * relative cost, and both lied: a first build had no measurements to weight the phases with,
+ * so the bar sat at 0% for the whole of a ten-minute generate phase and then jumped to 46%.
+ * A sliding bar says "working, no estimate" — which is the truth — and needs no repaint timer
+ * to say it, because CSS animates it.
+ */
 export default function ViewerLoadingOverlay({
   viewerLoading,
-  previewMode
+  previewMode,
+  progress = null
 }) {
-  const [loadingVerbs, setLoadingVerbs] = useState(() => shuffledLoadingVerbs());
-  const [activeWordIndex, setActiveWordIndex] = useState(0);
-  const [spinnerFrameIndex, setSpinnerFrameIndex] = useState(0);
-  const [ellipsisFrameIndex, setEllipsisFrameIndex] = useState(0);
-
-  const ASCII_SPINNER_FRAMES = ["|", "/", "-", "\\"];
-  const ASCII_ELLIPSIS_FRAMES = ["", ".", "..", "..."];
-
-  useEffect(() => {
-    if (!viewerLoading || previewMode) {
-      return undefined;
-    }
-
-    const nextLoadingVerbs = shuffledLoadingVerbs();
-    setLoadingVerbs(nextLoadingVerbs);
-    setActiveWordIndex(0);
-    setSpinnerFrameIndex(0);
-    setEllipsisFrameIndex(0);
-
-    const verbIntervalId = window.setInterval(() => {
-      setActiveWordIndex((current) => (current + 1) % nextLoadingVerbs.length);
-    }, 900);
-
-    const spinnerIntervalId = window.setInterval(() => {
-      setSpinnerFrameIndex((current) => (current + 1) % ASCII_SPINNER_FRAMES.length);
-    }, 90);
-
-    const ellipsisIntervalId = window.setInterval(() => {
-      setEllipsisFrameIndex((current) => (current + 1) % ASCII_ELLIPSIS_FRAMES.length);
-    }, 360);
-
-    return () => {
-      window.clearInterval(verbIntervalId);
-      window.clearInterval(spinnerIntervalId);
-      window.clearInterval(ellipsisIntervalId);
-    };
-  }, [previewMode, viewerLoading]);
-
   if (!viewerLoading || previewMode) {
     return null;
   }
 
-  const activeVerb = loadingVerbs[activeWordIndex] || CLAUDE_CODE_LOADING_VERBS[0];
-  const spinnerFrame = ASCII_SPINNER_FRAMES[spinnerFrameIndex];
-  const ellipsis = ASCII_ELLIPSIS_FRAMES[ellipsisFrameIndex];
+  const frame = progress ? formatArtifactProgress(progress) : null;
+  const status = frame?.label || DEFAULT_STATUS;
+  // Anything without a real fraction — an uncountable phase, or a plain asset read that
+  // reports nothing at all — renders as indeterminate.
+  const value = frame?.determinate ? frame.percent : null;
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20 overflow-hidden">
@@ -256,15 +50,31 @@ export default function ViewerLoadingOverlay({
         <div
           role="status"
           aria-live="polite"
-          className="cad-loading-ascii relative z-10 max-w-[min(90vw,38rem)] text-center font-mono text-sm text-popover-foreground"
+          className="relative z-10 flex w-[22rem] max-w-[min(90vw,28rem)] flex-col gap-2 text-popover-foreground"
         >
-          <span className="sr-only">{activeVerb}</span>
-          <span className="inline-flex w-[24ch] items-start justify-start text-left sm:w-[26ch]">
-            <span className="inline-block w-[2ch]">{spinnerFrame}</span>
-            <span className="inline-block w-[1ch]"> </span>
-            <span>{activeVerb}</span>
-            <span className="inline-block w-[3ch]">{ellipsis}</span>
-          </span>
+          <div className="flex items-baseline justify-between gap-4">
+            {/* smui: status text is uppercase with wide tracking. 11px is the skill's
+                `text-label` size; this app has not registered that token, so it is
+                written literally rather than adding a theme entry plus its
+                tailwind-merge classGroup for one call site. */}
+            <span className="truncate text-[11px] uppercase tracking-wider text-muted-foreground">
+              {status}
+              {/* The sub-unit rides on the SAME line as the phase, in its authored case —
+                  it is data ("airframe", "o1.7.3 nozzle_petal"), not a label, and shouting
+                  it would make a content hash even harder to read. `truncate` on the parent
+                  clips the pair from the right rather than letting it wrap over the scene. */}
+              {frame?.detail ? (
+                <span className="normal-case tracking-normal text-muted-foreground/60">
+                  {" · "}
+                  {frame.detail}
+                </span>
+              ) : null}
+            </span>
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+              {frame?.counts || ""}
+            </span>
+          </div>
+          <Progress value={value} aria-label={status} />
         </div>
       </div>
     </div>

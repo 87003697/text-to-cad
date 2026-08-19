@@ -1,11 +1,10 @@
-import Image from "next/image";
 import { ExternalLink } from "lucide-react";
 import { CopyButton } from "@/components/copy-button";
 import { HeroSection } from "@/components/hero-section";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 
-const skillsInstallCommand = "npx skills install earthtojake/text-to-cad";
+const skillsInstallCommand = "npx skills add earthtojake/text-to-cad";
 
 const pluginInstallCommands = [
   {
@@ -18,11 +17,13 @@ const pluginInstallCommands = [
     command:
       "claude plugin marketplace add earthtojake/text-to-cad\nclaude plugin install cad@text-to-cad",
   },
-];
-
-const supportedAgents = [
-  { name: "Claude Code", slug: "claude-code", icon: "claude-code.svg" },
-  { name: "Codex", slug: "codex", icon: "codex.svg" },
+  // Grok Build reads the same .claude-plugin/marketplace.json as Claude Code -- there is no
+  // separate Grok manifest -- and installs straight from the repo rather than adding a
+  // marketplace first, so it is one command, not two.
+  {
+    agent: "Grok Build",
+    command: "grok plugin install earthtojake/text-to-cad --trust",
+  },
 ];
 
 const skillGroups = [
@@ -35,7 +36,7 @@ const skillGroups = [
   {
     name: "CAD Viewer",
     path: "skills/cad-viewer",
-    summary: "Shows local browser previews for CAD, G-code, and robot files.",
+    summary: "Shows local browser previews for CAD and robot files.",
   },
   {
     name: "step.parts",
@@ -92,13 +93,19 @@ const skillGroups = [
   },
 ];
 
+// Command boxes cap at half the 1200px content shell rather than filling it: a command is a
+// short line, and a full-bleed box puts a lot of empty card to the right of it. A cap, not a
+// width -- a narrow screen still gets the whole column.
+const COMMAND_BOX_CLASS =
+  "min-w-0 max-w-[min(600px,100%)] overflow-hidden border border-border bg-card";
+
 function InstallCommand({
   item,
 }: {
   item: (typeof pluginInstallCommands)[number];
 }) {
   return (
-    <div className="min-w-0 max-w-full overflow-hidden border border-border bg-card">
+    <div className={COMMAND_BOX_CLASS}>
       <div className="border-b border-border px-3 py-2 text-label uppercase tracking-[1.5px] text-muted-foreground">
         {item.agent}
       </div>
@@ -128,7 +135,7 @@ function InstallCommands() {
 
 function SkillsInstallCommand() {
   return (
-    <div className="min-w-0 max-w-full overflow-hidden border border-border bg-card">
+    <div className={COMMAND_BOX_CLASS}>
       <div className="flex min-h-[54px] min-w-0 max-w-full items-stretch">
         <code className="flex min-w-0 flex-1 items-center overflow-x-auto whitespace-pre px-3 py-2 text-sm leading-6 text-foreground">
           {skillsInstallCommand}
@@ -138,57 +145,6 @@ function SkillsInstallCommand() {
           label="Copy Skills CLI install command"
           compact
         />
-      </div>
-    </div>
-  );
-}
-
-function AgentTile({
-  agent,
-  hidden = false,
-}: {
-  agent: (typeof supportedAgents)[number];
-  hidden?: boolean;
-}) {
-  return (
-    <a
-      aria-hidden={hidden ? "true" : undefined}
-      aria-label={`Skills for ${agent.name}`}
-      className="group flex h-[54px] w-[150px] shrink-0 items-center gap-2.5 border border-border bg-card px-2.5 text-muted-foreground transition hover:bg-secondary hover:text-foreground sm:w-[168px]"
-      href={`https://www.skills.sh/agent/${agent.slug}`}
-      rel="noreferrer"
-      tabIndex={hidden ? -1 : undefined}
-      target="_blank"
-    >
-      <span className="flex size-7 shrink-0 items-center justify-center">
-        <Image
-          alt=""
-          src={`https://www.skills.sh/agents/${agent.icon}`}
-          width={44}
-          height={44}
-          unoptimized
-          className="size-5 object-contain opacity-70 grayscale transition group-hover:opacity-100 group-hover:grayscale-0 dark:invert"
-        />
-      </span>
-      <span className="min-w-0 truncate text-label uppercase tracking-[1.3px]">
-        {agent.name}
-      </span>
-    </a>
-  );
-}
-
-function AgentCarousel() {
-  return (
-    <div className="agent-carousel relative min-h-[54px] min-w-0 overflow-hidden">
-      <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-background to-transparent sm:w-20" />
-      <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-background to-transparent sm:w-20" />
-      <div className="agent-carousel-track flex w-max gap-2">
-        {supportedAgents.map((agent) => (
-          <AgentTile key={agent.slug} agent={agent} />
-        ))}
-        {supportedAgents.map((agent) => (
-          <AgentTile key={`${agent.slug}-duplicate`} agent={agent} hidden />
-        ))}
       </div>
     </div>
   );
@@ -241,22 +197,12 @@ export default function Home() {
         <div className="min-w-0 space-y-2">
           <HeroSection />
 
-          <section
-            aria-label="Install CAD Skills with supported agents"
-            className="grid gap-5 py-6 lg:grid-cols-2 lg:items-center lg:gap-12"
-          >
-            <div className="min-w-0 space-y-3">
+          <section aria-label="Install text-to-cad" className="py-6">
+            <div className="max-w-3xl space-y-3">
               <h2 className="text-sm font-medium uppercase tracking-[1.5px] text-foreground">
                 Try It Now
               </h2>
               <SkillsInstallCommand />
-            </div>
-
-            <div className="min-w-0 space-y-3">
-              <h2 className="text-sm font-medium uppercase tracking-[1.5px] text-foreground">
-                Supported Agents
-              </h2>
-              <AgentCarousel />
             </div>
           </section>
 
@@ -313,11 +259,21 @@ export default function Home() {
             <SectionIntro
               id="installation-title"
               title="INSTALL"
-              description="Install CAD Skills with the Skills CLI. Provider-native plugin installs are available as a secondary path."
+              description="Install text-to-cad with the Skills CLI. Provider-native plugin installs are available as a secondary path."
             />
 
             <div className="max-w-3xl space-y-3">
               <SkillsInstallCommand />
+              <p className="text-sm leading-6 text-muted-foreground">
+                <span className="text-foreground">Run the same command to update.</span>{" "}
+                <code className="text-foreground">add</code> re-fetches the package and
+                overwrites what is installed, so it refreshes existing skills and picks up any
+                skill added in a newer release.{" "}
+                <code className="text-foreground">npx skills update</code> only walks your
+                lockfile, so it silently misses new ones. Neither removes a skill that was
+                retired upstream — drop one with{" "}
+                <code className="text-foreground">npx skills remove &lt;skill&gt;</code>.
+              </p>
               <div className="pt-3">
                 <h3 className="mb-3 text-sm font-medium uppercase tracking-[1.5px] text-foreground">
                   Plugin Installs

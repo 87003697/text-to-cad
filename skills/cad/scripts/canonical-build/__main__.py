@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from cadpy.canonical_build import main
+from cadgen.canonical_build import main
 
 
 if __name__ == "__main__":

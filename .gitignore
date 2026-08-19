@@ -6,6 +6,8 @@
 # Python
 __pycache__/
 *.py[cod]
+# Per-folder cadgen output home; rebuilt on demand.
+__cadgen__/
 *.egg-info/
 *.so
 *.dylib
@@ -72,3 +74,9 @@ models/fun/
 
 # Local-only pilot benchmark inputs (not committed)
 models/toys4k/
+
+# Component-GLB render packages are regenerated on demand.
+.*.step.glb/
+.*.step.glb
+.*.stp.glb/
+.*.stp.glb
