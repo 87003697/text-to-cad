@@ -219,7 +219,6 @@ class PilotReviewTests(unittest.TestCase):
                     "selected_step": 1,
                     "accepted": True,
                     "stop_reason": "acceptance_satisfied",
-                    "route": "cad",
                     "identity_sha256": "6" * 64,
                     "manifest": "final/manifest.json",
                 },

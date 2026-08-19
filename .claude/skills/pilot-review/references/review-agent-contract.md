@@ -48,7 +48,7 @@ destination.
     {
       "classification": "tool-interface-failure",
       "detail": "The registered build timed out after the configured budget.",
-      "fix_target": "implicit-cad canonical build exporter",
+      "fix_target": "CAD canonical build exporter",
       "evidence": [
         {
           "scope": "experiment",
@@ -138,7 +138,7 @@ source group path when using compatible in-place mode):
     {
       "classification": "tool-interface-failure",
       "detail": "Only the ring-heavy source exhausted the build budget.",
-      "fix_target": "implicit-cad canonical build exporter",
+      "fix_target": "CAD canonical build exporter",
       "evidence": [
         {
           "scope": "group",
@@ -153,7 +153,7 @@ source group path when using compatible in-place mode):
 }
 ```
 
-Compare experiments only when their shipped snapshot, route, or other relevant
+Compare experiments only when their shipped snapshot, build interface, or other relevant
 conditions are comparable. State the mismatch when they are not.
 
 ## Completion criterion

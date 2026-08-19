@@ -67,9 +67,7 @@ The root has exactly six top-level keys, in the following semantic shape:
 | `agentImageConfigDigest` | Full OCI image-config digest observed independently from the manifest |
 | `platform` | Exactly `{"architecture":"amd64","os":"linux"}` |
 | `runtimeManifestDigest` | Digest of the image-resident sealed runtime manifest |
-| `cupRuntimeCapabilityManifestDigest` | Digest of the closed first-release Cup capability manifest |
 | `buildInputSetDigest` | Digest of the closed offline build-input set: recipe, base, dependency locks, and project runtime artifacts |
-| `verificationPlanDigest` | Digest of the independently approved, immutable provider-free verification plan |
 
 Every digest is exactly `sha256:` plus 64 lowercase hexadecimal characters.
 `buildInputSetDigest` is an artifact-construction identity, not a Source
@@ -96,8 +94,8 @@ same-named child field to agree exactly.
 `entrypointExact` requires the OCI config `Entrypoint` to be exactly
 `["/usr/local/libexec/text-to-cad-agent-entrypoint"]`, `Cmd` to be exactly the
 empty array, and the file's path, mode `0555`, byte length, and digest to equal
-the runtime-manifest `entrypoint`. That digest also equals the approved
-verification-plan `entrypointDigest` and both lifecycle subject values. The
+the runtime-manifest `entrypoint`. That digest also equals both lifecycle
+subject values. The
 outer supervisor is not an image entrypoint producer and cannot satisfy this
 predicate with mounted, generated, prototype, or alternate bytes.
 
@@ -126,7 +124,7 @@ capability manifest, or build-input lock cannot be grafted into the graph.
 }
 ```
 
-`children` contains exactly the fifteen role/environment references in the
+`children` contains exactly the eleven role/environment references in the
 table below, sorted first by `kind` and then by `environment` (`null` sorts
 before strings). Each reference has exactly `kind`, `environment`, and
 `digest`. No pair may repeat and no digest may repeat. An environment-neutral
@@ -134,21 +132,17 @@ node uses JSON `null`; environment-qualified nodes use only `colima` or `cvm`.
 
 | `kind` | `environment` | Required direct dependencies |
 | --- | --- | --- |
-| `agent-lifecycle` | `colima` | `image-identity`, `browser-deny`, matching `source-snapshot`, `verification-plan` |
-| `agent-lifecycle` | `cvm` | `image-identity`, `browser-deny`, matching `source-snapshot`, `verification-plan` |
-| `browser-deny` | `null` | `image-identity`, `verification-plan` |
+| `agent-lifecycle` | `colima` | `image-identity`, `browser-deny`, matching `source-snapshot` |
+| `agent-lifecycle` | `cvm` | `image-identity`, `browser-deny`, matching `source-snapshot` |
+| `browser-deny` | `null` | `image-identity` |
 | `build-input-set` | `null` | none |
 | `build-provenance` | `null` | `build-input-set` |
-| `capability-conformance` | `colima` | matching `agent-lifecycle`, `cup-golden`, `verification-plan` |
-| `capability-conformance` | `cvm` | matching `agent-lifecycle`, `cup-golden`, `verification-plan` |
 | `codex-admission` | `null` | `dependency-admission` |
-| `cup-golden` | `null` | `image-identity`, `verification-plan` |
 | `dependency-admission` | `null` | `build-input-set` |
 | `image-identity` | `null` | `build-provenance`, `sbom` |
 | `sbom` | `null` | `build-provenance` |
-| `source-snapshot` | `colima` | `verification-plan` |
-| `source-snapshot` | `cvm` | `verification-plan` |
-| `verification-plan` | `null` | none |
+| `source-snapshot` | `colima` | none |
+| `source-snapshot` | `cvm` | none |
 
 Each referenced document has exactly:
 
@@ -195,16 +189,13 @@ The exact `subject` keys are:
 | --- | --- |
 | `build-input-set` | `buildInputSetDigest`, `buildRecipeDigest`, `baseImageManifestDigest`, `ubuntuSnapshotManifestDigest`, `dependencyLockDigest`, `projectRuntimeArtifactSetDigest` |
 | `build-provenance` | `buildInputSetDigest`, `builderImageManifestDigest`, `buildRecipeDigest`, `baseImageManifestDigest`, `outputImageManifestDigest`, `outputImageConfigDigest` |
-| `dependency-admission` | `buildInputSetDigest`, `dependencyLockDigest`, `aptClosureManifestDigest`, `pythonWheelManifestDigest`, `nodeArtifactDigest`, `implicitBundleDigest` |
+| `dependency-admission` | `buildInputSetDigest`, `dependencyLockDigest`, `aptClosureManifestDigest`, `pythonWheelManifestDigest`, `nodeArtifactDigest` |
 | `codex-admission` | `codexVersion` (literal `0.147.0`), `platform` (literal `x86_64-unknown-linux-musl`), `retrievalReceiptDigest`, `archiveDigest`, `executableDigest`, `signatureBundleDigest`, `signaturePolicyDigest`, `signatureVerificationReceiptDigest`, `elfClosureDigest` |
 | `sbom` | `agentImageManifestDigest`, `sbomDigest`, `format` (literal `spdx-json-2.3`) |
-| `image-identity` | `agentImageManifestDigest`, `agentImageConfigDigest`, `runtimeManifestDigest`, `cupRuntimeCapabilityManifestDigest`, `platform` |
+| `image-identity` | `agentImageManifestDigest`, `agentImageConfigDigest`, `runtimeManifestDigest`, `platform` |
 | `browser-deny` | `agentImageManifestDigest`, `scannerDigest`, `inventoryDigest`, `browserFindingCount`, `chromiumProcessCount` |
-| `cup-golden` | `agentImageManifestDigest`, `fixtureDigest`, `routerManifestDigest`, `expectedOutputDigest`, `observedOutputDigest`, `faceCount`, `watertight`, `eulerNumber` |
 | `source-snapshot` | `executionSourceSnapshotDigest`, `sourceManifestDigest`, `pathCount`, `totalBytes` |
 | `agent-lifecycle` | `agentImageManifestDigest`, `agentImageConfigDigest`, `runtimeManifestDigest`, `executionSourceSnapshotDigest`, `inputSnapshotDigest`, `agentConfigDigest`, `brokerAuthorityDigest`, `workloadDigest`, `lifecycleHarnessDigest`, `entrypointDigest`, `lifecycleReceiptSchemaDigest`, `resourceDisposition`, `cleanupDisposition` |
-| `capability-conformance` | `agentImageManifestDigest`, `runtimeManifestDigest`, `cupRuntimeCapabilityManifestDigest`, `executionSourceSnapshotDigest`, `inputSnapshotDigest`, `conformanceFixtureDigest`, `expectedOutputDigest`, `observedOutputDigest` |
-| `verification-plan` | `verificationPlanDigest`, `scannerDigest`, `verificationSourceSnapshotDigest`, `verificationSourceManifestDigest`, `verificationInputSnapshotDigest`, `cupFixtureDigest`, `routerManifestDigest`, `expectedOutputDigest`, `conformanceFixtureDigest`, `lifecycleHarnessDigest`, `entrypointDigest`, `lifecycleReceiptSchemaDigest`, `agentConfigDigest`, `brokerAuthorityDigest`, `workloadDigest` |
 
 All non-null fields ending in `Digest` use the full digest grammar. `pathCount`,
 `totalBytes`, `browserFindingCount`, `chromiumProcessCount`, `faceCount`, and
@@ -223,78 +214,13 @@ exactly `agentContainer`, `brokerVolume`, and `jobPrivateTree`; every value is
 fields set to `null`. These closed observations distinguish positive residue
 from failure to prove absence without exposing IDs or paths.
 
-### Verification authority and cross-field equality
+### Cross-field equality
 
-The environment-neutral `verification-plan` is approved before either host
-attempt and is immutable by `verificationPlanDigest`. Its producer only proves
-the closed predicates below; it cannot fill the plan from runtime observations.
-The plan artifact is the canonical object containing all verification-plan
-subject fields except `verificationPlanDigest`; that digest is SHA-256 of those
-bytes. The evidence node then copies the digest and fields, so neither the plan
-nor the evidence node hashes itself.
-Colima and CVM therefore run the same verifier bytes and inputs. The strict
-consumer enforces every equality in this matrix:
-
-| Plan field | Must equal |
-| --- | --- |
-| `verificationPlanDigest` | root `subject.verificationPlanDigest`; `verification-plan.subject.verificationPlanDigest` |
-| `scannerDigest` | `browser-deny.subject.scannerDigest` |
-| `verificationSourceSnapshotDigest` | both `source-snapshot.subject.executionSourceSnapshotDigest`; both lifecycle and both conformance `executionSourceSnapshotDigest` |
-| `verificationSourceManifestDigest` | each `source-snapshot.subject.sourceManifestDigest` whose node is `succeeded` |
-| `verificationInputSnapshotDigest` | both lifecycle and both conformance `inputSnapshotDigest` |
-| `cupFixtureDigest` | `cup-golden.subject.fixtureDigest` |
-| `routerManifestDigest` | `cup-golden.subject.routerManifestDigest` |
-| `expectedOutputDigest` | `cup-golden.subject.expectedOutputDigest`; both conformance `expectedOutputDigest` |
-| `conformanceFixtureDigest` | both conformance `conformanceFixtureDigest` |
-| `lifecycleHarnessDigest` | both lifecycle `lifecycleHarnessDigest` |
-| `entrypointDigest` | both lifecycle `entrypointDigest` |
-| `lifecycleReceiptSchemaDigest` | both lifecycle `lifecycleReceiptSchemaDigest` |
-| `agentConfigDigest` | both lifecycle `agentConfigDigest` |
-| `brokerAuthorityDigest` | both lifecycle `brokerAuthorityDigest` |
-| `workloadDigest` | both lifecycle `workloadDigest` |
-
-`verificationSourceSnapshotDigest` is request-bound identity. Every Source
-Snapshot, lifecycle, and conformance child repeats it as the non-null
-`executionSourceSnapshotDigest` in every status, including `failed` and
-`not-run`, and it always equals the plan value. The three Source Snapshot
-observations have this closed establishing-predicate map:
-
-| Observation | Establishing predicate | Exact concrete value rule |
-| --- | --- | --- |
-| `sourceManifestDigest` | `treeDigestMatchesObservation` | Equal to `verificationSourceManifestDigest` when `true`; a concrete full digest different from the plan value when `false` |
-| `pathCount` | `pathSetClosed` | Any permitted nonnegative integer when `true` or `false` |
-| `totalBytes` | `fileSizesBound` | Any permitted nonnegative integer when `true` or `false` |
-
-- A `succeeded` Source Snapshot has all three observations concrete and its
-  `sourceManifestDigest` equals `verificationSourceManifestDigest`.
-- A `failed` Source Snapshot applies each row independently. An observation is
-  `null` if and only if its establishing predicate is `null`; a `true` or
-  `false` predicate retains the concrete observed value required by the row.
-  This makes observations after an earlier first failure deterministically
-  `null` without erasing observations already made.
-- A `not-run` Source Snapshot has `sourceManifestDigest`, `pathCount`, and
-  `totalBytes` set to `null`.
-
-A strict consumer rejects a succeeded manifest mismatch, any null succeeded
-observation, any non-null not-run observation, a failed observation whose
-null/concrete state disagrees with its establishing predicate, or a concrete
-value that violates its row. It must not reject a failed Source Snapshot merely
-because its concrete observed manifest differs from the plan. The two Source
-Snapshot node subjects are required to be byte-for-byte equal, including counts
-after environment is excluded, only when both nodes succeeded; their
-request-bound fields remain equal in every status.
-
-In addition, root image/runtime/Cup identities equal every same-named child
-field, and `cup-golden.observedOutputDigest` plus each conformance
-`observedOutputDigest` must equal the plan's `expectedOutputDigest` on success.
-A producer-selected scanner, harness, entrypoint, receipt schema, fixture,
-input, router, expected output, or verification Source Snapshot is a schema
-rejection.
-
-This plan controls verification only. A later production Agent Execution may
-mount a different Source Snapshot by its own execution identity without
-changing the sealed image, `buildInputSetDigest`, or existing artifact-level
-Verified receipt.
+Root image, config, runtime-manifest, and build-input identities equal every
+same-named child field. The two Source Snapshot subjects must be byte-for-byte
+equal when both environments succeed. Lifecycle evidence binds its own source,
+input, harness, entrypoint, receipt-schema, agent-config, broker-authority, and
+workload identities without a CAD representation selector.
 
 ## Closed predicates
 
@@ -317,14 +243,12 @@ and no truthy substitute is accepted.
 | --- | --- |
 | `build-input-set` | `manifestSchemaExact`, `recipeBound`, `baseManifestBound`, `ubuntuSnapshotBound`, `dependencyLockBound`, `projectRuntimeArtifactsBound`, `pathSetClosed`, `fileDigestsBound`, `immutableObjectVisible` |
 | `build-provenance` | `builderIdentityExact`, `buildRecipeDigestExact`, `baseManifestDigestExact`, `platformLinuxAmd64`, `buildInputSetBound`, `networkDisabled`, `pullDisabled`, `cleanContextAllowlisted`, `outputManifestDigestExact`, `outputConfigDigestExact` |
-| `dependency-admission` | `ubuntuSnapshotPinned`, `ubuntuMetadataAuthenticated`, `debClosureComplete`, `pythonWheelClosureComplete`, `nativeMeshscopeWheelAdmitted`, `browserFreeMeshshotWheelAdmitted`, `nodeArtifactAdmitted`, `canonicalImplicitBundleClosed`, `runtimeFilesByteLocked`, `offlineRebuildSucceeded` |
+| `dependency-admission` | `ubuntuSnapshotPinned`, `ubuntuMetadataAuthenticated`, `debClosureComplete`, `pythonWheelClosureComplete`, `nativeMeshscopeWheelAdmitted`, `browserFreeMeshshotWheelAdmitted`, `nodeArtifactAdmitted`, `runtimeFilesByteLocked`, `offlineRebuildSucceeded` |
 | `codex-admission` | `versionExact`, `platformArtifactExact`, `retrievalMetadataRecorded`, `archiveDigestExact`, `executableDigestExact`, `archiveSingleExecutableExact`, `signatureBundleDigestExact`, `signaturePolicyExact`, `signatureVerified`, `certificateIdentityExact`, `certificateIssuerExact`, `transparencyLogVerified`, `elfClosureClosed`, `nodeAbsentSmokePassed`, `noninteractiveSmokePassed`, `immutableMirrorVisible` |
 | `sbom` | `formatExact`, `subjectManifestDigestExact`, `allRuntimeFilesCovered`, `packageVersionsExact`, `nativeLibrariesCovered`, `licensesRecorded`, `sbomDigestBound` |
-| `image-identity` | `immutableReferenceExact`, `manifestDigestObserved`, `configDigestObserved`, `runtimeManifestInsideImageExact`, `cupManifestInsideImageExact`, `osLinux`, `architectureAmd64`, `entrypointExact`, `userNonRoot`, `noMutableTagAuthority` |
+| `image-identity` | `immutableReferenceExact`, `manifestDigestObserved`, `configDigestObserved`, `runtimeManifestInsideImageExact`, `osLinux`, `architectureAmd64`, `entrypointExact`, `userNonRoot`, `noMutableTagAuthority` |
 | `browser-deny` | `packageInventoryEmpty`, `executableInventoryEmpty`, `cacheInventoryEmpty`, `elfMarkerInventoryEmpty`, `productMarkerInventoryEmpty`, `playwrightInventoryEmpty`, `chromiumProcessZero`, `browserLifecycleAuthorityAbsent` |
-| `cup-golden` | `fixtureDigestExact`, `formalRouterImplicitOnly`, `faceCount3764`, `watertightFalse`, `eulerNumber144`, `nodeImplicitSubsetExact`, `meshscopeAccepted`, `voxBlameAccepted`, `residualBrokerPreviewAccepted`, `outputDigestRepeatable` |
 | `source-snapshot` | `manifestSchemaExact`, `pathSetClosed`, `regularFilesOnly`, `fileModesBound`, `fileSizesBound`, `fileDigestsBound`, `treeDigestMatchesObservation`, `readOnlyMountEligible` |
-| `verification-plan` | `planSchemaExact`, `planDigestExact`, `scannerApproved`, `sourceSnapshotApproved`, `sourceManifestApproved`, `inputSnapshotApproved`, `cupFixtureApproved`, `routerManifestApproved`, `expectedOutputApproved`, `conformanceFixtureApproved`, `lifecycleHarnessApproved`, `entrypointApproved`, `receiptSchemaApproved`, `agentConfigApproved`, `brokerAuthorityApproved`, `workloadApproved` |
 
 For the `sbom` node, the only admitted License/Exception identifier authority
 is the canonical local catalog with schema
@@ -830,33 +754,6 @@ owner-attested container ID authorizes removal. A positive observation of any
 owned residue maps to `retained-resource`; inability to establish all required
 absence maps to `absence-proof`.
 
-`capability-conformance` in both environments has exactly:
-
-1. `runtimeManifestBound`
-2. `cupManifestBound`
-3. `sourceSnapshotBound`
-4. `inputSnapshotBound`
-5. `codexExecutableExact`
-6. `python312Exact`
-7. `nodeRuntimeExact`
-8. `canonicalImplicitSubsetExact`
-9. `meshscopeCallable`
-10. `voxBlameCallable`
-11. `brokerAuthorityJobPrivate`
-12. `residualPublicParity`
-13. `browserInventoryEmpty`
-14. `browserProcessZero`
-15. `dockerAuthorityAbsent`
-16. `credentialSurfaceEmpty`
-17. `providerNetworkDenied`
-18. `cupGoldenAccepted`
-19. `outputDigestBound`
-20. `terminalAndCleanupBound`
-
-The conformance job is provider-free. Its Source Snapshot is the exact verifier
-fixture snapshot bound in the lifecycle identity; that execution snapshot does
-not enter or replace the artifact `buildInputSetDigest` in the root subject.
-
 ### Exact child state machine and cascade
 
 The node state transition is one-way: `pending` (never published) to exactly one
@@ -889,11 +786,6 @@ The remaining observation map is closed:
 | `browser-deny.inventoryDigest` | `packageInventoryEmpty` | Full digest of the one complete closed inventory scan, whether the predicate is `true` or `false` |
 | `browser-deny.browserFindingCount` | `packageInventoryEmpty` | `0` when all six inventory predicates are `true`; at least `1` when any of them is `false` |
 | `browser-deny.chromiumProcessCount` | `chromiumProcessZero` | `0` when `true`; at least `1` when `false` |
-| `cup-golden.faceCount` | `faceCount3764` | `3764` when `true`; any permitted nonnegative integer other than `3764` when `false` |
-| `cup-golden.watertight` | `watertightFalse` | literal `false` when `true`; literal `true` when `false` |
-| `cup-golden.eulerNumber` | `eulerNumber144` | `144` when `true`; any signed 64-bit integer other than `144` when `false` |
-| `cup-golden.observedOutputDigest` | `outputDigestRepeatable` | Equal to `expectedOutputDigest` when `true`; any concrete full digest when `false`, including the expected digest |
-| `capability-conformance.observedOutputDigest` | `outputDigestBound` | Equal to `expectedOutputDigest` when `true`; a concrete full digest different from `expectedOutputDigest` when `false` |
 
 The six Browser inventory predicates are, in order,
 `packageInventoryEmpty`, `executableInventoryEmpty`, `cacheInventoryEmpty`,
@@ -911,16 +803,7 @@ concrete value rule in the table. In particular, it rejects a Browser inventory
 digest or finding count without an evaluated `packageInventoryEmpty`, a null
 scan result after that predicate was evaluated, a zero aggregate count when an
 inventory predicate is false, a nonzero aggregate count when all six are true,
-a process count whose nullness disagrees with `chromiumProcessZero`, or a
-process count inconsistent with that Boolean. It rejects a null Cup metric or
-output after its establishing predicate was evaluated, any Cup metric value
-inconsistent with its Boolean, a true Cup output digest unequal to expected, a
-null conformance output after `outputDigestBound` was evaluated, a true
-conformance output unequal to expected, or a false conformance output equal to
-expected. It does not reject a false `outputDigestRepeatable` merely because
-the one retained Cup output digest equals expected: repeatability can fail even
-when that observed run produced the expected bytes. Null observations cannot
-satisfy predicates.
+or a process count whose nullness disagrees with `chromiumProcessZero`.
 
 The supervisor processes the dependency DAG in the root child order, while
 independent ready nodes may execute concurrently. Before starting a node it
@@ -1111,48 +994,25 @@ resource.
 
 `Agent Runtime Verified` is an artifact-level statement about the exact root
 subject. A rollback may reuse its immutable Verified receipt only when the
-Agent image manifest/config bytes, runtime manifest, Cup capability manifest,
-build-input-set lock, and approved verification-plan digest are unchanged. A
-changed production execution Source Snapshot does not invalidate this artifact
-receipt. Reuse does not attest a new
-machine: each rollback target must produce fresh host provision and
-environment-qualified lifecycle/conformance evidence before execution. Those
-deployment receipts refer to the existing Verified root digest; they do not
-mint a different artifact identity or silently amend the old graph.
+Agent image manifest/config bytes, runtime manifest, and build-input-set lock
+are unchanged. A changed production execution Source Snapshot does not
+invalidate this artifact receipt. Reuse does not attest a new machine: each
+rollback target must produce fresh host provision and environment-qualified
+lifecycle evidence before execution.
 
 `Formal Pilot Integrated` is a later execution-level statement. It additionally
 binds a particular input, runtime job authority, Agent execution, Broker and
 Browser Sidecar artifacts, model/provider usage, outputs, and the formal Gate
-receipt. A real paid Cup pilot can establish that later statement, but cannot
-repair a missing Agent Runtime Verified predicate. Conversely, a Verified
-Agent artifact makes no claim that Venus was contacted, a paid job ran, a CAD
+receipt. A Verified Agent artifact makes no claim that a paid job ran, a CAD
 candidate was accepted, or the formal pilot path is integrated.
 
 ## Illustrative canonical records
-
-The following values are syntactically machine-checkable examples only. The
-repeated placeholder digests do not assert that evidence exists.
-
-```json
-{"failureCheck":null,"graph":{"algorithm":"sha256-canonical-json-v1","children":[{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","environment":"colima","kind":"agent-lifecycle"},{"digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","environment":"cvm","kind":"agent-lifecycle"},{"digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","environment":null,"kind":"browser-deny"},{"digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","environment":null,"kind":"build-input-set"},{"digest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","environment":null,"kind":"build-provenance"},{"digest":"sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","environment":"colima","kind":"capability-conformance"},{"digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","environment":"cvm","kind":"capability-conformance"},{"digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","environment":null,"kind":"codex-admission"},{"digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","environment":null,"kind":"cup-golden"},{"digest":"sha256:4444444444444444444444444444444444444444444444444444444444444444","environment":null,"kind":"dependency-admission"},{"digest":"sha256:5555555555555555555555555555555555555555555555555555555555555555","environment":null,"kind":"image-identity"},{"digest":"sha256:6666666666666666666666666666666666666666666666666666666666666666","environment":null,"kind":"sbom"},{"digest":"sha256:7777777777777777777777777777777777777777777777777777777777777777","environment":"colima","kind":"source-snapshot"},{"digest":"sha256:8888888888888888888888888888888888888888888888888888888888888888","environment":"cvm","kind":"source-snapshot"},{"digest":"sha256:abababababababababababababababababababababababababababababababab","environment":null,"kind":"verification-plan"}],"subjectDigest":"sha256:9999999999999999999999999999999999999999999999999999999999999999"},"retryAllowed":false,"schema":"text-to-cad.agent-runtime-verification/1","status":"verified","subject":{"agentImageConfigDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","agentImageManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","buildInputSetDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","cupRuntimeCapabilityManifestDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","platform":{"architecture":"amd64","os":"linux"},"runtimeManifestDigest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","verificationPlanDigest":"sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}
-```
 
 Example succeeded environment-neutral child:
 
 ```json
 {"blockedBy":null,"dependsOn":[],"environment":null,"failureCheck":null,"kind":"build-input-set","predicates":{"baseManifestBound":true,"dependencyLockBound":true,"fileDigestsBound":true,"immutableObjectVisible":true,"manifestSchemaExact":true,"pathSetClosed":true,"projectRuntimeArtifactsBound":true,"recipeBound":true,"ubuntuSnapshotBound":true},"retryAllowed":false,"schema":"text-to-cad.agent-runtime-evidence/1","status":"succeeded","subject":{"baseImageManifestDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","buildInputSetDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","buildRecipeDigest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","dependencyLockDigest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","projectRuntimeArtifactSetDigest":"sha256:4444444444444444444444444444444444444444444444444444444444444444","ubuntuSnapshotManifestDigest":"sha256:5555555555555555555555555555555555555555555555555555555555555555"},"subjectDigest":"sha256:9999999999999999999999999999999999999999999999999999999999999999"}
 ```
-
-Example downstream node that truthfully did not run:
-
-```json
-{"blockedBy":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","environment":"colima","kind":"agent-lifecycle"},"dependsOn":["sha256:3333333333333333333333333333333333333333333333333333333333333333","sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","sha256:abababababababababababababababababababababababababababababababab"],"environment":"colima","failureCheck":"dependency-failed","kind":"capability-conformance","predicates":{"brokerAuthorityJobPrivate":null,"browserInventoryEmpty":null,"browserProcessZero":null,"canonicalImplicitSubsetExact":null,"codexExecutableExact":null,"credentialSurfaceEmpty":null,"cupGoldenAccepted":null,"cupManifestBound":null,"dockerAuthorityAbsent":null,"inputSnapshotBound":null,"meshscopeCallable":null,"nodeRuntimeExact":null,"outputDigestBound":null,"providerNetworkDenied":null,"python312Exact":null,"residualPublicParity":null,"runtimeManifestBound":null,"sourceSnapshotBound":null,"terminalAndCleanupBound":null,"voxBlameCallable":null},"retryAllowed":false,"schema":"text-to-cad.agent-runtime-evidence/1","status":"not-run","subject":{"agentImageManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","conformanceFixtureDigest":"sha256:6666666666666666666666666666666666666666666666666666666666666666","cupRuntimeCapabilityManifestDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","executionSourceSnapshotDigest":"sha256:7777777777777777777777777777777777777777777777777777777777777777","expectedOutputDigest":"sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef","inputSnapshotDigest":"sha256:8888888888888888888888888888888888888888888888888888888888888888","observedOutputDigest":null,"runtimeManifestDigest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},"subjectDigest":"sha256:9999999999999999999999999999999999999999999999999999999999999999"}
-```
-
-The example root is not a valid Verified receipt until each displayed digest
-is replaced by the actual canonical digest of a valid child, the displayed
-`subjectDigest` is recomputed, and the complete graph passes strict
-consumption.
 
 ## Implementation still required
 
@@ -1161,7 +1021,7 @@ strict parser/canonicalizer, schema and graph validator, evidence producers,
 immutable publication/visibility and independent tombstone operations,
 restricted diagnostic index, rollback deployment receipt, fixtures for
 duplicate/extra/missing/cyclic, cross-subject substitution, failed/not-run
-cascade, lifecycle multi-failure/mandatory-suffix precedence, verification-plan
-cross-host substitution, alias mapping, and double-publication failure, plus
+cascade, lifecycle multi-failure/mandatory-suffix precedence, alias mapping,
+and double-publication failure, plus
 independent Colima/CVM provider-free runs. A
 real paid pilot and `Formal Pilot Integrated` remain separate later work.

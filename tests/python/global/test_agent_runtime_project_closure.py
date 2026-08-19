@@ -319,58 +319,6 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
             with self.assertRaisesRegex(closure.ProjectClosureError, "source"):
                 closure.audit_meshshot_wheel(bound_tamper, record)
 
-    def test_canonical_implicit_subset_is_exact_and_executes_cup_build(self) -> None:
-        closure = _load_project_closure()
-        with tempfile.TemporaryDirectory(prefix="implicit-agent-runtime-") as directory:
-            output = Path(directory)
-            record = closure.generate_implicit_runtime(REPO_ROOT, output)
-            runtime = output / "implicit-runtime"
-            self.assertEqual(record["schema"], "text-to-cad.implicit-runtime-files/1")
-            self.assertEqual(record["entrypoint"], "scripts/canonical-build.mjs")
-            self.assertEqual(record["bundlePath"], "implicit-runtime")
-            self.assertEqual(record["bundleDigest"], record["filesDigest"])
-            self.assertEqual(record["fileManifestDigest"], record["filesDigest"])
-            self.assertEqual(record["fileCount"], 11)
-            self.assertEqual(record["runtimeDependencies"], [])
-            paths = [entry["path"] for entry in record["files"]]
-            self.assertEqual(paths, sorted(paths))
-            self.assertNotIn("package.json", paths)
-            joined = b"\n".join((runtime / path).read_bytes().lower() for path in paths)
-            for forbidden in (b"playwright", b"chromium", b"snapshot", b"browser.js"):
-                self.assertNotIn(forbidden, joined)
-            manifest_bytes = (runtime / "implicit-runtime-manifest.json").read_bytes()
-            self.assertEqual(manifest_bytes, closure.canonical_json_bytes(record) + b"\n")
-
-            workspace = output / "workspace"
-            workspace.mkdir()
-            shutil.copyfile(
-                REPO_ROOT / "models/agent-runtime/cup_cup_033/source/cup_cup_033.implicit.js",
-                workspace / "cup.implicit.js",
-            )
-            subprocess.run(
-                [
-                    "node",
-                    str(runtime / "scripts/canonical-build.mjs"),
-                    "--source", "cup.implicit.js",
-                    "--output-dir", "built",
-                ],
-                cwd=workspace,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            expected = json.loads(
-                (
-                    REPO_ROOT
-                    / "models/agent-runtime/cup_cup_033/canonical-build-record.json"
-                ).read_bytes()
-            )
-            build = json.loads((workspace / "built/build.json").read_bytes())
-            self.assertEqual(
-                build["files"][1]["sha256"],
-                expected["measurementGlbDigest"].removeprefix("sha256:"),
-            )
-
     def test_meshscope_audit_rejects_non_linux_or_non_native_wheels(self) -> None:
         closure = _load_project_closure()
         with tempfile.TemporaryDirectory(prefix="meshscope-wheel-audit-") as directory:
@@ -829,7 +777,6 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="agent-project-closure-") as directory:
             output = Path(directory)
             meshshot_source = closure.generate_meshshot_distribution(REPO_ROOT, output)
-            implicit = closure.generate_implicit_runtime(REPO_ROOT, output)
             meshshot = closure.assemble_python_artifact(
                 meshshot_source,
                 {
@@ -863,11 +810,10 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                     "nativeConformanceDigest": _canonical_digest("meshscope-conformance"),
                     "needed": ["libc.so.6", "libgcc_s.so.1", "libstdc++.so.6"],
                 },
-                implicit=implicit,
             )
             self.assertEqual(
                 set(manifest),
-                {"schema", "platform", "pythonArtifacts", "implicitRuntime"},
+                {"schema", "platform", "pythonArtifacts"},
             )
             self.assertEqual(
                 manifest["platform"],
@@ -891,17 +837,6 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
             boolean_size = json.loads(encoded)
             boolean_size["pythonArtifacts"][0]["wheelBytes"] = True
             mutations.append(boolean_size)
-            implicit_extra = json.loads(encoded)
-            implicit_extra["implicitRuntime"]["rogue"] = True
-            mutations.append(implicit_extra)
-            implicit_digest = json.loads(encoded)
-            implicit_digest["implicitRuntime"]["fileManifestDigest"] = "0" * 64
-            mutations.append(implicit_digest)
-            implicit_file = json.loads(encoded)
-            implicit_file["implicitRuntime"]["files"][0]["sha256"] = _digest(
-                "substituted-implicit-file"
-            )
-            mutations.append(implicit_file)
             for index, mutated in enumerate(mutations):
                 with self.subTest(invalid_manifest=index), self.assertRaises(
                     closure.ProjectClosureError

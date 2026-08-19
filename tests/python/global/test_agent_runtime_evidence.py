@@ -10,10 +10,8 @@ SUBJECT = (
     b'{"agentImageConfigDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111",'
     b'"agentImageManifestDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111",'
     b'"buildInputSetDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111",'
-    b'"cupRuntimeCapabilityManifestDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111",'
     b'"platform":{"architecture":"amd64","os":"linux"},'
-    b'"runtimeManifestDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111",'
-    b'"verificationPlanDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}'
+    b'"runtimeManifestDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}'
 )
 
 
@@ -94,10 +92,8 @@ def valid_graph(*, failed_role=None, failed_predicate=None, root_failure=None, s
         if status == "not-run":
             for field in {
                 "browser-deny": ("inventoryDigest", "browserFindingCount", "chromiumProcessCount"),
-                "cup-golden": ("observedOutputDigest", "faceCount", "watertight", "eulerNumber"),
                 "source-snapshot": ("sourceManifestDigest", "pathCount", "totalBytes"),
                 "agent-lifecycle": ("resourceDisposition", "cleanupDisposition"),
-                "capability-conformance": ("observedOutputDigest",),
             }.get(role[0], ()):
                 subject[field] = None
         if role == failed_role and subject_changes:
@@ -109,19 +105,10 @@ def valid_graph(*, failed_role=None, failed_predicate=None, root_failure=None, s
                     "browserFindingCount": "packageInventoryEmpty",
                     "chromiumProcessCount": "chromiumProcessZero",
                 },
-                "cup-golden": {
-                    "observedOutputDigest": "outputDigestRepeatable",
-                    "faceCount": "faceCount3764",
-                    "watertight": "watertightFalse",
-                    "eulerNumber": "eulerNumber144",
-                },
                 "source-snapshot": {
                     "sourceManifestDigest": "treeDigestMatchesObservation",
                     "pathCount": "pathSetClosed",
                     "totalBytes": "fileSizesBound",
-                },
-                "capability-conformance": {
-                    "observedOutputDigest": "outputDigestBound",
                 },
             }.get(role[0], {})
             for field, predicate in observation_bindings.items():
@@ -199,25 +186,10 @@ def failed_lifecycle_graph(
     lifecycle = typed("evidence", lifecycle_value)
     children[0] = lifecycle
 
-    blocked_value = copy.deepcopy(children[5].value)
-    blocked_value["status"] = "not-run"
-    blocked_value["failureCheck"] = "dependency-failed"
-    blocked_value["blockedBy"] = {
-        "digest": digest(lifecycle),
-        "environment": "colima",
-        "kind": "agent-lifecycle",
-    }
-    blocked_value["dependsOn"][0] = digest(lifecycle)
-    blocked_value["predicates"] = {key: None for key in blocked_value["predicates"]}
-    blocked_value["subject"]["observedOutputDigest"] = None
-    blocked = typed("evidence", blocked_value)
-    children[5] = blocked
-
     root_value = copy.deepcopy(root.value)
     root_value["status"] = "failed"
     root_value["failureCheck"] = root_failure
     root_value["graph"]["children"][0]["digest"] = digest(lifecycle)
-    root_value["graph"]["children"][5]["digest"] = digest(blocked)
     return typed("verification", root_value), children
 
 
@@ -230,9 +202,9 @@ def dual_lifecycle_failure_graph(colima_check, cvm_check, root_failure):
         "brokerVolumeCleanupSucceeded": "brokerVolume",
         "jobPrivateTreeCleanupSucceeded": "jobPrivateTree",
     }
-    for lifecycle_index, capability_index, environment, selected in (
-        (0, 5, "colima", colima_check),
-        (1, 6, "cvm", cvm_check),
+    for lifecycle_index, selected in (
+        (0, colima_check),
+        (1, cvm_check),
     ):
         value = copy.deepcopy(children[lifecycle_index].value)
         value["status"] = "failed"
@@ -243,25 +215,10 @@ def dual_lifecycle_failure_graph(colima_check, cvm_check, root_failure):
         failed = typed("evidence", value)
         children[lifecycle_index] = failed
 
-        blocked_value = copy.deepcopy(children[capability_index].value)
-        blocked_value["status"] = "not-run"
-        blocked_value["failureCheck"] = "dependency-failed"
-        blocked_value["blockedBy"] = {
-            "digest": digest(failed),
-            "environment": environment,
-            "kind": "agent-lifecycle",
-        }
-        blocked_value["dependsOn"][0] = digest(failed)
-        blocked_value["predicates"] = {
-            key: None for key in blocked_value["predicates"]
-        }
-        blocked_value["subject"]["observedOutputDigest"] = None
-        children[capability_index] = typed("evidence", blocked_value)
-
     root_value = copy.deepcopy(root.value)
     root_value["status"] = "failed"
     root_value["failureCheck"] = root_failure
-    for index in (0, 1, 5, 6):
+    for index in (0, 1):
         root_value["graph"]["children"][index]["digest"] = digest(children[index])
     return typed("verification", root_value), children
 
@@ -439,9 +396,7 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "unexpected keys"):
             parse_strict(
                 "subject",
-                SUBJECT.replace(
-                    b',"verificationPlanDigest":"sha256:' + b"1" * 64 + b'"', b""
-                ),
+                SUBJECT.replace(b',"runtimeManifestDigest":"sha256:' + b"1" * 64 + b'"', b""),
             )
 
     def test_noncanonical_input_is_rejected_and_output_has_one_encoding(self) -> None:
@@ -456,7 +411,7 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         self.assertEqual(canonical_bytes(document), SUBJECT)
         self.assertEqual(
             digest(document),
-            "sha256:2d406a2e5fed508f05fa3693bbcb9479f9f611080ce5f4bdaa99a422bc1a74b9",
+            "sha256:eb95e20bb046d802d186e6d3db35e7ea6ccc6ff2631297aeda61a8bd7350ca5b",
         )
         with self.assertRaisesRegex(EvidenceError, "non-canonical"):
             parse_strict("subject", b"{" + SUBJECT[1:].replace(b'\":\"', b'\": \"', 1))
@@ -483,7 +438,7 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "Boolean or null"):
             typed("evidence", browser)
 
-    def test_verified_graph_closes_exact_fifteen_nodes(self) -> None:
+    def test_verified_graph_closes_exact_runtime_nodes(self) -> None:
         from scripts.pilot.agent_runtime import validate_graph
 
         result = validate_graph(*valid_graph())
@@ -513,25 +468,11 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "root subject digest substitution"):
             validate_graph(typed("verification", subject_graft), children)
 
-    def test_plan_or_child_identity_substitution_is_rejected(self) -> None:
-        from scripts.pilot.agent_runtime import EvidenceError, digest, validate_graph
-
-        root, children = valid_graph()
-        changed_value = copy.deepcopy(children[5].value)
-        changed_value["subject"]["expectedOutputDigest"] = "sha256:" + "c" * 64
-        changed_value["subject"]["observedOutputDigest"] = "sha256:" + "c" * 64
-        changed = typed("evidence", changed_value)
-        children[5] = changed
-        root_value = copy.deepcopy(root.value)
-        root_value["graph"]["children"][5]["digest"] = digest(changed)
-        with self.assertRaisesRegex(EvidenceError, "cross-document binding mismatch"):
-            validate_graph(typed("verification", root_value), children)
-
     def test_missing_and_duplicate_children_are_rejected(self) -> None:
         from scripts.pilot.agent_runtime import EvidenceError, validate_graph
 
         root, children = valid_graph()
-        with self.assertRaisesRegex(EvidenceError, "exactly fifteen"):
+        with self.assertRaisesRegex(EvidenceError, "exact required"):
             validate_graph(root, children[:-1])
         with self.assertRaisesRegex(EvidenceError, "duplicate child"):
             validate_graph(root, [children[0], *children[1:-1], children[0]])
@@ -547,13 +488,13 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "cycle"):
             validate_graph(root, changed)
 
-        ordered_value = copy.deepcopy(children[5].value)
+        ordered_value = copy.deepcopy(children[0].value)
         ordered_value["dependsOn"] = list(reversed(ordered_value["dependsOn"]))
         ordered = typed("evidence", ordered_value)
         changed = children[:]
-        changed[5] = ordered
+        changed[0] = ordered
         order_root = copy.deepcopy(root.value)
-        order_root["graph"]["children"][5]["digest"] = digest(ordered)
+        order_root["graph"]["children"][0]["digest"] = digest(ordered)
         with self.assertRaisesRegex(EvidenceError, "dependency list or dependency order"):
             validate_graph(typed("verification", order_root), changed)
 
@@ -569,34 +510,20 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "stop at first failure"):
             typed("evidence", failed)
 
-        not_run = copy.deepcopy(children[5].value)
+        not_run = copy.deepcopy(children[3].value)
         not_run["status"] = "not-run"
         not_run["failureCheck"] = "dependency-failed"
         not_run["predicates"] = {key: None for key in not_run["predicates"]}
-        not_run["subject"]["observedOutputDigest"] = None
-        not_run["blockedBy"] = {"digest": D, "environment": None, "kind": "verification-plan"}
-        with self.assertRaisesRegex(EvidenceError, "ready node cannot be not-run"):
+        not_run["blockedBy"] = {"digest": D, "environment": None, "kind": "dependency-admission"}
+        with self.assertRaisesRegex(EvidenceError, "outside the graph"):
             from scripts.pilot.agent_runtime import validate_graph
             root, all_children = valid_graph()
             altered = typed("evidence", not_run)
-            all_children[5] = altered
+            all_children[3] = altered
             root_value = copy.deepcopy(root.value)
             from scripts.pilot.agent_runtime import digest
-            root_value["graph"]["children"][5]["digest"] = digest(altered)
+            root_value["graph"]["children"][3]["digest"] = digest(altered)
             validate_graph(typed("verification", root_value), all_children)
-
-    def test_verification_plan_failure_closes_source_not_run_cascade(self) -> None:
-        from scripts.pilot.agent_runtime import validate_graph
-
-        root, children = valid_graph(
-            failed_role=("verification-plan", None),
-            failed_predicate="planSchemaExact",
-            root_failure="verification-plan.planSchemaExact",
-        )
-        result = validate_graph(root, children)
-        self.assertEqual(result.status, "failed")
-        self.assertEqual(children[12].value["subject"]["sourceManifestDigest"], None)
-        self.assertEqual(children[13].value["subject"]["sourceManifestDigest"], None)
 
     def test_failed_source_manifest_observation_is_status_aware(self) -> None:
         from scripts.pilot.agent_runtime import EvidenceError, validate_graph
@@ -625,22 +552,18 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         self.assertEqual(validate_graph(root, children).status, "failed")
 
     def test_verified_root_rejects_false_null_failed_and_not_run(self) -> None:
-        from scripts.pilot.agent_runtime import EvidenceError, digest, validate_graph
+        from scripts.pilot.agent_runtime import EvidenceError, validate_graph
 
-        root, children = valid_graph()
-        child = copy.deepcopy(children[5].value)
-        child["status"] = "failed"
-        child["failureCheck"] = "runtimeManifestBound"
-        child["predicates"] = {key: None for key in child["predicates"]}
-        child["predicates"]["runtimeManifestBound"] = False
-        child["subject"]["observedOutputDigest"] = None
-        failed = typed("evidence", child)
-        changed = children[:]
-        changed[5] = failed
+        root, children = valid_graph(
+            failed_role=("build-input-set", None),
+            failed_predicate="recipeBound",
+            root_failure="build-input-set.recipeBound",
+        )
         root_value = copy.deepcopy(root.value)
-        root_value["graph"]["children"][5]["digest"] = digest(failed)
+        root_value["status"] = "verified"
+        root_value["failureCheck"] = None
         with self.assertRaisesRegex(EvidenceError, "verified root contains"):
-            validate_graph(typed("verification", root_value), changed)
+            validate_graph(typed("verification", root_value), children)
 
     def test_lifecycle_multiple_false_uses_dominant_retained_resource(self) -> None:
         from scripts.pilot.agent_runtime import EvidenceError, validate_graph
@@ -733,46 +656,11 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         browser["subject"]["browserFindingCount"] = 1
         self.assertEqual(typed("evidence", browser).value["status"], "failed")
 
-        cup = copy.deepcopy(children[8].value)
-        cup["subject"]["faceCount"] = 0
-        with self.assertRaisesRegex(EvidenceError, "Cup observation"):
-            typed("evidence", cup)
-
-        cup = copy.deepcopy(children[8].value)
-        cup["status"] = "failed"
-        cup["failureCheck"] = "faceCount3764"
-        order = list(PREDICATES["cup-golden"])
-        cup["predicates"] = {
-            key: True if order.index(key) < 2 else False if key == "faceCount3764" else None
-            for key in order
-        }
-        cup["subject"]["faceCount"] = None
-        cup["subject"]["watertight"] = None
-        cup["subject"]["eulerNumber"] = None
-        cup["subject"]["observedOutputDigest"] = None
-        with self.assertRaisesRegex(EvidenceError, "Cup observation"):
-            typed("evidence", cup)
-        cup["subject"]["faceCount"] = 0
-        self.assertEqual(typed("evidence", cup).value["status"], "failed")
-
-        conformance = copy.deepcopy(children[5].value)
-        conformance["status"] = "failed"
-        conformance["failureCheck"] = "outputDigestBound"
-        order = list(PREDICATES["capability-conformance"])
-        conformance["predicates"] = {
-            key: True if order.index(key) < 18 else False if key == "outputDigestBound" else None
-            for key in order
-        }
-        with self.assertRaisesRegex(EvidenceError, "conformance observation"):
-            typed("evidence", conformance)
-        conformance["subject"]["observedOutputDigest"] = "sha256:" + "c" * 64
-        self.assertEqual(typed("evidence", conformance).value["status"], "failed")
-
     def test_source_count_observations_follow_establishing_predicates(self) -> None:
         from scripts.pilot.agent_runtime import EvidenceError
 
         _, children = valid_graph()
-        source = copy.deepcopy(children[12].value)
+        source = copy.deepcopy(children[9].value)
         source["status"] = "failed"
         source["failureCheck"] = "manifestSchemaExact"
         source["predicates"] = {
@@ -785,7 +673,7 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         with self.assertRaisesRegex(EvidenceError, "Source Snapshot observation"):
             typed("evidence", source)
 
-        source = copy.deepcopy(children[12].value)
+        source = copy.deepcopy(children[9].value)
         source["status"] = "failed"
         source["failureCheck"] = "pathSetClosed"
         source["predicates"] = {

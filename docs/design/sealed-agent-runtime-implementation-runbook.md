@@ -1,5 +1,8 @@
 # Copyable `/goal`: implement and verify the sealed Agent runtime
 
+Status: superseded. Do not run this goal; its CAD workload and paid pilot were
+retired. The remaining text is retained only as non-executable design history.
+
 ```text
 /goal
 
@@ -22,10 +25,6 @@ Authoritative inputs
   docs/design/agent-runtime-verification-receipt.md
 - Supply/lock/rollback contract:
   docs/design/agent-runtime-supply-lock-and-rollback.md
-- Capability surface research:
-  docs/research/sealed-agent-runtime-cup-capability-surface.md
-- Dependency closure research:
-  docs/research/sealed-agent-runtime-cup-dependency-closure.md
 - Codex artifact research:
   docs/research/sealed-agent-runtime-codex-artifact.md
 - SAR-003/SAR-007 prototype evidence is decision evidence only, never production

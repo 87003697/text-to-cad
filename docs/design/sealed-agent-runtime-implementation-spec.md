@@ -1,6 +1,7 @@
 # Sealed Agent runtime implementation specification
 
-Status: implementation-ready design; no production runtime or verification claim.
+Status: superseded; no CAD workload is admitted by this design after the
+retirement of its original geometry backend.
 
 This document turns the reviewed SAR-001 through SAR-007 decisions into the
 implementation boundary for the first sealed Agent runtime. It deliberately
@@ -8,13 +9,13 @@ does not claim `Agent Runtime Verified` or `Formal Pilot Integrated`.
 
 ## Product boundary
 
-The first release runs the `cup_cup_033` implicit-SDF route on `linux/amd64`.
-It contains exactly the execution surface needed by that route:
+There is currently no sealed CAD runtime release target. The reusable
+`linux/amd64` infrastructure described below is retained only as design
+reference for source snapshots, evidence, admission, and isolation:
 
 - Python 3.12 on a digest-pinned glibc Ubuntu/Noble base;
 - exact admitted NumPy, trimesh, Pillow, meshscope/VoxBlame and browser-free
   meshshot Broker client bytes;
-- the canonical implicit-JS subset and its exact Node runtime;
 - exact Codex CLI 0.147.0 native `x86_64-unknown-linux-musl` bytes, admitted
   outside the image build and mirrored unchanged;
 - git, git-lfs and a bounded allowlist of shell utilities.
@@ -32,8 +33,8 @@ it must not be folded into the Agent or confused with the sealed Agent client.
 ## Identity split
 
 The Agent Runtime Artifact is long-lived and identified by its canonical OCI
-manifest/config, runtime manifest, Cup capability manifest, build-input set,
-verification plan and admitted dependencies. The Source Snapshot is a separate
+manifest/config, runtime manifest, build-input set, and admitted dependencies.
+The Source Snapshot is a separate
 execution-scoped, read-only project artifact. A source edit does not rebuild or
 rename the Agent image.
 
@@ -217,14 +218,12 @@ The image-resident runtime manifest is the regular file
 `/usr/share/text-to-cad/runtime-manifest.json`, mode `0444`, and is canonical
 JSON with schema literal
 `text-to-cad.agent-runtime-manifest/1` and exactly these top-level keys:
-`schema`, `platform`, `entrypoint`, `cupCapabilityManifest`, `programs`,
-`nativeLibraries`, and `runtimeFiles`. `platform` is exactly
+`schema`, `platform`, `entrypoint`, `programs`, `nativeLibraries`, and
+`runtimeFiles`. `platform` is exactly
 `{"architecture":"amd64","os":"linux"}`. `entrypoint` has exactly `path`,
 `mode`, `bytes`, `digest`, and `argv`; its values are the fixed path/mode above,
 the observed nonnegative byte length, its full SHA-256, and the exact
-one-element image-config `Entrypoint` array. `cupCapabilityManifest` has exactly
-`path` and `digest` for the image-resident closed Cup manifest; its path is
-exactly `/usr/share/text-to-cad/cup-capability-manifest.json`.
+one-element image-config `Entrypoint` array.
 
 `programs` is a path-sorted array whose entries have exactly `name`, `path`,
 `version`, and `digest`. `nativeLibraries` is a path-sorted array whose entries
@@ -236,8 +235,8 @@ regular file in the final rootfs; every mode is an unsigned integer containing
 only permission bits, every byte count is nonnegative, and every digest is full
 SHA-256. Symlinks, directories, devices, sockets, and other non-regular entries
 are represented only by the OCI rootfs and are not permitted as manifest file
-records. Every program, native library, entrypoint, and Cup manifest file must
-also appear with identical identity in `runtimeFiles`. The inventory boundary
+records. Every program, native library, and entrypoint file must also appear
+with identical identity in `runtimeFiles`. The inventory boundary
 is exactly the union of those referenced files and every regular file admitted
 by `projectRuntimeArtifactSetDigest`; no file outside that union may appear.
 `programs` contains every executable invoked by the entrypoint or immutable
@@ -386,8 +385,6 @@ packages/agent_runtime/
   Dockerfile
   build-input.lock.json
   runtime-manifest.json
-  cup-capability-manifest.json
-  implicit-runtime-manifest.json
   browser-deny-policy.json
 scripts/pilot/agent_runtime/
   contracts.py

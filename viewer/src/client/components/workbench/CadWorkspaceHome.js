@@ -2,7 +2,6 @@ import {
   Bot,
   Boxes,
   ChevronRight,
-  Code,
   Cuboid,
   DraftingCompass,
   FileBox,
@@ -34,7 +33,6 @@ const ENTRY_ICON_COMPONENTS = {
   [ENTRY_ICON_KIND.ASSEMBLY]: Boxes,
   [ENTRY_ICON_KIND.DXF]: DraftingCompass,
   [ENTRY_ICON_KIND.GCODE]: Route,
-  [ENTRY_ICON_KIND.IMPLICIT]: Code,
   [ENTRY_ICON_KIND.ROBOT]: Bot,
   [ENTRY_ICON_KIND.STEP_PART]: Package,
   [ENTRY_ICON_KIND.STL_MESH]: Cuboid,
@@ -55,9 +53,6 @@ function formatLabelForEntry(entry, sourceFormat) {
   }
   if (sourceFormat === RENDER_FORMAT.GCODE) {
     return "G-code";
-  }
-  if (sourceFormat === RENDER_FORMAT.IMPLICIT) {
-    return "Implicit";
   }
   if (entry?.kind === "srdf") {
     return "SRDF";
@@ -136,7 +131,6 @@ export function selectHomeEntries(entries) {
     (entry) => entrySourceFormat(entry) === RENDER_FORMAT.STEP && entry?.kind !== "assembly",
     (entry) => entrySourceFormat(entry) === RENDER_FORMAT.DXF,
     (entry) => entrySourceFormat(entry) === RENDER_FORMAT.GCODE,
-    (entry) => entrySourceFormat(entry) === RENDER_FORMAT.IMPLICIT,
     (entry) => isRobotRenderFormat(entrySourceFormat(entry)) || entry?.kind === "srdf",
     (entry) => isMeshRenderFormat(entrySourceFormat(entry))
   ];

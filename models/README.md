@@ -13,7 +13,6 @@ text files.
 - [fun/](fun/README.md): standalone generated CAD examples and printable
   outputs.
 - [gcode/](gcode/README.md): small slicer input/output fixtures.
-- [implicits/](implicits/README.md): browser-native implicit CAD examples.
 - [mechanisms/](mechanisms/README.md): flattened mechanism STEP demos and
   generated render sidecars.
 - [robots/](robots/README.md): URDF/SRDF robot fixtures, meshes, printable
@@ -36,7 +35,7 @@ git lfs pull --include="models/**" --exclude=""
 
 ## Cleanup Policy
 
-- Keep canonical sources (`*.py`, `*.implicit.js`, `*.urdf`, `*.srdf`, and docs)
+- Keep canonical sources (`*.py`, `*.urdf`, `*.srdf`, and docs)
   readable in normal Git.
 - Keep durable generated fixtures (`*.step`, `*.stl`, `*.3mf`, `*.glb`,
   `*.gcode`, and `*.dxf`) in Git LFS.

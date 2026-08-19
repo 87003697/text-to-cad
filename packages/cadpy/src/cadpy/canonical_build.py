@@ -473,7 +473,6 @@ def _recipe(inputs: list[dict[str, Any]]) -> dict[str, Any]:
         argv_template.extend(("--input", f"{{input:{declared_input['id']}}}"))
     return {
         "schema": RECIPE_SCHEMA,
-        "route": "cad",
         "executable": ADAPTER_ID,
         "entrypoint": "scripts/canonical-build",
         "workingDirectory": ".",
@@ -553,7 +552,6 @@ def _load_recipe(*, root: Path, recipe_path: str) -> dict[str, Any]:
         raise ValueError(f"--recipe has unsupported fields: {joined}")
     for field in (
         "schema",
-        "route",
         "executable",
         "entrypoint",
         "workingDirectory",
@@ -712,7 +710,6 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
     by_id = {record["id"]: record for record in files}
     manifest: dict[str, Any] = {
         "schema": BUILD_SCHEMA,
-        "route": "cad",
         "entrypoint": "scripts/canonical-build",
         "adapter": {"id": ADAPTER_ID, "version": 1},
         "profile": {"id": PROFILE_ID, "path": OUTPUT_FILES["profile"], "digest": profile["digest"]},

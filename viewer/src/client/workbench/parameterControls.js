@@ -1,7 +1,7 @@
 import {
   normalizeParameterValue,
-  normalizeParameterValues
-} from "implicitjs/common/parameters.js";
+  normalizeStepModuleParameterValues as normalizeParameterValues
+} from "cadjs/common/stepModule.js";
 
 const DEFAULT_NUMBER_CONTROL_STEP = 0.01;
 const MIN_NUMBER_CONTROL_STEP = 0.000001;

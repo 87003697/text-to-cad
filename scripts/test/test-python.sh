@@ -20,6 +20,9 @@ while IFS= read -r skill; do
     if [ "$skill" = "cad" ] || [ "$skill" = "dxf" ]; then
       skill_paths+=("skills/$skill/scripts/packages/cadpy/src")
     fi
+    if [ "$skill" = "mesh-to-cad" ]; then
+      skill_paths+=("packages/browser_runtime/src")
+    fi
     run_python_unittest "$skill skill Python tests" "$test_dir" "${skill_paths[@]}"
   fi
 done < <("$LIST_SKILLS_SCRIPT")

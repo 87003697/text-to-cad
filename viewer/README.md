@@ -87,11 +87,10 @@ review links.
   and MoveIt2.
 - `moveit2_server/`: optional Python websocket backend for SRDF controls.
 
-The shared non-React CAD runtime source lives in `../packages/cadjs`, and the
-shared non-React implicit CAD runtime source lives in `../packages/implicitjs`.
+The shared non-React CAD runtime source lives in `../packages/cadjs`.
 On `develop`, `viewer/packages/*` is a symlinked development layout; keep
-reusable parsing, rendering, sidecar, selector, topology, implicit shader,
-snapshot, and export logic in the source packages.
+reusable parsing, rendering, sidecar, selector, topology, snapshot, and export
+logic in the source packages.
 
 ## Common Commands
 
@@ -189,9 +188,6 @@ assets are served by a backend and are not copied into `dist/`.
 - `cadjs` render pipeline: shared render APIs used by the viewer, docs, and
   snapshot runtime. In this workbench, see
   `../packages/cadjs/docs/render-pipeline.md`.
-- `implicitjs` runtime: shared implicit CAD model, shader render, snapshot, and
-  export APIs. In this workbench, see `../packages/implicitjs/README.md`.
-
 ## Verification
 
 Run the focused viewer checks before handing off viewer changes:

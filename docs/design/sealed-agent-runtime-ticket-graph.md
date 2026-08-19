@@ -1,7 +1,7 @@
 # Sealed Agent runtime implementation ticket graph
 
-Status: implementation queue; all listed outputs remain unimplemented until
-their ticket lands and passes its stated evidence.
+Status: superseded. Do not execute this queue; it is retained as architectural
+context only and has no active CAD workload or paid-pilot authorization.
 
 The reviewed architecture decisions are complete. These tickets convert them
 to production code without reopening the public seams in
@@ -12,8 +12,8 @@ The operational handoff is the
 | ID | Deliverable | Depends on | Required evidence |
 |---|---|---|---|
 | SAI-001 | Canonical evidence kernel, strict schemas, graph validator, lifecycle dominance and tombstones | none | adversarial malformed/duplicate/cascade vectors; no second encoder |
-| SAI-002 | Verification-plan and Cup capability manifests; provider-free durable Cup golden fixture and numeric-only route inspection | SAI-001 | exact manifest equality and router fixture tests |
-| SAI-003 | Browser-free project closure: split meshshot Broker client, build meshscope cp312 native wheel, vendor canonical implicit subset | SAI-002 | wheel/ELF audit, browser import/executable/cache denial, Cup imports |
+| SAI-002 | Retired CAD workload manifest work | SAI-001 | not executable |
+| SAI-003 | Browser-free reusable project closure for meshshot and meshscope | SAI-002 | wheel/ELF audit and browser import/executable/cache denial |
 | SAI-004 | External-byte admission for Noble/debs, Python wheels, Node 24.13.0 and Codex 0.147.0 | SAI-001 | immutable mirror metadata, hashes, signature/checksum facts without overstated provenance, Node-absent Codex smoke |
 | SAI-005 | Network-disabled deterministic OCI builder; production image-resident fixed entrypoint; runtime/Cup manifests; external SBOM and browser-inventory/receipt artifacts | SAI-003, SAI-004 | two byte-identical builds; exact entrypoint/config/runtime-manifest identity; gzip blob plus uncompressed DiffID closure; fixed local SPDX 3.28.0 catalog; external post-manifest inventories |
 | SAI-006 | Execution Source Snapshot builder and immutable publication/visibility contract | SAI-001 | no-follow manifest, exact digest/count/size, S3 exact-version and Mac visibility checks |
@@ -25,7 +25,7 @@ The operational handoff is the
 | SAI-012 | Production four-active FIFO admission and separate real isolation qualification | SAI-009, SAI-011 | four real containers, zero-allocation fifth queue, failure isolation, resource absence; no Verified-root rewrite |
 | SAI-013 | End-to-end supply, promotion, reconciliation and rollback acceptance | SAI-008, SAI-011, SAI-012 | exact S3/CVM/Mac receipts; current plus distinct predecessor retained |
 | SAI-014 | Provider-free production pilot integration with Agent + Venus Proxy + Broker + Sidecar | SAI-010, SAI-013 | fixed Source Snapshot/input, full Gate terminal/cleanup receipts, mock upstream and zero provider dispatch |
-| SAI-015 | Paid `cup_cup_033` pilot and retained review loop | SAI-014 | executable pre-dispatch cost admission; at most 20 model-reaching jobs and USD 1000 total; exact Formal receipt or closed failure |
+| SAI-015 | Retired paid pilot | SAI-014 | canceled; no dispatch authorized |
 
 ## Execution groups
 

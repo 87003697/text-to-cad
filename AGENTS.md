@@ -30,7 +30,7 @@ don't need this file.
 **Code**
 - `skills/`: agent skills + `references/`, `scripts/`
 - `plugins/`: versioned plugin packages bundling repo skills
-- `packages/cadjs`, `packages/implicitjs`, `packages/cadpy`,
+- `packages/cadjs`, `packages/cadpy`,
   `packages/cadpy_*`: shared runtime code (framework-agnostic, siblings
   do not import each other)
 - `viewer/`: editable CAD Viewer source app

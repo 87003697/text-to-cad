@@ -42,10 +42,6 @@ def _write_root(root: Path, marker: bytes = b"same\n") -> None:
     payload.parent.mkdir(parents=True)
     payload.write_bytes(marker)
     payload.chmod(0o444)
-    cup = root / "usr/share/text-to-cad/cup-capability-manifest.json"
-    cup.parent.mkdir(parents=True)
-    cup.write_bytes(b'{"schema":"fixture"}')
-    cup.chmod(0o444)
 
 
 class AgentRuntimeOciBuilderTests(unittest.TestCase):
@@ -376,13 +372,12 @@ class AgentRuntimeOciBuilderTests(unittest.TestCase):
             manifest = copy.deepcopy(builder.synthetic_test_request(root).runtime_manifest)
         for path in (
             "/usr/local/lib/python3.12/dist-packages/meshshot/__init__.py",
-            "/usr/local/lib/text-to-cad/implicitjs/index.js",
         ):
             manifest["runtimeFiles"].append({"path": path, "mode": 0o444, "bytes": 1, "digest": "sha256:" + "1" * 64})
         packages = cli._exact_spdx_packages(manifest)
         names = {item["name"] for item in packages}
-        self.assertEqual(len(packages), 55)
-        self.assertTrue({"bash", "numpy", "Pillow", "trimesh", "node", "codex", "meshscope", "meshshot", "text-to-cad-implicit-runtime"} <= names)
+        self.assertEqual(len(packages), 54)
+        self.assertTrue({"bash", "numpy", "Pillow", "trimesh", "node", "codex", "meshscope", "meshshot"} <= names)
         versions = {item["name"]: item["version"] for item in packages}
         self.assertEqual(versions["node"], "24.13.0")
         self.assertEqual(versions["codex"], "0.147.0")

@@ -24,9 +24,6 @@ from typing import Iterator, Mapping, Sequence
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REMOTE_ROOT = "~/text-to-cad"
 REMOTE_DESTINATION = f"cvm:{REMOTE_ROOT}/"
-IMPLICIT_NODE_MODULES_INCLUDE = (
-    "/skills/implicit-cad/scripts/packages/implicitjs/node_modules/***"
-)
 RSYNC_SUMMARY_PATTERN = re.compile(
     r"sent ([\d,]+) bytes\s+received ([\d,]+) bytes\s+"
     r"([\d,]+(?:\.\d+)?) bytes/sec"
@@ -67,8 +64,6 @@ VIEWER_REQUIRED_PACKAGES = (
     "react-dom",
     "@vitejs/plugin-react",
     "tailwindcss",
-    "playwright",
-    "playwright-core",
     "three",
     "gifenc",
 )
@@ -130,10 +125,9 @@ class RuntimeContract:
 
 @dataclass(frozen=True)
 class RuntimeAttestation:
-    """Local hashes and browser revision expected after remote transfer."""
+    """Local runtime hashes expected after remote transfer."""
 
     hashes: Mapping[str, str]
-    chromium_revision: str
 
 
 @dataclass(frozen=True)
@@ -148,46 +142,16 @@ class TransferSummary:
 PRODUCTION_RUNTIME = RuntimeContract(
     physical_directories=(
         "skills/cad-viewer/scripts/viewer",
-        "skills/implicit-cad/scripts/packages/implicitjs",
     ),
     required_files=(
         "skills/cad-viewer/scripts/viewer/package.json",
         "skills/cad-viewer/scripts/viewer/backend/server.mjs",
         "skills/cad-viewer/scripts/viewer/scripts/start-agent-viewer.mjs",
         "skills/cad-viewer/scripts/viewer/dist/index.html",
-        "skills/implicit-cad/scripts/packages/implicitjs/scripts/snapshot.mjs",
-        (
-            "skills/implicit-cad/scripts/packages/implicitjs/"
-            "node_modules/playwright/package.json"
-        ),
-        (
-            "skills/implicit-cad/scripts/packages/implicitjs/"
-            "node_modules/playwright-core/package.json"
-        ),
-        (
-            "skills/implicit-cad/scripts/packages/implicitjs/"
-            "node_modules/playwright-core/browsers.json"
-        ),
-        (
-            "skills/implicit-cad/scripts/packages/implicitjs/"
-            "node_modules/three/package.json"
-        ),
-        (
-            "skills/implicit-cad/scripts/packages/implicitjs/"
-            "node_modules/gifenc/package.json"
-        ),
     ),
     hash_files=(
         "skills/cad-viewer/scripts/viewer/backend/server.mjs",
         "skills/cad-viewer/scripts/viewer/scripts/start-agent-viewer.mjs",
-        (
-            "skills/implicit-cad/scripts/packages/implicitjs/"
-            "scripts/snapshot.mjs"
-        ),
-        (
-            "skills/implicit-cad/scripts/packages/implicitjs/"
-            "node_modules/playwright-core/browsers.json"
-        ),
     ),
 )
 
@@ -596,7 +560,7 @@ class CvmPush:
             (
                 inputs.viewer_node_modules,
                 stage / "viewer/node_modules",
-                ("cadjs", "implicitjs"),
+                ("cadjs",),
             ),
             (
                 inputs.cad_build_dependencies,
@@ -622,7 +586,7 @@ class CvmPush:
                     4,
                 )
         viewer_modules = stage / "viewer/node_modules"
-        for package in ("cadjs", "implicitjs"):
+        for package in ("cadjs",):
             link = viewer_modules / package
             if link.exists() or link.is_symlink():
                 link.unlink()
@@ -635,9 +599,6 @@ class CvmPush:
 
         env = {
             **self.environ,
-            "IMPLICITJS_RUNTIME_NODE_MODULES_SOURCE": str(
-                stage / "viewer/node_modules"
-            ),
             "CAD_SNAPSHOT_BUILD_DEPS_DIR": str(
                 stage / "tmp/cad-snapshot-build"
             ),
@@ -733,35 +694,7 @@ class CvmPush:
             relative: hashlib.sha256((stage / relative).read_bytes()).hexdigest()
             for relative in PRODUCTION_RUNTIME.hash_files
         }
-        browser_manifest = (
-            stage
-            / "skills/implicit-cad/scripts/packages/implicitjs/"
-            "node_modules/playwright-core/browsers.json"
-        )
-        payload = _read_json(browser_manifest, "Playwright browser manifest")
-        browsers = payload.get("browsers") if isinstance(payload, dict) else None
-        if not isinstance(browsers, list):
-            raise PushError("Playwright browser manifest has no browsers list", 4)
-        revision: str | None = None
-        for entry in browsers:
-            if (
-                isinstance(entry, dict)
-                and entry.get("name") == "chromium-headless-shell"
-            ):
-                value = str(entry.get("revision", ""))
-                if value.isdigit():
-                    revision = value
-                break
-        if revision is None:
-            raise PushError(
-                "Playwright browser manifest has no numeric "
-                "chromium-headless-shell revision",
-                4,
-            )
-        return RuntimeAttestation(
-            hashes=hashes,
-            chromium_revision=revision,
-        )
+        return RuntimeAttestation(hashes=hashes)
 
     def transfer_stage(self, stage: Path) -> None:
         """Perform the one and only remote rsync for a complete stage."""
@@ -774,7 +707,6 @@ class CvmPush:
             "rsync",
             "-avz",
             "--progress",
-            f"--include={IMPLICIT_NODE_MODULES_INCLUDE}",
             f"--exclude-from={self.repo_root / '.cvmignore'}",
             f"{stage}/",
             REMOTE_DESTINATION,
@@ -876,21 +808,6 @@ class CvmPush:
                 5,
             )
 
-        revision = attestation.chromium_revision
-        browser = (
-            f'$HOME/.cache/ms-playwright/chromium_headless_shell-{revision}/'
-            "chrome-headless-shell-linux64/chrome-headless-shell"
-        )
-        browser_result = self.runner.remote(
-            f'test -x "{browser}"',
-            cwd=self.repo_root,
-            check=False,
-        )
-        if browser_result.returncode != 0:
-            raise PushError(
-                f"CVM Playwright browser revision {revision} is missing.",
-                6,
-            )
 
     def remote_git_base(self) -> str:
         result = self.runner.remote(
@@ -942,8 +859,8 @@ class CvmPush:
             raise
 
         self._log(
-            "CVM runtime verified: physical Viewer + implicit runtime, "
-            "matching hashes, and Playwright browser revision"
+            "CVM runtime verified: physical Viewer runtime, "
+            "and matching hashes"
         )
         self.remote_head = self.remote_git_base()
         self._log(

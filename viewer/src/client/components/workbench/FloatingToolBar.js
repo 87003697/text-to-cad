@@ -47,7 +47,6 @@ function DesktopFloatingToolBar({
   viewerLoading,
   selectedMeshData,
   selectedDxfData,
-  selectedImplicitModel,
   drawingToolOptions,
   drawingTool,
   handleSelectDrawingTool,
@@ -62,11 +61,10 @@ function DesktopFloatingToolBar({
 }) {
   const [displayMenuOpen, setDisplayMenuOpen] = useState(false);
   const dxfMode = renderFormat === RENDER_FORMAT.DXF;
-  const implicitMode = renderFormat === RENDER_FORMAT.IMPLICIT;
   const urdfMode = renderFormat === RENDER_FORMAT.URDF;
   const robotMode = isRobotRenderFormat(renderFormat);
   const meshOnlyMode = isMeshRenderFormat(renderFormat);
-  const renderReady = implicitMode ? !!selectedImplicitModel : dxfMode ? !!selectedDxfData : !!selectedMeshData;
+  const renderReady = dxfMode ? !!selectedDxfData : !!selectedMeshData;
   const captureDisabled = viewerLoading || !renderReady;
   const selectDisabled = viewerLoading ||
     !selectedMeshData ||
@@ -89,7 +87,7 @@ function DesktopFloatingToolBar({
     >
       <TooltipProvider delayDuration={250}>
         <div className={`pointer-events-auto inline-flex h-8 w-fit items-center gap-0.5 self-end rounded-md p-1 ${FLOATING_TOOL_BAR_SURFACE_CLASS}`}>
-          {!dxfMode && !implicitMode && !robotMode && !meshOnlyMode ? (
+          {!dxfMode && !robotMode && !meshOnlyMode ? (
             <>
               <ToolbarButton
                 label={selectLabel}

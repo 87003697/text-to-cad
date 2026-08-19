@@ -113,22 +113,7 @@ def create_runtime(stage: Path) -> cvm_push.RuntimeAttestation:
     for relative in cvm_push.PRODUCTION_RUNTIME.required_files:
         path = stage / relative
         path.parent.mkdir(parents=True, exist_ok=True)
-        if relative.endswith("browsers.json"):
-            path.write_text(
-                json.dumps(
-                    {
-                        "browsers": [
-                            {
-                                "name": "chromium-headless-shell",
-                                "revision": "1234",
-                            }
-                        ]
-                    }
-                ),
-                encoding="utf-8",
-            )
-        else:
-            path.write_text(f"{relative}\n", encoding="utf-8")
+        path.write_text(f"{relative}\n", encoding="utf-8")
     workflow = cvm_push.CvmPush(FakeRunner(), repo_root=stage, environ={})
     workflow.validate_stage(stage)
     return workflow.attest_stage(stage)
@@ -206,7 +191,7 @@ class AgentModeTests(unittest.TestCase):
                 agent=True,
             )
             source = cvm_push.SourceProvenance("develop", "deadbeef", "dirty")
-            attestation = cvm_push.RuntimeAttestation({}, "1234")
+            attestation = cvm_push.RuntimeAttestation({})
             workflow.preflight_local = mock.Mock()
             workflow.preflight_remote = mock.Mock(
                 return_value=cvm_push.RemotePreflight(free_gb=20)
@@ -453,7 +438,7 @@ class BuildInputTests(unittest.TestCase):
             primary = root / "primary"
             viewer = create_viewer_dependencies(primary)
             cad = create_cad_dependencies(primary)
-            (repo / "viewer/node_modules/playwright").mkdir(parents=True)
+            (repo / "viewer/node_modules/react").mkdir(parents=True)
             (repo / "tmp/cad-snapshot-build/node_modules").mkdir(parents=True)
 
             runner = FakeRunner()
@@ -591,11 +576,8 @@ class StageTests(unittest.TestCase):
             )
 
             cadjs_link = stage / "viewer/node_modules/cadjs"
-            implicitjs_link = stage / "viewer/node_modules/implicitjs"
             self.assertTrue(cadjs_link.is_symlink())
             self.assertEqual(os.readlink(cadjs_link), "../packages/cadjs")
-            self.assertTrue(implicitjs_link.is_symlink())
-            self.assertEqual(os.readlink(implicitjs_link), "../packages/implicitjs")
             self.assertTrue(
                 (
                     stage
@@ -625,7 +607,7 @@ class StageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root_text:
             stage = Path(root_text)
             attestation = create_runtime(stage)
-            self.assertEqual(attestation.chromium_revision, "1234")
+            self.assertTrue(attestation.hashes)
 
             required = stage / cvm_push.PRODUCTION_RUNTIME.required_files[-1]
             required.unlink()
@@ -645,7 +627,7 @@ class StageTests(unittest.TestCase):
 
 
 class TransferAndVerifyTests(unittest.TestCase):
-    def test_transfer_uses_one_rsync_with_include_before_exclude(self) -> None:
+    def test_transfer_uses_one_rsync_with_repository_excludes(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
             repo = create_repo(root)
@@ -661,9 +643,8 @@ class TransferAndVerifyTests(unittest.TestCase):
 
             self.assertEqual(len(runner.streams), 1)
             argv = runner.streams[0][0]
-            include = f"--include={cvm_push.IMPLICIT_NODE_MODULES_INCLUDE}"
             exclude = f"--exclude-from={repo.resolve() / '.cvmignore'}"
-            self.assertLess(argv.index(include), argv.index(exclude))
+            self.assertIn(exclude, argv)
             self.assertEqual(argv[-2], f"{stage}/")
             self.assertEqual(argv[-1], cvm_push.REMOTE_DESTINATION)
 
@@ -759,7 +740,7 @@ class TransferAndVerifyTests(unittest.TestCase):
             self.assertEqual(error.exception.status, 23)
             self.assertTrue(error.exception.transferred)
 
-    def test_real_rsync_filter_includes_nested_runtime_and_excludes_root_viewer(
+    def test_real_rsync_filter_keeps_nested_runtime_and_excludes_root_viewer(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -771,12 +752,7 @@ class TransferAndVerifyTests(unittest.TestCase):
             nested_viewer = (
                 source / "skills/cad-viewer/scripts/viewer/nested.txt"
             )
-            nested_dependency = (
-                source
-                / "skills/implicit-cad/scripts/packages/implicitjs/"
-                "node_modules/playwright/package.json"
-            )
-            for path in (root_viewer, nested_viewer, nested_dependency):
+            for path in (root_viewer, nested_viewer):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("x\n", encoding="utf-8")
             target.mkdir()
@@ -785,7 +761,6 @@ class TransferAndVerifyTests(unittest.TestCase):
                 [
                     "rsync",
                     "-a",
-                    f"--include={cvm_push.IMPLICIT_NODE_MODULES_INCLUDE}",
                     f"--exclude-from={repo / '.cvmignore'}",
                     f"{source}/",
                     f"{target}/",
@@ -801,13 +776,6 @@ class TransferAndVerifyTests(unittest.TestCase):
             self.assertTrue(
                 (target / "skills/cad-viewer/scripts/viewer/nested.txt").is_file()
             )
-            self.assertTrue(
-                (
-                    target
-                    / "skills/implicit-cad/scripts/packages/implicitjs/"
-                    "node_modules/playwright/package.json"
-                ).is_file()
-            )
 
     def test_remote_verification_uses_full_contract_and_exact_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -819,7 +787,6 @@ class TransferAndVerifyTests(unittest.TestCase):
                 for relative, digest in attestation.hashes.items()
             )
             runner.respond("sha256sum", remote_output)
-            runner.respond("chromium_headless_shell-1234", "")
             workflow = cvm_push.CvmPush(
                 runner,
                 repo_root=stage,
@@ -832,17 +799,13 @@ class TransferAndVerifyTests(unittest.TestCase):
                 self.assertIn(f"test ! -L {relative}", command)
             for relative in cvm_push.PRODUCTION_RUNTIME.required_files:
                 self.assertIn(f"test -f {relative}", command)
-            self.assertIn("chromium_headless_shell-1234", runner.remote_commands[1])
 
             bad = dict(attestation.hashes)
             first = next(iter(bad))
             bad[first] = "0" * 64
             with self.assertRaisesRegex(cvm_push.PushError, "hash mismatch") as error:
                 workflow.verify_remote(
-                    cvm_push.RuntimeAttestation(
-                        hashes=bad,
-                        chromium_revision="1234",
-                    )
+                    cvm_push.RuntimeAttestation(hashes=bad)
                 )
             self.assertEqual(error.exception.status, 5)
 
@@ -884,10 +847,7 @@ class WorkflowTests(unittest.TestCase):
             )
             events: list[str] = []
             inputs = cvm_push.BuildInputs(root / "viewer", root / "cad")
-            attestation = cvm_push.RuntimeAttestation(
-                hashes={},
-                chromium_revision="1234",
-            )
+            attestation = cvm_push.RuntimeAttestation(hashes={})
             workflow.preflight_local = lambda: events.append("local")
             workflow.preflight_remote = lambda: (
                 events.append("remote"),

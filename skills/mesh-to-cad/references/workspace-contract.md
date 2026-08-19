@@ -14,7 +14,7 @@ Invoke it with the active project Python:
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace publish-cycle ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace finalize \
       --workspace <EXP_DIR> --selection <final-selection.json> --notes <notes.md> \
-      --rebuild-entrypoint <registered-cad-or-implicit-adapter> \
+      --rebuild-entrypoint <registered-cad-adapter> \
       --geometry-entrypoint <mesh-compare-entrypoint> \
       --tool-registry <trusted-tool-registry.json>
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace status ...
@@ -45,13 +45,13 @@ run returns the wrapped command's exit code.
   creating a Measured Step.
 - finalize validates Agent-owned selection evidence, copies every selected
   recipe input into isolated staging, executes the explicitly supplied
-  registered CAD or implicit rebuild adapter, proves the complete source to
+  registered CAD rebuild adapter, proves the complete source to
   primary artifact to measurement-mesh provenance chain, runs non-publishing
   VoxBlame equivalence through the supplied geometry entrypoint, renders the
   final preview, and atomically publishes `final/`. Explicit entrypoints keep
   the helper installable without locating or importing sibling skills. The
   caller's trusted registry is the explicit authority boundary: it binds the
-  route-specific registered adapter and VoxBlame IDs to the exact entrypoint
+  registered CAD adapter and VoxBlame IDs to the exact entrypoint
   digests executed. Do not generate or alter this registry from model output;
   installation/orchestration must supply it.
   `measurement.json` is an unchanged Selected Step summary; verification is a

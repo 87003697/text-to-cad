@@ -27,8 +27,7 @@ from .contracts import (
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SUBJECT_KEYS = {
     "agentImageManifestDigest", "agentImageConfigDigest", "platform",
-    "runtimeManifestDigest", "cupRuntimeCapabilityManifestDigest",
-    "buildInputSetDigest", "verificationPlanDigest",
+    "runtimeManifestDigest", "buildInputSetDigest",
 }
 
 
@@ -72,7 +71,6 @@ def _validate_child_subject(kind: str, subject: Any, status: str) -> None:
     _require_keys(subject, set(SUBJECT_FIELDS[kind]), f"{kind} subject")
     nullable = {
         "inventoryDigest", "browserFindingCount", "chromiumProcessCount",
-        "observedOutputDigest", "faceCount", "watertight", "eulerNumber",
         "sourceManifestDigest", "pathCount", "totalBytes",
         "resourceDisposition", "cleanupDisposition",
     }
@@ -86,9 +84,6 @@ def _validate_child_subject(kind: str, subject: Any, status: str) -> None:
                 raise EvidenceError(f"{kind}.subject.{key} must be a signed 64-bit integer")
             if key != "eulerNumber" and item < 0:
                 raise EvidenceError(f"{kind}.subject.{key} must be nonnegative")
-        elif key == "watertight":
-            if not isinstance(item, bool):
-                raise EvidenceError("cup-golden.subject.watertight must be Boolean")
         elif key == "platform":
             expected = {"architecture": "amd64", "os": "linux"} if kind == "image-identity" else "x86_64-unknown-linux-musl"
             if item != expected:
@@ -174,10 +169,8 @@ def _validate_evidence(value: Mapping[str, Any]) -> None:
         _validate_reference(value["blockedBy"], "blockedBy")
         observations = {
             "browser-deny": ("inventoryDigest", "browserFindingCount", "chromiumProcessCount"),
-            "cup-golden": ("observedOutputDigest", "faceCount", "watertight", "eulerNumber"),
             "source-snapshot": ("sourceManifestDigest", "pathCount", "totalBytes"),
             "agent-lifecycle": ("resourceDisposition", "cleanupDisposition"),
-            "capability-conformance": ("observedOutputDigest",),
         }.get(value["kind"], ())
         if any(value["subject"][key] is not None for key in observations):
             raise EvidenceError("not-run observation fields must be null")
@@ -307,35 +300,6 @@ def _validate_observations(value: Mapping[str, Any]) -> None:
             raise EvidenceError("browser observation process count contradicts predicate")
         if process_state is False and process_count < 1:
             raise EvidenceError("browser observation process count contradicts predicate")
-    elif kind == "cup-golden":
-        checks = (
-            ("faceCount", "faceCount3764", 3764, lambda item: item != 3764),
-            ("watertight", "watertightFalse", False, lambda item: item is True),
-            ("eulerNumber", "eulerNumber144", 144, lambda item: item != 144),
-        )
-        for field, predicate, success_value, false_rule in checks:
-            observation, state = _observation_state(
-                value, field, predicate, "Cup observation"
-            )
-            if state is True and observation != success_value:
-                raise EvidenceError("Cup observation contradicts true predicate")
-            if state is False and not false_rule(observation):
-                raise EvidenceError("Cup observation contradicts false predicate")
-        observed, state = _observation_state(
-            value, "observedOutputDigest", "outputDigestRepeatable", "Cup observation"
-        )
-        if state is True and observed != subject["expectedOutputDigest"]:
-            raise EvidenceError("Cup observation output contradicts true predicate")
-    elif kind == "capability-conformance":
-        observed, state = _observation_state(
-            value, "observedOutputDigest", "outputDigestBound",
-            "conformance observation",
-        )
-        expected = subject["expectedOutputDigest"]
-        if state is True and observed != expected:
-            raise EvidenceError("conformance observation contradicts true predicate")
-        if state is False and observed == expected:
-            raise EvidenceError("conformance observation contradicts false predicate")
     elif kind == "source-snapshot":
         for field, predicate in (
             ("sourceManifestDigest", "treeDigestMatchesObservation"),
@@ -411,7 +375,7 @@ def validate_graph(
     if len(set(reference_digests)) != len(reference_digests):
         raise EvidenceError("root child digest is duplicated")
     if len(children) != len(ROOT_ROLES):
-        raise EvidenceError("graph does not contain exactly fifteen children")
+        raise EvidenceError("graph does not contain the exact required children")
 
     child_by_role: dict[tuple[str, str | None], dict[str, Any]] = {}
     for child in children:
@@ -532,7 +496,7 @@ def _validate_cross_bindings(
 
     root_fields = (
         "agentImageManifestDigest", "agentImageConfigDigest", "runtimeManifestDigest",
-        "cupRuntimeCapabilityManifestDigest", "buildInputSetDigest",
+        "buildInputSetDigest",
     )
     for role in ROOT_ROLES:
         child_subject = children[role]["subject"]
@@ -540,54 +504,9 @@ def _validate_cross_bindings(
             if field in child_subject:
                 _equal(child_subject[field], root_subject[field], f"{role}.{field}")
     _equal(subject("image-identity")["platform"], root_subject["platform"], "image platform")
-    _equal(subject("verification-plan")["verificationPlanDigest"], root_subject["verificationPlanDigest"], "verification plan digest")
-
-    plan = subject("verification-plan")
-    plan_bindings = {
-        "scannerDigest": [("browser-deny", None, "scannerDigest")],
-        "verificationSourceSnapshotDigest": [("source-snapshot", env, "executionSourceSnapshotDigest") for env in ("colima", "cvm")] + [(kind, env, "executionSourceSnapshotDigest") for kind in ("agent-lifecycle", "capability-conformance") for env in ("colima", "cvm")],
-        "verificationInputSnapshotDigest": [(kind, env, "inputSnapshotDigest") for kind in ("agent-lifecycle", "capability-conformance") for env in ("colima", "cvm")],
-        "cupFixtureDigest": [("cup-golden", None, "fixtureDigest")],
-        "routerManifestDigest": [("cup-golden", None, "routerManifestDigest")],
-        "expectedOutputDigest": [("cup-golden", None, "expectedOutputDigest")] + [("capability-conformance", env, "expectedOutputDigest") for env in ("colima", "cvm")],
-        "conformanceFixtureDigest": [("capability-conformance", env, "conformanceFixtureDigest") for env in ("colima", "cvm")],
-        "lifecycleHarnessDigest": [("agent-lifecycle", env, "lifecycleHarnessDigest") for env in ("colima", "cvm")],
-        "entrypointDigest": [("agent-lifecycle", env, "entrypointDigest") for env in ("colima", "cvm")],
-        "lifecycleReceiptSchemaDigest": [("agent-lifecycle", env, "lifecycleReceiptSchemaDigest") for env in ("colima", "cvm")],
-        "agentConfigDigest": [("agent-lifecycle", env, "agentConfigDigest") for env in ("colima", "cvm")],
-        "brokerAuthorityDigest": [("agent-lifecycle", env, "brokerAuthorityDigest") for env in ("colima", "cvm")],
-        "workloadDigest": [("agent-lifecycle", env, "workloadDigest") for env in ("colima", "cvm")],
-    }
-    for plan_field, targets in plan_bindings.items():
-        for kind, environment, target_field in targets:
-            _equal(subject(kind, environment)[target_field], plan[plan_field], f"{kind}:{environment}.{target_field}")
     source_nodes = [children[("source-snapshot", env)] for env in ("colima", "cvm")]
-    expected_manifest = plan["verificationSourceManifestDigest"]
-    for node in source_nodes:
-        observed = node["subject"]["sourceManifestDigest"]
-        if node["status"] == "succeeded":
-            valid_observation = observed == expected_manifest
-        elif node["status"] == "not-run":
-            valid_observation = observed is None
-        else:
-            tree_observation = node["predicates"]["treeDigestMatchesObservation"]
-            valid_observation = (
-                (tree_observation is True and observed == expected_manifest)
-                or (
-                    tree_observation is False
-                    and observed is not None
-                    and observed != expected_manifest
-                )
-                or (tree_observation is None and observed is None)
-            )
-        if not valid_observation:
-            raise EvidenceError("source manifest observation contradicts status")
     if all(node["status"] == "succeeded" for node in source_nodes):
         _equal(source_nodes[0]["subject"], source_nodes[1]["subject"], "cross-host source snapshot")
-    for kind, environment in (("cup-golden", None), ("capability-conformance", "colima"), ("capability-conformance", "cvm")):
-        node = children[(kind, environment)]
-        if node["status"] == "succeeded":
-            _equal(node["subject"]["observedOutputDigest"], plan["expectedOutputDigest"], f"{kind}:{environment}.observedOutputDigest")
     build_inputs = subject("build-input-set")
     provenance = subject("build-provenance")
     admission = subject("dependency-admission")

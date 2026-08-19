@@ -230,7 +230,7 @@ Passed for the current review corrections:
 - `npm --prefix packages/meshshot test`.
 - `scripts/dev/setup-symlinks.sh --check`.
 - Lockfile-pinned local dependencies only, followed by current `cad`,
-  `cad-viewer`, `implicit-cad`, `mesh-compare`, plugin, and derived-version
+  `cad-viewer`, `mesh-compare`, plugin, and derived-version
   bundle checks. No lockfile changed and no unpinned temp dependency was
   installed.
 - `python -m py_compile` for changed Python and focused tests.

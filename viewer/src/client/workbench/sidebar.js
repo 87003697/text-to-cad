@@ -249,7 +249,7 @@ export function filenameLabelForEntry(entry) {
     return "";
   }
   const kind = String(entry?.kind || "").trim().toLowerCase();
-  const directSourceFormats = new Set(["dxf", "urdf", "srdf", "sdf", "stl", "3mf", "glb", "gcode", "implicit"]);
+  const directSourceFormats = new Set(["dxf", "urdf", "srdf", "sdf", "stl", "3mf", "glb", "gcode"]);
   const sourceFormat = directSourceFormats.has(kind)
     ? kind
     : String(sourceExtensionForEntry(entry) || "step").trim().toLowerCase();
@@ -277,9 +277,6 @@ export function filenameLabelForEntry(entry) {
   }
   if (sourceFormat === "gcode" || entry?.kind === "gcode") {
     return `${stem}.gcode`;
-  }
-  if (sourceFormat === "implicit" || entry?.kind === "implicit") {
-    return entryLeafName(entry);
   }
   return `${stem}.${sourceFormat === "stp" ? "stp" : "step"}`;
 }

@@ -20,7 +20,6 @@ runs:
         cache: npm
         cache-dependency-path: |
           packages/cadjs/package-lock.json
-          packages/implicitjs/package-lock.json
           viewer/package-lock.json
           docs/package-lock.json
 
@@ -38,6 +37,5 @@ runs:
       shell: bash
       run: |
         npm ci --prefix packages/cadjs
-        npm ci --prefix packages/implicitjs
         npm ci --prefix viewer
         npm ci --prefix docs

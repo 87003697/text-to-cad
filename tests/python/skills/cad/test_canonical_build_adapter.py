@@ -191,7 +191,7 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             recipe = json.loads((root / "candidate/rebuild.json").read_text(encoding="utf-8"))
 
             self.assertEqual("mesh-to-cad.build/1", manifest["schema"])
-            self.assertEqual("cad", manifest["route"])
+            self.assertNotIn("route", manifest)
             self.assertEqual("cad.canonical-build/1", manifest["adapter"]["id"])
             self.assertEqual("trellis2-canonical", profile["coordinateProfile"])
             self.assertEqual("voxblame-depth8", profile["tessellationProfile"])

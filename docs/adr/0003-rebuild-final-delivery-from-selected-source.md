@@ -8,9 +8,8 @@ Date: 2026-08-07
 
 Final Delivery is rebuilt from the Selected Step's archived source in isolated
 staging, then checked with non-publishing VoxBlame verification before atomic
-publication. Rebuilt STEP or implicit artifacts and their derived GLB become
-the delivered files only when their Observable Geometry exactly matches the
-Selected Step.
+publication. Rebuilt STEP artifacts and their derived GLB become the delivered
+files only when their Observable Geometry exactly matches the Selected Step.
 
 ## Consequences
 

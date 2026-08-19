@@ -181,13 +181,6 @@ function entryStepModuleSignature(entry) {
   ].filter(Boolean).join(":");
 }
 
-function entryImplicitSignature(entry) {
-  return [
-    entryAssetHash(entry, "implicit"),
-    normalizeString(entry?.hash)
-  ].filter(Boolean).join(":");
-}
-
 function entryLargeFileSignature(entry) {
   return [
     normalizeString(entry?.kind).toLowerCase(),
@@ -218,7 +211,6 @@ export function fileSessionSignaturesForEntry(entry) {
     tab: entryTabSignature(entry),
     dxf: entryDxfSignature(entry),
     stepModule: entryStepModuleSignature(entry),
-    implicit: entryImplicitSignature(entry),
     urdf: entryUrdfSignature(entry),
     largeFile: entryLargeFileSignature(entry)
   };
@@ -283,16 +275,6 @@ function normalizeStepModuleSlice(value) {
   }
   return {
     enabled: normalizeBoolean(value.enabled, true),
-    parameterValues: isPlainObject(value.parameterValues) ? cloneSerializable(value.parameterValues) : {},
-    animationState: normalizeStepModuleAnimationState(value.animationState)
-  };
-}
-
-function normalizeImplicitSlice(value) {
-  if (!isPlainObject(value)) {
-    return null;
-  }
-  return {
     parameterValues: isPlainObject(value.parameterValues) ? cloneSerializable(value.parameterValues) : {},
     animationState: normalizeStepModuleAnimationState(value.animationState)
   };
@@ -403,11 +385,6 @@ const FILE_SESSION_SLICE_SCHEMA = Object.freeze({
     normalize: normalizeStepModuleSlice,
     equals: storageValuesEqual,
     signatureKey: "stepModule"
-  },
-  implicit: {
-    normalize: normalizeImplicitSlice,
-    equals: storageValuesEqual,
-    signatureKey: "implicit"
   },
   urdf: {
     normalize: normalizeUrdfSlice,

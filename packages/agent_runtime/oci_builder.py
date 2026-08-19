@@ -34,7 +34,6 @@ from scripts.pilot.agent_runtime import (
 
 ENTRYPOINT = "/usr/local/libexec/text-to-cad-agent-entrypoint"
 RUNTIME_MANIFEST = "/usr/share/text-to-cad/runtime-manifest.json"
-CUP_MANIFEST = "/usr/share/text-to-cad/cup-capability-manifest.json"
 LAYER_MEDIA_TYPE = "application/vnd.oci.image.layer.v1.tar+gzip"
 MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
 CONFIG_MEDIA_TYPE = "application/vnd.oci.image.config.v1+json"
@@ -267,7 +266,6 @@ def validate_runtime_manifest(value: Mapping[str, Any], rootfs: Path) -> None:
         "schema",
         "platform",
         "entrypoint",
-        "cupCapabilityManifest",
         "programs",
         "nativeLibraries",
         "runtimeFiles",
@@ -297,11 +295,6 @@ def validate_runtime_manifest(value: Mapping[str, Any], rootfs: Path) -> None:
         raise RuntimeManifestError("entrypoint path or mode is wrong")
     if entrypoint["argv"] != [ENTRYPOINT]:
         raise RuntimeManifestError("entrypoint argv is wrong")
-    cup = value["cupCapabilityManifest"]
-    if not isinstance(cup, Mapping) or set(cup) != {"path", "digest"} or cup["path"] != CUP_MANIFEST:
-        raise RuntimeManifestError("Cup manifest identity is not closed")
-    _runtime_digest(cup["digest"], "cupCapabilityManifest.digest")
-
     runtime_files = value["runtimeFiles"]
     programs = value["programs"]
     libraries = value["nativeLibraries"]
@@ -354,27 +347,22 @@ def validate_runtime_manifest(value: Mapping[str, Any], rootfs: Path) -> None:
         raise RuntimeManifestError("native libraries are not path-sorted and unique")
 
     entry_actual = observed.get(ENTRYPOINT)
-    cup_actual = observed.get(CUP_MANIFEST)
-    if entry_actual is None or cup_actual is None:
-        raise RuntimeManifestError("entrypoint or Cup manifest is outside runtime files")
+    if entry_actual is None:
+        raise RuntimeManifestError("entrypoint is outside runtime files")
     if {key: entry_actual[key] for key in ("path", "mode", "bytes", "digest")} != {
         key: entrypoint[key] for key in ("path", "mode", "bytes", "digest")
     }:
         raise RuntimeManifestError("entrypoint identity disagrees with runtime files")
-    if cup["digest"] != cup_actual["digest"]:
-        raise RuntimeManifestError("Cup manifest digest disagrees with runtime files")
 
 
 def synthetic_test_request(rootfs: Path) -> BuildRequest:
     entrypoint = _regular_identity(rootfs, ENTRYPOINT)
-    cup = _regular_identity(rootfs, CUP_MANIFEST)
     payload = _regular_identity(rootfs, "/opt/text-to-cad/payload.txt")
-    runtime_files = sorted((entrypoint, payload, cup), key=lambda item: item["path"])
+    runtime_files = sorted((entrypoint, payload), key=lambda item: item["path"])
     runtime_manifest = {
         "schema": "text-to-cad.agent-runtime-manifest/1",
         "platform": {"architecture": "amd64", "os": "linux"},
         "entrypoint": {**entrypoint, "argv": [ENTRYPOINT]},
-        "cupCapabilityManifest": {"path": CUP_MANIFEST, "digest": cup["digest"]},
         "programs": [
             {
                 "name": "text-to-cad-agent-entrypoint",
@@ -399,10 +387,8 @@ def make_runtime_manifest(
     """Construct the closed manifest from observed, already-staged bytes."""
 
     entrypoint = _regular_identity(rootfs, ENTRYPOINT)
-    cup = _regular_identity(rootfs, CUP_MANIFEST)
     runtime_records: dict[str, dict[str, Any]] = {
         entrypoint["path"]: entrypoint,
-        cup["path"]: cup,
     }
     program_records: list[dict[str, Any]] = []
     for name, path, version in programs:
@@ -435,7 +421,6 @@ def make_runtime_manifest(
         "schema": "text-to-cad.agent-runtime-manifest/1",
         "platform": {"architecture": "amd64", "os": "linux"},
         "entrypoint": {**entrypoint, "argv": [ENTRYPOINT]},
-        "cupCapabilityManifest": {"path": CUP_MANIFEST, "digest": cup["digest"]},
         "programs": sorted(program_records, key=lambda item: item["path"]),
         "nativeLibraries": sorted(library_records, key=lambda item: item["path"]),
         "runtimeFiles": [runtime_records[path] for path in sorted(runtime_records)],

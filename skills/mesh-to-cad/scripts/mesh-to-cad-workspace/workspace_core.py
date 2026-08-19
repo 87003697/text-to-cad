@@ -123,7 +123,6 @@ _EXPERIMENT_FIELDS = {
     "coordinate_contract",
     "canonical_reference_sha256",
     "preview_profile",
-    "route",
 }
 _WORKSPACE_FIELDS = {
     "schema",
@@ -131,7 +130,6 @@ _WORKSPACE_FIELDS = {
     "coordinate_contract",
     "canonical_reference_sha256",
     "preview_profile",
-    "route",
     "input_identity_sha256",
     "setup_identity_sha256",
     "limits",
@@ -235,7 +233,7 @@ _STOP_REASONS = {
     "tool_failure",
 }
 _NOTES_HEADINGS = (
-    "## Input and Route",
+    "## Input",
     "## Modeling Intent",
     "## Preserved Structural Features",
     "## Omitted Surface Details",
@@ -282,6 +280,8 @@ def initialize_workspace(workspace: Path, prepared: Path) -> dict[str, Any]:
             _fail("invalid_setup", f"prepared setup is missing {name}", f"$.{name}")
     _validate_tree_source(prepared / "input", "$.input")
     _validate_tree_source(prepared / "setup", "$.setup")
+    if (prepared / "setup/route.json").exists():
+        _fail("invalid_setup", "CAD routing metadata is unsupported", "$.setup.route.json")
     experiment = _read_json(prepared / "experiment.json", "$.experiment")
     _validate_experiment(experiment)
     input_manifest = _read_json(prepared / "input/input.json", "$.input.input.json")
@@ -300,7 +300,6 @@ def initialize_workspace(workspace: Path, prepared: Path) -> dict[str, Any]:
         "coordinate_contract": experiment["coordinate_contract"],
         "canonical_reference_sha256": experiment["canonical_reference_sha256"],
         "preview_profile": experiment["preview_profile"],
-        "route": experiment["route"],
         "input_identity_sha256": _path_digest(prepared / "input"),
         "setup_identity_sha256": _path_digest(prepared / "setup"),
         "limits": {
@@ -878,10 +877,7 @@ def finalize_workspace(
     selected_root = workspace / "steps" / f"{selected_step:06d}"
     selected_document = _read_json(selected_root / "step.json", "$.selected_step")
     candidate_root = selected_root / "candidate"
-    recipe_path, recipe = _find_registered_recipe(
-        candidate_root,
-        route=_load_workspace_document(workspace)["route"],
-    )
+    recipe_path, recipe = _find_registered_recipe(candidate_root)
     rebuild_entrypoint = _external_entrypoint(
         rebuild_entrypoint, "$.rebuild_entrypoint"
     )
@@ -891,7 +887,6 @@ def finalize_workspace(
     tool_registry_path = tool_registry.resolve()
     tool_registry_document = _load_tool_registry(
         tool_registry_path,
-        route=recipe["route"],
         rebuild_entrypoint=rebuild_entrypoint,
         geometry_entrypoint=geometry_entrypoint,
     )
@@ -915,7 +910,6 @@ def finalize_workspace(
         recipe_sha256 = _file_sha256(rebuild_root / "rebuild.json")
         build_root, rebuild_command = _run_registered_rebuild(
             rebuild_root,
-            route=recipe["route"],
             entrypoint=rebuild_entrypoint,
         )
         rebuild_command["entrypoint_sha256"] = tool_registry_document["rebuild"][
@@ -934,7 +928,6 @@ def finalize_workspace(
             rebuild_root,
             build_root,
             build,
-            route=recipe["route"],
             recipe=recipe,
         )
 
@@ -971,7 +964,6 @@ def finalize_workspace(
         preview = _read_json(package / "preview.json", "$.final.preview")
         manifest: dict[str, Any] = {
             "schema": FINAL_DELIVERY_SCHEMA,
-            "route": recipe["route"],
             "selected_step": selected_step,
             "accepted": selected_document["accepted"],
             "stop_reason": selection_document["stop_reason"],
@@ -1137,9 +1129,7 @@ def _validate_final_notes(path: Path) -> bytes:
     return body
 
 
-def _find_registered_recipe(
-    candidate_root: Path, *, route: str
-) -> tuple[Path, dict[str, Any]]:
+def _find_registered_recipe(candidate_root: Path) -> tuple[Path, dict[str, Any]]:
     recipes = [
         path
         for path in candidate_root.rglob("rebuild.json")
@@ -1148,29 +1138,26 @@ def _find_registered_recipe(
     if len(recipes) != 1:
         _fail("invalid_rebuild_recipe", "Selected source bundle must contain exactly one rebuild.json")
     recipe = _read_json(recipes[0], "$.rebuild_recipe")
-    _validate_registered_recipe_document(recipe, route=route)
+    _validate_registered_recipe_document(recipe)
     return recipes[0], recipe
 
 
-def _validate_registered_recipe_document(
-    recipe: Mapping[str, Any], *, route: str
-) -> None:
-    if recipe.get("schema") != "mesh-to-cad.rebuild-recipe/1" or recipe.get("route") != route:
-        _fail("invalid_rebuild_recipe", "registered recipe schema or route conflicts")
-    if route == "cad":
-        if (
-            recipe.get("executable") != "cad.canonical-build/1"
-            or recipe.get("workingDirectory") != "."
-            or recipe.get("network") != "forbidden"
-            or recipe.get("ambientInputs") != "forbidden"
-        ):
-            _fail("invalid_rebuild_recipe", "CAD recipe is not the registered offline contract")
-    elif (
-        recipe.get("executable") != {"id": "implicit-cad.canonical-build/1"}
-        or recipe.get("working_directory") != "."
-        or recipe.get("network") is not False
+def _validate_registered_recipe_document(recipe: Mapping[str, Any]) -> None:
+    if "route" in recipe:
+        _fail(
+            "invalid_rebuild_recipe",
+            "CAD routing metadata is unsupported",
+            "$.rebuild_recipe.route",
+        )
+    if recipe.get("schema") != "mesh-to-cad.rebuild-recipe/1":
+        _fail("invalid_rebuild_recipe", "registered recipe schema conflicts")
+    if (
+        recipe.get("executable") != "cad.canonical-build/1"
+        or recipe.get("workingDirectory") != "."
+        or recipe.get("network") != "forbidden"
+        or recipe.get("ambientInputs") != "forbidden"
     ):
-        _fail("invalid_rebuild_recipe", "implicit recipe is not the registered offline contract")
+        _fail("invalid_rebuild_recipe", "CAD recipe is not the registered offline contract")
     inputs = recipe.get("inputs")
     if not isinstance(inputs, list) or not inputs:
         _fail("invalid_rebuild_recipe", "registered recipe inputs are missing")
@@ -1231,13 +1218,10 @@ def _external_entrypoint(path: Path, field: str) -> Path:
 def _load_tool_registry(
     path: Path,
     *,
-    route: str,
     rebuild_entrypoint: Path,
     geometry_entrypoint: Path,
 ) -> dict[str, Any]:
-    registry = _validate_tool_registry_document(
-        _read_json(path, "$.tool_registry"), route=route
-    )
+    registry = _validate_tool_registry_document(_read_json(path, "$.tool_registry"))
     rebuild = registry["rebuild"]
     geometry = registry["geometry"]
     for entry, entrypoint, field in (
@@ -1249,9 +1233,7 @@ def _load_tool_registry(
     return registry
 
 
-def _validate_tool_registry_document(
-    value: Mapping[str, Any], *, route: str
-) -> dict[str, Any]:
+def _validate_tool_registry_document(value: Mapping[str, Any]) -> dict[str, Any]:
     registry = _closed_object(
         value,
         {"schema", "rebuild", "geometry", "identity_sha256"},
@@ -1268,13 +1250,8 @@ def _validate_tool_registry_document(
         {"id", "entrypoint_sha256"},
         "$.tool_registry.geometry",
     )
-    expected_rebuild = (
-        "cad.canonical-build/1"
-        if route == "cad"
-        else "implicit-cad.canonical-build/1"
-    )
-    if rebuild["id"] != expected_rebuild:
-        _fail("untrusted_tool", "tool registry rebuild identity conflicts with route")
+    if rebuild["id"] != "cad.canonical-build/1":
+        _fail("untrusted_tool", "tool registry rebuild identity is not canonical CAD")
     if geometry["id"] != "mesh-compare.voxblame/1":
         _fail("untrusted_tool", "tool registry geometry identity is not VoxBlame")
     for entry, field in (
@@ -1290,31 +1267,17 @@ def _validate_tool_registry_document(
 
 
 def _run_registered_rebuild(
-    rebuild_root: Path, *, route: str, entrypoint: Path
+    rebuild_root: Path, *, entrypoint: Path
 ) -> tuple[Path, dict[str, Any]]:
-    if route == "cad":
-        argv = [
-            sys.executable,
-            str(entrypoint),
-            "rebuild",
-            "--recipe",
-            "rebuild.json",
-            "--output-dir",
-            "rebuilt",
-        ]
-    else:
-        node = shutil.which("node")
-        if node is None:
-            _fail("rebuild_failed", "node executable is unavailable")
-        argv = [
-            node,
-            str(entrypoint),
-            "--recipe",
-            "rebuild.json",
-            "--output-dir",
-            "rebuilt",
-            "--json",
-        ]
+    argv = [
+        sys.executable,
+        str(entrypoint),
+        "rebuild",
+        "--recipe",
+        "rebuild.json",
+        "--output-dir",
+        "rebuilt",
+    ]
     result, _timed_out = _run_bounded_command(
         argv,
         cwd=rebuild_root,
@@ -1328,9 +1291,7 @@ def _run_registered_rebuild(
     if not build_root.is_dir():
         _fail("rebuild_failed", "registered rebuild did not publish its output")
     return build_root, {
-        "registered_executable": (
-            "cad.canonical-build/1" if route == "cad" else "implicit-cad.canonical-build/1"
-        ),
+        "registered_executable": "cad.canonical-build/1",
         "exit_code": result.returncode,
         "stdout_sha256": hashlib.sha256(result.stdout.encode("utf-8")).hexdigest(),
         "stderr_sha256": hashlib.sha256(result.stderr.encode("utf-8")).hexdigest(),
@@ -1342,125 +1303,78 @@ def _validate_build_provenance(
     build_root: Path,
     build: Mapping[str, Any],
     *,
-    route: str,
     recipe: Mapping[str, Any],
 ) -> Path:
-    if build.get("schema") != "mesh-to-cad.build/1" or build.get("route") != route:
-        _fail("build_provenance_conflict", "rebuilt manifest schema or route conflicts")
+    if build.get("schema") != "mesh-to-cad.build/1":
+        _fail("build_provenance_conflict", "rebuilt manifest schema conflicts")
     recipe_inputs = recipe.get("inputs")
     if not isinstance(recipe_inputs, list) or not recipe_inputs or any(
         not isinstance(item, Mapping) for item in recipe_inputs
     ):
         _fail("build_provenance_conflict", "rebuild recipe input records are missing")
-    if route == "cad":
-        primary = build.get("primaryArtifact")
-        measurement = build.get("measurementGlb")
-        if not isinstance(primary, Mapping) or not isinstance(measurement, Mapping):
-            _fail("build_provenance_conflict", "CAD build artifact identities are missing")
-        files = build.get("files")
-        if not isinstance(files, list) or any(
-            not isinstance(item, Mapping) for item in files
-        ):
-            _fail("build_provenance_conflict", "CAD build file records are missing")
-        by_id = {
-            item.get("id"): item
-            for item in files
-            if isinstance(item.get("id"), str)
-        }
-        if len(by_id) != len(files):
-            _fail("build_provenance_conflict", "CAD build file identities conflict")
-        primary_id = primary.get("fileId")
-        measurement_id = measurement.get("fileId")
-        if not isinstance(primary_id, str) or not isinstance(measurement_id, str):
-            _fail("build_provenance_conflict", "CAD artifact file identities are invalid")
-        primary_path = _relative_member(build_root, primary.get("path"), "$.build.primaryArtifact.path")
-        measurement_path = _relative_member(build_root, measurement.get("path"), "$.build.measurementGlb.path")
-        if _file_sha256(primary_path) != primary.get("sha256") or _file_sha256(measurement_path) != measurement.get("sha256"):
-            _fail("build_provenance_conflict", "CAD build artifact digest mismatch")
-        derivation = build.get("derivation")
-        if not isinstance(derivation, list):
-            _fail("build_provenance_conflict", "CAD derivation is missing")
-        edges = {
-            (edge.get("from"), edge.get("to"))
-            for edge in derivation
-            if isinstance(edge, Mapping)
-        }
-        for index, declared in enumerate(recipe_inputs):
-            input_id = declared.get("id")
-            record = by_id.get(f"input:{input_id}")
-            if (
-                not isinstance(input_id, str)
-                or not isinstance(record, Mapping)
-                or record.get("path") != declared.get("path")
-                or record.get("sha256") != declared.get("sha256")
-                or _file_sha256(
-                    _relative_member(
-                        rebuild_root,
-                        declared.get("path"),
-                        f"$.rebuild_recipe.inputs[{index}].path",
-                    )
-                )
-                != declared.get("sha256")
-                or (f"input:{input_id}", primary_id) not in edges
-            ):
-                _fail(
-                    "build_provenance_conflict",
-                    "CAD source input is not bound to the rebuilt STEP",
-                )
-        if (
-            by_id.get(primary_id, {}).get("sha256")
-            != primary.get("sha256")
-            or by_id.get(measurement_id, {}).get("sha256")
-            != measurement.get("sha256")
-        ):
-            _fail("build_provenance_conflict", "CAD artifact records conflict")
-        if (primary_id, measurement_id) not in edges:
-            _fail("build_provenance_conflict", "CAD STEP-to-GLB derivation is missing")
-        return measurement_path
-    artifacts = build.get("artifacts")
-    if not isinstance(artifacts, Mapping):
-        _fail("build_provenance_conflict", "implicit build artifacts are missing")
-    primary = artifacts.get("primary")
-    measurement = artifacts.get("measurement")
+    primary = build.get("primaryArtifact")
+    measurement = build.get("measurementGlb")
     if not isinstance(primary, Mapping) or not isinstance(measurement, Mapping):
-        _fail("build_provenance_conflict", "implicit artifact identities are missing")
-    primary_path = _relative_member(build_root, primary.get("path"), "$.build.artifacts.primary.path")
-    measurement_path = _relative_member(build_root, measurement.get("path"), "$.build.artifacts.measurement.path")
+        _fail("build_provenance_conflict", "CAD build artifact identities are missing")
+    files = build.get("files")
+    if not isinstance(files, list) or any(
+        not isinstance(item, Mapping) for item in files
+    ):
+        _fail("build_provenance_conflict", "CAD build file records are missing")
+    by_id = {
+        item.get("id"): item
+        for item in files
+        if isinstance(item.get("id"), str)
+    }
+    if len(by_id) != len(files):
+        _fail("build_provenance_conflict", "CAD build file identities conflict")
+    primary_id = primary.get("fileId")
+    measurement_id = measurement.get("fileId")
+    if not isinstance(primary_id, str) or not isinstance(measurement_id, str):
+        _fail("build_provenance_conflict", "CAD artifact file identities are invalid")
+    primary_path = _relative_member(build_root, primary.get("path"), "$.build.primaryArtifact.path")
+    measurement_path = _relative_member(build_root, measurement.get("path"), "$.build.measurementGlb.path")
     if _file_sha256(primary_path) != primary.get("sha256") or _file_sha256(measurement_path) != measurement.get("sha256"):
-        _fail("build_provenance_conflict", "implicit build artifact digest mismatch")
-    if (
-        len(recipe_inputs) != 1
-        or primary.get("path") != recipe_inputs[0].get("path")
-        or primary.get("sha256") != recipe_inputs[0].get("sha256")
-        or _file_sha256(
-            _relative_member(
-                rebuild_root,
-                recipe_inputs[0].get("path"),
-                "$.rebuild_recipe.inputs[0].path",
-            )
-        )
-        != primary.get("sha256")
-    ):
-        _fail(
-            "build_provenance_conflict",
-            "implicit source input is not bound to the rebuilt GLB",
-        )
-    edges = build.get("derivation", {}).get("edges") if isinstance(build.get("derivation"), Mapping) else None
-    if not isinstance(edges, list) or not any(
-        edge.get("from") == primary.get("sha256")
-        and edge.get("to") == measurement.get("sha256")
-        for edge in edges
+        _fail("build_provenance_conflict", "CAD build artifact digest mismatch")
+    derivation = build.get("derivation")
+    if not isinstance(derivation, list):
+        _fail("build_provenance_conflict", "CAD derivation is missing")
+    edges = {
+        (edge.get("from"), edge.get("to"))
+        for edge in derivation
         if isinstance(edge, Mapping)
+    }
+    for index, declared in enumerate(recipe_inputs):
+        input_id = declared.get("id")
+        record = by_id.get(f"input:{input_id}")
+        if (
+            not isinstance(input_id, str)
+            or not isinstance(record, Mapping)
+            or record.get("path") != declared.get("path")
+            or record.get("sha256") != declared.get("sha256")
+            or _file_sha256(
+                _relative_member(
+                    rebuild_root,
+                    declared.get("path"),
+                    f"$.rebuild_recipe.inputs[{index}].path",
+                )
+            )
+            != declared.get("sha256")
+            or (f"input:{input_id}", primary_id) not in edges
+        ):
+            _fail(
+                "build_provenance_conflict",
+                "CAD source input is not bound to the rebuilt STEP",
+            )
+    if (
+        by_id.get(primary_id, {}).get("sha256")
+        != primary.get("sha256")
+        or by_id.get(measurement_id, {}).get("sha256")
+        != measurement.get("sha256")
     ):
-        _fail("build_provenance_conflict", "implicit source-to-GLB derivation is missing")
-    dependencies = build.get("dependencies")
-    execution_policy = build.get("execution_policy")
-    if not isinstance(dependencies, Mapping) or not isinstance(
-        execution_policy, Mapping
-    ) or dependencies.get("network") is not False or execution_policy.get(
-        "network"
-    ) is not False:
-        _fail("build_provenance_conflict", "implicit rebuild did not prove offline execution")
+        _fail("build_provenance_conflict", "CAD artifact records conflict")
+    if (primary_id, measurement_id) not in edges:
+        _fail("build_provenance_conflict", "CAD STEP-to-GLB derivation is missing")
     return measurement_path
 
 
@@ -1553,7 +1467,6 @@ def _validate_final_directory(
     manifest = _read_json(root / "manifest.json", "$.final.manifest")
     fields = {
         "schema",
-        "route",
         "selected_step",
         "accepted",
         "stop_reason",
@@ -1580,8 +1493,6 @@ def _validate_final_directory(
     identity = identity_source.pop("identity_sha256")
     if identity != _identity(FINAL_DELIVERY_SCHEMA, identity_source):
         _fail("corrupt_workspace", "Final Delivery identity digest mismatch")
-    if document["route"] != _load_workspace_document(workspace)["route"]:
-        _fail("identity_conflict", "Final Delivery route conflicts with Workspace")
     for key in (
         "source_identity_sha256",
         "artifacts_identity_sha256",
@@ -1638,12 +1549,11 @@ def _validate_final_directory(
         _fail("identity_conflict", "final measurement lost its original step number")
 
     rebuild = _read_json(root / "rebuild.json", "$.final.rebuild")
-    _validate_registered_recipe_document(rebuild, route=document["route"])
+    _validate_registered_recipe_document(rebuild)
     if _file_sha256(root / "rebuild.json") != document["registered_recipe_sha256"]:
         _fail("build_provenance_conflict", "Final registered recipe digest conflicts")
     tool_registry = _validate_tool_registry_document(
-        _read_json(root / "tool-registry.json", "$.final.tool_registry"),
-        route=document["route"],
+        _read_json(root / "tool-registry.json", "$.final.tool_registry")
     )
     rebuild_execution = document["rebuild_execution"]
     if not isinstance(rebuild_execution, Mapping):
@@ -1662,7 +1572,6 @@ def _validate_final_directory(
         root / "source",
         root / "artifacts",
         _read_json(root / "build.json", "$.final.build"),
-        route=document["route"],
         recipe=rebuild,
     )
 
@@ -1789,7 +1698,6 @@ def validate_workspace(
         "coordinate_contract",
         "canonical_reference_sha256",
         "preview_profile",
-        "route",
     ):
         if workspace_document[key] != experiment[key]:
             _fail("identity_conflict", f"workspace and experiment {key} differ")
@@ -1942,6 +1850,9 @@ def recover_workspace(workspace: Path) -> dict[str, Any]:
 
 
 def _validate_experiment(value: Mapping[str, Any]) -> None:
+    if "route" in value:
+        detail = "implicit CAD experiment is unsupported" if value.get("route") != "cad" else "CAD routing metadata is unsupported"
+        _fail("invalid_setup", detail, "$.experiment.route")
     root = _closed_object(value, _EXPERIMENT_FIELDS, "$.experiment")
     _const(root["schema"], EXPERIMENT_SCHEMA, "$.experiment.schema")
     _nonempty_string(root["workspace_id"], "$.experiment.workspace_id")
@@ -1954,12 +1865,13 @@ def _validate_experiment(value: Mapping[str, Any]) -> None:
     profile = _closed_object(root["preview_profile"], {"name", "sha256"}, "$.experiment.preview_profile")
     _nonempty_string(profile["name"], "$.experiment.preview_profile.name")
     _sha256(profile["sha256"], "$.experiment.preview_profile.sha256")
-    if root["route"] not in {"cad", "implicit"}:
-        _fail("invalid_setup", "route must be cad or implicit", "$.experiment.route")
 
 
 def _load_workspace_document(workspace: Path) -> dict[str, Any]:
     value = _read_json(workspace / "workspace.json", "$.workspace")
+    if "route" in value:
+        detail = "implicit CAD workspace is unsupported" if value.get("route") != "cad" else "CAD routing metadata is unsupported"
+        _fail("invalid_setup", detail, "$.workspace.route")
     root = _closed_object(value, _WORKSPACE_FIELDS, "$.workspace")
     _const(root["schema"], WORKSPACE_SCHEMA, "$.workspace.schema")
     _const(root["coordinate_contract"], COORDINATE_CONTRACT, "$.workspace.coordinate_contract")
@@ -2785,7 +2697,6 @@ def _build_graph(workspace: Path, *, validate_steps: bool) -> dict[str, Any]:
             "selected_step": final_document["selected_step"],
             "accepted": final_document["accepted"],
             "stop_reason": final_document["stop_reason"],
-            "route": final_document["route"],
             "identity_sha256": final_document["identity_sha256"],
             "manifest": "final/manifest.json",
         }
