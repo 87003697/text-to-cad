@@ -77,9 +77,6 @@ function fileSheetLabel(fileSheetKind) {
   if (fileSheetKind === "step") {
     return "STEP sheet";
   }
-  if (fileSheetKind === "implicit") {
-    return "Implicit CAD sheet";
-  }
   return "file sheet";
 }
 

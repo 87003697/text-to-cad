@@ -94,15 +94,6 @@ def gen_dxf():
     return {"document": doc}
 """
 
-IMPLICIT = """export default {
-  schema: "implicit.js/0.1.0",
-  name: "orb",
-  bounds: () => [[-6, -6, -6], [6, 6, 6]],
-  glsl: `float sdf(vec3 p) { return length(p) - 4.0; }`
-};
-"""
-
-
 def package_files(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("__cadgen__/**/*") if path.is_file())
 
@@ -143,7 +134,6 @@ class PackagePortabilityTest(unittest.TestCase):
         (cls.root / "widget.step.py").write_text(PART)
         (cls.root / "rig.step.py").write_text(ASSEMBLY)
         (cls.root / "sheet.dxf.py").write_text(DRAWING)
-        (cls.root / "orb.implicit.js").write_text(IMPLICIT)
         cls._build(cls.root)
 
     @classmethod
@@ -170,19 +160,11 @@ class PackagePortabilityTest(unittest.TestCase):
         generate_step_targets([str(root / "widget.step.py"), str(root / "rig.step.py")])
         build_step_artifact(repo_root=root, step=root / "imported.step")
         if HAS_NODE:
-            from cadgen.implicit_artifact import build_implicit_artifact
-
             generate_dxf_targets([str(root / "sheet.dxf.py")])
-            # The DEFAULT bake resolution on purpose: resolution is part of the bake
-            # identity, so a package baked at another one is legitimately stale to the
-            # viewer, which asks with the defaults -- and the viewer agreeing is half of
-            # what this file is checking.
-            build_implicit_artifact(repo_root=root, source_path=root / "orb.implicit.js")
 
     def _validators(self, root: Path):
         from server_py.artifact import (
             validate_dxf_freshness,
-            validate_implicit_freshness,
             validate_step_freshness,
         )
 
@@ -194,7 +176,6 @@ class PackagePortabilityTest(unittest.TestCase):
         if HAS_NODE:
             checks += [
                 ("sheet.dxf.py", validate_dxf_freshness),
-                ("orb.implicit.js", validate_implicit_freshness),
             ]
         return [(name, validate, str(root), str(root / name)) for name, validate in checks]
 
@@ -202,7 +183,7 @@ class PackagePortabilityTest(unittest.TestCase):
         # Guards the tests below from passing vacuously on an empty tree.
         expected = {"widget.step.py", "rig.step.py", "imported.step"}
         if HAS_NODE:
-            expected |= {"sheet.dxf.py", "orb.implicit.js"}
+            expected.add("sheet.dxf.py")
         self.assertEqual(
             expected,
             {path.name for path in (self.root / "__cadgen__" / "models").iterdir() if path.is_dir()},

@@ -1,11 +1,9 @@
 #!/usr/bin/env node
 // Does a theme mean the same thing to every render type?
 //
-// The viewer has ONE theme and two renderers behind it: the mesh path (three.js materials
-// and lights) and the implicit path (a raymarched SDF with a hand-written rig). They share
-// the stage, so the parts of a theme that belong to the stage MUST agree pixel for pixel;
-// the parts that belong to the surface can differ, but only in ways declared in the
-// capability table in viewer/docs/render-types.md.
+// The viewer has one theme shared by every supported file format. The parts of a theme
+// that belong to the stage must agree pixel for pixel; the surface must still respond to
+// lighting and material changes.
 //
 // So this asserts two different things:
 //
@@ -15,7 +13,7 @@
 //      changes. A renderer that ignores a theme still passes a background check while
 //      looking identical in all eight themes, which is precisely the failure this exists
 //      to catch: `lighting.fill` and `lighting.rim` were dropped at normalization and the
-//      raymarcher rendered every theme with the same rig.
+//      renderer would otherwise show every theme with the same rig.
 //
 // Usage:
 //   node viewer/scripts/e2e-theme-conformance.mjs --dir <models-root> [--url http://127.0.0.1:3245]
@@ -43,12 +41,10 @@ const THEME_IDS = [
   "terminal"
 ];
 
-// One scene per RENDERER, not per format — the point of comparison is mesh vs raymarch.
-// The mesh fixture is an STL because it loads with no build step, so a theme sweep does not
-// spend eight package rebuilds proving a point about lighting.
+// Two direct mesh formats keep the comparison independent of package generation.
 const SCENES = [
-  { renderer: "mesh", file: "fun/miniature_spiral_staircase_highres.stl" },
-  { renderer: "implicit", file: "implicits/rounded-orb.implicit.js" }
+  { renderer: "stl", file: "fun/miniature_spiral_staircase_highres.stl" },
+  { renderer: "glb", file: "fun/miniature_spiral_staircase_highres.glb" }
 ];
 
 // Background parity budget, per theme, in 0-255 channel distance. The backdrop is shared
@@ -56,9 +52,7 @@ const SCENES = [
 //
 // Four themes carry a MEASURED, PRE-EXISTING drift (this harness is what found it; the
 // numbers below are from the run that introduced it, and they are unchanged by the U4
-// lighting work — verified by A/B). It is not the shader's own backdrop: in the viewer the
-// raymarch pass composites over the shared stage, and swapping the shader's gradient ramp
-// moved these numbers by 0.0. It is not the environment map either: forcing
+// lighting work — verified by A/B). It is not the environment map: forcing
 // `environment.enabled = false` on cinematic leaves the delta at 7.1. Cause still unknown.
 //
 // Budgeted rather than ignored, so the drift cannot grow and cannot spread to a theme that
@@ -190,12 +184,12 @@ async function main() {
   }
 
   // 1. Background parity across renderers, per theme.
-  console.log("background parity (mesh vs implicit, per theme):");
+  console.log("background parity (STL vs GLB, per theme):");
   for (const [themeId, passes] of byTheme) {
-    const mesh = passes.find((pass) => pass.renderer === "mesh");
-    const implicit = passes.find((pass) => pass.renderer === "implicit");
-    if (!mesh || !implicit) continue;
-    const delta = rgbDistance(mesh.background, implicit.background);
+    const stl = passes.find((pass) => pass.renderer === "stl");
+    const glb = passes.find((pass) => pass.renderer === "glb");
+    if (!stl || !glb) continue;
+    const delta = rgbDistance(stl.background, glb.background);
     const budget = BACKGROUND_PARITY_BUDGETS[themeId] ?? BACKGROUND_PARITY_DEFAULT_BUDGET;
     const budgeted = themeId in BACKGROUND_PARITY_BUDGETS;
     const ok = delta <= budget;
@@ -206,7 +200,7 @@ async function main() {
       failures.push(`${themeId}: background drift improved to ${delta.toFixed(1)} — lower its budget from ${budget}`);
     }
     const status = ok ? (budgeted ? "known" : "ok  ") : "FAIL";
-    console.log(`  ${status} ${themeId.padEnd(16)} mesh=${mesh.background} implicit=${implicit.background} delta=${delta.toFixed(1)}${budgeted ? ` (budget ${budget})` : ""}`);
+    console.log(`  ${status} ${themeId.padEnd(16)} stl=${stl.background} glb=${glb.background} delta=${delta.toFixed(1)}${budgeted ? ` (budget ${budget})` : ""}`);
   }
 
   // 2. Surface response: each renderer must actually look different across themes.

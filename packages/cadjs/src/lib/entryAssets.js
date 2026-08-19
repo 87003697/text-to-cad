@@ -59,10 +59,10 @@ export function entryAsset(entry, key) {
   ) {
     return primaryAsset(entry);
   }
-  // A DXF or implicit entry's own file is not renderable geometry, so its `url` stays the
+  // A DXF entry's own file is not renderable geometry, so its `url` stays the
   // source/exchange artifact and the scanner publishes the package's baked mesh as a `glb`
   // relation. Resolving it here is what lets entryMeshAssetUrl and the mesh loaders treat
-  // those entries as ordinary GLB with no per-format branch.
+  // entry as an ordinary GLB with no per-format branch.
   if (assetKey === RENDER_FORMAT.GLB) {
     return relationAsset(entry, RENDER_FORMAT.GLB);
   }
@@ -176,10 +176,6 @@ export function entryIsDrawingDocument(entry) {
     entrySourceFormat(entry) === RENDER_FORMAT.DXF &&
     normalizeString(entry?.drawingProfile) === "drawing"
   );
-}
-
-export function entryHasImplicitCad(entry) {
-  return Boolean(entryAssetUrl(entry, "implicit") && entryAssetHash(entry, "implicit"));
 }
 
 export function entryStepModuleUrl(entry) {

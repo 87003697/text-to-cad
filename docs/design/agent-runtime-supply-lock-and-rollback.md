@@ -211,7 +211,6 @@ cannot safely be self-referential.
     "version": "1"
   },
   "manifests": {
-    "cupRuntimeCapabilityManifestDigest": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
     "runtimeManifestDigest": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
   },
   "sbom": {

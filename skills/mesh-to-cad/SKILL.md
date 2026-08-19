@@ -24,15 +24,15 @@ immutable evidence. Mutable modeling files live only under `work/`.
 
 ## Ownership
 
-- `$mesh-inspect` supplies routing evidence.
-- `$cad` or `$implicit-cad` owns source authoring and the registered canonical
-  build/rebuild recipe.
+- `$mesh-inspect` supplies geometric evidence for the modeling brief.
+- `$cad` owns source authoring and the registered canonical build/rebuild
+  recipe.
 - `$mesh-compare` owns Canonical Reference preparation, Measured Step facts,
   Repair Targets, Region Diff, previews, and rebuild verification.
 - `scripts/mesh-to-cad-workspace` owns publication, budgets, ancestry,
   protocol-scoped Git/LFS commits, recovery, selection, and Final Delivery.
-- The Agent owns route choice, Repair Batch selection, Planned Edits,
-  assessments, stop reasons, and the Selected Step.
+- The Agent owns Repair Batch selection, Planned Edits, assessments, stop
+  reasons, and the Selected Step.
 
 Read `references/workspace-contract.md` for helper commands and transaction
 semantics. Read `references/output-schemas.md` before authoring any setup,
@@ -42,13 +42,13 @@ plan, assessment, selection, or notes document.
 
 ### 1. Prepare and initialize
 
-1. Inspect the raw input and choose `cad` or `implicit-cad` using
-   `references/routing-rubric.md`. Record both the chosen route and the rejected
-   alternative under `<PREPARED>/setup/route.json`.
+1. Inspect the raw input with `$mesh-inspect` and write CAD modeling evidence
+   under `<PREPARED>/setup/`. Inputs that cannot be represented honestly as
+   STEP-first parametric CAD must stop with a declared modeling limitation.
 2. Run `$mesh-compare voxblame-prepare-reference` into `<PREPARED>/input`.
    This is the experiment's only normalization.
 3. Freeze `<PREPARED>/experiment.json` with Workspace ID, canonical-reference
-   identity, route, coordinate contract, and residual-preview profile.
+   identity, coordinate contract, and residual-preview profile.
 4. Ensure `<EXP_DIR>` is a Git repository root with no pre-staged paths, then
    initialize:
 
@@ -68,9 +68,9 @@ python skills/mesh-to-cad/scripts/mesh-to-cad-workspace begin-attempt \
   --workspace <EXP_DIR> --plan <initial-plan.json> --intended-step 0
 ```
 
-2. Run each build operation through the bounded `run` command. The route skill
+2. Run each build operation through the bounded `run` command. `$cad`
    must build directly in canonical coordinates and leave a complete source
-   bundle, registered offline rebuild recipe, route artifacts, and measurement
+   bundle, registered offline rebuild recipe, CAD artifacts, and measurement
    GLB under the Attempt's candidate directory.
 3. Run `$mesh-compare voxblame-preview` on the candidate and inspect all eight
    views.
@@ -95,7 +95,7 @@ For the chosen parent Measured Step:
    `voxblame.repair-batch/1` selecting one or more Repair Targets and mapping
    stable Planned Edit keys to them.
 3. Begin an Attempt with an explicit `--from-step <M>` and a new intended step.
-4. Execute the Planned Edits through bounded `run` calls, rebuild the route
+4. Execute the Planned Edits through bounded `run` calls, rebuild the CAD
    artifacts, render the child preview, and measure the child with explicit
    `--compare-to <M>`.
 5. Run `$mesh-compare voxblame-diff` for the frozen parent/child edge. Inspect
@@ -134,7 +134,7 @@ any earlier Measured Step is allowed; numeric adjacency never implies ancestry.
 ```bash
 python skills/mesh-to-cad/scripts/mesh-to-cad-workspace finalize \
   --workspace <EXP_DIR> --selection <final-selection.json> \
-  --notes <notes.md> --rebuild-entrypoint <registered-route-adapter> \
+  --notes <notes.md> --rebuild-entrypoint <registered-cad-adapter> \
   --geometry-entrypoint <mesh-compare-entrypoint> \
   --tool-registry <trusted-tool-registry.json>
 ```
@@ -181,7 +181,6 @@ or verification without the corresponding authority artifact.
 
 ## Progressive references
 
-- `references/routing-rubric.md`: route selection.
 - `references/output-schemas.md`: Agent-authored setup and evidence documents.
 - `references/workspace-contract.md`: helper commands, bounds, recovery, Git,
   LFS, and Final Delivery publication.

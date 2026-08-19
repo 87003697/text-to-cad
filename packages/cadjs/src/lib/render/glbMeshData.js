@@ -493,7 +493,7 @@ function buildMeshDataFromGltf(THREE, gltf) {
 function parseGlb(GLTFLoader, decoder, buffer) {
   const loader = new GLTFLoader();
   // Render-artifact packages are written with EXT_meshopt_compression, which is what makes a
-  // 66 MB implicit mesh ship at a few MB. It is a REQUIRED extension, so without the decoder
+  // 66 MB procedural mesh ship at a few MB. It is a REQUIRED extension, so without the decoder
   // registered GLTFLoader rejects the file outright -- registering it here rather than at each
   // call site is why the worker needs no separate wiring: it loads through this same function.
   // KHR_mesh_quantization needs nothing; three's loader supports it natively.

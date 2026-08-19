@@ -12,9 +12,7 @@ headless browser, the job/theme/display normalisation and output writing; this m
 the command line and the per-kind resolution that decides what a given input even is.
 
 Every input kind resolves here, and a skill enables a subset. An input the running skill
-does not enable is rejected BY NAME with a pointer to the skill that owns it, so a
-`.implicit.js` handed to the CAD skill is told where to go rather than failing on a missing
-resolver.
+does not enable is rejected by name rather than failing on a missing resolver.
 """
 
 from __future__ import annotations
@@ -115,20 +113,13 @@ from cadgen.snapshot_core import (
 )
 
 
-# `.implicit.js` is a compound suffix, so it is matched by name rather than by Path.suffix.
-IMPLICIT_INPUT_SUFFIX = ".implicit.js"
-# An implicit model is raymarched from its module: there is no CAD topology, so no section
-# or list mode. It is deliberately never rendered from a baked GLB -- the picture must not
-# depend on an export having been built.
-IMPLICIT_SUPPORTED_RENDER_MODES = {"view", "orbit", "animate"}
-
 # SUPPORTED_RENDER_MODES is the union across every kind -- "is that a mode at all?" -- so
 # each kind still has to name its own. STEP has no `animate`: a STEP model is swept through
 # an animated --params sweep in `view` mode, not by a declared animation.
 STEP_SUPPORTED_RENDER_MODES = {"view", "orbit", "section", "list"}
 
 # Imported lazily by ensure_render_job_step_artifact: only a STEP input needs it, and
-# importing it eagerly would drag OCP into a robot or implicit snapshot that never builds
+# importing it eagerly would drag OCP into a robot snapshot that never builds
 # anything. Kept module-level so tests can substitute it.
 ensure_step_topology_artifact = None
 
@@ -143,8 +134,6 @@ class SnapshotOptions:
     theme_specified: bool = False
     display: object = ""
     display_specified: bool = False
-    graphics: object = ""
-    graphics_specified: bool = False
     camera: object = "iso"
     camera_specified: bool = False
     width: int | None = None
@@ -168,7 +157,7 @@ class SnapshotOptions:
 
 # What each kind can do, for generated help. A skill's --help then describes THAT skill
 # rather than every format the shared implementation happens to carry -- the old single
-# blob documented STEP parameters, robot joint poses and implicit raymarching to every
+# blob documented STEP parameters and robot joint poses to every
 # reader regardless of which skill they were in.
 KIND_BLURBS: dict[str, str] = {
     "step": "a STEP model, or the gen_step() generator that builds one",
@@ -176,7 +165,6 @@ KIND_BLURBS: dict[str, str] = {
     "glb": "a mesh, rendered shaded solid",
     "stl": "a mesh, rendered shaded solid",
     "3mf": "a mesh, rendered shaded solid",
-    "implicit": "an implicit CAD model, raymarched",
     "dxf": "a drawing, rendered as its 3D flat pattern",
     "urdf": "a robot description, assembled from its link meshes",
     "srdf": "a robot description, assembled from its link meshes",
@@ -189,7 +177,6 @@ KIND_MODES: dict[str, frozenset[str]] = {
     "glb": frozenset(MESH_SUPPORTED_RENDER_MODES),
     "stl": frozenset(MESH_SUPPORTED_RENDER_MODES),
     "3mf": frozenset(MESH_SUPPORTED_RENDER_MODES),
-    "implicit": frozenset(IMPLICIT_SUPPORTED_RENDER_MODES),
     "dxf": frozenset(MESH_SUPPORTED_RENDER_MODES),
     "urdf": frozenset(MESH_SUPPORTED_RENDER_MODES),
     "srdf": frozenset(MESH_SUPPORTED_RENDER_MODES),
@@ -204,7 +191,7 @@ _MODE_BLURBS = {
     "list": "part occurrence refs as JSON; writes no files",
 }
 
-_KIND_HELP_ORDER = ("step", "stp", "3mf", "glb", "stl", "implicit", "dxf", "urdf", "srdf", "sdf")
+_KIND_HELP_ORDER = ("step", "stp", "3mf", "glb", "stl", "dxf", "urdf", "srdf", "sdf")
 
 
 def help_text(*, kinds: frozenset[str] | None = None, prog: str = "scripts/snapshot") -> str:
@@ -237,8 +224,6 @@ def help_text(*, kinds: frozenset[str] | None = None, prog: str = "scripts/snaps
         "  --camera VALUE    a preset, an azimuth:elevation pair, or JSON with preset/position/target/up/zoom",
         "  --theme VALUE     see Theme below",
         *(["  --display VALUE   see Display below"] if has_step else []),
-        *(["  --graphics VALUE  implicit raymarch quality: inline JSON or a JSON file path"]
-          if "implicit" in enabled else []),
         "  --size-profile ID simple, diagnostic, labeled, assembly, presentation, orbit, contact-sheet",
         "  --width/--height  pixels, overriding the size profile",
         "  --json            print the render result as JSON on stdout",
@@ -357,13 +342,6 @@ def parse_snapshot_args(argv: Sequence[str]) -> SnapshotOptions:
         elif arg.startswith("--display="):
             options.display = arg[len("--display=") :]
             options.display_specified = True
-        elif arg == "--graphics":
-            options.graphics = parse_required_value(argv, index, arg)
-            options.graphics_specified = True
-            index += 1
-        elif arg.startswith("--graphics="):
-            options.graphics = arg[len("--graphics=") :]
-            options.graphics_specified = True
         elif arg == "--params":
             options.params = parse_required_value(argv, index, arg)
             options.params_specified = True
@@ -475,7 +453,6 @@ def apply_option_overrides_to_job(job: object, options: SnapshotOptions, *, cwd:
             options.params_specified,
             options.params_path_specified,
             options.display_specified,
-            options.graphics_specified,
             options.theme_specified,
             options.camera_specified,
             option_focus_hide_specified(options),
@@ -494,8 +471,6 @@ def apply_option_overrides_to_job(job: object, options: SnapshotOptions, *, cwd:
         next_job["stepParametersPath"] = options.params_path
     if options.display_specified:
         next_job["display"] = load_display_option(options.display, cwd=cwd)
-    if options.graphics_specified:
-        next_job["graphics"] = load_graphics_option(options.graphics, cwd=cwd)
     if options.camera_specified:
         next_job["camera"] = parse_camera_option(options.camera)
     render = dict(next_job.get("render") if is_plain_object(next_job.get("render")) else {})
@@ -564,8 +539,6 @@ def load_job_from_options(
         job["render"]["sizeProfile"] = options.size_profile
     if options.display_specified:
         job["display"] = load_display_option(options.display, cwd=resolved_cwd)
-    if options.graphics_specified:
-        job["graphics"] = load_graphics_option(options.graphics, cwd=resolved_cwd)
     if options.params_specified:
         job["stepParameters"] = parse_params_option(options.params)
     if options.params_path_specified:
@@ -578,36 +551,9 @@ def load_job_from_options(
 
 
 
-def load_graphics_option(raw_graphics: object, *, cwd: Path) -> dict[str, object]:
-    """Implicit CAD's graphics settings: inline JSON, or a path to a JSON file.
-
-    A third option beside --theme and --display because the viewer has a third tab for it.
-    Detail, shadows and ambient occlusion are raymarch quality knobs -- they are not part of
-    a saved theme, and they are not display modes.
-    """
-    text = str(raw_graphics or "").strip()
-    if not text:
-        return {}
-    if text.startswith("{"):
-        payload = load_json_text(text, "--graphics")
-    else:
-        graphics_path = Path(text)
-        if not graphics_path.is_absolute():
-            graphics_path = (cwd / graphics_path).resolve()
-        if not graphics_path.is_file():
-            raise SnapshotError(f"--graphics file does not exist: {graphics_path}")
-        payload = load_json_text(graphics_path.read_text(encoding="utf-8"), str(graphics_path))
-    if not is_plain_object(payload):
-        raise SnapshotError("--graphics must be a JSON object of implicit graphics settings")
-    return dict(payload)
-
-
 def input_kind(file_path: Path) -> str:
-    # Compound suffixes first: `Path.suffix` sees only the last one, so `.implicit.js` would
-    # read as `.js` and `<name>.dxf.py` as a STEP generator.
+    # Compound generator suffixes must be checked before Path.suffix.
     name = file_path.name.lower()
-    if name.endswith(IMPLICIT_INPUT_SUFFIX):
-        return "implicit"
     if name.endswith(".dxf.py"):
         return "dxf"
     suffix = file_path.suffix.lower()
@@ -918,87 +864,6 @@ def normalize_render_job_selection(
 
 
 
-
-
-def resolve_implicit_render_job(
-    job: dict[str, object],
-    *,
-    kind: str,
-    input_path: Path,
-    root_path: Path,
-    resolved_cwd: Path,
-    timestamp: str | None,
-    **_kind_context: object,
-) -> dict[str, object]:
-    """Resolve a direct implicit CAD input (`.implicit.js`).
-
-    Implicit models render through the shared runtime's raymarch backend, so this
-    skips the STEP artifact/package pipeline and hands the renderer the module URL.
-    STEP-only options are rejected up front with clear errors."""
-    # Selector focus/hide/refs need the selector index built from STEP topology.
-    if selection_filter_values(job):
-        raise SnapshotError(
-            "selection focus/hide/refs require STEP topology; implicit models have no "
-            "part/subassembly selectors"
-        )
-    # stepParameters drive a STEP parameter sidecar; implicit models carry their own descriptors.
-    if has_step_parameter_render_values(job.get("stepParameters")):
-        raise SnapshotError(
-            "stepParameters require a STEP model; implicit models are parameterized by their "
-            "own descriptor, not STEP sidecars"
-        )
-    if job.get("stepParametersPath") is not None:
-        raise SnapshotError(
-            "stepParametersPath requires a STEP model; implicit models are parameterized by their "
-            "own descriptor, not STEP sidecars"
-        )
-
-    mode = str(job.get("mode") or "view").strip().lower()
-    if mode not in SUPPORTED_RENDER_MODES:
-        raise SnapshotError(f"Unsupported render mode: {mode or '(missing)'}")
-    if mode not in IMPLICIT_SUPPORTED_RENDER_MODES:
-        supported = ", ".join(sorted(IMPLICIT_SUPPORTED_RENDER_MODES))
-        raise SnapshotError(
-            f"{mode} mode is not supported for implicit inputs; implicit models support: {supported}"
-        )
-
-    # Implicit rendering is raymarched shading — there is no CAD topology for
-    # wireframe/edges/exploded, so reject anything but the default solid shading.
-    display = job.get("display") if is_plain_object(job.get("display")) else {}
-    raw_display_mode = re.sub(r"[\s-]+", "_", str(display.get("mode") or "").strip().lower())
-    canonical_display_mode = DISPLAY_MODE_ALIASES.get(raw_display_mode, raw_display_mode)
-    if canonical_display_mode and canonical_display_mode != "solid":
-        raise SnapshotError(
-            f"{canonical_display_mode} display mode is not supported for implicit inputs; "
-            "implicit models render raymarched shading"
-        )
-    exploded = display.get("exploded") if is_plain_object(display.get("exploded")) else None
-    if exploded is not None and exploded.get("enabled"):
-        raise SnapshotError(
-            "exploded view requires STEP assembly occurrence structure; implicit models "
-            "cannot be exploded"
-        )
-
-    # Raymarched shadows are ON in the viewer and OFF here unless asked for. A snapshot
-    # renders no floor plane, so the MESH path casts no shadow at all -- leaving the
-    # implicit default alone would make one format drop a shadow and every other format
-    # not, for no reason a reader could infer. Self-shading already carries the form.
-    job = {**job, "graphics": {"shadows": False, **(job.get("graphics") if is_plain_object(job.get("graphics")) else {})}}
-
-    asset_url = asset_url_for_path(input_path, root_path)
-    resolved: dict[str, object] = {
-        "rootPath": str(root_path),
-        "inputPath": str(input_path),
-        "inputUrl": asset_url,
-        "kind": "implicit",
-        "url": asset_url,
-    }
-    if bool(job.get("debug")):
-        resolved["debug"] = {"implicitSource": {"kind": "implicit"}}
-
-    normalized = normalize_common_job(job, mode=mode, resolved_cwd=resolved_cwd, timestamp=timestamp)
-    normalized["resolved"] = resolved
-    return normalized
 
 
 def resolve_robot_render_job(
@@ -1416,7 +1281,6 @@ KIND_RESOLVERS: dict[str, Callable[..., dict[str, object]]] = {
     "glb": resolve_mesh_render_job,
     "stl": resolve_mesh_render_job,
     "3mf": resolve_mesh_render_job,
-    "implicit": resolve_implicit_render_job,
     "dxf": resolve_drawing_render_job,
     "urdf": resolve_robot_render_job,
     "srdf": resolve_robot_render_job,
@@ -1434,7 +1298,6 @@ KIND_ENABLES: dict[str, tuple[str, ...]] = {"step": ("step", "python")}
 KIND_LABELS: dict[str, str] = {
     "step": ".step / .step.py", "stp": ".stp", "python": ".step.py",
     "glb": ".glb", "stl": ".stl", "3mf": ".3mf",
-    "implicit": ".implicit.js",
     "dxf": ".dxf / .dxf.py",
     "urdf": ".urdf", "srdf": ".srdf", "sdf": ".sdf",
 }
@@ -1604,4 +1467,3 @@ def run_snapshot_cli(
     except Exception as exc:
         stderr.write(f"{exc}\n")
         return 1
-

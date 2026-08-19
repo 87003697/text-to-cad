@@ -13,9 +13,7 @@ import {
 } from "lucide-react";
 import {
   renderCapabilities,
-  supportsTool,
-  viewportContentKind,
-  VIEWPORT_CONTENT
+  supportsTool
 } from "cadjs/lib/renderCapabilities";
 import { TooltipProvider } from "../ui/tooltip";
 import DrawingToolbar from "./DrawingToolbar";
@@ -130,7 +128,6 @@ function DesktopFloatingToolBar({
   viewerLoading,
   selectedMeshData,
   selectedDxfData,
-  selectedImplicitModel,
   drawingToolOptions,
   drawingTool,
   handleSelectDrawingTool,
@@ -149,13 +146,8 @@ function DesktopFloatingToolBar({
   // What this format can do, from the one capability table — never re-derived from
   // its identity, so a new format inherits the toolbar by declaring a row.
   const capabilities = renderCapabilities(renderFormat);
-  // "Is there anything on screen?" — asked once, for every format. An implicit
-  // raymarches its own GLSL and never loads mesh data, so asking only about
-  // selectedMeshData left its screenshot and orbit buttons permanently disabled
-  // even though both underlying paths work.
-  const viewportContent = viewportContentKind(renderFormat) === VIEWPORT_CONTENT.IMPLICIT
-    ? selectedImplicitModel
-    : selectedMeshData;
+  // Every retained render path produces mesh-backed viewport content.
+  const viewportContent = selectedMeshData;
   const showToolCluster = supportsTool(renderFormat, "select") ||
     supportsTool(renderFormat, "pan") ||
     supportsTool(renderFormat, "draw");

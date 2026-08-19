@@ -314,9 +314,8 @@ export function useViewerRuntime({
       };
 
       // A render type may tighten the pixel ratio further than the shared
-      // idle/interaction caps (the implicit raymarcher trades resolution for
-      // step budget while the camera moves). It only ever caps DOWN, so the
-      // mesh path — which installs no resolver — is unaffected.
+      // idle/interaction caps. It only ever caps DOWN, so renderers that install
+      // no resolver are unaffected.
       const resolveRenderPixelRatio = (pixelRatioCap, interaction) => {
         const base = getPixelRatioCap(pixelRatioCap);
         const extraCap = Number(runtimeRef.current?.resolveExtraPixelRatioCap?.(interaction));
@@ -438,9 +437,8 @@ export function useViewerRuntime({
           keyboardOrbitMoved ||
           needsMoreFrames ||
           // Hold the loop open for the whole gesture so a mesh scene keeps
-          // repainting at interaction quality. A render type whose frame costs
-          // tens of milliseconds (the implicit raymarcher) opts out: it would
-          // otherwise re-render every vsync between wheel ticks even though the
+          // repainting at interaction quality. An expensive render type may opt
+          // out so it does not re-render every vsync between wheel ticks when the
           // camera has not moved, and a 60 Hz pinch saturates the queue. Camera
           // movement still repaints through the controls `change` handler, and
           // damping/transition/keyboard/preview keep their own terms above.

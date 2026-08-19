@@ -70,19 +70,6 @@ DRAWING_PACKAGE = ArtifactKind(
     },
 )
 
-# Implicit CAD: sampling an SDF over a grid, polygonizing it, welding, writing.
-
-IMPLICIT_PACKAGE = ArtifactKind(
-    name="implicit-package",
-    phases=(PHASE_SAMPLE, PHASE_POLYGONIZE, PHASE_WELD, PHASE_WRITE),
-    labels={
-        PHASE_SAMPLE: "Sampling field",
-        PHASE_POLYGONIZE: "Building surface",
-        PHASE_WELD: "Welding vertices",
-        PHASE_WRITE: "Writing package",
-    },
-)
-
 # A snapshot render. Not a coordinated artifact -- it takes no lock and writes no status
 # record, because it produces an image, not a package another process might read half-built.
 # It is a kind anyway so its CLI reports through the same phase model as everything else;

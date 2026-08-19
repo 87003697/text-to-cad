@@ -12,7 +12,7 @@
  *
  * ```js
  * import { reportPhase, reportTotal, reportAdvance, reportResult }
- *   from "implicitjs/glb/progressStream.js";
+ *   from "cadjs/glb/progressStream.js";
  *
  * reportPhase("sample", 96);
  * for (const slice of slices) { …; reportAdvance(1, `slice ${i}/96`); }

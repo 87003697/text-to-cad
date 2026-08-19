@@ -48,7 +48,7 @@ def canonical_bake_hash(bake: Mapping[str, Any] | None) -> str | None:
     """sha256 over the canonicalized ``bake`` block, or None when a format bakes nothing.
 
     The bake block is the format-specific settings a build froze into its payload
-    (toolpath widths, implicit resolution, DXF thickness). Those settings are invisible to
+    (toolpath widths or DXF thickness). Those settings are invisible to
     every other freshness signal — the source is unchanged, the payload is present, the
     closure still hashes — so without this a settings change leaves stale artifacts
     rendering silently.

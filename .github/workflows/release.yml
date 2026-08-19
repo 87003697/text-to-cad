@@ -502,7 +502,7 @@ jobs:
           # `git add -A` honours .gitignore, so a generated path that is ignored (or unstaged
           # for any other reason) passes all of them and still ships missing. This asserts
           # against the INDEX, which is what actually becomes the commit. It is the check that
-          # would have caught skills/implicit-cad/scripts/snapshot/runtime shipping empty.
+          # catches any generated skill runtime that would otherwise ship empty.
           unstaged_generated=""
           while IFS= read -r generated_path; do
             [ -n "$generated_path" ] || continue

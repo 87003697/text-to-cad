@@ -22,7 +22,6 @@ models/
 │   ├── stl/  3mf/  glb/
 ├── drawings/
 │   └── dxf/               2D DXF fixtures (generators + imported files)
-├── implicits/             browser-native implicit CAD (.implicit.js)
 └── robots/                imported robot fixtures with URDF/SRDF
     └── elrobot/ lekiwi/ openarm/ so101/ tom/
 ```
@@ -59,7 +58,6 @@ the sources and is gitignored — never commit it.
 - [mesh/](mesh/README.md): exported `stl/`, `3mf/`, and `glb/` mesh artifacts —
   durable exports from `step/parts/` and `step/assemblies/` kept as fixtures
   for testing export/render behavior, organized by format.
-- [implicits/](implicits/README.md): browser-native implicit CAD examples.
 - [drawings/dxf/](drawings/dxf/README.md): small 2D DXF fixtures — Python
   `gen_dxf()` generator examples and imported permissively licensed `.dxf`
   files for tooling robustness tests.
@@ -84,7 +82,7 @@ git lfs pull --include="models/**" --exclude=""
 
 ## Cleanup Policy
 
-- Keep canonical sources (`*.py`, `*.implicit.js`, `*.urdf`, `*.srdf`, and docs)
+- Keep canonical sources (`*.py`, `*.urdf`, `*.srdf`, and docs)
   readable in normal Git.
 - Keep durable generated fixtures (`*.step`, `*.stl`, `*.3mf`, `*.glb`, and
   `*.dxf`) in Git LFS.

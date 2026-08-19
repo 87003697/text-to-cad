@@ -1,11 +1,9 @@
-// Shared, renderer-agnostic viewport/camera helpers used by both the mesh CAD
-// viewer (CadViewer) and its implicit raymarch pass (useImplicitRaymarch). These
+// Shared, renderer-agnostic viewport/camera helpers used by the CAD Viewer. These
 // helpers operate on a generic `runtime` shape that exposes at least
 // `{ THREE, camera, controls, keyboardOrbitState }`; they make no assumption
-// about how the scene itself is rendered (mesh scene graph vs raymarch quad).
+// about the model source format.
 //
-// The implementations here are the canonical mesh-viewer versions. The implicit
-// viewer is being brought in line with the mesh viewer, so it consumes these
+// The implementations here are the canonical mesh-viewer versions, so consumers share
 // instead of maintaining its own parallel copies.
 
 export const WORLD_UP = Object.freeze([0, 0, 1]);

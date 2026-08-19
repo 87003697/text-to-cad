@@ -101,10 +101,9 @@ function packagedEntry(kind, file, glbFile) {
   };
 }
 
-test("a DXF or implicit entry resolves its mesh from the render package", () => {
+test("a DXF entry resolves its mesh from the render package", () => {
   const dxf = packagedEntry("dxf", "plate.dxf", "__cadgen__/models/plate.dxf/preview.glb");
-  const implicit = packagedEntry("implicit", "orb.implicit.js", "__cadgen__/models/orb.implicit.js/model.glb");
-  for (const entry of [dxf, implicit]) {
+  for (const entry of [dxf]) {
     assert.equal(entryMeshAssetUrl(entry), `/assets/${entry.relations.glb.file}`);
     assert.equal(entryMeshAssetHash(entry), "baked-hash");
     assert.equal(entryMeshAssetBytes(entry), 2048);

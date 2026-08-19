@@ -268,7 +268,7 @@ class DegradedLockTest(CoordinationTestCase):
     Python's policy has always been "a missing lock must never be the reason a user's build
     fails", and `artifact_build` honours it by minting a run id and carrying on. But that id
     is never stamped into the sentinel, because nothing was locked to stamp it under, so the
-    Node builders (DXF, implicit) compared it against an empty sentinel and threw -- reporting
+    Node builders compared it against an empty sentinel and threw -- reporting
     a lock violation for a filesystem that simply cannot lock. The run now carries the fact
     across the boundary so the child can tell the two apart.
     """

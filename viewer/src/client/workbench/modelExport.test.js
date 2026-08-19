@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  IMPLICIT_EXPORT_FORMATS,
   STEP_EXPORT_FORMATS,
   isImportedStepEntry,
   exportItemLabel,
@@ -25,12 +24,6 @@ test("exportItemLabel: a native format is a download, everything else is an expo
   assert.equal(exportItemLabel("3mf"), "Export 3MF");
   assert.equal(exportItemLabel("stl"), "Export STL");
   assert.equal(exportItemLabel("glb"), "Export GLB");
-});
-
-test("an implicit model exports to mesh formats only", () => {
-  // There is no "Download IMPLICIT": the .implicit.js source IS the native file, and the
-  // mesh comes from the server-side export CLI rather than from the baked render package.
-  assert.deepEqual([...IMPLICIT_EXPORT_FORMATS].sort(), ["3mf", "glb", "stl"]);
 });
 
 test("requestModelExport preserves an absolute file ref (leading slash kept)", async () => {

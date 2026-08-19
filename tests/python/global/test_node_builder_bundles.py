@@ -1,11 +1,11 @@
-"""Every skill that ships cadgen's JS-backed producers must also ship its Node builders.
+"""Every skill that ships cadgen's JS-backed producer must also ship its Node builder.
 
-cadgen builds the DXF and implicit render packages by spawning a Node child
+cadgen builds the DXF render package by spawning a Node child
 (``cadgen._internal.node_runtime``), and it looks for that child at
 ``node_package_root()/cadjs/bin/<name>`` -- the ``packages/`` directory cadgen itself was
 loaded from. In the dev checkout that is the real ``packages/cadjs/bin``; in a published
 skill it is ``skills/<skill>/scripts/packages/cadjs/bin``, which only exists because
-``scripts/bundle/skills/bundle-{dxf,implicit-cad}.sh`` esbuilds it there.
+``scripts/bundle/skills/bundle-dxf.sh`` esbuilds it there.
 
 This test is the regression guard for the failure those bundle steps fix: a skill runtime
 that vendored ``cadgen`` but not its builder shipped a format it could not build, and said so
@@ -28,17 +28,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # has to be a rename in both.
 BUILDER_CONSTANTS = {
     "dxf-artifact.mjs": ("cadgen/_internal/drawing_package.py", "DRAWING_PREVIEW_BUILDER"),
-    "implicit-artifact.mjs": ("cadgen/_internal/implicit_package.py", "IMPLICIT_BUILDER"),
 }
 
-# Skill -> the files its builders need at runtime. The extra two implicit entries are not
-# optional decoration: their paths are computed from `import.meta.url` INSIDE the bundle
-# (`register("./implicitClosureHooks.mjs", ...)` and
-# `new Worker(new URL("./meshWorkerEntry.js", ...))`), so esbuild cannot inline them and the
-# builder dies at run time without them.
+# Skill -> the files its builder needs at runtime.
 SKILL_BUILDERS = {
     "dxf": ("dxf-artifact.mjs",),
-    "implicit-cad": ("implicit-artifact.mjs", "implicitClosureHooks.mjs", "meshWorkerEntry.js"),
 }
 
 # A bare specifier in an emitted bundle means a dependency that a published skill -- which

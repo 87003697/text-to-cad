@@ -2,7 +2,7 @@
 wait, and answers when it decides not to wait at all.
 
 One implementation for every artifact CLI (``step_artifact_cli``, ``dxf_artifact``,
-``implicit_artifact``, and the ``gen`` path in ``_internal.generation`` -- ``export``
+the ``gen`` path in ``_internal.generation`` -- ``export``
 shares the wait notice but never takes the write lock, so it has no build to hand to a
 peer), because the three things below have to agree across all of them:
 

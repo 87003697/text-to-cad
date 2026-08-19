@@ -15,10 +15,8 @@ export const jsonTargets = [
   { path: "packages/cadjs/package.json", fields: [["version"]] },
   {
     path: "packages/cadjs/package-lock.json",
-    fields: [["version"], ["packages", "", "version"], ["packages", "../implicitjs", "version"]],
+    fields: [["version"], ["packages", "", "version"]],
   },
-  { path: "packages/implicitjs/package.json", fields: [["version"]] },
-  { path: "packages/implicitjs/package-lock.json", fields: [["version"], ["packages", "", "version"]] },
   { path: "viewer/package.json", fields: [["version"]] },
   {
     path: "viewer/package-lock.json",
@@ -26,7 +24,6 @@ export const jsonTargets = [
       ["version"],
       ["packages", "", "version"],
       ["packages", "packages/cadjs", "version"],
-      ["packages", "packages/implicitjs", "version"],
     ],
   },
   { path: "skills/cad-viewer/scripts/viewer/package.json", fields: [["version"]] },
@@ -36,36 +33,12 @@ export const jsonTargets = [
   { path: "viewer/packages/cadjs/package.json", fields: [["version"]], required: false },
   {
     path: "viewer/packages/cadjs/package-lock.json",
-    fields: [["version"], ["packages", "", "version"], ["packages", "../implicitjs", "version"]],
+    fields: [["version"], ["packages", "", "version"]],
     required: false,
   },
   { path: "skills/cad-viewer/scripts/viewer/packages/cadjs/package.json", fields: [["version"]], required: false },
   {
     path: "skills/cad-viewer/scripts/viewer/packages/cadjs/package-lock.json",
-    fields: [["version"], ["packages", "", "version"], ["packages", "../implicitjs", "version"]],
-    required: false,
-  },
-  { path: "viewer/packages/implicitjs/package.json", fields: [["version"]], required: false },
-  {
-    path: "viewer/packages/implicitjs/package-lock.json",
-    fields: [["version"], ["packages", "", "version"]],
-    required: false,
-  },
-  { path: "skills/cad-viewer/scripts/viewer/packages/implicitjs/package.json", fields: [["version"]], required: false },
-  {
-    path: "skills/cad-viewer/scripts/viewer/packages/implicitjs/package-lock.json",
-    fields: [["version"], ["packages", "", "version"]],
-    required: false,
-  },
-  { path: "skills/implicit-cad/scripts/packages/implicitjs/package.json", fields: [["version"]], required: false },
-  {
-    path: "skills/implicit-cad/scripts/packages/implicitjs/package-lock.json",
-    fields: [["version"], ["packages", "", "version"]],
-    required: false,
-  },
-  { path: "skills/cad/scripts/packages/implicitjs/package.json", fields: [["version"]], required: false },
-  {
-    path: "skills/cad/scripts/packages/implicitjs/package-lock.json",
     fields: [["version"], ["packages", "", "version"]],
     required: false,
   },
@@ -235,8 +208,8 @@ function syncTomlTarget(relativePath, version) {
  * happens, so two of them stamping it means the last write wins -- and when the mirror declares
  * FEWER fields than the canonical target, the field only the canonical one knows about is
  * silently reverted. That is how the 0.4.10 release gate came to reject its own bump:
- * `packages/cadjs/package-lock.json` was stamped with the implicitjs version and then
- * overwritten through its own symlink, which did not carry that field.
+ * a canonical lockfile was stamped with an extra field and then overwritten through its
+ * own symlink, which did not carry that field.
  */
 export function mergeTargetsByRealPath(targets) {
   const merged = [];

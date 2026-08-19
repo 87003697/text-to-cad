@@ -41,14 +41,9 @@ test("orbitFrameOutputs honors explicit orbit timing", () => {
   assert.equal(orbit.outputs.at(-1).camera, "187.5:20");
 });
 
-test("resolveHeadlessJobKind dispatches implicit vs mesh jobs", async () => {
+test("resolveHeadlessJobKind dispatches supported jobs through the mesh renderer", async () => {
   const { resolveHeadlessJobKind } = await import("./headlessJobKind.js");
-  // Resolved kind stamped by the Python CLI is authoritative.
-  assert.equal(resolveHeadlessJobKind({ resolved: { kind: "implicit" } }), "implicit");
   assert.equal(resolveHeadlessJobKind({ resolved: { kind: "step" } }), "mesh");
   assert.equal(resolveHeadlessJobKind({ resolved: { kind: "glb" } }), "mesh");
-  // URL-suffix fallback for callers with no resolved payload.
-  assert.equal(resolveHeadlessJobKind({ resolved: { inputUrl: "/a/model.implicit.js" } }), "implicit");
   assert.equal(resolveHeadlessJobKind("/a/widget.glb"), "mesh");
-  assert.equal(resolveHeadlessJobKind({ url: "/a/pulse.implicit.js" }), "implicit");
 });

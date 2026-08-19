@@ -1,7 +1,7 @@
 """The Python<->Node builder bridge.
 
 Every test here spawns a REAL node child running a REAL script that imports the REAL
-``implicitjs/glb/progressStream.js`` helper through ``NODE_PATH``. That is deliberate: the
+``cadjs/glb/progressStream.js`` helper through ``NODE_PATH``. That is deliberate: the
 three things this module actually promises -- that bare specifiers resolve through the
 exports map, that NDJSON reaches the lock holder, and that no child outlives the lock -- are
 all properties of a separate process, and a mocked ``Popen`` proves none of them.
@@ -32,16 +32,16 @@ from cadgen._internal.node_runtime import (  # noqa: E402
     node_package_root,
     run_node_builder,
 )
-from cadgen.coordination import IMPLICIT_PACKAGE, artifact_build  # noqa: E402
+from cadgen.coordination import DRAWING_PACKAGE, artifact_build  # noqa: E402
 
 _NODE = shutil.which("node")
 
 # The helper is imported by BARE SPECIFIER, so every script below is also a live test of the
-# NODE_PATH mechanism: implicitjs/package.json maps "./glb/*" -> "./src/lib/glb/*", and only
+# NODE_PATH mechanism: cadjs/package.json maps "./glb/*" -> "./src/glb/*", and only
 # a NODE_PATH entry (not a directory alias) resolves through an exports map.
 _IMPORT = (
     'import { reportPhase, reportTotal, reportAdvance, reportResult } '
-    'from "implicitjs/glb/progressStream.js";\n'
+    'from "cadjs/glb/progressStream.js";\n'
 )
 
 
@@ -140,11 +140,11 @@ reportResult({ ok: true });
 
     def test_result_line_becomes_the_return_value(self):
         script = self.script(
-            'reportResult({ ok: true, packagePath: "a/b.implicit.glb", triangles: 42 });\n'
+            'reportResult({ ok: true, packagePath: "a/b/model.glb", triangles: 42 });\n'
         )
         payload = run_node_builder(script, run=Recorder())
         self.assertEqual(
-            {"ok": True, "packagePath": "a/b.implicit.glb", "triangles": 42}, payload
+            {"ok": True, "packagePath": "a/b/model.glb", "triangles": 42}, payload
         )
         # `type` is protocol framing, not payload: it must not leak into the CLI's JSON line.
         self.assertNotIn("type", payload)
@@ -199,7 +199,7 @@ class FailureTest(NodeRuntimeTestCase):
     def test_non_zero_exit_raises(self):
         script = self.script(
             """
-reportPhase("sample", 4);
+reportPhase("mesh", 4);
 process.stderr.write("builder blew up\\n");
 process.exit(3);
 """
@@ -272,9 +272,9 @@ class DiscoveryTest(NodeRuntimeTestCase):
         self.assertIn("node was not found", message)
         self.assertIn("CADGEN_NODE", message)
 
-    def test_node_path_points_at_the_packages_dir_holding_implicitjs(self):
+    def test_node_path_points_at_the_packages_dir_holding_cadjs(self):
         root = node_package_root()
-        self.assertTrue((root / "implicitjs" / "package.json").is_file(), root)
+        self.assertTrue((root / "cadjs" / "package.json").is_file(), root)
         env = node_child_env()
         self.assertEqual(str(root), env["NODE_PATH"].split(os.pathsep)[0])
 
@@ -289,15 +289,14 @@ class DiscoveryTest(NodeRuntimeTestCase):
         # dir with no node_modules above it, so they all depend on this. Pinned explicitly
         # because the mechanism is subtle: Node's ESM resolver ignores NODE_PATH, so the
         # bridge's --import hook forwards the miss to the CJS resolver, which reads NODE_PATH
-        # AND applies the exports map. "implicitjs/mesh" has no counterpart on disk -- only
-        # the map turns it into src/lib/implicitCad/mesh.js -- so resolving it proves the map
-        # was consulted rather than a directory path being glued together.
+        # AND applies the exports map. "cadjs/glb/progressStream.js" is resolved through the
+        # map, proving it was consulted rather than a directory path being glued together.
         script = self.script(
-            'reportResult({ ok: true, url: import.meta.resolve("implicitjs/mesh") });\n'
+            'reportResult({ ok: true, url: import.meta.resolve("cadjs/glb/progressStream.js") });\n'
         )
         payload = run_node_builder(script, run=Recorder())
         self.assertTrue(
-            payload["url"].endswith("/implicitjs/src/lib/implicitCad/mesh.js"), payload["url"]
+            payload["url"].endswith("/cadjs/src/glb/progressStream.js"), payload["url"]
         )
 
     def test_node_path_is_what_makes_it_resolve(self):
@@ -327,10 +326,10 @@ class ArtifactBuildIntegrationTest(NodeRuntimeTestCase):
     """The real thing: a real lock, a real status record, a real Node child."""
 
     def test_child_progress_flows_through_a_real_build_run(self):
-        package_dir = self.root / "__cadgen__" / "widget.implicit.glb"
+        package_dir = self.root / "__cadgen__" / "widget.dxf"
         script = self.script(
             """
-reportPhase("sample", 4);
+reportPhase("mesh", 4);
 for (let i = 1; i <= 4; i += 1) reportAdvance(1, `slice ${i}/4`);
 reportPhase("write");
 reportResult({ ok: true, packagePath: process.argv[2] });
@@ -339,18 +338,18 @@ reportResult({ ok: true, packagePath: process.argv[2] });
 
         events = []
         with artifact_build(
-            IMPLICIT_PACKAGE, package_dir, is_current=lambda: False, sink=events.append
+            DRAWING_PACKAGE, package_dir, is_current=lambda: False, sink=events.append
         ) as run:
             payload = run_node_builder(script, [str(package_dir)], run=run)
 
         self.assertEqual(str(package_dir), payload["packagePath"])
 
         phases = [event.phase for event in events]
-        self.assertIn("sample", phases)
+        self.assertIn("mesh", phases)
         self.assertIn("write", phases)
         self.assertEqual("done", phases[-1])
 
-        sampled = [event for event in events if event.phase == "sample"]
+        sampled = [event for event in events if event.phase == "mesh"]
         self.assertTrue(sampled[-1].determinate)
         self.assertEqual(4, sampled[-1].done)
         self.assertEqual(4, sampled[-1].total)
@@ -360,7 +359,7 @@ reportResult({ ok: true, packagePath: process.argv[2] });
         self.assertGreater(sampled[-1].fraction, sampled[0].fraction)
         # And the terminal record carries the phases the CHILD reported, so the run's own
         # timings account for the work it did.
-        self.assertIn("sample", events[-1].stage_ms or {})
+        self.assertIn("mesh", events[-1].stage_ms or {})
 
 
 class StdlibOnlyTest(unittest.TestCase):

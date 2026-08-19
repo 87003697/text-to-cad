@@ -3,8 +3,8 @@ export const RENDER_FORMAT = Object.freeze({
   STL: "stl",
   THREE_MF: "3mf",
   GLB: "glb",
+  GCODE: "gcode",
   DXF: "dxf",
-  IMPLICIT: "implicit",
   URDF: "urdf",
   SRDF: "srdf",
   SDF: "sdf"
@@ -27,7 +27,10 @@ export function normalizeFormat(value) {
 }
 
 export function normalizeRenderFormat(value, { defaultFormat = RENDER_FORMAT.STEP } = {}) {
-  const normalized = normalizeFormat(value || defaultFormat);
+  const normalized = normalizeFormat(value);
+  if (!normalized) {
+    return defaultFormat;
+  }
   if (normalized === "stp") {
     return RENDER_FORMAT.STEP;
   }
@@ -39,15 +42,15 @@ export function normalizeRenderFormat(value, { defaultFormat = RENDER_FORMAT.STE
     normalized === RENDER_FORMAT.STL ||
     normalized === RENDER_FORMAT.THREE_MF ||
     normalized === RENDER_FORMAT.GLB ||
+    normalized === RENDER_FORMAT.GCODE ||
     normalized === RENDER_FORMAT.DXF ||
-    normalized === RENDER_FORMAT.IMPLICIT ||
     normalized === RENDER_FORMAT.URDF ||
     normalized === RENDER_FORMAT.SRDF ||
     normalized === RENDER_FORMAT.SDF
   ) {
     return normalized;
   }
-  return defaultFormat;
+  return "";
 }
 
 export function entryKind(entry) {
@@ -56,6 +59,9 @@ export function entryKind(entry) {
 
 export function entrySourceFormat(entry) {
   const kind = entryKind(entry);
+  if (kind === "part" || kind === "assembly" || kind === RENDER_FORMAT.STEP || kind === "stp") {
+    return RENDER_FORMAT.STEP;
+  }
   if (kind === RENDER_FORMAT.DXF) {
     return RENDER_FORMAT.DXF;
   }
@@ -68,8 +74,8 @@ export function entrySourceFormat(entry) {
   if (kind === RENDER_FORMAT.GLB || kind === "gltf") {
     return RENDER_FORMAT.GLB;
   }
-  if (kind === RENDER_FORMAT.IMPLICIT) {
-    return RENDER_FORMAT.IMPLICIT;
+  if (kind === RENDER_FORMAT.GCODE) {
+    return RENDER_FORMAT.GCODE;
   }
   if (kind === RENDER_FORMAT.URDF) {
     return RENDER_FORMAT.URDF;
@@ -80,14 +86,16 @@ export function entrySourceFormat(entry) {
   if (kind === RENDER_FORMAT.SDF) {
     return RENDER_FORMAT.SDF;
   }
-  return RENDER_FORMAT.STEP;
+  if (!kind) {
+    return renderFormatFromPath(entry?.file || entry?.path || "", { defaultFormat: "" });
+  }
+  return "";
 }
 
-// The kinds whose renderable geometry is BAKED into a __cadgen__ render package rather
-// than parsed in the browser: a DXF is 2D entities and an implicit model is GLSL, so
-// neither has a mesh of its own. The producer writes one, the scanner publishes it as the
-// entry's `glb` asset, and the viewport loads it through the same path a native .glb takes.
-const PACKAGE_BAKED_RENDER_KINDS = Object.freeze([RENDER_FORMAT.DXF, RENDER_FORMAT.IMPLICIT]);
+// The kinds whose renderable geometry is baked into a __cadgen__ render package rather
+// than parsed in the browser. The producer writes one, the scanner publishes it as the
+// entry's `glb` asset, and the viewport loads it through the native GLB path.
+const PACKAGE_BAKED_RENDER_KINDS = Object.freeze([RENDER_FORMAT.DXF]);
 
 /**
  * The format of the asset the viewport actually LOADS for an entry, as opposed to the
@@ -139,8 +147,8 @@ export function fileSheetKindForEntry(entry) {
   if (kind === RENDER_FORMAT.SDF) {
     return RENDER_FORMAT.SDF;
   }
-  if (kind === RENDER_FORMAT.IMPLICIT) {
-    return RENDER_FORMAT.IMPLICIT;
+  if (kind === RENDER_FORMAT.GCODE) {
+    return RENDER_FORMAT.GCODE;
   }
   if (entrySourceFormat(entry) === RENDER_FORMAT.STEP) {
     return RENDER_FORMAT.STEP;
@@ -184,8 +192,8 @@ export function renderFormatFromExtension(extension) {
   if (normalized === "glb" || normalized === "gltf") {
     return RENDER_FORMAT.GLB;
   }
-  if (normalized === "implicit" || normalized === "implicit.js" || normalized === "implicit.mjs") {
-    return RENDER_FORMAT.IMPLICIT;
+  if (normalized === "gcode") {
+    return RENDER_FORMAT.GCODE;
   }
   if (normalized === "dxf") {
     return RENDER_FORMAT.DXF;
@@ -209,10 +217,6 @@ export function renderFormatFromPath(value, options = {}) {
     pathname = new URL(rawValue, options.baseUrl || "http://localhost/").pathname;
   } catch {
     pathname = rawValue.split("?")[0].split("#")[0];
-  }
-  const normalizedPath = pathname.toLowerCase();
-  if (normalizedPath.endsWith(".implicit.js") || normalizedPath.endsWith(".implicit.mjs")) {
-    return RENDER_FORMAT.IMPLICIT;
   }
   return renderFormatFromExtension(fileExtensionFromPath(value, options));
 }

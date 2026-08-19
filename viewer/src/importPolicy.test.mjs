@@ -19,25 +19,20 @@ function collectSourceFiles(directory, files = []) {
   return files;
 }
 
-test("viewer imports implicit CAD APIs through cadjs/implicit/*, never implicitjs directly", () => {
-  // The viewer installs cadjs alone; implicitjs arrives transitively and its
-  // APIs are consumed via the cadjs/implicit/* re-export layer (AGENTS.md).
-  // A bare `implicitjs` import still resolves through the hoisted transitive
-  // link, so nothing else fails loudly when one sneaks in (e.g. via a merge
-  // from a branch that predates the re-export layer) — this test is the fence.
+test("viewer does not import retired implicit CAD runtimes", () => {
   const offenders = [];
   for (const filePath of collectSourceFiles(viewerSrcRoot)) {
     if (filePath === selfPath) {
       continue;
     }
     const source = fs.readFileSync(filePath, "utf8");
-    if (/["']implicitjs(?:\/[^"']*)?["']/u.test(source)) {
+    if (/["'](?:implicitjs|cadjs\/implicit)(?:\/[^"']*)?["']/u.test(source)) {
       offenders.push(path.relative(viewerSrcRoot, filePath));
     }
   }
   assert.deepEqual(
     offenders,
     [],
-    `viewer sources must import cadjs/implicit/* instead of implicitjs directly: ${offenders.join(", ")}`
+    `viewer sources import retired implicit CAD runtimes: ${offenders.join(", ")}`
   );
 });

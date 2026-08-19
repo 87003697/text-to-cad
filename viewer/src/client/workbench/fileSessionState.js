@@ -177,13 +177,6 @@ function entryStepModuleSignature(entry) {
   ].filter(Boolean).join(":");
 }
 
-function entryImplicitSignature(entry) {
-  return [
-    entryAssetHash(entry, "implicit"),
-    normalizeString(entry?.hash)
-  ].filter(Boolean).join(":");
-}
-
 function entryLargeFileSignature(entry) {
   return [
     normalizeString(entry?.kind).toLowerCase(),
@@ -250,16 +243,6 @@ function normalizeStepModuleSlice(value) {
   }
   return {
     enabled: normalizeBoolean(value.enabled, true),
-    parameterValues: isPlainObject(value.parameterValues) ? cloneSerializable(value.parameterValues) : {},
-    animationState: normalizeStepModuleAnimationState(value.animationState)
-  };
-}
-
-function normalizeImplicitSlice(value) {
-  if (!isPlainObject(value)) {
-    return null;
-  }
-  return {
     parameterValues: isPlainObject(value.parameterValues) ? cloneSerializable(value.parameterValues) : {},
     animationState: normalizeStepModuleAnimationState(value.animationState)
   };

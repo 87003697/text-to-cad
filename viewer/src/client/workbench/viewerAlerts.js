@@ -119,27 +119,50 @@ export function buildViewerMeshAlert(entry, hasMeshData, loadError, artifact = n
   return null;
 }
 
-export function buildViewerImplicitAlert(fileRef, hasImplicitData, loadError) {
+export function buildViewerDxfAlert(fileRef, hasDxfData, loadError, previewError) {
   if (!fileRef) {
     return null;
   }
+
+  const command = rebuildCommandForEntry("dxf", fileRef);
+  const normalizedPreviewError = String(previewError || "").trim();
+
   if (loadError) {
     return {
       severity: "error",
-      summary: "Implicit CAD load failed",
-      title: "Failed to load implicit CAD module",
+      summary: "DXF load failed",
+      title: "Failed to load DXF flat pattern",
       message: loadError,
-      resolution: "Check the exported GLSL distance function and reload the page."
+      resolution: "Try reloading the page. If the problem persists, rebuild the CAD assets for this entry.",
+      command
     };
   }
-  if (!hasImplicitData) {
+
+  if (/DXF 3D bend preview currently requires vertical bend lines/i.test(normalizedPreviewError)) {
+    return null;
+  }
+
+  if (normalizedPreviewError) {
+    return {
+      severity: "warning",
+      summary: "DXF 3D preview unavailable",
+      title: "Failed to build the DXF 3D preview",
+      message: normalizedPreviewError,
+      resolution: "The flat pattern can still be shown, but the 3D extrusion preview could not be built from the current DXF geometry.",
+      command
+    };
+  }
+
+  if (!hasDxfData) {
     return {
       severity: "error",
-      summary: "Implicit CAD unavailable",
-      title: "No implicit CAD model is available",
-      message: "The selected entry is listed in the CAD catalog but the implicit CAD module did not load.",
-      resolution: "Confirm the .implicit.js or .implicit.mjs file exists and exports an implicit.js/0.1.0 model."
+      summary: "DXF unavailable",
+      title: "No DXF flat pattern is available",
+      message: "The selected entry does not have a ready DXF companion asset for the flat-pattern viewer.",
+      resolution: "Rebuild the CAD assets for this entry, then reload the page.",
+      command
     };
   }
+
   return null;
 }

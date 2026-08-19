@@ -257,7 +257,7 @@ def build_drawing_preview(
     Its run id is handed to the child, which checks it against the lock sentinel before
     writing anything -- so ONE run id, one status record and one progress bar span both
     runtimes, and a builder started outside the lock throws (see
-    ``implicitjs/glb/assertWriteLock.js``). A run that could not take a lock at all says so
+    the Node child). A run that could not take a lock at all says so
     with ``--lock-degraded``, so the child skips a check it cannot pass rather than turning a
     filesystem without advisory locks into a failed build.
 

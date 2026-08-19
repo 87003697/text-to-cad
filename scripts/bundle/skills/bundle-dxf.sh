@@ -4,7 +4,7 @@ set -euo pipefail
 # Vendors packages/cadgen into skills/dxf/scripts/packages/cadgen, and esbuilds the Node
 # drawing-preview builder into skills/dxf/scripts/packages/cadjs/bin. The builder is what
 # `cadgen._internal.drawing_package` spawns to bake preview.glb; it lives in
-# packages/cadjs/bin and imports three, meshoptimizer and implicitjs, none of which a
+# packages/cadjs/bin and imports three and meshoptimizer, neither of which a
 # published skill ships as node_modules -- so it is bundled self-contained (design §4.5).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"

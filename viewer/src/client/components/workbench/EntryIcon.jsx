@@ -1,5 +1,4 @@
 import {
-  Blend,
   Bot,
   Box,
   Code,
@@ -30,9 +29,7 @@ const ENTRY_ICON_COMPONENTS = {
   [ENTRY_ICON_KIND.THREE_MF_MESH]: Printer,
   [ENTRY_ICON_KIND.GLB_MESH]: FileBox,
   [ENTRY_ICON_KIND.DXF]: DraftingCompass,
-  [ENTRY_ICON_KIND.ROBOT]: Bot,
-  // Two overlapping shapes: the smooth boolean that defines an SDF model.
-  [ENTRY_ICON_KIND.IMPLICIT]: Blend
+  [ENTRY_ICON_KIND.ROBOT]: Bot
 };
 
 export function entryIconComponent(entry, sourceFormat, status) {

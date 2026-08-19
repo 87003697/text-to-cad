@@ -63,9 +63,9 @@ blocking wait；terminal completion 会提前 hand back。精确的更早 deadli
 - **CVM skill runtime 永远采用实体 production bundle**：Mac checkout 可以是开发
   symlink；push 不在远端预先 `unlink`，而由经过验证的 staging 作为 rsync source
   完成 symlink→目录转换。
-- **一个完整 stage 只做一次远端 rsync**：精确 include implicit runtime 的四个
-  `node_modules` 依赖，再应用全局 exclude。不得把主代码和运行依赖拆成两个可能只
-  成功一个的网络传输。
+- **一个完整 stage 只做一次远端 rsync**：先构建并验证 Viewer production
+  runtime，再应用全局 exclude。不得把主代码和运行依赖拆成两个可能只成功一个的
+  网络传输。
 - **不得把主 checkout 的依赖目录直接 symlink 进 staging**：Viewer 与 CAD build
   dependencies 必须复制到 staging，避免构建读取错误 worktree 或修改共享缓存。
 - **source → staging 必须排除本地状态**：`.agents/`、`.claude/`、`.codex/`、
@@ -86,10 +86,9 @@ blocking wait；terminal completion 会提前 hand back。精确的更早 deadli
 - 一次 skill 调用 = 一次完整同步（无 partial / resume 概念）；rsync 天然增量。
 - rsync 不更新 CVM `.git`。CVM HEAD 只是远端 checkout 基线，不是本次部署内容的
   identity；真正的 source provenance 是脚本输出的 branch/HEAD/dirty state。
-- push 结束前必须按同一 runtime contract 确认 Viewer/implicit runtime 是实体目录、
-  launcher/backend/dist/snapshot 与四个 implicit dependency 文件存在，并比较
-  Viewer backend、launcher、snapshot CLI 和 Playwright browser manifest 的
-  SHA-256；同时确认 host cache 中有对应 Chromium revision。任一失败均不得进入 pilot。
+- push 结束前必须按同一 runtime contract 确认 Viewer runtime 是实体目录，
+  launcher/backend/dist 存在，并比较 Viewer backend 与 launcher 的 SHA-256。
+  任一失败均不得进入 pilot。
 - 改名或删除仍不会自动清理 CVM stale path；必须先解析精确目标，再显式删除，
   不能通过 `--delete` 扩大同步权限。
 

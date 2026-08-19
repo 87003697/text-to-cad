@@ -2,7 +2,7 @@
 
 Everything here is format-agnostic: the headless browser driver, the job normalisation
 (camera, theme, display, size profile), the mesh render path, and output writing. It
-knows nothing about STEP topology, drawings, or implicit models -- a caller resolves its
+knows nothing about STEP topology or drawings -- a caller resolves its
 own input to an asset URL and hands the result to :func:`render_resolved_job_packet`.
 
 It lives in cadgen rather than in a skill because two skills need it and a skill may not
@@ -50,9 +50,7 @@ DEFAULT_RENDER_THEME_ID = "snapshot"
 VIEWER_DEFAULT_THEME_ID = "workbench-light"
 DEFAULT_TIMEOUT_SECONDS = 300
 RENDER_BROWSER_STARTUP_TIMEOUT_MS = 15_000
-# `animate` is implicit-only: it sweeps a model's own declared animation. The STEP
-# analogue is an animated --params sweep, which stays in `view`.
-SUPPORTED_RENDER_MODES = {"view", "orbit", "section", "list", "animate"}
+SUPPORTED_RENDER_MODES = {"view", "orbit", "section", "list"}
 MESH_INPUT_KINDS = {"glb", "stl", "3mf"}
 MESH_SUPPORTED_RENDER_MODES = {"view", "orbit", "list"}
 TOPOLOGY_DISPLAY_MODES = {"hidden_edges", "hidden_lines_removed"}
@@ -75,14 +73,6 @@ SUPPORTED_JOB_KEYS = frozenset(
         "selection",
         "stepParameters",
         "stepParametersPath",
-        # Implicit CAD's own three surfaces. `graphics` is a THIRD viewer tab beside Theme
-        # and Display (detail, shadows, ambient occlusion, model colours), so it is a third
-        # option rather than being folded into --display. Parameters and animation are the
-        # implicit analogues of stepParameters: named separately because an implicit model
-        # is parameterized by its own descriptor, not by a STEP sidecar.
-        "graphics",
-        "implicitParameters",
-        "implicitAnimation",
         # A robot's pose. The STEP analogue is stepParameters; a robot is posed by joint
         # angle, so it gets its own key rather than overloading one that means a sidecar.
         "jointValues",
@@ -445,7 +435,7 @@ def normalize_common_job(
     guard, render clip-stripping + scene-scale coercion, timestamped output
     resolution with per-output camera defaults, and the common return shape.
     Kind resolvers run their capability checks first, then call this, so a
-    STEP/mesh/implicit job all normalize identically; the caller attaches its
+    STEP and mesh jobs all normalize identically; the caller attaches its
     kind-specific ``resolved`` payload to the returned job."""
     outputs = job.get("outputs") if isinstance(job.get("outputs"), list) else []
     if mode != "list" and not outputs:

@@ -97,8 +97,7 @@ test("a stored dxf slice is dropped outright, not migrated", () => {
     fileKey: entry.file,
     signatures: { tab: "whatever" },
     slices: {
-      dxf: { thicknessMm: 2.4, bendSettings: [{ id: "bend-1", direction: "down", angleDeg: 91 }] },
-      implicit: { parameterValues: { radius: 3 }, animationState: { activeId: "spin" } }
+      dxf: { thicknessMm: 2.4, bendSettings: [{ id: "bend-1", direction: "down", angleDeg: 91 }] }
     }
   }));
   const restored = readFileSessionState("models", entry.file, entry, { storage });

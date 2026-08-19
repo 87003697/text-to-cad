@@ -1,4 +1,4 @@
-"""One snapshot implementation, six front doors — so the DOOR is what has to be right.
+"""One snapshot implementation, five front doors — so the DOOR is what has to be right.
 
 Sharing the CLI makes every skill mechanically capable of rendering every format. The
 kind gate is the only thing left keeping the CAD skill from quietly rendering a robot, so
@@ -30,7 +30,6 @@ from cadgen.snapshot_cli import (  # noqa: E402
 # fails this test rather than shipping.
 SKILL_KINDS = {
     "cad": ("step", "stp", "3mf", "glb", "stl"),
-    "implicit-cad": ("implicit",),
     "dxf": ("dxf",),
     "urdf": ("urdf",),
     "srdf": ("srdf",),
@@ -40,14 +39,13 @@ SKILL_KINDS = {
 
 class InputKindTests(unittest.TestCase):
     def test_compound_suffixes_are_not_read_as_their_last_one(self):
-        # Path.suffix sees only `.js` and `.py`; both of these would be misread by it.
-        self.assertEqual("implicit", input_kind(Path("orb.implicit.js")))
+        # Path.suffix sees only `.py`; a compound generator suffix needs special handling.
         self.assertEqual("dxf", input_kind(Path("panel.dxf.py")))
         # A plain `.py` IS a STEP generator, which is why the two need telling apart.
         self.assertEqual("python", input_kind(Path("bracket.step.py")))
 
     def test_every_kind_it_names_has_a_resolver_or_is_a_generator(self):
-        for sample in ("a.step", "a.stp", "a.glb", "a.stl", "a.3mf", "a.implicit.js",
+        for sample in ("a.step", "a.stp", "a.glb", "a.stl", "a.3mf",
                        "a.urdf", "a.srdf", "a.sdf", "a.dxf"):
             kind = input_kind(Path(sample))
             self.assertTrue(kind, f"{sample} resolved to no kind")
@@ -61,7 +59,6 @@ class EnabledKindsTests(unittest.TestCase):
         self.assertIn("python", enabled_kinds(("step",)))
 
     def test_a_skill_gets_only_what_it_declares(self):
-        self.assertEqual({"implicit"}, set(enabled_kinds(SKILL_KINDS["implicit-cad"])))
         self.assertEqual({"urdf"}, set(enabled_kinds(SKILL_KINDS["urdf"])))
 
     def test_an_unknown_kind_is_a_programming_error(self):
@@ -85,12 +82,10 @@ class KindGateTests(unittest.TestCase):
 
     def test_each_skill_refuses_the_others_formats(self):
         cases = [
-            ("cad", "orb.implicit.js"),
             ("cad", "arm.urdf"),
             ("cad", "panel.dxf"),
-            ("implicit-cad", "part.step"),
             ("dxf", "part.step"),
-            ("urdf", "orb.implicit.js"),
+            ("urdf", "panel.dxf"),
         ]
         for skill, filename in cases:
             with self.subTest(skill=skill, filename=filename):
@@ -99,32 +94,26 @@ class KindGateTests(unittest.TestCase):
 
     def test_a_refusal_never_points_at_another_skill(self):
         # Skills install independently, so naming one assumes something we cannot know.
-        for skill, filename in (("cad", "arm.urdf"), ("dxf", "orb.implicit.js")):
+        for skill, filename in (("cad", "arm.urdf"), ("dxf", "arm.urdf")):
             with self.subTest(skill=skill):
                 message = self._reject(skill, filename)
-                for other in ("cad skill", "dxf skill", "implicit-cad skill", "urdf skill"):
+                for other in ("cad skill", "dxf skill", "urdf skill"):
                     self.assertNotIn(other, message, message)
 
     def test_the_refusal_lists_what_this_skill_does_take(self):
         # A bare "no" makes the reader go read the source; the accepted set is the answer.
-        message = self._reject("cad", "orb.implicit.js")
+        message = self._reject("cad", "arm.urdf")
         self.assertIn(".step", message)
         self.assertIn(".stl", message)
 
     def test_a_step_generator_is_gated_as_step_not_as_python(self):
         # `.step.py` is rewritten to its logical `.step` path. Gating after that rewrite
         # would report a path the caller never named.
-        message = self._reject("implicit-cad", "bracket.step.py", body="def gen_step(): ...")
+        message = self._reject("dxf", "bracket.step.py", body="def gen_step(): ...")
         self.assertIn("bracket.step.py", message)
 
 
 class GeneratedHelpTests(unittest.TestCase):
-    def test_help_describes_only_this_skill(self):
-        implicit_help = help_text(kinds=enabled_kinds(SKILL_KINDS["implicit-cad"]))
-        self.assertIn(".implicit.js", implicit_help)
-        for absent in (".step", ".urdf", "--params", "--focus"):
-            self.assertNotIn(absent, implicit_help, f"{absent} is not this skill's business")
-
     def test_step_only_options_appear_for_the_cad_skill(self):
         cad_help = help_text(kinds=enabled_kinds(SKILL_KINDS["cad"]))
         for present in ("--params", "--focus", "section", "--view-labels"):
@@ -142,7 +131,7 @@ class GeneratedHelpTests(unittest.TestCase):
         # need occurrences and CAD edges -- and every non-STEP resolver rejected all four.
         # Advertising the flag everywhere meant advertising an option that only errors.
         self.assertIn("--display", help_text(kinds=enabled_kinds(SKILL_KINDS["cad"])))
-        for skill in ("dxf", "implicit-cad", "urdf", "srdf", "sdf"):
+        for skill in ("dxf", "urdf", "srdf", "sdf"):
             with self.subTest(skill=skill):
                 self.assertNotIn("--display", help_text(kinds=enabled_kinds(SKILL_KINDS[skill])))
 

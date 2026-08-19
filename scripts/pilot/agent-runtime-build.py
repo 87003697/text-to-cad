@@ -55,7 +55,6 @@ PROGRAMS = [
 ]
 PROJECT_PREFIXES = (
     "/usr/local/lib/python3.12/dist-packages",
-    "/usr/local/lib/text-to-cad/implicitjs",
     "/usr/local/libexec",
 )
 
@@ -85,11 +84,6 @@ EXACT_INPUTS = {
         REPO_ROOT / "packages/agent_runtime/external/python/python-wheel-lock.json",
         1_956,
         "sha256:cb41d9710da2617ffd43485cfa69cec7fabb1742621fd30d13d6c99a18598091",
-    ),
-    "cupCapabilityManifest": (
-        REPO_ROOT / "models/agent-runtime/cup_cup_033/cup-capability-manifest.json",
-        2_954,
-        "sha256:903d589bc6f3808849e8521349f4c625b20ecbdf103f0c1fbfe7f672a136d6a8",
     ),
 }
 CANONICAL_SEAM = (
@@ -175,7 +169,6 @@ def _exact_build_inputs(runtime_manifest: dict) -> dict:
         **identity,
         "buildInputSetDigest": canonical_json_digest(identity),
         "builderImageId": runtime_os["builderImageId"],
-        "cupCapabilityManifestDigest": EXACT_INPUTS["cupCapabilityManifest"][2],
         "localCasLocatorManifestDigest": EXACT_INPUTS["localCasLocatorManifest"][2],
         "qualifiedLocalRecordDigest": EXACT_INPUTS["qualifiedLocalRecord"][2],
         "recipe": recipe,
@@ -219,7 +212,7 @@ def _exact_spdx_packages(runtime_manifest: dict) -> list[dict]:
         "name": "meshscope",
         "version": "0.1.0",
     })
-    for name, prefix in (("meshshot", "/usr/local/lib/python3.12/dist-packages/meshshot"), ("text-to-cad-implicit-runtime", "/usr/local/lib/text-to-cad/implicitjs")):
+    for name, prefix in (("meshshot", "/usr/local/lib/python3.12/dist-packages/meshshot"),):
         members = [item for item in runtime_manifest["runtimeFiles"] if item["path"] == prefix or item["path"].startswith(prefix + "/")]
         if not members:
             raise BuildInputError(f"project package is absent: {name}")

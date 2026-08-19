@@ -7,7 +7,6 @@ export const FILE_SHEET_SECTION_IDS = Object.freeze({
   ROBOT_SDF: "sdf",
   ROBOT_MOTION: "motion",
   ROBOT_JOINTS: "joints",
-  IMPLICIT_GRAPHICS: "graphics",
   DXF_MATERIAL: "material",
   DXF_BENDS: "bends",
   DXF_LAYERS: "dxfLayers",
@@ -78,12 +77,6 @@ export function renderedFileSheetSectionIds(kind, options = {}) {
       // Measure is the one mesh-specific control: vertex-to-vertex distance on
       // the displayed triangles. Status still only appears when there is an issue.
       return [...status, FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS];
-    case "implicit":
-      return [
-        ...status,
-        ...(options.hasImplicitParameterPanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : []),
-        FILE_SHEET_SECTION_IDS.IMPLICIT_GRAPHICS
-      ];
     default:
       return [];
   }
@@ -118,11 +111,6 @@ export function defaultOpenFileSheetSectionIds(kind, options = {}) {
       return [
         ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
         FILE_SHEET_SECTION_IDS.STEP_MEASUREMENTS
-      ];
-    case "implicit":
-      return [
-        ...(options.hasFileStatus ? [FILE_SHEET_SECTION_IDS.FILE_STATUS] : []),
-        ...(options.hasImplicitParameterPanel ? [FILE_SHEET_SECTION_IDS.STEP_PARAMETERS] : [])
       ];
     default:
       return [];

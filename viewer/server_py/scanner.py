@@ -27,7 +27,6 @@ CAD_CATALOG_SCHEMA_VERSION = 4
 SOURCE_EXTENSIONS = frozenset(
     [".step", ".stp", ".stl", ".3mf", ".glb", ".dxf", ".urdf", ".srdf", ".sdf"]
 )
-IMPLICIT_CAD_EXTENSIONS = (".implicit.js", ".implicit.mjs")
 # Dot-prefixed (hidden) directories are skipped generically by _should_skip_directory;
 # this set only needs the non-hidden names.
 VIEWER_SKIPPED_DIRECTORIES = frozenset(
@@ -47,11 +46,6 @@ from cadgen._internal.drawing_package import (  # noqa: E402
     DRAWING_DESCRIPTOR_NAME,
     DRAWING_PACKAGE_KIND,
 )
-from cadgen._internal.implicit_package import (  # noqa: E402
-    IMPLICIT_DESCRIPTOR_NAME,
-    IMPLICIT_PACKAGE_KIND,
-)
-
 DXF_GENERATOR_SUFFIX = ".dxf.py"
 
 
@@ -142,13 +136,6 @@ def path_is_inside(file_path: str, root_path: str) -> bool:
     )
 
 
-def path_is_implicit_cad_source(value: str = "") -> bool:
-    pathname = re.split(r"[?#]", str(value or ""), maxsplit=1)[0].lower()
-    return any(pathname.endswith(ext) for ext in IMPLICIT_CAD_EXTENSIONS)
-
-
-
-
 # --- file stats / hashing / urls ---
 def _file_stats(file_path: str):
     try:
@@ -209,7 +196,7 @@ def _source_format_from_extension(extension: str) -> str:
 def source_format_for_path(source_path: str, extension: str | None = None) -> str:
     if extension is None:
         extension = os.path.splitext(source_path)[1]
-    return "implicit" if path_is_implicit_cad_source(source_path) else _source_format_from_extension(extension)
+    return _source_format_from_extension(extension)
 
 
 # --- directory scan helpers ---
@@ -245,7 +232,7 @@ def _collect_cad_source_files(root_path: str, result: list) -> list:
             # entries (the __cadgen__ dir is gitignored), not only the pre-built ones.
             result.append(entry_path)
             continue
-        if extension in SOURCE_EXTENSIONS or path_is_implicit_cad_source(entry_path):
+        if extension in SOURCE_EXTENSIONS:
             result.append(entry_path)
     return result
 
@@ -294,16 +281,14 @@ def _paired_urdf_path_for_srdf(source_path, repo_root):
 
 
 # --- render-package payload assets ---
-# Which baked GLB a catalog entry renders from, per kind. A DXF and an implicit model have
-# no renderable geometry of their own -- one is 2D entities, the other is GLSL -- so each
-# bakes a mesh into its entry-keyed __cadgen__ package and the scanner publishes THAT as the
-# entry's `glb` relation. The client then resolves it through the ordinary
+# Which baked GLB a catalog entry renders from, per kind. A DXF has no renderable geometry
+# of its own, so it bakes a mesh into its entry-keyed __cadgen__ package and the scanner
+# publishes THAT as the entry's `glb` relation. The client then resolves it through the ordinary
 # entryMeshAssetUrl path with no per-format branch, which is the whole point: one render
 # path, fed by one asset key.
 _RENDER_PACKAGE_GLB_PAYLOADS = {
     # kind: (descriptor file, descriptor kind, the descriptor field naming the GLB)
     "dxf": (DRAWING_DESCRIPTOR_NAME, DRAWING_PACKAGE_KIND, "preview"),
-    "implicit": (IMPLICIT_DESCRIPTOR_NAME, IMPLICIT_PACKAGE_KIND, "glb"),
 }
 
 
@@ -622,7 +607,7 @@ def is_served_cad_asset(file_path: str) -> bool:
         _is_declared_params_sidecar(file_path) or is_step_sidecar_path(file_path)
     ):
         return True
-    if extension in SOURCE_EXTENSIONS or path_is_implicit_cad_source(file_path):
+    if extension in SOURCE_EXTENSIONS:
         return True
     return False
 

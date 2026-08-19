@@ -1,11 +1,9 @@
 /**
- * The one JS GLB writer.
+ * The shared JS GLB writer.
  *
  * Replaces `meshToGlb`, which emitted a single non-indexed f32 primitive at 72 B/triangle --
  * fine for a download, ruinous for a render artifact. This writer is a generic mesh
- * serializer with no implicit-specific behaviour, which is why it lives in implicitjs and is
- * re-exported by cadjs (the repo's dependency rule: shared primitives source in implicitjs,
- * cadjs re-exports; cadjs may depend on implicitjs, never the reverse).
+ * serializer with no format-specific behaviour and lives in cadjs as shared runtime code.
  *
  * **It is PURE and LOCK-FREE.** Writing a render *package* is a different operation with a
  * different precondition -- it must hold the artifact's generation lock -- and lives in
@@ -502,8 +500,7 @@ export function writeGlb(mesh, options = {}) {
       name: sanitizeName(input?.name || name, name),
       extras: {
         // The occurrence id is an identity NAMESPACE, so it is keyed on the source kind
-        // rather than the model's display name -- "implicit-cad:0" is stable across a
-        // rename, "export sphere:0" is not. A per-primitive `occurrenceId` still wins, and
+        // rather than the model's display name. A per-primitive `occurrenceId` still wins, and
         // an explicit `occurrenceIdPrefix` overrides the namespace.
         cadOccurrenceId: String(
           input?.occurrenceId
@@ -526,7 +523,7 @@ export function writeGlb(mesh, options = {}) {
   }
 
   const gltf = {
-    asset: { version: "2.0", generator: "implicitjs writeGlb" },
+    asset: { version: "2.0", generator: "cadjs writeGlb" },
     scene: 0,
     scenes: [{ nodes: nodes.map((_, index) => index) }],
     nodes,

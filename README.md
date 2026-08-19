@@ -38,6 +38,62 @@ text-to-cad is a library of agent skills for generating, inspecting, sourcing,
 slicing, and handing off CAD and robot-description artifacts from local project
 files.
 
+## 🧰 Skills
+
+Install the library to give agents focused workflows for CAD, fabrication,
+robot description files, simulation, and local review.
+
+| Skill        | Summary                                                                                                                                            | Source                                              |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| CAD          | Creates and edits CAD models from plain-language or image requests, with STEP as the main output along with options to export to STL, 3MF and GLB. | [skills/cad](skills/cad/SKILL.md)                   |
+| CAD Viewer   | Shows local browser previews for CAD, G-code, and robot files.                                                                                     | [skills/cad-viewer](skills/cad-viewer/SKILL.md)     |
+| step.parts   | Finds off-the-shelf STEP parts like screws, bearings, motors, and connectors.                                                                      | [skills/step-parts](skills/step-parts/SKILL.md)     |
+| DXF          | Creates 2D DXF drawings like profiles, templates, gaskets, and cut layouts from Python sources or CAD geometry.                                    | [skills/dxf](skills/dxf/SKILL.md)                   |
+| URDF         | Writes robot structure files with links, joints, limits, inertials, and meshes.                                                                    | [skills/urdf](skills/urdf/SKILL.md)                 |
+| SRDF         | Adds MoveIt planning groups, end effectors, poses, and collision rules to a URDF.                                                                  | [skills/srdf](skills/srdf/SKILL.md)                 |
+| SDF          | Creates simulator models and worlds with frames, physics, sensors, and lights.                                                                     | [skills/sdf](skills/sdf/SKILL.md)                   |
+| SendCutSend  | Checks DXF and STEP files before upload to SendCutSend.                                                                                            | [skills/sendcutsend](skills/sendcutsend/SKILL.md)   |
+| G-code       | Slices supported mesh files into validated, printer-profiled FDM `.gcode` with real slicer CLIs.                                                   | [skills/gcode](skills/gcode/SKILL.md)               |
+| Bambu Labs   | Dry-runs, uploads, and cautiously starts local Bambu Lab print jobs from validated `.gcode`.                                                       | [skills/bambu-labs](skills/bambu-labs/SKILL.md)     |
+
+## 💻 Installation
+
+For production use, install or clone from `main`; that branch contains the
+generated skill/plugin outputs needed by provider installers.
+
+### Skills
+
+Install CAD Skills with the Skills CLI:
+
+```bash
+npx skills install earthtojake/text-to-cad
+```
+
+This is the preferred installation path. It installs the individual skills
+directly for supported agents.
+
+### Plugins
+
+Provider-native plugin installs are also available for Codex and Claude Code:
+
+```bash
+# Codex
+codex plugin marketplace add earthtojake/text-to-cad
+codex plugin add cad@text-to-cad
+```
+
+```bash
+# Claude Code
+claude plugin marketplace add earthtojake/text-to-cad
+claude plugin install cad@text-to-cad
+```
+
+Restart your agent if newly installed skills do not appear. For local
+development, branch from `develop`, open PRs against `develop`, and use the symlink
+workflow in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## 📸 Screenshots
+
 <table>
   <tr>
     <td width="33%">
@@ -78,7 +134,6 @@ robot description files, simulation, and local review.
 | SendCutSend  | Checks DXF and STEP files before upload to SendCutSend.                                                                                            | [skills/sendcutsend](skills/sendcutsend/SKILL.md)   |
 | G-code       | Slices supported mesh files into validated, printer-profiled FDM `.gcode` with real slicer CLIs.                                                   | [skills/gcode](skills/gcode/SKILL.md)               |
 | Bambu Labs   | Dry-runs, uploads, and cautiously starts local Bambu Lab print jobs from validated `.gcode`.                                                       | [skills/bambu-labs](skills/bambu-labs/SKILL.md)     |
-| Implicit CAD | Creates browser-native implicit CAD models using GLSL signed-distance fields and CAD Viewer raymarch rendering. Experimental.                      | [skills/implicit-cad](skills/implicit-cad/SKILL.md) |
 
 ## 💻 Installation
 

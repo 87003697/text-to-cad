@@ -4,9 +4,7 @@ Everything about rendering — arguments, job schema, theme, display, the headle
 is `cadgen.snapshot_cli`, shared with every other skill that renders. What is local is this
 file: which input kinds this skill accepts, and where its own bundled browser runtime lives.
 
-`.implicit.js` and `.urdf`/`.srdf`/`.sdf` used to resolve here too. They belong to the
-implicit-cad and urdf/srdf/sdf skills now; handing one to this CLI names the skill that
-renders it.
+Robot-description inputs belong to their dedicated URDF/SRDF/SDF skills.
 """
 
 from __future__ import annotations

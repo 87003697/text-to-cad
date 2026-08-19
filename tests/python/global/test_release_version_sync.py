@@ -6,9 +6,8 @@ canonical package. Each target reads its file before any write happens, so two t
 stamping one file means the last write wins -- and a mirror declaring fewer fields than the
 canonical target silently reverts the field only the canonical one knows about.
 
-That is not hypothetical: adding the implicitjs version to `packages/cadjs/package-lock.json`
-without adding it to that file's two symlinked mirrors made the 0.4.10 release fail its own
-version gate, after the bump and before anything was published.
+This test keeps the merge-by-real-path behavior covered without coupling it to a retired
+package.
 """
 
 from __future__ import annotations
@@ -48,7 +47,7 @@ class VersionSyncMirrorTests(unittest.TestCase):
             "const { mergeTargetsByRealPath } = await import(%s);\n"
             "const merged = mergeTargetsByRealPath([\n"
             '  { path: "packages/cadjs/package-lock.json",'
-            ' fields: [["version"], ["packages", "../implicitjs", "version"]] },\n'
+            ' fields: [["version"], ["packages", "", "version"]] },\n'
             '  { path: "viewer/packages/cadjs/package-lock.json", fields: [["version"]], required: false },\n'
             "]);\n"
             "console.log(JSON.stringify({ count: merged.length, fields: merged[0].fields,"
@@ -58,19 +57,14 @@ class VersionSyncMirrorTests(unittest.TestCase):
         payload = json.loads(_node(script))
         self.assertEqual(1, payload["count"], "a symlinked mirror must not get its own write")
         self.assertIn(
-            ["packages", "../implicitjs", "version"],
+            ["packages", "", "version"],
             payload["fields"],
             "the merged target must keep the field only the canonical target declared",
         )
         self.assertTrue(payload["treatedAsRequired"], "a required target keeps the file required")
 
-    def test_every_cadjs_lockfile_target_stamps_the_implicitjs_version(self) -> None:
-        """The field that broke 0.4.10, asserted across every copy of that lockfile.
-
-        cadjs's lockfile embeds implicitjs as a linked workspace package, so every target
-        naming a `cadjs/package-lock.json` has to stamp it -- including the vendored copies
-        that ship inside skills, which are real files rather than symlinks.
-        """
+    def test_every_cadjs_lockfile_target_stamps_its_root_version(self) -> None:
+        """Every canonical or vendored cadjs lockfile stamps its own package version."""
         targets = json.loads(
             _node(
                 "const { jsonTargets } = await import(%s);\n"
@@ -81,11 +75,7 @@ class VersionSyncMirrorTests(unittest.TestCase):
         self.assertGreaterEqual(len(lockfiles), 2, "expected the canonical lockfile and its mirrors")
         for target in lockfiles:
             with self.subTest(path=target["path"]):
-                self.assertIn(
-                    ["packages", "../implicitjs", "version"],
-                    target["fields"],
-                    f"{target['path']} would ship a stale implicitjs version",
-                )
+                self.assertIn(["packages", "", "version"], target["fields"])
 
     def test_derived_metadata_is_synced_at_the_current_version(self) -> None:
         """The gate the Release workflow runs, at the version in VERSION."""

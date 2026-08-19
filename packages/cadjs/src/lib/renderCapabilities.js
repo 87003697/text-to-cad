@@ -6,9 +6,8 @@ import { RENDER_FORMAT, normalizeFormat } from "./fileFormats.js";
 // Every identity check spread through the client (`renderFormat === RENDER_FORMAT.DXF`,
 // `isMeshRenderFormat(...)`, the `xxxMode` boolean piles) is a place a new format has to
 // be hand-added and a place an improvement fails to reach the other formats. That is not
-// hypothetical: the Orbit button was gated off for implicit and for DXF independently and
-// had to be fixed twice, and implicit grew a whole parallel export route to an endpoint
-// the server does not implement. Both were "this format was not on the list" bugs.
+// hypothetical: the Orbit button was once gated off for DXF independently and had to be
+// fixed separately. That was a "this format was not on the list" bug.
 //
 // So: a format is a ROW here plus a render backend (see viewer/docs/render-types.md).
 // Shared behaviour lives in the viewer shell and reads this table; it is never re-derived
@@ -17,25 +16,19 @@ import { RENDER_FORMAT, normalizeFormat } from "./fileFormats.js";
 // Rules for changing this file:
 // - Add a capability when the SECOND format needs it, never speculatively.
 // - Capabilities are DATA. No behaviour, no imports beyond the format enum.
-// - Format-specific *content* (STEP's tree, DXF's bends, an implicit's graphics tab)
+// - Format-specific *content* (STEP's tree or DXF's bends)
 //   stays format-specific — the flags below decide WHICH panels mount, not what is in
 //   them.
 
-// Which loaded object is "the thing on screen" for this format. The viewer resolves it
-// once into a single content signal; asking `!selectedMeshData` is what left implicit's
-// screenshot and orbit buttons permanently disabled, since a raymarched model never
-// loads a mesh.
+// Which loaded object is "the thing on screen" for this format.
 export const VIEWPORT_CONTENT = Object.freeze({
   MESH: "mesh",
-  IMPLICIT: "implicit",
   ROBOT: "robot"
 });
 
-// How parameters reach the viewer: from a sibling `.step.js` sidecar module, or declared
-// inside the `.implicit.js` model itself. Different stores, one consumer surface.
+// How parameters reach the viewer from a sibling `.step.js` sidecar module.
 export const PARAMETER_SOURCE = Object.freeze({
-  SIDECAR: "sidecar",
-  MODULE: "module"
+  SIDECAR: "sidecar"
 });
 
 // WHICH ASSET the viewer loads for this format — not the same question as `content`, which
@@ -45,7 +38,7 @@ export const PARAMETER_SOURCE = Object.freeze({
 export const ASSET_KIND = Object.freeze({
   MESH: "mesh",
   DRAWING: "drawing",
-  IMPLICIT: "implicit",
+  GCODE: "gcode",
   ROBOT: "robot"
 });
 
@@ -54,7 +47,7 @@ export const ASSET_KIND = Object.freeze({
 export const ENTRY_ICON_KIND = Object.freeze({
   LOADING: "loading",
   DXF: "dxf",
-  IMPLICIT: "implicit",
+  GCODE: "gcode",
   ROBOT: "robot",
   STEP: "step",
   STL_MESH: "stl-mesh",
@@ -143,8 +136,7 @@ const DEFAULT_CAPABILITIES = Object.freeze({
   displayModes: false,
   clip: false,
   planView: false,
-  // Projection is a THEME trait. Every format honours it; only the implicit raymarcher
-  // needed shader work to accept a parallel-ray camera.
+  // Projection is a theme trait honored by every format.
   themeProjection: true,
   params: null,
   animations: false,
@@ -152,12 +144,7 @@ const DEFAULT_CAPABILITIES = Object.freeze({
   // Formats whose VIEWPORT CONTENT comes from a generated package, so the viewer checks
   // freshness and may block on a build.
   //
-  // This is a SUBSET of `owns_entry` in viewer/server_py/artifact.py, not a mirror of it.
-  // The server also owns implicit entries — it builds their packages for export and
-  // snapshot — but an implicit renders live from its own GLSL, so the viewer must never
-  // wait on that build. Anything listed here and NOT owned by the server blocks forever;
-  // adding implicit here to "fix the drift" would block a format that has nothing to wait
-  // for.
+  // This is a subset of `owns_entry` in viewer/server_py/artifact.py`, not a mirror of it.
   artifactManaged: false,
   // The command that rebuilds this entry's assets by hand, shown on a build-failure card.
   // Empty for everything the viewer can rebuild itself or that IS its own asset — which is
@@ -207,19 +194,14 @@ export const RENDER_CAPABILITIES = Object.freeze({
     artifactManaged: true,
     exportFormats: Object.freeze(["dxf"])
   }),
-  [RENDER_FORMAT.IMPLICIT]: Object.freeze({
+  [RENDER_FORMAT.GCODE]: Object.freeze({
     ...DEFAULT_CAPABILITIES,
-    content: VIEWPORT_CONTENT.IMPLICIT,
-    assetKind: ASSET_KIND.IMPLICIT,
-    iconKind: ENTRY_ICON_KIND.IMPLICIT,
-    sheetKind: RENDER_FORMAT.IMPLICIT,
-    label: "Implicit",
-    params: PARAMETER_SOURCE.MODULE,
-    animations: true,
-    // Rendered live from its own GLSL: there is no baked artifact to be stale, so an
-    // implicit never blocks on a build and never shows a generating state.
+    assetKind: ASSET_KIND.GCODE,
+    iconKind: ENTRY_ICON_KIND.GCODE,
+    sheetKind: RENDER_FORMAT.GCODE,
+    label: "G-code",
     artifactManaged: false,
-    exportFormats: Object.freeze(["stl", "glb", "3mf"])
+    exportFormats: Object.freeze([])
   }),
   [RENDER_FORMAT.URDF]: Object.freeze({ ...DEFAULT_CAPABILITIES, ...ROBOT_CAPABILITIES, label: "URDF" }),
   [RENDER_FORMAT.SRDF]: Object.freeze({

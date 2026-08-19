@@ -11,7 +11,7 @@
  *
  * Contract:
  *   node dxf-artifact.mjs --package-dir <abs> --run-id <id> [--name N]  < drawing.dxf
- *   stdout is NDJSON progress + exactly one terminal `result` line (implicitjs progressStream).
+ *   stdout is NDJSON progress + exactly one terminal `result` line.
  *   Anything it wants to SAY goes to stderr, which the parent captures and echoes.
  *
  * The drawing arrives on STDIN, never as a path. That is what makes an imported drawing and a
@@ -33,11 +33,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { MeshoptEncoder } from "meshoptimizer";
-import { assertWriteLock } from "implicitjs/glb/assertWriteLock.js";
+import { assertWriteLock } from "cadjs/glb/assertWriteLock.js";
 import {
   reportPhase,
   reportResult,
-} from "implicitjs/glb/progressStream.js";
+} from "cadjs/glb/progressStream.js";
 
 import { parseDxf } from "../src/lib/dxf/parseDxf.js";
 import {

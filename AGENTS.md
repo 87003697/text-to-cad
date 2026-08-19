@@ -39,8 +39,10 @@ don't need this file.
 - `.claude-plugin/`, `.codex-plugin/`: provider manifests for the
   repo-root plugin package
 - `VERSION`: canonical repository/plugin release version
-- `packages/cadjs`, `packages/implicitjs`, `packages/cadpy`,
-  `packages/cadpy_*`: shared runtime code (framework-agnostic, siblings
+- `plugins/`: versioned plugin packages bundling repo skills
+- `packages/cadjs`, `packages/cadgen`, `packages/agent_runtime`,
+  `packages/browser_runtime`, `packages/meshscope`, and `packages/meshshot`:
+  shared runtime code (framework-agnostic, siblings
   do not import each other)
 - `viewer/`: editable CAD Viewer source app
 - `docs/`: documentation site

@@ -85,12 +85,6 @@ const skillGroups = [
     summary:
       "Dry-runs, uploads, and cautiously starts local Bambu Lab print jobs from validated .gcode.",
   },
-  {
-    name: "Implicit CAD",
-    path: "skills/implicit-cad",
-    summary:
-      "Creates browser-native implicit CAD models using GLSL signed-distance fields and CAD Viewer raymarch rendering. Experimental.",
-  },
 ];
 
 // Command boxes cap at half the 1200px content shell rather than filling it: a command is a

@@ -55,7 +55,6 @@ class CvmSyncContractTests(unittest.TestCase):
             "CVM production staging failed; no files transferred",
             module,
         )
-        self.assertIn("IMPLICIT_NODE_MODULES_INCLUDE", module)
         self.assertIn('"/.cvm-agent-jobs/"', module)
         self.assertIn('["ssh", "-n", "cvm", command]', module)
         self.assertNotIn("prepare_remote_runtime_dirs", module)

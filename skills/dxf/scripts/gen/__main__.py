@@ -23,7 +23,7 @@ if os.environ.get("PYTHONHASHSEED") != "0":
     raise SystemExit(subprocess.run([sys.executable, *sys.argv], check=False).returncode)
 
 # Prefer the skill's bundled cadgen over any pip-installed copy, exactly as
-# skills/cad/scripts/gen/__main__.py and skills/implicit-cad/scripts/gen/__main__.py do.
+# skills/cad/scripts/gen/__main__.py does.
 # This skill got away without it only because its requirements.txt installs
 # `--editable ./scripts/packages/cadgen`; run without that install and it silently binds
 # whichever cadgen is on the interpreter's path -- a different checkout, at a different

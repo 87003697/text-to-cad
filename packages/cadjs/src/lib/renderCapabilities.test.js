@@ -52,14 +52,13 @@ test("viewport content kinds are known", () => {
   for (const [format, row] of Object.entries(RENDER_CAPABILITIES)) {
     assert.ok(kinds.has(row.content), `${format} has unknown content kind ${row.content}`);
   }
-  assert.equal(viewportContentKind(RENDER_FORMAT.IMPLICIT), VIEWPORT_CONTENT.IMPLICIT);
   assert.equal(viewportContentKind(RENDER_FORMAT.STL), VIEWPORT_CONTENT.MESH);
   assert.equal(viewportContentKind(RENDER_FORMAT.URDF), VIEWPORT_CONTENT.ROBOT);
 });
 
 test("orbit and screenshot are available to every format", () => {
   // These act on the viewport, not the geometry. Gating them per format is what
-  // produced the same dead-button bug for implicit and DXF independently.
+  // produced a dead-button bug for DXF.
   for (const format of Object.values(RENDER_FORMAT)) {
     assert.equal(supportsTool(format, "orbit"), true, `${format} lost orbit`);
     assert.equal(supportsTool(format, "screenshot"), true, `${format} lost screenshot`);
@@ -110,19 +109,8 @@ test("measure does not imply topology", () => {
   assert.equal(hasCapability(RENDER_FORMAT.DXF, "measure"), false);
 });
 
-test("implicit renders live: parameters from its module, never artifact-managed", () => {
-  const implicit = renderCapabilities(RENDER_FORMAT.IMPLICIT);
-  assert.equal(implicit.params, PARAMETER_SOURCE.MODULE);
-  assert.equal(implicit.animations, true);
-  assert.equal(implicit.artifactManaged, false);
-  assert.deepEqual([...implicit.exportFormats], ["stl", "glb", "3mf"]);
-});
-
 test("artifact-managed formats are exactly STEP and DXF", () => {
-  // A SUBSET of owns_entry in viewer/server_py/artifact.py, which also owns implicit
-  // entries — the server builds implicit packages for export and snapshot, but the viewer
-  // raymarches the model live and must never wait on that build. A format listed here that
-  // the server does not own blocks forever; implicit is the reverse case and belongs out.
+  // A format listed here that the server does not own blocks forever.
   const managed = Object.values(RENDER_FORMAT).filter((format) => isArtifactManagedFormat(format));
   assert.deepEqual(managed.sort(), [RENDER_FORMAT.DXF, RENDER_FORMAT.STEP].sort());
 });

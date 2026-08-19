@@ -8,12 +8,6 @@ export const STEP_EXPORT_FORMATS = Object.freeze(["step", "3mf", "stl", "glb"]);
 // A generated `.dxf.py` drawing exports its native format only.
 export const DXF_EXPORT_FORMATS = Object.freeze(["dxf"]);
 
-// An `.implicit.js` model exports to mesh formats only — its own source is the "native"
-// file and there is nothing to download. The mesh is produced by the shipped implicitjs
-// export CLI, run SERVER-side (cadgen.implicit_export): unlike the baked render package it
-// is live-valued, so the exporter's own resolution/params defaults apply.
-export const IMPLICIT_EXPORT_FORMATS = Object.freeze(["stl", "glb", "3mf"]);
-
 const EMPTY_EXPORT_FORMATS = Object.freeze([]);
 
 const EXPORT_FORMAT_LABELS = Object.freeze({
@@ -57,14 +51,13 @@ function normalizedFormat(value) {
   const format = String(value || "").trim().toLowerCase().replace(/^\./, "");
   return STEP_EXPORT_FORMATS.includes(format)
     || DXF_EXPORT_FORMATS.includes(format)
-    || IMPLICIT_EXPORT_FORMATS.includes(format)
     ? format
     : "";
 }
 
-// Request a server-side export of one model — STEP/assembly, `.dxf.py` drawing, or
-// `.implicit.js` model — to `format`, written to a path the user picks via the OS-native
-// save dialog. ONE route for all three: the server picks the producer from the source file,
+// Request a server-side export of one model — STEP/assembly or `.dxf.py` drawing — to
+// `format`, written to a path the user picks via the OS-native save dialog. The server picks
+// the producer from the source file,
 // so nothing about which geometry runtime meshes it reaches the browser. Resolves to one of:
 //   { cancelled: true }                       — user dismissed the save dialog (not an error)
 //   { ok, path, filename, format }            — written directly to the chosen path
@@ -105,7 +98,7 @@ export async function requestModelExport({ file, format } = {}) {
 
 // The single answer to "what can this entry export to?", read from the capability table.
 // Both menus (the toolbar dropdown and the file context menu) used to re-derive this from
-// entry.kind independently, which is how implicit ended up in one and not the other.
+// entry.kind independently, which previously caused the menus to drift.
 // Returns an empty list for entries with nothing to export.
 export function exportFormatsForEntry(entry) {
   if (!entry) {

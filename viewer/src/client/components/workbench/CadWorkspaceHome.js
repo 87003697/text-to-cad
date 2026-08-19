@@ -15,7 +15,7 @@ import {
 
 const MAX_HOME_OPTIONS = 6;
 
-const HOME_GROUP_ORDER = ["assembly", "step", "dxf", "implicit", "robot", "mesh"];
+const HOME_GROUP_ORDER = ["assembly", "step", "dxf", "gcode", "robot", "mesh"];
 
 function homeGroupForEntry(entry) {
   if (entry?.kind === "assembly") {

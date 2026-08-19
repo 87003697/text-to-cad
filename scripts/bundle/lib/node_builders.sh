@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Shared helpers for shipping cadgen's Node builders inside a skill runtime.
 #
-# cadgen builds the implicit and DXF render packages by spawning a Node child
+# cadgen builds DXF render packages by spawning a Node child
 # (packages/cadgen/src/cadgen/_internal/node_runtime.py). The builders themselves live in
-# packages/cadjs/bin and import three, meshoptimizer and implicitjs -- a dependency GRAPH,
+# packages/cadjs/bin and imports three and meshoptimizer -- a dependency graph,
 # not just a file. A published skill ships no node_modules (design
 # §4.5, "Node the binary is available; the dependency graph is not"), so the builders are
 # esbuild-bundled into ONE self-contained --platform=node file each, exactly as
@@ -27,12 +27,6 @@
 NODE_BUILDER_ESBUILD_VERSION="${NODE_BUILDER_ESBUILD_VERSION:-0.27.7}"
 NODE_BUILDER_BUILD_DEPS_DIR="${NODE_BUILDER_BUILD_DEPS_DIR:-${BUNDLE_REPO_ROOT:?BUNDLE_REPO_ROOT must be set before sourcing node_builders.sh}/tmp/node-builder-build}"
 NODE_BUILDER_LOCKFILE="$BUNDLE_REPO_ROOT/packages/cadjs/package-lock.json"
-
-# Files whose runtime paths are computed from `import.meta.url` inside the bundle, so they
-# cannot be inlined and must be emitted BESIDE it under the same basename:
-#   implicitClosureHooks.mjs  <- register("./implicitClosureHooks.mjs", import.meta.url)
-#   meshWorkerEntry.js        <- new Worker(new URL("./meshWorkerEntry.js", import.meta.url))
-# Every other import in both builder graphs is a plain static import and gets inlined.
 
 node_builder_locked_version() {
   local name="$1"
@@ -107,10 +101,8 @@ bundle_node_builders() {
       return 1
     fi
     basename_out="$(basename "$entry")"
-    # NODE_PATH resolves the bare `implicitjs/...` specifiers through implicitjs's exports
-    # map and the pinned three/meshoptimizer out of the tmp toolchain, so the bundle is
-    # hermetic on a fresh checkout with no packages/*/node_modules. A directory --alias
-    # cannot do the first: it bypasses the exports map.
+    # NODE_PATH resolves cadjs and the pinned three/meshoptimizer out of the tmp toolchain,
+    # keeping the bundle hermetic on a fresh checkout with no packages/*/node_modules.
     NODE_PATH="$BUNDLE_REPO_ROOT/packages:$NODE_BUILDER_BUILD_DEPS_DIR/node_modules" \
       "$NODE_BUILDER_BUILD_DEPS_DIR/node_modules/.bin/esbuild" "$entry" \
       --bundle \

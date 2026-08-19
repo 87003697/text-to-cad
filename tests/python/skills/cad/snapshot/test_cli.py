@@ -864,19 +864,6 @@ class SnapshotCliTests(unittest.TestCase):
             )
         self.assertEqual(packet["jobs"][0]["resolved"]["debug"], {"meshSource": {"kind": "stl"}})
 
-    def test_render_job_surfaces_implicit_source_debug_when_requested(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = self._mesh_job_env(temporary_directory, "pulse.implicit.js", b"export default {};\n")
-            packet = resolve_render_job_packet(
-                {
-                    "input": "models/pulse.implicit.js",
-                    "debug": True,
-                    "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
-                },
-                cwd=root,
-            )
-        self.assertEqual(packet["jobs"][0]["resolved"]["debug"], {"implicitSource": {"kind": "implicit"}})
-
     def test_render_job_rejects_top_level_selection_shaped_keys(self) -> None:
         # "hide"/"focus" at top level were historically dropped without a word,
         # so the render completed with nothing hidden. The rejection names the
@@ -1058,61 +1045,9 @@ class SnapshotCliTests(unittest.TestCase):
             )
         self.assertEqual(packet["jobs"][0]["display"], {"mode": "solid", "projection": "orthographic"})
 
-    def test_input_kind_detects_implicit_modules(self) -> None:
-        self.assertEqual(snapshot_main.input_kind(Path("models/pulse.implicit.js")), "implicit")
-        # A plain .js file is not an implicit model and stays unsupported.
-        self.assertEqual(snapshot_main.input_kind(Path("models/helper.js")), "")
-
-    def test_render_job_resolves_implicit_module_without_step_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = self._mesh_job_env(temporary_directory, "pulse.implicit.js", b"export default {};\n")
-            calls = []
-
-            def fake_ensure(target, **kwargs):
-                calls.append(kwargs)
-                return None
-
-            original_ensure = snapshot_main.ensure_step_topology_artifact
-            try:
-                snapshot_main.ensure_step_topology_artifact = fake_ensure
-                packet = resolve_render_job_packet(
-                    {
-                        "input": "models/pulse.implicit.js",
-                        "outputs": [{"path": "tmp/iso.png", "camera": "iso"}],
-                    },
-                    cwd=root,
-                )
-            finally:
-                snapshot_main.ensure_step_topology_artifact = original_ensure
-
-        # Implicit inputs skip the STEP artifact pipeline entirely.
-        self.assertEqual(calls, [])
-        job = packet["jobs"][0]
-        resolved = job["resolved"]
-        self.assertEqual(resolved["kind"], "implicit")
-        self.assertTrue(urlparse(str(resolved["inputUrl"])).path.endswith("pulse.implicit.js"))
-        self.assertEqual(resolved["inputUrl"], resolved["url"])
-
-    def test_render_job_supports_orbit_for_implicit_input(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = self._mesh_job_env(temporary_directory, "pulse.implicit.js", b"export default {};\n")
-            packet = resolve_render_job_packet(
-                {"input": "models/pulse.implicit.js", "mode": "orbit", "outputs": [{"path": "tmp/orbit.gif"}]},
-                cwd=root,
-            )
-        self.assertEqual(packet["jobs"][0]["mode"], "orbit")
-        self.assertEqual(packet["jobs"][0]["resolved"]["kind"], "implicit")
-
     def test_render_job_rejects_static_gif_outside_orbit_mode(self) -> None:
         # A .gif output in a static job would silently save a single frame; the
         # CLI must instead point at orbit mode or animated params.
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = self._mesh_job_env(temporary_directory, "pulse.implicit.js", b"export default {};\n")
-            with self.assertRaisesRegex(SnapshotError, "renders a single frame.*--mode orbit"):
-                resolve_render_job_packet(
-                    {"input": "models/pulse.implicit.js", "outputs": [{"path": "tmp/spin.gif"}]},
-                    cwd=root,
-                )
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = self._mesh_job_env(temporary_directory, "widget.glb", b"glTF")
             with self.assertRaisesRegex(SnapshotError, "renders a single frame.*--mode orbit"):
@@ -1153,26 +1088,6 @@ class SnapshotCliTests(unittest.TestCase):
 
         self.assertEqual(packet["jobs"][0]["mode"], "view")
         self.assertTrue(str(packet["jobs"][0]["outputs"][0]["path"]).endswith(".gif"))
-
-    def test_render_job_rejects_step_only_options_for_implicit_input(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = self._mesh_job_env(temporary_directory, "pulse.implicit.js", b"export default {};\n")
-            base = {"input": "models/pulse.implicit.js", "outputs": [{"path": "tmp/iso.png", "camera": "iso"}]}
-            with self.assertRaisesRegex(SnapshotError, "list mode is not supported for implicit"):
-                resolve_render_job_packet({**base, "mode": "list", "outputs": []}, cwd=root)
-            with self.assertRaisesRegex(SnapshotError, "selection focus/hide/refs require STEP topology"):
-                resolve_render_job_packet({**base, "selection": {"focus": ["#o1.2"]}}, cwd=root)
-            with self.assertRaisesRegex(SnapshotError, "display mode is not supported for implicit"):
-                resolve_render_job_packet({**base, "display": {"mode": "wireframe"}}, cwd=root)
-            with self.assertRaisesRegex(SnapshotError, "exploded view requires STEP assembly"):
-                resolve_render_job_packet(
-                    {**base, "display": {"exploded": {"enabled": True, "amount": 1}}}, cwd=root
-                )
-            # stepParameters and section mode are STEP-only for implicit inputs too.
-            with self.assertRaisesRegex(SnapshotError, "stepParameters require a STEP model"):
-                resolve_render_job_packet({**base, "stepParameters": {"width": 5}}, cwd=root)
-            with self.assertRaisesRegex(SnapshotError, "section mode is not supported for implicit"):
-                resolve_render_job_packet({**base, "mode": "section"}, cwd=root)
 
     def test_input_kind_detects_robot_descriptions(self) -> None:
         self.assertEqual(snapshot_main.input_kind(Path("robots/arm.urdf")), "urdf")

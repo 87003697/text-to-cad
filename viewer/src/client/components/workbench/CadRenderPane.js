@@ -18,9 +18,7 @@ import { TUTORIAL_TIP_IDS } from "@/workbench/persistence";
 import {
   PARAMETER_SOURCE,
   renderCapabilities,
-  supportsTool,
-  viewportContentKind,
-  VIEWPORT_CONTENT
+  supportsTool
 } from "cadjs/lib/renderCapabilities";
 import {
   CAMERA_PROJECTION,
@@ -259,9 +257,6 @@ export default function CadRenderPane({
   renderFormat,
   renderPartsIndividually = false,
   selectedMeshData,
-  selectedImplicitModel,
-  implicitDynamicRenderActive = false,
-  implicitGraphicsSettings = null,
   selectedKey,
   missingFileRef = "",
   viewerServerInfo = null,
@@ -376,11 +371,9 @@ export default function CadRenderPane({
   // One capability lookup replaces the per-format mode booleans. Every gate below asks
   // what this format CAN do; none of them ask what it IS.
   const capabilities = renderCapabilities(renderFormat);
-  const implicitMode = viewportContentKind(renderFormat) === VIEWPORT_CONTENT.IMPLICIT;
   const drawEnabled = supportsTool(renderFormat, "draw");
-  // Formats with no per-part topology to select, annotate or explode: a plain mesh has
-  // no parts, and an implicit is a single SDF body. Both hand the viewer the same
-  // stripped-down prop set.
+  // Formats with no per-part topology to select, annotate or explode hand the viewer
+  // the same stripped-down prop set.
   const hasParts = capabilities.parts;
   const hasTopology = capabilities.topology;
   const displaySettingsActive = capabilities.displayModes && !!displaySettings;
@@ -425,10 +418,7 @@ export default function CadRenderPane({
   // Is there anything on screen? For every mesh-backed format that means mesh data -- DXF
   // included, since it lost its 2D fallback in phase 3a and now renders its baked preview,
   // so a failed build must read as "nothing renderable" and let the viewer alert block.
-  // An IMPLICIT renders by raymarching its own GLSL and never has mesh data, so asking the
-  // same question of it would treat every healthy implicit as an empty viewport; its content
-  // is the loaded model instead.
-  const viewportHasRenderableContent = implicitMode ? !!selectedImplicitModel : !!selectedMeshData;
+  const viewportHasRenderableContent = !!selectedMeshData;
   const ctaMode = drawEnabled && drawToolActive
     ? "screenshot"
     : (hasParts || hasTopology) && selectionCount > 0
@@ -533,9 +523,6 @@ export default function CadRenderPane({
       <CadViewer
         ref={viewerRef}
         meshData={selectedMeshData}
-        implicitModel={implicitMode ? selectedImplicitModel : null}
-        implicitGraphicsSettings={implicitMode ? implicitGraphicsSettings : null}
-        implicitDynamicRenderActive={implicitMode ? implicitDynamicRenderActive : false}
         modelKey={selectedKey}
         renderFormat={renderFormat}
         drawingThicknessScale={drawingThicknessScale}

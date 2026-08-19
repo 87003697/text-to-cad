@@ -49,19 +49,6 @@ _FORBIDDEN_ARCHIVE_MARKERS = (
     "runtime/render.html",
     "runtime/residual-render.js",
 )
-_IMPLICIT_FILES = (
-    "scripts/canonical-build.mjs",
-    "src/common/parameters.js",
-    "src/lib/implicitCad/animation.js",
-    "src/lib/implicitCad/canonicalBuild.js",
-    "src/lib/implicitCad/canonicalBuildWorker.mjs",
-    "src/lib/implicitCad/exportModel.js",
-    "src/lib/implicitCad/exporters.js",
-    "src/lib/implicitCad/mesh.js",
-    "src/lib/implicitCad/model.js",
-    "src/lib/implicitCad/schema.js",
-    "src/lib/implicitCad/sdfEvaluator.js",
-)
 _MESHSHOT_SOURCE_FILES = (
     "pyproject.toml",
     "src/meshshot/__init__.py",
@@ -655,66 +642,6 @@ def audit_meshshot_wheel(wheel: Path, source: Mapping[str, Any]) -> dict[str, An
         },
         "files": sorted(wheel_payloads),
     }
-
-
-def generate_implicit_runtime(repo_root: Path, output_root: Path) -> dict[str, Any]:
-    """Vendor the exact dependency-free canonical-build module graph."""
-
-    source = repo_root / "packages/implicitjs"
-    target = output_root / "implicit-runtime"
-    if target.exists():
-        raise ProjectClosureError("implicit runtime output must not already exist")
-    for relative in _IMPLICIT_FILES:
-        source_path = source / relative
-        if not source_path.is_file() or source_path.is_symlink():
-            raise ProjectClosureError(f"implicit source is not a regular file: {relative}")
-        destination = target / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source_path, destination)
-    records = _tree_records(target, _IMPLICIT_FILES)
-    if tuple(record["path"] for record in records) != tuple(sorted(_IMPLICIT_FILES)):
-        raise ProjectClosureError("implicit canonical source graph is not exact")
-    admitted = set(_IMPLICIT_FILES)
-    for relative in _IMPLICIT_FILES:
-        source_text = (target / relative).read_text(encoding="utf-8")
-        for specifier in re.findall(
-            r"(?:\bfrom\s+|\bimport\s*\()\s*['\"]([^'\"]+)", source_text
-        ):
-            if specifier.startswith("node:"):
-                continue
-            if not specifier.startswith("."):
-                raise ProjectClosureError(
-                    f"implicit canonical source has an npm import: {specifier}"
-                )
-            resolved = (PurePosixPath(relative).parent / specifier).as_posix()
-            normalized_parts: list[str] = []
-            for part in PurePosixPath(resolved).parts:
-                if part == "..":
-                    if not normalized_parts:
-                        raise ProjectClosureError("implicit import escapes the runtime root")
-                    normalized_parts.pop()
-                elif part != ".":
-                    normalized_parts.append(part)
-            normalized = "/".join(normalized_parts)
-            if normalized not in admitted:
-                raise ProjectClosureError(
-                    f"implicit canonical import is outside the closed graph: {normalized}"
-                )
-    record = {
-        "schema": "text-to-cad.implicit-runtime-files/1",
-        "entrypoint": "scripts/canonical-build.mjs",
-        "bundlePath": "implicit-runtime",
-        "runtimeDependencies": [],
-        "fileCount": len(records),
-        "filesDigest": _record_digest(records),
-        "bundleDigest": _record_digest(records),
-        "fileManifestDigest": _record_digest(records),
-        "files": records,
-    }
-    (target / "implicit-runtime-manifest.json").write_bytes(
-        canonical_json_bytes(record) + b"\n"
-    )
-    return record
 
 
 def audit_meshscope_wheel(
@@ -1822,15 +1749,14 @@ def assemble_meshscope_development_candidate(
 
 
 def build_project_manifest(
-    *, meshshot: Mapping[str, Any], meshscope: Mapping[str, Any], implicit: Mapping[str, Any]
+    *, meshshot: Mapping[str, Any], meshscope: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Bind the three project-owned artifacts without external dependency bytes."""
+    """Bind the project-owned mesh artifacts without external dependency bytes."""
 
     manifest = {
         "schema": "text-to-cad.agent-runtime-project-closure/1",
         "platform": {"architecture": "amd64", "os": "linux", "pythonAbi": "cp312"},
         "pythonArtifacts": [dict(meshscope), dict(meshshot)],
-        "implicitRuntime": dict(implicit),
     }
     validate_project_manifest(manifest)
     return manifest
@@ -1858,47 +1784,11 @@ def _validate_wheel_identity(
         raise ProjectClosureError(f"{distribution} source manifest binding is invalid")
 
 
-def _validate_implicit_record(implicit: Mapping[str, Any]) -> None:
-    expected_keys = {
-        "schema",
-        "entrypoint",
-        "bundlePath",
-        "runtimeDependencies",
-        "fileCount",
-        "filesDigest",
-        "bundleDigest",
-        "fileManifestDigest",
-        "files",
-    }
-    if set(implicit) != expected_keys or (
-        implicit.get("schema"),
-        implicit.get("entrypoint"),
-        implicit.get("bundlePath"),
-        implicit.get("fileCount"),
-    ) != (
-        "text-to-cad.implicit-runtime-files/1",
-        "scripts/canonical-build.mjs",
-        "implicit-runtime",
-        len(_IMPLICIT_FILES),
-    ):
-        raise ProjectClosureError("implicit project artifact shape is invalid")
-    dependencies = implicit.get("runtimeDependencies")
-    if not isinstance(dependencies, (list, tuple)) or dependencies:
-        raise ProjectClosureError("implicit project dependencies are invalid")
-    records = _validate_file_records(implicit.get("files"), _IMPLICIT_FILES)
-    digest = _record_digest(records)
-    if any(
-        implicit.get(field) != digest
-        for field in ("filesDigest", "bundleDigest", "fileManifestDigest")
-    ):
-        raise ProjectClosureError("implicit project artifact digest is invalid")
-
-
 def validate_project_manifest(value: Mapping[str, Any]) -> None:
-    """Reject any project closure that is not the exact Cup runtime surface."""
+    """Reject any project closure outside the exact mesh runtime surface."""
 
     if not isinstance(value, Mapping) or set(value) != {
-        "schema", "platform", "pythonArtifacts", "implicitRuntime"
+        "schema", "platform", "pythonArtifacts"
     }:
         raise ProjectClosureError("project closure manifest shape is invalid")
     if (
@@ -1958,10 +1848,6 @@ def validate_project_manifest(value: Mapping[str, Any]) -> None:
         "localBrowserRuntimeAbsent": True,
     }:
         raise ProjectClosureError("meshshot browser denial is invalid")
-    implicit = value.get("implicitRuntime")
-    if not isinstance(implicit, Mapping):
-        raise ProjectClosureError("implicit project artifact is not an object")
-    _validate_implicit_record(implicit)
 
 
 def _write_record(path: Path, value: Mapping[str, Any]) -> None:
@@ -2039,10 +1925,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "prepare":
         meshshot = generate_meshshot_distribution(args.repo_root.resolve(), args.output)
         meshscope = meshscope_source_record(args.repo_root.resolve())
-        implicit = generate_implicit_runtime(args.repo_root.resolve(), args.output)
         _write_record(args.output / "meshshot-source-manifest.json", meshshot)
         _write_record(args.output / "meshscope-source-manifest.json", meshscope)
-        _write_record(args.output / "implicit-runtime-record.json", implicit)
     elif args.command == "record-meshscope-source":
         _write_record(
             args.record, meshscope_source_record(args.repo_root.resolve())

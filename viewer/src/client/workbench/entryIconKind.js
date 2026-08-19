@@ -14,8 +14,6 @@ export { ENTRY_ICON_KIND };
 // an imported `.step` assembly read alike in the file list. Being code-derived
 // is carried by the small badge in the icon's bottom-right corner instead.
 //
-// An `.implicit.js` is not included: it is not generated FROM code, it IS the
-// code, so it keeps its own icon and takes no badge.
 export function isCodeDerivedEntry(entry) {
   if (String(entry?.sourceKind || "").trim().toLowerCase() === "python") {
     return true;
@@ -33,7 +31,7 @@ export function isCodeDerivedEntry(entry) {
 // as data instead of re-deriving it from eight format comparisons.
 const ICON_KIND_PRECEDENCE = [
   ENTRY_ICON_KIND.DXF,
-  ENTRY_ICON_KIND.IMPLICIT,
+  ENTRY_ICON_KIND.GCODE,
   ENTRY_ICON_KIND.ROBOT,
   ENTRY_ICON_KIND.STL_MESH,
   ENTRY_ICON_KIND.THREE_MF_MESH,
@@ -63,6 +61,5 @@ export function entryIconKind(entry, {
   if (normalizedKind === "srdf") {
     candidates.add(ENTRY_ICON_KIND.ROBOT);
   }
-
   return ICON_KIND_PRECEDENCE.find((iconKind) => candidates.has(iconKind)) || ENTRY_ICON_KIND.STEP;
 }

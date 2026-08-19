@@ -50,7 +50,6 @@ from typing import Any, Callable, Iterator
 from cadgen.coordination import record as _record
 from cadgen.coordination.kinds import (
     DRAWING_PACKAGE,
-    IMPLICIT_PACKAGE,
     PHASE_BROWSER,
     PHASE_RENDER,
     SNAPSHOT,
@@ -91,7 +90,6 @@ __all__ = [
     "BuildRun",
     "Contended",
     "DRAWING_PACKAGE",
-    "IMPLICIT_PACKAGE",
     "PHASE_BROWSER",
     "PHASE_RENDER",
     "SNAPSHOT",
@@ -225,7 +223,7 @@ class BuildRun:
         # was started by the lock holder by matching its run id against the sentinel, and a
         # degraded run never stamped one. This flag is the only way the child can tell "no
         # lock was taken here" from "you are not the holder", which are the same empty
-        # sentinel from where it stands. See implicitjs/glb/assertWriteLock.js.
+        # sentinel from where it stands.
         self.degraded = degraded
 
     def phase(self, name: str, *, total: int | None = None, detail: str = "") -> None:

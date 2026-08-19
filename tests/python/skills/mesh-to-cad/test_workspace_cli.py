@@ -26,7 +26,6 @@ CLI_PATH = (
 )
 MESH_COMPARE_PATH = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare"
 CAD_BUILD_PATH = REPO_ROOT / "skills/cad/scripts/canonical-build"
-IMPLICIT_BUILD_PATH = REPO_ROOT / "skills/implicit-cad/scripts/canonical-build.mjs"
 MESH_COMPARE_ENTRYPOINT = MESH_COMPARE_PATH / "cli.py"
 CAD_BUILD_ENTRYPOINT = CAD_BUILD_PATH / "__main__.py"
 PREVIEW_PROFILE_PATH = (
@@ -158,10 +157,7 @@ class WorkspaceCliTests(unittest.TestCase):
                 },
             },
         )
-        _write_json(
-            prepared / "setup/route.json",
-            {"schema": "mesh-to-cad.route/1", "route": "cad"},
-        )
+        (prepared / "setup").mkdir()
         _write_json(
             prepared / "experiment.json",
             {
@@ -173,10 +169,42 @@ class WorkspaceCliTests(unittest.TestCase):
                     "name": "cadena_residual_eight_view/1",
                     "sha256": self.profile_sha,
                 },
-                "route": "cad",
             },
         )
         return prepared
+
+    def test_init_rejects_retired_implicit_metadata(self) -> None:
+        prepared = self.prepared_setup()
+        experiment_path = prepared / "experiment.json"
+        experiment = json.loads(experiment_path.read_text(encoding="utf-8"))
+        experiment["route"] = "implicit"
+        _write_json(experiment_path, experiment)
+
+        status, rejected, _stderr = self.invoke(
+            "init", "--workspace", str(self.workspace), "--prepared", str(prepared)
+        )
+
+        self.assertEqual(2, status)
+        self.assertEqual("invalid_setup", rejected["error"]["classification"])
+        self.assertIn("implicit CAD experiment is unsupported", rejected["error"]["detail"])
+
+    def test_registered_rebuild_recipe_rejects_retired_route_metadata(self) -> None:
+        workspace_core = sys.modules["workspace_core"]
+        recipe = {
+            "schema": "mesh-to-cad.rebuild-recipe/1",
+            "executable": "cad.canonical-build/1",
+            "workingDirectory": ".",
+            "network": "forbidden",
+            "ambientInputs": "forbidden",
+            "inputs": [{"id": "source"}],
+            "route": "cad",
+        }
+
+        with self.assertRaises(self.cli.WorkspaceError) as raised:
+            workspace_core._validate_registered_recipe_document(recipe)
+
+        self.assertEqual("invalid_rebuild_recipe", raised.exception.classification)
+        self.assertEqual("$.rebuild_recipe.route", raised.exception.path)
 
     def initial_plan(self) -> Path:
         plan = self.root / "initial-plan.json"
@@ -617,10 +645,7 @@ class WorkspaceCliTests(unittest.TestCase):
         )
         self.reference_sha = input_document["canonical_reference_sha256"]
         self.profile_sha = _sha(PREVIEW_PROFILE_PATH.read_bytes())
-        _write_json(
-            prepared / "setup/route.json",
-            {"schema": "mesh-to-cad.route/1", "route": "cad"},
-        )
+        (prepared / "setup").mkdir(exist_ok=True)
         _write_json(
             prepared / "experiment.json",
             {
@@ -632,97 +657,6 @@ class WorkspaceCliTests(unittest.TestCase):
                     "name": "cadena_residual_eight_view/1",
                     "sha256": self.profile_sha,
                 },
-                "route": "cad",
-            },
-        )
-        return prepared, candidate
-
-    def canonical_implicit_flow(self, *, accepted: bool) -> tuple[Path, Path]:
-        candidate = self.workspace / "work" / "canonical-implicit"
-        (candidate / "source").mkdir(parents=True)
-        source = candidate / "source/model.implicit.js"
-
-        def write_source(half_x: float) -> None:
-            source.write_text(
-                "\n".join(
-                    (
-                        "export default {",
-                        '  schema: "implicit.js/0.1.0",',
-                        '  name: "canonical thin box",',
-                        '  units: "unitless",',
-                        "  bounds: [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],",
-                        f"  glsl: `float sdf(vec3 p) {{ vec3 q = abs(p) - vec3({half_x}, 0.005, 0.005); return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0); }}`",
-                        "};",
-                        "",
-                    )
-                ),
-                encoding="utf-8",
-            )
-
-        def build() -> None:
-            built = subprocess.run(
-                (
-                    "node",
-                    str(IMPLICIT_BUILD_PATH),
-                    "--source",
-                    "source/model.implicit.js",
-                    "--output-dir",
-                    "built",
-                    "--json",
-                ),
-                cwd=candidate,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            self.assertEqual(0, built.returncode, built.stderr)
-
-        write_source(0.5)
-        build()
-        candidate_mesh = candidate / "built/artifacts/model.glb"
-        prepared = self.root / "prepared-canonical-implicit"
-        reference = prepared / "input"
-        prepared.mkdir()
-        created = subprocess.run(
-            (
-                sys.executable,
-                str(MESH_COMPARE_PATH),
-                "voxblame-prepare-reference",
-                str(candidate_mesh),
-                "--output",
-                str(reference),
-            ),
-            cwd=REPO_ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        self.assertEqual(0, created.returncode, created.stderr)
-        if not accepted:
-            shutil.rmtree(candidate / "built")
-            write_source(0.4)
-            build()
-        input_document = json.loads(
-            (reference / "input.json").read_text(encoding="utf-8")
-        )
-        self.reference_sha = input_document["canonical_reference_sha256"]
-        self.profile_sha = _sha(PREVIEW_PROFILE_PATH.read_bytes())
-        _write_json(
-            prepared / "setup/route.json",
-            {"schema": "mesh-to-cad.route/1", "route": "implicit"},
-        )
-        _write_json(
-            prepared / "experiment.json",
-            {
-                "schema": "mesh-to-cad.experiment/1",
-                "workspace_id": "canonical-implicit-final",
-                "coordinate_contract": "trellis2_canonical/1",
-                "canonical_reference_sha256": self.reference_sha,
-                "preview_profile": {
-                    "name": "cadena_residual_eight_view/1",
-                    "sha256": self.profile_sha,
-                },
-                "route": "implicit",
             },
         )
         return prepared, candidate
@@ -766,7 +700,7 @@ class WorkspaceCliTests(unittest.TestCase):
         path.write_text(
             "\n\n".join(
                 (
-                    "## Input and Route\nSynthetic canonical CAD route.",
+                    "## Input\nSynthetic canonical CAD input.",
                     "## Modeling Intent\nRebuild the measured box.",
                     "## Preserved Structural Features\nOne centered box.",
                     "## Omitted Surface Details\nNone.",
@@ -781,19 +715,12 @@ class WorkspaceCliTests(unittest.TestCase):
         return path
 
     def final_tool_arguments(self) -> list[str]:
-        route = json.loads(
-            (self.workspace / "setup/route.json").read_text(encoding="utf-8")
-        )["route"]
-        rebuild = CAD_BUILD_ENTRYPOINT if route == "cad" else IMPLICIT_BUILD_PATH
-        registry = self.root / f"{route}-tool-registry.json"
+        rebuild = CAD_BUILD_ENTRYPOINT
+        registry = self.root / "cad-tool-registry.json"
         registry_value = {
             "schema": "mesh-to-cad.tool-registry/1",
             "rebuild": {
-                "id": (
-                    "cad.canonical-build/1"
-                    if route == "cad"
-                    else "implicit-cad.canonical-build/1"
-                ),
+                "id": "cad.canonical-build/1",
                 "entrypoint_sha256": _sha(rebuild.read_bytes()),
             },
             "geometry": {
@@ -875,7 +802,7 @@ class WorkspaceCliTests(unittest.TestCase):
             "--measurement",
             str(measurement),
             "--preview",
-            str(self.preview("route-preview", candidate_sha)),
+            str(self.preview("candidate-preview", candidate_sha)),
         )
         self.assertEqual(0, status, stderr)
         status, finalized, stderr = self.invoke(
@@ -1100,89 +1027,6 @@ class WorkspaceCliTests(unittest.TestCase):
             "build_provenance_conflict", rejected["error"]["classification"]
         )
 
-    def test_finalize_rebuilds_verifies_without_upgrading_unaccepted_implicit(
-        self,
-    ) -> None:
-        prepared, candidate = self.canonical_implicit_flow(accepted=False)
-        status, _initialized, stderr = self.invoke(
-            "init", "--workspace", str(self.workspace), "--prepared", str(prepared)
-        )
-        self.assertEqual(0, status, stderr)
-        status, attempt, stderr = self.invoke(
-            "begin-attempt",
-            "--workspace",
-            str(self.workspace),
-            "--plan",
-            str(self.initial_plan()),
-            "--intended-step",
-            "0",
-        )
-        self.assertEqual(0, status, stderr)
-        candidate_mesh = candidate / "built/artifacts/model.glb"
-        measured = subprocess.run(
-            (
-                sys.executable,
-                str(MESH_COMPARE_PATH),
-                "voxblame-measure",
-                str(candidate_mesh),
-                "--reference",
-                str(self.workspace / "input"),
-                "--output",
-                str(self.workspace / "voxblame"),
-                "--step",
-                "0",
-            ),
-            cwd=REPO_ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        self.assertEqual(0, measured.returncode, measured.stderr)
-        measurement = self.workspace / "voxblame/steps/000000/summary.json"
-        measurement_document = json.loads(measurement.read_text(encoding="utf-8"))
-        self.assertFalse(measurement_document["objective_facts"]["global_depth_8_zero"])
-        candidate_sha = _sha(candidate_mesh.read_bytes())
-        status, _published, stderr = self.invoke(
-            "publish-step-zero",
-            "--workspace",
-            str(self.workspace),
-            "--attempt",
-            str(attempt["attempt"]["attempt"]),
-            "--candidate",
-            str(candidate),
-            "--candidate-mesh",
-            "built/artifacts/model.glb",
-            "--measurement",
-            str(measurement),
-            "--preview",
-            str(self.preview("canonical-implicit-preview", candidate_sha)),
-        )
-        self.assertEqual(0, status, stderr)
-
-        status, finalized, stderr = self.invoke(
-            "finalize",
-            "--workspace",
-            str(self.workspace),
-            "--selection",
-            str(self.final_selection(accepted=False)),
-            "--notes",
-            str(self.final_notes()),
-            *self.final_tool_arguments(),
-        )
-
-        self.assertEqual(0, status, stderr)
-        self.assertFalse(finalized["final"]["accepted"])
-        selection = json.loads(
-            (self.workspace / "final/selection.json").read_text(encoding="utf-8")
-        )
-        self.assertFalse(selection["accepted"])
-        self.assertEqual("cycle_limit", selection["stop_reason"])
-        self.assertTrue(
-            json.loads(
-                (self.workspace / "final/verification.json").read_text(encoding="utf-8")
-            )["verified"]
-        )
-
     def test_finalize_covers_unaccepted_cad_recipe(self) -> None:
         prepared, candidate = self.canonical_cad_flow(accepted=False)
 
@@ -1193,21 +1037,8 @@ class WorkspaceCliTests(unittest.TestCase):
             accepted=False,
         )
 
-        self.assertEqual("cad", final["route"])
+        self.assertNotIn("route", final)
         self.assertEqual("cycle_limit", final["stop_reason"])
-
-    def test_finalize_covers_accepted_implicit_recipe(self) -> None:
-        prepared, candidate = self.canonical_implicit_flow(accepted=True)
-
-        final = self.execute_final_case(
-            prepared=prepared,
-            candidate=candidate,
-            candidate_mesh_relative="built/artifacts/model.glb",
-            accepted=True,
-        )
-
-        self.assertEqual("implicit", final["route"])
-        self.assertEqual("acceptance_satisfied", final["stop_reason"])
 
     def test_runner_accepts_and_reviewer_audits_real_synthetic_delivery(
         self,
@@ -1225,6 +1056,7 @@ class WorkspaceCliTests(unittest.TestCase):
         runner_temporary = tempfile.TemporaryDirectory(
             dir=outputs_root,
             prefix="workspace-cli-runner-test-",
+            ignore_cleanup_errors=True,
         )
         self.addCleanup(runner_temporary.cleanup)
         self.workspace = Path(runner_temporary.name) / "runner-driven-experiment"

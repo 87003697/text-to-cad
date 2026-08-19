@@ -6,4 +6,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 cd "$REPO_ROOT"
 
-run_python_unittest "Global policy tests" "tests/python/global"
+run_python_unittest \
+  "Global policy tests" \
+  "tests/python/global" \
+  "packages/browser_runtime/src"

@@ -1,12 +1,10 @@
 /**
- * ESM resolve hook: make bare `implicitjs/...` / `cadjs/...` specifiers resolvable in a
+ * ESM resolve hook: make bare `cadjs/...` specifiers resolvable in a
  * builder child that has no `node_modules`.
  *
- * The published skill runtime ships `packages/implicitjs` and `packages/cadjs` as SOURCE
- * with no `node_modules` anywhere, so a builder's `import … from "implicitjs/glb/…"` has
- * nothing to resolve against. `NODE_PATH=<packages>` fixes that for CommonJS -- a NODE_PATH
- * entry is treated as a `node_modules` directory, so `packages/implicitjs` resolves as the
- * package `implicitjs` *through its exports map* -- but **Node's ESM resolver ignores
+ * The published skill runtime ships `packages/cadjs` as source with no `node_modules`, so
+ * bare imports have nothing to resolve against. `NODE_PATH=<packages>` fixes that for
+ * CommonJS, but **Node's ESM resolver ignores
  * NODE_PATH entirely** (verified on v22.22.0: the import throws ERR_MODULE_NOT_FOUND while
  * `require.resolve` on the same specifier, same env, returns the right file). esbuild honors
  * NODE_PATH itself, which is why the bundling path in `bundle-cad.sh` never hit this.
@@ -16,8 +14,7 @@
  * the exports map is re-implemented here -- reimplementing it is exactly the mistake a
  * directory alias makes.
  *
- * Order matters: `nextResolve` runs FIRST, so a real `node_modules` (the dev checkout, where
- * `packages/cadjs/node_modules/implicitjs` is a workspace link), relative imports, `node:`
+ * Order matters: `nextResolve` runs FIRST, so a real `node_modules`, relative imports, `node:`
  * builtins and everything else behave exactly as they would without the hook. This is a
  * fallback for the one case that would otherwise be fatal, not a new resolution policy.
  */

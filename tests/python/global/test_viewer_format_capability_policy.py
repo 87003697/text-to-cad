@@ -4,9 +4,8 @@ The viewer renders every format through one shared component stack, but historic
 gated every feature per format with identity checks (``renderFormat === RENDER_FORMAT.X``,
 ``isMeshRenderFormat(...)``, the ``xxxMode`` boolean piles). Each one is a place a new
 format must be hand-added and a place an improvement fails to reach the other formats.
-That is not hypothetical: the Orbit button was gated off for implicit and for DXF
-independently and had to be fixed twice, and implicit grew a parallel export route to an
-endpoint the server does not implement.
+That is not hypothetical: the Orbit button was enabled for DXF in one place while several
+other identity checks still prevented preview mode.
 
 The fix is the capability registry (``packages/cadjs/src/lib/renderCapabilities.js``):
 code asks *what a format can do*, not *what it is*. This test ratchets the old pattern
@@ -41,7 +40,7 @@ ALLOWLIST = {
 }
 
 RENDER_FORMAT_MEMBER = re.compile(
-    r"RENDER_FORMAT\.(?:STEP|STL|THREE_MF|GLB|DXF|IMPLICIT|URDF|SRDF|SDF)\b"
+    r"RENDER_FORMAT\.(?:STEP|STL|THREE_MF|GLB|DXF|URDF|SRDF|SDF)\b"
 )
 FORMAT_PREDICATE = re.compile(r"\b(?:isMeshRenderFormat|isRobotRenderFormat)\s*\(")
 

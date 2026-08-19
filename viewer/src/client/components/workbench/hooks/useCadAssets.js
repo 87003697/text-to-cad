@@ -17,10 +17,6 @@ import {
   peekRenderUrdf
 } from "cadjs/lib/renderAssetClient";
 import {
-  loadImplicitCadModule,
-  peekImplicitCadModule
-} from "cadjs/implicit/loader";
-import {
   assemblyRootFromTopology,
   buildComposedPackageMeshData
 } from "cadjs/lib/assembly/meshData";
@@ -219,10 +215,6 @@ export function useCadAssets({
   const [meshLoadStage, setMeshLoadStage] = useState("");
   const [status, setStatus] = useState(ASSET_STATUS.READY);
   const [error, setError] = useState("");
-  const [implicitState, setImplicitState] = useState(null);
-  const [implicitStatus, setImplicitStatus] = useState(ASSET_STATUS.PENDING);
-  const [implicitError, setImplicitError] = useState("");
-  const [implicitLoadStage, setImplicitLoadStage] = useState("");
   const [urdfState, setUrdfState] = useState(null);
   const [urdfStatus, setUrdfStatus] = useState(ASSET_STATUS.PENDING);
   const [urdfError, setUrdfError] = useState("");
@@ -242,12 +234,10 @@ export function useCadAssets({
   const [displayEdgeLoadStage, setDisplayEdgeLoadStage] = useState("");
 
   const requestIdRef = useRef(0);
-  const implicitRequestIdRef = useRef(0);
   const urdfRequestIdRef = useRef(0);
   const referenceRequestIdRef = useRef(0);
   const displayEdgeRequestIdRef = useRef(0);
   const meshAbortControllerRef = useRef(null);
-  const implicitAbortControllerRef = useRef(null);
   const urdfAbortControllerRef = useRef(null);
   const referenceAbortControllerRef = useRef(null);
   const displayEdgeAbortControllerRef = useRef(null);
@@ -343,22 +333,6 @@ export function useCadAssets({
     return bundle ? buildDisplayEdgeState(entry, bundle) : null;
   }, [buildDisplayEdgeState, entryHasDisplayEdges]);
 
-  const getCachedImplicitState = useCallback((entry) => {
-    if (String(entry?.kind || "").trim().toLowerCase() !== RENDER_FORMAT.IMPLICIT) {
-      return null;
-    }
-    const model = peekImplicitCadModule(entryAssetUrl(entry, "implicit"));
-    if (!model) {
-      return null;
-    }
-    return {
-      file: entry.file,
-      kind: entry.kind,
-      implicitHash: entryAssetHash(entry, "implicit"),
-      model
-    };
-  }, []);
-
   const getCachedUrdfState = useCallback((entry) => {
     const kind = String(entry?.kind || "").trim().toLowerCase();
     if (!["urdf", "srdf", "sdf"].includes(kind)) {
@@ -400,12 +374,6 @@ export function useCadAssets({
     setMeshLoadInProgress(false);
     setMeshLoadTargetFile("");
     setMeshLoadStage("");
-  }, []);
-
-  const cancelImplicitLoad = useCallback(() => {
-    implicitRequestIdRef.current += 1;
-    abortLoad(implicitAbortControllerRef);
-    setImplicitLoadStage("");
   }, []);
 
   const cancelUrdfLoad = useCallback(() => {
@@ -738,59 +706,6 @@ export function useCadAssets({
     }
   }, [buildDisplayEdgeState, cancelDisplayEdgeLoad, entryHasDisplayEdges, getCachedDisplayEdgeState]);
 
-  const loadImplicitForEntry = useCallback(async (entry) => {
-    cancelImplicitLoad();
-    const requestId = implicitRequestIdRef.current;
-
-    if (String(entry?.kind || "").trim().toLowerCase() !== RENDER_FORMAT.IMPLICIT) {
-      setImplicitState(null);
-      setImplicitStatus(ASSET_STATUS.PENDING);
-      setImplicitError("");
-      return;
-    }
-
-    const cachedImplicitState = getCachedImplicitState(entry);
-    if (cachedImplicitState) {
-      setImplicitState(cachedImplicitState);
-      setImplicitStatus(ASSET_STATUS.READY);
-      setImplicitError("");
-      return;
-    }
-
-    const controller = new AbortController();
-    implicitAbortControllerRef.current = controller;
-    setImplicitStatus(ASSET_STATUS.LOADING);
-    setImplicitError("");
-    setImplicitLoadStage("loading implicit CAD");
-
-    try {
-      const model = await loadImplicitCadModule(entryAssetUrl(entry, "implicit"), { signal: controller.signal });
-      if (requestId !== implicitRequestIdRef.current) {
-        return;
-      }
-      setImplicitState({
-        file: entry.file,
-        kind: entry.kind,
-        implicitHash: entryAssetHash(entry, "implicit"),
-        model
-      });
-      setImplicitStatus(ASSET_STATUS.READY);
-    } catch (err) {
-      if (requestId !== implicitRequestIdRef.current || isAbortError(err) || controller.signal.aborted) {
-        return;
-      }
-      setImplicitStatus(ASSET_STATUS.ERROR);
-      setImplicitError(err instanceof Error ? err.message : String(err));
-    } finally {
-      if (implicitAbortControllerRef.current === controller) {
-        implicitAbortControllerRef.current = null;
-      }
-      if (requestId === implicitRequestIdRef.current) {
-        setImplicitLoadStage("");
-      }
-    }
-  }, [cancelImplicitLoad, getCachedImplicitState]);
-
   const loadUrdfForEntry = useCallback(async (entry) => {
     cancelUrdfLoad();
     const requestId = urdfRequestIdRef.current;
@@ -898,7 +813,6 @@ export function useCadAssets({
 
   useEffect(() => () => {
     abortLoad(meshAbortControllerRef);
-    abortLoad(implicitAbortControllerRef);
     abortLoad(urdfAbortControllerRef);
     abortLoad(referenceAbortControllerRef);
     abortLoad(displayEdgeAbortControllerRef);
@@ -914,13 +828,6 @@ export function useCadAssets({
     setStatus,
     error,
     setError,
-    implicitState,
-    setImplicitState,
-    implicitStatus,
-    setImplicitStatus,
-    implicitError,
-    setImplicitError,
-    implicitLoadStage,
     urdfState,
     setUrdfState,
     urdfStatus,
@@ -946,15 +853,12 @@ export function useCadAssets({
     getCachedMeshState,
     getCachedReferenceState,
     getCachedDisplayEdgeState,
-    getCachedImplicitState,
     getCachedUrdfState,
     cancelMeshLoad,
-    cancelImplicitLoad,
     cancelUrdfLoad,
     cancelReferenceLoad,
     cancelDisplayEdgeLoad,
     loadMeshForEntry,
-    loadImplicitForEntry,
     loadUrdfForEntry,
     loadReferencesForEntry,
     loadDisplayEdgesForEntry

@@ -213,7 +213,7 @@ documentation checks, and runs the code tests against that generated output.
 Most generated paths cannot drift on `develop` because they are symlinks to
 their canonical sources, and the freshness check skips those. It covers the
 generated outputs that `develop` does commit as real files, such as the CAD
-snapshot runtime built from `packages/cadjs` and `packages/implicitjs`, and
+snapshot runtime built from `packages/cadjs`, and
 version metadata derived from `VERSION`.
 
 ## Releases

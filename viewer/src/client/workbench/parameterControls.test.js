@@ -69,9 +69,9 @@ test("parseParameterValuesPasteText reports unknown ids with the runtime's label
   );
   assert.throws(
     () => parseParameterValuesPasteText(definition, '{"missing": 1}', {
-      label: "implicit parameter",
-      unknownLabel: "implicit parameter"
+      label: "module parameter",
+      unknownLabel: "module parameter"
     }),
-    /Unknown implicit parameter: missing/
+    /Unknown module parameter: missing/
   );
 });

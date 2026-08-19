@@ -35,7 +35,6 @@ import {
   normalizeDxfUnits
 } from "./workbench/DxfSettingsSection";
 import { buildDxfLayersTab } from "./workbench/DxfLayersSection";
-import ImplicitFileSheet from "./workbench/ImplicitFileSheet";
 import StepFileSheet from "./workbench/StepFileSheet";
 import StatusToast from "./workbench/StatusToast";
 import UrdfFileSheet from "./workbench/UrdfFileSheet";
@@ -112,13 +111,7 @@ import {
   PARAMETER_SOURCE,
   VIEWPORT_CONTENT
 } from "cadjs/lib/renderCapabilities";
-import {
-  buildViewerImplicitAlert,
-  buildViewerMeshAlert
-} from "@/workbench/viewerAlerts";
-import {
-  normalizeImplicitGraphicsSettings
-} from "@/workbench/implicitGraphicsSettings";
+import { buildViewerMeshAlert } from "@/workbench/viewerAlerts";
 import {
   buildParameterValuesCopyText,
   parseParameterValuesPasteText
@@ -143,7 +136,6 @@ import {
   entryAssetUrl,
   entryHasDisplayEdges,
   entryHasDxf,
-  entryHasImplicitCad,
   entryHasMesh,
   entryIsDrawingDocument,
   entryHasReferences,
@@ -310,12 +302,9 @@ import {
 } from "cadjs/lib/step/stepTree";
 import {
   loadStepModuleDefinition,
+  normalizeParameterValue,
   normalizeStepModuleParameterValues
 } from "cadjs/common/stepModule";
-import {
-  normalizeParameterValue,
-  normalizeParameterValues
-} from "cadjs/implicit/parameters";
 import { copyTextToClipboard, readTextFromClipboard } from "@/ui/clipboard";
 import { triggerUrlDownload } from "@/ui/download";
 import {
@@ -337,8 +326,7 @@ const DEFAULT_DOCUMENT_TITLE = "CAD Viewer";
 // (`artifactManaged`), declared once and mirrored against the server's `owns_entry`.
 // File-sheet kinds that render nothing but a status tab. A mesh never had file-specific
 // controls; DXF lost its when the geometry moved into a baked render package, whose
-// settings the producer owns. Implicits are NOT here -- they raymarch, so their params,
-// animations and graphics settings are live controls again.
+// settings the producer owns.
 const STATUS_ONLY_FILE_SHEET_KINDS = Object.freeze(["mesh", "dxf"]);
 
 function statusOnlyFileSheetTitle(sourceFormat) {
@@ -349,7 +337,7 @@ function statusOnlyFileSheetTitle(sourceFormat) {
 // `entryRenderAssetFormat`, never the source format: a DXF entry reports GLB here because its
 // geometry is the drawing package's baked preview.glb. STEP stays on the list under its own
 // name -- it is mesh-loaded too, but `entryRenderAssetFormat` reports `step` for it because
-// only DXF and implicit are the package-baked kinds.
+// DXF is the package-baked kind.
 
 // Single user-facing label for "the viewer is (re)generating the render artifacts a STEP model
 // needs before it can render" — used for both the filename status chip and its tooltip across every
@@ -374,9 +362,6 @@ const DESKTOP_TAB_TOOLS_MIN_WIDTH = 240;
 const DESKTOP_TAB_TOOLS_MAX_WIDTH = 448;
 const DEFAULT_TAB_TOOLS_WIDTH = CAD_WORKSPACE_DEFAULT_TAB_TOOLS_WIDTH;
 const CAD_WORKSPACE_TOP_BAR_HEIGHT = 44;
-const IMPLICIT_PARAMETER_RENDER_THROTTLE_MS = 36;
-const IMPLICIT_PARAMETER_ANIMATION_TICK_MS = 80;
-const IMPLICIT_DYNAMIC_RENDER_SETTLE_MS = 220;
 const DEFAULT_LARGE_FILE_STATE = Object.freeze({
   selectableTopologyEnabled: false
 });
@@ -1006,12 +991,8 @@ function throttledValuesEqual(left, right) {
 }
 
 // React re-invokes state updaters, and it only stops re-rendering when the
-// result is Object.is-equal to what it already has. The implicit animation
-// updaters each built a fresh object every invocation, so a single click could
-// be re-applied indefinitely: identical values, a new identity each time, never
-// settling. Re-publishing the object already in the ref gives React the
-// identity it needs to bail out, and keeps the ref write the animation tick
-// depends on (it reads the ref synchronously between renders).
+// result is Object.is-equal to what it already has. Re-publishing the object
+// already in the ref gives React the identity it needs to bail out.
 function publishAnimationState(stateRef, current, nextState) {
   const published = stateRef.current;
   if (published && shallowObjectValuesEqual(published, nextState)) {
@@ -1096,38 +1077,6 @@ function useThrottledValue(value, intervalMs, resetKey = "") {
   return throttledValue;
 }
 
-function buildAnimatedImplicitParameterValues(definition, animation, currentValues, elapsedSec) {
-  if (!definition || typeof animation?.update !== "function") {
-    return currentValues;
-  }
-  const duration = Math.max(Number(animation.duration) || 1, 0.001);
-  const clampedElapsedSec = clampNumber(elapsedSec, 0, duration);
-  const progress = duration > 0 ? clampNumber(clampedElapsedSec / duration, 0, 1) : 0;
-  const normalizedCurrent = normalizeParameterValues(definition, currentValues);
-  const nextValues = { ...normalizedCurrent };
-  const set = (parameterId, value) => {
-    const id = String(parameterId || "").trim();
-    const parameter = definition.parameterMap?.[id];
-    if (!parameter) {
-      return;
-    }
-    nextValues[id] = normalizeParameterValue(parameter, value);
-  };
-  animation.update({
-    ...normalizedCurrent,
-    elapsed: clampedElapsedSec,
-    elapsedSec: clampedElapsedSec,
-    duration,
-    progress,
-    cycle: duration > 0 ? clampedElapsedSec / duration : 0,
-    t: clampedElapsedSec,
-    loop: animation.loop !== false,
-    params: normalizedCurrent,
-    set
-  });
-  return nextValues;
-}
-
 async function readResponseError(response, fallback) {
   try {
     const payload = await response.json();
@@ -1151,7 +1100,7 @@ function entryWithoutRenderAssets(entry) {
   delete next.hash;
   delete next.bytes;
   delete next.assets;
-  // The baked mesh of a DXF or implicit entry is published as a `glb` relation rather than
+  // The baked mesh of a DXF entry is published as a `glb` relation rather than
   // as the entry's own url, so stripping only the url would leave the previous bake
   // renderable while its replacement is being built -- which is exactly the stale cache this
   // function exists to hide.
@@ -1300,11 +1249,6 @@ export default function CadWorkspace({
       typeof nextValue === "function" ? nextValue(current) : nextValue
     ));
   }, []);
-  const updateImplicitGraphicsSettings = useCallback((nextValue) => {
-    setImplicitGraphicsSettings((current) => normalizeImplicitGraphicsSettings(
-      typeof nextValue === "function" ? nextValue(current) : nextValue
-    ));
-  }, []);
   const [previewMode, setPreviewMode] = useState(false);
   const [tabToolsWidth, setTabToolsWidth] = useState(readInitialFileSheetWidth);
   const [fileSheetWidthIsCustom, setFileSheetWidthIsCustom] = useState(readInitialFileSheetWidthIsCustom);
@@ -1334,18 +1278,6 @@ export default function CadWorkspace({
   });
   const stepModuleParameterValuesRef = useRef(stepModuleParameterValues);
   const stepModuleAnimationStateRef = useRef(stepModuleAnimationState);
-  const [implicitParameterValues, setImplicitParameterValues] = useState({});
-  const [implicitAnimationState, setImplicitAnimationState] = useState({
-    activeId: "",
-    playing: false,
-    elapsedSec: 0,
-    speed: 1,
-    loopEnabled: true
-  });
-  const implicitAnimationStateRef = useRef(implicitAnimationState);
-  const [implicitGraphicsSettings, setImplicitGraphicsSettings] = useState(() => normalizeImplicitGraphicsSettings());
-  const [implicitParameterInteractionActive, setImplicitParameterInteractionActive] = useState(false);
-  const implicitParameterInteractionTimerRef = useRef(0);
   const [urdfPosePickerState, setUrdfPosePickerState] = useState(emptyUrdfPosePickerState);
   const lastPersistenceFailureKeyRef = useRef("");
   const urdfTrajectoryPlaybackRef = useRef({
@@ -1393,13 +1325,6 @@ export default function CadWorkspace({
     setStatus,
     error,
     setError,
-    implicitState,
-    setImplicitState,
-    implicitStatus,
-    setImplicitStatus,
-    implicitError,
-    setImplicitError,
-    implicitLoadStage,
     urdfState,
     setUrdfState,
     urdfStatus,
@@ -1420,15 +1345,12 @@ export default function CadWorkspace({
     setDisplayEdgeError,
     getCachedMeshState,
     getCachedReferenceState,
-    getCachedImplicitState,
     getCachedUrdfState,
     cancelMeshLoad,
-    cancelImplicitLoad,
     cancelUrdfLoad,
     cancelReferenceLoad,
     cancelDisplayEdgeLoad,
     loadMeshForEntry,
-    loadImplicitForEntry,
     loadUrdfForEntry,
     loadReferencesForEntry,
     loadDisplayEdgesForEntry
@@ -1484,8 +1406,8 @@ export default function CadWorkspace({
   // Unified render-artifact status for the selected entry: ready (render) | generating (loading) |
   // error (fatal). A missing/stale cache is not an issue — it just triggers a (re)build. Replaces
   // the per-entry step-source-status fetch, the mesh-stripping merge, and the build effect.
-  // Every artifact-managed kind: STEP models, DXF drawings (generated `.dxf.py` AND imported
-  // `.dxf` alike) and `.implicit.js` models. An imported `.dxf` used to be excluded because it
+  // Every artifact-managed kind: STEP models and DXF drawings (generated `.dxf.py` AND imported
+  // `.dxf` alike). An imported `.dxf` used to be excluded because it
   // "renders directly from disk" -- true only while the client still parsed and extruded DXF
   // entities in the browser. It renders from the package's baked preview.glb now, so it needs
   // the build for exactly the reason a generated one does.
@@ -1550,11 +1472,8 @@ export default function CadWorkspace({
   // package's baked preview.glb. Gating the mesh load on the source format instead is what
   // left a built DXF spinning -- the asset was on disk and nothing ever asked for it.
   //
-  // Not the whole answer, though. Two source kinds are rendered by something other than the
-  // mesh loader and must not take this path even though a mesh EXISTS for them: an implicit
-  // is raymarched from its module (its baked GLB is for export), and a robot is assembled
-  // from per-link meshes by the URDF loader. Both would otherwise download a second copy of
-  // the model and put it in the scene alongside the real one.
+  // Robots are rendered by something other than the mesh loader: they are assembled from
+  // per-link meshes by the URDF loader and must not download a second copy of the model.
   const selectedEntryRendersItsOwnGeometry =
     assetKindForRenderFormat(selectedEntrySourceFormat) !== ASSET_KIND.MESH &&
     assetKindForRenderFormat(selectedEntrySourceFormat) !== ASSET_KIND.DRAWING;
@@ -1616,7 +1535,6 @@ export default function CadWorkspace({
   const selectedEntryHasReferences = entryHasReferences(selectedEntry);
   const selectedEntryHasDisplayEdges = entryHasDisplayEdges(selectedEntry);
   const selectedEntryHasDxf = entryHasDxf(selectedEntry);
-  const selectedEntryHasImplicit = entryHasImplicitCad(selectedEntry);
   // A dimensioned drawing renders its own 2D geometry: there is no mesh to wait for.
   const selectedEntryIsDrawingDocument = entryIsDrawingDocument(selectedEntry);
   // The selected entry's render artifact is (re)building -> show the loading state. Replaces the
@@ -1640,11 +1558,6 @@ export default function CadWorkspace({
     selectedEntry?.kind === "assembly" &&
     selectedMeshMatches &&
     !!meshState?.assemblyBackgroundError;
-  const selectedImplicitMatches =
-    !!implicitState &&
-    !!selectedEntry &&
-    implicitState.file === fileKey(selectedEntry) &&
-    implicitState.implicitHash === entryAssetHash(selectedEntry, "implicit");
   const selectedUrdfMatches =
     !!urdfState &&
     !!selectedEntry &&
@@ -1652,11 +1565,6 @@ export default function CadWorkspace({
     urdfState.urdfHash === entryUrdfAssetHash(selectedEntry);
   const selectedUrdfData = selectedUrdfMatches ? urdfState.urdfData : null;
   const selectedUrdfMeshes = selectedUrdfMatches ? urdfState.meshesByUrl : null;
-  // The loaded .implicit.js module for the selected entry. The raymarch renderer takes the
-  // model straight from here -- there is no baked package in this path -- and the file
-  // sheet's parameter/animation controls read the definition off it.
-  const selectedImplicitModel = selectedImplicitMatches ? implicitState.model : null;
-  const selectedImplicitDefinition = selectedImplicitModel?.definition || null;
   const selectedUrdfFileRef = selectedEntryContentKind === VIEWPORT_CONTENT.ROBOT
     ? fileKey(selectedEntry)
     : "";
@@ -1902,42 +1810,6 @@ export default function CadWorkspace({
       cancelled = true;
     };
   }, [fileSessionNamespace, selectedEntry, selectedStepModuleCadPath, selectedStepModuleUrl]);
-
-  useEffect(() => {
-    if (!selectedImplicitDefinition || !selectedEntry || selectedEntrySourceFormat !== RENDER_FORMAT.IMPLICIT) {
-      setImplicitParameterValues({});
-      const nextAnimationState = buildDefaultParameterAnimationState(null);
-      implicitAnimationStateRef.current = nextAnimationState;
-      setImplicitAnimationState(nextAnimationState);
-      return;
-    }
-    const restoredSessionState = readFileSessionState(
-      fileSessionNamespace,
-      fileKey(selectedEntry),
-      selectedEntry
-    );
-    const restoredImplicitState = restoredSessionState?.slices?.implicit || null;
-    const defaultAnimationState = buildDefaultParameterAnimationState(selectedImplicitDefinition);
-    setImplicitParameterValues(normalizeParameterValues(
-      selectedImplicitDefinition,
-      restoredImplicitState?.parameterValues || selectedImplicitDefinition.defaultParameterValues
-    ));
-    const nextAnimationState = restoredImplicitState?.animationState
-      ? {
-          ...defaultAnimationState,
-          ...restoredImplicitState.animationState,
-          activeId: restoredImplicitState.animationState.activeId || defaultAnimationState.activeId,
-          playing: false
-        }
-      : defaultAnimationState;
-    implicitAnimationStateRef.current = nextAnimationState;
-    setImplicitAnimationState(nextAnimationState);
-  }, [
-    fileSessionNamespace,
-    selectedEntry,
-    selectedEntrySourceFormat,
-    selectedImplicitDefinition
-  ]);
 
   const selectedUrdfMotionControls = selectedUrdfMotion;
   const selectedUrdfMoveIt2ActionsEnabled = Boolean(moveit2ServerLive && selectedUrdfMotionControls);
@@ -2425,190 +2297,21 @@ export default function CadWorkspace({
     stepModuleAnimationState.speed
   ]);
 
-  const selectedImplicitActiveAnimation = useMemo(
-    () => findParameterAnimation(selectedImplicitDefinition, implicitAnimationState.activeId),
-    [implicitAnimationState.activeId, selectedImplicitDefinition]
-  );
-  const selectedImplicitAnimationViewState = useMemo(() => ({
-    ...implicitAnimationState,
-    activeId: selectedImplicitActiveAnimation?.id || implicitAnimationState.activeId || "",
-    duration: selectedImplicitActiveAnimation?.duration || 0,
-    loop: selectedImplicitActiveAnimation?.loop !== false,
-    loopEnabled: implicitAnimationState.loopEnabled ?? (selectedImplicitActiveAnimation?.loop !== false)
-  }), [implicitAnimationState, selectedImplicitActiveAnimation]);
-  const implicitRenderParameterValues = useThrottledValue(
-    implicitParameterValues,
-    IMPLICIT_PARAMETER_RENDER_THROTTLE_MS,
-    selectedKey
-  );
-  const implicitRenderAnimationViewState = useThrottledValue(
-    selectedImplicitAnimationViewState,
-    IMPLICIT_PARAMETER_RENDER_THROTTLE_MS,
-    selectedKey
-  );
-  const selectedImplicitRuntime = useMemo(() => {
-    if (!selectedImplicitModel) {
-      return {
-        model: null,
-        error: ""
-      };
-    }
-    if (!selectedImplicitDefinition?.buildModel) {
-      return {
-        model: selectedImplicitModel,
-        error: ""
-      };
-    }
-    try {
-      return {
-        model: selectedImplicitDefinition.buildModel(
-          implicitRenderParameterValues,
-          implicitRenderAnimationViewState
-        ),
-        error: ""
-      };
-    } catch (error) {
-      return {
-        model: null,
-        error: error instanceof Error ? error.message : String(error)
-      };
-    }
-  }, [
-    implicitRenderAnimationViewState,
-    implicitRenderParameterValues,
-    selectedImplicitDefinition,
-    selectedImplicitModel
-  ]);
-  const selectedImplicitRuntimeModel = selectedImplicitRuntime.model;
-  const selectedImplicitRuntimeError = selectedImplicitRuntime.error;
-  // THE content signal: "is there anything on screen?", answered once for every format
-  // from the capability table. Consumers (toolbar gates, CTA, preview mode, zoom pill,
-  // alert blocking) read this instead of guessing which loaded object backs the viewport
-  // — guessing `!selectedMeshData` is what left an implicit's buttons dead.
-  const selectedViewportContent =
-    viewportContentKind(selectedEntrySourceFormat) === VIEWPORT_CONTENT.IMPLICIT
-      ? selectedImplicitRuntimeModel
-      : selectedMeshData;
-  useEffect(() => {
-    implicitAnimationStateRef.current = implicitAnimationState;
-  }, [implicitAnimationState]);
+  const selectedViewportContent = selectedMeshData;
 
-  const markImplicitParameterInteraction = useCallback(() => {
-    if (typeof window === "undefined" || typeof window.setTimeout !== "function") {
-      return;
-    }
-    if (implicitParameterInteractionTimerRef.current) {
-      window.clearTimeout(implicitParameterInteractionTimerRef.current);
-    }
-    setImplicitParameterInteractionActive(true);
-    implicitParameterInteractionTimerRef.current = window.setTimeout(() => {
-      implicitParameterInteractionTimerRef.current = 0;
-      setImplicitParameterInteractionActive(false);
-    }, IMPLICIT_DYNAMIC_RENDER_SETTLE_MS);
-  }, []);
 
-  useEffect(() => {
-    return () => {
-      if (implicitParameterInteractionTimerRef.current && typeof window !== "undefined") {
-        window.clearTimeout(implicitParameterInteractionTimerRef.current);
-        implicitParameterInteractionTimerRef.current = 0;
+
+  // The selected entry's parameter runtime. Copy/paste/reset are shared by every
+  // sidecar-backed STEP model.
+  const activeParameterRuntime = parameterSourceKind(selectedEntrySourceFormat) === PARAMETER_SOURCE.SIDECAR
+    ? {
+        label: "STEP",
+        definition: selectedStepModuleDefinition,
+        values: stepModuleParameterValues,
+        applyValues: applyStepModuleParameterValues,
+        reset: handleResetStepModuleParameters
       }
-    };
-  }, []);
-
-  const implicitRenderPending = !shallowObjectValuesEqual(
-    implicitParameterValues,
-    implicitRenderParameterValues
-  ) || selectedImplicitAnimationViewState.elapsedSec !== implicitRenderAnimationViewState.elapsedSec;
-  const implicitDynamicRenderActive = Boolean(
-    selectedImplicitModel &&
-    (
-      implicitAnimationState.playing ||
-      implicitParameterInteractionActive ||
-      implicitRenderPending
-    )
-  );
-
-  const handleImplicitParameterChange = useCallback((parameterId, value) => {
-    const id = String(parameterId || "").trim();
-    const parameter = selectedImplicitDefinition?.parameterMap?.[id];
-    if (!parameter) {
-      return;
-    }
-    const nextValue = normalizeParameterValue(parameter, value);
-    markImplicitParameterInteraction();
-    setImplicitParameterValues((current) => (
-      current?.[id] === nextValue
-        ? current
-        : {
-            ...current,
-            [id]: nextValue
-          }
-    ));
-  }, [markImplicitParameterInteraction, selectedImplicitDefinition]);
-
-  const applyImplicitParameterValues = useCallback((values) => {
-    markImplicitParameterInteraction();
-    setImplicitParameterValues((current) => ({
-      ...current,
-      ...values
-    }));
-  }, [markImplicitParameterInteraction]);
-
-  const handleResetImplicitParameters = useCallback(() => {
-    if (!selectedImplicitDefinition) {
-      return;
-    }
-    markImplicitParameterInteraction();
-    setImplicitParameterValues(normalizeParameterValues(
-      selectedImplicitDefinition,
-      selectedImplicitDefinition.defaultParameterValues
-    ));
-    const nextAnimationState = buildDefaultParameterAnimationState(selectedImplicitDefinition);
-    implicitAnimationStateRef.current = nextAnimationState;
-    setImplicitAnimationState(nextAnimationState);
-  }, [markImplicitParameterInteraction, selectedImplicitDefinition]);
-
-  // THE parameter runtime: which store backs the selected entry's parameters, resolved
-  // once from the capability table. Copy/paste/reset are written against this and work
-  // for any format that declares a `params` source — a third store means one more arm
-  // here, not a third copy of three clipboard handlers.
-  //
-  // The stores stay separate on purpose: they drive different recompute pipelines (a
-  // STEP sidecar re-runs a build, an implicit re-uploads uniforms). Only the consumer
-  // surface is shared.
-  const activeParameterRuntime = useMemo(() => {
-    switch (parameterSourceKind(selectedEntrySourceFormat)) {
-      case PARAMETER_SOURCE.SIDECAR:
-        return {
-          label: "STEP",
-          definition: selectedStepModuleDefinition,
-          values: stepModuleParameterValues,
-          applyValues: applyStepModuleParameterValues,
-          reset: handleResetStepModuleParameters
-        };
-      case PARAMETER_SOURCE.MODULE:
-        return {
-          label: "implicit",
-          definition: selectedImplicitDefinition,
-          values: implicitParameterValues,
-          applyValues: applyImplicitParameterValues,
-          reset: handleResetImplicitParameters
-        };
-      default:
-        return null;
-    }
-  }, [
-    applyImplicitParameterValues,
-    applyStepModuleParameterValues,
-    handleResetImplicitParameters,
-    handleResetStepModuleParameters,
-    implicitParameterValues,
-    selectedEntrySourceFormat,
-    selectedImplicitDefinition,
-    selectedStepModuleDefinition,
-    stepModuleParameterValues
-  ]);
+    : null;
 
   const handleCopyParameters = useCallback(async () => {
     setScreenshotStatus("");
@@ -2649,214 +2352,21 @@ export default function CadWorkspace({
     activeParameterRuntime?.reset();
   }, [activeParameterRuntime]);
 
-  const handleImplicitAnimationSelect = useCallback((animationId) => {
-    const animation = findParameterAnimation(selectedImplicitDefinition, animationId);
-    setImplicitAnimationState((current) => {
-      const nextState = {
-        ...current,
-        activeId: animation?.id || "",
-        playing: false,
-        elapsedSec: 0,
-        loopEnabled: animation?.loop !== false
-      };
-      return publishAnimationState(implicitAnimationStateRef, current, nextState);
-    });
-  }, [selectedImplicitDefinition]);
 
-  const handleImplicitAnimationPlayToggle = useCallback(() => {
-    setImplicitAnimationState((current) => {
-      const animation = findParameterAnimation(selectedImplicitDefinition, current.activeId);
-      if (!animation) {
-        return current;
-      }
-      const duration = Math.max(Number(animation.duration) || 0, 0.001);
-      const elapsedSec = current.elapsedSec >= duration ? 0 : current.elapsedSec;
-      const nextState = {
-        ...current,
-        activeId: animation.id,
-        elapsedSec,
-        playing: !current.playing
-      };
-      return publishAnimationState(implicitAnimationStateRef, current, nextState);
-    });
-  }, [selectedImplicitDefinition]);
 
-  const handleImplicitAnimationReset = useCallback(() => {
-    setImplicitAnimationState((current) => {
-      const nextState = {
-        ...current,
-        elapsedSec: 0,
-        playing: false
-      };
-      return publishAnimationState(implicitAnimationStateRef, current, nextState);
-    });
-  }, []);
-
-  const handleImplicitAnimationScrub = useCallback((elapsedSec) => {
-    const duration = Math.max(Number(selectedImplicitActiveAnimation?.duration) || 1, 0.001);
-    markImplicitParameterInteraction();
-    setImplicitAnimationState((current) => {
-      const nextState = {
-        ...current,
-        elapsedSec: clampNumber(elapsedSec, 0, duration)
-      };
-      return publishAnimationState(implicitAnimationStateRef, current, nextState);
-    });
-  }, [markImplicitParameterInteraction, selectedImplicitActiveAnimation]);
-
-  const handleImplicitAnimationSpeedChange = useCallback((speed) => {
-    setImplicitAnimationState((current) => {
-      const nextState = {
-        ...current,
-        speed: clampNumber(speed, 0.1, 5)
-      };
-      return publishAnimationState(implicitAnimationStateRef, current, nextState);
-    });
-  }, []);
-
-  const handleImplicitAnimationLoopToggle = useCallback((nextLoopEnabled) => {
-    const animation = findParameterAnimation(
-      selectedImplicitDefinition,
-      implicitAnimationStateRef.current.activeId
-    );
-    setImplicitAnimationState((current) => {
-      const currentLoop = current.loopEnabled ?? (animation?.loop !== false);
-      const loopEnabled = typeof nextLoopEnabled === "boolean" ? nextLoopEnabled : !currentLoop;
-      const nextState = {
-        ...current,
-        loopEnabled
-      };
-      return publishAnimationState(implicitAnimationStateRef, current, nextState);
-    });
-  }, [selectedImplicitDefinition]);
 
   // The animation half of the same idea as `activeParameterRuntime`: the toolbar's
-  // Play button is a viewport control, so it asks the active runtime "do you have
-  // clips, are you playing, can I toggle you" instead of reading the STEP store by
-  // name. U0 flipped the button's gate to the `animations` capability but left it fed
-  // from STEP state, so an implicit's clips still could not be played from the toolbar.
-  const activeAnimationRuntime = useMemo(() => {
-    switch (parameterSourceKind(selectedEntrySourceFormat)) {
-      case PARAMETER_SOURCE.SIDECAR:
-        return {
-          available: selectedStepModuleHasAnimations,
-          playing: selectedStepModuleAnimationViewState.playing,
-          // A disabled sidecar is still loaded and still lists its clips; playing one
-          // would drive a build nobody asked for.
-          disabled: !stepModuleEnabled,
-          onPlayToggle: handleStepModuleAnimationPlayToggle
-        };
-      case PARAMETER_SOURCE.MODULE:
-        return {
-          available: hasParameterAnimations(selectedImplicitDefinition),
-          playing: selectedImplicitAnimationViewState.playing,
-          disabled: false,
-          onPlayToggle: handleImplicitAnimationPlayToggle
-        };
-      default:
-        return null;
-    }
-  }, [
-    handleImplicitAnimationPlayToggle,
-    handleStepModuleAnimationPlayToggle,
-    selectedEntrySourceFormat,
-    selectedImplicitAnimationViewState.playing,
-    selectedImplicitDefinition,
-    selectedStepModuleAnimationViewState.playing,
-    selectedStepModuleHasAnimations,
-    stepModuleEnabled
-  ]);
-
-  useEffect(() => {
-    if (
-      !selectedImplicitDefinition ||
-      !selectedImplicitActiveAnimation ||
-      !implicitAnimationState.playing ||
-      typeof window === "undefined" ||
-      typeof window.setTimeout !== "function"
-    ) {
-      return undefined;
-    }
-
-    let previousTimeMs = animationNowMs();
-    let timerId = 0;
-    const tick = () => {
-      const timeMs = animationNowMs();
-      const deltaSec = Math.min(Math.max((timeMs - previousTimeMs) / 1000, 0), 0.25);
-      previousTimeMs = timeMs;
-      const current = implicitAnimationStateRef.current;
-      if (current.playing && current.activeId === selectedImplicitActiveAnimation.id) {
-        const duration = Math.max(Number(selectedImplicitActiveAnimation.duration) || 1, 0.001);
-        const speed = clampNumber(current.speed, 0.1, 5);
-        let elapsedSec = current.elapsedSec + (deltaSec * speed);
-        let playing = current.playing;
-        const loopEnabled = current.loopEnabled ?? (selectedImplicitActiveAnimation.loop !== false);
-        if (loopEnabled) {
-          elapsedSec %= duration;
-        } else if (elapsedSec >= duration) {
-          elapsedSec = duration;
-          playing = false;
-        }
-        const nextState = {
-          ...current,
-          elapsedSec,
-          speed,
-          playing
-        };
-        implicitAnimationStateRef.current = nextState;
-        setImplicitAnimationState(nextState);
-        setImplicitParameterValues((currentValues) => {
-          try {
-            const nextValues = buildAnimatedImplicitParameterValues(
-              selectedImplicitDefinition,
-              selectedImplicitActiveAnimation,
-              currentValues,
-              elapsedSec
-            );
-            return shallowObjectValuesEqual(currentValues, nextValues) ? currentValues : nextValues;
-          } catch (error) {
-            console.error("Implicit parameter animation update failed", error);
-            return currentValues;
-          }
-        });
+  // Play button reads the active sidecar runtime rather than its backing state directly.
+  const activeAnimationRuntime = parameterSourceKind(selectedEntrySourceFormat) === PARAMETER_SOURCE.SIDECAR
+    ? {
+        available: selectedStepModuleHasAnimations,
+        playing: selectedStepModuleAnimationViewState.playing,
+        disabled: !stepModuleEnabled,
+        onPlayToggle: handleStepModuleAnimationPlayToggle
       }
-      timerId = window.setTimeout(tick, IMPLICIT_PARAMETER_ANIMATION_TICK_MS);
-    };
+    : null;
 
-    timerId = window.setTimeout(tick, IMPLICIT_PARAMETER_ANIMATION_TICK_MS);
-    return () => {
-      window.clearTimeout(timerId);
-    };
-  }, [
-    implicitAnimationState.playing,
-    selectedImplicitActiveAnimation,
-    selectedImplicitDefinition
-  ]);
 
-  useEffect(() => {
-    const animation = selectedImplicitActiveAnimation;
-    if (!selectedImplicitDefinition || typeof animation?.update !== "function") {
-      return;
-    }
-    setImplicitParameterValues((current) => {
-      try {
-        const nextValues = buildAnimatedImplicitParameterValues(
-          selectedImplicitDefinition,
-          animation,
-          current,
-          implicitAnimationState.elapsedSec
-        );
-        return shallowObjectValuesEqual(current, nextValues) ? current : nextValues;
-      } catch (error) {
-        console.error("Implicit parameter animation update failed", error);
-        return current;
-      }
-    });
-  }, [
-    implicitAnimationState.elapsedSec,
-    selectedImplicitActiveAnimation,
-    selectedImplicitDefinition
-  ]);
   const assemblyRoot = selectedAssemblyStructureReady
     ? selectedMeshData?.assemblyRoot || null
     : null;
@@ -3083,10 +2593,6 @@ export default function CadWorkspace({
   ]);
   const selectedUrdfPreviewError = selectedUrdfPreview.error;
   const effectiveRenderFormat = selectedEntrySourceFormat;
-  const implicitViewerLoading =
-    !!selectedEntry &&
-    implicitStatus !== ASSET_STATUS.ERROR &&
-    (!selectedImplicitMatches || implicitStatus === ASSET_STATUS.LOADING);
   // A robot is loading until EVERY link mesh has landed. It is published once, complete,
   // so this stays true for the whole fetch and the card keeps reporting "loading meshes
   // 7/13" — a partially-drawn robot with no card gives no sign whether more is coming.
@@ -3095,7 +2601,7 @@ export default function CadWorkspace({
     urdfStatus !== ASSET_STATUS.ERROR &&
     (!selectedUrdfMatches || urdfStatus === ASSET_STATUS.LOADING);
   // A fatal render-artifact error (not building) stops the loading spinner so the error
-  // surfaces. Every artifact-managed format, not just STEP: a DXF or implicit build that
+  // surfaces. Every artifact-managed format, not just STEP: a DXF build that
   // failed would otherwise spin forever behind its own error.
   const artifactBlocksRender =
     isArtifactManagedFormat(effectiveRenderFormat) &&
@@ -3108,11 +2614,7 @@ export default function CadWorkspace({
     (selectedStepArtifactRenderPending || !artifactBlocksRender) &&
     status !== ASSET_STATUS.ERROR &&
     (!selectedMeshMatches || status === ASSET_STATUS.LOADING || selectedStepModuleLoading);
-  // Implicits have their own arm again: they raymarch their GLSL, so "loading" means the
-  // .implicit.js module is still being fetched, not that a mesh is. DXF has no arm -- it
-  // renders its baked preview through the mesh path like everything else.
   const viewerLoading = {
-    [ASSET_KIND.IMPLICIT]: implicitViewerLoading,
     [ASSET_KIND.ROBOT]: urdfViewerLoading,
     [ASSET_KIND.MESH]: meshViewerLoading,
     // A DXF loads a drawing but RENDERS the drawing package's baked preview through the
@@ -3152,7 +2654,6 @@ export default function CadWorkspace({
   const simpleLoadingLabel = selectedArtifactGenerating || isArtifactManagedFormat(effectiveRenderFormat)
     ? ""
     : {
-        [ASSET_KIND.IMPLICIT]: "Loading implicit CAD...",
         [ASSET_KIND.ROBOT]: urdfLoadStage
           ? `${capitalizeFirst(urdfLoadStage)}...`
           : robotLoadingLabel,
@@ -3190,13 +2691,6 @@ export default function CadWorkspace({
     if (!selectedEntry || viewerLoading || selectedArtifactGenerating) {
       return null;
     }
-    if (effectiveRenderFormat === RENDER_FORMAT.IMPLICIT) {
-      return buildViewerImplicitAlert(
-        fileKey(selectedEntry),
-        !!selectedImplicitRuntimeModel,
-        implicitStatus === ASSET_STATUS.ERROR ? implicitError : selectedImplicitRuntimeError
-      ) || viewerRuntimeAlert;
-    }
     if (isRobotRenderFormat(effectiveRenderFormat)) {
       return buildViewerMeshAlert(
         selectedEntry,
@@ -3214,13 +2708,9 @@ export default function CadWorkspace({
   }, [
     effectiveRenderFormat,
     error,
-    implicitError,
-    implicitStatus,
     selectedEntry,
     selectedArtifact,
     selectedArtifactGenerating,
-    selectedImplicitRuntimeError,
-    selectedImplicitRuntimeModel,
     selectedMeshData,
     selectedUrdfPreviewError,
     status,
@@ -3770,12 +3260,6 @@ export default function CadWorkspace({
       selectedStepModuleStatus === "loading" ||
       selectedStepModuleError
     ),
-    hasImplicitParameterPanel: Boolean(
-      implicitStatus === ASSET_STATUS.LOADING ||
-      selectedImplicitRuntimeError ||
-      selectedImplicitDefinition?.parameters?.length ||
-      selectedImplicitDefinition?.animations?.length
-    ),
     hasFileStatus: selectedFileHasWarningOrErrorStatus,
     hasDxfBendsPanel: selectedFileSheetKind === "dxf" && drawingBends.length > 0,
     hasDxfLayersPanel: selectedFileSheetKind === "dxf" && drawingLayers.length > 1,
@@ -3783,9 +3267,6 @@ export default function CadWorkspace({
     motionEnabled: selectedFileSheetKind === "srdf" && moveit2ServerLive && selectedUrdfMotionEndEffectors.length > 0,
     showJoints: selectedFileSheetKind === "urdf" || selectedFileSheetKind === "srdf" || selectedFileSheetKind === "sdf"
   }), [
-    implicitStatus,
-    selectedImplicitDefinition,
-    selectedImplicitRuntimeError,
     selectedFileSheetKind,
     selectedFileHasWarningOrErrorStatus,
     selectedStepModuleDefinition,
@@ -3890,40 +3371,6 @@ export default function CadWorkspace({
     selectedKey
   ]);
 
-  useEffect(() => {
-    if (selectedFileSheetKind !== RENDER_FORMAT.IMPLICIT) {
-      return;
-    }
-    const parametersSectionId = FILE_SHEET_SECTION_IDS.STEP_PARAMETERS;
-    const graphicsSectionId = FILE_SHEET_SECTION_IDS.IMPLICIT_GRAPHICS;
-    const hasParametersSection = renderedSelectedFileSheetSectionIds.includes(parametersSectionId);
-    const hasGraphicsSection = renderedSelectedFileSheetSectionIds.includes(graphicsSectionId);
-    if (!hasParametersSection && !hasGraphicsSection) {
-      return;
-    }
-    setFileSheetOpenSectionIds((current) => {
-      const baseSectionIds = normalizeFileSheetOpenSectionIds(
-        Array.isArray(current) ? current : defaultSelectedFileSheetOpenSectionIds,
-        renderedSelectedFileSheetSectionIds
-      ).filter((sectionId) => sectionId !== graphicsSectionId);
-      const nextSectionIds = hasParametersSection && !baseSectionIds.includes(parametersSectionId)
-        ? [...baseSectionIds, parametersSectionId]
-        : baseSectionIds;
-      if (orderedStringListEqual(
-        nextSectionIds,
-        normalizeFileSheetOpenSectionIds(Array.isArray(current) ? current : defaultSelectedFileSheetOpenSectionIds, renderedSelectedFileSheetSectionIds)
-      )) {
-        return current;
-      }
-      return normalizeFileSheetOpenSectionIds(nextSectionIds, renderedSelectedFileSheetSectionIds);
-    });
-  }, [
-    defaultSelectedFileSheetOpenSectionIds,
-    renderedSelectedFileSheetSectionIds,
-    selectedFileSheetKind,
-    selectedKey
-  ]);
-
   const buildActiveTabSnapshot = useCallback(() => {
     return cloneTabSnapshot({
       referenceQuery,
@@ -4007,8 +3454,6 @@ export default function CadWorkspace({
   }, [
     buildActiveTabSnapshot,
     displaySettings,
-    implicitAnimationState,
-    implicitParameterValues,
     jointValuesByFileRef,
     largeFileState,
     selectedEntry,
@@ -4084,19 +3529,6 @@ export default function CadWorkspace({
         elapsedSec: Math.max(Number(stepModuleSlice.animationState?.elapsedSec) || 0, 0),
         speed: clampNumber(stepModuleSlice.animationState?.speed, 0.1, 5)
       });
-    }
-
-    const implicitSlice = sessionState?.slices?.implicit || null;
-    if (implicitSlice) {
-      setImplicitParameterValues(implicitSlice.parameterValues || {});
-      const nextAnimationState = {
-        activeId: String(implicitSlice.animationState?.activeId || ""),
-        playing: false,
-        elapsedSec: Math.max(Number(implicitSlice.animationState?.elapsedSec) || 0, 0),
-        speed: clampNumber(implicitSlice.animationState?.speed, 0.1, 5)
-      };
-      implicitAnimationStateRef.current = nextAnimationState;
-      setImplicitAnimationState(nextAnimationState);
     }
 
     const urdfSlice = sessionState?.slices?.urdf || null;
@@ -4227,7 +3659,6 @@ export default function CadWorkspace({
     const cachedMeshState = nextEntry ? getCachedMeshState(nextEntry) : null;
     const cachedReferenceState = nextEntry ? getCachedReferenceState(nextEntry) : null;
     const cachedUrdfState = nextEntry ? getCachedUrdfState(nextEntry) : null;
-    const cachedImplicitState = nextEntry ? getCachedImplicitState(nextEntry) : null;
     const currentSnapshot = selectedKey ? buildActiveTabSnapshot() : null;
 
     setOpenTabs((current) => {
@@ -4258,20 +3689,6 @@ export default function CadWorkspace({
       setReferenceError(cachedReferenceState.disabledReason || "");
     }
 
-    if (entrySourceFormat(nextEntry) !== RENDER_FORMAT.IMPLICIT) {
-      setImplicitState(null);
-      setImplicitStatus(ASSET_STATUS.PENDING);
-      setImplicitError("");
-    } else if (cachedImplicitState) {
-      setImplicitState(cachedImplicitState);
-      setImplicitStatus(ASSET_STATUS.READY);
-      setImplicitError("");
-    } else {
-      setImplicitState(null);
-      setImplicitStatus(ASSET_STATUS.PENDING);
-      setImplicitError("");
-    }
-
     if (!entryHasUrdf(nextEntry)) {
       setUrdfState(null);
       setUrdfStatus(ASSET_STATUS.PENDING);
@@ -4291,15 +3708,11 @@ export default function CadWorkspace({
     drawingTool,
     entryMap,
     flushActiveFileSession,
-    getCachedImplicitState,
     getCachedMeshState,
     getCachedReferenceState,
     getCachedUrdfState,
     readEntrySessionState,
     selectedKey,
-    setImplicitError,
-    setImplicitState,
-    setImplicitStatus,
     setUrdfError,
     setUrdfState,
     setUrdfStatus,
@@ -4343,7 +3756,7 @@ export default function CadWorkspace({
   });
 
   useEffect(() => {
-    if (stepModuleAnimationState.playing || implicitAnimationState.playing) {
+    if (stepModuleAnimationState.playing) {
       return undefined;
     }
     scheduleActiveFileSessionSave();
@@ -4352,7 +3765,6 @@ export default function CadWorkspace({
     };
   }, [
     clearFileSessionSaveTimer,
-    implicitAnimationState.playing,
     scheduleActiveFileSessionSave,
     stepModuleAnimationState.playing
   ]);
@@ -4726,41 +4138,6 @@ export default function CadWorkspace({
     selectedMeshMatches
   ]);
 
-
-  useEffect(() => {
-    if (!selectedEntry) {
-      cancelImplicitLoad();
-      return;
-    }
-    if (effectiveRenderFormat !== RENDER_FORMAT.IMPLICIT) {
-      cancelImplicitLoad();
-      return;
-    }
-    if (!selectedEntryHasImplicit) {
-      cancelImplicitLoad();
-      setImplicitState(null);
-      setImplicitStatus(ASSET_STATUS.PENDING);
-      setImplicitError("");
-      return;
-    }
-    if (selectedImplicitMatches) {
-      return;
-    }
-    loadImplicitForEntry(selectedEntry).catch((err) => {
-      setImplicitStatus(ASSET_STATUS.ERROR);
-      setImplicitError(err instanceof Error ? err.message : String(err));
-    });
-  }, [
-    cancelImplicitLoad,
-    effectiveRenderFormat,
-    loadImplicitForEntry,
-    selectedEntry,
-    selectedEntryHasImplicit,
-    selectedImplicitMatches,
-    setImplicitError,
-    setImplicitState,
-    setImplicitStatus
-  ]);
 
   useEffect(() => {
     if (!selectedEntry) {
@@ -5378,14 +4755,6 @@ export default function CadWorkspace({
       };
     }
 
-    if (effectiveRenderFormat === RENDER_FORMAT.IMPLICIT && implicitViewerLoading) {
-      return {
-        loading: true,
-        label: selectedEntryHasImplicit ? (implicitLoadStage || "loading implicit CAD") : "loading",
-        title: viewerLoadingLabel
-      };
-    }
-
     if (isRobotRenderFormat(effectiveRenderFormat) && urdfViewerLoading) {
       return {
         loading: true,
@@ -5469,8 +4838,6 @@ export default function CadWorkspace({
     assemblyHydrationLoading,
     assemblySidebarLoading,
     effectiveRenderFormat,
-    implicitLoadStage,
-    implicitViewerLoading,
     meshLoadStage,
     meshLoadTargetFile,
     referenceLoadStage,
@@ -5478,7 +4845,6 @@ export default function CadWorkspace({
     referenceSelectionStatus,
     selectedEntry,
     selectedEntryHasDxf,
-    selectedEntryHasImplicit,
     selectedEntryHasMesh,
     selectedEntryHasUrdf,
     selectedArtifactGenerating,
@@ -7396,8 +6762,7 @@ export default function CadWorkspace({
   // every format that draws something — camera actions are not a STEP feature. Only the
   // assembly-tree entries below are capability-gated; a format with no parts simply gets
   // the camera section. This also un-strands `zoomToFitSelection`'s whole-model fallback,
-  // which shipped with the implicit render type and was unreachable while this handler
-  // bailed on anything but STEP.
+  // which was unreachable while this handler bailed on anything but STEP.
   const openGlobalViewerContextMenu = useCallback(({ clientX = 0, clientY = 0 } = {}) => {
     if (!selectedViewportContent) {
       setViewerContextMenu(null);
@@ -8108,8 +7473,8 @@ export default function CadWorkspace({
     }
   }, [fileRevealAvailable]);
 
-  // One export handler for every exportable entry — STEP/assembly, DXF drawing, implicit
-  // model. The server picks the producer from the source file, so the only thing that varies
+  // One export handler for every exportable entry — STEP/assembly and DXF drawing.
+  // The server picks the producer from the source file, so the only thing that varies
   // here is the format the menu offered.
   const handleExportModelFile = useCallback(async (entry, format) => {
     const fileRef = entry ? fileKey(entry) : "";
@@ -8491,9 +7856,6 @@ export default function CadWorkspace({
           stepParameters={selectedStepParameterRuntime}
           selectedMeshData={selectedMeshData}
           selectedKey={selectedKey}
-          selectedImplicitModel={selectedImplicitRuntimeModel}
-          implicitDynamicRenderActive={implicitDynamicRenderActive}
-          implicitGraphicsSettings={implicitGraphicsSettings}
           missingFileRef={missingFileRef}
           viewerServerInfo={viewerServerInfo}
           viewerPerspective={viewerPerspective}
@@ -8675,7 +8037,6 @@ export default function CadWorkspace({
                 handleSelectTabToolMode={handleSelectTabToolMode}
                 viewerLoading={viewerLoading}
                 selectedMeshData={selectedMeshData}
-                selectedImplicitModel={selectedImplicitRuntimeModel}
                 drawingToolOptions={drawingToolOptions}
                 drawingTool={drawingTool}
                 handleSelectDrawingTool={handleSelectDrawingTool}
@@ -8936,51 +8297,6 @@ export default function CadWorkspace({
                 onMeasurementActivate={setActiveMeasureId}
                 onMeasurementDelete={handleMeasureDelete}
                 onMeasurementsClear={handleMeasureClear}
-              />
-            ) : null}
-
-            {selectedFileSheetKind === "implicit" ? (
-              <ImplicitFileSheet
-                key={`implicit:${selectedKey}`}
-                open={fileSheetOpen}
-                title="Implicit CAD"
-                isDesktop={isDesktop}
-                width={activeSheetWidth || tabToolsWidth}
-                selectedEntry={selectedEntry}
-                onOpenChange={setTabToolsOpen}
-                onStartResize={handleStartFileSheetResize}
-                parameterRuntime={{
-                  status: implicitStatus === ASSET_STATUS.LOADING ? "loading" : selectedImplicitRuntimeError ? "error" : selectedImplicitDefinition ? "ready" : "idle",
-                  error: selectedImplicitRuntimeError,
-                  definition: selectedImplicitDefinition,
-                  parameterValues: implicitParameterValues,
-                  animationState: selectedImplicitAnimationViewState,
-                  onParameterChange: handleImplicitParameterChange,
-                  onResetParameters: handleResetParameters,
-                  onAnimationSelect: handleImplicitAnimationSelect,
-                  onAnimationPlayToggle: handleImplicitAnimationPlayToggle,
-                  onAnimationReset: handleImplicitAnimationReset,
-                  onAnimationScrub: handleImplicitAnimationScrub,
-                  onAnimationSpeedChange: handleImplicitAnimationSpeedChange,
-                  onAnimationLoopToggle: handleImplicitAnimationLoopToggle,
-                  onCopyParams: handleCopyParameters,
-                  onPasteParams: handlePasteParameters
-                }}
-                graphicsRuntime={{
-                  model: selectedImplicitRuntimeModel,
-                  settings: implicitGraphicsSettings,
-                  onSettingsChange: updateImplicitGraphicsSettings
-                }}
-                fileDownloadAvailable={fileLinkCopyAvailable}
-                viewerServerInfo={viewerServerInfo}
-                localFileOpenAvailable={fileRevealAvailable}
-                fileAccessBusyKey={fileAccessBusyKey}
-                onOpenFileAsset={handleRevealFileAsset}
-                suppressDynamicMetadataStatus={selectedArtifactGenerating}
-                statusItems={selectedFileStatusItems}
-                themeTabs={themeTabs}
-                openSectionIds={effectiveFileSheetOpenSectionIds}
-                onOpenSectionIdsChange={handleFileSheetOpenSectionIdsChange}
               />
             ) : null}
 

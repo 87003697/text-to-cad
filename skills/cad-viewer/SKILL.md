@@ -1,6 +1,6 @@
 ---
 name: cad-viewer
-description: Start CAD Viewer and return review links for explicit CAD, implicit CAD, and robot-description files. Use when visually reviewing `.step`, `.stp`, `.implicit.js`, `.implicit.mjs`, `.glb`, `.stl`, `.3mf`, `.dxf`, `.urdf`, `.srdf`, or `.sdf` files, especially when handed off from CAD, implicit-cad, URDF, SRDF, or SDF generation skills.
+description: Start or reuse CAD Viewer and return review links for STEP-first CAD, mesh, robot-description, DXF, and G-code files. Use when visually reviewing `.step`, `.stp`, `.glb`, `.stl`, `.3mf`, `.gcode`, `.dxf`, `.urdf`, `.srdf`, or `.sdf` files, especially when handed off from CAD, G-code, URDF, SRDF, or SDFormat generation skills.
 ---
 
 # CAD Viewer
@@ -12,8 +12,9 @@ modify, debug, or iterate on CAD Viewer source itself, clone that repository and
 work there — this installed skill runtime runs the Viewer, it is not where you
 edit it.
 
-Use this skill to open existing or newly generated CAD, implicit CAD,
-robot-description, or DXF files in CAD Viewer and hand back live review links. The expected input is one or more explicit file paths.
+Use this skill to open existing or newly generated STEP-first CAD, mesh,
+robot-description, DXF, or plain FDM G-code files in CAD Viewer and hand back
+live review links. The expected input is one or more explicit file paths.
 
 ## Start Viewer
 

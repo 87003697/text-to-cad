@@ -450,21 +450,12 @@ test("a STEP part and a STEP assembly share one file icon", () => {
   assert.equal(part, ENTRY_ICON_KIND.STEP);
 });
 
-test("an implicit model has its own icon rather than a generic code glyph", () => {
-  const implicit = entryIconKind({ file: "a.implicit.js", kind: "implicit" }, { sourceFormat: "implicit" });
-  assert.equal(implicit, ENTRY_ICON_KIND.IMPLICIT);
-  assert.notEqual(implicit, ENTRY_ICON_KIND.STEP);
-});
-
 test("isCodeDerivedEntry marks generator-backed files and nothing else", () => {
   assert.equal(isCodeDerivedEntry({ file: "a.step.py", kind: "assembly" }), true);
   assert.equal(isCodeDerivedEntry({ file: "a.dxf.py", kind: "dxf" }), true);
   assert.equal(isCodeDerivedEntry({ kind: "part", sourceKind: "python" }), true);
   assert.equal(isCodeDerivedEntry({ file: "a.step", kind: "assembly" }), false);
   assert.equal(isCodeDerivedEntry({ file: "a.dxf", kind: "dxf" }), false);
-  // An .implicit.js IS the code rather than being generated from it, so it
-  // keeps its own icon and takes no badge.
-  assert.equal(isCodeDerivedEntry({ file: "a.implicit.js", kind: "implicit" }), false);
 });
 
 test("entryIconKind gives STEP, STL, 3MF, and GLB distinct file explorer icons", () => {

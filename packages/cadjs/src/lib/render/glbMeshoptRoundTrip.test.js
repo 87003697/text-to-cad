@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { MeshoptEncoder } from "meshoptimizer";
-import { writeGlb } from "implicitjs/glb/writeGlb.js";
+import { writeGlb } from "cadjs/glb/writeGlb.js";
 
 import { buildMeshDataFromGlbBuffer } from "./glbMeshData.js";
 

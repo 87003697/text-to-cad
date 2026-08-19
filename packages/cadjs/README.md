@@ -5,10 +5,6 @@ and generated snapshot browser assets. It owns reusable parsing, scene-building,
 explicit-CAD rendering, STEP topology, selector, mesh, robot-description, and
 artifact helpers without depending on React or application chrome.
 
-Implicit CAD model loading, shader rendering, snapshots, SDF sampling, and
-mesh exports live in the sibling `implicitjs` package. Consumers that need
-implicit CAD should depend on `implicitjs` directly alongside `cadjs`.
-
 ## Install
 
 In this workbench, consumers link the package directly:
@@ -51,9 +47,6 @@ Prefer moving logic into `cadjs` when it is reusable across:
 - docs or marketing previews,
 - generated snapshot browser runtime,
 - testable CAD parsing or sidecar preparation.
-
-Prefer moving implicit model, shader, snapshot, SDF, or mesh-export behavior
-into `implicitjs` instead.
 
 Keep app-specific workflows in the app. A useful rule of thumb: `cadjs` should
 understand CAD data and rendering state, while `viewer/` should understand user

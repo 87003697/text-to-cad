@@ -17,34 +17,19 @@ add fields.
   "preview_profile": {
     "name": "cadena_residual_eight_view/1",
     "sha256": "<sha256>"
-  },
-  "route": "cad"
-}
-```
-
-`route` is `cad` or `implicit-cad`. `<PREPARED>/setup/route.json` uses:
-
-```json
-{
-  "schema": "mesh-to-cad.route/1",
-  "route": "cad",
-  "decision_reasons": ["measured reason"],
-  "mesh_features_used": ["observed feature"],
-  "considered_alternative": {
-    "route": "implicit-cad",
-    "rejected_because": "specific evidence"
   }
 }
 ```
 
-The rejected alternative is required and must be non-empty.
+If STEP-first CAD cannot express the input honestly, record that limitation in
+the plan and stop reason.
 
 ## Initial plan
 
 ```json
 {
   "schema": "mesh-to-cad.initial-plan/1",
-  "summary": "Build the first route candidate directly in canonical coordinates."
+  "summary": "Build the first CAD candidate directly in canonical coordinates."
 }
 ```
 
@@ -146,7 +131,7 @@ conflict blocks Final Delivery.
 
 `notes.md` contains exactly these headings in this order:
 
-1. `## Input and Route`
+1. `## Input`
 2. `## Modeling Intent`
 3. `## Preserved Structural Features`
 4. `## Omitted Surface Details`
@@ -154,7 +139,7 @@ conflict blocks Final Delivery.
 6. `## Final Selection`
 7. `## Verification`
 
-Record the Canonical Reference and route, intended structure, declared
+Record the Canonical Reference, intended structure, declared
 omissions, Measured Step/Repair Cycle ancestry, considered and Selected Steps,
 inherited acceptance, stop reason, rebuild provenance, Observable Geometry
 verification, final preview, and primary artifacts. Cite paths; do not invent

@@ -35,7 +35,7 @@ _CLASSIFIERS = (
     ("checkpoint", ("git commit",)),
     (
         "reconstruct",
-        ("canonical-build", "build123d", "freecad", "implicit-cad", "cadquery"),
+        ("canonical-build", "build123d", "freecad", "cadquery"),
     ),
     ("inspect", ("mesh-inspect", "mesh_stats", "trimesh", "file ")),
 )

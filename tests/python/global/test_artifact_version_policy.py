@@ -72,7 +72,6 @@ class PackageVersionIsOneNumberPerFileTypeTest(unittest.TestCase):
         for constant in (
             "STEP_PACKAGE_VERSION",
             "DXF_PACKAGE_SCHEMA_VERSION",
-            "IMPLICIT_PACKAGE_SCHEMA_VERSION",
         ):
             self.assertIn(
                 constant,

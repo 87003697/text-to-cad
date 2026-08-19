@@ -441,64 +441,6 @@ export function createCadViewerApiMiddleware({
       }
       return;
     }
-    if (requestUrl.pathname === "/__cad/implicit-export") {
-      const method = String(req.method || "GET").toUpperCase();
-      if (method !== "POST") {
-        res.setHeader("allow", "POST");
-        sendJson(res, 405, {
-          error: "Use POST to export implicit CAD files",
-        });
-        return;
-      }
-      if (
-        backend.kind !== "local-fs" ||
-        typeof backend.generateImplicitExport !== "function" ||
-        typeof backend.resolveRoot !== "function"
-      ) {
-        sendJson(res, 405, {
-          error: "Implicit CAD export is only available for the local filesystem backend",
-        });
-        return;
-      }
-      try {
-        const body = await readJsonBody(req);
-        const catalog = await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef });
-        const resolvedRoot = typeof backend.resolveRequestRoot === "function"
-          ? backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef })
-          : backend.resolveRoot(activeRootDir);
-        const format = requestUrl.searchParams.get("format") || body.format || "glb";
-        const result = await backend.generateImplicitExport({
-          fileRef: activeFileRef || body.file,
-          format,
-          parameterValues: body.parameterValues || body.params || null,
-          animationState: body.animationState || body.implicitAnimationState || null,
-          resolution: body.resolution,
-          maxCells: body.maxCells,
-          resolvedRoot,
-          rootDir: activeRootDir,
-          catalog,
-        });
-        onCatalogChanged(resolvedRoot);
-        sendJson(res, 200, {
-          ok: true,
-          result,
-          entry: result.entry || null,
-          catalog: result.catalog || (
-            typeof backend.refreshCatalog === "function"
-              ? await backend.refreshCatalog({ rootDir: activeRootDir, fileRef: activeFileRef })
-              : await backend.readCatalog({ rootDir: activeRootDir, fileRef: activeFileRef })
-          ),
-          downloadUrl: `/__cad/download?dir=${encodeURIComponent(activeRootDir)}&file=${encodeURIComponent(result.outputFileRef)}&asset=output`,
-          filename: result.filename,
-        });
-      } catch (error) {
-        sendJson(res, 400, {
-          ok: false,
-          error: errorMessage(error),
-        });
-      }
-      return;
-    }
     if (requestUrl.pathname === "/__cad/step-source-status") {
       if (typeof backend.readStepSourceStatus !== "function") {
         sendJson(res, 501, {

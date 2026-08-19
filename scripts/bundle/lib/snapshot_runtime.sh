@@ -140,12 +140,8 @@ build_snapshot_runtime() {
   rm -rf "$target_dir"
   mkdir -p "$target_dir"
   write_snapshot_render_html "$target_dir"
-  # NODE_PATH resolves cadjs's bare `implicitjs` imports (e.g.
-  # cadjs/common/camera.js re-exports implicitjs/common/camera.js) directly
-  # from packages/ source, honoring implicitjs's exports map, and resolves the
-  # pinned meshoptimizer out of the tmp toolchain, so the bundle stays hermetic
-  # on fresh checkouts with no packages/cadjs/node_modules.
-  # A directory --alias cannot do the first: it bypasses the exports map.
+  # NODE_PATH resolves cadjs from packages/ and the pinned meshoptimizer out of
+  # the tmp toolchain, so the bundle stays hermetic on fresh checkouts.
   #
   # meshoptimizer MUST be resolvable here. glbMeshData.js reaches it through a
   # dynamic import("meshoptimizer"), which esbuild leaves as a bare specifier --

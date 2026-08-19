@@ -1,7 +1,6 @@
 """Run a Node builder as a child of the Python process that holds the artifact lock.
 
-The implicit and DXF (3D preview) builders are JavaScript: an ``.implicit.js`` source is an
-executable ES module, and the DXF preview mesher is ~3,400 LOC of already-shipped JS. But
+The DXF preview builder is JavaScript: its mesher is already-shipped JS. But
 **Node cannot hold the coordination lock**. Verified on this repo's interpreter (v22.22.0):
 ``fs.flock``, ``fs.promises.flock`` and ``O_EXLOCK`` are all absent, and an ``O_EXCL``
 lockfile is invisible to :func:`cadgen.coordination.snapshot`, which asks the kernel -- a
@@ -25,16 +24,14 @@ Two invariants this module exists to hold:
    "a thin Python process owns the child" design was chosen to prevent, and is why the
    server request thread was rejected as the lock holder.
 2. **Bare specifiers resolve through the exports map.** The published skill runtime ships
-   ``packages/implicitjs`` and ``packages/cadjs`` as SOURCE with no ``node_modules``, so the
-   child is spawned with ``NODE_PATH=<packages dir>``: a ``NODE_PATH`` entry is treated as a
-   ``node_modules`` directory, which makes ``packages/implicitjs`` resolve as the package
-   ``implicitjs`` *through its exports map*. A directory ``--alias`` cannot do this -- it
+   ``packages/cadjs`` as SOURCE with no ``node_modules``, so the child is spawned with
+   ``NODE_PATH=<packages dir>``. A directory ``--alias`` cannot do this -- it
    bypasses the exports map entirely. Same mechanism as
    ``scripts/bundle/skills/bundle-cad.sh:166-167``.
 
    **Correction to the design doc, measured here:** NODE_PATH alone is NOT sufficient for a
    real ``node`` child. Node's *ESM* resolver ignores NODE_PATH (verified on v22.22.0:
-   ``import "implicitjs/glb/progressStream.js"`` throws ERR_MODULE_NOT_FOUND while
+   a bare package import throws ERR_MODULE_NOT_FOUND while
    ``require.resolve`` of the same specifier under the same env returns the right file).
    bundle-cad.sh never hit this because esbuild implements NODE_PATH itself. So the child is
    also spawned with ``--import node_resolve_register.mjs``, whose resolve hook forwards a
@@ -121,7 +118,7 @@ def cad_node_executable(repo_root: Path | str | None = None) -> str:
         return str(Path(found).resolve())
 
     raise NodeUnavailable(
-        "node was not found on PATH. The implicit and DXF render builders run in Node, and "
+        "node was not found on PATH. The DXF render builder runs in Node, and "
         "the packaged CAD Viewer runtime is itself launched by node -- so a missing node "
         "means this environment is broken, not merely unconfigured. Install Node.js (>=20), "
         "or point CADGEN_NODE at an existing node binary."
@@ -135,7 +132,7 @@ def node_package_root() -> Path:
     right in both layouts: ``packages/cadgen/src/cadgen/_internal/node_runtime.py`` in the
     dev checkout, and ``skills/<skill>/scripts/packages/cadgen/src/cadgen/_internal/...`` in
     a vendored skill runtime. In both, ``parents[4]`` is the ``packages`` dir that also holds
-    ``implicitjs`` and ``cadjs``. ``CADGEN_NODE_PACKAGES`` overrides it.
+    ``cadjs``. ``CADGEN_NODE_PACKAGES`` overrides it.
     """
     override = str(os.environ.get("CADGEN_NODE_PACKAGES") or "").strip()
     if override:
@@ -156,7 +153,7 @@ def node_builder_script(name: str) -> Path:
     if not path.is_file():
         raise NodeBuilderError(
             f"Node builder is missing: {path}. The runtime that ships cadgen must also ship "
-            "packages/cadjs (and packages/implicitjs, which it imports); set "
+            "packages/cadjs; set "
             "CADGEN_NODE_PACKAGES to the packages directory that holds them."
         )
     return path
@@ -167,7 +164,7 @@ def node_child_env(
     *,
     package_root: Path | str | None = None,
 ) -> dict[str, str]:
-    """``os.environ`` plus a ``NODE_PATH`` that resolves bare ``implicitjs``/``cadjs``
+    """``os.environ`` plus a ``NODE_PATH`` that resolves bare ``cadjs``
     specifiers through their exports maps. ``extra`` is overlaid last and wins, including
     over ``NODE_PATH`` -- a caller that knows better is not second-guessed."""
     env = dict(os.environ)

@@ -1,13 +1,11 @@
-"""Render-artifact status/build for /__cad/artifact (the STEP component-GLB package, the
-DXF drawing package and the implicit-CAD render package).
+"""Render-artifact status/build for /__cad/artifact (STEP and DXF packages).
 
 - Ownership is decided on entry.file. Imported `.step`/`.stp` and generated `.step.py`,
-  imported `.dxf` and generated `.dxf.py`, and `.implicit.js`/`.implicit.mjs` models are ALL
+  imported `.dxf` and generated `.dxf.py` models are all
   owned and get a freshness check; an entry with no built artifact reports `needs-build` and
   is built on demand (the viewer surfaces every model, built or not). An imported `.dxf` is
   owned for the same reason an imported `.step` is: its package's `preview.glb` is the only
-  3D renderer it has, and an `.implicit.js` is owned for the same reason again — its baked
-  `model.glb` is the only renderer it has.
+  3D renderer it has.
 - Freshness is a PURE descriptor read (descriptor + payload existence + schema version +
   bake hash; a generated entry re-hashes its recorded source closure, an imported entry
   compares the digest its format's spec-table row names) — **no OCP**. It DOES import cadgen, but only stdlib-only modules
@@ -40,13 +38,6 @@ from cadgen._internal.drawing_package import (
     drawing_payload_keys,
     drawing_preview_bake_settings,
 )
-from cadgen._internal.implicit_package import (
-    IMPLICIT_DESCRIPTOR_NAME,
-    IMPLICIT_PACKAGE_KIND,
-    IMPLICIT_PACKAGE_SCHEMA_VERSION,
-    IMPLICIT_SUFFIXES,
-    implicit_bake_settings,
-)
 from cadgen._internal.package_freshness import (
     STEP_PACKAGE_VERSION,
     bake_hash_matches,
@@ -72,8 +63,6 @@ BUILDABLE_ARTIFACT_CODES = frozenset([
     "unsupported_step_topology",
     # Drawing package codes (same buildable semantics).
     "missing_dxf_artifact", "stale_dxf_artifact", "unsupported_dxf_artifact",
-    # Implicit render package codes.
-    "missing_implicit_artifact", "stale_implicit_artifact", "unsupported_implicit_artifact",
 ])
 
 # Owns imported `.step`/`.stp` and generated `.step.py`/`.stp.py` entries.
@@ -95,16 +84,8 @@ def owns_dxf_entry(entry) -> bool:
     return bool(entry) and bool(_DXF_ENTRY_RE.search(str(entry.get("file") or "")))
 
 
-# Owns `.implicit.js` / `.implicit.mjs` models. The suffixes come from the PRODUCER
-# (cadgen._internal.implicit_package), so the set of sources the viewer asks to build can
-# never drift from the set the builder accepts.
-def owns_implicit_entry(entry) -> bool:
-    file_ref = str((entry or {}).get("file") or "").lower()
-    return bool(entry) and any(file_ref.endswith(suffix) for suffix in IMPLICIT_SUFFIXES)
-
-
 def owns_entry(entry) -> bool:
-    return owns_step_entry(entry) or owns_dxf_entry(entry) or owns_implicit_entry(entry)
+    return owns_step_entry(entry) or owns_dxf_entry(entry)
 
 
 # --- pure freshness validation (shared by both package formats) ---
@@ -149,28 +130,6 @@ _DRAWING_PACKAGE = {
     "unsupported": "unsupported_dxf_artifact",
     "stale": "stale_dxf_artifact",
 }
-_IMPLICIT_PACKAGE = {
-    "descriptor": IMPLICIT_DESCRIPTOR_NAME,
-    "package_kind": IMPLICIT_PACKAGE_KIND,
-    "schema_version": IMPLICIT_PACKAGE_SCHEMA_VERSION,
-    # An implicit model is a GENERATED entry (its descriptor records sourceKind "python" and
-    # a JS source closure), so this field is never reached today. It is named anyway, and
-    # named the same as every post-STEP format, so the imported branch cannot fail open if a
-    # descriptor ever arrives with a different provenance.
-    "source_digest_field": "sourceDigest",
-    "missing_digest": "stale_implicit_artifact",
-    # The bake IS the artifact here: model.glb froze one resolution, one cell cap and the
-    # mesher's geometry contract into itself at the model's default parameter values, and
-    # nothing else in the freshness stack can see any of them change. This is the producer's
-    # own callable, so the two authorities cannot drift apart by an edit.
-    "bake_settings": implicit_bake_settings,
-    "missing": "missing_implicit_artifact",
-    "unreadable": "missing_implicit_artifact",
-    "unsupported": "unsupported_implicit_artifact",
-    "stale": "stale_implicit_artifact",
-}
-
-
 def _step_payload_refs(descriptor):
     """Every component GLB the assembly descriptor claims."""
     components = descriptor.get("components") if isinstance(descriptor.get("components"), dict) else {}
@@ -203,11 +162,6 @@ def _drawing_payload_refs(descriptor):
     # never had a bake -- the payload list comes from cadgen so this side cannot drift into
     # demanding one and reporting every drawing stale forever (issue #246).
     return [str(descriptor.get(key) or "").strip() for key in drawing_payload_keys(descriptor)]
-
-
-def _implicit_payload_refs(descriptor):
-    """The one payload an implicit package has: the baked mesh."""
-    return [str(descriptor.get("glb") or "").strip()]
 
 
 def _validate_render_package(spec, source_path, payload_refs, model_folder):
@@ -305,15 +259,6 @@ def validate_dxf_freshness(repo_root, source_path):
     del repo_root
     return _validate_render_package(
         _DRAWING_PACKAGE, source_path, _drawing_payload_refs, os.path.dirname(os.path.abspath(source_path))
-    )
-
-
-def validate_implicit_freshness(repo_root, source_path):
-    """ok=True (fresh/ready) or (False, code). source_path is the `.implicit.js` model; the
-    package dir is entry-keyed exactly like the STEP and drawing packages."""
-    del repo_root
-    return _validate_render_package(
-        _IMPLICIT_PACKAGE, source_path, _implicit_payload_refs, os.path.dirname(os.path.abspath(source_path))
     )
 
 

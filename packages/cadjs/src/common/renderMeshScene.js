@@ -716,7 +716,7 @@ export function renderJobContext(meshData, job = {}) {
   // Non-STEP sources used to be forced to PERSPECTIVE here regardless of the theme
   // ("historical perspective framing"), which had a consequence nobody was reading it for:
   // the tight frame that makes a render fill its canvas is orthographic-only, so every
-  // mesh, drawing, implicit and robot snapshot silently skipped it and sat in a sea of
+  // mesh, drawing and robot snapshot silently skipped it and sat in a sea of
   // empty space while STEP filled its frame. Measured on tom.urdf: the gate reported
   // usePerspectiveCamera=true and the tight frame never ran.
   const projection = normalizeCameraProjection(

@@ -33,7 +33,6 @@ EXPECTED_SKILLS = {
     "cad-viewer",
     "dxf",
     "gcode",
-    "implicit-cad",
     "mesh-compare",
     "mesh-inspect",
     "mesh-to-cad",
@@ -90,7 +89,7 @@ class PluginManifestPolicyTest(unittest.TestCase):
         self.assertEqual(marketplace.get("name"), MARKETPLACE_NAME)
         self.assertEqual(
             marketplace.get("interface", {}).get("displayName"),
-            "Text to CAD",
+            "text-to-cad",
         )
 
         plugins = marketplace.get("plugins")

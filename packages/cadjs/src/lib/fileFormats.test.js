@@ -22,7 +22,8 @@ test("entrySourceFormat maps manifest kinds to stable render formats", () => {
   assert.equal(entrySourceFormat({ kind: "3mf" }), RENDER_FORMAT.THREE_MF);
   assert.equal(entrySourceFormat({ kind: "glb" }), RENDER_FORMAT.GLB);
   assert.equal(entrySourceFormat({ kind: "gltf" }), RENDER_FORMAT.GLB);
-  assert.equal(entrySourceFormat({ kind: "implicit" }), RENDER_FORMAT.IMPLICIT);
+  assert.equal(entrySourceFormat({ kind: "gcode" }), RENDER_FORMAT.GCODE);
+  assert.equal(entrySourceFormat({ kind: "implicit" }), "");
   assert.equal(entrySourceFormat({ kind: "urdf" }), RENDER_FORMAT.URDF);
   assert.equal(entrySourceFormat({ kind: "srdf" }), RENDER_FORMAT.SRDF);
   assert.equal(entrySourceFormat({ kind: "sdf" }), RENDER_FORMAT.SDF);
@@ -38,7 +39,7 @@ test("fileSheetKindForEntry preserves specialized sheet routing", () => {
   assert.equal(fileSheetKindForEntry({ kind: "srdf" }), "srdf");
   assert.equal(fileSheetKindForEntry({ kind: "sdf" }), "sdf");
   assert.equal(fileSheetKindForEntry({ kind: "dxf" }), "dxf");
-  assert.equal(fileSheetKindForEntry({ kind: "implicit" }), "implicit");
+  assert.equal(fileSheetKindForEntry({ kind: "implicit" }), "");
 });
 
 test("mesh and robot format predicates stay narrow", () => {
@@ -56,9 +57,11 @@ test("normalizeRenderFormat preserves tab-state format aliases and defaults", ()
   assert.equal(normalizeRenderFormat("gltf"), RENDER_FORMAT.GLB);
   assert.equal(normalizeRenderFormat("srdf"), RENDER_FORMAT.SRDF);
   assert.equal(normalizeRenderFormat("3mf"), RENDER_FORMAT.THREE_MF);
-  assert.equal(normalizeRenderFormat("implicit"), RENDER_FORMAT.IMPLICIT);
-  assert.equal(normalizeRenderFormat("unknown"), RENDER_FORMAT.STEP);
-  assert.equal(normalizeRenderFormat("unknown", { defaultFormat: RENDER_FORMAT.DXF }), RENDER_FORMAT.DXF);
+  assert.equal(normalizeRenderFormat("gcode"), RENDER_FORMAT.GCODE);
+  assert.equal(normalizeRenderFormat("implicit"), "");
+  assert.equal(normalizeRenderFormat("unknown"), "");
+  assert.equal(normalizeRenderFormat("unknown", { defaultFormat: RENDER_FORMAT.DXF }), "");
+  assert.equal(normalizeRenderFormat(""), RENDER_FORMAT.STEP);
 });
 
 test("meshAssetKeyForEntry chooses native mesh keys and STEP GLB sidecars", () => {
@@ -68,7 +71,6 @@ test("meshAssetKeyForEntry chooses native mesh keys and STEP GLB sidecars", () =
   assert.equal(meshAssetKeyForEntry({ kind: "part" }), "glb");
   assert.equal(meshAssetKeyForEntry({ kind: "assembly" }), "glb");
   assert.equal(meshAssetKeyForEntry({ kind: "dxf" }), "glb");
-  assert.equal(meshAssetKeyForEntry({ kind: "implicit" }), "glb");
 });
 
 test("entryRenderAssetFormat is GLB for every package-baked kind, unconditionally", () => {
@@ -78,12 +80,10 @@ test("entryRenderAssetFormat is GLB for every package-baked kind, unconditionall
   // never a silent fall back to an in-browser parse.
   assert.equal(entryRenderAssetFormat.length, 1);
   assert.equal(entryRenderAssetFormat({ kind: "dxf" }), RENDER_FORMAT.GLB);
-  assert.equal(entryRenderAssetFormat({ kind: "implicit" }), RENDER_FORMAT.GLB);
   assert.equal(entryRenderAssetFormat({ kind: "dxf", url: "" }), RENDER_FORMAT.GLB);
   // The SOURCE format is untouched: it still names the file the user opened, and its
   // icon/status/reset call sites still ask that question.
   assert.equal(entrySourceFormat({ kind: "dxf" }), RENDER_FORMAT.DXF);
-  assert.equal(entrySourceFormat({ kind: "implicit" }), RENDER_FORMAT.IMPLICIT);
   assert.equal(entryRenderAssetFormat({ kind: "part" }), RENDER_FORMAT.STEP);
   assert.equal(entryRenderAssetFormat({ kind: "stl" }), RENDER_FORMAT.STL);
   assert.equal(entryRenderAssetFormat({ kind: "urdf" }), RENDER_FORMAT.URDF);
@@ -95,7 +95,8 @@ test("file extension parsing handles URLs, queries, and supported render formats
   assert.equal(fileExtensionFromPath("https://example.test/robot.srdf?download=1"), ".srdf");
   assert.equal(renderFormatFromPath("/assets/bracket.stp"), RENDER_FORMAT.STEP);
   assert.equal(renderFormatFromPath("/assets/bracket.gltf"), RENDER_FORMAT.GLB);
-  assert.equal(renderFormatFromPath("/assets/orb.implicit.js?download=1"), RENDER_FORMAT.IMPLICIT);
-  assert.equal(renderFormatFromPath("/assets/orb.implicit.mjs#preview"), RENDER_FORMAT.IMPLICIT);
+  assert.equal(renderFormatFromPath("/assets/toolpath.gcode?download=1"), RENDER_FORMAT.GCODE);
+  assert.equal(renderFormatFromPath("/assets/orb.implicit.js?download=1"), "");
+  assert.equal(renderFormatFromPath("/assets/orb.implicit.mjs#preview"), "");
   assert.equal(renderFormatFromPath("/assets/unknown"), "");
 });
