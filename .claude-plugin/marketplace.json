@@ -3,17 +3,20 @@
   "owner": {
     "name": "earthtojake"
   },
+  "interface": {
+    "displayName": "Text to CAD"
+  },
   "metadata": {
     "description": "CAD, robotics, fabrication, and local review plugins."
   },
   "description": "CAD, robotics, fabrication, and local review plugins.",
-  "version": "0.3.9",
+  "version": "0.3.13",
   "plugins": [
     {
       "name": "cad",
-      "source": "./plugins/cad",
+      "source": "./",
       "description": "CAD, robotics, fabrication, and local review skills.",
-      "version": "0.3.9",
+      "version": "0.3.13",
       "author": {
         "name": "earthtojake"
       },

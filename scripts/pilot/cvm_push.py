@@ -33,7 +33,7 @@ RSYNC_SUMMARY_PATTERN = re.compile(
 )
 
 # Source -> staging is intentionally different from staging -> CVM. The
-# staging copy keeps build-only inputs such as viewer/, packages/, and plugins/
+# staging copy keeps build-only inputs such as viewer/ and packages/
 # while excluding local state that must never become deployment material.
 STAGE_SOURCE_EXCLUDES = (
     "/.git",
@@ -813,9 +813,29 @@ class CvmPush:
         except ValueError:
             return TransferSummary()
 
+    def remove_legacy_plugin_tree(self) -> None:
+        """Remove only the obsolete pre-repo-root plugin package on CVM."""
+
+        result = self.runner.remote(
+            (
+                "set -eu\n"
+                f"cd {REMOTE_ROOT}\n"
+                "if [ -e plugins ]; then rm -rf -- plugins; fi\n"
+                "test ! -e plugins"
+            ),
+            cwd=self.repo_root,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise PushError(
+                "CVM repo-root plugin migration failed to remove legacy plugins/",
+                5,
+                transferred=True,
+            )
+
     @staticmethod
     def _remote_runtime_command() -> str:
-        lines = ["set -eu", f"cd {REMOTE_ROOT}"]
+        lines = ["set -eu", f"cd {REMOTE_ROOT}", "test ! -e plugins"]
         for relative in PRODUCTION_RUNTIME.physical_directories:
             quoted = shlex.quote(relative)
             lines.extend([f"test -d {quoted}", f"test ! -L {quoted}"])
@@ -931,6 +951,7 @@ class CvmPush:
                 attestation = self.attest_stage(stage)
                 self._enter_phase("transfer")
                 self.transfer_stage(stage)
+                self.remove_legacy_plugin_tree()
                 self._enter_phase("verify")
                 self.verify_remote(attestation)
         except PushError as exc:

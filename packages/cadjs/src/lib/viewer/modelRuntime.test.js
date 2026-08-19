@@ -101,6 +101,7 @@ test("model runtime camera events only match the visible model key", () => {
 test("model runtime helpers build and sync STEP clip planes", () => {
   const material = new THREE.MeshStandardMaterial();
   const edgeMaterial = new THREE.LineBasicMaterial();
+  const ghostMaterial = new THREE.MeshBasicMaterial();
   const overlayMaterial = new THREE.MeshBasicMaterial();
   const overlay = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), overlayMaterial);
   const runtime = {
@@ -111,7 +112,7 @@ test("model runtime helpers build and sync STEP clip planes", () => {
     },
     modelGroup: new THREE.Group(),
     renderer: {},
-    displayRecords: [{ material, edgeMaterial }],
+    displayRecords: [{ material, edgeMaterial, ghostMaterial }],
     facePickGroup: new THREE.Group(),
     edgePickGroup: new THREE.Group(),
     vertexPickGroup: new THREE.Group(),
@@ -139,14 +140,30 @@ test("model runtime helpers build and sync STEP clip planes", () => {
   assert.equal(runtime.activeClipPlanes.length, 1);
   assert.equal(material.clippingPlanes.length, 1);
   assert.equal(edgeMaterial.clippingPlanes.length, 1);
+  assert.equal(ghostMaterial.clippingPlanes.length, 1);
   assert.equal(overlayMaterial.clippingPlanes.length, 1);
   assert.equal(material.userData.cadClipPlaneEnabled, true);
+  assert.equal(ghostMaterial.userData.cadClipPlaneEnabled, true);
+
+  const initialGhostPlane = ghostMaterial.clippingPlanes[0];
+  assertNear(initialGhostPlane.constant, -7, "initial ghost plane constant");
+
+  syncRuntimeStepClipPlane(runtime, {
+    enabled: true,
+    axis: "x",
+    offset: 0.75
+  });
+  assert.equal(ghostMaterial.clippingPlanes, runtime.activeClipPlanes);
+  assert.notEqual(ghostMaterial.clippingPlanes[0], initialGhostPlane);
+  assertNear(ghostMaterial.clippingPlanes[0].constant, -9.5, "moved ghost plane constant");
 
   syncRuntimeStepClipPlane(runtime, { enabled: false });
   assert.equal(runtime.activeClipPlane, null);
   assert.deepEqual(runtime.activeClipPlanes, []);
   assert.equal(material.clippingPlanes, null);
   assert.equal(edgeMaterial.clippingPlanes, null);
+  assert.equal(ghostMaterial.clippingPlanes, null);
   assert.equal(overlayMaterial.clippingPlanes, null);
   assert.equal(material.userData.cadClipPlaneEnabled, false);
+  assert.equal(ghostMaterial.userData.cadClipPlaneEnabled, false);
 });

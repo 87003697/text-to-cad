@@ -59,7 +59,9 @@ robot description files, simulation, and local review.
 ## 💻 Installation
 
 For production use, install or clone from `main`; that branch contains the
-generated skill/plugin outputs needed by provider installers.
+generated skill outputs needed by provider installers. The repository root is
+the plugin package, and `skills/` is its canonical skill tree rather than a
+copy under `plugins/cad/`.
 
 ### Skills
 
@@ -77,10 +79,14 @@ directly for supported agents.
 Provider-native plugin installs are also available for Codex and Claude Code:
 
 ```bash
-# Codex
+# Codex (requires Codex 0.142.0 or newer)
 codex plugin marketplace add earthtojake/text-to-cad
 codex plugin add cad@text-to-cad
 ```
+
+Codex resolves this repository-root plugin only in version 0.142.0 and newer.
+Older versions silently skip it; upgrade Codex if the plugin does not appear in
+`codex plugin list`.
 
 ```bash
 # Claude Code

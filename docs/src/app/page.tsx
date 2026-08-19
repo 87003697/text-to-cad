@@ -326,7 +326,14 @@ export default function Home() {
               </div>
               <p className="text-sm leading-6 text-muted-foreground">
                 Skills CLI installation is preferred for regular use. Restart
-                your agent if newly installed skills do not appear.
+                your agent if newly installed skills do not appear. The Codex
+                plugin install requires Codex 0.142.0 or newer; older versions
+                skip the repository-root plugin silently.
+              </p>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Provider plugin installs use the repository root as the package
+                and load the canonical <code>skills/</code> tree directly; there
+                is no separate <code>plugins/cad/</code> copy.
               </p>
               <p className="text-sm leading-6 text-muted-foreground">
                 Local development symlink guidance lives in{" "}

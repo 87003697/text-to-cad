@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   applyServerArgsToEnv,
   parseServerArgs,
+  serverHelpText,
 } from "./serverArgs.mjs";
+import { DEFAULT_PORT_SCAN_LIMIT } from "./serverListen.mjs";
 
 test("parseServerArgs accepts direct backend port and host flags", () => {
   assert.deepEqual(
@@ -14,6 +16,8 @@ test("parseServerArgs accepts direct backend port and host flags", () => {
       host: "0.0.0.0",
       rootDir: "",
       shutdownAfterMs: null,
+      portScanLimit: DEFAULT_PORT_SCAN_LIMIT,
+      json: false,
       help: false,
     }
   );
@@ -27,6 +31,8 @@ test("parseServerArgs accepts a default directory", () => {
       host: "",
       rootDir: "/tmp/models",
       shutdownAfterMs: null,
+      portScanLimit: DEFAULT_PORT_SCAN_LIMIT,
+      json: false,
       help: false,
     }
   );
@@ -37,6 +43,8 @@ test("parseServerArgs accepts a default directory", () => {
       host: "",
       rootDir: "models",
       shutdownAfterMs: null,
+      portScanLimit: DEFAULT_PORT_SCAN_LIMIT,
+      json: false,
       help: false,
     }
   );
@@ -50,6 +58,8 @@ test("parseServerArgs accepts an explicit shutdown duration", () => {
       host: "",
       rootDir: "",
       shutdownAfterMs: 12 * 60 * 60 * 1000,
+      portScanLimit: DEFAULT_PORT_SCAN_LIMIT,
+      json: false,
       help: false,
     }
   );
@@ -79,4 +89,23 @@ test("applyServerArgsToEnv preserves env while keeping CLI port in parsed args",
 
 test("parseServerArgs rejects invalid ports", () => {
   assert.throws(() => parseServerArgs(["--port", "99999"]), /TCP port/);
+});
+
+test("parseServerArgs accepts the machine-readable startup flag", () => {
+  assert.equal(parseServerArgs(["--json"]).json, true);
+  assert.equal(parseServerArgs([]).json, false);
+});
+
+test("parseServerArgs accepts a port scan limit", () => {
+  assert.equal(parseServerArgs(["--port-scan-limit", "8"]).portScanLimit, 8);
+  assert.equal(parseServerArgs(["--port-scan-limit=0"]).portScanLimit, 0);
+  assert.equal(parseServerArgs([]).portScanLimit, DEFAULT_PORT_SCAN_LIMIT);
+  assert.throws(() => parseServerArgs(["--port-scan-limit", "-1"]), /non-negative integer/);
+});
+
+test("serverHelpText documents the flags the cad-viewer skill relies on", () => {
+  const help = serverHelpText();
+  for (const flag of ["--dir", "--port", "--host", "--shutdown-after", "--port-scan-limit", "--json"]) {
+    assert.ok(help.includes(flag), `expected help text to document ${flag}`);
+  }
 });

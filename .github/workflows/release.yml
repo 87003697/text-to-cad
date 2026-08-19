@@ -118,7 +118,7 @@ jobs:
             scripts/release/bump-version.sh "$BUMP" --no-commit
           fi
           node scripts/release/sync-version.mjs
-          version="$(tr -d '[:space:]' < plugins/cad/VERSION)"
+          version="$(tr -d '[:space:]' < VERSION)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if git diff --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -151,7 +151,7 @@ jobs:
         if: inputs.dry_run
         run: |
           git diff --stat
-          git diff -- plugins/cad/VERSION
+          git diff -- VERSION
 
       - name: Stop after dry run
         if: inputs.dry_run
@@ -168,7 +168,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           branch="release/$VERSION"
-          body="Bumps plugins/cad/VERSION and derived package/plugin metadata to $VERSION. This PR was created by the one-button Release workflow, which merges it into $BASE_BRANCH immediately; the publish job revalidates the full production bundle before anything ships to the target branch."
+          body="Bumps VERSION and derived package/plugin metadata to $VERSION. This PR was created by the one-button Release workflow, which merges it into $BASE_BRANCH immediately; the publish job revalidates the full production bundle before anything ships to the target branch."
 
           git checkout -B "$branch"
           git add -A
@@ -295,10 +295,13 @@ jobs:
             exit 2
           fi
 
-          current_version="$(tr -d '[:space:]' < plugins/cad/VERSION)"
+          current_version="$(tr -d '[:space:]' < VERSION)"
           latest_tag="$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | head -n 1 || true)"
           if ! scripts/release/check-version.sh --incremented-from origin/main >/tmp/publish-main-version-check.log 2>&1; then
-            main_version="$(git show origin/main:plugins/cad/VERSION | tr -d '[:space:]')"
+            # main published before the plugin package moved to the repository
+            # root keeps the canonical version at plugins/cad/VERSION.
+            main_version="$(git show origin/main:VERSION 2>/dev/null || git show origin/main:plugins/cad/VERSION)"
+            main_version="$(printf '%s' "$main_version" | tr -d '[:space:]')"
             if [ "$main_version" = "$current_version" ] && ! git rev-parse --verify --quiet "refs/tags/$current_version" >/dev/null; then
               echo "Release version already reached origin/main, but tag $current_version is missing; resuming publish."
             else
@@ -383,7 +386,7 @@ jobs:
             exit 1
           fi
 
-          version="$(tr -d '[:space:]' < plugins/cad/VERSION)"
+          version="$(tr -d '[:space:]' < VERSION)"
           if target_base_sha="$(git rev-parse --verify "origin/$TARGET_BRANCH^{commit}" 2>/dev/null)"; then
             echo "Using existing $TARGET_BRANCH as publish parent: $target_base_sha"
           else
