@@ -379,6 +379,25 @@
         "pressure_tube": "o1.1.1"
       },
       "ambiguous": {}
+    },
+    {
+      "phase": 1,
+      "why": "a row may carry the render package's `occurrenceId` spelling instead of `id`",
+      "rows": [
+        {
+          "occurrenceId": "o1.1",
+          "name": "eye_shank"
+        },
+        {
+          "id": "o1.2",
+          "name": "pressure_tube"
+        }
+      ],
+      "aliases": {
+        "eye_shank": "o1.1",
+        "pressure_tube": "o1.2"
+      },
+      "ambiguous": {}
     }
   ],
   "tokenCases": [
