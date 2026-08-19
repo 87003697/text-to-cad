@@ -55,6 +55,9 @@ jobs:
       - name: Check production bundle layout
         run: scripts/github-workflows/check-builds.sh --skip-bundle-check
 
+      - name: Start the bundled CAD Viewer
+        run: scripts/test/test-viewer-launch.sh
+
       - name: Run documentation checks
         run: scripts/test/test-docs.sh
 
