@@ -168,6 +168,10 @@ class RunnerTests(unittest.TestCase):
         self.assertNotIn("CVM_JOB", pilot_script)
         prompt = pilot_script[pilot_script.index("PROMPT=$(cat") : pilot_script.index("echo \"[pilot]")]
         self.assertNotIn("monitor", prompt.lower())
+        self.assertIsNone(
+            re.search(r"(?<!\\)`", prompt),
+            "unescaped backticks in the heredoc execute shell commands",
+        )
         workload = pilot_script[pilot_script.index("WORKLOAD=(") : pilot_script.index("PILOT_EXIT=0")]
         self.assertNotIn("cvm", workload.lower())
 
@@ -728,6 +732,10 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertNotIn("CODEX_RUN", pilot)
         self.assertNotIn('$REPO_ROOT/gateway', pilot)
         self.assertIn('run --input "$PLY"', pilot)
+        self.assertIn(
+            'PYTHONPATH="$REPO_ROOT/packages/browser_runtime/src${PYTHONPATH:+:$PYTHONPATH}"',
+            pilot,
+        )
         self.assertNotIn("--skill", pilot)
         self.assertNotIn("PILOT_SKILLS", pilot)
         self.assertIn("build_bwrap_argv", runner)
@@ -739,7 +747,7 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertIn("--skip-git-repo-check", pilot)
         self.assertIn("--disable\n    plugins", pilot)
         self.assertNotIn("--disable\n    view_image", pilot)
-        self.assertIn("Do not call `view_image`", pilot)
+        self.assertIn("Do not call \\`view_image\\`", pilot)
         self.assertIn("danger-full-access", pilot)
         self.assertNotIn("workspace-write", pilot)
         self.assertTrue(gateway.startswith("#!/usr/bin/env bash\n"))
@@ -840,6 +848,59 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn('base_url="http://127.0.0.1:18888/v1"', argv)
         self.assertNotIn("v2.open.venus.oa.com", argv)
+
+    def test_gateway_accepts_exact_gpt_55_model(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            capture = Path(temp) / "argv"
+            fake_codex = Path(temp) / "codex"
+            fake_codex.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CAPTURE\"\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+            env = dict(os.environ)
+            env.update(
+                {
+                    "CAPTURE": str(capture),
+                    "PATH": f"{temp}:{env.get('PATH', '')}",
+                    "VENUS_TOKEN": "token",
+                    "CLAUDE_TAP_URL": "http://127.0.0.1:18888/v1",
+                }
+            )
+            result = subprocess.run(
+                [
+                    str(REPO_ROOT / "gateway" / "codex-tap-gpt56"),
+                    "gpt-5.5",
+                    "exec",
+                    "prompt",
+                ],
+                env=env,
+                check=False,
+            )
+            argv = capture.read_text(encoding="utf-8")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("-m\ngpt-5.5\n", argv)
+
+    def test_gateway_rejects_unlisted_model(self) -> None:
+        env = dict(os.environ)
+        env.update(
+            {
+                "VENUS_TOKEN": "token",
+                "CLAUDE_TAP_URL": "http://127.0.0.1:18888/v1",
+            }
+        )
+        result = subprocess.run(
+            [
+                str(REPO_ROOT / "gateway" / "codex-tap-gpt56"),
+                "gpt-unknown",
+                "exec",
+            ],
+            env=env,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.assertEqual(result.returncode, 2)
 
     def test_prepare_exp_creates_initial_git_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Usage: codex-tap-gpt56 <model-variant> [codex args...]
+# Usage: codex-tap-gpt56 <sol|terra|luna|gpt-5.5> [codex args...]
 # This gateway is intentionally tap-only: there is no Venus direct fallback.
 
 readonly CODEX_BIN="codex"
@@ -16,12 +16,23 @@ fi
 command -v "$CODEX_BIN" >/dev/null \
   || { echo "codex not found on sandbox PATH" >&2; exit 1; }
 
-VARIANT="${1:?Usage: codex-tap-gpt56 <sol|terra|luna> [codex args...]}"
+VARIANT="${1:?Usage: codex-tap-gpt56 <sol|terra|luna|gpt-5.5> [codex args...]}"
 shift
-MODEL="gpt-5.6-${VARIANT}"
+case "$VARIANT" in
+  sol|terra|luna)
+    MODEL="gpt-5.6-${VARIANT}"
+    ;;
+  gpt-5.5)
+    MODEL="$VARIANT"
+    ;;
+  *)
+    echo "unsupported Venus model: $VARIANT" >&2
+    exit 2
+    ;;
+esac
 
 exec "$CODEX_BIN" \
-  -c "model_providers.venus.name=\"Venus GPT-5.6-${VARIANT} (via claude-tap)\"" \
+  -c "model_providers.venus.name=\"Venus ${MODEL} (via claude-tap)\"" \
   -c "model_providers.venus.base_url=\"${CLAUDE_TAP_URL}\"" \
   -c 'model_providers.venus.wire_api="responses"' \
   -c "model_providers.venus.experimental_bearer_token=\"${VENUS_TOKEN}\"" \

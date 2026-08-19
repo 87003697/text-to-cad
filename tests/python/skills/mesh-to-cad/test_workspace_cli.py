@@ -14,6 +14,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -90,6 +91,49 @@ class WorkspaceCliTests(unittest.TestCase):
             check=True,
         )
         return result.stdout.strip()
+
+    def test_run_command_defaults_to_thirty_minute_workspace_budget(self) -> None:
+        parsed = self.cli._parser().parse_args(
+            [
+                "run",
+                "--workspace",
+                str(self.workspace),
+                "--attempt",
+                "1",
+                "--phase",
+                "build",
+                "--",
+                "true",
+            ]
+        )
+
+        self.assertEqual(1800, parsed.timeout_seconds)
+        self.assertEqual(1800, self.cli.run_attempt_command.__globals__["MAX_COMMAND_SECONDS"])
+
+    def test_incomplete_transaction_scan_skips_runtime_telemetry_tree(self) -> None:
+        runtime_stage = self.workspace / "run/playwright/.tmp-browser-cache"
+        authority_stage = self.workspace / "work/attempts/000001/.tmp-command"
+        runtime_stage.mkdir(parents=True)
+        authority_stage.mkdir(parents=True)
+        scanned_roots: list[Path] = []
+        original_rglob = Path.rglob
+
+        def tracked_rglob(root: Path, pattern: str):
+            scanned_roots.append(root)
+            return original_rglob(root, pattern)
+
+        finder = self.cli.validate_workspace.__globals__[
+            "_find_incomplete_transactions"
+        ]
+        with mock.patch.object(Path, "rglob", tracked_rglob):
+            recovery = finder(self.workspace)
+
+        self.assertEqual(
+            ["work/attempts/000001/.tmp-command"],
+            [item["path"] for item in recovery],
+        )
+        self.assertNotIn(self.workspace, scanned_roots)
+        self.assertNotIn(self.workspace / "run", scanned_roots)
 
     def invoke(self, *arguments: str) -> tuple[int, dict, str]:
         stdout = io.StringIO()
@@ -1405,6 +1449,101 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertFalse(transaction.exists())
         self.assertEqual("", self.git("status", "--short"))
 
+    @unittest.skipUnless(os.name == "posix", "process-group cancellation requires POSIX")
+    def test_timed_out_command_terminates_descendant_processes(self) -> None:
+        self.publish_initial_flow()
+        plan = self.repair_plan("timeout-plan", from_step=0)
+        status, started, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(plan),
+            "--intended-step",
+            "1",
+            "--from-step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+
+        child_pid = self.root / "child.pid"
+        child_script = self.root / "timeout-child.py"
+        child_script.write_text(
+            """import os
+from pathlib import Path
+import signal
+import sys
+import time
+
+pid_path = Path(sys.argv[1])
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+pid_path.write_text(str(os.getpid()), encoding="utf-8")
+time.sleep(60)
+""",
+            encoding="utf-8",
+        )
+        parent_script = self.root / "timeout-parent.py"
+        parent_script.write_text(
+            """import subprocess
+import sys
+import time
+
+subprocess.Popen(
+    [sys.executable, sys.argv[1], sys.argv[2]],
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+time.sleep(60)
+""",
+            encoding="utf-8",
+        )
+
+        stdout = io.StringIO()
+        command_stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(command_stderr):
+            command_status = self.cli.main(
+                [
+                    "run",
+                    "--workspace",
+                    str(self.workspace),
+                    "--attempt",
+                    str(started["attempt"]["attempt"]),
+                    "--phase",
+                    "build",
+                    "--timeout-seconds",
+                    "1",
+                    "--",
+                    sys.executable,
+                    str(parent_script),
+                    str(child_script),
+                    str(child_pid),
+                ]
+            )
+
+        command = json.loads(stdout.getvalue())
+        self.assertEqual(124, command_status, command_stderr.getvalue())
+        self.assertTrue(command["command"]["timed_out"])
+        self.assertTrue(child_pid.is_file())
+        pid = int(child_pid.read_text(encoding="utf-8"))
+
+        def kill_surviving_child() -> None:
+            try:
+                os.kill(pid, 9)
+            except ProcessLookupError:
+                pass
+
+        self.addCleanup(kill_surviving_child)
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            if time.monotonic() >= deadline:
+                self.fail("the SIGTERM-ignoring command descendant is still running")
+            time.sleep(0.05)
+
     def test_failed_attempt_is_auditable_but_does_not_consume_cycle_budget(self) -> None:
         self.publish_initial_flow()
         plan = self.repair_plan("repair-plan", from_step=0)
@@ -1850,11 +1989,23 @@ class WorkspaceCliTests(unittest.TestCase):
         (self.workspace / "run/fake-authority.json").write_text(
             '{"accepted":true}\n', encoding="utf-8"
         )
+        (self.workspace / "run/playwright/.tmp-browser-cache").mkdir(
+            parents=True
+        )
         status, valid, stderr = self.invoke(
             "validate", "--workspace", str(self.workspace)
         )
         self.assertEqual(0, status, stderr)
         self.assertTrue(valid["valid"])
+
+        nested_stage = self.workspace / "work/attempts/000001/.tmp-command"
+        nested_stage.mkdir(parents=True)
+        status, staged, _stderr = self.invoke(
+            "validate", "--workspace", str(self.workspace)
+        )
+        self.assertEqual(2, status)
+        self.assertEqual("incomplete_transaction", staged["error"]["classification"])
+        nested_stage.rmdir()
 
         legacy = self.root / "legacy"
         legacy.mkdir()

@@ -25,6 +25,10 @@ MOUNT_PATH = (
     Path.home() / "threed-code/ericzyma/text-to-cad/outputs"
 )
 COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+DISPOSABLE_RUNTIME_EXCLUDES = (
+    "run/playwright/*",
+    "run/playwright-browsers/*",
+)
 
 
 class PullError(RuntimeError):
@@ -412,15 +416,16 @@ print(json.dumps({
             PostmortemPolicy.INCLUDE_CLEAN,
             PostmortemPolicy.INCLUDE_RETAIN,
         }:
-            return ()
+            return DISPOSABLE_RUNTIME_EXCLUDES
         path = REPO_ROOT / ".cvmignore.pull"
         if not path.is_file():
-            return ()
-        return tuple(
+            return DISPOSABLE_RUNTIME_EXCLUDES
+        configured = tuple(
             line
             for raw in path.read_text(encoding="utf-8").splitlines()
             if (line := raw.strip()) and not line.startswith("#")
         )
+        return tuple(dict.fromkeys((*DISPOSABLE_RUNTIME_EXCLUDES, *configured)))
 
     def _upload_exp(self, exp: str) -> None:
         exclude_args = " ".join(
@@ -436,7 +441,19 @@ print(json.dumps({
         if status not in {0, 2}:
             raise PullError(f"aws s3 cp fatal (exit={status}) — aborting", status)
 
-    def _count_local_files(self, exp: str) -> int:
+    @staticmethod
+    def _decode_file_list(stdout: str, label: str) -> tuple[str, ...]:
+        try:
+            value = json.loads(stdout)
+        except json.JSONDecodeError as error:
+            raise PullError(f"Invalid {label} file list", 5) from error
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) for item in value
+        ):
+            raise PullError(f"Invalid {label} file list", 5)
+        return tuple(sorted(value))
+
+    def _list_local_files(self, exp: str) -> tuple[str, ...]:
         script = """
 import fnmatch
 import json
@@ -447,7 +464,7 @@ import sys
 
 root = pathlib.Path.home() / "text-to-cad/outputs" / sys.argv[1]
 patterns = json.loads(sys.argv[2])
-count = 0
+files = []
 for directory, _dirnames, filenames in os.walk(root, followlinks=False):
     parent = pathlib.Path(directory)
     for name in filenames:
@@ -457,8 +474,8 @@ for directory, _dirnames, filenames in os.walk(root, followlinks=False):
         relative = path.relative_to(root).as_posix()
         if any(fnmatch.fnmatch(relative, pattern) for pattern in patterns):
             continue
-        count += 1
-print(count)
+        files.append(relative)
+print(json.dumps(sorted(files)))
 """.strip()
         command = " ".join(
             (
@@ -471,41 +488,105 @@ print(count)
         )
         result = self.runner.remote(command, check=False)
         if result.returncode != 0:
-            raise PullError(f"Cannot count CVM files: {exp}", 5)
-        try:
-            return int(result.stdout.strip())
-        except ValueError as error:
-            raise PullError(f"Invalid CVM file count: {exp}", 5) from error
+            raise PullError(f"Cannot list CVM files: {exp}", 5)
+        return self._decode_file_list(result.stdout, "CVM")
 
-    def _count_s3_files(self, exp: str) -> int:
-        pipeline = f"aws s3 ls --recursive {S3_PREFIX}/{exp}/ | wc -l"
-        command = f"bash -o pipefail -c {shlex.quote(pipeline)}"
+    def _list_s3_files(self, exp: str) -> tuple[str, ...]:
+        script = """
+import fnmatch
+import json
+import subprocess
+import sys
+
+bucket = sys.argv[1]
+prefix = sys.argv[2]
+patterns = json.loads(sys.argv[3])
+files = []
+token = None
+while True:
+    command = [
+        "aws", "s3api", "list-objects-v2",
+        "--bucket", bucket,
+        "--prefix", prefix,
+        "--output", "json",
+    ]
+    if token is not None:
+        command.extend(["--continuation-token", token])
+    completed = subprocess.run(
+        command,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.returncode != 0:
+        sys.stderr.write(completed.stderr)
+        raise SystemExit(completed.returncode)
+    payload = json.loads(completed.stdout)
+    for item in payload.get("Contents", []):
+        key = item.get("Key")
+        if not isinstance(key, str) or not key.startswith(prefix):
+            continue
+        relative = key[len(prefix):]
+        if not relative or any(
+            fnmatch.fnmatch(relative, pattern) for pattern in patterns
+        ):
+            continue
+        files.append(relative)
+    if not payload.get("IsTruncated"):
+        break
+    token = payload.get("NextContinuationToken")
+    if not isinstance(token, str) or not token:
+        raise SystemExit("S3 listing omitted its continuation token")
+print(json.dumps(sorted(files)))
+""".strip()
+        prefix = f"ericzyma/text-to-cad/outputs/{exp}/"
+        command = " ".join(
+            (
+                "python3",
+                "-c",
+                shlex.quote(script),
+                shlex.quote("arcwm-code-us-west-2"),
+                shlex.quote(prefix),
+                shlex.quote(json.dumps(self.excludes)),
+            )
+        )
         result = self.runner.remote(command, check=False)
         if result.returncode != 0:
-            raise PullError(f"Cannot count S3 files: {exp}", 5)
-        try:
-            return int(result.stdout.strip())
-        except ValueError as error:
-            raise PullError(f"Invalid S3 file count: {exp}", 5) from error
+            raise PullError(f"Cannot list S3 files: {exp}", 5)
+        return self._decode_file_list(result.stdout, "S3")
+
+    def _count_local_files(self, exp: str) -> int:
+        return len(self._list_local_files(exp))
+
+    def _count_s3_files(self, exp: str) -> int:
+        return len(self._list_s3_files(exp))
 
     def _verify_exp(self, exp: str) -> int:
-        local_count = self._count_local_files(exp)
-        s3_count = self._count_s3_files(exp)
-        if local_count != s3_count:
+        local_files = self._list_local_files(exp)
+        s3_files = self._list_s3_files(exp)
+        if local_files != s3_files:
+            missing = sorted(set(local_files) - set(s3_files))[:5]
+            extra = sorted(set(s3_files) - set(local_files))[:5]
             raise PullError(
                 "VERIFY FAILED "
-                f"(local={local_count} s3={s3_count}); "
+                f"(local={len(local_files)} s3={len(s3_files)} "
+                f"missing={missing} extra={extra}); "
                 "keeping CVM local. Investigate.",
                 5,
             )
-        return local_count
+        return len(local_files)
 
     def _existing_s3_is_complete(self, exp: str) -> tuple[bool, int, int]:
         """Compare an existing S3 prefix with its immutable CVM source."""
 
-        local_count = self._count_local_files(exp)
-        s3_count = self._count_s3_files(exp)
-        return local_count == s3_count, local_count, s3_count
+        local_files = self._list_local_files(exp)
+        s3_files = self._list_s3_files(exp)
+        return (
+            local_files == s3_files,
+            len(local_files),
+            len(s3_files),
+        )
 
     def _cleanup_exp(self, exp: str) -> None:
         if not is_safe_exp(exp):

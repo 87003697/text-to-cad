@@ -187,17 +187,15 @@ async function exportInRestrictedProcess(sourceText, outputPath) {
     });
     const stdout = [];
     const stderr = [];
-    const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-    }, 120000);
+    // Canonical meshing cost is source-dependent. The calling Workspace owns
+    // the command deadline and cancellation policy; this worker must not race
+    // it with a second timer that can discard otherwise valid geometry.
     child.stdout.on("data", (chunk) => stdout.push(chunk));
     child.stderr.on("data", (chunk) => stderr.push(chunk));
     child.on("error", (error) => {
-      clearTimeout(timeout);
       reject(error);
     });
     child.on("close", (status, signal) => {
-      clearTimeout(timeout);
       const errorText = Buffer.concat(stderr).toString("utf-8").trim();
       if (status !== 0) {
         const detail = errorText || `worker exited with ${status ?? signal ?? "unknown status"}`;

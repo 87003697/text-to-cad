@@ -71,8 +71,8 @@ Attempts consume no cycle. A successfully published geometric no-op consumes
 one cycle.
 
 run executes argv directly without a shell. It permits eight commands per
-Attempt, caps time at 900 seconds, stores at most 64 KiB from each output
-stream using a versioned head/tail policy, and redacts known secret-bearing
+Attempt, defaults to and caps time at 1800 seconds (30 minutes), stores at most
+64 KiB from each output stream using a versioned head/tail policy, and redacts known secret-bearing
 arguments and Authorization headers.
 
 Setup, Measured Step, Repair Cycle, Attempt, Final Delivery, and index writes use validated
