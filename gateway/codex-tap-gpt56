@@ -13,9 +13,6 @@ if [[ ! "$CLAUDE_TAP_URL" =~ ^http://127[.]0[.]0[.]1:[0-9]+/v1$ ]]; then
   exit 1
 fi
 
-command -v "$CODEX_BIN" >/dev/null \
-  || { echo "codex not found on sandbox PATH" >&2; exit 1; }
-
 VARIANT="${1:?Usage: codex-tap-gpt56 <sol|terra|luna|gpt-5.5> [codex args...]}"
 shift
 case "$VARIANT" in
@@ -30,6 +27,9 @@ case "$VARIANT" in
     exit 2
     ;;
 esac
+
+command -v "$CODEX_BIN" >/dev/null \
+  || { echo "codex not found on sandbox PATH" >&2; exit 1; }
 
 exec "$CODEX_BIN" \
   -c "model_providers.venus.name=\"Venus ${MODEL} (via claude-tap)\"" \
