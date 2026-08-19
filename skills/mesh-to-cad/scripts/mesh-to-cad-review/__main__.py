@@ -11,6 +11,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import tempfile
 from typing import Any
 
 
@@ -533,12 +534,29 @@ def review_workspace(
 
 
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_text(
+    _atomic_write_text(
+        path,
         json.dumps(value, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
     )
-    temporary.replace(path)
+
+
+def _atomic_write_text(path: Path, value: str) -> None:
+    descriptor, temporary_text = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_text)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(value)
+        temporary.replace(path)
+    except BaseException:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def _identity_sha256(value: dict[str, Any]) -> str:
@@ -580,6 +598,15 @@ def _verify_experiment_context(
             "review input group does not match its directory context: "
             f"{workspace / 'review-input.json'}"
         )
+    source = evidence.get("source")
+    expected_source = {
+        "workspace": str(workspace.resolve()),
+        "group": str(group.resolve()) if group is not None else None,
+    }
+    if source != expected_source:
+        raise ReviewError(
+            "review input source does not match the requested evidence target"
+        )
 
 
 def _group_records(
@@ -591,6 +618,10 @@ def _group_records(
         raise ReviewError("group review input must use pilot-review.group-evidence/1")
     if group_input.get("group") != group.name:
         raise ReviewError("group review input does not match its directory")
+    if group_input.get("source_group") != str(group.resolve()):
+        raise ReviewError(
+            "group review input source does not match the requested evidence target"
+        )
     raw_records = group_input.get("experiments")
     if not isinstance(raw_records, list):
         raise ReviewError("group review input experiments must be a list")
@@ -640,6 +671,52 @@ def _discover_target(target: Path) -> tuple[Path | None, list[Path]]:
     if not experiments:
         raise ReviewError(f"group contains no reviewable experiments: {target}")
     return target, experiments
+
+
+def _review_paths(
+    group: Path | None,
+    experiments: list[Path],
+    review_root: Path | None,
+) -> tuple[Path, dict[Path, Path]]:
+    """Map immutable evidence sources to their writable review destinations."""
+
+    if review_root is None:
+        root = group if group is not None else experiments[0]
+    else:
+        root = review_root.expanduser().resolve()
+        source_root = group if group is not None else experiments[0]
+        if root == source_root or root.is_relative_to(
+            source_root
+        ) or source_root.is_relative_to(root):
+            raise ReviewError(
+                "external review root must not overlap the evidence target"
+            )
+        root.mkdir(parents=True, exist_ok=True)
+    destinations: dict[Path, Path] = {}
+    candidates = {
+        workspace: (root / workspace.name if group is not None else root)
+        for workspace in experiments
+    }
+    if review_root is not None:
+        for candidate in candidates.values():
+            if candidate.is_symlink():
+                raise ReviewError(
+                    f"review destination must not be a symlink: {candidate}"
+                )
+            if candidate.exists() and not candidate.is_dir():
+                raise ReviewError(
+                    f"review destination must be a directory: {candidate}"
+                )
+            resolved = candidate.resolve()
+            if not resolved.is_relative_to(root):
+                raise ReviewError(
+                    f"review destination escapes the review root: {candidate}"
+                )
+    for workspace in experiments:
+        destination = candidates[workspace]
+        destination.mkdir(parents=True, exist_ok=True)
+        destinations[workspace] = destination.resolve()
+    return root, destinations
 
 
 def _read_bounded_text(path: Path, limit: int = 4096) -> str:
@@ -850,6 +927,7 @@ def _compiler_error_review(workspace: Path, detail: str) -> dict[str, Any]:
 def _prepare_experiment(
     workspace: Path,
     group: Path | None,
+    review_destination: Path,
     helper: str | Path,
     timeout_seconds: int,
 ) -> tuple[int, dict[str, Any]]:
@@ -875,6 +953,10 @@ def _prepare_experiment(
         "schema": "pilot-review.evidence/1",
         "experiment": workspace.name,
         "group": group.name if group is not None else None,
+        "source": {
+            "workspace": str(workspace.resolve()),
+            "group": str(group.resolve()) if group is not None else None,
+        },
         "compiler_status": {
             "status": status,
             "classification": baseline["workspace_validation"]["classification"],
@@ -883,7 +965,7 @@ def _prepare_experiment(
         "baseline": baseline,
         "execution": execution,
     })
-    _atomic_write_json(workspace / "review-input.json", evidence)
+    _atomic_write_json(review_destination / "review-input.json", evidence)
     return status, evidence
 
 
@@ -891,6 +973,7 @@ def prepare_target(
     target: Path,
     helper: str | Path,
     timeout_seconds: int,
+    review_root: Path | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Compile deterministic review evidence for one experiment or a group."""
 
@@ -900,12 +983,14 @@ def prepare_target(
             f"{MAX_VALIDATION_TIMEOUT_SECONDS} seconds"
         )
     group, experiments = _discover_target(target)
+    output_root, destinations = _review_paths(group, experiments, review_root)
     results: list[dict[str, Any]] = []
     status = 0
     for workspace in experiments:
         experiment_status, evidence = _prepare_experiment(
             workspace,
             group,
+            destinations[workspace],
             helper,
             timeout_seconds,
         )
@@ -929,11 +1014,12 @@ def prepare_target(
     summary = _seal_compiler_output({
         "schema": "pilot-review.group-evidence/1",
         "group": group.name if group is not None else None,
+        "source_group": str(group.resolve()) if group is not None else None,
         "snapshot_head": _snapshot_head(group, experiments[0]),
         "experiments": results,
     })
     if group is not None:
-        _atomic_write_json(group / "review-input.json", summary)
+        _atomic_write_json(output_root / "review-input.json", summary)
     return status, summary
 
 
@@ -1135,15 +1221,11 @@ def _markdown(review: dict[str, Any]) -> str:
 
 
 def _publish(workspace: Path, review: dict[str, Any]) -> None:
-    json_tmp = workspace / ".review.json.tmp"
-    markdown_tmp = workspace / ".review.md.tmp"
-    json_tmp.write_text(
+    _atomic_write_text(
+        workspace / "review.json",
         json.dumps(review, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
     )
-    markdown_tmp.write_text(_markdown(review), encoding="utf-8")
-    json_tmp.replace(workspace / "review.json")
-    markdown_tmp.replace(workspace / "review.md")
+    _atomic_write_text(workspace / "review.md", _markdown(review))
 
 
 def _validate_group_draft(
@@ -1221,24 +1303,33 @@ def _group_markdown(
     return "\n".join(lines) + "\n"
 
 
-def publish_target(target: Path) -> dict[str, Any]:
+def publish_target(
+    target: Path,
+    review_root: Path | None = None,
+) -> dict[str, Any]:
     """Validate Review Agent drafts and publish final review artifacts."""
 
     group, experiments = _discover_target(target)
+    output_root, destinations = _review_paths(group, experiments, review_root)
     group_root = group if group is not None else experiments[0]
     records: dict[str, dict[str, Any]] | None = None
     if group is not None:
-        group_input = _read_json(group / "review-input.json")
-        _verify_compiler_output(group_input, group / "review-input.json")
+        group_input = _read_json(output_root / "review-input.json")
+        _verify_compiler_output(group_input, output_root / "review-input.json")
         records = _group_records(group_input, group, experiments)
 
-    pending: list[tuple[Path, dict[str, Any]]] = []
+    pending: list[tuple[Path, Path, dict[str, Any]]] = []
     for workspace in experiments:
-        evidence = _read_json(workspace / "review-input.json")
-        _verify_compiler_output(evidence, workspace / "review-input.json")
+        review_workspace = destinations[workspace]
+        evidence = _read_json(review_workspace / "review-input.json")
+        _verify_compiler_output(
+            evidence,
+            review_workspace / "review-input.json",
+        )
         if evidence.get("schema") != "pilot-review.evidence/1":
             raise ReviewError(
-                f"unsupported review input schema in {workspace / 'review-input.json'}"
+                "unsupported review input schema in "
+                f"{review_workspace / 'review-input.json'}"
             )
         _verify_experiment_context(evidence, workspace, group)
         if records is not None:
@@ -1260,31 +1351,43 @@ def publish_target(target: Path) -> dict[str, Any]:
                     f"group compiler identity mismatch for experiment {workspace.name}"
                 )
         draft = _validate_experiment_draft(
-            _read_json(workspace / "review-draft.json"),
+            _read_json(review_workspace / "review-draft.json"),
             workspace,
             group_root,
         )
-        pending.append((workspace, _final_review(evidence, draft)))
+        pending.append(
+            (workspace, review_workspace, _final_review(evidence, draft))
+        )
 
     group_draft: dict[str, Any] | None = None
     if group is not None:
         group_draft = _validate_group_draft(
-            _read_json(group / "review-summary-draft.json"),
+            _read_json(output_root / "review-summary-draft.json"),
             group,
         )
 
-    for workspace, review in pending:
-        _publish(workspace, review)
+    for _workspace, review_workspace, review in pending:
+        _publish(review_workspace, review)
     if group is not None and group_draft is not None:
-        temporary = group / ".review-summary.md.tmp"
-        temporary.write_text(
-            _group_markdown(group, pending, group_draft),
-            encoding="utf-8",
+        _atomic_write_text(
+            output_root / "review-summary.md",
+            _group_markdown(
+                group,
+                [
+                    (workspace, review)
+                    for workspace, _review_workspace, review in pending
+                ],
+                group_draft,
+            ),
         )
-        temporary.replace(group / "review-summary.md")
     return {
-        "experiments": [workspace.name for workspace, _review in pending],
-        "group_summary": str(group / "review-summary.md") if group is not None else None,
+        "experiments": [workspace.name for workspace, _output, _review in pending],
+        "review_root": str(output_root),
+        "group_summary": (
+            str(output_root / "review-summary.md")
+            if group is not None
+            else None
+        ),
     }
 
 
@@ -1313,6 +1416,11 @@ def _workflow_parser() -> argparse.ArgumentParser:
     prepare.add_argument("target", type=Path)
     prepare.add_argument("--workspace-helper", default=DEFAULT_WORKSPACE_HELPER)
     prepare.add_argument(
+        "--review-root",
+        type=Path,
+        help="write review artifacts outside the immutable evidence target",
+    )
+    prepare.add_argument(
         "--validation-timeout-seconds",
         type=int,
         default=DEFAULT_VALIDATION_TIMEOUT_SECONDS,
@@ -1322,6 +1430,11 @@ def _workflow_parser() -> argparse.ArgumentParser:
         help="validate Review Agent drafts and publish final reports",
     )
     publish.add_argument("target", type=Path)
+    publish.add_argument(
+        "--review-root",
+        type=Path,
+        help="read drafts and publish reports outside the evidence target",
+    )
     return parser
 
 
@@ -1335,19 +1448,29 @@ def main(argv: list[str] | None = None) -> int:
                     args.target,
                     args.workspace_helper,
                     args.validation_timeout_seconds,
+                    args.review_root,
                 )
                 print(
                     json.dumps(
                         {
                             "ok": status == 0,
                             "status": status,
+                            "review_root": str(
+                                (
+                                    args.review_root
+                                    if args.review_root is not None
+                                    else args.target
+                                )
+                                .expanduser()
+                                .resolve()
+                            ),
                             **summary,
                         },
                         separators=(",", ":"),
                     )
                 )
                 return status
-            published = publish_target(args.target)
+            published = publish_target(args.target, args.review_root)
             print(
                 json.dumps(
                     {"ok": True, **published},

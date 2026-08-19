@@ -442,6 +442,230 @@ class PilotReviewTests(unittest.TestCase):
         self.assertIn("Only the bicycle command timed out", summary)
         self.assertIn("| airplane | pass | pass | accepted |", summary)
 
+    def test_external_review_root_keeps_source_immutable(self) -> None:
+        payload = self.canonical_experiment()
+        group = self.root / "group"
+        group.mkdir()
+        airplane = group / "airplane"
+        bicycle = group / "bicycle"
+        shutil.copytree(self.exp, airplane)
+        shutil.copytree(self.exp, bicycle)
+        review_root = self.root / "review-output"
+        helper = self.helper(payload)
+
+        status = self.reviewer.main(
+            [
+                "prepare",
+                str(group),
+                "--review-root",
+                str(review_root),
+                "--workspace-helper",
+                str(helper),
+            ]
+        )
+
+        self.assertEqual(status, 0)
+        self.assertFalse((group / "review-input.json").exists())
+        for source in (airplane, bicycle):
+            self.assertFalse((source / "review-input.json").exists())
+            evidence = json.loads(
+                (review_root / source.name / "review-input.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(str(source.resolve()), evidence["source"]["workspace"])
+            self.assertEqual(str(group.resolve()), evidence["source"]["group"])
+            write_json(
+                review_root / source.name / "review-draft.json",
+                self.review_draft(),
+            )
+        write_json(
+            review_root / "review-summary-draft.json",
+            {
+                "schema": "pilot-review.group-draft/1",
+                "summary": "The immutable source was reviewed externally.",
+                "cross_experiment_findings": [],
+                "fix_playbook": [],
+            },
+        )
+
+        status = self.reviewer.main(
+            ["publish", str(group), "--review-root", str(review_root)]
+        )
+
+        self.assertEqual(status, 0)
+        self.assertTrue((review_root / "review-summary.md").is_file())
+        for source in (airplane, bicycle):
+            self.assertTrue((review_root / source.name / "review.json").is_file())
+            self.assertTrue((review_root / source.name / "review.md").is_file())
+            self.assertFalse((source / "review.json").exists())
+            self.assertFalse((source / "review.md").exists())
+        self.assertFalse((group / "review-summary.md").exists())
+
+    def test_external_review_root_rejects_same_named_source_substitution(self) -> None:
+        payload = self.canonical_experiment()
+        original = self.root / "original/group"
+        substitute = self.root / "substitute/group"
+        original.mkdir(parents=True)
+        substitute.mkdir(parents=True)
+        for group in (original, substitute):
+            shutil.copytree(self.exp, group / "airplane")
+        review_root = self.root / "review-output"
+        helper = self.helper(payload)
+        self.assertEqual(
+            0,
+            self.reviewer.main(
+                [
+                    "prepare",
+                    str(original),
+                    "--review-root",
+                    str(review_root),
+                    "--workspace-helper",
+                    str(helper),
+                ]
+            ),
+        )
+        write_json(
+            review_root / "airplane/review-draft.json",
+            self.review_draft(),
+        )
+        write_json(
+            review_root / "review-summary-draft.json",
+            {
+                "schema": "pilot-review.group-draft/1",
+                "summary": "This draft belongs to the original source.",
+                "cross_experiment_findings": [],
+                "fix_playbook": [],
+            },
+        )
+
+        status = self.reviewer.main(
+            ["publish", str(substitute), "--review-root", str(review_root)]
+        )
+
+        self.assertEqual(status, 1)
+        self.assertFalse((review_root / "airplane/review.json").exists())
+        self.assertFalse((review_root / "review-summary.md").exists())
+
+    def test_external_review_root_rejects_source_overlap_before_writing(self) -> None:
+        payload = self.canonical_experiment()
+        group = self.root / "group"
+        group.mkdir()
+        shutil.copytree(self.exp, group / "airplane")
+        helper = self.helper(payload)
+
+        status = self.reviewer.main(
+            [
+                "prepare",
+                str(group),
+                "--review-root",
+                str(group / "reviews/current"),
+                "--workspace-helper",
+                str(helper),
+            ]
+        )
+
+        self.assertEqual(status, 1)
+        self.assertFalse((group / "reviews").exists())
+
+    def test_external_review_root_rejects_destination_symlink_to_source(self) -> None:
+        payload = self.canonical_experiment()
+        group = self.root / "group"
+        group.mkdir()
+        airplane = group / "airplane"
+        shutil.copytree(self.exp, airplane)
+        review_root = self.root / "review-output"
+        review_root.mkdir()
+        (review_root / "airplane").symlink_to(airplane, target_is_directory=True)
+        helper = self.helper(payload)
+
+        status = self.reviewer.main(
+            [
+                "prepare",
+                str(group),
+                "--review-root",
+                str(review_root),
+                "--workspace-helper",
+                str(helper),
+            ]
+        )
+
+        self.assertEqual(status, 1)
+        self.assertFalse((airplane / "review-input.json").exists())
+
+    def test_external_review_root_never_follows_fixed_temp_symlinks(self) -> None:
+        payload = self.canonical_experiment()
+        group = self.root / "group"
+        group.mkdir()
+        airplane = group / "airplane"
+        shutil.copytree(self.exp, airplane)
+        review_root = self.root / "review-output"
+        review_exp = review_root / "airplane"
+        review_exp.mkdir(parents=True)
+        protected = {
+            airplane / "workspace.json": (airplane / "workspace.json").read_bytes(),
+            airplane / "artifact_manifest.json": (
+                airplane / "artifact_manifest.json"
+            ).read_bytes(),
+            airplane / "input/input.json": (
+                airplane / "input/input.json"
+            ).read_bytes(),
+        }
+        (review_exp / ".review-input.json.tmp").symlink_to(
+            airplane / "workspace.json"
+        )
+        (review_root / ".review-input.json.tmp").symlink_to(
+            airplane / "artifact_manifest.json"
+        )
+        helper = self.helper(payload)
+
+        self.assertEqual(
+            0,
+            self.reviewer.main(
+                [
+                    "prepare",
+                    str(group),
+                    "--review-root",
+                    str(review_root),
+                    "--workspace-helper",
+                    str(helper),
+                ]
+            ),
+        )
+        write_json(review_exp / "review-draft.json", self.review_draft())
+        write_json(
+            review_root / "review-summary-draft.json",
+            {
+                "schema": "pilot-review.group-draft/1",
+                "summary": "Fixed temporary symlinks are never opened.",
+                "cross_experiment_findings": [],
+                "fix_playbook": [],
+            },
+        )
+        (review_exp / ".review.json.tmp").symlink_to(
+            airplane / "workspace.json"
+        )
+        (review_exp / ".review.md.tmp").symlink_to(
+            airplane / "input/input.json"
+        )
+        (review_root / ".review-summary.md.tmp").symlink_to(
+            airplane / "input/input.json"
+        )
+
+        self.assertEqual(
+            0,
+            self.reviewer.main(
+                ["publish", str(group), "--review-root", str(review_root)]
+            ),
+        )
+
+        for path, expected in protected.items():
+            self.assertEqual(expected, path.read_bytes(), path)
+        self.assertTrue((review_exp / "review-input.json").is_file())
+        self.assertTrue((review_exp / "review.json").is_file())
+        self.assertTrue((review_exp / "review.md").is_file())
+        self.assertTrue((review_root / "review-summary.md").is_file())
+
     def test_prepare_records_validator_timeout_without_invalidating_workspace(self) -> None:
         self.canonical_experiment()
         helper = self.root / "slow-helper.py"

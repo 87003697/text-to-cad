@@ -49,6 +49,22 @@ Run from the repository root:
   --workspace-helper skills/mesh-to-cad/scripts/mesh-to-cad-workspace
 ```
 
+For mounted evidence or a non-destructive rerun, separate the immutable source
+from the writable review destination:
+
+```bash
+./.venv/bin/python .claude/skills/pilot-review/scripts/review.py prepare \
+  outputs/<group> --review-root /tmp/pilot-reviews/<group> \
+  --workspace-helper skills/mesh-to-cad/scripts/mesh-to-cad-workspace
+```
+
+`--review-root` preserves the group layout but writes every review artifact
+under that root. The compiler seals the resolved source group and experiment
+paths, so publishing against another same-named source fails closed. Prefer
+this mode for rclone/S3 mounts; read authority in place instead of copying the
+experiment. Keep the review root disjoint from the source tree; overlapping
+paths fail before any review artifact is written.
+
 The default and maximum validator budget is 1800 seconds. The compiler cancels
 the validator process group on timeout and records `validator_timeout` with
 Workspace protocol `not_auditable`; timeout never means invalid authority.
@@ -57,6 +73,9 @@ Preparation writes only:
 
 - `<exp>/review-input.json` for every experiment;
 - `<group>/review-input.json` in group mode.
+
+With `--review-root`, these paths are relative to the review root and the source
+experiment receives no writes.
 
 Each experiment input freezes Workspace validation, graph, runner manifest,
 artifact presence, immutable command records, bounded stderr previews, rollout
@@ -97,6 +116,8 @@ Write:
 - `<exp>/review-draft.json` for every experiment;
 - `<group>/review-summary-draft.json` in group mode.
 
+When preparation used `--review-root`, write drafts under the same review root.
+
 The draft supplies only semantic verdicts, findings, unresolved questions,
 evidence gaps, and the ordered fix playbook. Runner and Workspace verdicts come
 from the compiler and cannot be overridden. Every finding has one primary root
@@ -112,8 +133,11 @@ Run:
 
 ```bash
 ./.venv/bin/python .claude/skills/pilot-review/scripts/review.py publish \
-  outputs/<group>
+  outputs/<group> --review-root /tmp/pilot-reviews/<group>
 ```
+
+Pass the same source target and review root used by `prepare`. Omit
+`--review-root` only for the compatible in-place workflow.
 
 The compiler validates all drafts before publishing any final report. It
 rejects unknown root-cause classes, invalid semantic verdicts, missing evidence
@@ -152,6 +176,8 @@ Step; explicit ancestry is authoritative.
 - Support only `mesh-to-cad.workspace/1` as experiment authority.
 - Preserve process, result, runtime, and runner evidence as distinct claims.
 - Keep the experiment immutable except for review inputs, drafts, and reports.
+- Prefer an external review root when the evidence source is mounted, shared,
+  or already has reports that must remain unchanged.
 - Use finalized SQLite traces with `immutable=1` when trace inspection is
   necessary.
 - Keep the workflow local and read-only: no network request, model dispatch,

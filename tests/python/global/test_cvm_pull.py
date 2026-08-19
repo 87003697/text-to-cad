@@ -471,7 +471,10 @@ class PullPlanTests(unittest.TestCase):
 
     def test_count_local_files_uses_relative_fnmatch_contract(self) -> None:
         runner = FakeRunner()
-        runner.respond("python3 -c", stdout="7\n")
+        runner.respond(
+            "path.relative_to(root).as_posix()",
+            stdout=json.dumps([f"file-{index}" for index in range(7)]),
+        )
         workflow = self.workflow(runner)
         workflow.excludes = ("stderr.log", ".git/*")
         self.assertEqual(workflow._count_local_files("group/exp"), 7)
@@ -480,18 +483,100 @@ class PullPlanTests(unittest.TestCase):
         self.assertIn("fnmatch.fnmatch(relative, pattern)", command)
         self.assertIn("stat.S_ISREG(path.lstat().st_mode)", command)
 
+    def test_disposable_browser_runtimes_are_always_excluded(self) -> None:
+        runner = FakeRunner()
+        workflow = cvm_pull.CvmPull(
+            cvm_pull.PullRequest(
+                None,
+                None,
+                cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
+            ),
+            runner,
+        )
+
+        self.assertEqual(
+            cvm_pull.DISPOSABLE_RUNTIME_EXCLUDES,
+            workflow.excludes,
+        )
+        workflow._upload_exp("group/exp")
+        command = runner.remote_commands[-1]
+        for pattern in cvm_pull.DISPOSABLE_RUNTIME_EXCLUDES:
+            self.assertIn(f"--exclude '{pattern}'", command)
+        self.assertNotIn(".codex-upper", command)
+
+    def test_default_excludes_include_disposable_browser_runtimes(self) -> None:
+        runner = FakeRunner()
+        workflow = self.workflow(runner)
+
+        for pattern in cvm_pull.DISPOSABLE_RUNTIME_EXCLUDES:
+            self.assertIn(pattern, workflow.excludes)
+        self.assertEqual(
+            len(workflow.excludes),
+            len(set(workflow.excludes)),
+        )
+
     def test_upload_never_follows_cvm_symlinks(self) -> None:
         runner = FakeRunner()
         workflow = self.workflow(runner)
         workflow._upload_exp("group/exp")
         self.assertIn("--no-follow-symlinks", runner.remote_commands[-1])
 
-    def test_s3_count_uses_pipefail(self) -> None:
+    def test_s3_listing_filters_relative_keys_with_the_same_excludes(self) -> None:
         runner = FakeRunner()
-        runner.respond("bash -o pipefail", stdout="7\n")
+        runner.respond(
+            "s3api",
+            stdout=json.dumps([f"file-{index}" for index in range(7)]),
+        )
         workflow = self.workflow(runner)
         self.assertEqual(workflow._count_s3_files("group/exp"), 7)
-        self.assertIn("bash -o pipefail -c", runner.remote_commands[-1])
+        command = runner.remote_commands[-1]
+        self.assertIn("list-objects-v2", command)
+        self.assertIn("fnmatch.fnmatch(relative, pattern)", command)
+        self.assertIn("ericzyma/text-to-cad/outputs/group/exp/", command)
+
+    def test_existing_s3_requires_exact_filtered_key_set(self) -> None:
+        runner = FakeRunner()
+        workflow = self.workflow(runner)
+        with (
+            mock.patch.object(
+                workflow,
+                "_list_local_files",
+                return_value=("artifact_manifest.json", "step_index.json", "workspace.json"),
+            ),
+            mock.patch.object(
+                workflow,
+                "_list_s3_files",
+                return_value=("artifact_manifest.json", "wrong-offsetting-object.json", "workspace.json"),
+            ),
+        ):
+            complete, local_count, s3_count = workflow._existing_s3_is_complete(
+                "group/exp"
+            )
+
+        self.assertFalse(complete)
+        self.assertEqual((3, 3), (local_count, s3_count))
+
+    def test_verify_reports_missing_and_extra_filtered_keys(self) -> None:
+        runner = FakeRunner()
+        workflow = self.workflow(runner)
+        with (
+            mock.patch.object(
+                workflow,
+                "_list_local_files",
+                return_value=("artifact_manifest.json", "step_index.json"),
+            ),
+            mock.patch.object(
+                workflow,
+                "_list_s3_files",
+                return_value=("artifact_manifest.json", "run/playwright-version.json"),
+            ),
+        ):
+            with self.assertRaises(cvm_pull.PullError) as error:
+                workflow._verify_exp("group/exp")
+
+        self.assertEqual(5, error.exception.status)
+        self.assertIn("step_index.json", str(error.exception))
+        self.assertIn("run/playwright-version.json", str(error.exception))
 
     def test_cleanup_revalidates_exact_two_component_target(self) -> None:
         runner = FakeRunner()

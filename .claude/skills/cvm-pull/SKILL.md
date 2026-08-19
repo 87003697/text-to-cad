@@ -33,7 +33,8 @@ Parse request → Discover plan → Qualify terminal/postmortem
 模块。每个 exp 必须 verify 成功后才进入 cleanup。
 
 1. 解析 flags：
-   - `--include-byproducts`：上传 `run/.codex-upper` 等副产物后才清理失败实验；
+   - `--include-byproducts`：上传 `run/.codex-upper` 等诊断副产物后才清理失败实验；
+     每实验的 Playwright/Chromium 安装仍作为 disposable runtime 排除；
    - `--include-byproducts --retain-cvm-source`：上传并验证完整失败实验，刷新
      Mac mount，但保留 CVM 源；用于需要审阅 postmortem 且清理未获授权的情况；
    - `--discard-postmortem`：显式丢弃未上传的 postmortem 后清理失败实验；
@@ -62,14 +63,14 @@ Parse request → Discover plan → Qualify terminal/postmortem
   直读 S3 prefix，不把可能陈旧的 VFS mount cache 当作 source of truth。已有
   prefix 仍必须与 immutable CVM source 验证：完整则恢复 cleanup；少对象则重试
   upload 后再验；多出对象则 fail closed、保留 CVM source。
-- **上传后 verify 通过才清理 CVM 本地**：`find CVM local -type f | wc -l` ==
-  `aws s3 ls --recursive | wc -l`。**verify fail 保留 CVM local + exit 5**，
-  绝不盲删源。
+- **上传后 verify 通过才清理 CVM 本地**：对 CVM 与 S3 应用相同 exclude 后，
+  相对文件 key 集合必须完全相等；只比较数量会让一个多余对象抵消一个缺失对象。
+  **verify fail 保留 CVM local + exit 5**，绝不盲删源。
 - **失败态默认不清理**：Runner 为非零状态保留 `run/.codex-upper`。默认 pull 检测
   `artifact_manifest.json.final_status != 0` 或 `run/.codex-upper` 后跳过该 exp；
   只有显式 `--include-byproducts` 或 `--discard-postmortem` 才能越过。
 - **保留源模式仍须完整验证**：`--retain-cvm-source` 仅能与
-  `--include-byproducts` 同时使用。它执行同一 upload、CVM/S3 文件计数验证和 mount
+  `--include-byproducts` 同时使用。它执行同一 upload、CVM/S3 key 集合验证和 mount
   可见性检查，但跳过 CVM cleanup；已有完整 S3 prefix 仍重新对照不可变 CVM 源。
 - **CVM symlink 不得成为上传入口**：upload 固定使用 `--no-follow-symlinks`，CVM
   计数只包含 `lstat` 证明的普通文件。读取 manifest 前，固定 outputs root、group 和
@@ -82,11 +83,14 @@ Parse request → Discover plan → Qualify terminal/postmortem
   `final_status` 的 `artifact_manifest.json`；missing/invalid 时 exit 9，不上传、不
   清理，并回到 `$cvm-monitor`。monitor 返回不能代替 pull 重验。
 - **`run/rollout.jsonl` 默认上传**，它是 pilot 的 cost/事故真相源。
+- **浏览器安装始终排除**：`run/playwright/` 与
+  `run/playwright-browsers/` 是数百 MiB 的 disposable runtime，即使使用
+  `--include-byproducts` 也不上传；保留 rollout、trace 和版本/身份记录即可复盘。
 - **`run/stderr.log` + `.codex/` + `__pycache__/` 默认排除**；`--include-byproducts` opt-in。
 - **rclone mount 必须健康**：跑前直接探测 `127.0.0.1:5572` RC endpoint；
   不依赖 macOS process table，探测失败则 exit 4。
 - **不以 mount existence 判完成**：mount 只用于最终 visibility；S3 prefix
-  existence 也只是恢复提示，必须与 CVM immutable source 做 count verify。
+  existence 也只是恢复提示，必须与 CVM immutable source 做 filtered-key verify。
 - **cleanup target 必须是安全的两段相对路径**：不符合
   `[A-Za-z0-9._-]+/[A-Za-z0-9._-]+` 或任一组件为 `.`/`..` 时 exit 7，
   绝不拼进 remote `rm`。
@@ -130,7 +134,8 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - 上传的新 exp dir 清单（本轮 uploaded + cleaned）
 - 使用 `--retain-cvm-source` 时，分别报告 uploaded + verified + mount-visible 与
   retained-on-CVM 清单；不得称为 cleaned
-- 已存在且与 CVM 源计数一致的 S3 prefix 单独报告为 verified-existing，不得称为
+- 已存在且与 CVM 源 filtered-key 集合一致的 S3 prefix 单独报告为
+  verified-existing，不得称为
   本轮 uploaded；保留源模式不得使用 `resuming cleanup` 文案
 - 因失败态/postmortem 默认保留在 CVM 的 exp 清单
 - 每 exp artifact 存在性 check（从 mount 侧读）：`workspace.json` /
@@ -144,7 +149,8 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - exit 4（RC endpoint 或 S3 remote listing 不可用）→ 分别执行
   `rclone rc --rc-addr=127.0.0.1:5572 core/version` 和带 bucket 的
   `rclone lsf threed-code:arcwm-code-us-west-2/...` 排查
-- exit 5（verify fail：本地文件数 ≠ S3 文件数） → 汇报 exp 名 + 两侧计数，指示
+- exit 5（verify fail：filtered key 缺失或多余） → 汇报 exp 名、两侧计数和有界
+  missing/extra key，指示
   不清 CVM，让用户人工介入
 - exit 6（S3 已验证但 mount 尚不可见）→ 明确数据已安全上传，并按 policy 如实
   报告：普通 publish 为 `CVM source cleaned`，`--retain-cvm-source` 为

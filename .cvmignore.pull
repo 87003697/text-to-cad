@@ -1,6 +1,10 @@
 # aws s3 cp exclude list — CVM → S3 upload (cvm-pull.sh uses this)
 # run/rollout.jsonl is intentionally NOT excluded: it is the new-pilot cost and
 # incident source. usage.json remains an optional legacy compatibility file.
+# Per-experiment browser installations are disposable runtime caches. Preserve
+# browser/version evidence, not hundreds of MiB of duplicated Chromium bytes.
+run/playwright/*
+run/playwright-browsers/*
 #
 # NB (2026-07-29): aws --exclude matches the RELATIVE path from source
 # root, not the absolute path. `*/.foo/*` requires a leading `/` component

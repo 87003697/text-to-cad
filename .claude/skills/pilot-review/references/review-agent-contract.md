@@ -7,7 +7,10 @@ the ordered fix playbook.
 
 ## Experiment draft
 
-Write `<exp>/review-draft.json`:
+Write `<exp>/review-draft.json` under the destination selected by `prepare`.
+With `--review-root`, this is `<review-root>/<exp>/review-draft.json`; evidence
+paths still resolve against the immutable source experiment, not the review
+destination.
 
 ```json
 {
@@ -80,7 +83,8 @@ optional record index, call ID, JSON field, line, or other precise locator.
 
 ## Group draft
 
-For group input, also write `outputs/<group>/review-summary-draft.json`:
+For group input, also write `<review-root>/review-summary-draft.json` (or the
+source group path when using compatible in-place mode):
 
 ```json
 {
