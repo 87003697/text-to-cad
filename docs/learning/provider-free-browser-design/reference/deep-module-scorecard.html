@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>历史 Browser Executor 方案：Deep Module 设计速查</title>
+  <link rel="stylesheet" href="../assets/course.css">
+</head>
+<body><main>
+  <h1>历史 Browser Executor 方案：Deep Module 设计速查</h1>
+  <p class="lede">用四个问题判断一次重构是否真的把复杂度向下拉。</p>
+
+  <div class="card warn">
+    <strong>历史案例：</strong>以下具体 Interface 和 Adapter 来自
+    <a href="../../../design/provider-free-browser-runtime-deep-module.md">未实施的 fallback 方案</a>，
+    不是当前 Development 或 Formal 要求。当前实现见
+    <a href="../../../../packages/browser_runtime/README.md"><code>packages/browser_runtime</code></a>，
+    长期决策见
+    <a href="../../../adr/0004-own-provider-free-browser-lifecycle-by-authority.md">ADR 0004</a>。
+  </div>
+
+  <table>
+    <thead><tr><th>问题</th><th>好的信号</th><th>危险信号</th></tr></thead>
+    <tbody>
+      <tr><td>Interface</td><td>caller 只提交 residual render request</td><td>caller 传 endpoint、path、mode、cleanup policy</td></tr>
+      <tr><td>Depth</td><td>一次 execute 隐藏 authority、render、cleanup</td><td>公开 start/connect/close 的时间顺序</td></tr>
+      <tr><td>Locality</td><td>cleanup precedence 只实现一次</td><td>predicate 改名要改五层 if/else</td></tr>
+      <tr><td>Seam</td><td>fallback 中的 Darwin/Linux 两个真实 Adapter</td><td>为假想 direct-CDP 建 registry</td></tr>
+    </tbody>
+  </table>
+
+  <h2>fallback 方案当时选定的 Interface</h2>
+  <pre><code>render_residual_preview(...) -&gt; RenderedPreview
+
+_BrowserExecutor.execute(
+    _SealedResidualBrowserJob
+) -&gt; _BrowserExecution</code></pre>
+
+  <h2>fallback 方案不允许外泄的知识</h2>
+  <ul>
+    <li>source、execution tree、mount、PID/PGID、CDP endpoint</li>
+    <li>supervisor protocol 与 fixed socket/record paths</li>
+    <li>cleanup 首错与 Retained Resource Proof 仲裁</li>
+    <li>Darwin/Linux Adapter 选择与 frozen budgets</li>
+  </ul>
+
+  <h2>Source-Hidden 判据</h2>
+  <div class="card warn">
+    <strong>只读不是隐藏。</strong> renderer 可见的任何进程 root 只要能解析 source alias，验收就应失败。
+  </div>
+
+  <h2>删除测试</h2>
+  <p>删除 Module 后，如果知识重新散落到 renderer、scenario、protocol 和 reviewer，Module 有 Depth。若复杂度直接消失，它只是 Middle Man。</p>
+
+  <p><a href="../lessons/0001-designing-the-browser-executor.html">返回课程</a></p>
+</main></body>
+</html>

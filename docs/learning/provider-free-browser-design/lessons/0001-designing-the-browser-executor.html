@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lesson 1: 用历史 Browser Executor 方案练习深 Module</title>
+  <link rel="stylesheet" href="../assets/course.css">
+</head>
+<body><main>
+  <h1>用历史 Browser Executor 方案练习深 Module</h1>
+  <p class="lede">目标：你能判断一次重构是在提高 Depth，还是只把一个大文件切成更多小文件。</p>
+
+  <div class="card warn">
+    <strong>历史案例：</strong>本课分析的是未实施的
+    <a href="../../../design/provider-free-browser-runtime-deep-module.md">fallback deep-module 方案</a>，
+    不是当前实现计划。当前 Development 路径是
+    <a href="../../../../packages/browser_runtime/README.md"><code>packages/browser_runtime</code></a>；
+    长期 Formal 决策由
+    <a href="../../../adr/0004-own-provider-free-browser-lifecycle-by-authority.md">ADR 0004</a>定义。
+  </div>
+
+  <h2>1. 先看当时的问题</h2>
+  <p>历史 runtime 的困难不只是 <code>browser_runtime.py</code> 有 4,847 行，而是一次 cleanup 规则变化会迫使 runtime、supervisor、scenario、protocol、reviewer 和测试一起修改。复杂度穿过了多个 caller 能看见的 Interface，Locality 很低。</p>
+
+  <div class="card warn">
+    <strong>伪重构：</strong>把 <code>_PinnedExecutable</code> 拆成四个 class，但仍让 caller 按顺序调用 <code>mount()</code>、<code>launch()</code>、<code>connect()</code>、<code>cleanup()</code>。文件变小，Interface 反而更大。
+  </div>
+
+  <h2>2. fallback 方案选定的两个 Seam</h2>
+  <pre><code>公开 Seam
+render_residual_preview(request) -&gt; RenderedPreview
+
+私有执行 Seam
+BrowserExecutor.execute(sealed_job) -&gt; BrowserExecution</code></pre>
+
+  <p>外部 caller 不学习 browser。私有 executor 一次性拥有 authority、Source-Hidden、launch、CDP、render、cleanup 和 evidence。Darwin 与 Linux 是两个真实 Adapter，所以这个 Seam 不是为测试虚构的。</p>
+
+  <div class="card good">
+    <strong>Depth：</strong>caller 学一个动作，却得到完整八视图渲染和所有安全生命周期保证。
+  </div>
+
+  <h2>3. 内部仍可拆，但不扩大 Interface</h2>
+  <ul>
+    <li><strong>FrozenBrowserTree</strong>：manifest、copy、freeze。</li>
+    <li><strong>BrowserExecutionTree</strong>：只读 execution tree 与 Source-Hidden。</li>
+    <li><strong>OwnedBrowserProcess</strong>：process group、readiness、listener、CDP。</li>
+    <li><strong>CleanupLedger</strong>：首个 predicate 与 retained proof 仲裁。</li>
+  </ul>
+  <p>它们是 executor Implementation 内的 Module。caller 不组合它们，也不承担调用顺序。</p>
+
+  <h2>4. 为什么 Source-Hidden 不等于只读</h2>
+  <p>如果 Chromium 能通过 <code>/proc/&lt;supervisor&gt;/root</code> 解析 source，即使打开写模式失败，它仍知道 source 的存在和内容。规格要求的是看不见，因此新拓扑让 source-owning materializer 留在 renderer 的 PID namespace 之外，并给 renderer 一个私有 <code>/proc</code>。</p>
+
+  <h2>5. 三个检索练习</h2>
+  <div class="prompt">
+    <p><strong>Q1.</strong> caller 新增 <code>runtime_mode</code> 和 <code>cdp_endpoint</code>，Module 变深了吗？</p>
+    <p class="answer" tabindex="0">没有，内部知识泄漏到了 Interface。</p>
+  </div>
+  <div class="prompt">
+    <p><strong>Q2.</strong> 为什么 fallback 方案没有定义可插拔的 direct-CDP Adapter registry？</p>
+    <p class="answer" tabindex="0">当时只有一个真实控制 Adapter，Seam 仍是假设。</p>
+  </div>
+  <div class="prompt">
+    <p><strong>Q3.</strong> 哪个验收事实能证明 Source-Hidden？</p>
+    <p class="answer" tabindex="0">所有 renderer-visible source aliases 都无法解析。</p>
+  </div>
+
+  <h2>6. 你现在可以怎样评审方案</h2>
+  <ol>
+    <li>圈出 caller 必须知道的全部事实；它们共同构成 Interface。</li>
+    <li>做删除测试：删除 Module 后，复杂度会消失还是散回 caller？</li>
+    <li>检查每个 Seam 是否至少有两个真实 Adapter。</li>
+    <li>确认新测试穿过 Interface，而不是继续 patch 私有 syscall。</li>
+  </ol>
+
+  <p>速查表：<a href="../reference/deep-module-scorecard.html">Deep Module 设计速查</a></p>
+  <p>推荐主资料：<a href="https://web.stanford.edu/~ouster/cgi-bin/aposd.php">John Ousterhout, A Philosophy of Software Design</a>。Stanford 的课程提纲将 deep modules、interface versus implementation、Design It Twice 和 pull complexity downwards 放在同一设计框架中。</p>
+
+  <div class="card">
+    完成练习后，把 Q1–Q3 的答案发给我。我会根据你的解释，而不是“看过课程”本身，建立第一条 learning record。应用答案时必须重新检查当前 Development Interface 和 ADR 0004，不能把历史 class 或 Seam 当作现行实现要求。
+  </div>
+</main></body>
+</html>
