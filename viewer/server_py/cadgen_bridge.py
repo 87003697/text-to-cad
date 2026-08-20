@@ -118,20 +118,23 @@ def require_cadgen_runtime(repo_root: str) -> dict:
     )
 
 
-def run_cadgen(module: str, args, repo_root: str) -> dict:
+_DEFAULT_CADGEN_TIMEOUT_SECONDS = float(os.environ.get("VIEWER_CADGEN_TIMEOUT", "300"))
+
+
+def run_cadgen(module: str, args, repo_root: str, timeout: float | None = None) -> dict:
     """Run a cadgen build/export op and return its payload dict (``{ok:false,error}``
     on failure). Prefers the warm worker; falls back to a cold subprocess on any
     worker spawn/transport fault so the path is always available."""
     try:
         from . import worker_client
 
-        return worker_client.run_cadgen(module, args, repo_root)
+        return worker_client.run_cadgen(module, args, repo_root, timeout=timeout)
     except worker_client._WorkerError:
         pass  # worker disabled or faulted -> cold subprocess below
-    return run_cadgen_cold(module, args, repo_root)
+    return run_cadgen_cold(module, args, repo_root, timeout=timeout)
 
 
-def run_cadgen_cold(module: str, args, repo_root: str) -> dict:
+def run_cadgen_cold(module: str, args, repo_root: str, timeout: float | None = None) -> dict:
     """Run `python -m <module> <args>` in a fresh subprocess and return the last
     stdout JSON line as a dict, or {ok:false,error} on failure."""
     env = dict(os.environ)
@@ -141,11 +144,19 @@ def run_cadgen_cold(module: str, args, repo_root: str) -> dict:
     # Byte-deterministic artifacts (drawing packages are content-addressed):
     # ezdxf's object ordering depends on Python hash randomization.
     env.setdefault("PYTHONHASHSEED", "0")
+    if timeout is None:
+        timeout = _DEFAULT_CADGEN_TIMEOUT_SECONDS
     try:
         proc = subprocess.run(
             [sys.executable, "-m", module, *args],
-            cwd=repo_root, env=env, capture_output=True, text=True,
+            cwd=repo_root if repo_root and os.path.isdir(repo_root) else None,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"cadgen {module} timed out after {timeout:.1f}s"}
     except OSError as exc:
         return {"ok": False, "error": str(exc)}
     for line in reversed(proc.stdout.splitlines()):

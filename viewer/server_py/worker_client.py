@@ -24,6 +24,8 @@ from . import cadgen_bridge
 # viewer/ (dev) or the bundled runtime root — the dir that holds the `server_py`
 # package, so the worker resolves as `-m server_py.worker`.
 _SERVER_PY_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DEFAULT_CADGEN_TIMEOUT_SECONDS = float(os.environ.get("VIEWER_CADGEN_TIMEOUT", "300"))
+_DEFAULT_PING_TIMEOUT_SECONDS = float(os.environ.get("VIEWER_CAD_WORKER_PING_TIMEOUT", "10"))
 
 
 def _worker_enabled() -> bool:
@@ -125,7 +127,29 @@ class CadWorker:
             self._reap()
 
     # --- request/response --------------------------------------------------------
-    def _send_once(self, repo_root: str, method: str, params: dict) -> dict:
+    def _read_line(self, proc: subprocess.Popen, timeout: float | None = None) -> str:
+        if timeout is None or timeout <= 0:
+            return proc.stdout.readline() if proc.stdout else ""
+        line_box: list[str | None] = [None]
+        exc_box: list[Exception | None] = [None]
+
+        def _reader():
+            try:
+                if proc.stdout is not None:
+                    line_box[0] = proc.stdout.readline()
+            except Exception as exc:  # noqa: BLE001
+                exc_box[0] = exc
+
+        reader_thread = threading.Thread(target=_reader, daemon=True)
+        reader_thread.start()
+        reader_thread.join(timeout=timeout)
+        if reader_thread.is_alive():
+            raise _WorkerTransportError(f"worker request timed out after {timeout:.1f}s")
+        if exc_box[0] is not None:
+            raise _WorkerTransportError(f"worker stdout read failed: {exc_box[0]}") from exc_box[0]
+        return line_box[0] or ""
+
+    def _send_once(self, repo_root: str, method: str, params: dict, timeout: float | None = None) -> dict:
         if not self._alive():
             self._spawn(repo_root)
         proc = self._proc
@@ -138,7 +162,7 @@ class CadWorker:
             proc.stdin.flush()
         except (OSError, ValueError) as exc:
             raise _WorkerTransportError(f"worker stdin write failed: {exc}") from exc
-        line = proc.stdout.readline()
+        line = self._read_line(proc, timeout=timeout)
         if line == "":  # EOF: the worker died (e.g. OCP segfault)
             raise _WorkerTransportError("worker closed the connection (no response)")
         try:
@@ -152,7 +176,7 @@ class CadWorker:
             raise _WorkerError(f"worker protocol error: {err.get('message')}")
         return response.get("result") or {}
 
-    def _request(self, repo_root: str, method: str, params: dict) -> dict:
+    def _request(self, repo_root: str, method: str, params: dict, timeout: float | None = None) -> dict:
         """Send a request, respawning once on a TRANSPORT fault before giving up. A
         clean protocol-error response propagates without a respawn."""
         with self._lock:
@@ -160,21 +184,26 @@ class CadWorker:
             if recycle and self._invokes >= recycle:
                 self._reap()  # bound OCP memory: recycle the warm process
             try:
-                result = self._send_once(repo_root, method, params)
+                result = self._send_once(repo_root, method, params, timeout=timeout)
             except _WorkerTransportError:
                 self._reap()
-                result = self._send_once(repo_root, method, params)  # one clean retry
+                result = self._send_once(repo_root, method, params, timeout=timeout)  # one clean retry
             self._invokes += 1
             return result
 
-    def run_cadgen(self, module: str, args, repo_root: str) -> dict:
+    def run_cadgen(self, module: str, args, repo_root: str, timeout: float | None = None) -> dict:
+        if timeout is None:
+            timeout = _DEFAULT_CADGEN_TIMEOUT_SECONDS
         return self._request(
-            repo_root, "invoke", {"module": module, "args": list(args), "repo_root": repo_root}
+            repo_root, "invoke", {"module": module, "args": list(args), "repo_root": repo_root},
+            timeout=timeout,
         )
 
-    def ping(self, repo_root: str = "") -> dict:
+    def ping(self, repo_root: str = "", timeout: float | None = None) -> dict:
         """Spawn-if-needed and round-trip a health check (OCP is not imported)."""
-        return self._request(repo_root, "ping", {})
+        if timeout is None:
+            timeout = _DEFAULT_PING_TIMEOUT_SECONDS
+        return self._request(repo_root, "ping", {}, timeout=timeout)
 
 
 _CLIENT: CadWorker | None = None
@@ -192,9 +221,9 @@ def get_client() -> CadWorker:
         return _CLIENT
 
 
-def run_cadgen(module: str, args, repo_root: str) -> dict:
+def run_cadgen(module: str, args, repo_root: str, timeout: float | None = None) -> dict:
     """Warm-worker equivalent of :func:`cadgen_bridge.run_cadgen`. Raises
     :class:`_WorkerError` on a transport/spawn fault (caller falls back to cold)."""
     if not _worker_enabled():
         raise _WorkerError("warm worker disabled (VIEWER_CAD_WORKER=0)")
-    return get_client().run_cadgen(module, args, repo_root)
+    return get_client().run_cadgen(module, args, repo_root, timeout=timeout)
