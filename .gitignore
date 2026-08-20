@@ -23,6 +23,7 @@ htmlcov/
 .cache
 .agents/
 .vite
+.vercel
 node_modules
 dist
 coverage
@@ -32,12 +33,15 @@ coverage
 !skills/cad-viewer/scripts/viewer/dist/
 !skills/cad-viewer/scripts/viewer/dist/**
 
-# Temporary files
+# Temporary files and scratch notes
 *.tmp
 *.swp
 *.step.glb.lock
 *.stp.glb.lock
 tmp/
+repo-scan*.md
+*-scan-*.md
+*-fix-plan*.md
 
 # Review media rendered next to a fixture. models/ holds CAD/robot sources,
 # generated 3D and fabrication outputs, and docs only; see models/README.md.
