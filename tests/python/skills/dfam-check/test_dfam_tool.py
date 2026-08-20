@@ -249,6 +249,20 @@ class MultiBodyWallTest(unittest.TestCase):
         # 0.3 mm is the fit gap; the thinnest real wall is the 1.7 mm socket.
         self.assertGreater(thinnest, 1.0)
 
+    def test_per_body_carries_p05_for_the_same_judgement_rule_as_pooled(self) -> None:
+        """SKILL.md says judge on p05_mm (min_mm alone can be a sampling
+        outlier) and also says attribute a violation to its own body rather
+        than the pooled figure. Both rules only hold together if p05_mm is
+        present per body, not only in the pooled result.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            facts = dfam_tool._wall_facts(dfam_tool._load(self._assembly(tmp)), samples=2000)
+
+        for body in facts["per_body"]:
+            self.assertIn("p05_mm", body)
+            self.assertIsNotNone(body["p05_mm"])
+
     def test_internal_arrays_never_reach_the_payload(self) -> None:
         """The pooled arrays are numpy and would not survive json.dumps."""
         with tempfile.TemporaryDirectory() as td:

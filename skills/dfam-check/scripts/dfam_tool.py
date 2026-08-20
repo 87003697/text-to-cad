@@ -131,6 +131,7 @@ def _wall_facts(mesh: trimesh.Trimesh, samples: int, seed: int = 42) -> dict:
         per_body.append({
             "body": i,
             "min_mm": facts.get("min_mm"),
+            "p05_mm": facts.get("p05_mm"),
             "median_mm": facts.get("median_mm"),
             "samples_valid": facts.get("samples_valid", 0),
         })
