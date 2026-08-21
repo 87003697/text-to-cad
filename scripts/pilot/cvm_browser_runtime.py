@@ -18,7 +18,11 @@ from typing import Any, Mapping, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, os.fspath(REPO_ROOT / "packages/browser_runtime/src"))
+from browser_runtime.config import CAD_RENDER_PROGRAMS
+
+
 STATE_ROOT = REPO_ROOT / ".cvm-browser-runtime"
+REMOTE_IMAGE_LOCK = REPO_ROOT / "packages/browser_runtime/image/image-lock.json"
 REMOTE_ROOT = "~/text-to-cad"
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
@@ -121,6 +125,47 @@ def _write_json(path: Path, value: Mapping[str, object]) -> None:
         raise RuntimeWorkflowError("receipt already exists") from exc
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _replace_bytes(path: Path, payload: bytes) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    if temporary.exists() or temporary.is_symlink():
+        raise RuntimeWorkflowError("temporary replacement already exists")
+    try:
+        descriptor = os.open(
+            temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+        )
+        try:
+            view = memoryview(payload)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("short replacement write")
+                view = view[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _replace_json(path: Path, value: Mapping[str, object]) -> None:
+    _replace_bytes(path, _canonical(value))
+
+
+def _activate_lock_with_receipt(
+    original_lock: bytes,
+    activated_lock: Mapping[str, object],
+    receipt_path: Path,
+    receipt: Mapping[str, object],
+) -> None:
+    _replace_json(REMOTE_IMAGE_LOCK, activated_lock)
+    try:
+        _write_json(receipt_path, receipt)
+    except BaseException:
+        _replace_bytes(REMOTE_IMAGE_LOCK, original_lock)
+        raise
 
 
 def _claim_once(state: Path, operation: str, handle: str) -> None:
@@ -385,6 +430,12 @@ def provision(handle: str) -> Mapping[str, object]:
         or receipt.get("image") != prepare_receipt.get("image")
         or not isinstance(receipt.get("retainedImageId"), str)
         or IMAGE_ID.fullmatch(receipt["retainedImageId"]) is None
+        or not _valid_retained_image(receipt.get("retainedImage"))
+        or receipt["retainedImage"].get("id") != receipt["retainedImageId"]
+        or not _same_runtime_artifact(
+            receipt.get("image"), receipt.get("retainedImage")
+        )
+        or re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("remoteLockSha256"))) is None
         or receipt.get("archiveSha256") != attestation["sha256"]
         or receipt.get("transferAbsent") is not True
     ):
@@ -470,21 +521,27 @@ def _validate_status_receipt(
         elif value.get("status") == "provisioned":
             expected = common | {
                 "image", "retainedImageId", "archiveSha256", "workflowFiles",
-                "freeBytes",
+                "freeBytes", "retainedImage", "remoteLockSha256",
             }
         else:
             raise RuntimeWorkflowError("remote status receipt is invalid")
         if set(value) != expected:
             raise RuntimeWorkflowError("remote status receipt is invalid")
-        if (
-            value.get("transferAbsent") is not True
-            or value.get("retryAllowed") is not False
+        if value.get("retryAllowed") is not False or not isinstance(
+            value.get("transferAbsent"), bool
         ):
             raise RuntimeWorkflowError("remote status receipt is invalid")
         if value.get("status") == "provisioned" and (
-            not _valid_runtime_image(value.get("image"))
+            value.get("transferAbsent") is not True
+            or not _valid_runtime_image(value.get("image"))
             or not isinstance(value.get("retainedImageId"), str)
             or IMAGE_ID.fullmatch(value["retainedImageId"]) is None
+            or not _valid_retained_image(value.get("retainedImage"))
+            or value["retainedImage"].get("id") != value["retainedImageId"]
+            or not _same_runtime_artifact(
+                value.get("image"), value.get("retainedImage")
+            )
+            or re.fullmatch(r"[0-9a-f]{64}", str(value.get("remoteLockSha256"))) is None
             or re.fullmatch(r"[0-9a-f]{64}", str(value.get("archiveSha256"))) is None
             or not _valid_workflow_files(value.get("workflowFiles"))
             or not isinstance(value.get("freeBytes"), int)
@@ -500,6 +557,8 @@ def _validate_status_receipt(
             }
             or value.get("status") not in {"aborted", "cleanup-failed"}
             or not isinstance(value.get("transferAbsent"), bool)
+            or (value.get("status") == "aborted")
+            != (value.get("transferAbsent") is True)
         ):
             raise RuntimeWorkflowError("remote status receipt is invalid")
     elif name == "probe":
@@ -525,6 +584,17 @@ def _validate_status_receipt(
                     or IMAGE_ID.fullmatch(digest) is None
                 )
                 for digest in (value.get("programDigest"), value.get("pngSha256"))
+            )
+            or (
+                value.get("status") == "succeeded"
+                and (
+                    value.get("cleanupAbsent") is not True
+                    or value.get("capabilitySchema")
+                    != "text-to-cad.browser-runtime-capability/1"
+                    or value.get("programDigest")
+                    != CAD_RENDER_PROGRAMS["residual"]
+                    or value.get("pngSha256") is None
+                )
             )
         ):
             raise RuntimeWorkflowError("remote status receipt is invalid")
@@ -560,6 +630,88 @@ def _valid_runtime_image(value: object) -> bool:
         and value["archiveReference"].isascii()
         and 0 < len(value["archiveReference"]) <= 256
     )
+
+
+def _valid_retained_image(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == {"role", "id", "platform", "sourceRevision"}
+        and value.get("role") == "runtime"
+        and value.get("platform") == "linux/amd64"
+        and isinstance(value.get("id"), str)
+        and IMAGE_ID.fullmatch(value["id"]) is not None
+        and isinstance(value.get("sourceRevision"), str)
+        and REVISION.fullmatch(value["sourceRevision"]) is not None
+    )
+
+
+def _same_runtime_artifact(source: object, retained: object) -> bool:
+    return (
+        _valid_runtime_image(source)
+        and _valid_retained_image(retained)
+        and source["role"] == retained["role"]
+        and source["platform"] == retained["platform"]
+        and source["sourceRevision"] == retained["sourceRevision"]
+    )
+
+
+def _load_remote_image_lock() -> Mapping[str, Any]:
+    lock = _strict_json(
+        REMOTE_IMAGE_LOCK.read_text(encoding="utf-8"), "Browser Runtime image lock"
+    )
+    image = lock.get("image")
+    if (
+        set(lock) != {"schema_version", "image", "built_from_ref", "notes"}
+        or lock.get("schema_version") != 1
+        or not isinstance(lock.get("built_from_ref"), str)
+        or REVISION.fullmatch(lock["built_from_ref"]) is None
+        or not isinstance(image, dict)
+        or set(image)
+        != {
+            "name", "id", "base_image", "base_id", "playwright_mcp_version",
+            "content_size_bytes", "architecture",
+        }
+        or image.get("name") != "text-to-cad-browser-runtime"
+        or not isinstance(image.get("id"), str)
+        or IMAGE_ID.fullmatch(image["id"]) is None
+        or image.get("architecture") != "amd64"
+        or not isinstance(image.get("content_size_bytes"), int)
+        or image["content_size_bytes"] <= 0
+    ):
+        raise RuntimeWorkflowError("deployed Browser Runtime lock is invalid")
+    return lock
+
+
+def _remove_transport_reference(reference: str) -> bool:
+    try:
+        _docker("image", "rm", reference, check=False)
+        return not _image_ids(reference)
+    except BaseException:
+        return False
+
+
+def _load_retained_image(
+    archive: Path, reference: str, source_image: Mapping[str, Any]
+) -> Mapping[str, object]:
+    error: BaseException | None = None
+    retained: Mapping[str, object] | None = None
+    try:
+        _docker("image", "load", "--input", os.fspath(archive), timeout=1800)
+        loaded = _image_ids(reference)
+        if len(loaded) != 1:
+            raise RuntimeWorkflowError("loaded runtime image inventory is invalid")
+        retained = dict(_inspect_image(loaded[0]))
+        if not _same_runtime_artifact(source_image, retained):
+            raise RuntimeWorkflowError("loaded runtime image attestation changed")
+    except BaseException as exc:
+        error = exc
+    if not _remove_transport_reference(reference):
+        raise RuntimeWorkflowError("transport image reference cleanup failed")
+    if error is not None:
+        raise error
+    if retained is None or _inspect_image(retained["id"]).get("id") != retained["id"]:
+        raise RuntimeWorkflowError("retained runtime image is unavailable")
+    return retained
 
 
 def _disk_gate(extra_bytes: int = 0) -> int:
@@ -645,27 +797,43 @@ def _remote_provision_operation(handle: str, owner: str) -> Mapping[str, object]
     reference = image.get("archiveReference")
     if not isinstance(reference, str) or _image_ids(reference):
         raise RuntimeWorkflowError("runtime archive reference is not fresh")
-    _docker("image", "load", "--input", os.fspath(archive), timeout=1800)
-    loaded = _image_ids(reference)
-    if loaded != (image.get("id"),):
-        raise RuntimeWorkflowError("loaded runtime image ID changed across transport")
+    retained = dict(_load_retained_image(archive, reference, image))
+    retained_id = retained["id"]
+    lock_bytes = REMOTE_IMAGE_LOCK.read_bytes()
+    lock = _load_remote_image_lock()
+    lock_image = lock.get("image")
+    if (
+        lock.get("built_from_ref") != image.get("sourceRevision")
+        or lock_image.get("id") != image.get("id")
+    ):
+        raise RuntimeWorkflowError("deployed Browser Runtime lock is invalid")
+    lock_image = dict(lock_image)
+    lock_image["id"] = retained_id
+    activated_lock = dict(lock)
+    activated_lock["image"] = lock_image
     for path in (archive, prepare_path):
         path.unlink()
     incoming.rmdir()
+    free_bytes = _disk_gate()
+    remote_lock_sha256 = _sha256_bytes(_canonical(activated_lock))
     receipt: Mapping[str, object] = {
         "schema": PROVISION_SCHEMA,
         "status": "provisioned",
         "handle": handle,
         "ownerNonce": owner,
         "image": image,
-        "retainedImageId": loaded[0],
+        "retainedImageId": retained_id,
+        "retainedImage": retained,
+        "remoteLockSha256": remote_lock_sha256,
         "archiveSha256": attestation["sha256"],
         "workflowFiles": _workflow_hashes(),
-        "freeBytes": _disk_gate(),
+        "freeBytes": free_bytes,
         "transferAbsent": not incoming.exists(),
         "retryAllowed": False,
     }
-    _write_json(state / "provision.json", receipt)
+    _activate_lock_with_receipt(
+        lock_bytes, activated_lock, state / "provision.json", receipt
+    )
     return receipt
 
 
@@ -737,6 +905,9 @@ def probe(handle: str) -> Mapping[str, object]:
 
 def remote_probe(handle: str) -> Mapping[str, object]:
     provision_receipt = _load_receipt(handle, "provision.json", PROVISION_SCHEMA)
+    _validate_status_receipt(
+        "provision", provision_receipt, handle, PROVISION_SCHEMA
+    )
     _claim_once(STATE_ROOT / handle, "probe", handle)
     retained = provision_receipt.get("retainedImageId")
     owner = provision_receipt.get("ownerNonce")
@@ -746,14 +917,24 @@ def remote_probe(handle: str) -> Mapping[str, object]:
         raise RuntimeWorkflowError("runtime owner is invalid")
     if provision_receipt.get("workflowFiles") != _workflow_hashes():
         raise RuntimeWorkflowError("deployed workflow changed before probe")
+    lock = _load_remote_image_lock()
+    retained_image = provision_receipt["retainedImage"]
+    if (
+        _sha256_file(REMOTE_IMAGE_LOCK) != provision_receipt.get("remoteLockSha256")
+        or lock["image"].get("id") != retained
+        or lock.get("built_from_ref") != retained_image.get("sourceRevision")
+    ):
+        raise RuntimeWorkflowError("Browser Runtime lock changed before probe")
     _disk_gate()
     from browser_runtime import BrowserRuntimeJob
 
     job = BrowserRuntimeJob(
         owner_nonce=owner,
         capability_dir=STATE_ROOT / handle / "probe-runtime",
-        image_ref=retained,
+        image_lock_path=REMOTE_IMAGE_LOCK,
     )
+    if job.image_ref != retained:
+        raise RuntimeWorkflowError("Browser Runtime job did not use the exact lock")
     preflight: Mapping[str, Any] | None = None
     capability: Mapping[str, Any] | None = None
     error: BaseException | None = None
