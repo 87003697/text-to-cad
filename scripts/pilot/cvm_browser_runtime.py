@@ -325,6 +325,11 @@ def _remote_failure(completed: subprocess.CompletedProcess[str], phase: str) -> 
     raise RuntimeWorkflowError(f"remote {phase} failed")
 
 
+def _remote_transfer_destination(handle: str) -> str:
+    _validate_handle(handle)
+    return f"cvm:text-to-cad/.cvm-browser-runtime/{handle}/incoming/"
+
+
 def provision(handle: str) -> Mapping[str, object]:
     prepare_receipt = _load_receipt(handle, "prepare.json", PREPARE_SCHEMA)
     _claim_once(STATE_ROOT / handle, "provision", handle)
@@ -353,15 +358,18 @@ def provision(handle: str) -> Mapping[str, object]:
     if begin.returncode != 0:
         _remote_failure(begin, "begin")
     _remote_receipt(begin, "cvm-browser-runtime.begin/1")
-    destination = f"cvm:{REMOTE_ROOT}/.cvm-browser-runtime/{handle}/incoming/"
+    destination = _remote_transfer_destination(handle)
     try:
-        _run(
+        transfer = _run(
             [
                 "rsync", "-az", "--protect-args", os.fspath(archive),
                 os.fspath(STATE_ROOT / handle / "prepare.json"), destination,
             ],
+            check=False,
             timeout=1800,
         )
+        if transfer.returncode != 0:
+            raise RuntimeWorkflowError("remote transfer failed")
         completed = _remote("remote-provision", handle, owner, check=False)
         receipt = _remote_receipt(completed, PROVISION_SCHEMA)
     except BaseException:
