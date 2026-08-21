@@ -2,14 +2,13 @@
   "schema_version": 1,
   "image": {
     "name": "text-to-cad-browser-runtime",
-    "tag": "build",
-    "id": "sha256:cc8d99c57008fa41a55d8d3fad10360172b7eaaa9c75ca206861894834561158",
+    "id": "sha256:e198b02f5f86c3c99750328181d3d546d3169585a0e06df7e9fc0e8c65b985df",
     "base_image": "mcr.microsoft.com/playwright:v1.51.1-jammy",
     "base_id": "sha256:79da45705a7c3f147c435ac6d0beeddf2e132f53263cb27bed90beafbb2e552b",
     "playwright_mcp_version": "0.0.79",
-    "content_size_bytes": 868350908,
+    "content_size_bytes": 868351666,
     "architecture": "amd64"
   },
-  "built_from_ref": "bbe805fe8fb159680dc075686f9093ebb448b09f",
-  "notes": "Local development build from the recorded develop parent plus the Browser Runtime residual-render working-tree change. `id` is the Docker image content ID; use it as the image ref. The image exposes Playwright MCP on 9223 and the closed residual CAD renderer on 9224, with Chromium and all render assets baked in. A real fixed-triangle render passed through BrowserRuntimeJob.preflight before this lock was written. On CVM transport via `docker save | docker load`, the same ID is preserved."
+  "built_from_ref": "579094a75b1930fbd2be4fee39d3850cca1243cf",
+  "notes": "Built from the exact clean Git archive named by built_from_ref. `id` is the only runtime image authority; no tag fallback is permitted. The linux/amd64 image exposes Playwright MCP on 9223 and the closed residual CAD renderer on 9224, with Chromium and all render assets baked in. BrowserRuntimeJob preflight and the real red/green/yellow residual semantic and byte-repeatability integration test passed against this exact ID before publication."
 }
