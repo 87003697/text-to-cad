@@ -13,7 +13,6 @@ FROM mcr.microsoft.com/playwright:v1.51.1-jammy
 
 ARG SOURCE_REVISION
 RUN test -n "$SOURCE_REVISION"
-LABEL org.opencontainers.image.revision="$SOURCE_REVISION"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PW_MCP_VERSION=0.0.79 \
@@ -43,4 +42,5 @@ RUN chmod 0755 /usr/local/bin/entrypoint.sh
 USER pwuser
 WORKDIR /home/pwuser
 EXPOSE 9223 9224
+LABEL org.opencontainers.image.revision="$SOURCE_REVISION"
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

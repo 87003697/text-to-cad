@@ -12,8 +12,19 @@ Its public Interface is exactly `prepare → provision → probe`.
 
 ## Workflow
 
-1. Start from a reviewed clean checkout. Build the runtime image with
-   `org.opencontainers.image.revision` set to the reviewed source revision.
+1. Start from a reviewed clean checkout. Build from an exact Git archive, not
+   the workspace directory, so ignored outputs and caches never enter the
+   multi-gigabyte Docker context. Pass the same 40-hex revision as
+   `SOURCE_REVISION`; the Dockerfile places its provenance label after the
+   expensive dependency layers so a revision-only rebuild reuses them.
+
+   ```bash
+   git archive --format=tar <40-hex-reviewed-sha> |
+     docker build --platform linux/amd64 \
+       --build-arg SOURCE_REVISION=<same-40-hex-reviewed-sha> \
+       --tag text-to-cad-browser-runtime:build-<short-sha> \
+       --file packages/browser_runtime/image/Dockerfile -
+   ```
 2. Prepare locally:
 
    ```bash
