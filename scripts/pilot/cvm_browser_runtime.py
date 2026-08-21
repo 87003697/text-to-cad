@@ -295,6 +295,7 @@ def _remote(operation: str, *args: object, check: bool = True):
             "remote-provision": 1800,
             "remote-abort": 60,
             "remote-probe": 600,
+            "remote-status": 60,
         }[operation],
     )
 
@@ -375,6 +376,7 @@ def provision(handle: str) -> Mapping[str, object]:
     except BaseException:
         _remote("remote-abort", handle, owner, check=False)
         raise
+    _write_json(STATE_ROOT / handle / "provision.json", receipt)
     if (
         completed.returncode != 0
         or receipt.get("status") != "provisioned"
@@ -387,8 +389,40 @@ def provision(handle: str) -> Mapping[str, object]:
         or receipt.get("transferAbsent") is not True
     ):
         raise RuntimeWorkflowError("remote provision receipt is invalid")
-    _write_json(STATE_ROOT / handle / "provision.json", receipt)
     return receipt
+
+
+def status(handle: str) -> Mapping[str, object]:
+    _validate_handle(handle)
+    completed = _remote("remote-status", handle, check=False)
+    if completed.returncode != 0:
+        _remote_failure(completed, "status")
+    return _remote_receipt(completed, "cvm-browser-runtime.status/1")
+
+
+def remote_status(handle: str) -> Mapping[str, object]:
+    _validate_handle(handle)
+    state = STATE_ROOT / handle
+    receipts: dict[str, object] = {}
+    schemas = {
+        "begin": "cvm-browser-runtime.begin/1",
+        "provision": PROVISION_SCHEMA,
+        "abort": "cvm-browser-runtime.abort/1",
+        "probe": PROBE_SCHEMA,
+    }
+    for name, schema in schemas.items():
+        path = state / f"{name}.json"
+        if path.is_file() and not path.is_symlink():
+            value = _strict_json(path.read_text(encoding="ascii"), f"{name} receipt")
+            if value.get("schema") != schema or value.get("handle") != handle:
+                raise RuntimeWorkflowError("remote status receipt is invalid")
+            receipts[name] = value
+    return {
+        "schema": "cvm-browser-runtime.status/1",
+        "status": "observed",
+        "handle": handle,
+        "receipts": receipts,
+    }
 
 
 def _disk_gate(extra_bytes: int = 0) -> int:
@@ -640,7 +674,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     prepare_parser = operations.add_parser("prepare")
     prepare_parser.add_argument("--source-revision", required=True)
     prepare_parser.add_argument("--runtime-image", required=True)
-    for operation in ("provision", "probe", "remote-probe"):
+    for operation in ("provision", "probe", "status", "remote-probe", "remote-status"):
         child = operations.add_parser(operation)
         child.add_argument("handle")
     begin = operations.add_parser("remote-begin")
@@ -668,6 +702,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             receipt = provision(args.handle)
         elif args.operation == "probe":
             receipt = probe(args.handle)
+        elif args.operation == "status":
+            receipt = status(args.handle)
         elif args.operation == "remote-begin":
             receipt = remote_begin(
                 args.handle,
@@ -683,6 +719,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             receipt = remote_abort(args.handle, args.owner)
         elif args.operation == "remote-probe":
             receipt = remote_probe(args.handle)
+        elif args.operation == "remote-status":
+            receipt = remote_status(args.handle)
         else:
             raise RuntimeWorkflowError("unknown operation")
         print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))

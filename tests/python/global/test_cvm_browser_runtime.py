@@ -131,6 +131,25 @@ class BrowserRuntimeWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(runtime.RuntimeWorkflowError, "CVM disk gate"):
             runtime._remote_failure(completed, "begin")
 
+    def test_remote_status_reads_receipts_without_mutation(self) -> None:
+        handle = "cvmbr-" + "2" * 24
+        with tempfile.TemporaryDirectory() as temp:
+            state_root = Path(temp) / ".cvm-browser-runtime"
+            state = state_root / handle
+            state.mkdir(parents=True)
+            receipt = {
+                "schema": runtime.PROVISION_SCHEMA,
+                "status": "failed",
+                "handle": handle,
+            }
+            (state / "provision.json").write_text(
+                json.dumps(receipt), encoding="ascii"
+            )
+            with mock.patch.object(runtime, "STATE_ROOT", state_root):
+                observed = runtime.remote_status(handle)
+        self.assertEqual(observed["status"], "observed")
+        self.assertEqual(observed["receipts"], {"provision": receipt})
+
     def test_transfer_destination_matches_proven_cvm_push_root(self) -> None:
         handle = "cvmbr-" + "1" * 24
         self.assertEqual(

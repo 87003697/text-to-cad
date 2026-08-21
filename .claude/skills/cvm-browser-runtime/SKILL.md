@@ -9,6 +9,8 @@ description: >-
 
 Use this workflow for the single Browser Runtime image consumed by pilot jobs.
 Its public Interface is exactly `prepare → provision → probe`.
+`status <handle>` is a read-only diagnostic for retrieving immutable remote
+receipts after a failed operation; it never retries or changes lifecycle state.
 
 ## Workflow
 
