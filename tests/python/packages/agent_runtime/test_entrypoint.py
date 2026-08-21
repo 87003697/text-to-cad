@@ -14,8 +14,10 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[4]
 ENTRYPOINT = REPO_ROOT / "packages/agent_runtime/text-to-cad-agent-entrypoint"
 sys.path.insert(0, str(REPO_ROOT / "packages/browser_runtime/src"))
+sys.path.insert(0, str(REPO_ROOT / "packages/meshshot/src"))
 
 from browser_runtime.config import CAD_RENDER_PROGRAMS  # noqa: E402
+from meshshot import runtime_client  # noqa: E402
 
 
 def _load_entrypoint():
@@ -133,13 +135,23 @@ class ProductionAgentEntrypointTests(unittest.TestCase):
             payload = entrypoint._canonical(capability)
             path.write_bytes(payload)
             path.chmod(0o444)
-            with mock.patch.object(entrypoint.os, "getuid", return_value=65532):
+            with mock.patch.object(
+                entrypoint, "_require_browser_runtime_read_only_mount"
+            ):
                 self.assertEqual(
                     entrypoint._browser_runtime_capability_digest(path),
                     entrypoint._digest(payload),
                 )
+                self.assertEqual(
+                    runtime_client.load_runtime_capability(path), capability
+                )
             path.chmod(0o644)
-            with self.assertRaisesRegex(entrypoint.GateError, "replaceable"):
+            with (
+                mock.patch.object(
+                    entrypoint, "_require_browser_runtime_read_only_mount"
+                ),
+                self.assertRaisesRegex(entrypoint.GateError, "replaceable"),
+            ):
                 entrypoint._browser_runtime_capability_digest(path)
 
             path.chmod(0o600)
@@ -153,13 +165,15 @@ class ProductionAgentEntrypointTests(unittest.TestCase):
                 path.write_bytes(entrypoint._canonical(invalid))
                 path.chmod(0o444)
                 with (
-                    mock.patch.object(entrypoint.os, "getuid", return_value=65532),
+                    mock.patch.object(
+                        entrypoint, "_require_browser_runtime_read_only_mount"
+                    ),
                     self.assertRaisesRegex(entrypoint.GateError, "schema is invalid"),
                 ):
                     entrypoint._browser_runtime_capability_digest(path)
                 path.chmod(0o600)
 
-    def test_agent_owned_or_writable_capability_surface_is_rejected(self) -> None:
+    def test_externally_owned_or_writable_capability_surface_is_rejected(self) -> None:
         entrypoint = _load_entrypoint()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.json"
@@ -179,7 +193,13 @@ class ProductionAgentEntrypointTests(unittest.TestCase):
                 )
             )
             path.chmod(0o444)
-            with self.assertRaisesRegex(entrypoint.GateError, "replaceable"):
+            with (
+                mock.patch.object(
+                    entrypoint, "_require_browser_runtime_read_only_mount"
+                ),
+                mock.patch.object(entrypoint.os, "getuid", return_value=65532),
+                self.assertRaisesRegex(entrypoint.GateError, "replaceable"),
+            ):
                 entrypoint._browser_runtime_capability_digest(path)
 
         with mock.patch.object(entrypoint, "_mount_options", return_value={"rw"}):
