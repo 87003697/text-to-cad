@@ -131,11 +131,11 @@ class BrowserRuntimeWorkflowTests(unittest.TestCase):
         with self.assertRaisesRegex(runtime.RuntimeWorkflowError, "CVM disk gate"):
             runtime._remote_failure(completed, "begin")
 
-    def test_transfer_destination_is_home_relative_and_shell_free(self) -> None:
+    def test_transfer_destination_matches_proven_cvm_push_root(self) -> None:
         handle = "cvmbr-" + "1" * 24
         self.assertEqual(
             runtime._remote_transfer_destination(handle),
-            f"cvm:text-to-cad/.cvm-browser-runtime/{handle}/incoming/",
+            f"cvm:~/text-to-cad/.cvm-browser-runtime/{handle}/incoming/",
         )
 
     def test_remote_begin_requires_deployed_workflow_and_archive_capacity(self) -> None:

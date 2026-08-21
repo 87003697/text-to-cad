@@ -327,7 +327,7 @@ def _remote_failure(completed: subprocess.CompletedProcess[str], phase: str) -> 
 
 def _remote_transfer_destination(handle: str) -> str:
     _validate_handle(handle)
-    return f"cvm:text-to-cad/.cvm-browser-runtime/{handle}/incoming/"
+    return f"cvm:{REMOTE_ROOT}/.cvm-browser-runtime/{handle}/incoming/"
 
 
 def provision(handle: str) -> Mapping[str, object]:
@@ -362,7 +362,7 @@ def provision(handle: str) -> Mapping[str, object]:
     try:
         transfer = _run(
             [
-                "rsync", "-az", "--protect-args", os.fspath(archive),
+                "rsync", "-az", os.fspath(archive),
                 os.fspath(STATE_ROOT / handle / "prepare.json"), destination,
             ],
             check=False,
