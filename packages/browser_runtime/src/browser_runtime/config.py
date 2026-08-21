@@ -20,7 +20,7 @@ SANDBOX_RUNTIME_CAPABILITY_PATH = (
 RUNTIME_CAPABILITY_SCHEMA = "text-to-cad.browser-runtime-capability/1"
 # This identity names the closed HTTP residual-render operation.
 CAD_RENDER_PROGRAMS: Mapping[str, str] = {
-    "residual": "sha256:589b422a9e2d01438c4668fa02300d822001bb3d0a7c0423e68675f54cf94fc6"
+    "residual": "sha256:9a7fbaf17a65f8e44c116833eee1b30cf023a50f2c52b30ced030203fe255d33"
 }
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[2]

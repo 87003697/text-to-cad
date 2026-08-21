@@ -4,7 +4,10 @@ const assert = require("node:assert/strict");
 const http = require("node:http");
 const test = require("node:test");
 
-const { createCadRenderServer } = require("./cad-render-service.cjs");
+const {
+  createCadRenderServer,
+  validateRequest,
+} = require("./cad-render-service.cjs");
 
 const token = "a".repeat(64);
 const programDigest = `sha256:${"b".repeat(64)}`;
@@ -171,6 +174,31 @@ test("rejects malformed packed geometry before rendering", async (context) => {
     });
     assert.equal(response.status, 400);
   }
+});
+
+test("validates a representative packed mesh without regex stack growth", () => {
+  const vertexCount = 1_000_000;
+  const largeGeometry = {
+    schema: "text-to-cad.packed-triangle-mesh/1",
+    vertexCount,
+    faceCount: 1,
+    positionsF32LeBase64: encodeTypedArray(new Float32Array(vertexCount * 3)),
+    indicesU32LeBase64: encodeTypedArray(new Uint32Array([0, 1, 2])),
+  };
+  const requestValue = {
+    schema: "text-to-cad.cad-render-request/2",
+    jobId,
+    program: "residual",
+    programDigest,
+    payload: {
+      reference: largeGeometry,
+      candidate: triangle,
+      variant: "step",
+      exteriorDirections: [],
+      options: { cameraPolicy: "profile-fixed", canonicalPostprocess: true },
+    },
+  };
+  assert.equal(validateRequest(requestValue, programDigest, jobId), requestValue);
 });
 
 test("bounds a render that never settles and aborts its work", async (context) => {

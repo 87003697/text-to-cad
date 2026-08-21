@@ -23,12 +23,23 @@ function exactKeys(value, keys) {
 }
 
 function canonicalBase64(value, byteLength) {
-  return (
-    typeof value === "string" &&
-    value.length === 4 * Math.ceil(byteLength / 3) &&
-    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value) &&
-    Buffer.byteLength(value, "base64") === byteLength
-  );
+  if (typeof value !== "string" || value.length !== 4 * Math.ceil(byteLength / 3)) {
+    return false;
+  }
+  const padding = (3 - (byteLength % 3)) % 3;
+  const encodedLength = value.length - padding;
+  for (let index = 0; index < encodedLength; index += 1) {
+    const code = value.charCodeAt(index);
+    const alphaNumeric =
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57);
+    if (!alphaNumeric && code !== 43 && code !== 47) return false;
+  }
+  for (let index = encodedLength; index < value.length; index += 1) {
+    if (value.charCodeAt(index) !== 61) return false;
+  }
+  return Buffer.byteLength(value, "base64") === byteLength;
 }
 
 function validGeometry(value) {
