@@ -70,7 +70,7 @@ SUBJECT_FIELDS = {
     "image-identity": ("agentImageManifestDigest", "agentImageConfigDigest", "runtimeManifestDigest", "platform"),
     "browser-deny": ("agentImageManifestDigest", "scannerDigest", "inventoryDigest", "browserFindingCount", "chromiumProcessCount"),
     "source-snapshot": ("executionSourceSnapshotDigest", "sourceManifestDigest", "pathCount", "totalBytes"),
-    "agent-lifecycle": ("agentImageManifestDigest", "agentImageConfigDigest", "runtimeManifestDigest", "executionSourceSnapshotDigest", "inputSnapshotDigest", "agentConfigDigest", "brokerAuthorityDigest", "workloadDigest", "lifecycleHarnessDigest", "entrypointDigest", "lifecycleReceiptSchemaDigest", "resourceDisposition", "cleanupDisposition"),
+    "agent-lifecycle": ("agentImageManifestDigest", "agentImageConfigDigest", "runtimeManifestDigest", "executionSourceSnapshotDigest", "inputSnapshotDigest", "agentConfigDigest", "browserRuntimeCapabilityDigest", "workloadDigest", "lifecycleHarnessDigest", "entrypointDigest", "lifecycleReceiptSchemaDigest", "resourceDisposition", "cleanupDisposition"),
 }
 
 PREDICATES = {
@@ -89,8 +89,8 @@ PREDICATES = {
     "image-identity": ("immutableReferenceExact", "manifestDigestObserved", "configDigestObserved", "runtimeManifestInsideImageExact", "osLinux", "architectureAmd64", "entrypointExact", "userNonRoot", "noMutableTagAuthority"),
     "browser-deny": ("packageInventoryEmpty", "executableInventoryEmpty", "cacheInventoryEmpty", "elfMarkerInventoryEmpty", "productMarkerInventoryEmpty", "playwrightInventoryEmpty", "chromiumProcessZero", "browserLifecycleAuthorityAbsent"),
     "source-snapshot": ("manifestSchemaExact", "pathSetClosed", "regularFilesOnly", "fileModesBound", "fileSizesBound", "fileDigestsBound", "treeDigestMatchesObservation", "readOnlyMountEligible"),
-    "agent-lifecycle": ("adapterOperationsClosed", "authorityFresh", "jobPrivateLayoutExact", "snapshotIdentityExact", "workloadIdentityExact", "imageIdentityOuterAttested", "returnedContainerIdExact", "containerOwnershipExact", "inertContainerConfigExact", "readOnlyRoot", "sourceReadOnly", "inputReadOnly", "writableMountAllowlistExact", "dockerSocketAbsent", "capabilitiesEmpty", "noNewPrivileges", "externalNetworkAbsent", "entrypointPreflightExact", "brokerProofIdentityBound", "workloadReleasedOnce", "terminalPublicationExact", "workloadProcessGroupAbsent", "descendantResidueFalse", "workloadNotInterrupted", "workloadTerminalZero", "containerCleanupSucceeded", "brokerVolumeCleanupSucceeded", "jobPrivateTreeCleanupSucceeded", "agentContainerAbsent", "ownerLabelsAbsent", "brokerVolumeAbsent", "jobPrivateTreeAbsent"),
+    "agent-lifecycle": ("adapterOperationsClosed", "authorityFresh", "jobPrivateLayoutExact", "snapshotIdentityExact", "workloadIdentityExact", "imageIdentityOuterAttested", "returnedContainerIdExact", "containerOwnershipExact", "inertContainerConfigExact", "readOnlyRoot", "sourceReadOnly", "inputReadOnly", "writableMountAllowlistExact", "dockerSocketAbsent", "capabilitiesEmpty", "noNewPrivileges", "externalNetworkAbsent", "entrypointPreflightExact", "browserRuntimeCapabilityIdentityBound", "workloadReleasedOnce", "terminalPublicationExact", "workloadProcessGroupAbsent", "descendantResidueFalse", "workloadNotInterrupted", "workloadTerminalZero", "containerCleanupSucceeded", "browserCapabilityCleanupSucceeded", "jobPrivateTreeCleanupSucceeded", "agentContainerAbsent", "ownerLabelsAbsent", "browserCapabilityAbsent", "jobPrivateTreeAbsent"),
 }
 
-LIFECYCLE_RESOURCE_FIELDS = ("agentContainer", "ownerLabels", "brokerVolume", "jobPrivateTree", "workloadProcessGroup")
-LIFECYCLE_CLEANUP_FIELDS = ("agentContainer", "brokerVolume", "jobPrivateTree")
+LIFECYCLE_RESOURCE_FIELDS = ("agentContainer", "ownerLabels", "browserCapability", "jobPrivateTree", "workloadProcessGroup")
+LIFECYCLE_CLEANUP_FIELDS = ("agentContainer", "browserCapability", "jobPrivateTree")

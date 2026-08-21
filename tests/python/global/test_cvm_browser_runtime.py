@@ -303,6 +303,12 @@ class BrowserRuntimeWorkflowTests(unittest.TestCase):
         self.assertFalse((root / "scripts/pilot/cvm-sidecar-probe.sh").exists())
         self.assertFalse((root / ".claude/skills/cvm-sidecar-probe").exists())
         self.assertFalse((root / "scripts/pilot/browser_gate_contract.py").exists())
+        entrypoint = (
+            root / "packages/agent_runtime/text-to-cad-agent-entrypoint"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("browser.sock", entrypoint)
+        self.assertNotIn("agent-broker", entrypoint)
+        self.assertNotIn("brokerAuthorityDigest", entrypoint)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import importlib.machinery
 import importlib.util
 import json
@@ -72,7 +71,7 @@ class ProductionAgentEntrypointTests(unittest.TestCase):
                 "executionSourceSnapshotDigest": "sha256:" + "2" * 64,
                 "inputSnapshotDigest": "sha256:" + "3" * 64,
                 "agentConfigDigest": "sha256:" + "4" * 64,
-                "brokerAuthorityDigest": "sha256:" + "5" * 64,
+                "browserRuntimeCapabilityDigest": "sha256:" + "5" * 64,
                 "workloadDigest": entrypoint._workload_digest(workload),
                 "jobId": "job-1",
                 "ownerNonce": "owner-1",
@@ -91,8 +90,10 @@ class ProductionAgentEntrypointTests(unittest.TestCase):
         self.assertNotIn(b"prototypes.agent_runtime_boundary", payload)
         self.assertNotIn(b"from contract import", payload)
         self.assertNotIn(b"import browser_surface", payload)
+        self.assertNotIn(b"browser.sock", payload)
+        self.assertNotIn(b"agent-broker", payload)
         prototype = REPO_ROOT / "packages/meshshot/prototypes/agent_runtime_boundary/entrypoint.py"
-        self.assertNotEqual(hashlib.sha256(payload).digest(), hashlib.sha256(prototype.read_bytes()).digest())
+        self.assertFalse(prototype.exists())
 
     def test_entrypoint_uses_the_shared_canonical_json_seam(self) -> None:
         payload = ENTRYPOINT.read_bytes()
@@ -105,6 +106,23 @@ class ProductionAgentEntrypointTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(entrypoint.GateError):
                     entrypoint._parse_exact(entrypoint._canonical(value))
+
+    def test_browser_runtime_capability_is_read_only_and_digest_bound(self) -> None:
+        entrypoint = _load_entrypoint()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            payload = entrypoint._canonical(
+                {"schema": "text-to-cad.browser-runtime-capability/1"}
+            )
+            path.write_bytes(payload)
+            path.chmod(0o444)
+            self.assertEqual(
+                entrypoint._browser_runtime_capability_digest(path),
+                entrypoint._digest(payload),
+            )
+            path.chmod(0o644)
+            with self.assertRaisesRegex(entrypoint.GateError, "replaceable"):
+                entrypoint._browser_runtime_capability_digest(path)
 
     def test_signal_is_latched_before_spawn_and_replayed_to_the_process_group(self) -> None:
         entrypoint = _load_entrypoint()
@@ -232,17 +250,21 @@ class ProductionAgentEntrypointTests(unittest.TestCase):
             "executionSourceSnapshotDigest": "sha256:" + "3" * 64,
             "inputSnapshotDigest": "sha256:" + "4" * 64,
             "agentConfigDigest": "sha256:" + "5" * 64,
-            "brokerAuthorityDigest": "sha256:" + "6" * 64,
+            "browserRuntimeCapabilityDigest": "sha256:" + "6" * 64,
             "workloadDigest": "sha256:" + "7" * 64,
             "jobId": "job",
             "ownerNonce": "owner",
         }
         control = {"schema": entrypoint.SCHEMA, "challenge": "challenge", "workload": ["/usr/bin/true"], **identity}
-        proof = {"schema": "text-to-cad.agent-broker-proof/1", "challenge": "challenge", "brokerMac": "a" * 64, **identity}
-        proof_digest = entrypoint._digest(entrypoint._canonical(proof))
-        release = {"schema": "text-to-cad.agent-entrypoint-release/1", "brokerProofDigest": proof_digest, "release": True}
+        preflight = {
+            "schema": "text-to-cad.agent-entrypoint-preflight/1",
+            "challenge": "challenge",
+            **identity,
+        }
+        preflight_digest = entrypoint._digest(entrypoint._canonical(preflight))
+        release = {"schema": "text-to-cad.agent-entrypoint-release/1", "entrypointPreflightDigest": preflight_digest, "release": True}
         published = []
-        with mock.patch.object(entrypoint.sys, "argv", [str(ENTRYPOINT)]), mock.patch.object(entrypoint, "_load_control", return_value=control), mock.patch.object(entrypoint, "_preflight"), mock.patch.object(entrypoint, "_socket_exchange", return_value=proof), mock.patch.object(entrypoint, "_read_release", return_value=release), mock.patch.object(entrypoint, "_run_workload", return_value=entrypoint.GroupResult(143, False, True, 15)), mock.patch.object(entrypoint, "_output_digest", return_value="sha256:" + "8" * 64), mock.patch.object(entrypoint, "_publish", side_effect=published.append):
+        with mock.patch.object(entrypoint.sys, "argv", [str(ENTRYPOINT)]), mock.patch.object(entrypoint, "_load_control", return_value=control), mock.patch.object(entrypoint, "_preflight"), mock.patch.object(entrypoint, "_browser_runtime_capability_digest", return_value=identity["browserRuntimeCapabilityDigest"]), mock.patch.object(entrypoint, "_read_release", return_value=release), mock.patch.object(entrypoint, "_run_workload", return_value=entrypoint.GroupResult(143, False, True, 15)), mock.patch.object(entrypoint, "_output_digest", return_value="sha256:" + "8" * 64), mock.patch.object(entrypoint, "_publish", side_effect=published.append):
             self.assertEqual(entrypoint.main(), 143)
         terminal = published[-1]
         self.assertEqual(terminal["workloadStatus"], 143)
@@ -252,7 +274,7 @@ class ProductionAgentEntrypointTests(unittest.TestCase):
         self.assertEqual(terminal["outputDigest"], "sha256:" + "8" * 64)
 
         published.clear()
-        with mock.patch.object(entrypoint.sys, "argv", [str(ENTRYPOINT)]), mock.patch.object(entrypoint, "_load_control", return_value=control), mock.patch.object(entrypoint, "_preflight"), mock.patch.object(entrypoint, "_socket_exchange", return_value=proof), mock.patch.object(entrypoint, "_read_release", return_value=release), mock.patch.object(entrypoint, "_run_workload", return_value=entrypoint.GroupResult(125, True, False, None)), mock.patch.object(entrypoint, "_publish", side_effect=published.append):
+        with mock.patch.object(entrypoint.sys, "argv", [str(ENTRYPOINT)]), mock.patch.object(entrypoint, "_load_control", return_value=control), mock.patch.object(entrypoint, "_preflight"), mock.patch.object(entrypoint, "_browser_runtime_capability_digest", return_value=identity["browserRuntimeCapabilityDigest"]), mock.patch.object(entrypoint, "_read_release", return_value=release), mock.patch.object(entrypoint, "_run_workload", return_value=entrypoint.GroupResult(125, True, False, None)), mock.patch.object(entrypoint, "_publish", side_effect=published.append):
             with self.assertRaises(entrypoint.GateError):
                 entrypoint.main()
         self.assertEqual(len(published), 1)

@@ -50,9 +50,9 @@ def valid_graph(*, failed_role=None, failed_predicate=None, root_failure=None, s
             elif field == "watertight":
                 value[field] = False
             elif field == "resourceDisposition":
-                value[field] = {"agentContainer": "absent", "brokerVolume": "absent", "jobPrivateTree": "absent", "ownerLabels": "absent", "workloadProcessGroup": "absent"}
+                value[field] = {"agentContainer": "absent", "browserCapability": "absent", "jobPrivateTree": "absent", "ownerLabels": "absent", "workloadProcessGroup": "absent"}
             elif field == "cleanupDisposition":
-                value[field] = {"agentContainer": "succeeded", "brokerVolume": "succeeded", "jobPrivateTree": "succeeded"}
+                value[field] = {"agentContainer": "succeeded", "browserCapability": "succeeded", "jobPrivateTree": "succeeded"}
             else:
                 value[field] = D
         return value
@@ -178,7 +178,7 @@ def failed_lifecycle_graph(
         lifecycle_value["subject"]["resourceDisposition"][unproved] = "unproved"
     cleanup_resource = {
         "containerCleanupSucceeded": "agentContainer",
-        "brokerVolumeCleanupSucceeded": "brokerVolume",
+        "browserCapabilityCleanupSucceeded": "browserCapability",
         "jobPrivateTreeCleanupSucceeded": "jobPrivateTree",
     }
     if selected in cleanup_resource:
@@ -199,7 +199,7 @@ def dual_lifecycle_failure_graph(colima_check, cvm_check, root_failure):
     root, children = valid_graph()
     cleanup_resource = {
         "containerCleanupSucceeded": "agentContainer",
-        "brokerVolumeCleanupSucceeded": "brokerVolume",
+        "browserCapabilityCleanupSucceeded": "browserCapability",
         "jobPrivateTreeCleanupSucceeded": "jobPrivateTree",
     }
     for lifecycle_index, selected in (
@@ -572,7 +572,7 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
         lifecycle = copy.deepcopy(children[0].value)
         lifecycle["status"] = "failed"
         lifecycle["predicates"]["entrypointPreflightExact"] = False
-        lifecycle["predicates"]["brokerProofIdentityBound"] = None
+        lifecycle["predicates"]["browserRuntimeCapabilityIdentityBound"] = None
         lifecycle["predicates"]["workloadReleasedOnce"] = None
         lifecycle["predicates"]["agentContainerAbsent"] = False
         lifecycle["subject"]["resourceDisposition"]["agentContainer"] = "retained"
@@ -709,19 +709,19 @@ class AgentRuntimeEvidenceTests(unittest.TestCase):
             "noNewPrivileges": "inert-container",
             "externalNetworkAbsent": "inert-container",
             "entrypointPreflightExact": "entrypoint-preflight",
-            "brokerProofIdentityBound": "broker-proof",
+            "browserRuntimeCapabilityIdentityBound": "browser-runtime-capability",
             "workloadReleasedOnce": "workload-release",
             "terminalPublicationExact": "terminal-publication",
             "descendantResidueFalse": "workload-process-group",
             "workloadNotInterrupted": "workload-interrupted",
             "workloadTerminalZero": "workload-terminal",
             "containerCleanupSucceeded": "cleanup-container",
-            "brokerVolumeCleanupSucceeded": "cleanup-broker-volume",
+            "browserCapabilityCleanupSucceeded": "cleanup-browser-capability",
             "jobPrivateTreeCleanupSucceeded": "cleanup-private-tree",
         }
         resource_predicates = {
             "workloadProcessGroupAbsent", "agentContainerAbsent", "ownerLabelsAbsent",
-            "brokerVolumeAbsent", "jobPrivateTreeAbsent",
+            "browserCapabilityAbsent", "jobPrivateTreeAbsent",
         }
         self.assertEqual(
             set(_LIFECYCLE_ALIAS),

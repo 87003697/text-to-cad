@@ -115,7 +115,7 @@ def _select_lifecycle_failure(value: Mapping[str, Any]) -> str:
         ("workloadProcessGroupAbsent", "workloadProcessGroup"),
         ("agentContainerAbsent", "agentContainer"),
         ("ownerLabelsAbsent", "ownerLabels"),
-        ("brokerVolumeAbsent", "brokerVolume"),
+        ("browserCapabilityAbsent", "browserCapability"),
         ("jobPrivateTreeAbsent", "jobPrivateTree"),
     )
     for disposition in ("retained", "unproved"):
@@ -124,7 +124,7 @@ def _select_lifecycle_failure(value: Mapping[str, Any]) -> str:
                 return predicate
     if predicates["terminalPublicationExact"] is False:
         return "terminalPublicationExact"
-    for predicate in ("containerCleanupSucceeded", "brokerVolumeCleanupSucceeded", "jobPrivateTreeCleanupSucceeded"):
+    for predicate in ("containerCleanupSucceeded", "browserCapabilityCleanupSucceeded", "jobPrivateTreeCleanupSucceeded"):
         if predicates[predicate] is False:
             return predicate
     if predicates["workloadNotInterrupted"] is False:
@@ -242,7 +242,7 @@ def _validate_lifecycle_dispositions(value: Mapping[str, Any]) -> None:
     resource_predicates = {
         "agentContainer": "agentContainerAbsent",
         "ownerLabels": "ownerLabelsAbsent",
-        "brokerVolume": "brokerVolumeAbsent",
+        "browserCapability": "browserCapabilityAbsent",
         "jobPrivateTree": "jobPrivateTreeAbsent",
         "workloadProcessGroup": "workloadProcessGroupAbsent",
     }
@@ -252,7 +252,7 @@ def _validate_lifecycle_dispositions(value: Mapping[str, Any]) -> None:
             raise EvidenceError("lifecycle resource disposition contradicts predicate")
     cleanup_predicates = {
         "agentContainer": "containerCleanupSucceeded",
-        "brokerVolume": "brokerVolumeCleanupSucceeded",
+        "browserCapability": "browserCapabilityCleanupSucceeded",
         "jobPrivateTree": "jobPrivateTreeCleanupSucceeded",
     }
     for resource, predicate in cleanup_predicates.items():
@@ -531,11 +531,11 @@ _LIFECYCLE_ALIAS = {
     "writableMountAllowlistExact": "inert-container", "dockerSocketAbsent": "inert-container",
     "capabilitiesEmpty": "inert-container", "noNewPrivileges": "inert-container",
     "externalNetworkAbsent": "inert-container", "entrypointPreflightExact": "entrypoint-preflight",
-    "brokerProofIdentityBound": "broker-proof", "workloadReleasedOnce": "workload-release",
+    "browserRuntimeCapabilityIdentityBound": "browser-runtime-capability", "workloadReleasedOnce": "workload-release",
     "terminalPublicationExact": "terminal-publication",
     "descendantResidueFalse": "workload-process-group",
     "workloadNotInterrupted": "workload-interrupted", "workloadTerminalZero": "workload-terminal",
-    "containerCleanupSucceeded": "cleanup-container", "brokerVolumeCleanupSucceeded": "cleanup-broker-volume",
+    "containerCleanupSucceeded": "cleanup-container", "browserCapabilityCleanupSucceeded": "cleanup-browser-capability",
     "jobPrivateTreeCleanupSucceeded": "cleanup-private-tree",
 }
 
@@ -556,7 +556,7 @@ def _lifecycle_alias(value: dict[str, Any]) -> str:
     dispositions = value["subject"]["resourceDisposition"]
     resources = {
         "workloadProcessGroupAbsent": "workloadProcessGroup", "agentContainerAbsent": "agentContainer",
-        "ownerLabelsAbsent": "ownerLabels", "brokerVolumeAbsent": "brokerVolume",
+        "ownerLabelsAbsent": "ownerLabels", "browserCapabilityAbsent": "browserCapability",
         "jobPrivateTreeAbsent": "jobPrivateTree",
     }
     if selected in resources:
@@ -583,7 +583,7 @@ def _root_failure(children: dict[tuple[str, str | None], dict[str, Any]]) -> str
                 "absence-proof": 1,
                 "terminal-publication": 2,
                 "cleanup-container": 3,
-                "cleanup-broker-volume": 4,
+                "cleanup-browser-capability": 4,
                 "cleanup-private-tree": 5,
                 "workload-interrupted": 6,
             }

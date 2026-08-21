@@ -191,7 +191,7 @@ The exact `subject` keys are:
 | `image-identity` | `agentImageManifestDigest`, `agentImageConfigDigest`, `runtimeManifestDigest`, `platform` |
 | `browser-deny` | `agentImageManifestDigest`, `scannerDigest`, `inventoryDigest`, `browserFindingCount`, `chromiumProcessCount` |
 | `source-snapshot` | `executionSourceSnapshotDigest`, `sourceManifestDigest`, `pathCount`, `totalBytes` |
-| `agent-lifecycle` | `agentImageManifestDigest`, `agentImageConfigDigest`, `runtimeManifestDigest`, `executionSourceSnapshotDigest`, `inputSnapshotDigest`, `agentConfigDigest`, `brokerAuthorityDigest`, `workloadDigest`, `lifecycleHarnessDigest`, `entrypointDigest`, `lifecycleReceiptSchemaDigest`, `resourceDisposition`, `cleanupDisposition` |
+| `agent-lifecycle` | `agentImageManifestDigest`, `agentImageConfigDigest`, `runtimeManifestDigest`, `executionSourceSnapshotDigest`, `inputSnapshotDigest`, `agentConfigDigest`, `browserRuntimeCapabilityDigest`, `workloadDigest`, `lifecycleHarnessDigest`, `entrypointDigest`, `lifecycleReceiptSchemaDigest`, `resourceDisposition`, `cleanupDisposition` |
 
 All non-null fields ending in `Digest` use the full digest grammar. `pathCount`,
 `totalBytes`, `browserFindingCount`, `chromiumProcessCount`, `faceCount`, and
@@ -202,10 +202,10 @@ root value; each dependent field must equal the corresponding dependency's
 subject value.
 
 For every `succeeded` or `failed` lifecycle child, `resourceDisposition` is a
-concrete object with exactly `agentContainer`, `ownerLabels`, `brokerVolume`,
+concrete object with exactly `agentContainer`, `ownerLabels`, `browserCapability`,
 `jobPrivateTree`, and `workloadProcessGroup`; every value is `absent`,
 `retained`, or `unproved`. `cleanupDisposition` is a concrete object with
-exactly `agentContainer`, `brokerVolume`, and `jobPrivateTree`; every value is
+exactly `agentContainer`, `browserCapability`, and `jobPrivateTree`; every value is
 `succeeded`, `failed`, or `not-required`. A `not-run` lifecycle child has both
 fields set to `null`. These closed observations distinguish positive residue
 from failure to prove absence without exposing IDs or paths.
@@ -668,7 +668,7 @@ vocabulary and order:
 16. `noNewPrivileges`
 17. `externalNetworkAbsent`
 18. `entrypointPreflightExact`
-19. `brokerProofIdentityBound`
+19. `browserRuntimeCapabilityIdentityBound`
 20. `workloadReleasedOnce`
 21. `terminalPublicationExact`
 22. `workloadProcessGroupAbsent`
@@ -676,11 +676,11 @@ vocabulary and order:
 24. `workloadNotInterrupted`
 25. `workloadTerminalZero`
 26. `containerCleanupSucceeded`
-27. `brokerVolumeCleanupSucceeded`
+27. `browserCapabilityCleanupSucceeded`
 28. `jobPrivateTreeCleanupSucceeded`
 29. `agentContainerAbsent`
 30. `ownerLabelsAbsent`
-31. `brokerVolumeAbsent`
+31. `browserCapabilityAbsent`
 32. `jobPrivateTreeAbsent`
 
 The lifecycle phases are exact:
@@ -699,12 +699,12 @@ changes an earlier `false` to `null` or `true`. A terminal/workload predicate is
 for example, `workloadTerminalZero` is null if no workload was released.
 After a lifecycle node starts, its cleanup and resource-absence predicates are
 never null and both disposition objects are always concrete. For each cleanup
-pair, `containerCleanupSucceeded`, `brokerVolumeCleanupSucceeded`, or
+pair, `containerCleanupSucceeded`, `browserCapabilityCleanupSucceeded`, or
 `jobPrivateTreeCleanupSucceeded` is `true` exactly when its matching
 `cleanupDisposition` value is `succeeded` or `not-required`, and is `false`
 exactly when that value is `failed`. For each absence pair,
 `workloadProcessGroupAbsent`, `agentContainerAbsent`, `ownerLabelsAbsent`,
-`brokerVolumeAbsent`, or `jobPrivateTreeAbsent` is `true` exactly when its
+`browserCapabilityAbsent`, or `jobPrivateTreeAbsent` is `true` exactly when its
 matching `resourceDisposition` value is `absent`, and is `false` exactly when
 that value is `retained` or `unproved`.
 
@@ -721,12 +721,12 @@ After all phases, the lifecycle child selects one of its observed false
 predicates without deleting any others:
 
 1. first resource predicate in `workloadProcessGroupAbsent`,
-   `agentContainerAbsent`, `ownerLabelsAbsent`, `brokerVolumeAbsent`,
+   `agentContainerAbsent`, `ownerLabelsAbsent`, `browserCapabilityAbsent`,
    `jobPrivateTreeAbsent` order whose disposition is `retained`;
 2. first false resource predicate in that order whose disposition is
    `unproved`;
 3. `terminalPublicationExact` if false;
-4. first false cleanup predicate in container, Broker volume, private tree
+4. first false cleanup predicate in container, Browser Runtime capability, private tree
    order;
 5. `workloadNotInterrupted` if false;
 6. otherwise the first false predicate in the complete normative lifecycle
@@ -903,16 +903,16 @@ predicate and closed disposition using this exact SAR-003 mapping:
 | `container-ownership` | `containerOwnershipExact` |
 | `inert-container` | first false of `inertContainerConfigExact`, `readOnlyRoot`, `sourceReadOnly`, `inputReadOnly`, `writableMountAllowlistExact`, `dockerSocketAbsent`, `capabilitiesEmpty`, `noNewPrivileges`, `externalNetworkAbsent` in normative predicate order |
 | `entrypoint-preflight` | `entrypointPreflightExact` |
-| `broker-proof` | `brokerProofIdentityBound` |
+| `browser-runtime-capability` | `browserRuntimeCapabilityIdentityBound` |
 | `workload-release` | `workloadReleasedOnce` |
 | `terminal-publication` | `terminalPublicationExact` |
 | `workload-process-group` | `descendantResidueFalse` |
 | `workload-interrupted` | `workloadNotInterrupted` |
 | `workload-terminal` | `workloadTerminalZero` |
 | `cleanup-container` | `containerCleanupSucceeded` |
-| `cleanup-broker-volume` | `brokerVolumeCleanupSucceeded` |
+| `cleanup-browser-capability` | `browserCapabilityCleanupSucceeded` |
 | `cleanup-private-tree` | `jobPrivateTreeCleanupSucceeded` |
-| `retained-resource` | first false resource predicate in `workloadProcessGroupAbsent`, `agentContainerAbsent`, `ownerLabelsAbsent`, `brokerVolumeAbsent`, `jobPrivateTreeAbsent` order whose matching disposition is `retained` |
+| `retained-resource` | first false resource predicate in `workloadProcessGroupAbsent`, `agentContainerAbsent`, `ownerLabelsAbsent`, `browserCapabilityAbsent`, `jobPrivateTreeAbsent` order whose matching disposition is `retained` |
 | `absence-proof` | first false resource predicate in the same order whose matching disposition is `unproved` |
 
 The child `failureCheck` is always the right-hand selected predicate, never the

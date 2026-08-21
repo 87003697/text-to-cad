@@ -7,7 +7,6 @@ import hashlib
 import os
 from pathlib import Path
 import signal
-import socket
 import stat
 import subprocess
 import sys
@@ -40,7 +39,7 @@ WRITABLE = (
     Path("/run/text-to-cad-agent/work"),
     Path("/run/text-to-cad-agent/output"),
 )
-BROKER_SOCKET = Path("/run/meshshot-browser/browser.sock")
+BROWSER_RUNTIME_CAPABILITY = Path("/run/meshshot-browser/runtime.json")
 RUNTIME_MANIFEST = Path("/usr/share/text-to-cad/runtime-manifest.json")
 SCHEMA = "text-to-cad.agent-entrypoint-control/1"
 IDENTITY_KEYS = (
@@ -49,7 +48,7 @@ IDENTITY_KEYS = (
     "executionSourceSnapshotDigest",
     "inputSnapshotDigest",
     "agentConfigDigest",
-    "brokerAuthorityDigest",
+    "browserRuntimeCapabilityDigest",
     "workloadDigest",
     "jobId",
     "ownerNonce",
@@ -178,20 +177,32 @@ def _preflight() -> None:
         raise GateError("external default route is present")
 
 
-def _socket_exchange(request: dict[str, object]) -> dict[str, object]:
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-        client.settimeout(10)
-        client.connect(str(BROKER_SOCKET))
-        client.sendall(_canonical(request) + b"\n")
-        response = bytearray()
-        while not response.endswith(b"\n") and len(response) <= 16384:
-            block = client.recv(4096)
-            if not block:
-                break
-            response += block
-    if not response.endswith(b"\n") or len(response) > 16384:
-        raise GateError("Broker proof is unavailable")
-    return _parse_exact(bytes(response[:-1]))
+def _browser_runtime_capability_digest(
+    path: Path = BROWSER_RUNTIME_CAPABILITY,
+) -> str:
+    if path.is_symlink():
+        raise GateError("Browser Runtime capability cannot be a symlink")
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o444
+        ):
+            raise GateError("Browser Runtime capability is replaceable")
+        payload = os.read(descriptor, 16385)
+    finally:
+        os.close(descriptor)
+    if not payload or len(payload) > 16384:
+        raise GateError("Browser Runtime capability size is invalid")
+    value = _parse_exact(payload)
+    if value.get("schema") != "text-to-cad.browser-runtime-capability/1":
+        raise GateError("Browser Runtime capability schema is invalid")
+    return _digest(payload)
 
 
 def _publish(value: dict[str, object]) -> None:
@@ -427,25 +438,23 @@ def main() -> int:
     control = _load_control()
     _preflight()
     identity = {key: control[key] for key in IDENTITY_KEYS}
-    broker_request = {
-        "schema": "text-to-cad.agent-broker-challenge/1",
+    capability_digest = _browser_runtime_capability_digest()
+    if capability_digest != control["browserRuntimeCapabilityDigest"]:
+        raise GateError("Browser Runtime capability identity is wrong")
+    preflight = {
+        "schema": "text-to-cad.agent-entrypoint-preflight/1",
         "challenge": control["challenge"],
         **identity,
     }
-    proof = _socket_exchange(broker_request)
-    expected_proof_keys = {"schema", "challenge", "brokerMac", *IDENTITY_KEYS}
-    if set(proof) != expected_proof_keys or proof.get("schema") != "text-to-cad.agent-broker-proof/1":
-        raise GateError("Broker proof schema is not closed")
-    if any(proof.get(key) != broker_request.get(key) for key in ("challenge", *IDENTITY_KEYS)):
-        raise GateError("Broker proof identity is wrong")
-    broker_mac = proof.get("brokerMac")
-    if not isinstance(broker_mac, str) or len(broker_mac) != 64 or any(character not in "0123456789abcdef" for character in broker_mac):
-        raise GateError("Broker proof MAC syntax is wrong")
-    proof_digest = _digest(_canonical(proof))
-    _publish({"schema": "text-to-cad.agent-entrypoint-preflight/1", "brokerProof": proof, "brokerProofDigest": proof_digest})
+    preflight_digest = _digest(_canonical(preflight))
+    _publish(preflight)
     release = _read_release()
-    if release != {"schema": "text-to-cad.agent-entrypoint-release/1", "brokerProofDigest": proof_digest, "release": True}:
-        raise GateError("outer did not release the exact Broker proof")
+    if release != {
+        "schema": "text-to-cad.agent-entrypoint-release/1",
+        "entrypointPreflightDigest": preflight_digest,
+        "release": True,
+    }:
+        raise GateError("outer did not release the exact entrypoint preflight")
     result = _run_workload(control["workload"])
     if not result.group_absent:
         raise GateError("workload process group remains present")
