@@ -64,7 +64,7 @@ def _retarget_key(target: dict, mask_sha256: str) -> str:
     identity = {
         "schema": "voxblame.repair-target-identity/1",
         "source_step": target["source_step"],
-        "partition_profile": "repair_target_partition/1",
+        "partition_profile": "repair_target_partition/2",
         "mask_sha256": mask_sha256,
         "missing_surface_count": profile["missing_surface_count"],
         "excess_surface_count": profile["excess_surface_count"],
@@ -722,7 +722,7 @@ class VoxBlameMeasurementTests(unittest.TestCase):
         targets = measurement["repair_targets"]
         self.assertEqual("repair_target_display/1", targets["ordering_profile"])
         self.assertEqual(len(targets["ordered_targets"]), targets["total"])
-        self.assertGreaterEqual(targets["total"], 2)
+        self.assertGreaterEqual(targets["total"], 1)
         self.assertEqual(
             depth_eight["surface_error_count"],
             sum(
@@ -752,7 +752,7 @@ class VoxBlameMeasurementTests(unittest.TestCase):
             result.summary["repair_targets"]["items"],
         )
 
-    def test_disconnected_targets_are_reachable_through_stable_pages(self) -> None:
+    def test_disconnected_exact_errors_form_one_validated_macro_target(self) -> None:
         raw = self.root / "ten-patches.ply"
         _write_double_ply(raw, _disconnected_triangle_row(10))
         reference = self.root / "paged-input"
@@ -769,26 +769,16 @@ class VoxBlameMeasurementTests(unittest.TestCase):
         candidate = self.root / "one-patch.ply"
         _write_double_ply(candidate, first_patch)
 
-        first_page = measure_step(
+        page = measure_step(
             reference, candidate, state, step=0
         ).summary["repair_targets"]
-        second_page = page_repair_targets(state, step=0, offset=8)
 
-        self.assertEqual(9, first_page["total"])
-        self.assertEqual(8, first_page["returned"])
-        self.assertEqual(1, first_page["remaining"])
-        self.assertEqual(8, first_page["next_offset"])
-        self.assertEqual(9, second_page["total"])
-        self.assertEqual(1, second_page["returned"])
-        self.assertEqual(0, second_page["remaining"])
-        self.assertIsNone(second_page["next_offset"])
-        self.assertEqual(
-            list(range(9)),
-            [
-                target["display_rank"]
-                for target in first_page["items"] + second_page["items"]
-            ],
-        )
+        self.assertEqual(1, page["total"])
+        self.assertEqual(1, page["returned"])
+        self.assertEqual(0, page["remaining"])
+        self.assertIsNone(page["next_offset"])
+        self.assertEqual(0, page["items"][0]["display_rank"])
+        self.assertGreater(page["items"][0]["mask"]["region_count"], 1)
         report_path = state / "steps/000000/measurement.json"
         report_text = report_path.read_text(encoding="utf-8")
         report = json.loads(report_text)

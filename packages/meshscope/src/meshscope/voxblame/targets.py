@@ -11,7 +11,11 @@ from pathlib import PurePosixPath
 from typing import Any, Iterable, TYPE_CHECKING
 
 from meshscope.voxblame.codec import read_surface_tree
-from meshscope.voxblame.contracts import MAX_DEPTH, validate_measurement_contract
+from meshscope.voxblame.contracts import (
+    MAX_DEPTH,
+    validate_measurement_contract,
+    validate_session_contract,
+)
 from meshscope.voxblame.errors import (
     OctreeError,
     UnsupportedOrInvalidVoxBlameState,
@@ -23,12 +27,14 @@ if TYPE_CHECKING:
     from meshscope.voxblame.exterior import ExteriorMeasurement
 
 
-TARGET_PARTITION_PROFILE = "repair_target_partition/1"
+LEGACY_TARGET_PARTITION_PROFILE = "repair_target_partition/1"
+TARGET_PARTITION_PROFILE = "repair_target_partition/2"
 TARGET_ORDERING_PROFILE = "repair_target_display/1"
 INTERIOR_REGION_SET_SCHEMA = "octree_region_set/1"
 EXTERIOR_GRID_REGION_SET_SCHEMA = "exterior_grid_region_set/1"
 TARGET_PAGE_SIZE = 8
 TARGET_SPLIT_MAX_CELLS = 4_096
+ADAPTIVE_TARGET_SPLIT_MAX_CELLS = 65_536
 TARGET_SPLIT_DEPTH = 4
 
 _REGION_SET_DIGEST_DOMAIN = b"octree_region_set/1\0"
@@ -64,18 +70,19 @@ class _InteriorTarget:
     split_index: int
     split_count: int
     split_reason: str
-    coarse_coverage: int
+    frontier_coverage: int
 
 
 def partition_repair_targets(
     missing_tree: SurfaceTree,
     excess_tree: SurfaceTree,
     *,
+    active_depth: int | None,
     source_step: int,
     step_root: str | None = None,
     exterior: ExteriorMeasurement | None = None,
 ) -> _RepairTargetPartition:
-    """Partition all depth-8 interior error cells with frozen 18-connectivity."""
+    """Group exact depth-8 errors at the deterministic active repair depth."""
 
     if (
         not isinstance(source_step, int)
@@ -89,14 +96,36 @@ def partition_repair_targets(
         raise OctreeError("Repair Targets require depth-8 error evidence")
     missing = {int(code) for code in missing_tree.iter_leaf_codes()}
     excess = {int(code) for code in excess_tree.iter_leaf_codes()}
+    if active_depth is None:
+        if missing or excess:
+            raise OctreeError("nonempty interior errors require an active repair depth")
+    elif (
+        not isinstance(active_depth, int)
+        or isinstance(active_depth, bool)
+        or not 1 <= active_depth <= MAX_DEPTH
+    ):
+        raise OctreeError("active repair depth must be an integer from 1 through 8")
     directions = {code: _MISSING for code in missing}
     for code in excess:
         directions[code] = directions.get(code, 0) | _EXCESS
 
     candidates: list[_InteriorTarget] = []
-    for component in _connected_components(directions):
-        component_key = _component_key(component, directions)
-        splits = _split_component(component)
+    for component in _partition_components(
+        directions,
+        profile=TARGET_PARTITION_PROFILE,
+        active_depth=active_depth,
+    ):
+        component_key = _component_key(
+            component,
+            directions,
+            profile=TARGET_PARTITION_PROFILE,
+            active_depth=active_depth,
+        )
+        splits = _split_component(
+            component,
+            maximum_cells=ADAPTIVE_TARGET_SPLIT_MAX_CELLS,
+            start_depth=max(TARGET_SPLIT_DEPTH, active_depth or TARGET_SPLIT_DEPTH),
+        )
         split_count = len(splits)
         for split_index, cells in enumerate(splits):
             mask_bytes, mask_digest, region_count = _region_set(cells)
@@ -120,9 +149,9 @@ def partition_repair_targets(
                         if split_count == 1
                         else "coarse_octree_locality"
                     ),
-                    coarse_coverage=len(
+                    frontier_coverage=len(
                         {
-                            code >> (3 * (MAX_DEPTH - TARGET_SPLIT_DEPTH))
+                            code >> (3 * (MAX_DEPTH - (active_depth or MAX_DEPTH)))
                             for code in cells
                         }
                     ),
@@ -169,6 +198,7 @@ def partition_repair_targets(
         component_key = f"exterior-component-{exterior_digest[:16]}"
         target_key = _target_identity_key(
             source_step=source_step,
+            partition_profile=TARGET_PARTITION_PROFILE,
             mask_sha256=exterior_digest,
             missing_count=0,
             excess_count=exterior.surface_cell_count,
@@ -225,6 +255,8 @@ def partition_repair_targets(
         mask_artifacts,
         missing,
         excess,
+        profile=TARGET_PARTITION_PROFILE,
+        active_depth=active_depth,
     )
     return _RepairTargetPartition(
         report={
@@ -234,6 +266,74 @@ def partition_repair_targets(
         },
         mask_bytes=mask_artifacts,
     )
+
+
+def active_repair_depth(errors_by_depth: list[dict[str, Any]]) -> int | None:
+    """Return the coarsest depth with interior error, or ``None`` when clear."""
+
+    if len(errors_by_depth) != MAX_DEPTH:
+        raise OctreeError("repair resolution requires depth-1 through depth-8 evidence")
+    for expected_depth, evidence in enumerate(errors_by_depth, start=1):
+        if evidence.get("depth") != expected_depth:
+            raise OctreeError("repair resolution depth evidence is not ordered")
+        count = evidence.get("surface_error_count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise OctreeError("repair resolution error count is invalid")
+        if count:
+            return expected_depth
+    return None
+
+
+def inspect_repair_frontier(
+    workspace: str | Path, *, step: int, offset: int = 0
+) -> dict[str, Any]:
+    """Return the thin Agent view over one validated Measured Step."""
+
+    page_repair_targets(workspace, step=step, offset=offset)
+    root = Path(workspace)
+    try:
+        measurement = json.loads(
+            (root / "steps" / f"{step:06d}" / "measurement.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        session = json.loads((root / "session.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OctreeError("Repair Frontier evidence is unavailable") from exc
+    validate_measurement_contract(measurement)
+    validate_session_contract(session)
+    partition_profile = session["profiles"]["target_partition"]
+    adaptive = partition_profile == TARGET_PARTITION_PROFILE
+    measured_active_depth = active_repair_depth(measurement["errors_by_depth"])
+    active_depth = measured_active_depth if adaptive else None
+    interior = [
+        target
+        for target in measurement["repair_targets"]["ordered_targets"]
+        if target["kind"] == "interior"
+    ]
+    if offset > len(interior):
+        _invalid(
+            "$.repair_targets.offset",
+            "exceeds the frozen interior target count",
+        )
+    selected = interior[offset : offset + TARGET_PAGE_SIZE]
+    remaining = len(interior) - offset - len(selected)
+    exterior = [
+        target
+        for target in measurement["repair_targets"]["ordered_targets"]
+        if target["kind"] == "exterior"
+    ]
+    return {
+        "repair_frontier": {
+            "active_depth": active_depth,
+        },
+        "alerts": [_exterior_alert(target) for target in exterior],
+        "repair_targets": {
+            "total": len(interior),
+            "next_offset": offset + len(selected) if remaining else None,
+            "items": [_agent_target_view(target) for target in selected],
+        },
+    }
 
 
 def repair_target_page(
@@ -317,6 +417,24 @@ def _validate_published_partition(
     excess_tree = read_surface_tree(step_root / "excess-depth8.vbsvo")
     missing = {int(code) for code in missing_tree.iter_leaf_codes()}
     excess = {int(code) for code in excess_tree.iter_leaf_codes()}
+    try:
+        session = json.loads((workspace / "session.json").read_text(encoding="utf-8"))
+        profile = session["profiles"]["target_partition"]
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+    ) as exc:
+        raise OctreeError("Repair Target partition profile is unavailable") from exc
+    if profile not in {LEGACY_TARGET_PARTITION_PROFILE, TARGET_PARTITION_PROFILE}:
+        raise OctreeError("Repair Target partition profile is unsupported")
+    active_depth = (
+        active_repair_depth(measurement["errors_by_depth"])
+        if profile == TARGET_PARTITION_PROFILE
+        else MAX_DEPTH
+    )
     targets = measurement["repair_targets"]["ordered_targets"]
     interior = [target for target in targets if target.get("kind") == "interior"]
     artifacts: dict[str, bytes] = {}
@@ -341,7 +459,14 @@ def _validate_published_partition(
             ).read_bytes()
         except OSError as exc:
             raise OctreeError("Repair Target mask artifact is missing") from exc
-    _validate_interior_partition(interior, artifacts, missing, excess)
+    _validate_interior_partition(
+        interior,
+        artifacts,
+        missing,
+        excess,
+        profile=profile,
+        active_depth=active_depth,
+    )
     exterior_targets = [
         target for target in targets if target.get("kind") == "exterior"
     ]
@@ -424,6 +549,7 @@ def _validate_published_partition(
         raise OctreeError("exterior Repair Target split provenance is invalid")
     expected_key = _target_identity_key(
         source_step=step,
+        partition_profile=profile,
         mask_sha256=digest,
         missing_count=0,
         excess_count=surface_count,
@@ -435,9 +561,36 @@ def _validate_published_partition(
         raise OctreeError("exterior Repair Target identity mismatch")
 
 
-def _connected_components(directions: dict[int, int]) -> list[set[int]]:
+def _partition_components(
+    directions: dict[int, int], *, profile: str, active_depth: int | None
+) -> list[set[int]]:
+    if not directions:
+        return []
+    if profile == LEGACY_TARGET_PARTITION_PROFILE:
+        return _connected_components(directions, depth=MAX_DEPTH)
+    if profile != TARGET_PARTITION_PROFILE or active_depth is None:
+        raise OctreeError("unsupported adaptive Repair Target partition state")
+
+    shift = 3 * (MAX_DEPTH - active_depth)
+    coarse_directions: dict[int, int] = {}
+    for code, direction in directions.items():
+        prefix = code >> shift
+        coarse_directions[prefix] = coarse_directions.get(prefix, 0) | direction
+    coarse_components = _connected_components(coarse_directions, depth=active_depth)
+    exact_by_prefix: dict[int, set[int]] = {}
+    for code in directions:
+        exact_by_prefix.setdefault(code >> shift, set()).add(code)
+    return [
+        set().union(*(exact_by_prefix[prefix] for prefix in component))
+        for component in coarse_components
+    ]
+
+
+def _connected_components(
+    directions: dict[int, int], *, depth: int = MAX_DEPTH
+) -> list[set[int]]:
     coordinates = {
-        decode_octant_prefix(code, MAX_DEPTH): code for code in directions
+        decode_octant_prefix(code, depth): code for code in directions
     }
     remaining = set(directions)
     components: list[set[int]] = []
@@ -448,7 +601,7 @@ def _connected_components(directions: dict[int, int]) -> list[set[int]]:
         pending = deque([seed])
         while pending:
             code = pending.popleft()
-            x, y, z = decode_octant_prefix(code, MAX_DEPTH)
+            x, y, z = decode_octant_prefix(code, depth)
             for dx, dy, dz in _NEIGHBOR_OFFSETS:
                 neighbor = coordinates.get((x + dx, y + dy, z + dz))
                 if neighbor is None or neighbor not in remaining:
@@ -460,14 +613,19 @@ def _connected_components(directions: dict[int, int]) -> list[set[int]]:
     return components
 
 
-def _split_component(component: set[int]) -> list[set[int]]:
-    if len(component) <= TARGET_SPLIT_MAX_CELLS:
+def _split_component(
+    component: set[int],
+    *,
+    maximum_cells: int = TARGET_SPLIT_MAX_CELLS,
+    start_depth: int = TARGET_SPLIT_DEPTH,
+) -> list[set[int]]:
+    if len(component) <= maximum_cells:
         return [component]
 
     def split(cells: set[int], depth: int) -> list[set[int]]:
-        if len(cells) <= TARGET_SPLIT_MAX_CELLS or depth == MAX_DEPTH:
+        if len(cells) <= maximum_cells or depth == MAX_DEPTH:
             return [cells]
-        child_depth = max(depth + 1, TARGET_SPLIT_DEPTH)
+        child_depth = max(depth + 1, start_depth)
         shift = 3 * (MAX_DEPTH - child_depth)
         buckets: dict[int, set[int]] = {}
         for code in cells:
@@ -475,20 +633,28 @@ def _split_component(component: set[int]) -> list[set[int]]:
         result: list[set[int]] = []
         for prefix in sorted(buckets):
             connected_chunks = _connected_components(
-                {code: _MISSING for code in buckets[prefix]}
+                {code: _MISSING for code in buckets[prefix]}, depth=MAX_DEPTH
             )
             for connected in connected_chunks:
                 result.extend(split(connected, child_depth))
         return result
 
-    return split(component, TARGET_SPLIT_DEPTH - 1)
+    return split(component, start_depth - 1)
 
 
-def _component_key(component: set[int], directions: dict[int, int]) -> str:
+def _component_key(
+    component: set[int],
+    directions: dict[int, int],
+    *,
+    profile: str = LEGACY_TARGET_PARTITION_PROFILE,
+    active_depth: int | None = None,
+) -> str:
     payload = {
-        "profile": TARGET_PARTITION_PROFILE,
+        "profile": profile,
         "cells": [[code, directions[code]] for code in sorted(component)],
     }
+    if profile == TARGET_PARTITION_PROFILE:
+        payload["active_depth"] = active_depth
     digest = hashlib.sha256(_json_bytes(payload)).hexdigest()
     return f"component-{digest[:16]}"
 
@@ -498,6 +664,7 @@ def _interior_target_key(
 ) -> str:
     return _target_identity_key(
         source_step=source_step,
+        partition_profile=TARGET_PARTITION_PROFILE,
         mask_sha256=target.mask["logical_sha256"],
         missing_count=target.missing_count,
         excess_count=target.excess_count,
@@ -510,6 +677,7 @@ def _interior_target_key(
 def _target_identity_key(
     *,
     source_step: int,
+    partition_profile: str,
     mask_sha256: str,
     missing_count: int,
     excess_count: int,
@@ -520,7 +688,7 @@ def _target_identity_key(
     identity = {
         "schema": "voxblame.repair-target-identity/1",
         "source_step": source_step,
-        "partition_profile": TARGET_PARTITION_PROFILE,
+        "partition_profile": partition_profile,
         "mask_sha256": mask_sha256,
         "missing_surface_count": missing_count,
         "excess_surface_count": excess_count,
@@ -609,7 +777,7 @@ def _expand_region_set(data: bytes) -> set[int]:
             raise OctreeError("Repair Target mask region is invalid")
         remaining = 3 * (MAX_DEPTH - depth)
         expanded_count += 1 << remaining
-        if expanded_count > TARGET_SPLIT_MAX_CELLS:
+        if expanded_count > ADAPTIVE_TARGET_SPLIT_MAX_CELLS:
             raise OctreeError("Repair Target mask exceeds its split profile")
         expanded = range(prefix << remaining, (prefix + 1) << remaining)
         if result.intersection(expanded):
@@ -632,9 +800,38 @@ def _canonical_bounds(cells: set[int]) -> dict[str, list[float]]:
     }
 
 
+def _agent_target_view(target: dict[str, Any]) -> dict[str, Any]:
+    """Hide persisted validation machinery behind the Agent interface."""
+
+    profile = target["error_profile"]
+    return {
+        "bounds_canonical": target["bounds_canonical"],
+        "missing_surface_count": profile["missing_surface_count"],
+        "excess_surface_count": profile["excess_surface_count"],
+        "target_key": target["target_key"],
+        "mask_sha256": target["mask"]["logical_sha256"],
+    }
+
+
+def _exterior_alert(target: dict[str, Any]) -> dict[str, Any]:
+    """Expose only actionable spatial facts and stable selection identity."""
+
+    exterior = target["exterior"]
+    return {
+        "kind": "exterior_surface",
+        "bounds_canonical": target["bounds_canonical"],
+        "outside_directions": exterior["outside_directions"],
+        "nearest_overrun": exterior["nearest_overrun"],
+        "farthest_overrun": exterior["farthest_overrun"],
+        "excess_surface_count": target["error_profile"]["excess_surface_count"],
+        "target_key": target["target_key"],
+        "mask_sha256": target["mask"]["logical_sha256"],
+    }
+
+
 def _display_order(target: _InteriorTarget) -> tuple[Any, ...]:
     return (
-        -target.coarse_coverage,
+        -target.frontier_coverage,
         -(target.missing_count + target.excess_count),
         *target.bounds["min"],
         target.mask["logical_sha256"],
@@ -646,14 +843,37 @@ def _validate_interior_partition(
     artifacts: dict[str, bytes],
     missing: set[int],
     excess: set[int],
+    *,
+    profile: str = LEGACY_TARGET_PARTITION_PROFILE,
+    active_depth: int | None = None,
 ) -> None:
     directions = {code: _MISSING for code in missing}
     for code in excess:
         directions[code] = directions.get(code, 0) | _EXCESS
     expected_splits: dict[frozenset[int], dict[str, Any]] = {}
-    for component_cells in _connected_components(directions):
-        component_key = _component_key(component_cells, directions)
-        splits = _split_component(component_cells)
+    for component_cells in _partition_components(
+        directions, profile=profile, active_depth=active_depth
+    ):
+        component_key = _component_key(
+            component_cells,
+            directions,
+            profile=profile,
+            active_depth=active_depth,
+        )
+        maximum_cells = (
+            ADAPTIVE_TARGET_SPLIT_MAX_CELLS
+            if profile == TARGET_PARTITION_PROFILE
+            else TARGET_SPLIT_MAX_CELLS
+        )
+        splits = _split_component(
+            component_cells,
+            maximum_cells=maximum_cells,
+            start_depth=(
+                max(TARGET_SPLIT_DEPTH, active_depth or TARGET_SPLIT_DEPTH)
+                if profile == TARGET_PARTITION_PROFILE
+                else TARGET_SPLIT_DEPTH
+            ),
+        )
         for split_index, split_cells in enumerate(splits):
             expected_splits[frozenset(split_cells)] = {
                 "component_key": component_key,
@@ -686,11 +906,11 @@ def _validate_interior_partition(
         if observed.intersection(cells):
             raise OctreeError("Repair Target masks overlap")
         observed.update(cells)
-        profile = target["error_profile"]
+        error_profile = target["error_profile"]
         if (
-            profile["missing_surface_count"] != len(cells & missing)
-            or profile["excess_surface_count"] != len(cells & excess)
-            or profile["surface_error_count"] != len(cells)
+            error_profile["missing_surface_count"] != len(cells & missing)
+            or error_profile["excess_surface_count"] != len(cells & excess)
+            or error_profile["surface_error_count"] != len(cells)
         ):
             raise OctreeError("Repair Target error profile conflicts with its mask")
         component = target["component"]
@@ -700,9 +920,10 @@ def _validate_interior_partition(
             )
         expected_key = _target_identity_key(
             source_step=target["source_step"],
+            partition_profile=profile,
             mask_sha256=target["mask"]["logical_sha256"],
-            missing_count=profile["missing_surface_count"],
-            excess_count=profile["excess_surface_count"],
+            missing_count=error_profile["missing_surface_count"],
+            excess_count=error_profile["excess_surface_count"],
             component_key=component["component_key"],
             split_index=component["split_index"],
             split_count=component["split_count"],
@@ -724,5 +945,8 @@ def _invalid(path: str, detail: str) -> None:
 
 
 __all__ = [
+    "TARGET_PARTITION_PROFILE",
+    "active_repair_depth",
+    "inspect_repair_frontier",
     "page_repair_targets",
 ]

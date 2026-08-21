@@ -1963,6 +1963,65 @@ time.sleep(60)
         self.assertEqual("identity_conflict", rejected["error"]["classification"])
         self.assertFalse((self.workspace / "steps/000000").exists())
 
+    def test_step_zero_candidate_mesh_ignores_nested_cadgen_glb(self) -> None:
+        status, _payload, stderr = self.invoke(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--prepared",
+            str(self.prepared_setup()),
+        )
+        self.assertEqual(0, status, stderr)
+        status, attempt, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(self.initial_plan()),
+            "--intended-step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+        candidate, candidate_sha = self.candidate(
+            "candidate-with-cadgen-cache",
+            b"authoritative measurement mesh",
+        )
+        cadgen_cache = candidate / "artifacts/__cadgen__"
+        cadgen_cache.mkdir()
+        (cadgen_cache / "topology.glb").write_bytes(b"derived viewer mesh")
+        measurement = self.measurement(
+            step=0,
+            compare_to=None,
+            candidate_sha=candidate_sha,
+            observable_sha="9" * 64,
+            accepted=False,
+        )
+        preview = self.preview("preview-with-cadgen-cache", candidate_sha)
+
+        status, published, stderr = self.invoke(
+            "publish-step-zero",
+            "--workspace",
+            str(self.workspace),
+            "--attempt",
+            str(attempt["attempt"]["attempt"]),
+            "--candidate",
+            str(candidate),
+            "--candidate-mesh",
+            "artifacts/model.glb",
+            "--measurement",
+            str(measurement),
+            "--preview",
+            str(preview),
+        )
+
+        self.assertEqual(0, status, stderr)
+        self.assertTrue(published["ok"])
+        status, validation, stderr = self.invoke(
+            "validate", "--workspace", str(self.workspace)
+        )
+        self.assertEqual(0, status, stderr)
+        self.assertTrue(validation["valid"])
+
     def test_validation_binds_setup_and_current_git_commit_identities(self) -> None:
         self.publish_initial_flow()
         reference = self.workspace / "input/reference.ply"

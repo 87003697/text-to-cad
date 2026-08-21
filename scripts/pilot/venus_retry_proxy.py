@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Loopback proxy for narrowly retrying transient Venus decryption failures."""
+"""Loopback proxy for narrowly retrying transient Venus failures."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 RETRYABLE_ERROR_CODE = "invalid_encrypted_content"
 VENUS_CODEX_ROUTING_HEADER = "Venus-Codex-Routing"
+MAX_RETRY_AFTER_SECONDS = 120.0
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -39,6 +40,7 @@ class _ProxyServer(ThreadingHTTPServer):
         target_url: str,
         audit_path: Path,
         backoffs: tuple[float, ...],
+        rate_limit_backoffs: tuple[float, ...],
         upstream_timeout: float,
         upstream_bearer_token: str | None,
         required_client_bearer_token: str | None,
@@ -48,8 +50,17 @@ class _ProxyServer(ThreadingHTTPServer):
 
         if len(backoffs) > 2:
             raise ValueError("retry policy allows at most two extra attempts")
+        if len(rate_limit_backoffs) > 2:
+            raise ValueError("rate-limit retry policy allows at most two extra attempts")
         if any(not math.isfinite(delay) or delay < 0 for delay in backoffs):
             raise ValueError("retry backoffs must be finite and non-negative")
+        if any(
+            not math.isfinite(delay) or delay < 0
+            for delay in rate_limit_backoffs
+        ):
+            raise ValueError(
+                "rate-limit retry backoffs must be finite and non-negative"
+            )
         if not math.isfinite(upstream_timeout) or upstream_timeout <= 0:
             raise ValueError("upstream_timeout must be finite and positive")
         target = urlsplit(target_url)
@@ -58,6 +69,7 @@ class _ProxyServer(ThreadingHTTPServer):
         self.target = target
         self.audit_path = audit_path
         self.backoffs = backoffs
+        self.rate_limit_backoffs = rate_limit_backoffs
         self.upstream_timeout = upstream_timeout
         self.upstream_bearer_token = upstream_bearer_token
         self.required_client_bearer_token = required_client_bearer_token
@@ -75,7 +87,13 @@ class _ProxyServer(ThreadingHTTPServer):
         suffix = incoming_path[3:] if incoming_path.startswith("/v1") else incoming_path
         return f"{self.target.path.rstrip('/')}/{suffix.lstrip('/')}"
 
-    def record_attempt(self, attempt: int, status: int, error_code: str | None) -> None:
+    def record_attempt(
+        self,
+        attempt: int,
+        status: int,
+        error_code: str | None,
+        retry_after_seconds: float | None,
+    ) -> None:
         """Append a body-free, header-free retry audit record."""
 
         record = {
@@ -83,6 +101,8 @@ class _ProxyServer(ThreadingHTTPServer):
             "status": status,
             "error_code": error_code,
         }
+        if retry_after_seconds is not None:
+            record["retry_after_seconds"] = retry_after_seconds
         self.audit_path.parent.mkdir(parents=True, exist_ok=True)
         with self.audit_lock, self.audit_path.open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(record, separators=(",", ":")) + "\n")
@@ -137,7 +157,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # reasoning so every continuation stays on one resource provider.
         forwarded_headers[VENUS_CODEX_ROUTING_HEADER] = "true"
 
-        for attempt in range(1, len(self.server.backoffs) + 2):
+        retry_budget = max(
+            len(self.server.backoffs),
+            len(self.server.rate_limit_backoffs),
+        )
+        for attempt in range(1, retry_budget + 2):
             with self.server.request_lock:
                 if (
                     self.server.max_upstream_attempts is not None
@@ -159,8 +183,16 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 forwarded_headers,
             )
             error_code = self._error_code(status, response_body)
-            self.server.record_attempt(attempt, status, error_code)
-            retryable = (
+            retry_after_seconds = (
+                self._retry_after_seconds(headers) if status == 429 else None
+            )
+            self.server.record_attempt(
+                attempt,
+                status,
+                error_code,
+                retry_after_seconds,
+            )
+            encrypted_content_failure = (
                 status == 400
                 and (
                     error_code == RETRYABLE_ERROR_CODE
@@ -170,10 +202,20 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     )
                 )
             )
-            if not retryable or attempt > len(self.server.backoffs):
+            retry_backoffs = (
+                self.server.rate_limit_backoffs
+                if status == 429
+                else self.server.backoffs
+                if encrypted_content_failure
+                else ()
+            )
+            if attempt > len(retry_backoffs):
                 self._respond(status, headers, response_body)
                 return
-            time.sleep(self.server.backoffs[attempt - 1])
+            delay = retry_backoffs[attempt - 1]
+            if retry_after_seconds is not None:
+                delay = max(delay, retry_after_seconds)
+            time.sleep(delay)
 
     def _forward(
         self,
@@ -228,6 +270,30 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         return code if isinstance(code, str) else None
 
     @staticmethod
+    def _retry_after_seconds(
+        headers: list[tuple[str, str]],
+    ) -> float | None:
+        """Return one bounded numeric Retry-After hint without logging headers."""
+
+        value = next(
+            (
+                raw.strip()
+                for name, raw in headers
+                if name.lower() == "retry-after"
+            ),
+            None,
+        )
+        if value is None:
+            return None
+        try:
+            seconds = float(value)
+        except ValueError:
+            return None
+        if not math.isfinite(seconds) or seconds < 0:
+            return None
+        return min(seconds, MAX_RETRY_AFTER_SECONDS)
+
+    @staticmethod
     def _has_encrypted_reasoning(body: bytes) -> bool:
         """Return whether this is an encrypted reasoning continuation."""
 
@@ -275,6 +341,7 @@ class RetryProxy:
         audit_path: Path,
         *,
         backoffs: tuple[float, ...] = (0.2, 0.5),
+        rate_limit_backoffs: tuple[float, ...] = (10.0, 60.0),
         upstream_timeout: float = 180,
         upstream_bearer_token: str | None = None,
         required_client_bearer_token: str | None = None,
@@ -286,6 +353,7 @@ class RetryProxy:
             target_url,
             audit_path,
             backoffs,
+            rate_limit_backoffs,
             upstream_timeout,
             upstream_bearer_token,
             required_client_bearer_token,

@@ -80,9 +80,13 @@ canonical operations above.
 5. Read `objective_facts`, ordered depth-1–8 counts, depth-8 evidence, Exterior
    Surface facts, and Observable Geometry identity. A step is objectively
    accepted only when all three objective facts are true.
-6. Follow `repair_targets.next_offset` with `voxblame-targets` until every
-   Repair Target has been inspected. Display order is stable but does not tell
-   the Agent what to edit.
+6. Call `voxblame-targets`, read `repair_frontier.active_depth`, inspect any
+   exterior `alerts`, then follow `repair_targets.next_offset` until every
+   interior Repair Target has been inspected. Mesh Compare owns the
+   deterministic repair depth; the Agent must not choose or advance it.
+   Targets are grouped at that depth while retaining exact depth-8 masks. Item
+   order is deterministic attention order by objective error impact, not a CAD
+   edit instruction.
 7. After an explicit child Measured Step exists, run `voxblame-diff` with the
    frozen Repair Batch. Treat exact-mask, halo, outside-selected, trajectory,
    and exterior evidence as facts; the Agent writes the assessment.
@@ -130,6 +134,8 @@ invent missing evidence or infer a modeling decision from objective facts.
 - The Canonical Reference is normalized exactly once; candidates are not.
 - Every nonzero Measured Step and Region Diff has explicit ancestry.
 - Repair Targets partition the complete current error set.
+- Each Measured Step recomputes its Active Repair Depth. A child may advance,
+  remain at, or return to a coarser depth; final acceptance remains depth-8.
 - Preview, measurement, Region Diff, and verification identities must agree
   before their owning Workspace publication.
 - Published evidence is immutable; identical retries may be idempotent and
