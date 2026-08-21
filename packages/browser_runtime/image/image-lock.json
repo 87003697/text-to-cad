@@ -2,13 +2,13 @@
   "schema_version": 1,
   "image": {
     "name": "text-to-cad-browser-runtime",
-    "id": "sha256:e198b02f5f86c3c99750328181d3d546d3169585a0e06df7e9fc0e8c65b985df",
+    "id": "sha256:bfcfe17537be0f1b596ed9883fcd04a16014220f978bbce177cf4b7587f3e951",
     "base_image": "mcr.microsoft.com/playwright:v1.51.1-jammy",
     "base_id": "sha256:79da45705a7c3f147c435ac6d0beeddf2e132f53263cb27bed90beafbb2e552b",
     "playwright_mcp_version": "0.0.79",
-    "content_size_bytes": 868351666,
+    "content_size_bytes": 868352292,
     "architecture": "amd64"
   },
-  "built_from_ref": "579094a75b1930fbd2be4fee39d3850cca1243cf",
-  "notes": "Built from the exact clean Git archive named by built_from_ref. `id` is the only runtime image authority; no tag fallback is permitted. The linux/amd64 image exposes Playwright MCP on 9223 and the closed residual CAD renderer on 9224, with Chromium and all render assets baked in. BrowserRuntimeJob preflight and the real red/green/yellow residual semantic and byte-repeatability integration test passed against this exact ID before publication."
+  "built_from_ref": "12db28680d636e1d75cc44e92b3ec20d73551456",
+  "notes": "Built from the exact clean Git revision named by built_from_ref. `id` is the only runtime image authority; no tag fallback is permitted. The linux/amd64 image exposes Playwright MCP on 9223 and the closed packed-geometry residual CAD renderer on 9224, with Chromium and all render assets baked in. BrowserRuntimeJob preflight and the representative 305,796-triangle airplane residual integration test passed against this exact ID before publication."
 }
