@@ -30,8 +30,15 @@ except ModuleNotFoundError as exc:
         raise
     from venus_retry_proxy import RetryProxy
 
+sys.path.insert(
+    0,
+    os.fspath(
+        Path(__file__).resolve().parents[2] / "packages/browser_runtime/src"
+    ),
+)
 from browser_runtime import (
     BROWSER_RUNTIME_CONTRACT,
+    HOST_IMAGE_LOCK_PATH,
     SANDBOX_CODEX_CONFIG_NAME,
     SANDBOX_CODEX_CONFIG_PATH,
     SANDBOX_MOUNT_ROOT,
@@ -1143,7 +1150,9 @@ def run_pilot(
     sidecar: BrowserRuntimeJob | None = None
     with SignalRelay() as relay:
         try:
-            sidecar = BrowserRuntimeJob.create(exp_dir)
+            sidecar = BrowserRuntimeJob.create(
+                exp_dir, image_lock_path=HOST_IMAGE_LOCK_PATH
+            )
             sidecar.start()
             if relay.cancelled:
                 workload_status = 128 + (relay.signum or signal.SIGTERM)

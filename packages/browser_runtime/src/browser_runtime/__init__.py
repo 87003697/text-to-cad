@@ -1,5 +1,6 @@
 from .config import (
     BROWSER_RUNTIME_CONTRACT,
+    HOST_IMAGE_LOCK_PATH,
     IMAGE_LOCK_PATH,
     SANDBOX_CODEX_CONFIG_NAME,
     SANDBOX_CODEX_CONFIG_PATH,
@@ -14,6 +15,7 @@ __all__ = [
     "BROWSER_RUNTIME_CONTRACT",
     "BrowserRuntimeError",
     "BrowserRuntimeJob",
+    "HOST_IMAGE_LOCK_PATH",
     "IMAGE_LOCK_PATH",
     "SANDBOX_CODEX_CONFIG_NAME",
     "SANDBOX_CODEX_CONFIG_PATH",

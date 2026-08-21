@@ -25,6 +25,9 @@ CAD_RENDER_PROGRAMS: Mapping[str, str] = {
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[2]
 IMAGE_LOCK_PATH = _PACKAGE_ROOT / "image" / "image-lock.json"
+HOST_IMAGE_LOCK_PATH = (
+    Path.home() / ".local/state/text-to-cad/browser-runtime/image-lock.json"
+)
 
 BROWSER_RUNTIME_CONTRACT: Mapping[str, str] = {
     "sandbox_mount_root": SANDBOX_MOUNT_ROOT,
