@@ -74,6 +74,12 @@ const skillGroups = [
     summary: "Checks DXF and STEP files before upload to SendCutSend.",
   },
   {
+    name: "DfAM Check",
+    path: "skills/dfam-check",
+    summary:
+      "Measures mesh printability per process: wall thickness, overhangs, support volume, and build orientation.",
+  },
+  {
     name: "G-code",
     path: "skills/gcode",
     summary:
