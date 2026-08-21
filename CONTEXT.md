@@ -78,6 +78,34 @@ _Avoid_: Image tag, browser cache, runtime build, mutable container
 A versioned, pre-registered repository-owned rendering workload accepted by the Browser Sidecar, such as the CAD Viewer or the formal eight-view residual renderer. The Agent supplies structured model, camera, and rendering inputs; it cannot submit arbitrary HTML or JavaScript.
 _Avoid_: Arbitrary webpage, arbitrary script, browser task
 
+**Self-Contained GLB**:
+A single GLB whose complete scene, buffers, images, and other model resources are embedded in that file, so loading it never resolves an external model resource.
+_Avoid_: GLB package, model URL, GLB with side files
+
+**Viewer Integration Proof**:
+CVM development evidence that the Browser Sidecar loaded the designated Self-Contained GLB through the current CAD Viewer, captured its initial orthographic view, selected perspective through the existing Viewer UI, captured the changed view, and observed no Viewer error.
+_Avoid_: Viewer page opened, HTTP success, canvas present, screenshot smoke
+
+**Viewer Projection Trace**:
+The replayable two-state evidence sequence `Orthographic (initial) → Perspective (explicit selection)`, with the observed projection state and viewport capture at both states.
+_Avoid_: Toggle test, click trace, final screenshot
+
+**Sidecar Asset Backend**:
+The request-scoped provider that presents model data to the real CAD Viewer through the Viewer’s catalog and asset contract; it does not own Chromium or Viewer interaction semantics.
+_Avoid_: Sidecar Viewer, browser server, model injector
+
+**Viewer Control Run**:
+A CVM development run in which the current workspace Viewer server presents a durable Self-Contained GLB to the Browser Sidecar, establishing the expected loading and interaction behavior before the Sidecar Asset Backend is introduced.
+_Avoid_: Production baseline, upstream conformance, formal pilot
+
+**Asset Backend Run**:
+A CVM development run that repeats a Viewer Control Run’s model and interactions while replacing only the model provider with the Sidecar Asset Backend.
+_Avoid_: Second implementation, formal pilot, different test
+
+**CVM Development Proof**:
+Behavioral evidence produced on CVM without claiming formal artifact identity, Source-Hidden execution, or pilot acceptance.
+_Avoid_: Formal CVM proof, provision receipt, accepted pilot
+
 **Provider-Free Browser Execution**:
 Browser execution using a pre-provisioned, digest-pinned local artifact and job-private connection, with no runtime browser-provider call or browser download. A preloaded image on Colima or CVM remains Provider-Free.
 _Avoid_: Rebuilding Chromium per job, managed cloud browser, runtime browser install
