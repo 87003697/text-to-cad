@@ -504,6 +504,29 @@ class PullPlanTests(unittest.TestCase):
             self.assertIn(f"--exclude '{pattern}'", command)
         self.assertNotIn(".codex-upper", command)
 
+    def test_full_postmortem_excludes_browser_and_git_lfs_caches(
+        self,
+    ) -> None:
+        runner = FakeRunner()
+        workflow = cvm_pull.CvmPull(
+            cvm_pull.PullRequest(
+                None,
+                None,
+                cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
+            ),
+            runner,
+        )
+
+        self.assertIn("work/playwright-browsers/*", workflow.excludes)
+        self.assertIn("*/run/playwright/*", workflow.excludes)
+        self.assertIn("*/run/playwright-browsers/*", workflow.excludes)
+        self.assertIn("*/work/playwright/*", workflow.excludes)
+        self.assertIn("*/work/playwright-browsers/*", workflow.excludes)
+        self.assertIn(".git/lfs/*", workflow.excludes)
+        self.assertIn("*/.git/lfs/*", workflow.excludes)
+        self.assertNotIn(".git/*", workflow.excludes)
+        self.assertNotIn("*/.git/*", workflow.excludes)
+
     def test_default_excludes_include_disposable_browser_runtimes(self) -> None:
         runner = FakeRunner()
         workflow = self.workflow(runner)

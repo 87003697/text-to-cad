@@ -5,6 +5,12 @@
 # browser/version evidence, not hundreds of MiB of duplicated Chromium bytes.
 run/playwright/*
 run/playwright-browsers/*
+*/run/playwright/*
+*/run/playwright-browsers/*
+work/playwright/*
+work/playwright-browsers/*
+*/work/playwright/*
+*/work/playwright-browsers/*
 #
 # NB (2026-07-29): aws --exclude matches the RELATIVE path from source
 # root, not the absolute path. `*/.foo/*` requires a leading `/` component
@@ -25,7 +31,7 @@ __pycache__/*
 */.codex-upper/*
 .codex-work/*
 */.codex-work/*
-# per-exp git repo. Hooks + refs + objects add ~25 boilerplate files
-# per exp; the per-phase commit history isn't the primary artifact.
-.git/*
-*/.git/*
+# Preserve per-exp Git commits, objects, index, and refs: they are canonical
+# Workspace authority. Only duplicated LFS payload caches are disposable.
+.git/lfs/*
+*/.git/lfs/*

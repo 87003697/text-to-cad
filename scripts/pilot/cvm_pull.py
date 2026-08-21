@@ -28,6 +28,14 @@ COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 DISPOSABLE_RUNTIME_EXCLUDES = (
     "run/playwright/*",
     "run/playwright-browsers/*",
+    "*/run/playwright/*",
+    "*/run/playwright-browsers/*",
+    "work/playwright/*",
+    "work/playwright-browsers/*",
+    "*/work/playwright/*",
+    "*/work/playwright-browsers/*",
+    ".git/lfs/*",
+    "*/.git/lfs/*",
 )
 
 
