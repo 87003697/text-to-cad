@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+import re
 import signal
 import stat
 import subprocess
@@ -13,6 +14,7 @@ import sys
 import time
 from collections.abc import Mapping
 from typing import NamedTuple
+from urllib.parse import urlsplit
 
 try:
     from agent_runtime_canonical_json import (
@@ -55,6 +57,11 @@ IDENTITY_KEYS = (
 )
 MANIFEST_KEYS = {"schema", "challenge", "workload", *IDENTITY_KEYS}
 FULL_DIGEST_KEYS = tuple(key for key in IDENTITY_KEYS if key.endswith("Digest"))
+EXACT_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
+HEX_AUTHORITY = re.compile(r"[0-9a-f]{12,64}\Z")
+RESIDUAL_PROGRAM_DIGEST = (
+    "sha256:9d8e841ee6acef17e842e9ed23d8d537a155b5f7a36d4838758af4cb348d1359"
+)
 
 
 class GateError(RuntimeError):
@@ -146,12 +153,23 @@ def _mount_options(target: Path) -> set[str]:
     return matches[0]
 
 
+def _require_browser_runtime_read_only_mount() -> None:
+    for target in (BROWSER_RUNTIME_CAPABILITY, BROWSER_RUNTIME_CAPABILITY.parent):
+        try:
+            if "ro" in _mount_options(target):
+                return
+        except GateError:
+            continue
+    raise GateError("Browser Runtime capability surface is not read-only")
+
+
 def _preflight() -> None:
     if "ro" not in _mount_options(Path("/")):
         raise GateError("container rootfs is not read-only")
     for target in (SOURCE, INPUT):
         if "ro" not in _mount_options(target):
             raise GateError("immutable job surface is not read-only")
+    _require_browser_runtime_read_only_mount()
     for target in WRITABLE:
         if "rw" not in _mount_options(target):
             raise GateError("job-private surface is not writable")
@@ -192,6 +210,7 @@ def _browser_runtime_capability_digest(
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_nlink != 1
             or stat.S_IMODE(metadata.st_mode) != 0o444
+            or metadata.st_uid == os.getuid()
         ):
             raise GateError("Browser Runtime capability is replaceable")
         payload = os.read(descriptor, 16385)
@@ -200,9 +219,54 @@ def _browser_runtime_capability_digest(
     if not payload or len(payload) > 16384:
         raise GateError("Browser Runtime capability size is invalid")
     value = _parse_exact(payload)
-    if value.get("schema") != "text-to-cad.browser-runtime-capability/1":
+    expected_keys = {
+        "schema",
+        "jobId",
+        "imageRef",
+        "mcpUrl",
+        "cadRenderUrl",
+        "cadRenderToken",
+        "programs",
+    }
+    programs = value.get("programs")
+    if (
+        set(value) != expected_keys
+        or value.get("schema") != "text-to-cad.browser-runtime-capability/1"
+        or not isinstance(value.get("jobId"), str)
+        or HEX_AUTHORITY.fullmatch(value["jobId"]) is None
+        or not isinstance(value.get("imageRef"), str)
+        or EXACT_IMAGE_ID.fullmatch(value["imageRef"]) is None
+        or not _fixed_loopback_url(value.get("mcpUrl"), "/mcp")
+        or not _fixed_loopback_url(
+            value.get("cadRenderUrl"), "/cad/render/residual"
+        )
+        or not isinstance(value.get("cadRenderToken"), str)
+        or HEX_AUTHORITY.fullmatch(value["cadRenderToken"]) is None
+        or not isinstance(programs, dict)
+        or programs != {"residual": RESIDUAL_PROGRAM_DIGEST}
+    ):
         raise GateError("Browser Runtime capability schema is invalid")
     return _digest(payload)
+
+
+def _fixed_loopback_url(value: object, expected_path: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname == "127.0.0.1"
+        and parsed.username is None
+        and parsed.password is None
+        and port is not None
+        and parsed.path == expected_path
+        and not parsed.query
+        and not parsed.fragment
+    )
 
 
 def _publish(value: dict[str, object]) -> None:

@@ -13,6 +13,9 @@ from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 ENTRYPOINT = REPO_ROOT / "packages/agent_runtime/text-to-cad-agent-entrypoint"
+sys.path.insert(0, str(REPO_ROOT / "packages/browser_runtime/src"))
+
+from browser_runtime.config import CAD_RENDER_PROGRAMS  # noqa: E402
 
 
 def _load_entrypoint():
@@ -26,6 +29,13 @@ def _load_entrypoint():
 
 
 class ProductionAgentEntrypointTests(unittest.TestCase):
+    def test_registered_browser_program_identity_matches_runtime(self) -> None:
+        entrypoint = _load_entrypoint()
+        self.assertEqual(
+            entrypoint.RESIDUAL_PROGRAM_DIGEST,
+            CAD_RENDER_PROGRAMS["residual"],
+        )
+
     def test_fixed_entrypoint_bytes_are_executable_and_self_test_without_ambient_authority(self) -> None:
         self.assertEqual(ENTRYPOINT.stat().st_mode & 0o111, 0o111)
         completed = subprocess.run(
@@ -111,18 +121,72 @@ class ProductionAgentEntrypointTests(unittest.TestCase):
         entrypoint = _load_entrypoint()
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runtime.json"
-            payload = entrypoint._canonical(
-                {"schema": "text-to-cad.browser-runtime-capability/1"}
-            )
+            capability = {
+                "schema": "text-to-cad.browser-runtime-capability/1",
+                "jobId": "a" * 32,
+                "imageRef": "sha256:" + "b" * 64,
+                "mcpUrl": "http://127.0.0.1:32001/mcp",
+                "cadRenderUrl": "http://127.0.0.1:32002/cad/render/residual",
+                "cadRenderToken": "c" * 64,
+                "programs": {"residual": entrypoint.RESIDUAL_PROGRAM_DIGEST},
+            }
+            payload = entrypoint._canonical(capability)
             path.write_bytes(payload)
             path.chmod(0o444)
-            self.assertEqual(
-                entrypoint._browser_runtime_capability_digest(path),
-                entrypoint._digest(payload),
-            )
+            with mock.patch.object(entrypoint.os, "getuid", return_value=65532):
+                self.assertEqual(
+                    entrypoint._browser_runtime_capability_digest(path),
+                    entrypoint._digest(payload),
+                )
             path.chmod(0o644)
             with self.assertRaisesRegex(entrypoint.GateError, "replaceable"):
                 entrypoint._browser_runtime_capability_digest(path)
+
+            path.chmod(0o600)
+            for mutation in (
+                {"imageRef": "text-to-cad-browser-runtime:latest"},
+                {"programs": {"residual": "sha256:" + "d" * 64}},
+                {"extra": True},
+            ):
+                invalid = dict(capability)
+                invalid.update(mutation)
+                path.write_bytes(entrypoint._canonical(invalid))
+                path.chmod(0o444)
+                with (
+                    mock.patch.object(entrypoint.os, "getuid", return_value=65532),
+                    self.assertRaisesRegex(entrypoint.GateError, "schema is invalid"),
+                ):
+                    entrypoint._browser_runtime_capability_digest(path)
+                path.chmod(0o600)
+
+    def test_agent_owned_or_writable_capability_surface_is_rejected(self) -> None:
+        entrypoint = _load_entrypoint()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.json"
+            path.write_bytes(
+                entrypoint._canonical(
+                    {
+                        "schema": "text-to-cad.browser-runtime-capability/1",
+                        "jobId": "a" * 32,
+                        "imageRef": "sha256:" + "b" * 64,
+                        "mcpUrl": "http://127.0.0.1:32001/mcp",
+                        "cadRenderUrl": "http://127.0.0.1:32002/cad/render/residual",
+                        "cadRenderToken": "c" * 64,
+                        "programs": {
+                            "residual": entrypoint.RESIDUAL_PROGRAM_DIGEST
+                        },
+                    }
+                )
+            )
+            path.chmod(0o444)
+            with self.assertRaisesRegex(entrypoint.GateError, "replaceable"):
+                entrypoint._browser_runtime_capability_digest(path)
+
+        with mock.patch.object(entrypoint, "_mount_options", return_value={"rw"}):
+            with self.assertRaisesRegex(entrypoint.GateError, "not read-only"):
+                entrypoint._require_browser_runtime_read_only_mount()
+        with mock.patch.object(entrypoint, "_mount_options", return_value={"ro"}):
+            entrypoint._require_browser_runtime_read_only_mount()
 
     def test_signal_is_latched_before_spawn_and_replayed_to_the_process_group(self) -> None:
         entrypoint = _load_entrypoint()
