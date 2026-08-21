@@ -13,13 +13,10 @@ container ports to random host-loopback ports. It writes a job-private
 workload starts. Missing or invalid CAD render capability fails closed inside a
 pilot; it never triggers an Agent-owned Chromium launch.
 
-Development-only: this package does not implement Formal fixed-program
-authority, gate proofs, or sealed evidence. It provides a general-purpose
-Chromium the Agent can drive via MCP tools plus one bounded repository-owned
-render operation, isolated per job by Docker container, network, random
-loopback ports, token, and read-only capability. See
-`docs/adr/0004-own-provider-free-browser-lifecycle-by-authority.md` for the
-long-term Sealed design that a later milestone would layer on top.
+This is the sole pilot browser path. The Agent receives one read-only runtime
+capability and cannot select a URL, image, executable, or fallback renderer.
+The outer runner requires the exact locked image ID and fails before paid work
+when the image or fixed render program is unavailable.
 
 Build the image from the repository root so the Dockerfile-specific allowlist
 can include the fixed meshshot assets without sending unrelated workspace
@@ -27,6 +24,7 @@ content:
 
 ```bash
 docker buildx build --load \
+  --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
   --file packages/browser_runtime/image/Dockerfile \
   --tag text-to-cad-browser-runtime:build \
   .

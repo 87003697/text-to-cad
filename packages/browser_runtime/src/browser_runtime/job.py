@@ -19,6 +19,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import subprocess
 import time
@@ -38,6 +39,7 @@ from .config import (
 
 _LOOPBACK_OPENER = urllib_request.build_opener(urllib_request.ProxyHandler({}))
 _MAX_HEALTH_RESPONSE_BYTES = 4096
+_EXACT_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
 class BrowserRuntimeError(RuntimeError):
@@ -81,18 +83,15 @@ class BrowserRuntimeJob:
         self.network_name = f"{self.prefix}-net"
         self.container_name = f"{self.prefix}-runtime"
         self.capability_dir = Path(self.capability_dir)
-        self._fallback_image_ref: str | None = None
         if self.image_ref is None:
             lock = load_image_lock(self.image_lock_path)
             image = lock["image"]
-            tagged_ref = f"{image['name']}:{image.get('tag', 'latest')}"
-            # Docker save/load may legitimately assign a different local
-            # content ID on another engine. Prefer the locked ID when it is
-            # present locally, but retain the locked tag as a transport-safe
-            # fallback for that destination.
-            self.image_ref = image.get("id") or tagged_ref
-            if image.get("id"):
-                self._fallback_image_ref = tagged_ref
+            self.image_ref = image.get("id")
+        if (
+            not isinstance(self.image_ref, str)
+            or _EXACT_IMAGE_ID.fullmatch(self.image_ref) is None
+        ):
+            raise BrowserRuntimeError("browser runtime requires an exact image ID")
         self._started = False
         self._published_port: int | None = None
         self._cad_render_published_port: int | None = None
@@ -185,28 +184,16 @@ class BrowserRuntimeJob:
             raise
 
     def _resolve_local_image_ref(self) -> None:
-        """Use the locked tag when a transported image has a new local ID."""
+        """Require the exact locked image; runtime tags are not authority."""
 
-        fallback = self._fallback_image_ref
-        if fallback is None:
-            return
         try:
             self.docker(["docker", "image", "inspect", self.image_ref])
-            return
-        except subprocess.CalledProcessError:
-            pass
-        except FileNotFoundError as exc:
-            raise BrowserRuntimeError("docker executable not found") from exc
-        try:
-            self.docker(["docker", "image", "inspect", fallback])
         except subprocess.CalledProcessError as exc:
             raise BrowserRuntimeError(
-                "browser runtime image is unavailable by locked ID or tag: "
-                f"{self.image_ref}, {fallback}"
+                f"exact browser runtime image is unavailable: {self.image_ref}"
             ) from exc
         except FileNotFoundError as exc:
             raise BrowserRuntimeError("docker executable not found") from exc
-        self.image_ref = fallback
 
     def stop(self) -> None:
         self._docker_ignore(

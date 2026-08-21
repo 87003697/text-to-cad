@@ -36,6 +36,10 @@ run_suite "cadgen package Python tests" "tests/python/packages/cadgen" "packages
 run_suite "meshscope package Python tests" "tests/python/packages/meshscope" "packages/meshscope/src"
 run_suite "meshshot package Python tests" "tests/python/packages/meshshot" "packages/meshshot/src"
 
+# This test is always discovered. It skips unless an exact Browser Runtime
+# image is explicitly supplied, and then exercises real Docker + Chromium.
+run_suite "Browser Runtime residual integration" "tests/integration/test_browser_runtime_residual.py" "packages/browser_runtime/src" "packages/meshshot/src"
+
 while IFS= read -r skill; do
   test_dir="tests/python/skills/$skill"
   if [ -d "$test_dir" ]; then

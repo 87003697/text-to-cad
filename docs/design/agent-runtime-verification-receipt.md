@@ -26,22 +26,18 @@ them:
   [`README.md`](https://github.com/87003697/text-to-cad/blob/22d2a35dc1c852dbca3fd19c48fc55a504cb496c/packages/meshshot/prototypes/agent_runtime_boundary/README.md).
   Those paths are decision evidence on that commit and are deliberately not
   present on this document's fixed base.
-- The Browser Sidecar proof-only receipt, exact identity, terminal cleanup, and
-  nested-gate split are specified in
-  [the formal-pilot integration spec](../specs/browser-sidecar-formal-pilot-integration.md)
-  and enforced by
-  [`runner.py`](../../scripts/pilot/runner.py),
-  [`browser_sidecar.py`](../../scripts/pilot/browser_sidecar.py), and
-  [`browser_sidecar_conformance.py`](../../scripts/pilot/browser_sidecar_conformance.py).
-- Registered Browser programs and artifact identities remain fixed by
-  [`browser_contract.json`](../../packages/meshshot/src/meshshot/browser_contract.json)
-  and
-  [`image-lock.json`](../../packages/meshshot/browser_sidecar_broker/image-lock.json).
+- Browser Runtime exact identity, terminal cleanup, and fixed preflight are
+  enforced by [`runner.py`](../../scripts/pilot/runner.py),
+  [`job.py`](../../packages/browser_runtime/src/browser_runtime/job.py), and
+  [`cvm_browser_runtime.py`](../../scripts/pilot/cvm_browser_runtime.py).
+- The registered residual program and runtime artifact are fixed by
+  [`config.py`](../../packages/browser_runtime/src/browser_runtime/config.py)
+  and [`image-lock.json`](../../packages/browser_runtime/image/image-lock.json).
 - CVM terminal publication uses a manifest-before-report transaction and
   retains failed scratch in
   [`cvm_agent.py`](../../scripts/pilot/cvm_agent.py). CVM image provisioning
   already rejects duplicate JSON keys and hashes canonical request bytes in
-  [`cvm_sidecar_probe.py`](../../scripts/pilot/cvm_sidecar_probe.py).
+  [`cvm_browser_runtime.py`](../../scripts/pilot/cvm_browser_runtime.py).
 
 These sources are implementation precedents, not evidence that this new schema
 has been emitted.
@@ -1001,9 +997,9 @@ rollback target must produce fresh host provision and environment-qualified
 lifecycle evidence before execution.
 
 `Formal Pilot Integrated` is a later execution-level statement. It additionally
-binds a particular input, runtime job authority, Agent execution, Broker and
-Browser Sidecar artifacts, model/provider usage, outputs, and the formal Gate
-receipt. A Verified Agent artifact makes no claim that a paid job ran, a CAD
+binds a particular input, runtime job authority, Agent execution, exact Browser
+Runtime Artifact and registered programs, model/provider usage, outputs, and
+the runtime preflight receipt. A Verified Agent artifact makes no claim that a paid job ran, a CAD
 candidate was accepted, or the formal pilot path is integrated.
 
 ## Illustrative canonical records

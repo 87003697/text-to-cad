@@ -257,7 +257,7 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                     "-c",
                     "import meshshot; "
                     "assert meshshot.render_residual_preview.__module__ "
-                    "== 'meshshot.broker_client'; "
+                    "== 'meshshot.runtime_client'; "
                     "assert set(meshshot.__all__) == "
                     "{'LoadedProfile','MeshGeometry','MeshshotError',"
                     "'RenderedPreview','load_profile','render_residual_preview'}",
@@ -277,7 +277,7 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                     "[[0,1,2]]); "
                     "\ntry: meshshot.render_residual_preview(g,g)"
                     "\nexcept meshshot.MeshshotError as e: "
-                    "assert str(e) == 'formal browser authority file is required'"
+                    "assert str(e) == 'browser runtime capability is required'"
                     "\nelse: raise AssertionError('missing authority did not fail closed')",
                 ],
                 env={**os.environ, "PYTHONPATH": str(target)},

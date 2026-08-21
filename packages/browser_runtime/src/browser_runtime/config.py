@@ -18,8 +18,7 @@ SANDBOX_RUNTIME_CAPABILITY_PATH = (
     f"{SANDBOX_MOUNT_ROOT}/{SANDBOX_RUNTIME_CAPABILITY_NAME}"
 )
 RUNTIME_CAPABILITY_SCHEMA = "text-to-cad.browser-runtime-capability/1"
-# This identity names the first closed HTTP residual-render operation. It is
-# deliberately separate from the retired Formal Broker program identity.
+# This identity names the closed HTTP residual-render operation.
 CAD_RENDER_PROGRAMS: Mapping[str, str] = {
     "residual": "sha256:9d8e841ee6acef17e842e9ed23d8d537a155b5f7a36d4838758af4cb348d1359"
 }

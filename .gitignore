@@ -1,6 +1,6 @@
 # macOS
 .DS_Store
-/.cvm-sidecar-probes/
+/.cvm-browser-runtime/
 .vscode
 
 # Python

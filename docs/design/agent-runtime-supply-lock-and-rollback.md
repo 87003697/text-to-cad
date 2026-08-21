@@ -17,28 +17,23 @@ ID, an S3 tarball, a Git revision, and a mutable tag could all appear to mean
 
 ## Source boundary and reusable precedent
 
-The existing Browser Sidecar workflow is useful precedent, but not the Agent
+The existing Browser Runtime workflow is useful precedent, but not the Agent
 runtime supply implementation:
 
-- [`cvm_sidecar_probe.py`](../../scripts/pilot/cvm_sidecar_probe.py) inspects
-  exact source revisions and image IDs, creates a fresh deterministic handle,
-  writes a hash-and-size-attested legacy Docker-native archive, and publishes a
-  local prepare receipt. That legacy archive format is not selected here.
+- [`cvm_browser_runtime.py`](../../scripts/pilot/cvm_browser_runtime.py) inspects
+  one exact source revision and image ID, creates a deterministic handle,
+  writes a hash-and-size-attested Docker-native archive, and publishes a local
+  prepare receipt. That archive format is not selected here.
 - Its provision step rechecks the local archive, creates a single-owner
   attempt, transfers the archive and receipt by direct `rsync`, and validates a
   remote provision receipt. This is a bounded prepare/provision/probe pattern,
   not a persistent artifact store.
-- The remote side has fail-closed ownership and abort receipts, and verifies
-  loaded image inventory. Those lifecycle shapes can be generalized.
-- [`browser_sidecar.py`](../../scripts/pilot/browser_sidecar.py) rejects a
-  malformed Broker lock and inspects exact pre-provisioned image properties,
-  but the current
-  [`image-lock.json`](../../packages/meshshot/browser_sidecar_broker/image-lock.json)
-  has only `baseImageId`, `imageId`, and `sourceRevision`.
-- Sidecar identity also lives separately in
-  [`browser_contract.json`](../../packages/meshshot/src/meshshot/browser_contract.json)
-  and source constants. A source-configured ID and a host-local loaded ID are
-  observations in different namespaces; equality must be proved, not assumed.
+- The remote side has fail-closed ownership, verifies loaded image inventory,
+  and executes the same Browser Runtime preflight as production pilots.
+- Runtime program identity is fixed by
+  [`config.py`](../../packages/browser_runtime/src/browser_runtime/config.py)
+  and the exact image identity by
+  [`image-lock.json`](../../packages/browser_runtime/image/image-lock.json).
 - [`snapshot-batch.sh`](../../scripts/pilot/snapshot-batch.sh) copies a working
   tree including `.git`, dereferences symlinks, records dirty/untracked state,
   recursively uploads to an output prefix, and skips any non-empty destination.
@@ -312,7 +307,7 @@ and a terminal receipt is not a sealed Source Snapshot.
 
 An execution admission record later binds four independent identities: current
 Agent Runtime Lock digest, execution Source Snapshot Lock digest, input
-snapshot digest, and exact Broker/Sidecar locks. None may be inferred from
+snapshot digest, and exact Browser Runtime image/program locks. None may be inferred from
 another.
 
 ## Closed construction, verification, and promotion workflows

@@ -78,41 +78,25 @@ _Avoid_: Output folder, VoxBlame directory
 A job-scoped browser environment for repository-owned local rendering programs. It may render the interactive CAD Viewer or a formal residual preview, but it cannot navigate arbitrary external webpages.
 _Avoid_: Web agent, general-purpose browser, remote browser provider
 
-**Browser Sidecar**:
-The job-scoped Local Rendering Browser execution environment started and terminated by the outer job authority. One sidecar may serve multiple renders within its job, but each render receives a fresh browser context. The Agent receives only a bounded local browser connection and never owns the browser executable or process lifecycle.
-_Avoid_: Agent browser process, shared browser pool, nested Chromium
+**Browser Runtime**:
+The sole job-scoped browser execution environment started and terminated by the outer pilot runner. It exposes a bounded MCP connection and fixed registered render operations from one exact OCI image. The Agent never owns Chromium, installs a browser, selects an image tag, or falls back to a local browser.
+_Avoid_: Browser Sidecar, Agent browser process, shared browser pool, fallback browser
 
-**Sidecar Artifact**:
-The platform-specific, immutable OCI image selected by digest for Provider-Free Browser Execution. It contains the version-matched Playwright Server, Chromium, and approved Render Program builds.
-_Avoid_: Image tag, browser cache, runtime build, mutable container
+**Browser Runtime Artifact**:
+The immutable linux/amd64 OCI image selected only by exact `sha256` image ID for Provider-Free Browser Execution. It contains the version-matched Playwright MCP server, Chromium, and approved Render Program builds, and records the exact source revision in its OCI metadata.
+_Avoid_: Sidecar Artifact, image tag, browser cache, mutable container
 
 **Render Program**:
-A versioned, pre-registered repository-owned rendering workload accepted by the Browser Sidecar, such as the CAD Viewer or the formal eight-view residual renderer. The Agent supplies structured model, camera, and rendering inputs; it cannot submit arbitrary HTML or JavaScript.
+A versioned, pre-registered repository-owned rendering workload baked into the Browser Runtime Artifact, such as the formal eight-view residual renderer. The Agent supplies closed structured inputs; it cannot submit arbitrary HTML, JavaScript, URLs, paths, browser arguments, or runtime options.
 _Avoid_: Arbitrary webpage, arbitrary script, browser task
 
 **Self-Contained GLB**:
 A single GLB whose complete scene, buffers, images, and other model resources are embedded in that file, so loading it never resolves an external model resource.
 _Avoid_: GLB package, model URL, GLB with side files
 
-**Viewer Integration Proof**:
-CVM development evidence that the Browser Sidecar loaded the designated Self-Contained GLB through the current CAD Viewer, captured its initial orthographic view, selected perspective through the existing Viewer UI, captured the changed view, and observed no Viewer error.
-_Avoid_: Viewer page opened, HTTP success, canvas present, screenshot smoke
-
-**Viewer Projection Trace**:
-The replayable two-state evidence sequence `Orthographic (initial) → Perspective (explicit selection)`, with the observed projection state and viewport capture at both states.
-_Avoid_: Toggle test, click trace, final screenshot
-
-**Sidecar Asset Backend**:
-The request-scoped provider that presents model data to the real CAD Viewer through the Viewer’s catalog and asset contract; it does not own Chromium or Viewer interaction semantics.
-_Avoid_: Sidecar Viewer, browser server, model injector
-
-**Viewer Control Run**:
-A CVM development run in which the current workspace Viewer server presents a durable Self-Contained GLB to the Browser Sidecar, establishing the expected loading and interaction behavior before the Sidecar Asset Backend is introduced.
-_Avoid_: Production baseline, upstream conformance, formal pilot
-
-**Asset Backend Run**:
-A CVM development run that repeats a Viewer Control Run’s model and interactions while replacing only the model provider with the Sidecar Asset Backend.
-_Avoid_: Second implementation, formal pilot, different test
+**Browser Runtime Capability**:
+The job-private, read-only capability that binds one Agent execution to the exact Browser Runtime image ID, job ID, loopback endpoints, bearer token, and registered Render Program digests. Missing, replaceable, malformed, stale, or mismatched capabilities fail closed.
+_Avoid_: Browser Authority, broker authority, socket discovery, environment-selected endpoint
 
 **CVM Development Proof**:
 Behavioral evidence produced on CVM without claiming formal artifact identity, Source-Hidden execution, or pilot acceptance.
@@ -122,12 +106,8 @@ _Avoid_: Formal CVM proof, provision receipt, accepted pilot
 Browser execution using a pre-provisioned, digest-pinned local artifact and job-private connection, with no runtime browser-provider call or browser download. A preloaded image on Colima or CVM remains Provider-Free.
 _Avoid_: Rebuilding Chromium per job, managed cloud browser, runtime browser install
 
-**Browser Authority**:
-The experiment-bound identity and outer lifecycle authority for the exact Sidecar Artifact and Render Program used to produce a local render.
-_Avoid_: Browser path, Chromium process, pinned executable
-
 **Browser Execution Tree**:
-The read-only Sidecar Artifact filesystem visible to Chromium, containing only approved browser and Render Program assets and no source workspace mount.
+The read-only Browser Runtime Artifact filesystem visible to Chromium, containing only approved browser and Render Program assets and no source workspace mount.
 _Avoid_: Browser cache, staged browser, source tree, source bind mount
 
 **Source-Hidden**:

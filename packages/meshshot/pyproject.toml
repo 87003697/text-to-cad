@@ -9,7 +9,6 @@ description = "Versioned browser renderer for canonical mesh residual previews."
 requires-python = ">=3.11"
 dependencies = [
   "Pillow",
-  "playwright",
 ]
 
 [tool.setuptools.packages.find]
@@ -17,4 +16,4 @@ where = ["src"]
 include = ["meshshot*"]
 
 [tool.setuptools.package-data]
-meshshot = ["browser_contract.json", "profiles/*.json", "runtime/*"]
+meshshot = ["profiles/*.json"]

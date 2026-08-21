@@ -52,8 +52,7 @@ _FORBIDDEN_ARCHIVE_MARKERS = (
 _MESHSHOT_SOURCE_FILES = (
     "pyproject.toml",
     "src/meshshot/__init__.py",
-    "src/meshshot/broker_client.py",
-    "src/meshshot/browser_contract.json",
+    "src/meshshot/runtime_client.py",
     "src/meshshot/profile.py",
     "src/meshshot/profiles/cadena_residual_eight_view_v1.json",
 )
@@ -511,7 +510,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "meshshot-agent-runtime"
 version = "0.1.0"
-description = "Broker-only residual preview client for the sealed Agent runtime."
+description = "Browser Runtime residual preview client for the sealed Agent runtime."
 requires-python = ">=3.12,<3.13"
 dependencies = ["Pillow==12.2.0"]
 
@@ -520,12 +519,12 @@ where = ["src"]
 include = ["meshshot"]
 
 [tool.setuptools.package-data]
-meshshot = ["browser_contract.json", "profiles/*.json"]
+meshshot = ["profiles/*.json"]
 """
     (target / "pyproject.toml").write_text(pyproject, encoding="utf-8", newline="\n")
-    public_init = '''"""Public API for the sealed Broker-only residual client."""
+    public_init = '''"""Public API for the sealed Browser Runtime residual client."""
 
-from meshshot.broker_client import (
+from meshshot.runtime_client import (
     MeshGeometry,
     MeshshotError,
     RenderedPreview,
@@ -544,9 +543,8 @@ __all__ = [
 '''
     (package / "__init__.py").write_text(public_init, encoding="utf-8", newline="\n")
     for relative in (
-        "broker_client.py",
+        "runtime_client.py",
         "profile.py",
-        "browser_contract.json",
         "profiles/cadena_residual_eight_view_v1.json",
     ):
         source_path = source / relative
@@ -569,7 +567,7 @@ __all__ = [
 
 
 def audit_meshshot_wheel(wheel: Path, source: Mapping[str, Any]) -> dict[str, Any]:
-    """Prove the built wheel contains only the Broker client/profile surface."""
+    """Prove the built wheel contains only the Browser Runtime client/profile surface."""
 
     if not re.fullmatch(r"meshshot_agent_runtime-0\.1\.0-py3-none-any\.whl", wheel.name):
         raise ProjectClosureError("meshshot wheel filename is not the exact pure wheel")

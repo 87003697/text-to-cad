@@ -1,7 +1,7 @@
-"""Public API for formal residual previews."""
+"""Public API for Browser Runtime residual previews."""
 
 from meshshot.profile import LoadedProfile, load_profile
-from meshshot.renderer import (
+from meshshot.runtime_client import (
     MeshGeometry,
     MeshshotError,
     RenderedPreview,

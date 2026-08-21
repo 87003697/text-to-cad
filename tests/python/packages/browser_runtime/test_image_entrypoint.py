@@ -27,6 +27,8 @@ class BrowserRuntimeImageEntrypointTests(unittest.TestCase):
         self.assertIn("cad-render-service.cjs", dockerfile)
         self.assertIn("residual-render.js", dockerfile)
         self.assertIn("cadena_residual_eight_view_v1.json", dockerfile)
+        self.assertIn('LABEL org.opencontainers.image.revision="$SOURCE_REVISION"', dockerfile)
+        self.assertIn('RUN test -n "$SOURCE_REVISION"', dockerfile)
 
     def test_fixed_program_digest_covers_service_and_baked_assets(self) -> None:
         paths = (

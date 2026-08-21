@@ -77,7 +77,7 @@ test("serves one closed residual operation", async (context) => {
   });
 });
 
-test("rejects missing authority and unknown request keys", async (context) => {
+test("rejects an invalid token and unknown request keys", async (context) => {
   const server = createCadRenderServer({
     token,
     programDigest,

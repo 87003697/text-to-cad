@@ -46,6 +46,8 @@ def _fake_docker(port_by_container: dict[tuple[str, int], int] | None = None):
     def _docker(argv):
         argv = list(argv)
         call_log.append(argv)
+        if argv[:3] == ["docker", "image", "inspect"]:
+            return _completed()
         if argv[:3] == ["docker", "network", "create"]:
             return _completed(stdout=argv[-1] + "\n")
         if argv[:2] == ["docker", "run"]:
@@ -102,10 +104,10 @@ class ContractShapeTests(unittest.TestCase):
             SANDBOX_RUNTIME_CAPABILITY_PATH,
         )
 
-    def test_image_lock_is_readable_and_lists_id_or_tag(self):
+    def test_image_lock_is_readable_and_lists_exact_id(self):
         self.assertTrue(IMAGE_LOCK_PATH.is_file())
-        text = IMAGE_LOCK_PATH.read_text(encoding="utf-8")
-        self.assertIn("text-to-cad-browser-runtime", text)
+        value = json.loads(IMAGE_LOCK_PATH.read_text(encoding="utf-8"))
+        self.assertRegex(value["image"]["id"], r"^sha256:[0-9a-f]{64}$")
 
 
 class RenderMcpConfigTests(unittest.TestCase):
@@ -123,22 +125,25 @@ class RenderMcpConfigTests(unittest.TestCase):
         self.assertNotEqual(a, b)
 
 
+EXACT_IMAGE = "sha256:" + "d" * 64
+
+
 class JobFactoryTests(unittest.TestCase):
 
     def test_create_allocates_capability_under_exp_dir(self):
         with TemporaryDirectory() as tmp:
             exp = Path(tmp)
-            job = BrowserRuntimeJob.create(exp, image_ref="sha256:deadbeef", docker=_fake_docker())
+            job = BrowserRuntimeJob.create(exp, image_ref=EXACT_IMAGE, docker=_fake_docker())
             self.assertTrue(
                 job.capability_dir.as_posix().startswith((exp / "run/browser-runtime").as_posix())
             )
-            self.assertEqual(job.image_ref, "sha256:deadbeef")
+            self.assertEqual(job.image_ref, EXACT_IMAGE)
 
     def test_create_generates_unique_nonces(self):
         with TemporaryDirectory() as tmp:
             docker = _fake_docker()
-            a = BrowserRuntimeJob.create(Path(tmp), image_ref="sha:x", docker=docker)
-            b = BrowserRuntimeJob.create(Path(tmp), image_ref="sha:x", docker=docker)
+            a = BrowserRuntimeJob.create(Path(tmp), image_ref=EXACT_IMAGE, docker=docker)
+            b = BrowserRuntimeJob.create(Path(tmp), image_ref=EXACT_IMAGE, docker=docker)
             self.assertNotEqual(a.owner_nonce, b.owner_nonce)
             self.assertNotEqual(a.container_name, b.container_name)
             self.assertNotEqual(a.network_name, b.network_name)
@@ -148,7 +153,7 @@ class JobFactoryTests(unittest.TestCase):
             job = BrowserRuntimeJob.create(
                 Path(tmp),
                 owner_nonce="abcdef0123456789abcd",
-                image_ref="sha:x",
+                image_ref=EXACT_IMAGE,
                 docker=_fake_docker(),
             )
             self.assertEqual(job.prefix, "ttc-br-abcdef012345")
@@ -159,10 +164,10 @@ class JobFactoryTests(unittest.TestCase):
                 BrowserRuntimeJob(
                     owner_nonce="short",
                     capability_dir=Path(tmp),
-                    image_ref="sha:x",
+                    image_ref=EXACT_IMAGE,
                 )
 
-    def test_locked_id_falls_back_to_locked_tag_after_transport(self):
+    def test_missing_locked_id_fails_without_tag_fallback(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             lock = root / "image-lock.json"
@@ -179,33 +184,31 @@ class JobFactoryTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            base = _fake_docker()
+            calls = []
 
-            def transported_docker(argv):
+            def exact_docker(argv):
                 argv = list(argv)
+                calls.append(argv)
                 if argv[:3] == ["docker", "image", "inspect"]:
-                    if argv[-1] == "sha256:mac-only":
-                        raise subprocess.CalledProcessError(1, argv)
-                    self.assertEqual(
-                        argv[-1], "text-to-cad-browser-runtime:build"
-                    )
-                    return _completed()
-                return base(argv)
+                    raise subprocess.CalledProcessError(1, argv)
+                return _completed()
 
-            job = BrowserRuntimeJob.create(
-                root,
-                image_lock_path=lock,
-                docker=transported_docker,
-            )
-            job._wait_for_port = lambda: None  # type: ignore[method-assign]
-            job.start()
-            self.assertEqual(
-                job.image_ref, "text-to-cad-browser-runtime:build"
-            )
-            run_call = next(
-                call for call in base.calls if call[:2] == ["docker", "run"]
-            )
-            self.assertEqual(run_call[-1], "text-to-cad-browser-runtime:build")
+            with self.assertRaisesRegex(BrowserRuntimeError, "exact image ID"):
+                BrowserRuntimeJob.create(
+                    root,
+                    image_lock_path=lock,
+                    docker=exact_docker,
+                )
+            self.assertEqual(calls, [])
+
+    def test_explicit_tag_is_rejected(self):
+        with TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(BrowserRuntimeError, "exact image ID"):
+                BrowserRuntimeJob.create(
+                    Path(tmp),
+                    image_ref="text-to-cad-browser-runtime:latest",
+                    docker=_fake_docker(),
+                )
 
 
 class LifecycleTests(unittest.TestCase):
@@ -214,7 +217,7 @@ class LifecycleTests(unittest.TestCase):
         docker = overrides.pop("docker", _fake_docker())
         job = BrowserRuntimeJob.create(
             Path(tmp),
-            image_ref=overrides.pop("image_ref", "sha256:deadbeef"),
+            image_ref=overrides.pop("image_ref", EXACT_IMAGE),
             docker=docker,
         )
         # Skip the real socket poll — port-open check needs a live listener.
@@ -416,7 +419,7 @@ class LifecycleTests(unittest.TestCase):
                     return _completed()
                 return _completed()
             failing_docker.rmed = False  # type: ignore[attr-defined]
-            job = BrowserRuntimeJob.create(Path(tmp), image_ref="sha:x", docker=failing_docker)
+            job = BrowserRuntimeJob.create(Path(tmp), image_ref=EXACT_IMAGE, docker=failing_docker)
             with self.assertRaises(BrowserRuntimeError):
                 job.start()
             self.assertTrue(failing_docker.rmed)  # type: ignore[attr-defined]
@@ -425,7 +428,7 @@ class LifecycleTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             def missing(argv):
                 raise FileNotFoundError("docker not found")
-            job = BrowserRuntimeJob.create(Path(tmp), image_ref="sha:x", docker=missing)
+            job = BrowserRuntimeJob.create(Path(tmp), image_ref=EXACT_IMAGE, docker=missing)
             with self.assertRaises(BrowserRuntimeError):
                 job.start()
 
@@ -462,8 +465,8 @@ class ConcurrentIsolationTests(unittest.TestCase):
     def test_two_jobs_use_distinct_networks_and_containers(self):
         with TemporaryDirectory() as tmp:
             docker = _fake_docker()
-            a = BrowserRuntimeJob.create(Path(tmp), image_ref="sha:x", docker=docker)
-            b = BrowserRuntimeJob.create(Path(tmp), image_ref="sha:x", docker=docker)
+            a = BrowserRuntimeJob.create(Path(tmp), image_ref=EXACT_IMAGE, docker=docker)
+            b = BrowserRuntimeJob.create(Path(tmp), image_ref=EXACT_IMAGE, docker=docker)
             a._wait_for_port = lambda: None  # type: ignore[method-assign]
             b._wait_for_port = lambda: None  # type: ignore[method-assign]
             a.start()
