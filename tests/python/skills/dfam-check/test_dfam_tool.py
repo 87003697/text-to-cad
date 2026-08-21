@@ -212,9 +212,6 @@ class CliTest(unittest.TestCase):
         self.assertEqual(len(payload["orientations"]["candidates"]), 6)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class MultiBodyWallTest(unittest.TestCase):
     """A mating clearance is not a wall.
@@ -325,3 +322,7 @@ class ScaleHintTest(unittest.TestCase):
             path = _stl(Box(20, 20, 15), tmp, "box")
             self.assertIn("scale", _run_cli(["measure", path]))
             self.assertIn("scale", _run_cli(["orientations", path]))
+
+
+if __name__ == "__main__":
+    unittest.main()
