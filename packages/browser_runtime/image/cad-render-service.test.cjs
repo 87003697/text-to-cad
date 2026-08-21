@@ -9,9 +9,18 @@ const { createCadRenderServer } = require("./cad-render-service.cjs");
 const token = "a".repeat(64);
 const programDigest = `sha256:${"b".repeat(64)}`;
 const jobId = "c".repeat(32);
+function encodeTypedArray(values) {
+  return Buffer.from(values.buffer, values.byteOffset, values.byteLength).toString("base64");
+}
+
 const triangle = {
-  vertices: [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
-  faces: [[0, 1, 2]],
+  schema: "text-to-cad.packed-triangle-mesh/1",
+  vertexCount: 3,
+  faceCount: 1,
+  positionsF32LeBase64: encodeTypedArray(
+    new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+  ),
+  indicesU32LeBase64: encodeTypedArray(new Uint32Array([0, 1, 2])),
 };
 
 function request(port, body, authorization = `Bearer ${token}`) {
@@ -55,7 +64,7 @@ test("serves one closed residual operation", async (context) => {
   context.after(() => new Promise((resolve) => server.close(resolve)));
   const port = server.address().port;
   const response = await request(port, {
-    schema: "text-to-cad.cad-render-request/1",
+    schema: "text-to-cad.cad-render-request/2",
     jobId,
     program: "residual",
     programDigest,
@@ -91,7 +100,7 @@ test("rejects an invalid token and unknown request keys", async (context) => {
   const unauthorized = await request(port, {}, "Bearer wrong");
   assert.equal(unauthorized.status, 401);
   const invalid = await request(port, {
-    schema: "text-to-cad.cad-render-request/1",
+    schema: "text-to-cad.cad-render-request/2",
     jobId,
     program: "residual",
     programDigest,
@@ -112,7 +121,7 @@ test("rejects a request owned by another browser job", async (context) => {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   context.after(() => new Promise((resolve) => server.close(resolve)));
   const response = await request(server.address().port, {
-    schema: "text-to-cad.cad-render-request/1",
+    schema: "text-to-cad.cad-render-request/2",
     jobId: "d".repeat(32),
     program: "residual",
     programDigest,
@@ -125,6 +134,43 @@ test("rejects a request owned by another browser job", async (context) => {
     },
   });
   assert.equal(response.status, 400);
+});
+
+test("rejects malformed packed geometry before rendering", async (context) => {
+  const server = createCadRenderServer({
+    token,
+    programDigest,
+    jobId,
+    assets: { html: Buffer.from("html"), javascript: Buffer.from("js") },
+    render: async () => assert.fail("render must not run"),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  for (const invalidGeometry of [
+    { ...triangle, indicesU32LeBase64: encodeTypedArray(new Uint32Array([0, 1, 3])) },
+    { ...triangle, positionsF32LeBase64: "not-base64" },
+    {
+      ...triangle,
+      positionsF32LeBase64: encodeTypedArray(
+        new Float32Array([Number.NaN, 0, 0, 1, 0, 0, 0, 1, 0]),
+      ),
+    },
+  ]) {
+    const response = await request(server.address().port, {
+      schema: "text-to-cad.cad-render-request/2",
+      jobId,
+      program: "residual",
+      programDigest,
+      payload: {
+        reference: invalidGeometry,
+        candidate: triangle,
+        variant: "step",
+        exteriorDirections: [],
+        options: { cameraPolicy: "profile-fixed", canonicalPostprocess: true },
+      },
+    });
+    assert.equal(response.status, 400);
+  }
 });
 
 test("bounds a render that never settles and aborts its work", async (context) => {
@@ -143,7 +189,7 @@ test("bounds a render that never settles and aborts its work", async (context) =
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   context.after(() => new Promise((resolve) => server.close(resolve)));
   const response = await request(server.address().port, {
-    schema: "text-to-cad.cad-render-request/1",
+    schema: "text-to-cad.cad-render-request/2",
     jobId,
     program: "residual",
     programDigest,

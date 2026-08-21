@@ -6,6 +6,7 @@ import base64
 from io import BytesIO
 import json
 from pathlib import Path
+import struct
 import tempfile
 import unittest
 from unittest import mock
@@ -71,6 +72,14 @@ class BrowserRuntimeClientTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(MeshshotError, "capability is required"):
                 render_residual_preview(_geometry(), _geometry())
+
+    def test_packed_geometry_rejects_float32_overflow(self) -> None:
+        invalid = MeshGeometry(
+            vertices=[[1e39, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            faces=[[0, 1, 2]],
+        )
+        with self.assertRaisesRegex(MeshshotError, "finite three-dimensional"):
+            invalid.to_packed_json()
 
     def test_public_render_has_one_runtime_path(self) -> None:
         with (
@@ -167,6 +176,29 @@ class BrowserRuntimeClientTests(unittest.TestCase):
         self.assertEqual(
             set(json.loads(request.data)),
             {"schema", "jobId", "program", "programDigest", "payload"},
+        )
+        request_value = json.loads(request.data)
+        self.assertEqual(
+            request_value["schema"], "text-to-cad.cad-render-request/2"
+        )
+        packed = request_value["payload"]["reference"]
+        self.assertEqual(
+            set(packed),
+            {
+                "schema",
+                "vertexCount",
+                "faceCount",
+                "positionsF32LeBase64",
+                "indicesU32LeBase64",
+            },
+        )
+        self.assertEqual(packed["vertexCount"], 3)
+        self.assertEqual(packed["faceCount"], 1)
+        self.assertEqual(
+            struct.unpack(
+                "<3I", base64.b64decode(packed["indicesU32LeBase64"])
+            ),
+            (0, 1, 2),
         )
 
     def test_loopback_client_does_not_install_environment_proxy_handler(self) -> None:

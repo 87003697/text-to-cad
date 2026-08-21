@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 
-const REQUEST_SCHEMA = "text-to-cad.cad-render-request/1";
+const REQUEST_SCHEMA = "text-to-cad.cad-render-request/2";
 const RESPONSE_SCHEMA = "text-to-cad.cad-render-response/1";
 const MAX_REQUEST_BYTES = 96 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
@@ -22,25 +22,46 @@ function exactKeys(value, keys) {
   return observed.length === expected.length && observed.every((key, i) => key === expected[i]);
 }
 
+function canonicalBase64(value, byteLength) {
+  return (
+    typeof value === "string" &&
+    value.length === 4 * Math.ceil(byteLength / 3) &&
+    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value) &&
+    Buffer.byteLength(value, "base64") === byteLength
+  );
+}
+
 function validGeometry(value) {
-  if (!exactKeys(value, ["vertices", "faces"])) return false;
-  if (!Array.isArray(value.vertices) || value.vertices.length === 0) return false;
-  if (!Array.isArray(value.faces) || value.faces.length === 0) return false;
-  for (const vertex of value.vertices) {
-    if (!Array.isArray(vertex) || vertex.length !== 3 || !vertex.every(Number.isFinite)) {
-      return false;
-    }
+  if (!exactKeys(value, [
+    "schema",
+    "vertexCount",
+    "faceCount",
+    "positionsF32LeBase64",
+    "indicesU32LeBase64",
+  ])) return false;
+  const vertexCount = value.vertexCount;
+  const faceCount = value.faceCount;
+  if (
+    value.schema !== "text-to-cad.packed-triangle-mesh/1" ||
+    !Number.isSafeInteger(vertexCount) || vertexCount <= 0 ||
+    !Number.isSafeInteger(faceCount) || faceCount <= 0 ||
+    vertexCount > Math.floor(MAX_REQUEST_BYTES / 12) ||
+    faceCount > Math.floor(MAX_REQUEST_BYTES / 12)
+  ) return false;
+  const positionBytes = vertexCount * 3 * 4;
+  const indexBytes = faceCount * 3 * 4;
+  if (
+    !canonicalBase64(value.positionsF32LeBase64, positionBytes) ||
+    !canonicalBase64(value.indicesU32LeBase64, indexBytes)
+  ) return false;
+
+  const positions = Buffer.from(value.positionsF32LeBase64, "base64");
+  for (let offset = 0; offset < positions.length; offset += 4) {
+    if (!Number.isFinite(positions.readFloatLE(offset))) return false;
   }
-  for (const face of value.faces) {
-    if (
-      !Array.isArray(face) ||
-      face.length !== 3 ||
-      !face.every(
-        (index) => Number.isSafeInteger(index) && index >= 0 && index < value.vertices.length,
-      )
-    ) {
-      return false;
-    }
+  const indices = Buffer.from(value.indicesU32LeBase64, "base64");
+  for (let offset = 0; offset < indices.length; offset += 4) {
+    if (indices.readUInt32LE(offset) >= vertexCount) return false;
   }
   return true;
 }

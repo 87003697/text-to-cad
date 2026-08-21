@@ -10,13 +10,55 @@ const DIRECTION_VECTOR = Object.freeze({
   "+z": [0, 0, 1],
 });
 
+function decodeBase64Bytes(value) {
+  const decoded = atob(value);
+  const bytes = new Uint8Array(decoded.length);
+  for (let index = 0; index < decoded.length; index += 1) {
+    bytes[index] = decoded.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function decodeFloat32Le(value, count) {
+  const bytes = decodeBase64Bytes(value);
+  if (bytes.byteLength !== count * 4) throw new Error("invalid packed positions");
+  const values = new Float32Array(count);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let index = 0; index < count; index += 1) {
+    values[index] = view.getFloat32(index * 4, true);
+  }
+  return values;
+}
+
+function decodeUint32Le(value, count) {
+  const bytes = decodeBase64Bytes(value);
+  if (bytes.byteLength !== count * 4) throw new Error("invalid packed indices");
+  const values = new Uint32Array(count);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let index = 0; index < count; index += 1) {
+    values[index] = view.getUint32(index * 4, true);
+  }
+  return values;
+}
+
 function geometryFromPayload(payload) {
+  if (payload.schema !== "text-to-cad.packed-triangle-mesh/1") {
+    throw new Error("unsupported packed geometry");
+  }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute(
     "position",
-    new THREE.Float32BufferAttribute(payload.vertices.flat(), 3),
+    new THREE.BufferAttribute(
+      decodeFloat32Le(payload.positionsF32LeBase64, payload.vertexCount * 3),
+      3,
+    ),
   );
-  geometry.setIndex(payload.faces.flat());
+  geometry.setIndex(
+    new THREE.BufferAttribute(
+      decodeUint32Le(payload.indicesU32LeBase64, payload.faceCount * 3),
+      1,
+    ),
+  );
   geometry.computeVertexNormals();
   geometry.computeBoundingSphere();
   return geometry;

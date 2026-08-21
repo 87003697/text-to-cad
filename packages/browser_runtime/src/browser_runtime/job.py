@@ -21,6 +21,7 @@ import json
 import os
 import re
 import secrets
+import struct
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -227,11 +228,23 @@ class BrowserRuntimeJob:
         """Render one fixed triangle before any paid Agent workload starts."""
 
         triangle = {
-            "vertices": [[-0.35, -0.3, 0.0], [0.35, -0.3, 0.0], [0.0, 0.35, 0.0]],
-            "faces": [[0, 1, 2]],
+            "schema": "text-to-cad.packed-triangle-mesh/1",
+            "vertexCount": 3,
+            "faceCount": 1,
+            "positionsF32LeBase64": base64.b64encode(
+                struct.pack(
+                    "<9f",
+                    -0.35, -0.3, 0.0,
+                    0.35, -0.3, 0.0,
+                    0.0, 0.35, 0.0,
+                )
+            ).decode("ascii"),
+            "indicesU32LeBase64": base64.b64encode(
+                struct.pack("<3I", 0, 1, 2)
+            ).decode("ascii"),
         }
         request_value = {
-            "schema": "text-to-cad.cad-render-request/1",
+            "schema": "text-to-cad.cad-render-request/2",
             "jobId": self.owner_nonce,
             "program": "residual",
             "programDigest": CAD_RENDER_PROGRAMS["residual"],

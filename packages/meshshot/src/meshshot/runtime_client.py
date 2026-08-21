@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from array import array
 from collections.abc import Sequence
 from dataclasses import dataclass
 from io import BytesIO
@@ -12,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
@@ -24,14 +26,15 @@ from meshshot.profile import load_profile
 
 RUNTIME_CAPABILITY_PATH = Path("/run/meshshot-browser/runtime.json")
 RUNTIME_CAPABILITY_SCHEMA = "text-to-cad.browser-runtime-capability/1"
-RUNTIME_REQUEST_SCHEMA = "text-to-cad.cad-render-request/1"
+RUNTIME_REQUEST_SCHEMA = "text-to-cad.cad-render-request/2"
 RUNTIME_RESPONSE_SCHEMA = "text-to-cad.cad-render-response/1"
 EXPECTED_RESIDUAL_PROGRAM = (
-    "sha256:9d8e841ee6acef17e842e9ed23d8d537a155b5f7a36d4838758af4cb348d1359"
+    "sha256:589b422a9e2d01438c4668fa02300d822001bb3d0a7c0423e68675f54cf94fc6"
 )
 _HEX_12_TO_64 = re.compile(r"[0-9a-f]{12,64}\Z")
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
+_MAX_FINITE_FLOAT32 = 3.4028234663852886e38
 _MAX_CAPABILITY_BYTES = 16 * 1024
 _MAX_REQUEST_BYTES = 96 * 1024 * 1024
 _MAX_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -50,23 +53,54 @@ class MeshGeometry:
     vertices: Sequence[Sequence[float]]
     faces: Sequence[Sequence[int]]
 
-    def to_json(self) -> dict[str, list[list[float]] | list[list[int]]]:
-        vertices = [[float(value) for value in vertex] for vertex in self.vertices]
-        faces = [[int(value) for value in face] for face in self.faces]
-        if not vertices or any(
-            len(vertex) != 3 or not all(math.isfinite(value) for value in vertex)
-            for vertex in vertices
-        ):
+    def to_packed_json(self) -> dict[str, Any]:
+        """Encode one mesh without expanding every scalar into JSON objects."""
+
+        vertex_count = len(self.vertices)
+        face_count = len(self.faces)
+        if vertex_count == 0:
             raise MeshshotError(
                 "mesh geometry requires finite three-dimensional vertices"
             )
-        if not faces or any(
-            len(face) != 3
-            or any(index < 0 or index >= len(vertices) for index in face)
-            for face in faces
-        ):
+        positions = array("f")
+        for vertex in self.vertices:
+            if len(vertex) != 3:
+                raise MeshshotError(
+                    "mesh geometry requires finite three-dimensional vertices"
+                )
+            values = tuple(float(value) for value in vertex)
+            if not all(
+                math.isfinite(value) and abs(value) <= _MAX_FINITE_FLOAT32
+                for value in values
+            ):
+                raise MeshshotError(
+                    "mesh geometry requires finite three-dimensional vertices"
+                )
+            positions.extend(values)
+
+        if face_count == 0:
             raise MeshshotError("mesh geometry requires valid triangle indices")
-        return {"vertices": vertices, "faces": faces}
+        indices = array("I")
+        if indices.itemsize != 4:
+            raise MeshshotError("mesh geometry requires 32-bit triangle indices")
+        for face in self.faces:
+            if len(face) != 3:
+                raise MeshshotError("mesh geometry requires valid triangle indices")
+            values = tuple(int(value) for value in face)
+            if any(index < 0 or index >= vertex_count for index in values):
+                raise MeshshotError("mesh geometry requires valid triangle indices")
+            indices.extend(values)
+
+        if sys.byteorder != "little":
+            positions.byteswap()
+            indices.byteswap()
+        return {
+            "schema": "text-to-cad.packed-triangle-mesh/1",
+            "vertexCount": vertex_count,
+            "faceCount": face_count,
+            "positionsF32LeBase64": base64.b64encode(positions).decode("ascii"),
+            "indicesU32LeBase64": base64.b64encode(indices).decode("ascii"),
+        }
 
 
 @dataclass(frozen=True)
@@ -181,8 +215,8 @@ def prepare_payload(
     ):
         raise MeshshotError("exterior directions must be unique signed x/y/z values")
     payload = {
-        "reference": reference.to_json(),
-        "candidate": candidate.to_json(),
+        "reference": reference.to_packed_json(),
+        "candidate": candidate.to_packed_json(),
         "variant": variant,
         "exteriorDirections": list(directions),
         "options": {"cameraPolicy": "profile-fixed", "canonicalPostprocess": True},
