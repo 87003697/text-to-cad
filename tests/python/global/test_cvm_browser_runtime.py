@@ -141,6 +141,9 @@ class BrowserRuntimeWorkflowTests(unittest.TestCase):
                 "schema": runtime.PROVISION_SCHEMA,
                 "status": "failed",
                 "handle": handle,
+                "ownerNonce": "3" * 32,
+                "transferAbsent": True,
+                "retryAllowed": False,
             }
             (state / "provision.json").write_text(
                 json.dumps(receipt), encoding="ascii"
@@ -149,6 +152,48 @@ class BrowserRuntimeWorkflowTests(unittest.TestCase):
                 observed = runtime.remote_status(handle)
         self.assertEqual(observed["status"], "observed")
         self.assertEqual(observed["receipts"], {"provision": receipt})
+
+    def test_remote_status_rejects_extra_or_incomplete_receipts(self) -> None:
+        handle = "cvmbr-" + "4" * 24
+        with tempfile.TemporaryDirectory() as temp:
+            state_root = Path(temp) / ".cvm-browser-runtime"
+            state = state_root / handle
+            state.mkdir(parents=True)
+            (state / "provision.json").write_text(
+                json.dumps(
+                    {
+                        "schema": runtime.PROVISION_SCHEMA,
+                        "status": "failed",
+                        "handle": handle,
+                        "extra": True,
+                    }
+                ),
+                encoding="ascii",
+            )
+            with (
+                mock.patch.object(runtime, "STATE_ROOT", state_root),
+                self.assertRaisesRegex(
+                    runtime.RuntimeWorkflowError, "status receipt is invalid"
+                ),
+            ):
+                runtime.remote_status(handle)
+
+    def test_remote_status_includes_terminal_attempt_receipts(self) -> None:
+        handle = "cvmbr-" + "5" * 24
+        with tempfile.TemporaryDirectory() as temp:
+            state_root = Path(temp) / ".cvm-browser-runtime"
+            state = state_root / handle
+            state.mkdir(parents=True)
+            attempt = {
+                "schema": "cvm-browser-runtime.probe-attempt/1",
+                "handle": handle,
+            }
+            (state / "probe-attempt.json").write_text(
+                json.dumps(attempt), encoding="ascii"
+            )
+            with mock.patch.object(runtime, "STATE_ROOT", state_root):
+                observed = runtime.remote_status(handle)
+        self.assertEqual(observed["receipts"], {"probe-attempt": attempt})
 
     def test_transfer_destination_matches_proven_cvm_push_root(self) -> None:
         handle = "cvmbr-" + "1" * 24

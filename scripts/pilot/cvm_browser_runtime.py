@@ -406,16 +406,17 @@ def remote_status(handle: str) -> Mapping[str, object]:
     receipts: dict[str, object] = {}
     schemas = {
         "begin": "cvm-browser-runtime.begin/1",
+        "provision-attempt": "cvm-browser-runtime.provision-attempt/1",
         "provision": PROVISION_SCHEMA,
         "abort": "cvm-browser-runtime.abort/1",
+        "probe-attempt": "cvm-browser-runtime.probe-attempt/1",
         "probe": PROBE_SCHEMA,
     }
     for name, schema in schemas.items():
         path = state / f"{name}.json"
         if path.is_file() and not path.is_symlink():
             value = _strict_json(path.read_text(encoding="ascii"), f"{name} receipt")
-            if value.get("schema") != schema or value.get("handle") != handle:
-                raise RuntimeWorkflowError("remote status receipt is invalid")
+            _validate_status_receipt(name, value, handle, schema)
             receipts[name] = value
     return {
         "schema": "cvm-browser-runtime.status/1",
@@ -423,6 +424,142 @@ def remote_status(handle: str) -> Mapping[str, object]:
         "handle": handle,
         "receipts": receipts,
     }
+
+
+def _validate_status_receipt(
+    name: str,
+    value: Mapping[str, Any],
+    handle: str,
+    schema: str,
+) -> None:
+    if value.get("schema") != schema or value.get("handle") != handle:
+        raise RuntimeWorkflowError("remote status receipt is invalid")
+    if name.endswith("-attempt"):
+        if set(value) != {"schema", "handle"}:
+            raise RuntimeWorkflowError("remote status receipt is invalid")
+        return
+    owner = value.get("ownerNonce")
+    if not isinstance(owner, str) or NONCE.fullmatch(owner) is None:
+        raise RuntimeWorkflowError("remote status receipt is invalid")
+    if name == "begin":
+        expected = {
+            "schema", "status", "handle", "ownerNonce", "archive",
+            "workflowFiles", "freeBytes",
+        }
+        archive = value.get("archive")
+        if (
+            set(value) != expected
+            or value.get("status") != "ready"
+            or not isinstance(archive, dict)
+            or set(archive) != {"bytes", "sha256"}
+            or not isinstance(archive.get("bytes"), int)
+            or archive["bytes"] <= 0
+            or re.fullmatch(r"[0-9a-f]{64}", str(archive.get("sha256"))) is None
+            or not _valid_workflow_files(value.get("workflowFiles"))
+            or not isinstance(value.get("freeBytes"), int)
+            or value["freeBytes"] < 0
+        ):
+            raise RuntimeWorkflowError("remote status receipt is invalid")
+    elif name == "provision":
+        common = {
+            "schema", "status", "handle", "ownerNonce", "transferAbsent",
+            "retryAllowed",
+        }
+        if value.get("status") == "failed":
+            expected = common
+        elif value.get("status") == "provisioned":
+            expected = common | {
+                "image", "retainedImageId", "archiveSha256", "workflowFiles",
+                "freeBytes",
+            }
+        else:
+            raise RuntimeWorkflowError("remote status receipt is invalid")
+        if set(value) != expected:
+            raise RuntimeWorkflowError("remote status receipt is invalid")
+        if (
+            value.get("transferAbsent") is not True
+            or value.get("retryAllowed") is not False
+        ):
+            raise RuntimeWorkflowError("remote status receipt is invalid")
+        if value.get("status") == "provisioned" and (
+            not _valid_runtime_image(value.get("image"))
+            or not isinstance(value.get("retainedImageId"), str)
+            or IMAGE_ID.fullmatch(value["retainedImageId"]) is None
+            or re.fullmatch(r"[0-9a-f]{64}", str(value.get("archiveSha256"))) is None
+            or not _valid_workflow_files(value.get("workflowFiles"))
+            or not isinstance(value.get("freeBytes"), int)
+            or value["freeBytes"] < 0
+        ):
+            raise RuntimeWorkflowError("remote status receipt is invalid")
+    elif name == "abort":
+        if (
+            set(value)
+            != {
+                "schema", "status", "handle", "ownerNonce", "transferAbsent",
+                "retryAllowed",
+            }
+            or value.get("status") not in {"aborted", "cleanup-failed"}
+            or not isinstance(value.get("transferAbsent"), bool)
+        ):
+            raise RuntimeWorkflowError("remote status receipt is invalid")
+    elif name == "probe":
+        expected = {
+            "schema", "status", "handle", "ownerNonce", "retainedImageId",
+            "programDigest", "pngSha256", "capabilitySchema", "cleanupAbsent",
+            "freeBytes", "retryAllowed",
+        }
+        if (
+            set(value) != expected
+            or value.get("status") not in {"succeeded", "failed"}
+            or not isinstance(value.get("retainedImageId"), str)
+            or IMAGE_ID.fullmatch(value["retainedImageId"]) is None
+            or not isinstance(value.get("cleanupAbsent"), bool)
+            or not isinstance(value.get("freeBytes"), int)
+            or value["freeBytes"] < 0
+            or value.get("capabilitySchema")
+            not in {None, "text-to-cad.browser-runtime-capability/1"}
+            or any(
+                digest is not None
+                and (
+                    not isinstance(digest, str)
+                    or IMAGE_ID.fullmatch(digest) is None
+                )
+                for digest in (value.get("programDigest"), value.get("pngSha256"))
+            )
+        ):
+            raise RuntimeWorkflowError("remote status receipt is invalid")
+    else:
+        raise RuntimeWorkflowError("remote status receipt is invalid")
+    if value.get("retryAllowed") is not False and name != "begin":
+        raise RuntimeWorkflowError("remote status receipt is invalid")
+
+
+def _valid_workflow_files(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value) == {"module", "wrapper"}
+        and all(
+            isinstance(item, str) and re.fullmatch(r"[0-9a-f]{64}", item)
+            for item in value.values()
+        )
+    )
+
+
+def _valid_runtime_image(value: object) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value)
+        == {"role", "id", "platform", "sourceRevision", "archiveReference"}
+        and value.get("role") == "runtime"
+        and value.get("platform") == "linux/amd64"
+        and isinstance(value.get("id"), str)
+        and IMAGE_ID.fullmatch(value["id"]) is not None
+        and isinstance(value.get("sourceRevision"), str)
+        and REVISION.fullmatch(value["sourceRevision"]) is not None
+        and isinstance(value.get("archiveReference"), str)
+        and value["archiveReference"].isascii()
+        and 0 < len(value["archiveReference"]) <= 256
+    )
 
 
 def _disk_gate(extra_bytes: int = 0) -> int:
