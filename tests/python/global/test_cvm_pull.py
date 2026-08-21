@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import importlib.util
 import json
 import subprocess
@@ -537,6 +538,16 @@ class PullPlanTests(unittest.TestCase):
             len(workflow.excludes),
             len(set(workflow.excludes)),
         )
+
+    def test_default_excludes_preserve_workspace_stderr_inventory(self) -> None:
+        workflow = self.workflow(FakeRunner())
+
+        def excluded(relative: str) -> bool:
+            return any(fnmatch.fnmatch(relative, pattern) for pattern in workflow.excludes)
+
+        self.assertFalse(excluded("run/stderr.log"))
+        self.assertFalse(excluded("attempts/000001/commands/000001/stderr.log"))
+        self.assertFalse(excluded("cycles/000001/commands/000001/stderr.log"))
 
     def test_upload_never_follows_cvm_symlinks(self) -> None:
         runner = FakeRunner()

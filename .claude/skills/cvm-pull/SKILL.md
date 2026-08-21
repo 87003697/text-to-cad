@@ -86,7 +86,9 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - **浏览器安装始终排除**：`run/playwright/` 与
   `run/playwright-browsers/` 是数百 MiB 的 disposable runtime，即使使用
   `--include-byproducts` 也不上传；保留 rollout、trace 和版本/身份记录即可复盘。
-- **`run/stderr.log` + `.codex/` + `__pycache__/` 默认排除**；`--include-byproducts` opt-in。
+- **所有 stderr 均保留**：runner artifact manifest 与 Workspace inventory 会声明
+  `run/stderr.log`、Attempt/Cycle command stderr，包括零字节文件；pull 必须逐字节保留。
+  `.codex/` 与 `__pycache__/` 仍默认排除，`--include-byproducts` opt-in。
 - **rclone mount 必须健康**：跑前直接探测 `127.0.0.1:5572` RC endpoint；
   不依赖 macOS process table，探测失败则 exit 4。
 - **不以 mount existence 判完成**：mount 只用于最终 visibility；S3 prefix

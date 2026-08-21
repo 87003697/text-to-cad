@@ -19,8 +19,6 @@ work/playwright-browsers/*
 # forms are listed so nested occurrences (rare) are also caught.
 .codex/*
 */.codex/*
-stderr.log
-*/stderr.log
 __pycache__/*
 */__pycache__/*
 # bwrap overlay bookkeeping — v4 runner collects the unique rollout into
