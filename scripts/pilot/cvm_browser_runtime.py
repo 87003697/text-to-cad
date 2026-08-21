@@ -214,11 +214,13 @@ def prepare(source_revision: str, runtime_image: str) -> Mapping[str, object]:
     image = dict(_inspect_image(runtime_image))
     if image["sourceRevision"] != source_revision:
         raise RuntimeWorkflowError("runtime image source revision does not match")
+    prepare_nonce = secrets.token_hex(16)
     identity = {
         "sourceRevision": source_revision,
         "workflowRevision": workflow_revision,
         "workflowFiles": workflow_files,
         "imageId": runtime_image,
+        "prepareNonce": prepare_nonce,
     }
     handle = "cvmbr-" + _sha256_bytes(_canonical(identity))[:24]
     state = STATE_ROOT / handle
@@ -257,6 +259,7 @@ def prepare(source_revision: str, runtime_image: str) -> Mapping[str, object]:
             "sourceRevision": source_revision,
             "workflowRevision": workflow_revision,
             "workflowFiles": workflow_files,
+            "prepareNonce": prepare_nonce,
             "image": image,
             "archive": {
                 "sha256": _sha256_file(archive),
@@ -306,6 +309,22 @@ def _remote_receipt(completed: subprocess.CompletedProcess[str], schema: str):
     return value
 
 
+def _remote_failure(completed: subprocess.CompletedProcess[str], phase: str) -> None:
+    prefix = "cvm-browser-runtime: "
+    lines = [line for line in completed.stderr.splitlines() if line.startswith(prefix)]
+    if len(lines) == 1:
+        detail = lines[0][len(prefix) :]
+        allowed = {
+            "CVM disk gate failed",
+            "deployed workflow hash mismatch",
+            "Docker server must be linux/amd64",
+            "remote handle already exists",
+        }
+        if detail in allowed:
+            raise RuntimeWorkflowError(f"remote {phase} failed: {detail}")
+    raise RuntimeWorkflowError(f"remote {phase} failed")
+
+
 def provision(handle: str) -> Mapping[str, object]:
     prepare_receipt = _load_receipt(handle, "prepare.json", PREPARE_SCHEMA)
     _claim_once(STATE_ROOT / handle, "provision", handle)
@@ -329,7 +348,10 @@ def provision(handle: str) -> Mapping[str, object]:
         attestation["sha256"],
         prepare_receipt["workflowFiles"]["module"],
         prepare_receipt["workflowFiles"]["wrapper"],
+        check=False,
     )
+    if begin.returncode != 0:
+        _remote_failure(begin, "begin")
     _remote_receipt(begin, "cvm-browser-runtime.begin/1")
     destination = f"cvm:{REMOTE_ROOT}/.cvm-browser-runtime/{handle}/incoming/"
     try:

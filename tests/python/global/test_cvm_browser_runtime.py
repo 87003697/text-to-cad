@@ -65,6 +65,7 @@ class BrowserRuntimeWorkflowTests(unittest.TestCase):
                 receipt = runtime.prepare(REVISION, IMAGE)
 
             self.assertEqual(receipt["status"], "prepared")
+            self.assertRegex(receipt["prepareNonce"], r"^[0-9a-f]{32}$")
             self.assertEqual(receipt["image"]["role"], "runtime")
             self.assertEqual(references, {})
             self.assertTrue(
@@ -88,6 +89,47 @@ class BrowserRuntimeWorkflowTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(runtime.RuntimeWorkflowError, "revision"):
                 runtime.prepare(REVISION, IMAGE)
+
+    def test_prepare_same_image_creates_fresh_handles(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            state_root = Path(temp) / ".cvm-browser-runtime"
+
+            def docker(*args, **kwargs):
+                if args[:2] == ("image", "save"):
+                    Path(args[args.index("--output") + 1]).write_bytes(b"archive")
+                return subprocess.CompletedProcess(args, 0, "", "")
+
+            with (
+                mock.patch.object(runtime, "STATE_ROOT", state_root),
+                mock.patch.object(runtime, "_workflow_revision", return_value=REVISION),
+                mock.patch.object(runtime, "_workflow_hashes", return_value=WORKFLOW),
+                mock.patch.object(
+                    runtime,
+                    "_inspect_image",
+                    return_value={
+                        "role": "runtime",
+                        "id": IMAGE,
+                        "platform": "linux/amd64",
+                        "sourceRevision": REVISION,
+                    },
+                ),
+                mock.patch.object(
+                    runtime,
+                    "_image_ids",
+                    side_effect=[(), (IMAGE,), (), (), (IMAGE,), ()],
+                ),
+                mock.patch.object(runtime, "_docker", side_effect=docker),
+            ):
+                first = runtime.prepare(REVISION, IMAGE)
+                second = runtime.prepare(REVISION, IMAGE)
+            self.assertNotEqual(first["handle"], second["handle"])
+
+    def test_remote_begin_failure_preserves_closed_reason(self) -> None:
+        completed = subprocess.CompletedProcess(
+            [], 1, "", "cvm-browser-runtime: CVM disk gate failed\n"
+        )
+        with self.assertRaisesRegex(runtime.RuntimeWorkflowError, "CVM disk gate"):
+            runtime._remote_failure(completed, "begin")
 
     def test_remote_begin_requires_deployed_workflow_and_archive_capacity(self) -> None:
         handle = "cvmbr-" + "1" * 24
