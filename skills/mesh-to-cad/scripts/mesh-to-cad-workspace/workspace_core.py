@@ -2476,11 +2476,15 @@ def _validate_step_directory(workspace: Path, root: Path, *, expected_step: int)
             for item in files
             if Path(item["path"]).suffix.lower() in {".glb", ".gltf"}
             and item["path"].startswith("candidate/")
+            and item["sha256"] == document["candidate_mesh_sha256"]
         ),
         None,
     )
     if candidate_mesh_rel is None:
-        _fail("corrupt_workspace", "Measured Step candidate mesh is missing")
+        _fail(
+            "corrupt_workspace",
+            "Measured Step candidate mesh identity is missing from its inventory",
+        )
     experiment = _load_workspace_document(workspace)
     parent_observable = None
     if document["parent_step"] is not None:

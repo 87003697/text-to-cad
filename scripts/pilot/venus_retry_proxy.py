@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Loopback proxy for narrowly retrying transient Venus decryption failures."""
+"""Loopback proxy for narrowly retrying transient Venus failures."""
 
 from __future__ import annotations
 
@@ -39,6 +39,7 @@ class _ProxyServer(ThreadingHTTPServer):
         target_url: str,
         audit_path: Path,
         backoffs: tuple[float, ...],
+        rate_limit_backoffs: tuple[float, ...],
         upstream_timeout: float,
         upstream_bearer_token: str | None,
         required_client_bearer_token: str | None,
@@ -48,8 +49,17 @@ class _ProxyServer(ThreadingHTTPServer):
 
         if len(backoffs) > 2:
             raise ValueError("retry policy allows at most two extra attempts")
+        if len(rate_limit_backoffs) > 2:
+            raise ValueError("rate-limit retry policy allows at most two extra attempts")
         if any(not math.isfinite(delay) or delay < 0 for delay in backoffs):
             raise ValueError("retry backoffs must be finite and non-negative")
+        if any(
+            not math.isfinite(delay) or delay < 0
+            for delay in rate_limit_backoffs
+        ):
+            raise ValueError(
+                "rate-limit retry backoffs must be finite and non-negative"
+            )
         if not math.isfinite(upstream_timeout) or upstream_timeout <= 0:
             raise ValueError("upstream_timeout must be finite and positive")
         target = urlsplit(target_url)
@@ -58,6 +68,7 @@ class _ProxyServer(ThreadingHTTPServer):
         self.target = target
         self.audit_path = audit_path
         self.backoffs = backoffs
+        self.rate_limit_backoffs = rate_limit_backoffs
         self.upstream_timeout = upstream_timeout
         self.upstream_bearer_token = upstream_bearer_token
         self.required_client_bearer_token = required_client_bearer_token
@@ -137,7 +148,11 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         # reasoning so every continuation stays on one resource provider.
         forwarded_headers[VENUS_CODEX_ROUTING_HEADER] = "true"
 
-        for attempt in range(1, len(self.server.backoffs) + 2):
+        retry_budget = max(
+            len(self.server.backoffs),
+            len(self.server.rate_limit_backoffs),
+        )
+        for attempt in range(1, retry_budget + 2):
             with self.server.request_lock:
                 if (
                     self.server.max_upstream_attempts is not None
@@ -160,7 +175,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             )
             error_code = self._error_code(status, response_body)
             self.server.record_attempt(attempt, status, error_code)
-            retryable = (
+            encrypted_content_failure = (
                 status == 400
                 and (
                     error_code == RETRYABLE_ERROR_CODE
@@ -170,10 +185,17 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     )
                 )
             )
-            if not retryable or attempt > len(self.server.backoffs):
+            retry_backoffs = (
+                self.server.rate_limit_backoffs
+                if status == 429
+                else self.server.backoffs
+                if encrypted_content_failure
+                else ()
+            )
+            if attempt > len(retry_backoffs):
                 self._respond(status, headers, response_body)
                 return
-            time.sleep(self.server.backoffs[attempt - 1])
+            time.sleep(retry_backoffs[attempt - 1])
 
     def _forward(
         self,
@@ -275,6 +297,7 @@ class RetryProxy:
         audit_path: Path,
         *,
         backoffs: tuple[float, ...] = (0.2, 0.5),
+        rate_limit_backoffs: tuple[float, ...] = (2.0, 10.0),
         upstream_timeout: float = 180,
         upstream_bearer_token: str | None = None,
         required_client_bearer_token: str | None = None,
@@ -286,6 +309,7 @@ class RetryProxy:
             target_url,
             audit_path,
             backoffs,
+            rate_limit_backoffs,
             upstream_timeout,
             upstream_bearer_token,
             required_client_bearer_token,

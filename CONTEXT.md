@@ -24,6 +24,18 @@ _Avoid_: Cycle, step
 A source-step spatial partition of surface-occupancy error, identified by a fixed exact mask and diagnostic bounds. It says where the disagreement is, not how to edit CAD.
 _Avoid_: Action, command, next action
 
+**Active Repair Depth**:
+The coarsest interior occupancy depth from 1 through 8 that still contains missing or excess surface evidence for one measured step. It is recomputed by VoxBlame and is never selected by the Agent.
+_Avoid_: Agent-selected resolution, acceptance depth
+
+**Repair Frontier**:
+The current measured step's repair targets grouped at its active repair depth while retaining exact depth-8 masks. It may advance, remain, or return to a coarser depth after a repair.
+_Avoid_: Target queue, resolution setting
+
+**Repair Hypothesis**:
+An Agent-authored, falsifiable explanation that connects repair-frontier evidence to one plausible CAD change.
+_Avoid_: VoxBlame recommendation, objective fact
+
 **Repair Batch**:
 One coherent modeling change that selects one or more current-step repair targets and maps planned edits to them.
 _Avoid_: Action list, voxel queue

@@ -278,6 +278,32 @@ class MeasureStepCliTests(unittest.TestCase):
         )
         self.assertEqual("voxblame.exterior-snapshot/1", snapshot["schema"])
 
+        status, target_view, stderr = self.invoke(
+            "voxblame-targets",
+            "--output",
+            str(self.output),
+            "--step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+        self.assertEqual(1, len(target_view["alerts"]))
+        alert = target_view["alerts"][0]
+        self.assertEqual("exterior_surface", alert["kind"])
+        self.assertEqual(["+x"], alert["outside_directions"])
+        self.assertEqual(
+            [
+                "kind",
+                "bounds_canonical",
+                "outside_directions",
+                "nearest_overrun",
+                "farthest_overrun",
+                "excess_surface_count",
+                "target_key",
+                "mask_sha256",
+            ],
+            list(alert),
+        )
+
     def test_targets_command_rejects_offset_beyond_frozen_target_count(self) -> None:
         self.assertEqual(
             0,
@@ -344,9 +370,32 @@ class MeasureStepCliTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(str(self.output), payload["output"])
         self.assertEqual(0, payload["step"])
+        persisted = measured["measurement"]["repair_targets"]
+        frontier = payload["repair_frontier"]
+        self.assertEqual({"active_depth"}, set(frontier))
+        self.assertIsInstance(frontier["active_depth"], int)
+        self.assertEqual([], payload["alerts"])
+        target = payload["repair_targets"]["items"][0]
         self.assertEqual(
-            measured["measurement"]["repair_targets"],
-            payload["repair_targets"],
+            [
+                "bounds_canonical",
+                "missing_surface_count",
+                "excess_surface_count",
+                "target_key",
+                "mask_sha256",
+            ],
+            list(target),
+        )
+        persisted_target = next(
+            item
+            for item in persisted["items"]
+            if item["target_key"] == target["target_key"]
+        )
+        self.assertEqual(
+            persisted_target["bounds_canonical"], target["bounds_canonical"]
+        )
+        self.assertEqual(
+            persisted_target["mask"]["logical_sha256"], target["mask_sha256"]
         )
         self.assertFalse(_FORBIDDEN_SUMMARY_FIELDS & _all_keys(payload))
 

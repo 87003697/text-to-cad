@@ -162,6 +162,45 @@ class VenusRetryProxyTests(unittest.TestCase):
         self.assertEqual(statuses, [200, 429])
         self.assertEqual(len(upstream.requests), 1)
 
+    def test_rate_limit_replays_exact_request_after_bounded_backoff(self) -> None:
+        limited = b'{"error":{"message":"Too Many Requests"}}'
+        success = b'{"id":"response-after-rate-limit"}'
+        request_body = b'{"input":[{"type":"message","content":"continue"}]}'
+
+        with tempfile.TemporaryDirectory() as temp:
+            audit_path = Path(temp) / "venus-retry.jsonl"
+            with ScriptedUpstream([(429, limited), (200, success)]) as upstream:
+                from scripts.pilot.venus_retry_proxy import RetryProxy
+
+                with RetryProxy(
+                    upstream.url,
+                    audit_path,
+                    rate_limit_backoffs=(0,),
+                ) as proxy:
+                    connection = http.client.HTTPConnection(
+                        "127.0.0.1", proxy.port, timeout=2
+                    )
+                    connection.request(
+                        "POST",
+                        "/v1/responses",
+                        body=request_body,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response = connection.getresponse()
+                    response_body = response.read()
+                    connection.close()
+            audit = [
+                json.loads(line)
+                for line in audit_path.read_text(encoding="utf-8").splitlines()
+            ]
+
+        self.assertEqual((response.status, response_body), (200, success))
+        self.assertEqual([item[1] for item in upstream.requests], [request_body] * 2)
+        self.assertEqual(
+            [(item["attempt"], item["status"]) for item in audit],
+            [(1, 429), (2, 200)],
+        )
+
     def test_empty_400_retries_only_encrypted_reasoning_continuation(self) -> None:
         request_body = json.dumps(
             {

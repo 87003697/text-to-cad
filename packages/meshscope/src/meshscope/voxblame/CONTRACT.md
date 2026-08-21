@@ -86,9 +86,25 @@ The report freezes the complete target order. Interior targets have
 `exterior: null`; exterior targets require the complete diagnostic object.
 `display_rank` is a stable order, not priority.
 
-`repair_target_partition/1` groups the union of missing and excess depth-8
-cells with 18-connectivity. Components above 4096 cells split deterministically
-at depth-4 coarse-octree locality boundaries; split chunks remain connected.
+`repair_target_partition/1` is the legacy profile that groups the union of
+missing and excess depth-8 cells with 18-connectivity. Components above 4096
+cells split deterministically at depth-4 coarse-octree locality boundaries.
+
+`repair_target_partition/2` selects the coarsest depth from 1 through 8 with
+nonzero interior surface error, groups the projected cells with
+18-connectivity at that Active Repair Depth, and maps each group back to exact
+depth-8 error cells. Exact masks remain complete and disjoint. Large adaptive
+groups split deterministically without changing their combined exact coverage.
+Every Measured Step recomputes the Active Repair Depth; final acceptance still
+uses depth-8 evidence. Exterior evidence remains independent and may form an
+exterior-only Repair Frontier.
+The Agent-facing CLI is intentionally thinner than this persisted report. It
+returns only `repair_frontier.active_depth`, exterior `alerts`, and paged
+interior targets containing bounds, missing/excess counts, and stable target
+and mask identities. Interior items use deterministic attention order by
+objective error impact. A legacy `/1` workspace remains readable but reports
+`active_depth: null`; only a newly measured `/2` workspace has an adaptive
+Repair Frontier.
 Target masks are exact minimal octree covers. `error_profile` carries the
 missing/excess direction facts without introducing a prescriptive direction,
 priority, strategy, verdict, or `next_action` field.

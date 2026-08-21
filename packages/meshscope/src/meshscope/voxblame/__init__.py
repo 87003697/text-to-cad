@@ -59,7 +59,11 @@ from meshscope.voxblame.region_diff import (
     publish_region_diff,
     validate_region_diff_contract,
 )
-from meshscope.voxblame.targets import page_repair_targets
+from meshscope.voxblame.targets import (
+    active_repair_depth,
+    inspect_repair_frontier,
+    page_repair_targets,
+)
 from meshscope.voxblame.tree import SurfaceTree, tree_from_codes
 from meshscope.voxblame.verification import (
     VERIFICATION_SCHEMA,
@@ -102,9 +106,11 @@ __all__ = [
     "SurfaceTreeError",
     "VoxBlameError",
     "build_lattice_tree",
+    "active_repair_depth",
     "decode_surface_tree",
     "encode_surface_tree",
     "measure_step",
+    "inspect_repair_frontier",
     "page_repair_targets",
     "read_surface_tree",
     "prepare_reference",

@@ -89,9 +89,13 @@ python skills/mesh-to-cad/scripts/mesh-to-cad-workspace publish-step-zero \
 
 For the chosen parent Measured Step:
 
-1. Page every current Repair Target. Inspect its formal preview and objective
-   missing/excess evidence.
-2. Decide whether one coherent repair is plausible. If so, author one
+1. Read the Repair Frontier's Active Repair Depth and exterior alerts, then
+   page every current interior Repair Target in attention order. Inspect its
+   bounds, objective missing/excess evidence, and formal preview. Do not choose
+   or advance repair depth manually.
+2. Form one or more falsifiable Repair Hypotheses from the current Repair
+   Frontier, formal preview, CAD source, and repair history. Decide whether one
+   coherent repair is plausible. If so, select one hypothesis and author one
    `voxblame.repair-batch/1` selecting one or more Repair Targets and mapping
    stable Planned Edit keys to them.
 3. Begin an Attempt with an explicit `--from-step <M>` and a new intended step.

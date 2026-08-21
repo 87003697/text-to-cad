@@ -74,14 +74,14 @@ class RegionDiffCliTests(unittest.TestCase):
             status = cli.main(list(arguments))
         return status, json.loads(stdout.getvalue()), stderr.getvalue()
 
-    def test_multi_target_batch_publishes_objective_region_diff(self) -> None:
+    def test_macro_target_batch_publishes_objective_region_diff(self) -> None:
         measurement = json.loads(
             (self.workspace / "steps/000000/measurement.json").read_text(
                 encoding="utf-8"
             )
         )
-        targets = measurement["repair_targets"]["ordered_targets"][:2]
-        self.assertEqual(2, len(targets))
+        targets = measurement["repair_targets"]["ordered_targets"]
+        self.assertEqual(1, len(targets))
         selected = [
             {
                 "target_key": target["target_key"],
@@ -97,7 +97,7 @@ class RegionDiffCliTests(unittest.TestCase):
                 {
                     "edit_key": "restore-disconnected-surfaces",
                     "target_keys": [item["target_key"] for item in selected],
-                    "description": "Restore the two selected surface patches.",
+                    "description": "Restore the selected surface patches.",
                 },
                 {
                     "edit_key": "align-first-patch",
@@ -145,7 +145,7 @@ class RegionDiffCliTests(unittest.TestCase):
         )
         self.assertEqual(64, len(diff["repair_batch"]["plan_sha256"]))
         self.assertEqual(64, len(diff["identity"]["region_diff_sha256"]))
-        self.assertEqual(2, len(diff["selected_regions"]))
+        self.assertEqual(1, len(diff["selected_regions"]))
         for region in diff["selected_regions"]:
             depth_eight = region["interior"]["errors_by_depth"][-1]
             self.assertGreater(

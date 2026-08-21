@@ -15,7 +15,7 @@ sys.path.append(str(PACKAGES_DIR / "meshshot" / "src"))
 from meshscope.voxblame import (
     PrepareReferenceError,
     measure_step,
-    page_repair_targets,
+    inspect_repair_frontier,
     prepare_preview_scene,
     prepare_reference,
     publish_preview,
@@ -218,7 +218,9 @@ def _targets_main(argv: list[str]) -> int:
     )
     args = parser.parse_args(argv)
     try:
-        page = page_repair_targets(args.output, step=args.step, offset=args.offset)
+        view = inspect_repair_frontier(
+            args.output, step=args.step, offset=args.offset
+        )
     except Exception as exc:
         classification = getattr(exc, "classification", "target_page_failed")
         detail = getattr(exc, "detail", str(exc))
@@ -232,7 +234,7 @@ def _targets_main(argv: list[str]) -> int:
                 "ok": True,
                 "output": str(args.output),
                 "step": args.step,
-                "repair_targets": page,
+                **view,
             },
             separators=(",", ":"),
         )

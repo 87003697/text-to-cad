@@ -39,6 +39,8 @@ from meshscope.voxblame.exterior import (
 )
 from meshscope.voxblame.frame import CanonicalFrame, mesh_vertices
 from meshscope.voxblame.targets import (
+    TARGET_PARTITION_PROFILE,
+    active_repair_depth,
     partition_repair_targets,
     repair_target_page,
 )
@@ -48,7 +50,7 @@ from meshscope.voxblame.voxelize import Backend, build_lattice_tree, voxelize_me
 
 MEASUREMENT_SUMMARY_SCHEMA = "voxblame.summary/1"
 _SURFACE_PROFILE = "conservative_surface_occupancy/1"
-_TARGET_PROFILE = "repair_target_partition/1"
+_TARGET_PROFILE = TARGET_PARTITION_PROFILE
 _EXTERIOR_PROFILE = "signed_exterior_surface/1"
 
 
@@ -121,12 +123,14 @@ def measure_step(
     reference_sets = _occupancy_by_depth(reference_tree)
     candidate_sets = _occupancy_by_depth(candidate_tree)
     errors_by_depth = _errors_by_depth(reference_sets, candidate_sets)
+    active_depth = active_repair_depth(errors_by_depth)
     missing_tree = tree_from_codes(reference_sets[-1] - candidate_sets[-1], MAX_DEPTH)
     excess_tree = tree_from_codes(candidate_sets[-1] - reference_sets[-1], MAX_DEPTH)
     step_root = f"{output_root.name}/steps/{step:06d}"
     repair_targets = partition_repair_targets(
         missing_tree,
         excess_tree,
+        active_depth=active_depth,
         source_step=step,
         step_root=step_root,
         exterior=exterior,

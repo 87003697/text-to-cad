@@ -258,11 +258,14 @@ def validate_session_contract(value: Mapping[str, Any]) -> Mapping[str, Any]:
         "conservative_surface_occupancy/1",
         "$.profiles.surface_occupancy",
     )
-    _const(
-        profiles["target_partition"],
+    if profiles["target_partition"] not in {
         "repair_target_partition/1",
-        "$.profiles.target_partition",
-    )
+        "repair_target_partition/2",
+    }:
+        _fail(
+            "$.profiles.target_partition",
+            "must identify a supported Repair Target partition profile",
+        )
     _const(
         profiles["exterior_surface"],
         "signed_exterior_surface/1",
