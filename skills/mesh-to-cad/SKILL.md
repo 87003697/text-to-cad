@@ -59,6 +59,16 @@ python skills/mesh-to-cad/scripts/mesh-to-cad-workspace init \
 
 Do not write authority files directly after initialization.
 
+### Attempt command recording
+
+After `begin-attempt`, invoke every fallible build, preview, measurement, and
+diff command through `mesh-to-cad-workspace run` with an explicit phase. A
+nonzero command completes the Attempt only after its command document is
+published and `record-attempt` records `result=tool_failure` with the tool's
+reported classification. In particular, a `preview_failed` result is a tool
+failure named `preview_failed`; it is not evidence of a representation limit
+or of no feasible CAD strategy.
+
 ### 2. Publish Measured Step 0
 
 1. Author `mesh-to-cad.initial-plan/1` and begin Attempt 0:

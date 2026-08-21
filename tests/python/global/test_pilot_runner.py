@@ -56,6 +56,11 @@ class FakeBrowserRuntimeJob:
         self.started = False
         self.stopped = True
 
+    def preflight(self):
+        """Match the paid-workload admission check without browser I/O."""
+
+        return None
+
     def poll_failed(self):
         """Report a healthy container so wait_workload does not tear down."""
 
@@ -699,6 +704,91 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("runtime-stop", events)
         self.assertEqual(events[-1], "relay-exit")
         supervised.assert_not_called()
+
+    def test_run_pilot_preflights_cad_render_before_paid_workload(self) -> None:
+        events: list[str] = []
+
+        class FakeRuntime(FakeBrowserRuntimeJob):
+            @classmethod
+            def create(cls, *args, **kwargs):
+                events.append("runtime-create")
+                return cls()
+
+            def start(self):
+                events.append("runtime-start")
+
+            def preflight(self):
+                events.append("cad-render-preflight")
+
+            def stop(self):
+                events.append("runtime-stop")
+
+        with (
+            mock.patch.object(self.supervisor, "prepare_exp"),
+            mock.patch.object(self.supervisor, "BrowserRuntimeJob", FakeRuntime),
+            mock.patch.object(
+                self.supervisor,
+                "run_supervised",
+                side_effect=lambda *args: events.append("paid-workload") or 0,
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "finalize_pilot",
+                side_effect=lambda exp, status, env, **kwargs: status,
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "validate_exp_dir",
+                return_value=self.supervisor.REPO_ROOT / "outputs/group/exp",
+            ),
+        ):
+            status = self.supervisor.run_pilot(
+                self.supervisor.REPO_ROOT / "outputs/group/exp",
+                [],
+                ["/fake/workload"],
+                self.environ,
+            )
+
+        self.assertEqual(status, 0)
+        self.assertLess(events.index("cad-render-preflight"), events.index("paid-workload"))
+        self.assertEqual(events[-1], "runtime-stop")
+
+    def test_cad_render_preflight_failure_skips_paid_workload(self) -> None:
+        runtime = FakeBrowserRuntimeJob()
+
+        class FailingRuntime(FakeBrowserRuntimeJob):
+            @classmethod
+            def create(cls, *args, **kwargs):
+                return runtime
+
+        runtime.preflight = mock.Mock(
+            side_effect=self.supervisor.BrowserRuntimeError("fixed render unavailable")
+        )
+        with (
+            mock.patch.object(self.supervisor, "prepare_exp"),
+            mock.patch.object(self.supervisor, "BrowserRuntimeJob", FailingRuntime),
+            mock.patch.object(self.supervisor, "run_supervised") as paid_workload,
+            mock.patch.object(
+                self.supervisor,
+                "finalize_pilot",
+                side_effect=lambda exp, status, env, **kwargs: status,
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "validate_exp_dir",
+                return_value=self.supervisor.REPO_ROOT / "outputs/group/exp",
+            ),
+        ):
+            status = self.supervisor.run_pilot(
+                self.supervisor.REPO_ROOT / "outputs/group/exp",
+                [],
+                ["/fake/workload"],
+                self.environ,
+            )
+
+        self.assertEqual(status, 1)
+        paid_workload.assert_not_called()
+        self.assertTrue(runtime.stopped)
 
 
 class ProductionPathContractTests(unittest.TestCase):

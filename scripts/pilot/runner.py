@@ -1148,6 +1148,10 @@ def run_pilot(
             if relay.cancelled:
                 workload_status = 128 + (relay.signum or signal.SIGTERM)
             else:
+                sidecar.preflight()
+            if relay.cancelled:
+                workload_status = 128 + (relay.signum or signal.SIGTERM)
+            else:
                 workload_status = run_supervised(
                     exp_dir,
                     input_paths,

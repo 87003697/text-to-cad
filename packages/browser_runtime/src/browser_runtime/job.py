@@ -15,15 +15,29 @@ port through the config file that bwrap read-mounts into the sandbox.
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import os
 import secrets
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
-from .config import load_image_lock
+from .config import (
+    CAD_RENDER_PROGRAMS,
+    RUNTIME_CAPABILITY_SCHEMA,
+    SANDBOX_RUNTIME_CAPABILITY_NAME,
+    load_image_lock,
+)
+
+
+_LOOPBACK_OPENER = urllib_request.build_opener(urllib_request.ProxyHandler({}))
+_MAX_HEALTH_RESPONSE_BYTES = 4096
 
 
 class BrowserRuntimeError(RuntimeError):
@@ -58,6 +72,7 @@ class BrowserRuntimeJob:
     shm_size: str = "1g"
     pids_limit: int = 512
     container_port: int = 9223
+    cad_render_container_port: int = 9224
 
     def __post_init__(self) -> None:
         if len(self.owner_nonce) < 12:
@@ -80,6 +95,8 @@ class BrowserRuntimeJob:
                 self._fallback_image_ref = tagged_ref
         self._started = False
         self._published_port: int | None = None
+        self._cad_render_published_port: int | None = None
+        self._cad_render_token = secrets.token_hex(32)
 
     # -- factory ----------------------------------------------------------
 
@@ -125,6 +142,17 @@ class BrowserRuntimeJob:
             raise BrowserRuntimeError("browser runtime is not started")
         return self._published_port
 
+    @property
+    def cad_render_url(self) -> str:
+        """Fixed residual-render endpoint exposed by this job's sidecar."""
+
+        if self._cad_render_published_port is None:
+            raise BrowserRuntimeError("CAD render runtime is not started")
+        return (
+            f"http://127.0.0.1:{self._cad_render_published_port}"
+            "/cad/render/residual"
+        )
+
     # -- lifecycle --------------------------------------------------------
 
     def start(self) -> None:
@@ -139,15 +167,22 @@ class BrowserRuntimeJob:
                 self._build_run_argv(),
                 purpose="start browser runtime container",
             )
-            self._published_port = self._discover_published_port()
+            self._published_port = self._discover_published_port(self.container_port)
+            self._cad_render_published_port = self._discover_published_port(
+                self.cad_render_container_port
+            )
+            self._started = True
+            self._wait_for_port()
+            self._publish_runtime_capability()
         except BrowserRuntimeError:
             self._docker_ignore(
                 ["docker", "rm", "--force", "--volumes", self.container_name]
             )
             self._docker_ignore(["docker", "network", "rm", self.network_name])
+            self._started = False
+            self._published_port = None
+            self._cad_render_published_port = None
             raise
-        self._started = True
-        self._wait_for_port()
 
     def _resolve_local_image_ref(self) -> None:
         """Use the locked tag when a transported image has a new local ID."""
@@ -180,6 +215,7 @@ class BrowserRuntimeJob:
         self._docker_ignore(["docker", "network", "rm", self.network_name])
         self._started = False
         self._published_port = None
+        self._cad_render_published_port = None
 
     def poll_failed(self) -> bool:
         """Return True if the container is no longer in a healthy running state."""
@@ -200,6 +236,91 @@ class BrowserRuntimeJob:
             return True
         return (result.stdout or "").strip() != "running"
 
+    def preflight(self) -> None:
+        """Render one fixed triangle before any paid Agent workload starts."""
+
+        triangle = {
+            "vertices": [[-0.35, -0.3, 0.0], [0.35, -0.3, 0.0], [0.0, 0.35, 0.0]],
+            "faces": [[0, 1, 2]],
+        }
+        request_value = {
+            "schema": "text-to-cad.cad-render-request/1",
+            "jobId": self.owner_nonce,
+            "program": "residual",
+            "programDigest": CAD_RENDER_PROGRAMS["residual"],
+            "payload": {
+                "reference": triangle,
+                "candidate": triangle,
+                "variant": "step",
+                "exteriorDirections": [],
+                "options": {
+                    "cameraPolicy": "profile-fixed",
+                    "canonicalPostprocess": True,
+                },
+            },
+        }
+        encoded = json.dumps(
+            request_value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("ascii")
+        request = urllib_request.Request(
+            self.cad_render_url,
+            data=encoded,
+            headers={
+                "authorization": f"Bearer {self._cad_render_token}",
+                "content-type": "application/json",
+            },
+            method="POST",
+        )
+        response_bytes: bytes | None = None
+        last_error: BaseException | None = None
+        # Docker's newly published loopback forwarder can accept a TCP probe
+        # just before it is ready to carry the first HTTP request. Retrying the
+        # fixed, side-effect-free triangle avoids mistaking that brief transport
+        # warm-up for a broken render program.
+        for attempt in range(3):
+            try:
+                with _LOOPBACK_OPENER.open(request, timeout=30.0) as response:
+                    response_bytes = response.read(16 * 1024 * 1024 + 1)
+                break
+            except urllib_error.HTTPError as exc:
+                raise BrowserRuntimeError("CAD render preflight request failed") from exc
+            except (OSError, urllib_error.URLError) as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(0.25)
+        if response_bytes is None:
+            raise BrowserRuntimeError("CAD render preflight request failed") from last_error
+        if len(response_bytes) > 16 * 1024 * 1024:
+            raise BrowserRuntimeError("CAD render preflight response is too large")
+        try:
+            value = json.loads(response_bytes)
+            result = value["result"]
+            png_data_url = result["pngDataUrl"]
+            png_bytes = base64.b64decode(png_data_url.split(",", 1)[1], validate=True)
+        except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise BrowserRuntimeError("CAD render preflight response is invalid") from exc
+        if (
+            not isinstance(value, dict)
+            or set(value)
+            != {"schema", "jobId", "program", "programDigest", "result"}
+            or value["schema"] != "text-to-cad.cad-render-response/1"
+            or value["jobId"] != self.owner_nonce
+            or value["program"] != "residual"
+            or value["programDigest"] != CAD_RENDER_PROGRAMS["residual"]
+            or not isinstance(result, dict)
+            or result.get("ok") is not True
+            or not isinstance(png_data_url, str)
+            or not png_data_url.startswith("data:image/png;base64,")
+            or not png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+            or not isinstance(result.get("views"), list)
+            or len(result["views"]) != 8
+        ):
+            raise BrowserRuntimeError("CAD render preflight identity is invalid")
+        self._publish_preflight_receipt(png_bytes)
+
     # -- internals --------------------------------------------------------
 
     def _build_run_argv(self) -> list[str]:
@@ -208,6 +329,13 @@ class BrowserRuntimeJob:
             "--name", self.container_name,
             "--network", self.network_name,
             "--publish", f"127.0.0.1:0:{self.container_port}/tcp",
+            "--publish", f"127.0.0.1:0:{self.cad_render_container_port}/tcp",
+            "--env", f"TTC_CAD_RENDER_TOKEN={self._cad_render_token}",
+            "--env", f"TTC_BROWSER_RUNTIME_JOB_ID={self.owner_nonce}",
+            "--env", (
+                "TTC_CAD_RENDER_PROGRAM_DIGEST="
+                f"{CAD_RENDER_PROGRAMS['residual']}"
+            ),
             "--read-only",
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=512m",
             "--tmpfs", "/home/pwuser:rw,size=64m,uid=1000",
@@ -220,7 +348,7 @@ class BrowserRuntimeJob:
             self.image_ref,
         ]
 
-    def _discover_published_port(self) -> int:
+    def _discover_published_port(self, container_port: int) -> int:
         result = self.docker(
             [
                 "docker",
@@ -228,7 +356,7 @@ class BrowserRuntimeJob:
                 "--format",
                 (
                     "{{ (index (index .NetworkSettings.Ports "
-                    f'"{self.container_port}/tcp") 0).HostPort '
+                    f'"{container_port}/tcp") 0).HostPort '
                     "}}"
                 ),
                 self.container_name,
@@ -238,7 +366,7 @@ class BrowserRuntimeJob:
         if not raw:
             raise BrowserRuntimeError(
                 "docker did not report a published host port for "
-                f"{self.container_port}/tcp on {self.container_name}"
+                f"{container_port}/tcp on {self.container_name}"
             )
         try:
             port = int(raw)
@@ -253,20 +381,111 @@ class BrowserRuntimeJob:
     def _wait_for_port(self) -> None:
         import socket as _socket
 
+        for label, port in (
+            ("browser MCP", self._published_port),
+            ("CAD render", self._cad_render_published_port),
+        ):
+            deadline = time.monotonic() + self.port_ready_timeout_s
+            while time.monotonic() < deadline:
+                with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as sock:
+                    sock.settimeout(0.5)
+                    try:
+                        sock.connect(("127.0.0.1", port))
+                        break
+                    except (ConnectionRefusedError, OSError):
+                        pass
+                time.sleep(self.port_ready_poll_s)
+            else:
+                raise BrowserRuntimeError(
+                    f"{label} port did not accept connections within "
+                    f"{self.port_ready_timeout_s:.1f}s"
+                )
+        self._wait_for_cad_health()
+
+    def _wait_for_cad_health(self) -> None:
+        health_url = (
+            f"http://127.0.0.1:{self._cad_render_published_port}/healthz"
+        )
         deadline = time.monotonic() + self.port_ready_timeout_s
         while time.monotonic() < deadline:
-            with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as sock:
-                sock.settimeout(0.5)
-                try:
-                    sock.connect(("127.0.0.1", self._published_port))
+            try:
+                with _LOOPBACK_OPENER.open(health_url, timeout=2.0) as response:
+                    value = json.loads(response.read(_MAX_HEALTH_RESPONSE_BYTES + 1))
+                if (
+                    isinstance(value, dict)
+                    and value.get("schema") == "text-to-cad.cad-render-health/1"
+                    and value.get("program") == "residual"
+                    and value.get("programDigest") == CAD_RENDER_PROGRAMS["residual"]
+                ):
                     return
-                except (ConnectionRefusedError, OSError):
-                    pass
+            except (OSError, ValueError, urllib_error.URLError, json.JSONDecodeError):
+                pass
             time.sleep(self.port_ready_poll_s)
         raise BrowserRuntimeError(
-            f"browser runtime port 127.0.0.1:{self._published_port} did not "
-            f"accept connections within {self.port_ready_timeout_s:.1f}s"
+            "CAD render health endpoint did not become ready within "
+            f"{self.port_ready_timeout_s:.1f}s"
         )
+
+    def _publish_runtime_capability(self) -> None:
+        capability = {
+            "schema": RUNTIME_CAPABILITY_SCHEMA,
+            "jobId": self.owner_nonce,
+            "imageRef": self.image_ref,
+            "mcpUrl": self.mcp_url,
+            "cadRenderUrl": self.cad_render_url,
+            "cadRenderToken": self._cad_render_token,
+            "programs": dict(CAD_RENDER_PROGRAMS),
+        }
+        encoded = json.dumps(
+            capability,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("ascii")
+        target = self.capability_dir / SANDBOX_RUNTIME_CAPABILITY_NAME
+        temporary = self.capability_dir / f".{SANDBOX_RUNTIME_CAPABILITY_NAME}.tmp"
+        try:
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o400,
+            )
+            try:
+                view = memoryview(encoded)
+                while view:
+                    written = os.write(descriptor, view)
+                    if written <= 0:
+                        raise OSError("short capability write")
+                    view = view[written:]
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.chmod(temporary, 0o444)
+            os.replace(temporary, target)
+        except OSError as exc:
+            temporary.unlink(missing_ok=True)
+            raise BrowserRuntimeError(
+                "cannot publish browser runtime capability"
+            ) from exc
+
+    def _publish_preflight_receipt(self, png_bytes: bytes) -> None:
+        receipt = {
+            "schema": "text-to-cad.browser-runtime-preflight/1",
+            "imageRef": self.image_ref,
+            "program": "residual",
+            "programDigest": CAD_RENDER_PROGRAMS["residual"],
+            "pngSha256": "sha256:" + hashlib.sha256(png_bytes).hexdigest(),
+            "passed": True,
+        }
+        target = self.capability_dir / "preflight.json"
+        try:
+            target.write_text(
+                json.dumps(receipt, sort_keys=True, separators=(",", ":")),
+                encoding="ascii",
+            )
+            target.chmod(0o444)
+        except OSError as exc:
+            raise BrowserRuntimeError("cannot publish CAD render preflight") from exc
 
     def _docker_or_raise(self, argv: Sequence[str], *, purpose: str) -> None:
         try:

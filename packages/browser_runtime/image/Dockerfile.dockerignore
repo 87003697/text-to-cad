@@ -1,0 +1,14 @@
+**
+!packages/
+!packages/browser_runtime/
+!packages/browser_runtime/image/
+!packages/browser_runtime/image/entrypoint.sh
+!packages/browser_runtime/image/cad-render-service.cjs
+!packages/meshshot/
+!packages/meshshot/src/
+!packages/meshshot/src/meshshot/
+!packages/meshshot/src/meshshot/runtime/
+!packages/meshshot/src/meshshot/runtime/render.html
+!packages/meshshot/src/meshshot/runtime/residual-render.js
+!packages/meshshot/src/meshshot/profiles/
+!packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json

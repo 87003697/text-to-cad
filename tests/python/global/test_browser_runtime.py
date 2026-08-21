@@ -8,11 +8,14 @@ callable so tests never touch a real Docker daemon.
 from __future__ import annotations
 
 import json
+import base64
 import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
+
+import browser_runtime.job as job_module
 
 from browser_runtime import (
     BROWSER_RUNTIME_CONTRACT,
@@ -22,6 +25,8 @@ from browser_runtime import (
     SANDBOX_CODEX_CONFIG_NAME,
     SANDBOX_CODEX_CONFIG_PATH,
     SANDBOX_MOUNT_ROOT,
+    SANDBOX_RUNTIME_CAPABILITY_NAME,
+    SANDBOX_RUNTIME_CAPABILITY_PATH,
     render_mcp_config,
 )
 
@@ -32,7 +37,7 @@ def _completed(stdout: str = "", stderr: str = "", returncode: int = 0):
     )
 
 
-def _fake_docker(port_by_container: dict[str, int] | None = None):
+def _fake_docker(port_by_container: dict[tuple[str, int], int] | None = None):
     """Return a docker CLI mock that emulates create/inspect/rm outcomes."""
 
     port_by_container = port_by_container or {}
@@ -45,13 +50,19 @@ def _fake_docker(port_by_container: dict[str, int] | None = None):
             return _completed(stdout=argv[-1] + "\n")
         if argv[:2] == ["docker", "run"]:
             container = argv[argv.index("--name") + 1]
-            port_by_container.setdefault(container, 32700 + len(port_by_container))
+            for index, item in enumerate(argv):
+                if item != "--publish":
+                    continue
+                container_port = int(argv[index + 1].rsplit(":", 1)[1].removesuffix("/tcp"))
+                key = (container, container_port)
+                port_by_container.setdefault(key, 32700 + len(port_by_container))
             return _completed(stdout=container + "\n")
         if argv[:2] == ["docker", "inspect"] and "--format" in argv:
             container = argv[-1]
             fmt = argv[argv.index("--format") + 1]
             if "HostPort" in fmt:
-                port = port_by_container.get(container)
+                container_port = int(fmt.split('"')[1].removesuffix("/tcp"))
+                port = port_by_container.get((container, container_port))
                 if port is None:
                     raise subprocess.CalledProcessError(
                         1, argv, stderr="no such container"
@@ -82,6 +93,14 @@ class ContractShapeTests(unittest.TestCase):
             SANDBOX_CODEX_CONFIG_PATH,
         )
         self.assertTrue(SANDBOX_MOUNT_ROOT.startswith("/"))
+        self.assertEqual(
+            BROWSER_RUNTIME_CONTRACT["sandbox_runtime_capability_name"],
+            SANDBOX_RUNTIME_CAPABILITY_NAME,
+        )
+        self.assertEqual(
+            BROWSER_RUNTIME_CONTRACT["sandbox_runtime_capability_path"],
+            SANDBOX_RUNTIME_CAPABILITY_PATH,
+        )
 
     def test_image_lock_is_readable_and_lists_id_or_tag(self):
         self.assertTrue(IMAGE_LOCK_PATH.is_file())
@@ -227,6 +246,141 @@ class LifecycleTests(unittest.TestCase):
             self.assertTrue(job.mcp_url.startswith("http://127.0.0.1:"))
             self.assertTrue(job.mcp_url.endswith("/mcp"))
             self.assertGreater(job.published_port, 0)
+
+    def test_start_publishes_closed_runtime_capability(self):
+        with TemporaryDirectory() as tmp:
+            job, _ = self._make_job(tmp)
+            job.start()
+            capability_path = job.capability_dir / SANDBOX_RUNTIME_CAPABILITY_NAME
+            capability = json.loads(capability_path.read_text(encoding="ascii"))
+            self.assertEqual(
+                set(capability),
+                {
+                    "schema",
+                    "jobId",
+                    "imageRef",
+                    "mcpUrl",
+                    "cadRenderUrl",
+                    "cadRenderToken",
+                    "programs",
+                },
+            )
+            self.assertEqual(
+                capability["schema"],
+                "text-to-cad.browser-runtime-capability/1",
+            )
+            self.assertEqual(capability["jobId"], job.owner_nonce)
+            self.assertEqual(capability["imageRef"], job.image_ref)
+            self.assertEqual(capability["mcpUrl"], job.mcp_url)
+            self.assertEqual(capability["cadRenderUrl"], job.cad_render_url)
+            self.assertEqual(set(capability["programs"]), {"residual"})
+            self.assertEqual(capability_path.stat().st_mode & 0o777, 0o444)
+
+    def test_start_publishes_mcp_and_cad_render_ports(self):
+        with TemporaryDirectory() as tmp:
+            job, docker = self._make_job(tmp)
+            job.start()
+            run_call = next(a for a in docker.calls if a[:2] == ["docker", "run"])
+            published = [
+                run_call[index + 1]
+                for index, item in enumerate(run_call)
+                if item == "--publish"
+            ]
+            self.assertEqual(
+                published,
+                ["127.0.0.1:0:9223/tcp", "127.0.0.1:0:9224/tcp"],
+            )
+            self.assertTrue(job.cad_render_url.startswith("http://127.0.0.1:"))
+            self.assertTrue(job.cad_render_url.endswith("/cad/render/residual"))
+
+    def test_preflight_renders_before_publishing_receipt(self):
+        with TemporaryDirectory() as tmp:
+            job, _ = self._make_job(tmp)
+            job.start()
+            png = b"\x89PNG\r\n\x1a\nfixed-preflight"
+            response_value = {
+                "schema": "text-to-cad.cad-render-response/1",
+                "jobId": job.owner_nonce,
+                "program": "residual",
+                "programDigest": job_module.CAD_RENDER_PROGRAMS["residual"],
+                "result": {
+                    "ok": True,
+                    "pngDataUrl": "data:image/png;base64,"
+                    + base64.b64encode(png).decode("ascii"),
+                    "views": [{"name": str(index)} for index in range(8)],
+                },
+            }
+
+            class Response:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def read(self, limit):
+                    return json.dumps(response_value).encode("ascii")
+
+            with mock.patch.object(job_module._LOOPBACK_OPENER, "open", return_value=Response()):
+                job.preflight()
+
+            receipt = json.loads(
+                (job.capability_dir / "preflight.json").read_text(encoding="ascii")
+            )
+            self.assertTrue(receipt["passed"])
+            self.assertEqual(receipt["program"], "residual")
+            self.assertEqual(receipt["programDigest"], job_module.CAD_RENDER_PROGRAMS["residual"])
+
+    def test_preflight_uses_proxy_free_loopback_client(self):
+        handlers = job_module._LOOPBACK_OPENER.handlers
+        proxy_handlers = [
+            handler for handler in handlers
+            if isinstance(handler, job_module.urllib_request.ProxyHandler)
+        ]
+        # Supplying ProxyHandler({}) suppresses urllib's default environment-
+        # aware ProxyHandler; build_opener intentionally omits the empty one.
+        self.assertEqual(proxy_handlers, [])
+
+    def test_preflight_retries_a_transient_loopback_disconnect(self):
+        with TemporaryDirectory() as tmp:
+            job, _ = self._make_job(tmp)
+            job.start()
+            png = b"\x89PNG\r\n\x1a\nretry"
+            response_value = {
+                "schema": "text-to-cad.cad-render-response/1",
+                "jobId": job.owner_nonce,
+                "program": "residual",
+                "programDigest": job_module.CAD_RENDER_PROGRAMS["residual"],
+                "result": {
+                    "ok": True,
+                    "pngDataUrl": "data:image/png;base64,"
+                    + base64.b64encode(png).decode("ascii"),
+                    "views": [{} for _ in range(8)],
+                },
+            }
+
+            class Response:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def read(self, limit):
+                    return json.dumps(response_value).encode("ascii")
+
+            with (
+                mock.patch.object(
+                    job_module._LOOPBACK_OPENER,
+                    "open",
+                    side_effect=[ConnectionResetError("warming up"), Response()],
+                ) as open_request,
+                mock.patch.object(job_module.time, "sleep"),
+            ):
+                job.preflight()
+
+            self.assertEqual(open_request.call_count, 2)
+            self.assertTrue((job.capability_dir / "preflight.json").is_file())
 
     def test_mcp_url_before_start_raises(self):
         with TemporaryDirectory() as tmp:

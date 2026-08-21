@@ -7,8 +7,13 @@ from importlib.resources import files
 import json
 import os
 from pathlib import Path
+import re
 import socket
+import stat
 from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+from urllib.parse import urlsplit
 
 from meshshot import broker_client
 from meshshot.broker_client import MeshGeometry, MeshshotError, RenderedPreview
@@ -24,6 +29,17 @@ _CONTRACT = json.loads(
 )
 _AUTHORITY_PATH = Path(_CONTRACT["authorityPath"])
 _SOCKET_PATH = Path(_CONTRACT["socketPath"])
+_RUNTIME_CAPABILITY_PATH = Path("/run/meshshot-browser/runtime.json")
+_RUNTIME_CAPABILITY_SCHEMA = "text-to-cad.browser-runtime-capability/1"
+_RUNTIME_REQUEST_SCHEMA = "text-to-cad.cad-render-request/1"
+_RUNTIME_RESPONSE_SCHEMA = "text-to-cad.cad-render-response/1"
+_HEX_12_TO_64 = re.compile(r"[0-9a-f]{12,64}\Z")
+_SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_MAX_RUNTIME_CAPABILITY_BYTES = 16 * 1024
+_MAX_RUNTIME_REQUEST_BYTES = 96 * 1024 * 1024
+_MAX_RUNTIME_RESPONSE_BYTES = 16 * 1024 * 1024
+_RUNTIME_TIMEOUT_SECONDS = 120.0
+_LOOPBACK_OPENER = urllib_request.build_opener(urllib_request.ProxyHandler({}))
 
 
 def _load_browser_authority() -> dict[str, Any] | None:
@@ -48,6 +64,150 @@ def _registered_residual_render(
         socket_path=_SOCKET_PATH,
         socket_factory=socket.socket,
     )
+
+
+def _load_runtime_capability() -> dict[str, Any] | None:
+    """Read the fixed Development Browser Runtime capability, if present."""
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(_RUNTIME_CAPABILITY_PATH, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise MeshshotError("browser runtime capability is unavailable") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o444
+        ):
+            raise MeshshotError("browser runtime capability is replaceable")
+        raw = os.read(descriptor, _MAX_RUNTIME_CAPABILITY_BYTES + 1)
+    except MeshshotError:
+        raise
+    except OSError as exc:
+        raise MeshshotError("browser runtime capability is unavailable") from exc
+    finally:
+        os.close(descriptor)
+    if not raw or len(raw) > _MAX_RUNTIME_CAPABILITY_BYTES:
+        raise MeshshotError("browser runtime capability has an invalid size")
+    try:
+        capability = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise MeshshotError("browser runtime capability is not valid JSON") from exc
+    expected_keys = {
+        "schema",
+        "jobId",
+        "imageRef",
+        "mcpUrl",
+        "cadRenderUrl",
+        "cadRenderToken",
+        "programs",
+    }
+    if not isinstance(capability, dict) or set(capability) != expected_keys:
+        raise MeshshotError("browser runtime capability has an invalid schema")
+    programs = capability["programs"]
+    endpoint = capability["cadRenderUrl"]
+    mcp_endpoint = capability["mcpUrl"]
+    endpoint_valid = _valid_loopback_url(endpoint, "/cad/render/residual")
+    mcp_endpoint_valid = _valid_loopback_url(mcp_endpoint, "/mcp")
+    if (
+        capability["schema"] != _RUNTIME_CAPABILITY_SCHEMA
+        or not isinstance(capability["jobId"], str)
+        or _HEX_12_TO_64.fullmatch(capability["jobId"]) is None
+        or not isinstance(capability["imageRef"], str)
+        or not capability["imageRef"].isascii()
+        or not capability["imageRef"]
+        or len(capability["imageRef"]) > 256
+        or not isinstance(capability["mcpUrl"], str)
+        or not mcp_endpoint_valid
+        or not isinstance(capability["cadRenderToken"], str)
+        or _HEX_12_TO_64.fullmatch(capability["cadRenderToken"]) is None
+        or not isinstance(programs, dict)
+        or set(programs) != {"residual"}
+        or not isinstance(programs["residual"], str)
+        or _SHA256.fullmatch(programs["residual"]) is None
+        or not endpoint_valid
+    ):
+        raise MeshshotError("browser runtime capability identity is invalid")
+    return capability
+
+
+def _valid_loopback_url(value: Any, expected_path: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname == "127.0.0.1"
+        and parsed.username is None
+        and parsed.password is None
+        and port is not None
+        and parsed.path == expected_path
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _runtime_browser_render(
+    capability: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Call the fixed residual operation in the Development Browser Runtime."""
+
+    request_value = {
+        "schema": _RUNTIME_REQUEST_SCHEMA,
+        "jobId": capability["jobId"],
+        "program": "residual",
+        "programDigest": capability["programs"]["residual"],
+        "payload": broker_client.broker_payload(payload),
+    }
+    request_bytes = json.dumps(
+        request_value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    ).encode("ascii")
+    if len(request_bytes) > _MAX_RUNTIME_REQUEST_BYTES:
+        raise MeshshotError("browser runtime residual request is too large")
+    request = urllib_request.Request(
+        capability["cadRenderUrl"],
+        data=request_bytes,
+        headers={
+            "authorization": f"Bearer {capability['cadRenderToken']}",
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with _LOOPBACK_OPENER.open(request, timeout=_RUNTIME_TIMEOUT_SECONDS) as response:
+            response_bytes = response.read(_MAX_RUNTIME_RESPONSE_BYTES + 1)
+    except (OSError, urllib_error.URLError) as exc:
+        raise MeshshotError("browser runtime residual request failed") from exc
+    if len(response_bytes) > _MAX_RUNTIME_RESPONSE_BYTES:
+        raise MeshshotError("browser runtime residual response is too large")
+    try:
+        response_value = json.loads(response_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise MeshshotError("browser runtime residual response is invalid") from exc
+    if (
+        not isinstance(response_value, dict)
+        or set(response_value)
+        != {"schema", "jobId", "program", "programDigest", "result"}
+        or response_value["schema"] != _RUNTIME_RESPONSE_SCHEMA
+        or response_value["jobId"] != capability["jobId"]
+        or response_value["program"] != "residual"
+        or response_value["programDigest"] != capability["programs"]["residual"]
+        or not isinstance(response_value["result"], dict)
+    ):
+        raise MeshshotError("browser runtime residual response identity is invalid")
+    return response_value["result"]
 
 
 def _legacy_browser_render(payload: dict[str, Any]) -> dict[str, Any]:
@@ -139,11 +299,15 @@ def render_residual_preview(
         reference, candidate, variant, exterior_directions
     )
     authority = _load_browser_authority()
-    if authority is None:
-        result = _legacy_browser_render(payload)
-    else:
+    if authority is not None:
         result = _registered_residual_render(
             authority,
             broker_client.broker_payload(payload),
         )
+    else:
+        runtime_capability = _load_runtime_capability()
+        if runtime_capability is not None:
+            result = _runtime_browser_render(runtime_capability, payload)
+        else:
+            result = _legacy_browser_render(payload)
     return broker_client.finalize_preview(result, loaded, variant)

@@ -3,13 +3,13 @@
   "image": {
     "name": "text-to-cad-browser-runtime",
     "tag": "build",
-    "id": "sha256:82ab40a22aafcd3607d4f9249569f684f46584a9941f2e1e17cd9a1d73c58a26",
+    "id": "sha256:cc8d99c57008fa41a55d8d3fad10360172b7eaaa9c75ca206861894834561158",
     "base_image": "mcr.microsoft.com/playwright:v1.51.1-jammy",
     "base_id": "sha256:79da45705a7c3f147c435ac6d0beeddf2e132f53263cb27bed90beafbb2e552b",
     "playwright_mcp_version": "0.0.79",
-    "content_size_bytes": 864329643,
+    "content_size_bytes": 868350908,
     "architecture": "amd64"
   },
-  "built_from_ref": "09660bb5cdbd45d31b058bc6d166154c7e543a09",
-  "notes": "Local development build. `id` is the docker image content ID; use it as the image ref. Rebuilt after pinning entrypoint.sh --executable-path to /ms-playwright/chromium_headless_shell-1161/chrome-linux/headless_shell so browser_navigate does not try to resolve chrome-for-testing (chromium-1237), which is absent from playwright:v1.51.1-jammy. On CVM transport via `docker save | docker load`, the same ID is preserved."
+  "built_from_ref": "bbe805fe8fb159680dc075686f9093ebb448b09f",
+  "notes": "Local development build from the recorded develop parent plus the Browser Runtime residual-render working-tree change. `id` is the Docker image content ID; use it as the image ref. The image exposes Playwright MCP on 9223 and the closed residual CAD renderer on 9224, with Chromium and all render assets baked in. A real fixed-triangle render passed through BrowserRuntimeJob.preflight before this lock was written. On CVM transport via `docker save | docker load`, the same ID is preserved."
 }

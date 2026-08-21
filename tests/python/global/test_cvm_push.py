@@ -82,6 +82,11 @@ def create_repo(root: Path) -> Path:
         (REPO_ROOT / "viewer/package-lock.json").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    (repo / "packages/cadjs").mkdir(parents=True)
+    (repo / "packages/cadjs/package-lock.json").write_text(
+        (REPO_ROOT / "packages/cadjs/package-lock.json").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     return repo
 
 
@@ -98,11 +103,12 @@ def create_viewer_dependencies(root: Path) -> Path:
     return modules
 
 
-def create_cad_dependencies(root: Path) -> Path:
+def create_cad_dependencies(root: Path, repo_root: Path | None = None) -> Path:
     build = root / "tmp/cad-snapshot-build"
     for executable in cvm_push.CAD_REQUIRED_EXECUTABLES:
         make_executable(build / executable)
-    for package, version in cvm_push.CAD_REQUIRED_PACKAGE_VERSIONS.items():
+    versions = cvm_push.cad_required_package_versions(repo_root or REPO_ROOT)
+    for package, version in versions.items():
         write_package(build / "node_modules", package, version)
     return build
 
@@ -431,6 +437,26 @@ class AgentModeTests(unittest.TestCase):
 
 
 class BuildInputTests(unittest.TestCase):
+    def test_cad_dependencies_follow_cadjs_lockfile(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repo = create_repo(root)
+            lock_path = repo / "packages/cadjs/package-lock.json"
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            lock["packages"]["node_modules/three"]["version"] = "9.9.9-test"
+            lock_path.write_text(json.dumps(lock), encoding="utf-8")
+            candidate = create_cad_dependencies(root, repo)
+
+            self.assertEqual(
+                cvm_push.cad_dependency_errors(candidate, repo),
+                (),
+            )
+            write_package(candidate / "node_modules", "three", "0.0.0-stale")
+            self.assertIn(
+                "three version 0.0.0-stale does not match 9.9.9-test",
+                cvm_push.cad_dependency_errors(candidate, repo),
+            )
+
     def test_incomplete_worktree_inputs_fall_back_to_complete_primary(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
@@ -523,7 +549,7 @@ class StageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
             repo = create_repo(root)
-            (repo / "packages/source.txt").parent.mkdir(parents=True)
+            (repo / "packages/source.txt").parent.mkdir(parents=True, exist_ok=True)
             (repo / "packages/source.txt").write_text("dirty\n", encoding="utf-8")
             (repo / ".agents/secret.txt").parent.mkdir()
             (repo / ".agents/secret.txt").write_text("secret\n", encoding="utf-8")

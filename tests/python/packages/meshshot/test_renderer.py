@@ -34,6 +34,165 @@ def _geometry(*triangles: tuple[tuple[float, float, float], ...]) -> MeshGeometr
 
 
 class ResidualRendererTests(unittest.TestCase):
+    def test_development_runtime_capability_uses_sidecar_without_local_launch(self) -> None:
+        from meshshot import renderer
+
+        triangle = ((-0.35, -0.3, 0.0), (0.35, -0.3, 0.0), (0.0, 0.35, 0.0))
+        geometry = _geometry(triangle)
+        image = Image.new("RGB", (504, 1008), (17, 23, 31))
+        encoded = BytesIO()
+        image.save(encoded, format="PNG")
+        result = {
+            "ok": True,
+            "pngDataUrl": "data:image/png;base64,"
+            + base64.b64encode(encoded.getvalue()).decode("ascii"),
+            "views": [
+                {"name": name}
+                for name in ("+Z", "-Z", "+Y", "-Y", "+X", "-X", "Iso", "-Iso")
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            capability_path = root / "runtime.json"
+            capability_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "text-to-cad.browser-runtime-capability/1",
+                        "jobId": "a" * 32,
+                        "imageRef": "sha256:development-image",
+                        "mcpUrl": "http://127.0.0.1:32001/mcp",
+                        "cadRenderUrl": "http://127.0.0.1:32002/cad/render/residual",
+                        "cadRenderToken": "b" * 64,
+                        "programs": {"residual": "sha256:" + "c" * 64},
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                encoding="ascii",
+            )
+            capability_path.chmod(0o444)
+            with (
+                mock.patch("meshshot.renderer._AUTHORITY_PATH", root / "absent-authority.json"),
+                mock.patch("meshshot.renderer._RUNTIME_CAPABILITY_PATH", capability_path),
+                mock.patch(
+                    "meshshot.renderer._runtime_browser_render",
+                    return_value=result,
+                ) as runtime_render,
+                mock.patch("meshshot.renderer._legacy_browser_render") as local_render,
+            ):
+                rendered = render_residual_preview(geometry, geometry)
+
+        self.assertEqual(rendered.variant, "step")
+        runtime_render.assert_called_once()
+        local_render.assert_not_called()
+
+    def test_invalid_development_runtime_capability_fails_without_local_fallback(self) -> None:
+        triangle = ((-0.35, -0.3, 0.0), (0.35, -0.3, 0.0), (0.0, 0.35, 0.0))
+        geometry = _geometry(triangle)
+        with tempfile.TemporaryDirectory() as temp:
+            capability_path = Path(temp) / "runtime.json"
+            capability_path.write_text("{}", encoding="ascii")
+            capability_path.chmod(0o444)
+            with (
+                mock.patch("meshshot.renderer._AUTHORITY_PATH", Path(temp) / "absent.json"),
+                mock.patch("meshshot.renderer._RUNTIME_CAPABILITY_PATH", capability_path),
+                mock.patch("meshshot.renderer._legacy_browser_render") as local_render,
+            ):
+                with self.assertRaisesRegex(MeshshotError, "runtime capability"):
+                    render_residual_preview(geometry, geometry)
+        local_render.assert_not_called()
+
+    def test_development_runtime_request_is_closed_and_identity_bound(self) -> None:
+        from meshshot import renderer
+
+        capability = {
+            "schema": "text-to-cad.browser-runtime-capability/1",
+            "jobId": "a" * 32,
+            "imageRef": "sha256:development-image",
+            "mcpUrl": "http://127.0.0.1:32001/mcp",
+            "cadRenderUrl": "http://127.0.0.1:32002/cad/render/residual",
+            "cadRenderToken": "b" * 64,
+            "programs": {"residual": "sha256:" + "c" * 64},
+        }
+        triangle = ((-0.35, -0.3, 0.0), (0.35, -0.3, 0.0), (0.0, 0.35, 0.0))
+        loaded, payload, _ = renderer.broker_client.prepare_payload(
+            _geometry(triangle), _geometry(triangle), "step", ()
+        )
+        result = {"ok": True, "pngDataUrl": "data:image/png;base64,AA==", "views": []}
+        response_value = {
+            "schema": "text-to-cad.cad-render-response/1",
+            "jobId": capability["jobId"],
+            "program": "residual",
+            "programDigest": capability["programs"]["residual"],
+            "result": result,
+        }
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, limit):
+                return json.dumps(response_value).encode("ascii")
+
+        with mock.patch.object(
+            renderer._LOOPBACK_OPENER,
+            "open",
+            return_value=Response(),
+        ) as open_request:
+            observed = renderer._runtime_browser_render(capability, payload)
+
+        self.assertEqual(observed, result)
+        request = open_request.call_args.args[0]
+        self.assertEqual(
+            request.headers["Authorization"],
+            "Bearer " + capability["cadRenderToken"],
+        )
+        request_value = json.loads(request.data)
+        self.assertEqual(
+            set(request_value),
+            {"schema", "jobId", "program", "programDigest", "payload"},
+        )
+        self.assertNotIn("profile", request_value["payload"])
+        self.assertEqual(loaded.profile["variants"]["step"]["image_pixels"], [504, 1008])
+
+    def test_development_runtime_capability_rejects_malformed_port(self) -> None:
+        from meshshot import renderer
+
+        with tempfile.TemporaryDirectory() as temp:
+            capability_path = Path(temp) / "runtime.json"
+            capability_path.write_text(
+                json.dumps(
+                    {
+                        "schema": "text-to-cad.browser-runtime-capability/1",
+                        "jobId": "a" * 32,
+                        "imageRef": "sha256:development-image",
+                        "mcpUrl": "http://127.0.0.1:not-a-port/mcp",
+                        "cadRenderUrl": "http://127.0.0.1:32002/cad/render/residual",
+                        "cadRenderToken": "b" * 64,
+                        "programs": {"residual": "sha256:" + "c" * 64},
+                    }
+                ),
+                encoding="ascii",
+            )
+            capability_path.chmod(0o444)
+            with mock.patch("meshshot.renderer._RUNTIME_CAPABILITY_PATH", capability_path):
+                with self.assertRaisesRegex(MeshshotError, "identity is invalid"):
+                    renderer._load_runtime_capability()
+
+    def test_development_runtime_uses_proxy_free_loopback_client(self) -> None:
+        from meshshot import renderer
+
+        proxy_handlers = [
+            handler for handler in renderer._LOOPBACK_OPENER.handlers
+            if isinstance(handler, renderer.urllib_request.ProxyHandler)
+        ]
+        # Supplying ProxyHandler({}) suppresses urllib's default environment-
+        # aware ProxyHandler; build_opener intentionally omits the empty one.
+        self.assertEqual(proxy_handlers, [])
+
     def test_legacy_render_delegates_deadline_to_caller(self) -> None:
         from meshshot import renderer
 

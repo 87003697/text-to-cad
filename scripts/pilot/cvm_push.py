@@ -68,11 +68,8 @@ VIEWER_REQUIRED_PACKAGES = (
     "gifenc",
 )
 CAD_REQUIRED_EXECUTABLES = ("node_modules/.bin/esbuild",)
-CAD_REQUIRED_PACKAGE_VERSIONS = {
-    "esbuild": "0.27.7",
-    "three": "0.160.0",
-    "gifenc": "1.0.3",
-}
+CAD_SNAPSHOT_ESBUILD_VERSION = "0.27.7"
+CAD_LOCKED_PACKAGES = ("three", "gifenc", "meshoptimizer")
 
 
 class PushError(RuntimeError):
@@ -277,7 +274,31 @@ def viewer_dependency_errors(candidate: Path, repo_root: Path) -> tuple[str, ...
     return tuple(errors)
 
 
-def cad_dependency_errors(candidate: Path) -> tuple[str, ...]:
+def cad_required_package_versions(repo_root: Path) -> Mapping[str, str]:
+    """Resolve the snapshot toolchain contract from its canonical lockfile."""
+
+    lock = _read_json(
+        repo_root / "packages/cadjs/package-lock.json",
+        "cadjs lockfile",
+    )
+    packages = lock.get("packages") if isinstance(lock, dict) else None
+    if not isinstance(packages, dict):
+        raise PushError("cadjs package-lock.json has no packages object", 4)
+
+    versions = {"esbuild": CAD_SNAPSHOT_ESBUILD_VERSION}
+    for package in CAD_LOCKED_PACKAGES:
+        locked = packages.get(f"node_modules/{package}")
+        version = locked.get("version") if isinstance(locked, dict) else None
+        if not isinstance(version, str):
+            raise PushError(
+                f"cadjs package-lock.json has no version for {package}",
+                4,
+            )
+        versions[package] = version
+    return versions
+
+
+def cad_dependency_errors(candidate: Path, repo_root: Path) -> tuple[str, ...]:
     """Return every reason a CAD snapshot dependency candidate is incomplete."""
 
     errors: list[str] = []
@@ -285,7 +306,7 @@ def cad_dependency_errors(candidate: Path) -> tuple[str, ...]:
         path = candidate / relative
         if not path.is_file() or not os.access(path, os.X_OK):
             errors.append(f"missing executable {relative}")
-    for package, expected in CAD_REQUIRED_PACKAGE_VERSIONS.items():
+    for package, expected in cad_required_package_versions(repo_root).items():
         path = _package_path(candidate / "node_modules", package)
         actual = _package_version(path)
         if actual is None:
@@ -509,7 +530,10 @@ class CvmPush:
                 label="CAD snapshot dependencies",
                 explicit_name="CVM_PUSH_CAD_BUILD_DEPS_SOURCE",
                 candidates=cad_candidates,
-                validate=cad_dependency_errors,
+                validate=lambda path: cad_dependency_errors(
+                    path,
+                    self.repo_root,
+                ),
             ),
         )
 
