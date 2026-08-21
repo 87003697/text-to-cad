@@ -8,6 +8,7 @@ import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 
 class ScriptedUpstream:
@@ -15,7 +16,9 @@ class ScriptedUpstream:
 
     def __init__(
         self,
-        responses: list[tuple[int, bytes]],
+        responses: list[
+            tuple[int, bytes] | tuple[int, bytes, dict[str, str]]
+        ],
         *,
         delay: float = 0,
     ) -> None:
@@ -37,9 +40,13 @@ class ScriptedUpstream:
                 )
                 owner.request_headers.append(list(self.headers.items()))
                 time.sleep(owner.delay)
-                status, response = owner.responses.pop(0)
+                scripted = owner.responses.pop(0)
+                status, response = scripted[:2]
+                response_headers = scripted[2] if len(scripted) == 3 else {}
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
+                for name, value in response_headers.items():
+                    self.send_header(name, value)
                 self.send_header("Content-Length", str(len(response)))
                 self.end_headers()
                 try:
@@ -200,6 +207,56 @@ class VenusRetryProxyTests(unittest.TestCase):
             [(item["attempt"], item["status"]) for item in audit],
             [(1, 429), (2, 200)],
         )
+
+    def test_rate_limit_honors_bounded_retry_after_hint(self) -> None:
+        limited = b'{"error":{"message":"Too Many Requests"}}'
+        success = b'{"id":"response-after-retry-after"}'
+
+        with tempfile.TemporaryDirectory() as temp:
+            audit_path = Path(temp) / "venus-retry.jsonl"
+            with ScriptedUpstream(
+                [
+                    (429, limited, {"Retry-After": "25"}),
+                    (200, success),
+                ]
+            ) as upstream:
+                from scripts.pilot.venus_retry_proxy import RetryProxy
+
+                with (
+                    mock.patch(
+                        "scripts.pilot.venus_retry_proxy.time.sleep"
+                    ) as sleep,
+                    RetryProxy(
+                        upstream.url,
+                        audit_path,
+                        rate_limit_backoffs=(7,),
+                    ) as proxy,
+                ):
+                    connection = http.client.HTTPConnection(
+                        "127.0.0.1", proxy.port, timeout=2
+                    )
+                    connection.request("POST", "/v1/responses", body=b"{}")
+                    response = connection.getresponse()
+                    response_body = response.read()
+                    connection.close()
+
+        self.assertEqual((response.status, response_body), (200, success))
+        self.assertIn(mock.call(25.0), sleep.call_args_list)
+
+    def test_default_rate_limit_backoffs_cover_a_minute_window(self) -> None:
+        from scripts.pilot.venus_retry_proxy import RetryProxy
+
+        with tempfile.TemporaryDirectory() as temp:
+            proxy = RetryProxy(
+                "http://127.0.0.1:1/llmproxy/v1",
+                Path(temp) / "venus-retry.jsonl",
+            )
+            try:
+                self.assertGreaterEqual(
+                    sum(proxy._server.rate_limit_backoffs), 60
+                )
+            finally:
+                proxy._server.server_close()
 
     def test_empty_400_retries_only_encrypted_reasoning_continuation(self) -> None:
         request_body = json.dumps(

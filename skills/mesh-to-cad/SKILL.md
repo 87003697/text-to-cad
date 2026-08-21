@@ -71,7 +71,9 @@ python skills/mesh-to-cad/scripts/mesh-to-cad-workspace begin-attempt \
 2. Run each build operation through the bounded `run` command. `$cad`
    must build directly in canonical coordinates and leave a complete source
    bundle, registered offline rebuild recipe, CAD artifacts, and measurement
-   GLB under the Attempt's candidate directory.
+   GLB under the Attempt's candidate directory. From Step 0 onward, keep the
+   rebuild recipe bundle-relative and ready for isolated finalization. Give
+   every rebuild a new empty output directory.
 3. Run `$mesh-compare voxblame-preview` on the candidate and inspect all eight
    views.
 4. Run `$mesh-compare voxblame-measure` with `--step 0` and no parent.
@@ -99,9 +101,9 @@ For the chosen parent Measured Step:
    `voxblame.repair-batch/1` selecting one or more Repair Targets and mapping
    stable Planned Edit keys to them.
 3. Begin an Attempt with an explicit `--from-step <M>` and a new intended step.
-4. Execute the Planned Edits through bounded `run` calls, rebuild the CAD
-   artifacts, render the child preview, and measure the child with explicit
-   `--compare-to <M>`.
+4. Execute the Planned Edits through bounded `run` calls, rebuild into a new
+   empty output directory, render the child preview, and measure the child
+   with explicit `--compare-to <M>`.
 5. Run `$mesh-compare voxblame-diff` for the frozen parent/child edge. Inspect
    exact-mask, halo, outside-selected, trajectory, and Exterior Surface facts.
 6. Write Agent assessment and source-change evidence, then atomically publish
@@ -118,9 +120,11 @@ python skills/mesh-to-cad/scripts/mesh-to-cad-workspace publish-cycle \
 
 An Attempt that cannot publish a Measured Step must be frozen with
 `record-attempt`. A failed Attempt consumes no Repair Cycle. A successfully
-measured geometric no-op consumes one. The Workspace permits at most five
-successful Repair Cycles, three Attempts per intended step, and two actual tool
-failures per intended step.
+measured geometric no-op consumes one. Use Repair Cycles for falsifiable,
+geometry-directed edits; make recipe and provenance corrections before a
+Measured Step or while preparing finalization. The Workspace permits at most
+five successful Repair Cycles, three Attempts per intended step, and two actual
+tool failures per intended step.
 
 Stop repair immediately when the objective facts establish acceptance. The
 Agent may stop earlier when no feasible coherent repair remains. Branching from
