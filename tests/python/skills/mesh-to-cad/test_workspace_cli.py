@@ -595,19 +595,20 @@ class WorkspaceCliTests(unittest.TestCase):
             )
 
         def build() -> None:
+            candidate_relative = candidate.relative_to(self.workspace).as_posix()
             built = subprocess.run(
                 (
                     sys.executable,
                     str(CAD_BUILD_PATH),
                     "build",
                     "--source",
-                    "source/model.py",
+                    f"{candidate_relative}/source/model.py",
                     "--input",
-                    "config.txt",
+                    f"{candidate_relative}/config.txt",
                     "--output-dir",
-                    "built",
+                    f"{candidate_relative}/built",
                 ),
-                cwd=candidate,
+                cwd=self.workspace,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -741,6 +742,36 @@ class WorkspaceCliTests(unittest.TestCase):
             str(registry),
         ]
 
+    @staticmethod
+    def write_provider_free_final_preview(
+        workspace: Path,
+        candidate: Path,
+        *,
+        selected_step: int,
+        selected_summary: Path,
+        output: Path,
+        entrypoint: Path,
+    ) -> None:
+        del entrypoint
+        output.mkdir()
+        image = b"provider-free-final-preview\n"
+        (output / "preview.png").write_bytes(image)
+        experiment = json.loads((workspace / "experiment.json").read_text(encoding="utf-8"))
+        preview = {
+            "schema": "voxblame.preview/1",
+            "render_variant": "final",
+            "selected_step": selected_step,
+            "selected_summary_sha256": _sha(selected_summary.read_bytes()),
+            "reference": {
+                "canonical_reference_sha256": experiment["canonical_reference_sha256"]
+            },
+            "profile": {"experiment_identity": experiment["preview_profile"]},
+            "candidate": {"mesh_sha256": _sha(candidate.read_bytes())},
+            "image": {"path": "preview.png", "sha256": _sha(image)},
+        }
+        preview["preview_identity_sha256"] = _identity("voxblame.preview/1", preview)
+        _write_json(output / "preview.json", preview)
+
     def execute_final_case(
         self,
         *,
@@ -805,16 +836,20 @@ class WorkspaceCliTests(unittest.TestCase):
             str(self.preview("candidate-preview", candidate_sha)),
         )
         self.assertEqual(0, status, stderr)
-        status, finalized, stderr = self.invoke(
-            "finalize",
-            "--workspace",
-            str(self.workspace),
-            "--selection",
-            str(self.final_selection(accepted=accepted)),
-            "--notes",
-            str(self.final_notes()),
-            *self.final_tool_arguments(),
-        )
+        with mock.patch.dict(
+            self.cli.finalize_workspace.__globals__,
+            {"_run_final_preview": self.write_provider_free_final_preview},
+        ):
+            status, finalized, stderr = self.invoke(
+                "finalize",
+                "--workspace",
+                str(self.workspace),
+                "--selection",
+                str(self.final_selection(accepted=accepted)),
+                "--notes",
+                str(self.final_notes()),
+                *self.final_tool_arguments(),
+            )
         self.assertEqual(0, status, stderr)
         self.assertIs(accepted, finalized["final"]["accepted"])
         return finalized["final"]
@@ -828,6 +863,7 @@ class WorkspaceCliTests(unittest.TestCase):
             str(self.prepared_setup()),
         )
         self.assertEqual(0, status, stderr)
+
         self.assertTrue(payload["ok"])
         self.assertEqual("mesh-to-cad.workspace/1", payload["workspace"]["schema"])
 
@@ -897,6 +933,153 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertIn("Workspace-Step: 0", message)
         self.assertIn(f"Candidate-SHA256: {candidate_sha}", message)
 
+    def test_step_zero_rejects_recipe_input_outside_candidate_bundle(self) -> None:
+        status, _payload, stderr = self.invoke(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--prepared",
+            str(self.prepared_setup()),
+        )
+        self.assertEqual(0, status, stderr)
+        status, attempt, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(self.initial_plan()),
+            "--intended-step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+        candidate, candidate_sha = self.candidate("candidate-external-recipe", b"candidate")
+        source = candidate / "source/model.py"
+        _write_json(
+            candidate / "artifacts/rebuild.json",
+            {
+                "schema": "mesh-to-cad.rebuild-recipe/1",
+                "executable": "cad.canonical-build/1",
+                "workingDirectory": ".",
+                "network": "forbidden",
+                "ambientInputs": "forbidden",
+                "inputs": [
+                    {
+                        "id": "source",
+                        "role": "canonical-cad-source",
+                        "path": "work/attempts/000004/candidate/source/model.py",
+                        "sha256": _sha(source.read_bytes()),
+                    }
+                ],
+            },
+        )
+        measurement = self.measurement(
+            step=0,
+            compare_to=None,
+            candidate_sha=candidate_sha,
+            observable_sha="9" * 64,
+            accepted=False,
+        )
+
+        status, rejected, _stderr = self.invoke(
+            "publish-step-zero",
+            "--workspace",
+            str(self.workspace),
+            "--attempt",
+            str(attempt["attempt"]["attempt"]),
+            "--candidate",
+            str(candidate),
+            "--candidate-mesh",
+            "artifacts/model.glb",
+            "--measurement",
+            str(measurement),
+            "--preview",
+            str(self.preview("preview-external-recipe", candidate_sha)),
+        )
+
+        self.assertEqual(2, status)
+        self.assertEqual("invalid_workspace_path", rejected["error"]["classification"])
+        self.assertEqual("$.rebuild_recipe.inputs[0].path", rejected["error"]["path"])
+
+    def test_step_zero_revalidates_recipe_inputs_after_candidate_copy(self) -> None:
+        status, _payload, stderr = self.invoke(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--prepared",
+            str(self.prepared_setup()),
+        )
+        self.assertEqual(0, status, stderr)
+        status, attempt, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(self.initial_plan()),
+            "--intended-step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+        candidate, candidate_sha = self.candidate("candidate-copy-race", b"candidate")
+        source = candidate / "source/model.py"
+        _write_json(
+            candidate / "artifacts/rebuild.json",
+            {
+                "schema": "mesh-to-cad.rebuild-recipe/1",
+                "executable": "cad.canonical-build/1",
+                "workingDirectory": ".",
+                "network": "forbidden",
+                "ambientInputs": "forbidden",
+                "inputs": [
+                    {
+                        "id": "source",
+                        "role": "canonical-cad-source",
+                        "path": "source/model.py",
+                        "sha256": _sha(source.read_bytes()),
+                    }
+                ],
+            },
+        )
+        measurement = self.measurement(
+            step=0,
+            compare_to=None,
+            candidate_sha=candidate_sha,
+            observable_sha="9" * 64,
+            accepted=False,
+        )
+        original_copytree = shutil.copytree
+
+        def mutate_before_copy(src, dst, *args, **kwargs):
+            if Path(src).resolve() == candidate.resolve():
+                source.write_text("# changed during publication\n", encoding="utf-8")
+            return original_copytree(src, dst, *args, **kwargs)
+
+        workspace_core = self.cli.publish_step_zero.__globals__
+        with mock.patch.object(workspace_core["shutil"], "copytree", side_effect=mutate_before_copy):
+            status, rejected, _stderr = self.invoke(
+                "publish-step-zero",
+                "--workspace",
+                str(self.workspace),
+                "--attempt",
+                str(attempt["attempt"]["attempt"]),
+                "--candidate",
+                str(candidate),
+                "--candidate-mesh",
+                "artifacts/model.glb",
+                "--measurement",
+                str(measurement),
+                "--preview",
+                str(self.preview("preview-copy-race", candidate_sha)),
+            )
+
+        self.assertEqual(2, status)
+        self.assertEqual("source_mutation", rejected["error"]["classification"])
+        self.assertFalse((self.workspace / "steps/000000").exists())
+        self.assertFalse(any((self.workspace / "work").glob(".tmp-step-zero-*")))
+        status, _workspace_status, stderr = self.invoke(
+            "status", "--workspace", str(self.workspace)
+        )
+        self.assertEqual(0, status, stderr)
+
     def test_finalize_rebuilds_verifies_and_atomically_publishes_accepted_cad(
         self,
     ) -> None:
@@ -960,16 +1143,20 @@ class WorkspaceCliTests(unittest.TestCase):
         )
         self.assertEqual(0, status, stderr)
 
-        status, finalized, stderr = self.invoke(
-            "finalize",
-            "--workspace",
-            str(self.workspace),
-            "--selection",
-            str(self.final_selection(accepted=True)),
-            "--notes",
-            str(self.final_notes()),
-            *self.final_tool_arguments(),
-        )
+        with mock.patch.dict(
+            self.cli.finalize_workspace.__globals__,
+            {"_run_final_preview": self.write_provider_free_final_preview},
+        ):
+            status, finalized, stderr = self.invoke(
+                "finalize",
+                "--workspace",
+                str(self.workspace),
+                "--selection",
+                str(self.final_selection(accepted=True)),
+                "--notes",
+                str(self.final_notes()),
+                *self.final_tool_arguments(),
+            )
 
         self.assertEqual(0, status, stderr)
         self.assertTrue(finalized["final"]["accepted"])
@@ -1119,6 +1306,9 @@ class WorkspaceCliTests(unittest.TestCase):
                 self.mcp_url = "http://127.0.0.1:43111/mcp"
 
             def start(self):
+                return None
+
+            def preflight(self):
                 return None
 
             def stop(self):

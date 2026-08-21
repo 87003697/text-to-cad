@@ -455,7 +455,12 @@ def publish_step_zero(
     )
     stage = transaction / "step"
     stage.mkdir(parents=True)
-    _copy_step_evidence(evidence, stage)
+    try:
+        _copy_step_evidence(evidence, stage)
+        _validate_candidate_rebuild_recipe_if_present(stage / "candidate")
+    except Exception:
+        shutil.rmtree(transaction, ignore_errors=True)
+        raise
     _write_json(stage / "plan.json", plan)
     successful_attempt = {**active, "result": "measured_step_published"}
     _write_json(stage / "attempt.json", successful_attempt)
@@ -751,7 +756,12 @@ def publish_cycle(
     cycle_stage = transaction / "cycle"
     step_stage.mkdir(parents=True)
     cycle_stage.mkdir()
-    _copy_step_evidence(evidence, step_stage)
+    try:
+        _copy_step_evidence(evidence, step_stage)
+        _validate_candidate_rebuild_recipe_if_present(step_stage / "candidate")
+    except Exception:
+        shutil.rmtree(transaction, ignore_errors=True)
+        raise
     step_files = _inventory(step_stage)
     step_document: dict[str, Any] = {
         "schema": STEP_SCHEMA,
@@ -1142,6 +1152,21 @@ def _find_registered_recipe(candidate_root: Path) -> tuple[Path, dict[str, Any]]
     return recipes[0], recipe
 
 
+def _validate_candidate_rebuild_recipe_if_present(candidate_root: Path) -> None:
+    recipes = [
+        path
+        for path in candidate_root.rglob("rebuild.json")
+        if path.is_file() and not path.is_symlink()
+    ]
+    if not recipes:
+        return
+    if len(recipes) != 1:
+        _fail("invalid_rebuild_recipe", "Candidate bundle must not contain multiple rebuild.json files")
+    recipe = _read_json(recipes[0], "$.rebuild_recipe")
+    _validate_registered_recipe_document(recipe)
+    _validated_rebuild_inputs(candidate_root, recipe)
+
+
 def _validate_registered_recipe_document(recipe: Mapping[str, Any]) -> None:
     if "route" in recipe:
         _fail(
@@ -1169,18 +1194,29 @@ def _copy_rebuild_inputs(
     recipe: Mapping[str, Any],
 ) -> list[dict[str, str]]:
     records: list[dict[str, str]] = []
-    for index, item in enumerate(recipe["inputs"]):
-        if not isinstance(item, Mapping) or set(item) - {"id", "role", "path", "sha256"}:
-            _fail("invalid_rebuild_recipe", "recipe input shape is invalid", f"$.rebuild_recipe.inputs[{index}]")
-        source = _relative_member(candidate_root, item.get("path"), f"$.rebuild_recipe.inputs[{index}].path")
-        _sha256(item.get("sha256"), f"$.rebuild_recipe.inputs[{index}].sha256")
-        if _file_sha256(source) != item["sha256"]:
-            _fail("source_mutation", "archived source digest conflicts with rebuild recipe")
+    for item, source in _validated_rebuild_inputs(candidate_root, recipe):
         target = rebuild_root.joinpath(*PurePosixPath(item["path"]).parts)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
         records.append({"path": item["path"], "sha256": item["sha256"]})
     return records
+
+
+def _validated_rebuild_inputs(
+    candidate_root: Path,
+    recipe: Mapping[str, Any],
+) -> list[tuple[Mapping[str, Any], Path]]:
+    validated: list[tuple[Mapping[str, Any], Path]] = []
+    expected_fields = {"id", "role", "path", "sha256"}
+    for index, item in enumerate(recipe["inputs"]):
+        if not isinstance(item, Mapping) or set(item) != expected_fields:
+            _fail("invalid_rebuild_recipe", "recipe input shape is invalid", f"$.rebuild_recipe.inputs[{index}]")
+        source = _relative_member(candidate_root, item.get("path"), f"$.rebuild_recipe.inputs[{index}].path")
+        _sha256(item.get("sha256"), f"$.rebuild_recipe.inputs[{index}].sha256")
+        if _file_sha256(source) != item["sha256"]:
+            _fail("source_mutation", "archived source digest conflicts with rebuild recipe")
+        validated.append((item, source))
+    return validated
 
 
 def _verify_rebuild_inputs_unchanged(root: Path, records: list[dict[str, str]]) -> None:
@@ -1924,6 +1960,7 @@ def _prepare_step_evidence(
     preview = preview.resolve()
     measurement = measurement.resolve()
     _validate_tree_source(candidate, "$.candidate")
+    _validate_candidate_rebuild_recipe_if_present(candidate)
     _validate_tree_source(preview, "$.preview")
     mesh_path = _relative_member(candidate, candidate_mesh, "$.candidate_mesh")
     measurement_document = _read_json(measurement, "$.measurement")
@@ -2443,6 +2480,7 @@ def _validate_step_directory(workspace: Path, root: Path, *, expected_step: int)
     value = _read_json(root / "step.json", f"$.steps[{expected_step}]")
     document = _closed_object(value, _STEP_FIELDS, f"$.steps[{expected_step}]")
     _const(document["schema"], STEP_SCHEMA, f"$.steps[{expected_step}].schema")
+    _validate_candidate_rebuild_recipe_if_present(root / "candidate")
     if document["step"] != expected_step:
         _fail("parent_mismatch", "step directory and manifest number differ")
     identity_document = dict(document)

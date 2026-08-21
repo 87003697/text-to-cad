@@ -233,6 +233,27 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertNotIn(str(root), json.dumps(manifest))
             self.assertNotIn(str(root), json.dumps(recipe))
 
+    def test_build_records_recipe_inputs_relative_to_nested_candidate_bundle(self) -> None:
+        with temporary_directory(prefix="cad-canonical-nested-bundle-") as temp_dir:
+            root = Path(temp_dir)
+            candidate = root / "work/attempts/000004/candidate"
+            _write_canonical_source(candidate)
+
+            result = _run_adapter(
+                root,
+                "build",
+                "--source",
+                "work/attempts/000004/candidate/source/model.py",
+                "--output-dir",
+                "work/attempts/000004/candidate/artifacts",
+            )
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            recipe = json.loads(
+                (candidate / "artifacts/rebuild.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("source/model.py", recipe["inputs"][0]["path"])
+
     def test_saved_recipe_rebuilds_offline_from_only_declared_inputs(self) -> None:
         with temporary_directory(prefix="cad-canonical-rebuild-") as temp_dir:
             temp_root = Path(temp_dir)

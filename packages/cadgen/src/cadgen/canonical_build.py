@@ -575,11 +575,16 @@ def _load_recipe(*, root: Path, recipe_path: str) -> dict[str, Any]:
 
 def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None = None) -> dict[str, Any]:
     root = root.resolve()
-    source_path, source_relative = _relative_path(source, root=root, label="--source", must_exist=True)
+    source_path, _source_root_relative = _relative_path(source, root=root, label="--source", must_exist=True)
     if source_path.suffix.lower() != ".py":
         raise ValueError("--source must name a Python gen_step() source")
     _validate_unitless_source_parameters(source_path)
     output_path, output_relative = _relative_path(output_dir, root=root, label="--output-dir")
+    bundle_root = output_path.parent
+    try:
+        source_relative = source_path.relative_to(bundle_root).as_posix()
+    except ValueError as exc:
+        raise ValueError("--source must be inside the candidate bundle containing --output-dir") from exc
     if output_path == root or source_path == output_path or output_path in source_path.parents:
         raise ValueError("--output-dir must be separate from the declared source")
     if output_path.exists() and any(output_path.iterdir()):
@@ -589,7 +594,11 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
     declared_inputs: list[tuple[Path, str]] = [(source_path, source_relative)]
     seen_inputs = {source_path}
     for raw_input in inputs or []:
-        input_path, input_relative = _relative_path(raw_input, root=root, label="--input", must_exist=True)
+        input_path, _input_root_relative = _relative_path(raw_input, root=root, label="--input", must_exist=True)
+        try:
+            input_relative = input_path.relative_to(bundle_root).as_posix()
+        except ValueError as exc:
+            raise ValueError("--input must be inside the candidate bundle containing --output-dir") from exc
         if input_path in seen_inputs:
             raise ValueError("--input paths must be unique and must not repeat --source")
         if _is_within(input_path, output_path):
