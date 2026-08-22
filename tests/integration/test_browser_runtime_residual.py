@@ -6,7 +6,10 @@ The ordinary unit suite skips this test because it starts Docker and Chromium.
 
 from __future__ import annotations
 
+import asyncio
 from io import BytesIO
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -20,10 +23,12 @@ from PIL import Image
 from tests.python.support.paths import add_repo_path
 
 add_repo_path("packages/browser_runtime/src")
+add_repo_path("packages/cadgen/src")
 add_repo_path("packages/meshscope/src")
 add_repo_path("packages/meshshot/src")
 
 from browser_runtime import BrowserRuntimeJob  # noqa: E402
+from cadgen.snapshot_core import BatchSnapshotRenderer  # noqa: E402
 from meshshot import MeshGeometry, render_residual_preview  # noqa: E402
 from meshshot import runtime_client  # noqa: E402
 from meshscope.voxblame import prepare_preview_scene  # noqa: E402
@@ -108,6 +113,99 @@ class BrowserRuntimeResidualIntegrationTests(unittest.TestCase):
                 self.assertTrue(any(r > 100 and g > 100 for r, g, _ in pixels))
             finally:
                 job.stop()
+            ledger_path = job.capability_dir / "render-ledger.json"
+            ledger_bytes = ledger_path.read_bytes()
+            ledger = json.loads(ledger_bytes)
+            cleanup = json.loads(
+                (job.capability_dir / "cleanup.json").read_text(encoding="ascii")
+            )
+            self.assertEqual(len(ledger["requests"]), 3)
+            self.assertEqual(
+                [row["sequence"] for row in ledger["requests"]],
+                [0, 1, 2],
+            )
+            self.assertTrue(
+                all(
+                    row["program"] == "residual"
+                    and row["outcome"] == "succeeded"
+                    for row in ledger["requests"]
+                )
+            )
+            self.assertEqual(cleanup["renderRequestCount"], 3)
+            self.assertEqual(
+                cleanup["renderLedgerSha256"],
+                "sha256:" + hashlib.sha256(ledger_bytes).hexdigest(),
+            )
+            self.assertTrue(cleanup["containerAbsent"])
+            self.assertTrue(cleanup["networkAbsent"])
+            self.assertTrue(cleanup["passed"])
+
+    def test_real_runtime_records_snapshot_and_cleanup_evidence(self) -> None:
+        image_id = os.environ.get("TTC_BROWSER_RUNTIME_TEST_IMAGE", "")
+        snapshot_glb = os.environ.get("TTC_BROWSER_RUNTIME_TEST_SNAPSHOT_GLB", "")
+        if _IMAGE_ID.fullmatch(image_id) is None:
+            self.skipTest("exact Browser Runtime image ID was not supplied")
+        if not snapshot_glb:
+            self.skipTest("representative snapshot GLB was not supplied")
+
+        model = Path(snapshot_glb).resolve()
+        self.assertTrue(model.is_file())
+        with TemporaryDirectory() as temp:
+            job = BrowserRuntimeJob.create(Path(temp), image_ref=image_id)
+            try:
+                job.start()
+                job.preflight()
+                output_path = Path(temp) / "snapshot.png"
+                renderer = BatchSnapshotRenderer(
+                    Path("skills/cad/scripts/snapshot/runtime"),
+                    capability_path=job.capability_dir / "runtime.json",
+                )
+                result = asyncio.run(renderer.render({
+                    "input": str(model),
+                    "mode": "view",
+                    "outputs": [{
+                        "path": str(output_path),
+                        "width": 256,
+                        "height": 256,
+                        "camera": "iso",
+                    }],
+                    "resolved": {
+                        "rootPath": str(model.parent),
+                        "inputPath": str(model),
+                        "inputUrl": (
+                            "http://snapshot.local/__render_asset/" + model.name
+                        ),
+                        "url": "http://snapshot.local/__render_asset/" + model.name,
+                        "kind": "glb",
+                    },
+                }))
+                self.assertTrue(result["ok"])
+                data_url = result["outputs"][0]["dataUrl"]
+                self.assertTrue(data_url.startswith("data:image/png;base64,"))
+            finally:
+                job.stop()
+
+            ledger_path = job.capability_dir / "render-ledger.json"
+            ledger_bytes = ledger_path.read_bytes()
+            ledger = json.loads(ledger_bytes)
+            cleanup = json.loads(
+                (job.capability_dir / "cleanup.json").read_text(encoding="ascii")
+            )
+            self.assertEqual(
+                [row["program"] for row in ledger["requests"]],
+                ["residual", "snapshot"],
+            )
+            self.assertTrue(
+                all(row["outcome"] == "succeeded" for row in ledger["requests"])
+            )
+            self.assertEqual(cleanup["renderRequestCount"], 2)
+            self.assertEqual(
+                cleanup["renderLedgerSha256"],
+                "sha256:" + hashlib.sha256(ledger_bytes).hexdigest(),
+            )
+            self.assertTrue(cleanup["containerAbsent"])
+            self.assertTrue(cleanup["networkAbsent"])
+            self.assertTrue(cleanup["passed"])
 
     def test_real_runtime_renders_representative_fixture(self) -> None:
         image_id = os.environ.get("TTC_BROWSER_RUNTIME_TEST_IMAGE", "")

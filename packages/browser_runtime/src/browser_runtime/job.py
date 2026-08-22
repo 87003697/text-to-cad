@@ -245,7 +245,10 @@ class BrowserRuntimeJob:
             network_absent = self._remove_and_wait_absent(
                 remove_argv=["docker", "network", "rm", self.network_name],
                 inspect_argv=["docker", "network", "inspect", self.network_name],
-                missing_markers=("no such network",),
+                missing_markers=(
+                    "no such network",
+                    f"network {self.network_name.lower()} not found",
+                ),
             )
         except BrowserRuntimeError as exc:
             errors.append(str(exc))

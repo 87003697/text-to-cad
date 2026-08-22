@@ -92,7 +92,9 @@ def _fake_docker(port_by_container: dict[tuple[str, int], int] | None = None):
         if argv[:3] == ["docker", "network", "inspect"]:
             if argv[-1] not in networks:
                 raise subprocess.CalledProcessError(
-                    1, argv, stderr=f"Error: No such network: {argv[-1]}"
+                    1,
+                    argv,
+                    stderr=f"Error response from daemon: network {argv[-1]} not found",
                 )
             return _completed(stdout="{}\n")
         raise AssertionError(f"unexpected docker call: {argv}")
