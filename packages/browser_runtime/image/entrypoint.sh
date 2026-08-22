@@ -2,8 +2,9 @@
 # Launch Playwright MCP and the fixed CAD render service in one job container.
 #
 # Bind on 0.0.0.0 so docker's port publish can NAT into the container;
-# the container itself is confined to a per-job internal bridge, so
-# cross-container reach requires the host loopback published port.
+# the container itself is confined to a per-job bridge. Registered snapshot
+# pages additionally abort every request outside the baked service and the
+# request's verified content-addressed asset set.
 
 set -euo pipefail
 

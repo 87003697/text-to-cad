@@ -1,7 +1,7 @@
 """Outer-owned lifecycle for a single per-job browser runtime container.
 
 Each job creates:
-- one Docker bridge network (``--internal``, no host reach) named
+- one job-private Docker bridge network named
   ``<prefix>-net``,
 - one container named ``<prefix>-runtime`` running Chromium + Playwright
   MCP, with its internal port published to a random host loopback slot,
@@ -159,7 +159,7 @@ class BrowserRuntimeJob:
         self.capability_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
         self._resolve_local_image_ref()
         self._docker_or_raise(
-            ["docker", "network", "create", "--internal", self.network_name],
+            ["docker", "network", "create", self.network_name],
             purpose="create per-job docker network",
         )
         try:
