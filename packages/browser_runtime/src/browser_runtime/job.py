@@ -75,6 +75,8 @@ class BrowserRuntimeJob:
     docker: DockerRunner = field(default=_run_docker)
     port_ready_timeout_s: float = 20.0
     port_ready_poll_s: float = 0.15
+    cleanup_absence_timeout_s: float = 5.0
+    cleanup_absence_poll_s: float = 0.1
     cpu_limit: str = "1.5"
     memory_limit: str = "2500m"
     shm_size: str = "1g"
@@ -228,21 +230,21 @@ class BrowserRuntimeJob:
         ledger_bytes = self._captured_ledger_bytes
         ledger_count = self._captured_ledger_count
 
-        self._docker_ignore(
-            ["docker", "rm", "--force", "--volumes", self.container_name]
-        )
-        self._docker_ignore(["docker", "network", "rm", self.network_name])
         try:
-            container_absent = self._docker_resource_absent(
-                ["docker", "container", "inspect", self.container_name],
+            container_absent = self._remove_and_wait_absent(
+                remove_argv=[
+                    "docker", "rm", "--force", "--volumes", self.container_name,
+                ],
+                inspect_argv=["docker", "container", "inspect", self.container_name],
                 missing_markers=("no such object", "no such container"),
             )
         except BrowserRuntimeError as exc:
             errors.append(str(exc))
             container_absent = False
         try:
-            network_absent = self._docker_resource_absent(
-                ["docker", "network", "inspect", self.network_name],
+            network_absent = self._remove_and_wait_absent(
+                remove_argv=["docker", "network", "rm", self.network_name],
+                inspect_argv=["docker", "network", "inspect", self.network_name],
                 missing_markers=("no such network",),
             )
         except BrowserRuntimeError as exc:
@@ -704,6 +706,25 @@ class BrowserRuntimeJob:
                 return True
             raise BrowserRuntimeError("docker cleanup absence proof failed") from exc
         return False
+
+    def _remove_and_wait_absent(
+        self,
+        *,
+        remove_argv: Sequence[str],
+        inspect_argv: Sequence[str],
+        missing_markers: tuple[str, ...],
+    ) -> bool:
+        deadline = time.monotonic() + self.cleanup_absence_timeout_s
+        while True:
+            self._docker_ignore(remove_argv)
+            if self._docker_resource_absent(
+                inspect_argv,
+                missing_markers=missing_markers,
+            ):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(self.cleanup_absence_poll_s)
 
     def _docker_or_raise(self, argv: Sequence[str], *, purpose: str) -> None:
         try:

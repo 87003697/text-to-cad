@@ -244,6 +244,8 @@ class LifecycleTests(unittest.TestCase):
         )
         # Skip the real socket poll — port-open check needs a live listener.
         job._wait_for_port = lambda: None  # type: ignore[method-assign]
+        job.cleanup_absence_timeout_s = 0.01
+        job.cleanup_absence_poll_s = 0.0
         def capture_ledger():
             value = {
                 "schema": "text-to-cad.browser-runtime-render-ledger/1",
@@ -510,6 +512,30 @@ class LifecycleTests(unittest.TestCase):
             self.assertTrue(cleanup["passed"])
             self.assertIsNotNone(cleanup["renderLedgerSha256"])
             self.assertEqual(cleanup["renderRequestCount"], 0)
+
+    def test_stop_retries_transient_network_removal_until_exactly_absent(self):
+        with TemporaryDirectory() as tmp:
+            job, docker = self._make_job(tmp)
+            job.start()
+            network_remove_attempts = 0
+
+            def lagged_network_cleanup(argv):
+                nonlocal network_remove_attempts
+                argv = list(argv)
+                if argv[:3] == ["docker", "network", "rm"]:
+                    network_remove_attempts += 1
+                    if network_remove_attempts == 1:
+                        return _completed()
+                return docker(argv)
+
+            job.docker = lagged_network_cleanup
+            job.stop()
+            self.assertGreaterEqual(network_remove_attempts, 2)
+            cleanup = json.loads(
+                (job.capability_dir / "cleanup.json").read_text(encoding="ascii")
+            )
+            self.assertTrue(cleanup["networkAbsent"])
+            self.assertTrue(cleanup["passed"])
 
     def test_capture_render_ledger_exact_validates_and_publishes(self):
         with TemporaryDirectory() as tmp:
