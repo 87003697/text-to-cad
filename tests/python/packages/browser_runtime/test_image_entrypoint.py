@@ -46,6 +46,20 @@ class BrowserRuntimeImageEntrypointTests(unittest.TestCase):
             "sha256:" + digest.hexdigest(),
         )
 
+    def test_snapshot_program_digest_covers_service_and_baked_assets(self) -> None:
+        paths = (
+            REPO_ROOT / "packages/browser_runtime/image/cad-render-service.cjs",
+            REPO_ROOT / "skills/cad/scripts/snapshot/runtime/render.html",
+            REPO_ROOT / "skills/cad/scripts/snapshot/runtime/snapshot-render.js",
+        )
+        digest = hashlib.sha256()
+        for path in paths:
+            digest.update(path.read_bytes())
+        self.assertEqual(
+            CAD_RENDER_PROGRAMS["snapshot"],
+            "sha256:" + digest.hexdigest(),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

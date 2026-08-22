@@ -20,8 +20,8 @@ SANDBOX_RUNTIME_CAPABILITY_PATH = (
 RUNTIME_CAPABILITY_SCHEMA = "text-to-cad.browser-runtime-capability/1"
 # These identities name the closed HTTP Render Programs baked into one exact image.
 CAD_RENDER_PROGRAMS: Mapping[str, str] = {
-    "residual": "sha256:9a7fbaf17a65f8e44c116833eee1b30cf023a50f2c52b30ced030203fe255d33",
-    "snapshot": "sha256:a9fb496cd605bf454bbb2e539238fa302b71b1989117e24ffda0b331e2752f61",
+    "residual": "sha256:3a4e126eac548fb0c2e134a1161e01085c95ce630d31c596d7329721cc6a3d9d",
+    "snapshot": "sha256:9f7c44c619fe224688a838229b343709dd3be4364f01c9138f381ae403044b85",
 }
 
 _PACKAGE_ROOT = Path(__file__).resolve().parents[2]

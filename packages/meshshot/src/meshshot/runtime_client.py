@@ -29,10 +29,10 @@ RUNTIME_CAPABILITY_SCHEMA = "text-to-cad.browser-runtime-capability/1"
 RUNTIME_REQUEST_SCHEMA = "text-to-cad.cad-render-request/2"
 RUNTIME_RESPONSE_SCHEMA = "text-to-cad.cad-render-response/1"
 EXPECTED_RESIDUAL_PROGRAM = (
-    "sha256:9a7fbaf17a65f8e44c116833eee1b30cf023a50f2c52b30ced030203fe255d33"
+    "sha256:3a4e126eac548fb0c2e134a1161e01085c95ce630d31c596d7329721cc6a3d9d"
 )
 EXPECTED_SNAPSHOT_PROGRAM = (
-    "sha256:a9fb496cd605bf454bbb2e539238fa302b71b1989117e24ffda0b331e2752f61"
+    "sha256:9f7c44c619fe224688a838229b343709dd3be4364f01c9138f381ae403044b85"
 )
 _HEX_12_TO_64 = re.compile(r"[0-9a-f]{12,64}\Z")
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
