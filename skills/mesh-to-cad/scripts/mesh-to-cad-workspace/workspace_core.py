@@ -44,7 +44,8 @@ TOOL_FAILURE_RESULT = "tool_failure"
 FINAL_SELECTION_SCHEMA = "mesh-to-cad.final-selection/1"
 FINAL_DELIVERY_SCHEMA = "mesh-to-cad.final-delivery/1"
 VERIFICATION_SCHEMA = "voxblame.verification/1"
-TOOL_REGISTRY_SCHEMA = "mesh-to-cad.tool-registry/1"
+TOOL_REGISTRY_SCHEMA = "mesh-to-cad.tool-registry/2"
+LEGACY_TOOL_REGISTRY_SCHEMA = "mesh-to-cad.tool-registry/1"
 FAILED_ATTEMPT_RESULTS = (
     TOOL_FAILURE_RESULT,
     "strategy_changed",
@@ -1274,6 +1275,16 @@ def _load_tool_registry(
         (rebuild, rebuild_entrypoint, "$.tool_registry.rebuild.entrypoint_sha256"),
         (geometry, geometry_entrypoint, "$.tool_registry.geometry.entrypoint_sha256"),
     ):
+        registered_path = entry.get("entrypoint")
+        if (
+            registered_path is not None
+            and Path(registered_path).resolve() != entrypoint.resolve()
+        ):
+            _fail(
+                "untrusted_tool",
+                "tool entrypoint path conflicts with registry",
+                field.replace("entrypoint_sha256", "entrypoint"),
+            )
         if _file_sha256(entrypoint) != entry["entrypoint_sha256"]:
             _fail("untrusted_tool", "tool entrypoint digest conflicts with registry", field)
     return registry
@@ -1285,29 +1296,58 @@ def _validate_tool_registry_document(value: Mapping[str, Any]) -> dict[str, Any]
         {"schema", "rebuild", "geometry", "identity_sha256"},
         "$.tool_registry",
     )
-    _const(registry["schema"], TOOL_REGISTRY_SCHEMA, "$.tool_registry.schema")
+    schema = registry["schema"]
+    if schema not in (LEGACY_TOOL_REGISTRY_SCHEMA, TOOL_REGISTRY_SCHEMA):
+        _fail("untrusted_tool", "tool registry schema is unsupported", "$.tool_registry.schema")
+    entry_fields = (
+        {"id", "entrypoint_sha256"}
+        if schema == LEGACY_TOOL_REGISTRY_SCHEMA
+        else {"id", "entrypoint", "entrypoint_sha256"}
+    )
     rebuild = _closed_object(
         registry["rebuild"],
-        {"id", "entrypoint_sha256"},
+        entry_fields,
         "$.tool_registry.rebuild",
     )
     geometry = _closed_object(
         registry["geometry"],
-        {"id", "entrypoint_sha256"},
+        entry_fields,
         "$.tool_registry.geometry",
     )
     if rebuild["id"] != "cad.canonical-build/1":
         _fail("untrusted_tool", "tool registry rebuild identity is not canonical CAD")
     if geometry["id"] != "mesh-compare.voxblame/1":
         _fail("untrusted_tool", "tool registry geometry identity is not VoxBlame")
-    for entry, field in (
-        (rebuild, "$.tool_registry.rebuild.entrypoint_sha256"),
-        (geometry, "$.tool_registry.geometry.entrypoint_sha256"),
+    for entry, path_field, digest_field in (
+        (
+            rebuild,
+            "$.tool_registry.rebuild.entrypoint",
+            "$.tool_registry.rebuild.entrypoint_sha256",
+        ),
+        (
+            geometry,
+            "$.tool_registry.geometry.entrypoint",
+            "$.tool_registry.geometry.entrypoint_sha256",
+        ),
     ):
-        _sha256(entry["entrypoint_sha256"], field)
+        if schema == TOOL_REGISTRY_SCHEMA:
+            entrypoint = entry["entrypoint"]
+            if (
+                not isinstance(entrypoint, str)
+                or not entrypoint.startswith("/")
+                or entrypoint.startswith("//")
+                or PurePosixPath(entrypoint).as_posix() != entrypoint
+                or ".." in PurePosixPath(entrypoint).parts
+            ):
+                _fail(
+                    "untrusted_tool",
+                    "tool registry entrypoint is not an absolute canonical path",
+                    path_field,
+                )
+        _sha256(entry["entrypoint_sha256"], digest_field)
     identity_source = dict(registry)
     identity = identity_source.pop("identity_sha256")
-    if identity != _identity(TOOL_REGISTRY_SCHEMA, identity_source):
+    if identity != _identity(schema, identity_source):
         _fail("untrusted_tool", "tool registry identity digest conflicts")
     return {**dict(registry), "rebuild": dict(rebuild), "geometry": dict(geometry)}
 

@@ -719,18 +719,20 @@ class WorkspaceCliTests(unittest.TestCase):
         rebuild = CAD_BUILD_ENTRYPOINT
         registry = self.root / "cad-tool-registry.json"
         registry_value = {
-            "schema": "mesh-to-cad.tool-registry/1",
+            "schema": "mesh-to-cad.tool-registry/2",
             "rebuild": {
                 "id": "cad.canonical-build/1",
+                "entrypoint": str(rebuild),
                 "entrypoint_sha256": _sha(rebuild.read_bytes()),
             },
             "geometry": {
                 "id": "mesh-compare.voxblame/1",
+                "entrypoint": str(MESH_COMPARE_ENTRYPOINT),
                 "entrypoint_sha256": _sha(MESH_COMPARE_ENTRYPOINT.read_bytes()),
             },
         }
         registry_value["identity_sha256"] = _identity(
-            "mesh-to-cad.tool-registry/1", registry_value
+            "mesh-to-cad.tool-registry/2", registry_value
         )
         _write_json(registry, registry_value)
         return [
@@ -741,6 +743,76 @@ class WorkspaceCliTests(unittest.TestCase):
             "--tool-registry",
             str(registry),
         ]
+
+    def test_tool_registry_requires_matching_absolute_entrypoint(self) -> None:
+        arguments = self.final_tool_arguments()
+        registry = Path(arguments[-1])
+        value = json.loads(registry.read_text(encoding="utf-8"))
+        value["rebuild"]["entrypoint"] = "skills/cad/scripts/canonical-build"
+        value_without_identity = dict(value)
+        value_without_identity.pop("identity_sha256")
+        value["identity_sha256"] = _identity(
+            "mesh-to-cad.tool-registry/2", value_without_identity
+        )
+        _write_json(registry, value)
+
+        load_registry = self.cli.finalize_workspace.__globals__["_load_tool_registry"]
+        with self.assertRaises(self.cli.WorkspaceError) as raised:
+            load_registry(
+                registry,
+                rebuild_entrypoint=CAD_BUILD_ENTRYPOINT,
+                geometry_entrypoint=MESH_COMPARE_ENTRYPOINT,
+            )
+        self.assertEqual("untrusted_tool", raised.exception.classification)
+
+    def test_tool_registry_rejects_double_slash_entrypoint(self) -> None:
+        arguments = self.final_tool_arguments()
+        registry = Path(arguments[-1])
+        value = json.loads(registry.read_text(encoding="utf-8"))
+        value["rebuild"]["entrypoint"] = "//" + value["rebuild"][
+            "entrypoint"
+        ].lstrip("/")
+        value_without_identity = dict(value)
+        value_without_identity.pop("identity_sha256")
+        value["identity_sha256"] = _identity(
+            "mesh-to-cad.tool-registry/2", value_without_identity
+        )
+        _write_json(registry, value)
+
+        load_registry = self.cli.finalize_workspace.__globals__["_load_tool_registry"]
+        with self.assertRaises(self.cli.WorkspaceError) as raised:
+            load_registry(
+                registry,
+                rebuild_entrypoint=CAD_BUILD_ENTRYPOINT,
+                geometry_entrypoint=MESH_COMPARE_ENTRYPOINT,
+            )
+        self.assertEqual("untrusted_tool", raised.exception.classification)
+
+    def test_tool_registry_reads_legacy_v1_without_entrypoint(self) -> None:
+        registry = self.root / "legacy-tool-registry.json"
+        value = {
+            "schema": "mesh-to-cad.tool-registry/1",
+            "rebuild": {
+                "id": "cad.canonical-build/1",
+                "entrypoint_sha256": _sha(CAD_BUILD_ENTRYPOINT.read_bytes()),
+            },
+            "geometry": {
+                "id": "mesh-compare.voxblame/1",
+                "entrypoint_sha256": _sha(MESH_COMPARE_ENTRYPOINT.read_bytes()),
+            },
+        }
+        value["identity_sha256"] = _identity(
+            "mesh-to-cad.tool-registry/1", value
+        )
+        _write_json(registry, value)
+
+        load_registry = self.cli.finalize_workspace.__globals__["_load_tool_registry"]
+        loaded = load_registry(
+            registry,
+            rebuild_entrypoint=CAD_BUILD_ENTRYPOINT,
+            geometry_entrypoint=MESH_COMPARE_ENTRYPOINT,
+        )
+        self.assertEqual("mesh-to-cad.tool-registry/1", loaded["schema"])
 
     @staticmethod
     def write_provider_free_final_preview(

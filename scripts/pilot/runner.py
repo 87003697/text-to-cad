@@ -62,6 +62,12 @@ MANIFEST_EXCLUDED_PREFIXES = {"run/.codex-upper"}
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
 CAD_REBUILD_ENTRYPOINT = REPO_ROOT / "skills/cad/scripts/canonical-build/__main__.py"
 GEOMETRY_ENTRYPOINT = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare/__main__.py"
+SANDBOX_CAD_REBUILD_ENTRYPOINT = (
+    SANDBOX_REPO_ROOT / "skills/cad/scripts/canonical-build/__main__.py"
+)
+SANDBOX_GEOMETRY_ENTRYPOINT = (
+    SANDBOX_REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare/__main__.py"
+)
 VIEWER_RUNTIME_DIR = REPO_ROOT / "skills/cad-viewer/scripts/viewer"
 TRUSTED_TOOL_REGISTRY_NAME = "trusted-tool-registry.json"
 SYSTEM_RO_PATHS = (
@@ -117,22 +123,24 @@ def publish_tool_registry(authority_dir: Path) -> Path:
         if not path.is_file() or path.is_symlink():
             raise PilotError("trusted tool entrypoint is unavailable")
     value: dict[str, object] = {
-        "schema": "mesh-to-cad.tool-registry/1",
+        "schema": "mesh-to-cad.tool-registry/2",
         "rebuild": {
             "id": "cad.canonical-build/1",
+            "entrypoint": str(SANDBOX_CAD_REBUILD_ENTRYPOINT),
             "entrypoint_sha256": hashlib.sha256(
                 CAD_REBUILD_ENTRYPOINT.read_bytes()
             ).hexdigest(),
         },
         "geometry": {
             "id": "mesh-compare.voxblame/1",
+            "entrypoint": str(SANDBOX_GEOMETRY_ENTRYPOINT),
             "entrypoint_sha256": hashlib.sha256(
                 GEOMETRY_ENTRYPOINT.read_bytes()
             ).hexdigest(),
         },
     }
     value["identity_sha256"] = hashlib.sha256(
-        b"mesh-to-cad.tool-registry/1\0" + _workspace_json_bytes(value)
+        b"mesh-to-cad.tool-registry/2\0" + _workspace_json_bytes(value)
     ).hexdigest()
     target = Path(authority_dir) / TRUSTED_TOOL_REGISTRY_NAME
     temporary = target.with_name(f".{target.name}.tmp")

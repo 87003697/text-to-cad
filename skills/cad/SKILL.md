@@ -87,6 +87,19 @@ python scripts/canonical-build build \
   --output-dir artifacts
 ```
 
+When the command is wrapped by `mesh-to-cad-workspace run`, the child cwd is
+the experiment root. Read the runner-owned
+`/run/meshshot-browser/trusted-tool-registry.json` and invoke the rebuild
+entry's absolute `entrypoint`; do not prefix a repository-relative
+`skills/cad/...` launcher. Keep `--source`, `--input`, and `--output-dir`
+relative to the experiment root. In the sealed pilot this has the form:
+
+```bash
+python /workspace/repo/skills/cad/scripts/canonical-build/__main__.py build \
+  --source work/attempt-000001/candidate/source/model.py \
+  --output-dir work/attempt-000001/candidate/artifacts
+```
+
 Omit `--input` when the generator has no local sidecars; repeat it for every file the generator reads. A successful build is complete when `build.json`, `profile.json`, `rebuild.json`, `canonical.step`, and `measurement.glb` exist in the explicit output directory.
 
 Rebuild a saved bundle through its registered recipe:

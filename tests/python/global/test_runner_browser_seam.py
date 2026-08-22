@@ -35,9 +35,17 @@ class PrepareSandboxMcpConfigTests(unittest.TestCase):
             registry_path = runner.publish_tool_registry(authority)
             registry = json.loads(registry_path.read_text(encoding="utf-8"))
 
-            self.assertEqual(registry["schema"], "mesh-to-cad.tool-registry/1")
+            self.assertEqual(registry["schema"], "mesh-to-cad.tool-registry/2")
             self.assertEqual(registry["rebuild"]["id"], "cad.canonical-build/1")
+            self.assertEqual(
+                registry["rebuild"]["entrypoint"],
+                "/workspace/repo/skills/cad/scripts/canonical-build/__main__.py",
+            )
             self.assertEqual(registry["geometry"]["id"], "mesh-compare.voxblame/1")
+            self.assertEqual(
+                registry["geometry"]["entrypoint"],
+                "/workspace/repo/skills/mesh-compare/scripts/mesh-compare/__main__.py",
+            )
             self.assertEqual(registry_path.stat().st_mode & 0o777, 0o444)
             self.assertEqual(
                 registry_path,
