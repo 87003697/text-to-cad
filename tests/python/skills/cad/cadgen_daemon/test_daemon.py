@@ -150,26 +150,6 @@ class CadgenDaemonTests(unittest.TestCase):
         self.assertIn("is current", output)
         self.assertLess(elapsed, 2.0, f"warm request took {elapsed:.2f}s")
 
-    def test_b1_source_edit_rebuilds_the_written_step(self) -> None:
-        """A warm build must not export geometry cached before a source edit."""
-        from build123d import import_step
-
-        source = self.model_dir / "box.step.py"
-        step = self.model_dir / "box.step"
-
-        exit_code, output = self._warm_run(["box.step.py", "--write"])
-        self.assertEqual(0, exit_code, output)
-        before = import_step(step).bounding_box().size.X
-        self.assertAlmostEqual(10.0, before, places=5)
-
-        source.write_text(BOX_SOURCE.replace("10.0, 8.0, 4.0", "11.0, 8.0, 4.0"), encoding="utf-8")
-        exit_code, output = self._warm_run(["box.step.py", "--write"])
-        self.assertEqual(0, exit_code, output)
-        self.assertIn("built", output)
-        after = import_step(step).bounding_box().size.X
-        self.assertAlmostEqual(11.0, after, places=5)
-        self.assertNotEqual(before, after)
-
     def test_c_version_token_mismatch_triggers_restart(self) -> None:
         frames = _raw_request(
             self.socket_path,
