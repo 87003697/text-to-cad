@@ -159,7 +159,7 @@ class BrowserRuntimeJob:
         self.capability_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
         self._resolve_local_image_ref()
         self._docker_or_raise(
-            ["docker", "network", "create", self.network_name],
+            ["docker", "network", "create", "--internal", self.network_name],
             purpose="create per-job docker network",
         )
         try:
@@ -333,8 +333,8 @@ class BrowserRuntimeJob:
             "--env", f"TTC_CAD_RENDER_TOKEN={self._cad_render_token}",
             "--env", f"TTC_BROWSER_RUNTIME_JOB_ID={self.owner_nonce}",
             "--env", (
-                "TTC_CAD_RENDER_PROGRAM_DIGEST="
-                f"{CAD_RENDER_PROGRAMS['residual']}"
+                "TTC_CAD_RENDER_PROGRAMS_JSON="
+                + json.dumps(dict(CAD_RENDER_PROGRAMS), separators=(",", ":"))
             ),
             "--read-only",
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=512m",
@@ -414,8 +414,7 @@ class BrowserRuntimeJob:
                 if (
                     isinstance(value, dict)
                     and value.get("schema") == "text-to-cad.cad-render-health/1"
-                    and value.get("program") == "residual"
-                    and value.get("programDigest") == CAD_RENDER_PROGRAMS["residual"]
+                    and value.get("programs") == dict(CAD_RENDER_PROGRAMS)
                 ):
                     return
             except (OSError, ValueError, urllib_error.URLError, json.JSONDecodeError):

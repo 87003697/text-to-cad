@@ -44,6 +44,10 @@ of stdout).
    or `.3mf`, also pass `--glb-output
    ${EXP_DIR}/input_preview.glb`; this command performs the required CAD Z-up
    to glTF Y-up conversion and neutral preview-material normalization.
+   This command consumes the job's read-only Browser Runtime capability. If
+   the capability is missing or rejected, stop and report that failure; the
+   outer runner owns browser provisioning. Do not install Playwright/Chromium
+   or start a local browser.
 3. **Hand off to `$cad-viewer`.** If the input mesh is `.stl` or
    `.glb`, hand the original path directly. If it is `.ply`, `.obj`, or
    `.3mf`, hand off the exact `input_preview.glb` produced by step 2. Do not

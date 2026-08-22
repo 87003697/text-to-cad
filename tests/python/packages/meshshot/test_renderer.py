@@ -38,7 +38,10 @@ def _capability() -> dict:
         "mcpUrl": "http://127.0.0.1:32001/mcp",
         "cadRenderUrl": "http://127.0.0.1:32002/cad/render/residual",
         "cadRenderToken": "b" * 64,
-        "programs": {"residual": runtime_client.EXPECTED_RESIDUAL_PROGRAM},
+        "programs": {
+            "residual": runtime_client.EXPECTED_RESIDUAL_PROGRAM,
+            "snapshot": runtime_client.EXPECTED_SNAPSHOT_PROGRAM,
+        },
     }
 
 

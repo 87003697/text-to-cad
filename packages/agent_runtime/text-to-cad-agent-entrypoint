@@ -60,7 +60,10 @@ FULL_DIGEST_KEYS = tuple(key for key in IDENTITY_KEYS if key.endswith("Digest"))
 EXACT_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 HEX_AUTHORITY = re.compile(r"[0-9a-f]{12,64}\Z")
 RESIDUAL_PROGRAM_DIGEST = (
-    "sha256:9d8e841ee6acef17e842e9ed23d8d537a155b5f7a36d4838758af4cb348d1359"
+    "sha256:9a7fbaf17a65f8e44c116833eee1b30cf023a50f2c52b30ced030203fe255d33"
+)
+SNAPSHOT_PROGRAM_DIGEST = (
+    "sha256:a9fb496cd605bf454bbb2e539238fa302b71b1989117e24ffda0b331e2752f61"
 )
 
 
@@ -244,7 +247,10 @@ def _browser_runtime_capability_digest(
         or not isinstance(value.get("cadRenderToken"), str)
         or HEX_AUTHORITY.fullmatch(value["cadRenderToken"]) is None
         or not isinstance(programs, dict)
-        or programs != {"residual": RESIDUAL_PROGRAM_DIGEST}
+        or programs != {
+            "residual": RESIDUAL_PROGRAM_DIGEST,
+            "snapshot": SNAPSHOT_PROGRAM_DIGEST,
+        }
     ):
         raise GateError("Browser Runtime capability schema is invalid")
     return _digest(payload)

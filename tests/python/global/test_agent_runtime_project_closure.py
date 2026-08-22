@@ -137,6 +137,19 @@ def _write_synthetic_meshscope_wheel(destination: Path, source: dict) -> None:
 
 
 class AgentRuntimeProjectClosureTests(unittest.TestCase):
+    def test_snapshot_skills_do_not_install_agent_local_playwright(self) -> None:
+        for skill in ("cad", "dxf", "sdf", "srdf", "urdf"):
+            requirements = REPO_ROOT / "skills" / skill / "requirements.txt"
+            if requirements.is_file():
+                self.assertNotIn(
+                    "playwright", requirements.read_text(encoding="utf-8").lower(), skill
+                )
+        snapshot_core = (
+            REPO_ROOT / "packages" / "cadgen" / "src" / "cadgen" / "snapshot_core.py"
+        ).read_text(encoding="utf-8")
+        for forbidden in ("playwright.async_api", "chromium.launch", "playwright install"):
+            self.assertNotIn(forbidden, snapshot_core)
+
     def test_project_closure_uses_the_single_shared_canonical_json_seam(self) -> None:
         closure = _load_project_closure()
         from scripts.pilot.agent_runtime import canonical_json_bytes

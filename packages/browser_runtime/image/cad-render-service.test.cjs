@@ -6,6 +6,7 @@ const test = require("node:test");
 
 const {
   createCadRenderServer,
+  validateRegisteredRequest,
   validateRequest,
 } = require("./cad-render-service.cjs");
 
@@ -26,14 +27,14 @@ const triangle = {
   indicesU32LeBase64: encodeTypedArray(new Uint32Array([0, 1, 2])),
 };
 
-function request(port, body, authorization = `Bearer ${token}`) {
+function request(port, body, authorization = `Bearer ${token}`, requestPath = "/cad/render/residual") {
   return new Promise((resolve, reject) => {
     const encoded = Buffer.from(JSON.stringify(body));
     const operation = http.request(
       {
         host: "127.0.0.1",
         port,
-        path: "/cad/render/residual",
+        path: requestPath,
         method: "POST",
         headers: {
           authorization,
@@ -87,6 +88,86 @@ test("serves one closed residual operation", async (context) => {
     programDigest,
     result: expectedResult,
   });
+});
+
+test("serves the registered snapshot operation with verified assets", async (context) => {
+  const snapshotDigest = `sha256:${"d".repeat(64)}`;
+  const bytes = Buffer.from("glTF-test");
+  const assetDigest = `sha256:${require("node:crypto").createHash("sha256").update(bytes).digest("hex")}`;
+  const payload = {
+    job: {
+      mode: "view",
+      outputs: [{ path: "/browser-runtime/output/0.png", width: 64, height: 64 }],
+      resolved: {
+        rootPath: "/browser-runtime/model",
+        inputPath: "/browser-runtime/model/input.glb",
+        url: `http://snapshot.local/__runtime_asset/${assetDigest.slice(7)}.glb`,
+      },
+    },
+    assets: [{
+      url: `http://snapshot.local/__runtime_asset/${assetDigest.slice(7)}.glb`,
+      mediaType: "model/gltf-binary",
+      byteLength: bytes.length,
+      sha256: assetDigest,
+      bytesBase64: bytes.toString("base64"),
+    }],
+  };
+  const expectedResult = { ok: true, outputs: [] };
+  const server = createCadRenderServer({
+    token,
+    programs: { residual: programDigest, snapshot: snapshotDigest },
+    jobId,
+    assets: {
+      html: Buffer.from("html"), javascript: Buffer.from("js"),
+      snapshot: { html: Buffer.from("snapshot html"), javascript: Buffer.from("snapshot js") },
+    },
+    render: async () => assert.fail("residual render must not run"),
+    renderSnapshot: async (received) => {
+      assert.deepEqual(received, payload);
+      return expectedResult;
+    },
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const response = await request(server.address().port, {
+    schema: "text-to-cad.cad-render-request/2",
+    jobId,
+    program: "snapshot",
+    programDigest: snapshotDigest,
+    payload,
+  }, `Bearer ${token}`, "/cad/render/snapshot");
+  assert.equal(response.status, 200);
+  assert.equal(response.value.program, "snapshot");
+  assert.equal(response.value.programDigest, snapshotDigest);
+  assert.deepEqual(response.value.result, expectedResult);
+});
+
+test("snapshot validation rejects every unstaged network spelling", () => {
+  const snapshotDigest = `sha256:${"d".repeat(64)}`;
+  const programs = { residual: programDigest, snapshot: snapshotDigest };
+  for (const value of [
+    "//169.254.169.254/latest/meta-data",
+    " http://169.254.169.254/latest/meta-data",
+    "https://example.invalid/model.glb",
+    "file:///etc/passwd",
+  ]) {
+    assert.throws(() => validateRegisteredRequest({
+      schema: "text-to-cad.cad-render-request/2",
+      jobId,
+      program: "snapshot",
+      programDigest: snapshotDigest,
+      payload: { job: { resolved: { url: value } }, assets: [] },
+    }, programs, jobId), /payload is invalid/);
+  }
+  for (const value of ["file handle", "http_mount", "data label", "javascript mode"]) {
+    assert.doesNotThrow(() => validateRegisteredRequest({
+      schema: "text-to-cad.cad-render-request/2",
+      jobId,
+      program: "snapshot",
+      programDigest: snapshotDigest,
+      payload: { job: { label: value }, assets: [] },
+    }, programs, jobId));
+  }
 });
 
 test("rejects an invalid token and unknown request keys", async (context) => {

@@ -23,14 +23,18 @@ import json
 import mimetypes
 import os
 import re
+import stat
 import sys
 import time
+import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote, urlparse
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from cadgen.coordination import PHASE_RENDER, resolve as resolve_progress
 
@@ -38,6 +42,23 @@ from cadgen.coordination import PHASE_RENDER, resolve as resolve_progress
 SNAPSHOT_ORIGIN = "http://snapshot.local"
 SNAPSHOT_RENDER_URL = f"{SNAPSHOT_ORIGIN}/render.html"
 SNAPSHOT_ROUTE_GLOB = f"{SNAPSHOT_ORIGIN}/**"
+RUNTIME_CAPABILITY_PATH = Path("/run/meshshot-browser/runtime.json")
+RUNTIME_CAPABILITY_SCHEMA = "text-to-cad.browser-runtime-capability/1"
+RUNTIME_REQUEST_SCHEMA = "text-to-cad.cad-render-request/2"
+RUNTIME_RESPONSE_SCHEMA = "text-to-cad.cad-render-response/1"
+EXPECTED_SNAPSHOT_PROGRAM = (
+    "sha256:a9fb496cd605bf454bbb2e539238fa302b71b1989117e24ffda0b331e2752f61"
+)
+EXPECTED_RESIDUAL_PROGRAM = (
+    "sha256:9a7fbaf17a65f8e44c116833eee1b30cf023a50f2c52b30ced030203fe255d33"
+)
+_RUNTIME_SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_RUNTIME_HEX = re.compile(r"[0-9a-f]{12,64}\Z")
+_MAX_RUNTIME_CAPABILITY_BYTES = 16 * 1024
+_MAX_SNAPSHOT_ASSET_BYTES = 128 * 1024 * 1024
+_MAX_SNAPSHOT_REQUEST_BYTES = 160 * 1024 * 1024
+_MAX_SNAPSHOT_RESPONSE_BYTES = 64 * 1024 * 1024
+_RUNTIME_HTTP = urllib_request.build_opener(urllib_request.ProxyHandler({}))
 # A snapshot is usually READ by an agent rather than looked at by a person, so it does not
 # default to a viewer theme at all: `snapshot` is Workbench Light with the ground grid and
 # origin axis removed (themeSettings.js RENDER_ONLY_THEME_PRESETS). Those two are helpful
@@ -741,113 +762,307 @@ async def with_snapshot_timeout(awaitable: Any, timeout_seconds: object, label: 
         return await asyncio.wait_for(awaitable, timeout=timeout)
     except asyncio.TimeoutError as exc:
         raise SnapshotError(f"{label} timed out after {timeout_seconds}s") from exc
+def _valid_runtime_url(value: object, expected_path: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "http"
+        and parsed.hostname == "127.0.0.1"
+        and parsed.username is None
+        and parsed.password is None
+        and port is not None
+        and parsed.path == expected_path
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def load_snapshot_runtime_capability(
+    path: Path = RUNTIME_CAPABILITY_PATH,
+) -> dict[str, object]:
+    """Load the one immutable Browser Runtime capability; there is no local fallback."""
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError as exc:
+        raise SnapshotError("Browser Runtime capability is required for CAD snapshot") from exc
+    except OSError as exc:
+        raise SnapshotError("Browser Runtime capability is unavailable for CAD snapshot") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != os.getuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o444
+        ):
+            raise SnapshotError("Browser Runtime capability is replaceable")
+        raw = os.read(descriptor, _MAX_RUNTIME_CAPABILITY_BYTES + 1)
+    finally:
+        os.close(descriptor)
+    if not raw or len(raw) > _MAX_RUNTIME_CAPABILITY_BYTES:
+        raise SnapshotError("Browser Runtime capability has an invalid size")
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SnapshotError("Browser Runtime capability is not valid JSON") from exc
+    expected_keys = {
+        "schema", "jobId", "imageRef", "mcpUrl", "cadRenderUrl",
+        "cadRenderToken", "programs",
+    }
+    programs = value.get("programs") if is_plain_object(value) else None
+    if (
+        not is_plain_object(value)
+        or set(value) != expected_keys
+        or value.get("schema") != RUNTIME_CAPABILITY_SCHEMA
+        or not isinstance(value.get("jobId"), str)
+        or _RUNTIME_HEX.fullmatch(value["jobId"]) is None
+        or not isinstance(value.get("imageRef"), str)
+        or _RUNTIME_SHA256.fullmatch(value["imageRef"]) is None
+        or not _valid_runtime_url(value.get("mcpUrl"), "/mcp")
+        or not _valid_runtime_url(value.get("cadRenderUrl"), "/cad/render/residual")
+        or not isinstance(value.get("cadRenderToken"), str)
+        or _RUNTIME_HEX.fullmatch(value["cadRenderToken"]) is None
+        or programs != {
+            "residual": EXPECTED_RESIDUAL_PROGRAM,
+            "snapshot": EXPECTED_SNAPSHOT_PROGRAM,
+        }
+    ):
+        raise SnapshotError("Browser Runtime capability identity is invalid")
+    return dict(value)
+
+
+def _snapshot_asset_packet(job: Mapping[str, object]) -> tuple[dict[str, object], list[dict[str, object]], list[str]]:
+    resolved = job.get("resolved") if is_plain_object(job.get("resolved")) else {}
+    root_path = Path(str(resolved.get("rootPath") or "")).resolve()
+    assets: dict[str, dict[str, object]] = {}
+    staged_paths: dict[Path, str] = {}
+    staging_paths: set[Path] = set()
+    source_outputs = job.get("outputs") if isinstance(job.get("outputs"), list) else []
+    original_paths = [
+        str(output.get("path") or "")
+        for output in source_outputs
+        if is_plain_object(output)
+    ]
+
+    def stage_file(file_path: Path) -> str:
+        file_path = file_path.resolve()
+        if file_path in staged_paths:
+            return staged_paths[file_path]
+        if file_path in staging_paths:
+            raise SnapshotError("Robot snapshot asset dependency cycle is invalid")
+        staging_paths.add(file_path)
+        try:
+            payload = file_path.read_bytes()
+        except OSError as exc:
+            staging_paths.discard(file_path)
+            raise SnapshotError(f"Cannot stage snapshot asset: {file_path.name}") from exc
+        suffix = file_path.suffix.lower()
+        if suffix in {".urdf", ".sdf"}:
+            try:
+                document = ET.fromstring(payload)
+            except ET.ParseError as exc:
+                raise SnapshotError(f"Cannot parse robot snapshot asset: {file_path.name}") from exc
+            references: list[tuple[ET.Element, str, str]] = []
+            if suffix == ".urdf":
+                references.extend(
+                    (element, "attribute", str(element.get("filename") or "").strip())
+                    for element in document.iter()
+                    if element.tag.rsplit("}", 1)[-1] == "mesh"
+                )
+            else:
+                for mesh_element in document.iter():
+                    if mesh_element.tag.rsplit("}", 1)[-1] != "mesh":
+                        continue
+                    references.extend(
+                        (element, "text", str(element.text or "").strip())
+                        for element in list(mesh_element)
+                        if element.tag.rsplit("}", 1)[-1] == "uri"
+                    )
+            for element, location, reference in references:
+                if not reference:
+                    continue
+                parsed_reference = urlparse(reference)
+                if parsed_reference.scheme and parsed_reference.scheme != "package":
+                    raise SnapshotError("Robot snapshot assets must be local files")
+                if parsed_reference.query or parsed_reference.fragment:
+                    raise SnapshotError("Robot snapshot asset references cannot contain query or fragment")
+                if parsed_reference.scheme == "package":
+                    package_path = "/".join(
+                        part for part in (parsed_reference.netloc, parsed_reference.path.lstrip("/")) if part
+                    )
+                    dependency = root_path / unquote(package_path)
+                else:
+                    if parsed_reference.netloc:
+                        raise SnapshotError("Robot snapshot assets must be local files")
+                    dependency = file_path.parent / unquote(parsed_reference.path)
+                dependency = dependency.resolve()
+                if not path_is_inside_or_equal(dependency, root_path) or not dependency.is_file():
+                    raise SnapshotError(f"Robot snapshot asset is unavailable: {reference}")
+                dependency_url = stage_file(dependency)
+                if location == "attribute":
+                    element.set("filename", dependency_url)
+                else:
+                    element.text = dependency_url
+            payload = ET.tostring(document, encoding="utf-8", xml_declaration=True)
+        if len(payload) > _MAX_SNAPSHOT_ASSET_BYTES:
+            raise SnapshotError("Snapshot asset exceeds Browser Runtime budget")
+        digest = "sha256:" + sha256(payload).hexdigest()
+        asset_url = f"{SNAPSHOT_ORIGIN}/__runtime_asset/{digest[7:]}{suffix}"
+        assets.setdefault(
+            asset_url,
+            {
+                "url": asset_url,
+                "mediaType": content_type_for_path(file_path),
+                "byteLength": len(payload),
+                "sha256": digest,
+                "bytesBase64": base64.b64encode(payload).decode("ascii"),
+            },
+        )
+        staging_paths.remove(file_path)
+        staged_paths[file_path] = asset_url
+        return asset_url
+
+    def rewrite(value: object) -> object:
+        if isinstance(value, list):
+            return [rewrite(item) for item in value]
+        if is_plain_object(value):
+            return {str(key): rewrite(item) for key, item in value.items()}
+        if not isinstance(value, str):
+            return value
+        parsed = urlparse(value)
+        raw_url = value if parsed.scheme else f"{SNAPSHOT_ORIGIN}{value}"
+        if not parsed.path.startswith("/__render_asset/"):
+            candidate = Path(value)
+            if candidate.is_absolute():
+                try:
+                    relative = candidate.resolve().relative_to(root_path)
+                except (OSError, ValueError):
+                    relative = None
+                if relative is not None:
+                    return "/browser-runtime/model/" + relative.as_posix()
+            return value
+        try:
+            file_path = resolve_snapshot_route_file(
+                raw_url,
+                runtime_dir=Path("."),
+                active_root_path=root_path,
+            )
+        except (OSError, RouteFileError) as exc:
+            raise SnapshotError(f"Cannot stage snapshot asset: {parsed.path}") from exc
+        return stage_file(file_path)
+
+    runtime_job = rewrite(copy.deepcopy(dict(job)))
+    input_suffix = Path(str(resolved.get("inputPath") or "model")).suffix.lower()
+    runtime_job["input"] = f"/browser-runtime/model/input{input_suffix}"
+    runtime_resolved = runtime_job.get("resolved")
+    if is_plain_object(runtime_resolved):
+        runtime_resolved["rootPath"] = "/browser-runtime/model"
+        runtime_resolved["inputPath"] = f"/browser-runtime/model/input{input_suffix}"
+    outputs = runtime_job.get("outputs") if isinstance(runtime_job.get("outputs"), list) else []
+    if len(outputs) != len(original_paths):
+        raise SnapshotError("Snapshot output plan is invalid")
+    for index, (output, original_path) in enumerate(zip(outputs, original_paths, strict=True)):
+        if not is_plain_object(output):
+            continue
+        suffix = Path(original_path).suffix.lower() or ".png"
+        output["path"] = f"/browser-runtime/output/{index}{suffix}"
+    return runtime_job, list(assets.values()), original_paths
+
+
+def _restore_snapshot_paths(result: dict[str, object], paths: list[str]) -> dict[str, object]:
+    outputs = result.get("outputs") if isinstance(result.get("outputs"), list) else []
+    if len(outputs) != len(paths):
+        raise SnapshotError("Browser Runtime snapshot output count is invalid")
+    for output, output_path in zip(outputs, paths, strict=True):
+        if not is_plain_object(output):
+            raise SnapshotError("Browser Runtime snapshot output is invalid")
+        output["path"] = output_path
+    return result
+
+
 class BatchSnapshotRenderer:
-    def __init__(self, runtime_dir: Path) -> None:
-        # Each skill bundles its own render.html/snapshot-render.js, so the driver is told
-        # where they are rather than locating them relative to itself.
+    """One-shot client for the outer-owned, registered snapshot Render Program."""
+
+    def __init__(self, runtime_dir: Path, capability_path: Path | None = None) -> None:
+        # Kept in the constructor for caller compatibility; browser assets are baked into
+        # the exact Browser Runtime image and are never loaded from the Agent workspace.
         self.runtime_dir = Path(runtime_dir)
-        self.playwright = None
-        self.browser = None
-        self.context = None
-        self.page = None
-        self.active_root_path: Path | None = None
+        self.capability_path = capability_path or RUNTIME_CAPABILITY_PATH
+        self.capability: dict[str, object] | None = None
         self.started = False
 
     async def start(self) -> None:
-        if self.started:
-            return
-        try:
-            try:
-                from playwright.async_api import async_playwright
-            except ImportError as exc:
-                raise SnapshotError(
-                    "CAD snapshot requires the Python playwright package. "
-                    "Install the CAD skill requirements, then run `python -m playwright install chromium` if needed."
-                ) from exc
-            self.playwright = await async_playwright().start()
-            self.browser = await self.playwright.chromium.launch(
-                headless=True,
-                timeout=RENDER_BROWSER_STARTUP_TIMEOUT_MS,
-            )
-            self.context = await self.browser.new_context(
-                viewport={"width": SIMPLE_RENDER_WIDTH, "height": SIMPLE_RENDER_HEIGHT},
-                device_scale_factor=1,
-            )
-            self.page = await self.context.new_page()
-            await self.page.route(SNAPSHOT_ROUTE_GLOB, self.handle_route)
-            await self.page.goto(SNAPSHOT_RENDER_URL, wait_until="load", timeout=DEFAULT_TIMEOUT_SECONDS * 1000)
-            await self.page.wait_for_function(
-                "typeof window.__snapshotRender === 'function'",
-                timeout=DEFAULT_TIMEOUT_SECONDS * 1000,
-            )
+        if not self.started:
+            self.capability = load_snapshot_runtime_capability(self.capability_path)
             self.started = True
-        except Exception:  # noqa: BLE001 - any startup failure must still tear down the browser, then re-raise
-            await self.close()
-            raise
 
-    async def handle_route(self, route: Any) -> None:
-        request = route.request
-        if request.method != "GET":
-            await route.fulfill(status=405, content_type="text/plain; charset=utf-8", body="method not allowed")
-            return
-        try:
-            file_path = resolve_snapshot_route_file(
-                request.url,
-                runtime_dir=self.runtime_dir,
-                active_root_path=self.active_root_path,
-            )
-        except RouteFileError as exc:
-            await route.fulfill(status=exc.status, content_type="text/plain; charset=utf-8", body=str(exc))
-            return
-        except Exception as exc:
-            await route.fulfill(status=500, content_type="text/plain; charset=utf-8", body=str(exc))
-            return
-        if not file_path.is_file():
-            await route.fulfill(status=404, content_type="text/plain; charset=utf-8", body="not found")
-            return
-        await route.fulfill(
-            status=200,
-            content_type=content_type_for_path(file_path),
-            headers={"cache-control": "no-store"},
-            body=file_path.read_bytes(),
+    def _render_sync(self, job: Mapping[str, object]) -> dict[str, object]:
+        if self.capability is None:
+            raise SnapshotError("Browser Runtime snapshot client is not started")
+        runtime_job, assets, output_paths = _snapshot_asset_packet(job)
+        capability = self.capability
+        request_value = {
+            "schema": RUNTIME_REQUEST_SCHEMA,
+            "jobId": capability["jobId"],
+            "program": "snapshot",
+            "programDigest": EXPECTED_SNAPSHOT_PROGRAM,
+            "payload": {"job": runtime_job, "assets": assets},
+        }
+        encoded = json.dumps(
+            request_value, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")
+        if len(encoded) > _MAX_SNAPSHOT_REQUEST_BYTES:
+            raise SnapshotError("Browser Runtime snapshot request is too large")
+        render_url = str(capability["cadRenderUrl"]).replace(
+            "/cad/render/residual", "/cad/render/snapshot"
         )
+        request = urllib_request.Request(
+            render_url,
+            data=encoded,
+            headers={
+                "authorization": f"Bearer {capability['cadRenderToken']}",
+                "content-type": "application/json",
+            },
+            method="POST",
+        )
+        timeout = max(1.0, float(job.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS))
+        try:
+            with _RUNTIME_HTTP.open(request, timeout=timeout) as response:
+                response_bytes = response.read(_MAX_SNAPSHOT_RESPONSE_BYTES + 1)
+        except (OSError, urllib_error.URLError) as exc:
+            raise SnapshotError("Browser Runtime snapshot request failed") from exc
+        if len(response_bytes) > _MAX_SNAPSHOT_RESPONSE_BYTES:
+            raise SnapshotError("Browser Runtime snapshot response is too large")
+        try:
+            response_value = json.loads(response_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SnapshotError("Browser Runtime snapshot response is invalid") from exc
+        if (
+            not is_plain_object(response_value)
+            or set(response_value) != {"schema", "jobId", "program", "programDigest", "result"}
+            or response_value.get("schema") != RUNTIME_RESPONSE_SCHEMA
+            or response_value.get("jobId") != capability["jobId"]
+            or response_value.get("program") != "snapshot"
+            or response_value.get("programDigest") != EXPECTED_SNAPSHOT_PROGRAM
+            or not is_plain_object(response_value.get("result"))
+            or response_value["result"].get("ok") is not True
+        ):
+            raise SnapshotError("Browser Runtime snapshot response identity is invalid")
+        return _restore_snapshot_paths(dict(response_value["result"]), output_paths)
 
     async def render(self, job: Mapping[str, object]) -> dict[str, object]:
         await self.start()
-        resolved = job.get("resolved") if is_plain_object(job.get("resolved")) else {}
-        self.active_root_path = Path(str(resolved.get("rootPath") or "")).resolve()
-        width, height = max_output_size(job)
-        await self.page.set_viewport_size({"width": width, "height": height})
-        timeout_seconds = job.get("timeoutSeconds") or DEFAULT_TIMEOUT_SECONDS
-        result = await with_snapshot_timeout(
-            self.page.evaluate("(renderJob) => window.__snapshotRender(renderJob)", dict(job)),
-            timeout_seconds,
-        )
-        if not is_plain_object(result) or not result.get("ok"):
-            message = result.get("error") if is_plain_object(result) else ""
-            raise SnapshotError(str(message or "unknown browser snapshot failure"))
-        return result
+        return await asyncio.to_thread(self._render_sync, job)
 
     async def close(self) -> None:
-        if self.context is not None:
-            try:
-                await self.context.close()
-            except Exception:  # noqa: BLE001 - best-effort teardown; a failing close must not mask the original error
-                pass
-            self.context = None
-        if self.browser is not None:
-            try:
-                await self.browser.close()
-            except Exception:  # noqa: BLE001 - best-effort teardown; a failing close must not mask the original error
-                pass
-            self.browser = None
-        if self.playwright is not None:
-            try:
-                await self.playwright.stop()
-            except Exception:  # noqa: BLE001 - best-effort teardown; a failing close must not mask the original error
-                pass
-            self.playwright = None
-        self.page = None
+        self.capability = None
         self.started = False
 # --- progress ----------------------------------------------------------------------
 # A snapshot was silent for its ENTIRE run, then grew a progress class of its own: free-text

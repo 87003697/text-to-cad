@@ -31,6 +31,9 @@ RUNTIME_RESPONSE_SCHEMA = "text-to-cad.cad-render-response/1"
 EXPECTED_RESIDUAL_PROGRAM = (
     "sha256:9a7fbaf17a65f8e44c116833eee1b30cf023a50f2c52b30ced030203fe255d33"
 )
+EXPECTED_SNAPSHOT_PROGRAM = (
+    "sha256:a9fb496cd605bf454bbb2e539238fa302b71b1989117e24ffda0b331e2752f61"
+)
 _HEX_12_TO_64 = re.compile(r"[0-9a-f]{12,64}\Z")
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _OUTSIDE_DIRECTIONS = frozenset({"-x", "+x", "-y", "+y", "-z", "+z"})
@@ -193,8 +196,10 @@ def load_runtime_capability(
         or not isinstance(capability["cadRenderToken"], str)
         or _HEX_12_TO_64.fullmatch(capability["cadRenderToken"]) is None
         or not isinstance(programs, dict)
-        or set(programs) != {"residual"}
-        or programs["residual"] != EXPECTED_RESIDUAL_PROGRAM
+        or programs != {
+            "residual": EXPECTED_RESIDUAL_PROGRAM,
+            "snapshot": EXPECTED_SNAPSHOT_PROGRAM,
+        }
     ):
         raise MeshshotError("browser runtime capability identity is invalid")
     return capability

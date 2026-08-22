@@ -130,7 +130,10 @@ class ProductionAgentEntrypointTests(unittest.TestCase):
                 "mcpUrl": "http://127.0.0.1:32001/mcp",
                 "cadRenderUrl": "http://127.0.0.1:32002/cad/render/residual",
                 "cadRenderToken": "c" * 64,
-                "programs": {"residual": entrypoint.RESIDUAL_PROGRAM_DIGEST},
+                "programs": {
+                    "residual": entrypoint.RESIDUAL_PROGRAM_DIGEST,
+                    "snapshot": entrypoint.SNAPSHOT_PROGRAM_DIGEST,
+                },
             }
             payload = entrypoint._canonical(capability)
             path.write_bytes(payload)

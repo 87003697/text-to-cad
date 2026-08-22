@@ -37,6 +37,10 @@ COPY packages/meshshot/src/meshshot/runtime/residual-render.js \
   /opt/text-to-cad/render-programs/residual/residual-render.js
 COPY packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json \
   /opt/text-to-cad/render-programs/residual/cadena_residual_eight_view_v1.json
+COPY skills/cad/scripts/snapshot/runtime/render.html \
+  /opt/text-to-cad/render-programs/snapshot/render.html
+COPY skills/cad/scripts/snapshot/runtime/snapshot-render.js \
+  /opt/text-to-cad/render-programs/snapshot/snapshot-render.js
 RUN chmod 0755 /usr/local/bin/entrypoint.sh
 
 USER pwuser

@@ -276,7 +276,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(capability["imageRef"], job.image_ref)
             self.assertEqual(capability["mcpUrl"], job.mcp_url)
             self.assertEqual(capability["cadRenderUrl"], job.cad_render_url)
-            self.assertEqual(set(capability["programs"]), {"residual"})
+            self.assertEqual(set(capability["programs"]), {"residual", "snapshot"})
             self.assertEqual(capability_path.stat().st_mode & 0o777, 0o444)
 
     def test_start_publishes_mcp_and_cad_render_ports(self):

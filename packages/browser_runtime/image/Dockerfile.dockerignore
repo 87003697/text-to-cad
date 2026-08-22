@@ -12,3 +12,10 @@
 !packages/meshshot/src/meshshot/runtime/residual-render.js
 !packages/meshshot/src/meshshot/profiles/
 !packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json
+!skills/
+!skills/cad/
+!skills/cad/scripts/
+!skills/cad/scripts/snapshot/
+!skills/cad/scripts/snapshot/runtime/
+!skills/cad/scripts/snapshot/runtime/render.html
+!skills/cad/scripts/snapshot/runtime/snapshot-render.js

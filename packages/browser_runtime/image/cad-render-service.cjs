@@ -3,15 +3,17 @@
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const REQUEST_SCHEMA = "text-to-cad.cad-render-request/2";
 const RESPONSE_SCHEMA = "text-to-cad.cad-render-response/1";
-const MAX_REQUEST_BYTES = 96 * 1024 * 1024;
-const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_REQUEST_BYTES = 160 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PORT = 9224;
 const DEFAULT_REQUEST_BODY_TIMEOUT_MS = 10_000;
 const DEFAULT_RENDER_TIMEOUT_MS = 110_000;
 const DEFAULT_PROGRAM_ROOT = "/opt/text-to-cad/render-programs/residual";
+const DEFAULT_SNAPSHOT_PROGRAM_ROOT = "/opt/text-to-cad/render-programs/snapshot";
 const DEFAULT_CHROME =
   "/ms-playwright/chromium_headless_shell-1161/chrome-linux/headless_shell";
 
@@ -77,6 +79,53 @@ function validGeometry(value) {
   return true;
 }
 
+function validSnapshotAsset(value) {
+  if (!exactKeys(value, ["url", "mediaType", "byteLength", "sha256", "bytesBase64"])) {
+    return false;
+  }
+  if (
+    typeof value.url !== "string" ||
+    !/^http:\/\/snapshot\.local\/__runtime_asset\/[0-9a-f]{64}(?:\.[a-z0-9]+)?$/.test(value.url) ||
+    typeof value.mediaType !== "string" || value.mediaType.length < 1 || value.mediaType.length > 128 ||
+    !Number.isSafeInteger(value.byteLength) || value.byteLength < 0 ||
+    value.byteLength > 128 * 1024 * 1024 ||
+    typeof value.sha256 !== "string" || !/^sha256:[0-9a-f]{64}$/.test(value.sha256) ||
+    !canonicalBase64(value.bytesBase64, value.byteLength)
+  ) return false;
+  const bytes = Buffer.from(value.bytesBase64, "base64");
+  const observed = `sha256:${crypto.createHash("sha256").update(bytes).digest("hex")}`;
+  return observed === value.sha256 && value.url.includes(`/${observed.slice(7)}`);
+}
+
+function snapshotJobUsesOnlyAssets(value, assetUrls) {
+  if (Array.isArray(value)) return value.every((item) => snapshotJobUsesOnlyAssets(item, assetUrls));
+  if (value && typeof value === "object") {
+    return Object.values(value).every((item) => snapshotJobUsesOnlyAssets(item, assetUrls));
+  }
+  if (typeof value !== "string") return true;
+  const candidate = value.trim();
+  if (/^(?:\/\/|\\\\|https?:|file:|data:|blob:|javascript:)/i.test(candidate)) {
+    return candidate === value && assetUrls.has(value);
+  }
+  return !value.includes("/../") && !value.includes("\\..\\");
+}
+
+function validateSnapshotPayload(payload) {
+  if (!exactKeys(payload, ["job", "assets"]) || !payload.job || typeof payload.job !== "object" ||
+      Array.isArray(payload.job) || !Array.isArray(payload.assets) || payload.assets.length > 4096) {
+    return false;
+  }
+  let totalBytes = 0;
+  const urls = new Set();
+  for (const asset of payload.assets) {
+    if (!validSnapshotAsset(asset) || urls.has(asset.url)) return false;
+    urls.add(asset.url);
+    totalBytes += asset.byteLength;
+    if (totalBytes > 128 * 1024 * 1024) return false;
+  }
+  return snapshotJobUsesOnlyAssets(payload.job, urls);
+}
+
 function validateRequest(value, programDigest, jobId) {
   if (!exactKeys(value, ["schema", "jobId", "program", "programDigest", "payload"])) {
     throw new Error("request schema is invalid");
@@ -107,6 +156,20 @@ function validateRequest(value, programDigest, jobId) {
     throw new Error("residual payload is invalid");
   }
   return value;
+}
+
+function validateRegisteredRequest(value, programs, jobId) {
+  if (!exactKeys(value, ["schema", "jobId", "program", "programDigest", "payload"])) {
+    throw new Error("request schema is invalid");
+  }
+  if (
+    value.schema !== REQUEST_SCHEMA || value.jobId !== jobId ||
+    !Object.prototype.hasOwnProperty.call(programs, value.program) ||
+    value.programDigest !== programs[value.program]
+  ) throw new Error("request identity is invalid");
+  if (value.program === "residual") return validateRequest(value, programs.residual, jobId);
+  if (value.program === "snapshot" && validateSnapshotPayload(value.payload)) return value;
+  throw new Error("request payload is invalid");
 }
 
 function jsonResponse(response, status, value) {
@@ -144,15 +207,21 @@ async function renderWithDeadline(render, payload, timeoutMs) {
 function createCadRenderServer({
   token,
   programDigest,
+  programs,
   jobId,
   render,
+  renderSnapshot,
   assets,
   requestBodyTimeoutMs = DEFAULT_REQUEST_BODY_TIMEOUT_MS,
   renderTimeoutMs = DEFAULT_RENDER_TIMEOUT_MS,
 }) {
+  const registeredPrograms = programs || { residual: programDigest };
   if (!/^[0-9a-f]{64}$/.test(token)) throw new Error("CAD render token is invalid");
-  if (!/^sha256:[0-9a-f]{64}$/.test(programDigest)) {
-    throw new Error("CAD render program digest is invalid");
+  if (
+    !exactKeys(registeredPrograms, ["residual", "snapshot"].filter((key) => registeredPrograms[key])) ||
+    !Object.values(registeredPrograms).every((digest) => /^sha256:[0-9a-f]{64}$/.test(digest))
+  ) {
+    throw new Error("CAD render programs are invalid");
   }
   if (!/^[0-9a-f]{12,64}$/.test(jobId)) throw new Error("browser runtime job ID is invalid");
   if (!Number.isSafeInteger(requestBodyTimeoutMs) || requestBodyTimeoutMs <= 0) {
@@ -165,8 +234,7 @@ function createCadRenderServer({
     if (request.method === "GET" && request.url === "/healthz") {
       jsonResponse(response, 200, {
         schema: "text-to-cad.cad-render-health/1",
-        program: "residual",
-        programDigest,
+        programs: registeredPrograms,
       });
       return;
     }
@@ -186,7 +254,19 @@ function createCadRenderServer({
       response.end(assets.javascript);
       return;
     }
-    if (request.method !== "POST" || request.url !== "/cad/render/residual") {
+    if (request.method === "GET" && request.url === "/cad/assets/snapshot/render.html" && assets.snapshot) {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      response.end(assets.snapshot.html);
+      return;
+    }
+    if (request.method === "GET" && request.url === "/snapshot-render.js" && assets.snapshot) {
+      response.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+      response.end(assets.snapshot.javascript);
+      return;
+    }
+    const requestedProgram = request.url === "/cad/render/residual" ? "residual" :
+      request.url === "/cad/render/snapshot" ? "snapshot" : null;
+    if (request.method !== "POST" || requestedProgram === null) {
       jsonResponse(response, 404, { ok: false, error: "not found" });
       return;
     }
@@ -234,22 +314,25 @@ function createCadRenderServer({
       clearTimeout(bodyTimer);
       let value;
       try {
-        value = validateRequest(
+        value = validateRegisteredRequest(
           JSON.parse(Buffer.concat(chunks).toString("utf8")),
-          programDigest,
+          registeredPrograms,
           jobId,
         );
+        if (value.program !== requestedProgram) throw new Error("request route is invalid");
       } catch {
         jsonResponse(response, 400, { ok: false, error: "invalid request" });
         return;
       }
       try {
-        const result = await renderWithDeadline(render, value.payload, renderTimeoutMs);
+        const selectedRender = value.program === "snapshot" ? renderSnapshot : render;
+        if (typeof selectedRender !== "function") throw new Error("render program is unavailable");
+        const result = await renderWithDeadline(selectedRender, value.payload, renderTimeoutMs);
         jsonResponse(response, 200, {
           schema: RESPONSE_SCHEMA,
           jobId: value.jobId,
-          program: "residual",
-          programDigest,
+          program: value.program,
+          programDigest: value.programDigest,
           result,
         });
       } catch {
@@ -262,11 +345,13 @@ function createCadRenderServer({
 
 async function startProductionService() {
   const token = process.env.TTC_CAD_RENDER_TOKEN || "";
-  const programDigest = process.env.TTC_CAD_RENDER_PROGRAM_DIGEST || "";
+  const programs = JSON.parse(process.env.TTC_CAD_RENDER_PROGRAMS_JSON || "{}");
   const jobId = process.env.TTC_BROWSER_RUNTIME_JOB_ID || "";
   const host = process.env.TTC_CAD_RENDER_HOST || "0.0.0.0";
   const port = Number(process.env.TTC_CAD_RENDER_PORT || DEFAULT_PORT);
   const programRoot = process.env.TTC_CAD_RENDER_PROGRAM_ROOT || DEFAULT_PROGRAM_ROOT;
+  const snapshotProgramRoot =
+    process.env.TTC_SNAPSHOT_RENDER_PROGRAM_ROOT || DEFAULT_SNAPSHOT_PROGRAM_ROOT;
   const profilePath =
     process.env.TTC_CAD_RENDER_PROFILE_PATH ||
     path.join(programRoot, "cadena_residual_eight_view_v1.json");
@@ -274,6 +359,10 @@ async function startProductionService() {
   const assets = {
     html: fs.readFileSync(path.join(programRoot, "render.html")),
     javascript: fs.readFileSync(path.join(programRoot, "residual-render.js")),
+    snapshot: {
+      html: fs.readFileSync(path.join(snapshotProgramRoot, "render.html")),
+      javascript: fs.readFileSync(path.join(snapshotProgramRoot, "snapshot-render.js")),
+    },
   };
   const profile = JSON.parse(fs.readFileSync(profilePath, "utf8"));
   const { chromium } = require("playwright-core");
@@ -307,7 +396,56 @@ async function startProductionService() {
       await context.close();
     }
   };
-  const server = createCadRenderServer({ token, programDigest, jobId, render, assets });
+  const renderSnapshot = async (payload, signal) => {
+    const outputs = Array.isArray(payload.job.outputs) ? payload.job.outputs : [];
+    const width = Math.max(1, ...outputs.map((output) => Number(output.width) || 1));
+    const height = Math.max(1, ...outputs.map((output) => Number(output.height) || 1));
+    const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1 });
+    const abort = () => void context.close().catch(() => {});
+    signal.addEventListener("abort", abort, { once: true });
+    const assetMap = new Map(payload.assets.map((asset) => [asset.url, asset]));
+    try {
+      const page = await context.newPage();
+      await page.route("**/*", async (route) => {
+        const requestUrl = route.request().url();
+        const asset = assetMap.get(requestUrl);
+        if (asset) {
+          if (route.request().method() !== "GET") {
+            await route.fulfill({ status: 405, body: "method not allowed" });
+            return;
+          }
+          await route.fulfill({
+            status: 200,
+            contentType: asset.mediaType,
+            headers: { "cache-control": "no-store" },
+            body: Buffer.from(asset.bytesBase64, "base64"),
+          });
+          return;
+        }
+        const allowedOrigin = `http://127.0.0.1:${port}`;
+        if (
+          route.request().method() === "GET" &&
+          (requestUrl === `${allowedOrigin}/cad/assets/snapshot/render.html` ||
+            requestUrl === `${allowedOrigin}/snapshot-render.js`)
+        ) {
+          await route.continue();
+          return;
+        }
+        await route.abort("blockedbyclient");
+      });
+      await page.goto(`http://127.0.0.1:${port}/cad/assets/snapshot/render.html`, {
+        waitUntil: "load", timeout: DEFAULT_RENDER_TIMEOUT_MS,
+      });
+      await page.waitForFunction("typeof window.__snapshotRender === 'function'", null, {
+        timeout: DEFAULT_RENDER_TIMEOUT_MS,
+      });
+      return await page.evaluate((job) => window.__snapshotRender(job), payload.job);
+    } finally {
+      signal.removeEventListener("abort", abort);
+      await context.close();
+    }
+  };
+  const server = createCadRenderServer({ token, programs, jobId, render, renderSnapshot, assets });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, resolve);
@@ -327,6 +465,7 @@ module.exports = {
   createCadRenderServer,
   renderWithDeadline,
   validateRequest,
+  validateRegisteredRequest,
 };
 
 if (require.main === module) {

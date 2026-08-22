@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import io
 import json
@@ -10,7 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest import mock
 from urllib.parse import parse_qs, urlparse
 
@@ -64,6 +65,7 @@ add_repo_path("packages/cadgen/src")
 # the CAD skill's behaviour, so they drive the shared implementation through that skill's
 # runtime directory.
 import cadgen.snapshot_cli as snapshot_main
+import cadgen.snapshot_core as snapshot_core
 import snapshot.__main__ as cad_snapshot_entry
 from cadgen.snapshot_cli import (
     SnapshotError,
@@ -1367,81 +1369,200 @@ class SnapshotCliTests(unittest.TestCase):
             RUNTIME_DIR / "snapshot-render.js",
         )
 
-    def test_snapshot_renderer_does_not_force_chromium_single_process(self) -> None:
-        captured_launch_options = {}
+    def test_snapshot_renderer_requires_browser_runtime_without_local_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            renderer = snapshot_main.BatchSnapshotRenderer(
+                RUNTIME_DIR, capability_path=Path(temp) / "missing-runtime.json"
+            )
+            with self.assertRaisesRegex(
+                SnapshotError, "Browser Runtime capability is required"
+            ):
+                asyncio.run(renderer.start())
+        source = repo_path("packages/cadgen/src/cadgen/snapshot_core.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("playwright.async_api", source)
+        self.assertNotIn("chromium.launch", source)
+        self.assertNotIn("playwright install", source)
 
-        class FakePage:
-            async def route(self, *args, **kwargs):
-                pass
+    def test_snapshot_renderer_posts_content_addressed_assets_to_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            mesh = root / "part.glb"
+            mesh.write_bytes(b"glTF" + b"\0" * 32)
+            capability_path = root / "runtime.json"
+            capability = {
+                "schema": snapshot_core.RUNTIME_CAPABILITY_SCHEMA,
+                "jobId": "a" * 32,
+                "imageRef": "sha256:" + "b" * 64,
+                "mcpUrl": "http://127.0.0.1:31001/mcp",
+                "cadRenderUrl": "http://127.0.0.1:31002/cad/render/residual",
+                "cadRenderToken": "c" * 64,
+                "programs": {
+                    "residual": snapshot_core.EXPECTED_RESIDUAL_PROGRAM,
+                    "snapshot": snapshot_core.EXPECTED_SNAPSHOT_PROGRAM,
+                },
+            }
+            capability_path.write_text(json.dumps(capability), encoding="ascii")
+            capability_path.chmod(0o444)
+            output_path = root / "preview.png"
+            job = {
+                "input": str(mesh),
+                "mode": "view",
+                "outputs": [
+                    {"path": str(output_path), "width": 64, "height": 64, "camera": "iso"}
+                ],
+                "resolved": {
+                    "rootPath": str(root),
+                    "inputPath": str(mesh),
+                    "inputUrl": "http://snapshot.local/__render_asset/part.glb",
+                    "url": "http://snapshot.local/__render_asset/part.glb",
+                    "kind": "glb",
+                },
+            }
+            response_value = {
+                "schema": snapshot_core.RUNTIME_RESPONSE_SCHEMA,
+                "jobId": capability["jobId"],
+                "program": "snapshot",
+                "programDigest": snapshot_core.EXPECTED_SNAPSHOT_PROGRAM,
+                "result": {
+                    "ok": True,
+                    "outputs": [
+                        {
+                            "path": "/browser-runtime/output/0.png",
+                            "width": 64,
+                            "height": 64,
+                            "dataUrl": "data:image/png;base64,iVBORw0KGgo=",
+                        }
+                    ],
+                },
+            }
 
-            async def goto(self, *args, **kwargs):
-                pass
+            class FakeResponse(io.BytesIO):
+                def __enter__(self):
+                    return self
 
-            async def wait_for_function(self, *args, **kwargs):
-                pass
+                def __exit__(self, *_args):
+                    self.close()
 
-        class FakeContext:
-            async def new_page(self):
-                return FakePage()
+            captured = {}
 
-            async def close(self):
-                pass
+            def open_request(request, timeout):
+                captured["url"] = request.full_url
+                captured["body"] = json.loads(request.data)
+                captured["timeout"] = timeout
+                return FakeResponse(json.dumps(response_value).encode("ascii"))
 
-        class FakeBrowser:
-            async def new_context(self, *args, **kwargs):
-                return FakeContext()
+            renderer = snapshot_main.BatchSnapshotRenderer(
+                RUNTIME_DIR, capability_path=capability_path
+            )
+            with mock.patch.object(snapshot_core._RUNTIME_HTTP, "open", open_request):
+                result = asyncio.run(renderer.render(job))
 
-            async def close(self):
-                pass
+            self.assertEqual(captured["url"], "http://127.0.0.1:31002/cad/render/snapshot")
+            request_value = captured["body"]
+            self.assertEqual(request_value["program"], "snapshot")
+            self.assertEqual(len(request_value["payload"]["assets"]), 1)
+            asset = request_value["payload"]["assets"][0]
+            self.assertTrue(asset["url"].startswith("http://snapshot.local/__runtime_asset/"))
+            self.assertEqual(base64.b64decode(asset["bytesBase64"]), mesh.read_bytes())
+            self.assertNotIn(str(root), json.dumps(request_value))
+            self.assertEqual(result["outputs"][0]["path"], str(output_path))
 
-        class FakeChromium:
-            async def launch(self, **kwargs):
-                captured_launch_options.update(kwargs)
-                return FakeBrowser()
+    def test_snapshot_asset_packet_rewrites_robot_link_meshes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            meshes = root / "meshes"
+            meshes.mkdir()
+            link = meshes / "link.stl"
+            link.write_bytes(b"solid link\nendsolid link\n")
+            robot = root / "robot.urdf"
+            robot.write_text(
+                '<robot name="fixture"><link name="body"><visual><geometry>'
+                '<mesh filename="meshes/link.stl"/></geometry></visual></link></robot>',
+                encoding="utf-8",
+            )
+            job = {
+                "input": str(robot),
+                "mode": "view",
+                "outputs": [{"path": str(root / "robot.png"), "width": 64, "height": 64}],
+                "resolved": {
+                    "rootPath": str(root),
+                    "inputPath": str(robot),
+                    "inputUrl": "http://snapshot.local/__render_asset/robot.urdf",
+                    "url": "http://snapshot.local/__render_asset/robot.urdf",
+                    "kind": "urdf",
+                },
+            }
 
-        class FakePlaywright:
-            def __init__(self) -> None:
-                self.chromium = FakeChromium()
+            runtime_job, assets, _ = snapshot_core._snapshot_asset_packet(job)
 
-            async def stop(self):
-                pass
+            self.assertEqual(len(assets), 2)
+            robot_asset = next(asset for asset in assets if asset["url"].endswith(".urdf"))
+            robot_xml = base64.b64decode(robot_asset["bytesBase64"]).decode("utf-8")
+            mesh_url = next(asset["url"] for asset in assets if asset["url"].endswith(".stl"))
+            self.assertIn(mesh_url, robot_xml)
+            self.assertNotIn("meshes/link.stl", robot_xml)
+            self.assertEqual(runtime_job["resolved"]["url"], robot_asset["url"])
 
-        fake_playwright = FakePlaywright()
+    def test_snapshot_asset_packet_decodes_robot_mesh_uri_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            meshes = root / "meshes"
+            meshes.mkdir()
+            (meshes / "link mesh.stl").write_bytes(b"solid link\nendsolid link\n")
+            robot = root / "robot.urdf"
+            robot.write_text(
+                '<robot name="fixture"><link name="body"><visual><geometry>'
+                '<mesh filename="meshes/link%20mesh.stl"/></geometry></visual></link></robot>',
+                encoding="utf-8",
+            )
+            job = {
+                "input": str(robot),
+                "mode": "view",
+                "outputs": [{"path": str(root / "robot.png"), "width": 64, "height": 64}],
+                "resolved": {
+                    "rootPath": str(root),
+                    "inputPath": str(robot),
+                    "inputUrl": "http://snapshot.local/__render_asset/robot.urdf",
+                    "url": "http://snapshot.local/__render_asset/robot.urdf",
+                    "kind": "urdf",
+                },
+            }
 
-        class FakeAsyncPlaywright:
-            async def start(self):
-                return fake_playwright
+            _runtime_job, assets, _ = snapshot_core._snapshot_asset_packet(job)
 
-        async_api_module = ModuleType("playwright.async_api")
-        async_api_module.async_playwright = FakeAsyncPlaywright
-        playwright_module = ModuleType("playwright")
-        playwright_module.__path__ = []
+            self.assertEqual({Path(asset["url"]).suffix for asset in assets}, {".urdf", ".stl"})
 
-        original_playwright = sys.modules.get("playwright")
-        original_async_api = sys.modules.get("playwright.async_api")
-        try:
-            sys.modules["playwright"] = playwright_module
-            sys.modules["playwright.async_api"] = async_api_module
+    def test_snapshot_asset_packet_ignores_non_mesh_sdf_uris(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            sdf = root / "primitive.sdf"
+            sdf.write_text(
+                '<sdf version="1.9"><model name="fixture"><link name="body"><visual name="box">'
+                '<geometry><box><size>1 1 1</size></box></geometry><material><script>'
+                '<uri>file://media/materials/scripts/gazebo.material</uri>'
+                '</script></material></visual></link></model></sdf>',
+                encoding="utf-8",
+            )
+            job = {
+                "input": str(sdf),
+                "mode": "view",
+                "outputs": [{"path": str(root / "primitive.png"), "width": 64, "height": 64}],
+                "resolved": {
+                    "rootPath": str(root),
+                    "inputPath": str(sdf),
+                    "inputUrl": "http://snapshot.local/__render_asset/primitive.sdf",
+                    "url": "http://snapshot.local/__render_asset/primitive.sdf",
+                    "kind": "sdf",
+                },
+            }
 
-            async def start_renderer() -> None:
-                renderer = snapshot_main.BatchSnapshotRenderer(RUNTIME_DIR)
-                try:
-                    await renderer.start()
-                finally:
-                    await renderer.close()
+            _runtime_job, assets, _ = snapshot_core._snapshot_asset_packet(job)
 
-            asyncio.run(start_renderer())
-        finally:
-            if original_playwright is None:
-                sys.modules.pop("playwright", None)
-            else:
-                sys.modules["playwright"] = original_playwright
-            if original_async_api is None:
-                sys.modules.pop("playwright.async_api", None)
-            else:
-                sys.modules["playwright.async_api"] = original_async_api
-
-        self.assertNotIn("--single-process", captured_launch_options.get("args") or [])
+            self.assertEqual(len(assets), 1)
+            rendered = base64.b64decode(assets[0]["bytesBase64"]).decode("utf-8")
+            self.assertIn("file://media/materials/scripts/gazebo.material", rendered)
 
     def test_snapshot_tool_has_no_sideways_runtime_dependencies(self) -> None:
         snapshot_root = repo_path("skills/cad/scripts/snapshot")
