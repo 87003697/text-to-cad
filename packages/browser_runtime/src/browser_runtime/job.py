@@ -29,12 +29,12 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 from urllib import error as urllib_error
 from urllib import request as urllib_request
+from urllib.parse import urlsplit
 
 from .config import (
     CAD_RENDER_PROGRAMS,
     RUNTIME_CAPABILITY_SCHEMA,
     SANDBOX_RUNTIME_CAPABILITY_NAME,
-    load_image_lock,
 )
 
 
@@ -44,8 +44,18 @@ _MAX_AUDIT_RESPONSE_BYTES = 4 * 1024 * 1024
 _MAX_RENDER_LEDGER_ENTRIES = 4096
 _MAX_RENDER_REQUEST_BYTES = 160 * 1024 * 1024
 _MAX_RENDER_RESPONSE_BYTES = 64 * 1024 * 1024
+_MAX_MCP_RESPONSE_BYTES = 8 * 1024 * 1024
 _EXACT_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_BARE_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_REVISION = re.compile(r"[0-9a-f]{40}\Z")
+_RETENTION_REFERENCE = re.compile(
+    r"text-to-cad-browser-runtime-retained:[0-9a-f]{64}\Z"
+)
+VIEWER_SMOKE_URL = (
+    "http://127.0.0.1:9225/?file=spur_gear_blank.glb"
+)
+VIEWER_SMOKE_DOCUMENT = "spur_gear_blank.glb"
 
 
 class BrowserRuntimeError(RuntimeError):
@@ -72,6 +82,8 @@ class BrowserRuntimeJob:
     capability_dir: Path
     image_ref: str | None = None
     image_lock_path: Path | None = None
+    viewer_runtime_dir: Path | None = None
+    viewer_model_dir: Path | None = None
     docker: DockerRunner = field(default=_run_docker)
     port_ready_timeout_s: float = 20.0
     port_ready_poll_s: float = 0.15
@@ -91,10 +103,24 @@ class BrowserRuntimeJob:
         self.network_name = f"{self.prefix}-net"
         self.container_name = f"{self.prefix}-runtime"
         self.capability_dir = Path(self.capability_dir)
+        self._image_lock_bytes: bytes | None = None
+        self._image_lock: dict[str, Any] | None = None
         if self.image_ref is None:
-            lock = load_image_lock(self.image_lock_path)
-            image = lock["image"]
-            self.image_ref = image.get("id")
+            lock_path = Path(self.image_lock_path) if self.image_lock_path else None
+            if lock_path is None:
+                from .config import IMAGE_LOCK_PATH
+
+                lock_path = IMAGE_LOCK_PATH
+            try:
+                self._image_lock_bytes = lock_path.read_bytes()
+                lock = json.loads(self._image_lock_bytes)
+                image = lock["image"]
+                self.image_ref = image["id"]
+            except (KeyError, OSError, TypeError, json.JSONDecodeError) as exc:
+                raise BrowserRuntimeError("browser runtime image lock is invalid") from exc
+            if not isinstance(lock, dict):
+                raise BrowserRuntimeError("browser runtime image lock is invalid")
+            self._image_lock = lock
         if (
             not isinstance(self.image_ref, str)
             or _EXACT_IMAGE_ID.fullmatch(self.image_ref) is None
@@ -108,6 +134,20 @@ class BrowserRuntimeJob:
         self._published_port: int | None = None
         self._cad_render_published_port: int | None = None
         self._cad_render_token = secrets.token_hex(32)
+        self.viewer_runtime_dir = (
+            Path(self.viewer_runtime_dir).resolve()
+            if self.viewer_runtime_dir is not None
+            else None
+        )
+        self.viewer_model_dir = (
+            Path(self.viewer_model_dir).resolve()
+            if self.viewer_model_dir is not None
+            else None
+        )
+        if (self.viewer_runtime_dir is None) != (self.viewer_model_dir is None):
+            raise BrowserRuntimeError(
+                "viewer runtime and model directories must be supplied together"
+            )
 
     # -- factory ----------------------------------------------------------
 
@@ -119,6 +159,8 @@ class BrowserRuntimeJob:
         owner_nonce: str | None = None,
         image_ref: str | None = None,
         image_lock_path: Path | None = None,
+        viewer_runtime_dir: Path | None = None,
+        viewer_model_dir: Path | None = None,
         docker: DockerRunner | None = None,
     ) -> "BrowserRuntimeJob":
         """Allocate a per-job capability directory under EXP_DIR/run/."""
@@ -133,6 +175,10 @@ class BrowserRuntimeJob:
             kwargs["image_ref"] = image_ref
         if image_lock_path is not None:
             kwargs["image_lock_path"] = image_lock_path
+        if viewer_runtime_dir is not None:
+            kwargs["viewer_runtime_dir"] = viewer_runtime_dir
+        if viewer_model_dir is not None:
+            kwargs["viewer_model_dir"] = viewer_model_dir
         if docker is not None:
             kwargs["docker"] = docker
         return cls(**kwargs)
@@ -188,7 +234,10 @@ class BrowserRuntimeJob:
             )
             self._started = True
             self._wait_for_port()
+            if self.viewer_runtime_dir is not None:
+                self._start_viewer()
             self._publish_runtime_capability()
+            self._publish_image_authority()
         except BrowserRuntimeError:
             self._docker_ignore(
                 ["docker", "rm", "--force", "--volumes", self.container_name]
@@ -392,10 +441,268 @@ class BrowserRuntimeJob:
             raise BrowserRuntimeError("CAD render preflight identity is invalid")
         self._publish_preflight_receipt(png_bytes)
 
+    def preflight_mcp(self, viewer_url: str = VIEWER_SMOKE_URL) -> None:
+        """Prove MCP tool discovery and a real production Viewer page before paid work."""
+
+        parsed = urlsplit(viewer_url)
+        if (
+            parsed.scheme != "http"
+            or parsed.hostname != "127.0.0.1"
+            or parsed.port != 9225
+            or parsed.path != "/"
+            or parsed.query != "file=spur_gear_blank.glb"
+            or parsed.fragment
+        ):
+            raise BrowserRuntimeError("CAD Viewer smoke URL is invalid")
+        initialized, session = self._mcp_post(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "text-to-cad-browser-runtime-preflight",
+                        "version": "1",
+                    },
+                },
+            }
+        )
+        result = initialized.get("result") if isinstance(initialized, dict) else None
+        if (
+            not isinstance(result, dict)
+            or result.get("protocolVersion") != "2025-03-26"
+            or not session
+        ):
+            raise BrowserRuntimeError("Browser MCP initialize response is invalid")
+        self._mcp_post(
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            session=session,
+        )
+        listed, session = self._mcp_post(
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+            session=session,
+        )
+        listed_result = listed.get("result") if isinstance(listed, dict) else None
+        tools = listed_result.get("tools") if isinstance(listed_result, dict) else None
+        if not isinstance(tools, list):
+            raise BrowserRuntimeError("Browser MCP tool list is invalid")
+        tool_names = tuple(
+            item.get("name")
+            for item in tools
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        )
+        required_tools = {
+            "browser_navigate",
+            "browser_run_code_unsafe",
+            "browser_snapshot",
+            "browser_take_screenshot",
+        }
+        if len(tool_names) != len(tools) or not required_tools.issubset(tool_names):
+            raise BrowserRuntimeError("Browser MCP required tools are unavailable")
+
+        deadline = time.monotonic() + 30.0
+        navigation: dict[str, Any] | None = None
+        while time.monotonic() < deadline:
+            response, session = self._mcp_post(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "browser_navigate",
+                        "arguments": {"url": viewer_url},
+                    },
+                },
+                session=session,
+            )
+            navigation = self._mcp_tool_result(response)
+            if navigation is not None:
+                break
+            time.sleep(0.25)
+        if navigation is None:
+            raise BrowserRuntimeError("Browser MCP could not open the CAD Viewer")
+
+        ready_response, session = self._mcp_post(
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "browser_run_code_unsafe",
+                    "arguments": {
+                        "code": (
+                            "async (page) => {"
+                            "const button=page.getByRole('button',{name:'Copy screenshot'});"
+                            "await button.waitFor({state:'visible',timeout:30000});"
+                            "await page.waitForFunction(()=>{const b=document.querySelector("
+                            "'button[aria-label=\"Copy screenshot\"]');return b&&!b.disabled;},"
+                            "null,{timeout:30000});"
+                            "return {url:page.url(),screenshotEnabled:!(await button.isDisabled())};"
+                            "}"
+                        )
+                    },
+                },
+            },
+            session=session,
+        )
+        ready = self._mcp_tool_result(ready_response)
+        ready_text = self._mcp_text(ready)
+        ready_value = self._mcp_json_object(ready_text)
+        if (
+            ready is None
+            or ready_value
+            != {"url": viewer_url, "screenshotEnabled": True}
+        ):
+            raise BrowserRuntimeError("CAD Viewer model did not become ready")
+
+        snapshot_response, session = self._mcp_post(
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {"name": "browser_snapshot", "arguments": {}},
+            },
+            session=session,
+        )
+        snapshot = self._mcp_tool_result(snapshot_response)
+        snapshot_text = self._mcp_text(snapshot)
+        if snapshot is None or "Copy screenshot" not in snapshot_text:
+            raise BrowserRuntimeError("CAD Viewer accessibility snapshot is invalid")
+
+        screenshot_response, _session = self._mcp_post(
+            {
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": "browser_take_screenshot",
+                    "arguments": {"type": "png"},
+                },
+            },
+            session=session,
+        )
+        screenshot = self._mcp_tool_result(screenshot_response)
+        png_bytes = self._mcp_image(screenshot)
+        if screenshot is None or png_bytes is None or not png_bytes.startswith(
+            b"\x89PNG\r\n\x1a\n"
+        ):
+            raise BrowserRuntimeError("CAD Viewer screenshot is invalid")
+        receipt = {
+            "schema": "text-to-cad.browser-runtime-mcp-smoke/1",
+            "jobId": self.owner_nonce,
+            "imageRef": self.image_ref,
+            "protocolVersion": result["protocolVersion"],
+            "toolNames": sorted(tool_names),
+            "viewerUrl": viewer_url,
+            "viewerDocument": VIEWER_SMOKE_DOCUMENT,
+            "modelReady": True,
+            "snapshotSha256": "sha256:"
+            + hashlib.sha256(snapshot_text.encode("utf-8")).hexdigest(),
+            "screenshotSha256": "sha256:" + hashlib.sha256(png_bytes).hexdigest(),
+            "passed": True,
+        }
+        self._publish_json_receipt("mcp-smoke.json", receipt)
+
+    def _mcp_post(
+        self,
+        value: dict[str, Any],
+        *,
+        session: str | None = None,
+    ) -> tuple[dict[str, Any], str | None]:
+        headers = {
+            "content-type": "application/json",
+            "accept": "application/json, text/event-stream",
+        }
+        if session is not None:
+            headers["mcp-session-id"] = session
+        request = urllib_request.Request(
+            self.mcp_url,
+            data=json.dumps(value, separators=(",", ":")).encode("ascii"),
+            headers=headers,
+            method="POST",
+        )
+        try:
+            with _LOOPBACK_OPENER.open(request, timeout=40.0) as response:
+                raw = response.read(_MAX_MCP_RESPONSE_BYTES + 1)
+                next_session = response.headers.get("mcp-session-id") or session
+        except (OSError, urllib_error.URLError) as exc:
+            raise BrowserRuntimeError("Browser MCP request failed") from exc
+        if len(raw) > _MAX_MCP_RESPONSE_BYTES:
+            raise BrowserRuntimeError("Browser MCP response is too large")
+        if not raw:
+            return {}, next_session
+        try:
+            text = raw.decode("utf-8")
+            if text.lstrip().startswith("{"):
+                decoded = json.loads(text)
+            else:
+                payloads = [
+                    json.loads(line.removeprefix("data:").strip())
+                    for line in text.splitlines()
+                    if line.startswith("data:")
+                ]
+                decoded = payloads[-1]
+        except (IndexError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BrowserRuntimeError("Browser MCP response is invalid") from exc
+        if not isinstance(decoded, dict):
+            raise BrowserRuntimeError("Browser MCP response is invalid")
+        return decoded, next_session
+
+    @staticmethod
+    def _mcp_tool_result(response: dict[str, Any]) -> dict[str, Any] | None:
+        result = response.get("result")
+        if not isinstance(result, dict) or result.get("isError") is True:
+            return None
+        return result
+
+    @staticmethod
+    def _mcp_text(result: dict[str, Any] | None) -> str:
+        content = result.get("content") if isinstance(result, dict) else None
+        if not isinstance(content, list):
+            return ""
+        return "\n".join(
+            item["text"]
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        )
+
+    @staticmethod
+    def _mcp_image(result: dict[str, Any] | None) -> bytes | None:
+        content = result.get("content") if isinstance(result, dict) else None
+        if not isinstance(content, list):
+            return None
+        for item in content:
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "image"
+                and item.get("mimeType") == "image/png"
+                and isinstance(item.get("data"), str)
+            ):
+                try:
+                    return base64.b64decode(item["data"], validate=True)
+                except ValueError:
+                    return None
+        return None
+
+    @staticmethod
+    def _mcp_json_object(text: str) -> dict[str, Any] | None:
+        """Decode the final standalone JSON object from MCP text content."""
+
+        for line in reversed(text.splitlines()):
+            try:
+                value = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, dict):
+                return value
+        return None
+
     # -- internals --------------------------------------------------------
 
     def _build_run_argv(self) -> list[str]:
-        return [
+        argv = [
             "docker", "run", "--detach",
             "--name", self.container_name,
             "--network", self.network_name,
@@ -416,8 +723,147 @@ class BrowserRuntimeJob:
             "--memory", self.memory_limit,
             "--pids-limit", str(self.pids_limit),
             "--stop-timeout", "5",
-            self.image_ref,
         ]
+        if self.viewer_runtime_dir is not None and self.viewer_model_dir is not None:
+            viewer_document = self.viewer_model_dir / VIEWER_SMOKE_DOCUMENT
+            required = (
+                self.viewer_runtime_dir / "backend/server.mjs",
+                self.viewer_runtime_dir / "dist/index.html",
+            )
+            if (
+                any(not path.is_file() for path in required)
+                or not self.viewer_model_dir.is_dir()
+                or not self._is_self_consistent_glb(viewer_document)
+            ):
+                raise BrowserRuntimeError("CAD Viewer runtime assets are unavailable")
+            argv.extend(
+                [
+                    "--mount",
+                    "type=bind,source="
+                    + os.fspath(self.viewer_runtime_dir)
+                    + ",target=/opt/text-to-cad/viewer,readonly",
+                    "--mount",
+                    "type=bind,source="
+                    + os.fspath(self.viewer_model_dir)
+                    + ",target=/opt/text-to-cad/viewer-models,readonly",
+                ]
+            )
+        argv.append(self.image_ref)
+        return argv
+
+    @staticmethod
+    def _is_self_consistent_glb(path: Path) -> bool:
+        """Reject missing files and unhydrated LFS pointers before Docker starts."""
+
+        try:
+            size = path.stat().st_size
+            with path.open("rb") as stream:
+                header = stream.read(12)
+        except OSError:
+            return False
+        if len(header) != 12:
+            return False
+        magic, version, declared_size = struct.unpack("<4sII", header)
+        return magic == b"glTF" and version == 2 and declared_size == size
+
+    def _start_viewer(self) -> None:
+        self._docker_or_raise(
+            [
+                "docker",
+                "exec",
+                "--detach",
+                self.container_name,
+                "node",
+                "/opt/text-to-cad/viewer/backend/server.mjs",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "9225",
+                "--port-scan-limit",
+                "0",
+                "--dir",
+                "/opt/text-to-cad/viewer-models",
+            ],
+            purpose="start the production CAD Viewer",
+        )
+
+    def _publish_image_authority(self) -> None:
+        if self._image_lock is None or self._image_lock_bytes is None:
+            return
+        source_revision = self._image_lock.get("built_from_ref")
+        image = self._image_lock.get("image")
+        host = self._image_lock.get("host")
+        expected_lock_keys = {"schema_version", "image", "built_from_ref", "notes"}
+        if host is not None:
+            expected_lock_keys.add("host")
+        expected_image_keys = {
+            "name",
+            "id",
+            "base_image",
+            "base_id",
+            "playwright_mcp_version",
+            "content_size_bytes",
+            "architecture",
+        }
+        if (
+            set(self._image_lock) != expected_lock_keys
+            or self._image_lock.get("schema_version") != 1
+            or not isinstance(self._image_lock.get("notes"), str)
+            or not isinstance(image, dict)
+            or set(image) != expected_image_keys
+            or image.get("name") != "text-to-cad-browser-runtime"
+            or image.get("id") != self.image_ref
+            or not isinstance(image.get("base_image"), str)
+            or not isinstance(image.get("base_id"), str)
+            or _EXACT_IMAGE_ID.fullmatch(image["base_id"]) is None
+            or not isinstance(image.get("playwright_mcp_version"), str)
+            or not isinstance(image.get("content_size_bytes"), int)
+            or image["content_size_bytes"] <= 0
+            or image.get("architecture") != "amd64"
+            or not isinstance(source_revision, str)
+            or _REVISION.fullmatch(source_revision) is None
+            or (host is not None and not isinstance(host, dict))
+        ):
+            raise BrowserRuntimeError("browser runtime image authority is invalid")
+        if isinstance(host, dict):
+            source_image_ref = host.get("sourceImageId")
+            retention_reference = host.get("retentionReference")
+            archive_sha256 = host.get("archiveSha256")
+            if (
+                set(host)
+                != {"sourceImageId", "retentionReference", "archiveSha256"}
+                or not isinstance(source_image_ref, str)
+                or _EXACT_IMAGE_ID.fullmatch(source_image_ref) is None
+                or not isinstance(retention_reference, str)
+                or _RETENTION_REFERENCE.fullmatch(retention_reference) is None
+                or retention_reference.rsplit(":", 1)[1]
+                != self.image_ref.removeprefix("sha256:")
+                or not isinstance(archive_sha256, str)
+                or _BARE_SHA256.fullmatch(archive_sha256) is None
+            ):
+                raise BrowserRuntimeError("browser runtime image authority is invalid")
+        authority_kind = "host-lock" if isinstance(host, dict) else "repository-lock"
+        receipt = {
+            "schema": "text-to-cad.browser-runtime-image-authority/1",
+            "jobId": self.owner_nonce,
+            "imageRef": self.image_ref,
+            "authorityKind": authority_kind,
+            "lockSha256": "sha256:"
+            + hashlib.sha256(self._image_lock_bytes).hexdigest(),
+            "sourceRevision": source_revision,
+            "sourceImageRef": (
+                host.get("sourceImageId")
+                if isinstance(host, dict)
+                else self.image_ref
+            ),
+            "retentionReference": (
+                host.get("retentionReference") if isinstance(host, dict) else None
+            ),
+            "archiveSha256": (
+                host.get("archiveSha256") if isinstance(host, dict) else None
+            ),
+        }
+        self._publish_json_receipt("image-authority.json", receipt)
 
     def _discover_published_port(self, container_port: int) -> int:
         result = self.docker(

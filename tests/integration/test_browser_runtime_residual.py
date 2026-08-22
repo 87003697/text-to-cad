@@ -27,7 +27,7 @@ add_repo_path("packages/cadgen/src")
 add_repo_path("packages/meshscope/src")
 add_repo_path("packages/meshshot/src")
 
-from browser_runtime import BrowserRuntimeJob  # noqa: E402
+from browser_runtime import BrowserRuntimeJob, IMAGE_LOCK_PATH  # noqa: E402
 from cadgen.snapshot_core import BatchSnapshotRenderer  # noqa: E402
 from meshshot import MeshGeometry, render_residual_preview  # noqa: E402
 from meshshot import runtime_client  # noqa: E402
@@ -81,6 +81,72 @@ def _container_failure_diagnostic(container_name: str) -> str:
 
 
 class BrowserRuntimeResidualIntegrationTests(unittest.TestCase):
+    def test_real_runtime_opens_production_viewer_through_mcp(self) -> None:
+        image_id = os.environ.get("TTC_BROWSER_RUNTIME_TEST_IMAGE", "")
+        if _IMAGE_ID.fullmatch(image_id) is None:
+            self.skipTest("exact Browser Runtime image ID was not supplied")
+        image_lock = json.loads(IMAGE_LOCK_PATH.read_text(encoding="utf-8"))
+        if image_lock["image"]["id"] != image_id:
+            self.skipTest("supplied image is not the repository-locked image")
+
+        repo_root = Path(__file__).resolve().parents[2]
+        viewer_runtime = repo_root / "tmp/cad-viewer-runtime-check"
+        viewer_models = repo_root / "models/mesh/glb"
+        if not (viewer_runtime / "backend/server.mjs").is_file():
+            self.skipTest("materialized CAD Viewer runtime was not built")
+
+        with TemporaryDirectory() as temp:
+            job = BrowserRuntimeJob.create(
+                Path(temp),
+                image_lock_path=IMAGE_LOCK_PATH,
+                viewer_runtime_dir=viewer_runtime,
+                viewer_model_dir=viewer_models,
+            )
+            try:
+                job.start()
+                job.preflight()
+                job.preflight_mcp()
+                authority = json.loads(
+                    (job.capability_dir / "image-authority.json").read_text(
+                        encoding="ascii"
+                    )
+                )
+                smoke = json.loads(
+                    (job.capability_dir / "mcp-smoke.json").read_text(
+                        encoding="ascii"
+                    )
+                )
+                self.assertEqual(authority["imageRef"], image_id)
+                self.assertEqual(authority["authorityKind"], "repository-lock")
+                self.assertTrue(smoke["modelReady"])
+                self.assertTrue(smoke["passed"])
+                self.assertRegex(smoke["screenshotSha256"], r"sha256:[0-9a-f]{64}")
+            finally:
+                job.stop()
+
+            cleanup = json.loads(
+                (job.capability_dir / "cleanup.json").read_text(encoding="ascii")
+            )
+            self.assertTrue(cleanup["containerAbsent"])
+            self.assertTrue(cleanup["networkAbsent"])
+            self.assertTrue(cleanup["passed"])
+            self.assertNotEqual(
+                subprocess.run(
+                    ["docker", "container", "inspect", job.container_name],
+                    check=False,
+                    capture_output=True,
+                ).returncode,
+                0,
+            )
+            self.assertNotEqual(
+                subprocess.run(
+                    ["docker", "network", "inspect", job.network_name],
+                    check=False,
+                    capture_output=True,
+                ).returncode,
+                0,
+            )
+
     def test_real_runtime_is_semantic_and_repeatable(self) -> None:
         image_id = os.environ.get("TTC_BROWSER_RUNTIME_TEST_IMAGE", "")
         if _IMAGE_ID.fullmatch(image_id) is None:

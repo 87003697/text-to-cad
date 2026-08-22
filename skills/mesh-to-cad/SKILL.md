@@ -154,8 +154,13 @@ python skills/mesh-to-cad/scripts/mesh-to-cad-workspace finalize \
   --workspace <EXP_DIR> --selection <final-selection.json> \
   --notes <notes.md> --rebuild-entrypoint <registered-cad-adapter> \
   --geometry-entrypoint <mesh-compare-entrypoint> \
-  --tool-registry <trusted-tool-registry.json>
+  --tool-registry /run/meshshot-browser/trusted-tool-registry.json
 ```
+
+The formal pilot runner supplies that registry on the same read-only authority
+mount as the Browser Runtime capability. Never create, copy, hash, or repair a
+tool registry under the experiment. Outside the formal pilot environment, the
+calling orchestrator must supply an equivalent read-only registry explicitly.
 
 Finalization copies the Selected Step source into isolated staging, performs
 the registered offline rebuild without source edits, validates build

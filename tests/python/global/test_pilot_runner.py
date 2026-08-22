@@ -61,6 +61,11 @@ class FakeBrowserRuntimeJob:
 
         return None
 
+    def preflight_mcp(self):
+        """Match the provider-free real Viewer admission check."""
+
+        return None
+
     def poll_failed(self):
         """Report a healthy container so wait_workload does not tear down."""
 
@@ -720,6 +725,9 @@ class RunnerTests(unittest.TestCase):
             def preflight(self):
                 events.append("cad-render-preflight")
 
+            def preflight_mcp(self):
+                events.append("viewer-mcp-preflight")
+
             def stop(self):
                 events.append("runtime-stop")
 
@@ -751,6 +759,7 @@ class RunnerTests(unittest.TestCase):
 
         self.assertEqual(status, 0)
         self.assertLess(events.index("cad-render-preflight"), events.index("paid-workload"))
+        self.assertLess(events.index("viewer-mcp-preflight"), events.index("paid-workload"))
         self.assertEqual(events[-1], "runtime-stop")
 
     def test_cad_render_preflight_failure_skips_paid_workload(self) -> None:
@@ -789,6 +798,55 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(status, 1)
         paid_workload.assert_not_called()
         self.assertTrue(runtime.stopped)
+
+    def test_cancellation_during_cad_preflight_skips_viewer_preflight(self) -> None:
+        relay = SimpleNamespace(cancelled=False, signum=None)
+        runtime = FakeBrowserRuntimeJob()
+
+        class RelayContext:
+            def __enter__(self):
+                return relay
+
+            def __exit__(self, *args):
+                return False
+
+        class RuntimeFactory(FakeBrowserRuntimeJob):
+            @classmethod
+            def create(cls, *args, **kwargs):
+                return runtime
+
+        def cancel_during_preflight():
+            relay.cancelled = True
+            relay.signum = signal.SIGTERM
+
+        runtime.preflight = mock.Mock(side_effect=cancel_during_preflight)
+        runtime.preflight_mcp = mock.Mock()
+        with (
+            mock.patch.object(self.supervisor, "prepare_exp"),
+            mock.patch.object(self.supervisor, "SignalRelay", return_value=RelayContext()),
+            mock.patch.object(self.supervisor, "BrowserRuntimeJob", RuntimeFactory),
+            mock.patch.object(self.supervisor, "run_supervised") as paid_workload,
+            mock.patch.object(
+                self.supervisor,
+                "finalize_pilot",
+                side_effect=lambda exp, status, env, **kwargs: status,
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "validate_exp_dir",
+                return_value=self.supervisor.REPO_ROOT / "outputs/group/exp",
+            ),
+        ):
+            status = self.supervisor.run_pilot(
+                self.supervisor.REPO_ROOT / "outputs/group/exp",
+                [],
+                ["/fake/workload"],
+                self.environ,
+            )
+
+        self.assertEqual(status, 128 + signal.SIGTERM)
+        runtime.preflight_mcp.assert_not_called()
+        paid_workload.assert_not_called()
 
 
 class ProductionPathContractTests(unittest.TestCase):
@@ -1286,11 +1344,13 @@ class ProductionPathContractTests(unittest.TestCase):
             host_home = Path(temp) / "host-home"
             playwright = host_home / ".cache" / "ms-playwright"
             installed_skills = host_home / ".codex" / "skills"
-            capability_dir = repo_root / "browser-capability"
+            capability_dir = (
+                exp_dir / "run" / "browser-runtime" / "0123456789abcdef"
+            )
             exp_dir.mkdir(parents=True)
             skill_dir.mkdir(parents=True)
             outside_skill.mkdir()
-            capability_dir.mkdir()
+            capability_dir.mkdir(parents=True)
             input_path.parent.mkdir(parents=True)
             gateway.parent.mkdir(parents=True)
             venv.mkdir()
@@ -1383,6 +1443,17 @@ class ProductionPathContractTests(unittest.TestCase):
                 "--ro-bind",
                 str(capability_dir.resolve()),
                 runner.SANDBOX_MOUNT_ROOT,
+            ],
+            triples,
+        )
+        self.assertIn(
+            [
+                "--ro-bind",
+                str(capability_dir.resolve()),
+                (
+                    "/workspace/repo/outputs/group/exp with spaces/"
+                    "run/browser-runtime/0123456789abcdef"
+                ),
             ],
             triples,
         )

@@ -7,6 +7,7 @@ and build_bwrap_argv wiring the capability dir + MCP url through to bwrap.
 from __future__ import annotations
 
 import importlib.util
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -26,6 +27,22 @@ def _load_runner():
 
 
 class PrepareSandboxMcpConfigTests(unittest.TestCase):
+
+    def test_runner_publishes_canonical_read_only_tool_registry(self):
+        runner = _load_runner()
+        with TemporaryDirectory() as tmp:
+            authority = Path(tmp) / "authority"
+            registry_path = runner.publish_tool_registry(authority)
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(registry["schema"], "mesh-to-cad.tool-registry/1")
+            self.assertEqual(registry["rebuild"]["id"], "cad.canonical-build/1")
+            self.assertEqual(registry["geometry"]["id"], "mesh-compare.voxblame/1")
+            self.assertEqual(registry_path.stat().st_mode & 0o777, 0o444)
+            self.assertEqual(
+                registry_path,
+                authority / runner.TRUSTED_TOOL_REGISTRY_NAME,
+            )
 
     def test_prepare_sandbox_without_mcp_url_omits_config(self):
         runner = _load_runner()

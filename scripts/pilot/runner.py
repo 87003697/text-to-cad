@@ -60,6 +60,11 @@ ARTIFACT_CONTRACT_STATUS = 4
 MANIFEST_EXCLUDED_ROOTS = {".git"}
 MANIFEST_EXCLUDED_PREFIXES = {"run/.codex-upper"}
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
+CAD_REBUILD_ENTRYPOINT = REPO_ROOT / "skills/cad/scripts/canonical-build/__main__.py"
+GEOMETRY_ENTRYPOINT = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare/__main__.py"
+VIEWER_RUNTIME_DIR = REPO_ROOT / "skills/cad-viewer/scripts/viewer"
+VIEWER_MODEL_DIR = REPO_ROOT / "models/mesh/glb"
+TRUSTED_TOOL_REGISTRY_NAME = "trusted-tool-registry.json"
 SYSTEM_RO_PATHS = (
     Path("/usr"),
     Path("/etc/alternatives"),
@@ -96,6 +101,65 @@ __pycache__/
 *.pyc
 .codex/
 """
+
+
+def _workspace_json_bytes(value: Mapping[str, object]) -> bytes:
+    """Encode one Workspace-compatible canonical JSON document."""
+
+    return (
+        json.dumps(value, indent=2, sort_keys=True, separators=(",", ": ")) + "\n"
+    ).encode("utf-8")
+
+
+def publish_tool_registry(authority_dir: Path) -> Path:
+    """Publish the runner-owned finalization registry beside runtime authority."""
+
+    for path in (CAD_REBUILD_ENTRYPOINT, GEOMETRY_ENTRYPOINT):
+        if not path.is_file() or path.is_symlink():
+            raise PilotError("trusted tool entrypoint is unavailable")
+    value: dict[str, object] = {
+        "schema": "mesh-to-cad.tool-registry/1",
+        "rebuild": {
+            "id": "cad.canonical-build/1",
+            "entrypoint_sha256": hashlib.sha256(
+                CAD_REBUILD_ENTRYPOINT.read_bytes()
+            ).hexdigest(),
+        },
+        "geometry": {
+            "id": "mesh-compare.voxblame/1",
+            "entrypoint_sha256": hashlib.sha256(
+                GEOMETRY_ENTRYPOINT.read_bytes()
+            ).hexdigest(),
+        },
+    }
+    value["identity_sha256"] = hashlib.sha256(
+        b"mesh-to-cad.tool-registry/1\0" + _workspace_json_bytes(value)
+    ).hexdigest()
+    target = Path(authority_dir) / TRUSTED_TOOL_REGISTRY_NAME
+    temporary = target.with_name(f".{target.name}.tmp")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o400,
+        )
+        try:
+            payload = memoryview(_workspace_json_bytes(value))
+            while payload:
+                written = os.write(descriptor, payload)
+                if written <= 0:
+                    raise OSError("short trusted tool registry write")
+                payload = payload[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.chmod(temporary, 0o444)
+        os.replace(temporary, target)
+        return target
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise PilotError("cannot publish trusted tool registry") from exc
 
 
 class PilotError(RuntimeError):
@@ -650,6 +714,15 @@ def build_bwrap_argv(
         browser_capability_dir = browser_capability_dir.resolve()
         if not browser_capability_dir.is_dir():
             raise PilotError("browser runtime capability directory is unavailable")
+        try:
+            browser_capability_relative = browser_capability_dir.relative_to(exp_dir)
+        except ValueError as exc:
+            raise PilotError(
+                "browser runtime capability directory must be inside the experiment"
+            ) from exc
+        sandbox_browser_capability_dir = (
+            sandbox_exp / browser_capability_relative
+        )
     argv = [
         bwrap,
         "--unshare-pid",
@@ -735,6 +808,9 @@ def build_bwrap_argv(
     if browser_capability_dir is not None:
         argv.extend(
             [
+                "--ro-bind",
+                str(browser_capability_dir),
+                str(sandbox_browser_capability_dir),
                 "--ro-bind",
                 str(browser_capability_dir),
                 SANDBOX_MOUNT_ROOT,
@@ -1151,13 +1227,21 @@ def run_pilot(
     with SignalRelay() as relay:
         try:
             sidecar = BrowserRuntimeJob.create(
-                exp_dir, image_lock_path=HOST_IMAGE_LOCK_PATH
+                exp_dir,
+                image_lock_path=HOST_IMAGE_LOCK_PATH,
+                viewer_runtime_dir=VIEWER_RUNTIME_DIR,
+                viewer_model_dir=VIEWER_MODEL_DIR,
             )
             sidecar.start()
+            publish_tool_registry(sidecar.capability_dir)
             if relay.cancelled:
                 workload_status = 128 + (relay.signum or signal.SIGTERM)
             else:
                 sidecar.preflight()
+            if relay.cancelled:
+                workload_status = 128 + (relay.signum or signal.SIGTERM)
+            else:
+                sidecar.preflight_mcp()
             if relay.cancelled:
                 workload_status = 128 + (relay.signum or signal.SIGTERM)
             else:

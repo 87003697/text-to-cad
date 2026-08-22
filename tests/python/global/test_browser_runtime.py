@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import base64
+import hashlib
+import struct
 import subprocess
 import unittest
 from pathlib import Path
@@ -63,6 +65,8 @@ def _fake_docker(port_by_container: dict[tuple[str, int], int] | None = None):
                 key = (container, container_port)
                 port_by_container.setdefault(key, 32700 + len(port_by_container))
             return _completed(stdout=container + "\n")
+        if argv[:3] == ["docker", "exec", "--detach"]:
+            return _completed()
         if argv[:2] == ["docker", "inspect"] and "--format" in argv:
             container = argv[-1]
             fmt = argv[argv.index("--format") + 1]
@@ -191,6 +195,71 @@ class JobFactoryTests(unittest.TestCase):
                     image_ref=EXACT_IMAGE,
                 )
 
+    def test_viewer_mount_requires_hydrated_native_glb(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / "viewer"
+            models = root / "models"
+            (runtime / "backend").mkdir(parents=True)
+            (runtime / "dist").mkdir()
+            models.mkdir()
+            (runtime / "backend/server.mjs").write_text("// server\n")
+            (runtime / "dist/index.html").write_text("<!doctype html>\n")
+            model = models / job_module.VIEWER_SMOKE_DOCUMENT
+            model.write_text("version https://git-lfs.github.com/spec/v1\n")
+            job = BrowserRuntimeJob(
+                owner_nonce="abcdef0123456789abcd",
+                capability_dir=root / "authority",
+                image_ref=EXACT_IMAGE,
+                viewer_runtime_dir=runtime,
+                viewer_model_dir=models,
+                docker=_fake_docker(),
+            )
+
+            with self.assertRaisesRegex(
+                BrowserRuntimeError, "Viewer runtime assets"
+            ):
+                job._build_run_argv()
+
+    def test_viewer_mount_is_read_only_and_starts_inside_runtime(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / "viewer"
+            models = root / "models"
+            (runtime / "backend").mkdir(parents=True)
+            (runtime / "dist").mkdir()
+            models.mkdir()
+            (runtime / "backend/server.mjs").write_text("// server\n")
+            (runtime / "dist/index.html").write_text("<!doctype html>\n")
+            (models / job_module.VIEWER_SMOKE_DOCUMENT).write_bytes(
+                struct.pack("<4sII", b"glTF", 2, 12)
+            )
+            docker = _fake_docker()
+            job = BrowserRuntimeJob(
+                owner_nonce="abcdef0123456789abcd",
+                capability_dir=root / "authority",
+                image_ref=EXACT_IMAGE,
+                viewer_runtime_dir=runtime,
+                viewer_model_dir=models,
+                docker=docker,
+            )
+            job._wait_for_port = lambda: None  # type: ignore[method-assign]
+
+            job.start()
+
+            run_call = next(a for a in docker.calls if a[:2] == ["docker", "run"])
+            mounts = [
+                run_call[index + 1]
+                for index, value in enumerate(run_call)
+                if value == "--mount"
+            ]
+            self.assertEqual(len(mounts), 2)
+            self.assertTrue(all(value.endswith(",readonly") for value in mounts))
+            exec_call = next(
+                a for a in docker.calls if a[:3] == ["docker", "exec", "--detach"]
+            )
+            self.assertIn("/opt/text-to-cad/viewer/backend/server.mjs", exec_call)
+
     def test_missing_locked_id_fails_without_tag_fallback(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -314,6 +383,151 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(capability["cadRenderUrl"], job.cad_render_url)
             self.assertEqual(set(capability["programs"]), {"residual", "snapshot"})
             self.assertEqual(capability_path.stat().st_mode & 0o777, 0o444)
+
+    def test_start_publishes_image_authority_from_selected_lock(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lock_path = root / "image-lock.json"
+            lock = {
+                "schema_version": 1,
+                "image": {
+                    "name": "text-to-cad-browser-runtime",
+                    "id": EXACT_IMAGE,
+                    "base_image": "example.invalid/runtime@sha256:fixed",
+                    "base_id": "sha256:" + "b" * 64,
+                    "playwright_mcp_version": "0.0.79",
+                    "content_size_bytes": 1234,
+                    "architecture": "amd64",
+                },
+                "built_from_ref": "1" * 40,
+                "notes": "test lock",
+                "host": {
+                    "sourceImageId": "sha256:" + "c" * 64,
+                    "retentionReference": "text-to-cad-browser-runtime-retained:"
+                    + "d" * 64,
+                    "archiveSha256": "a" * 64,
+                },
+            }
+            encoded = json.dumps(
+                lock, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ).encode("ascii")
+            lock_path.write_bytes(encoded)
+            job = BrowserRuntimeJob.create(
+                root,
+                image_lock_path=lock_path,
+                docker=_fake_docker(),
+            )
+            job._wait_for_port = lambda: None  # type: ignore[method-assign]
+            job.start()
+
+            authority_path = job.capability_dir / "image-authority.json"
+            authority = json.loads(authority_path.read_text(encoding="ascii"))
+            self.assertEqual(authority["imageRef"], EXACT_IMAGE)
+            self.assertEqual(authority["sourceRevision"], "1" * 40)
+            self.assertEqual(
+                authority["lockSha256"],
+                "sha256:" + hashlib.sha256(encoded).hexdigest(),
+            )
+            self.assertEqual(authority_path.stat().st_mode & 0o777, 0o444)
+
+    def test_malformed_host_lock_cannot_publish_authority(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = json.loads(IMAGE_LOCK_PATH.read_text(encoding="utf-8"))
+            source["image"]["id"] = EXACT_IMAGE
+            source["host"] = {}
+            lock_path = root / "image-lock.json"
+            lock_path.write_text(json.dumps(source), encoding="utf-8")
+            job = BrowserRuntimeJob.create(
+                root,
+                image_lock_path=lock_path,
+                docker=_fake_docker(),
+            )
+            job._wait_for_port = lambda: None  # type: ignore[method-assign]
+
+            with self.assertRaisesRegex(
+                BrowserRuntimeError, "image authority is invalid"
+            ):
+                job.start()
+
+    def test_mcp_preflight_publishes_tool_and_viewer_smoke_receipt(self):
+        with TemporaryDirectory() as tmp:
+            job, _ = self._make_job(tmp)
+            job.start()
+            png = b"\x89PNG\r\n\x1a\nviewer-smoke"
+            tool_names = [
+                "browser_navigate",
+                "browser_run_code_unsafe",
+                "browser_snapshot",
+                "browser_take_screenshot",
+            ]
+            responses = iter(
+                [
+                    ({"result": {"protocolVersion": "2025-03-26"}}, "session"),
+                    ({}, "session"),
+                    (
+                        {"result": {"tools": [{"name": name} for name in tool_names]}},
+                        "session",
+                    ),
+                    ({"result": {"content": [{"type": "text", "text": "ready"}]}}, "session"),
+                    (
+                        {
+                            "result": {
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": (
+                                            "### Result\n"
+                                            + json.dumps(
+                                                {
+                                                    "url": job_module.VIEWER_SMOKE_URL,
+                                                    "screenshotEnabled": True,
+                                                }
+                                            )
+                                        ),
+                                    }
+                                ]
+                            }
+                        },
+                        "session",
+                    ),
+                    (
+                        {
+                            "result": {
+                                "content": [
+                                    {"type": "text", "text": "button Copy screenshot"}
+                                ]
+                            }
+                        },
+                        "session",
+                    ),
+                    (
+                        {
+                            "result": {
+                                "content": [
+                                    {
+                                        "type": "image",
+                                        "mimeType": "image/png",
+                                        "data": base64.b64encode(png).decode("ascii"),
+                                    }
+                                ]
+                            }
+                        },
+                        "session",
+                    ),
+                ]
+            )
+            job._mcp_post = mock.Mock(side_effect=lambda *args, **kwargs: next(responses))  # type: ignore[method-assign]
+            job.preflight_mcp()
+
+            receipt = json.loads(
+                (job.capability_dir / "mcp-smoke.json").read_text(encoding="ascii")
+            )
+            self.assertTrue(receipt["passed"])
+            self.assertEqual(receipt["imageRef"], EXACT_IMAGE)
+            self.assertEqual(receipt["viewerUrl"], job_module.VIEWER_SMOKE_URL)
+            self.assertIn("browser_navigate", receipt["toolNames"])
+            self.assertIn("browser_snapshot", receipt["toolNames"])
 
     def test_start_publishes_mcp_and_cad_render_ports(self):
         with TemporaryDirectory() as tmp:
