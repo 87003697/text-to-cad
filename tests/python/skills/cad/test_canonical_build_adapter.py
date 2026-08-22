@@ -141,6 +141,51 @@ def _position_bounds(path: Path) -> tuple[list[float], list[float]]:
 
 
 class CanonicalBuildAdapterTests(unittest.TestCase):
+    def test_registered_entrypoint_bootstraps_its_vendored_cadgen_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_text:
+            root = Path(temp_text)
+            entrypoint_dir = root / "scripts/canonical-build"
+            package_dir = root / "scripts/packages/cadgen/src/cadgen"
+            ambient_dir = root / "ambient/cadgen"
+            entrypoint_dir.mkdir(parents=True)
+            package_dir.mkdir(parents=True)
+            ambient_dir.mkdir(parents=True)
+            shutil.copy2(ADAPTER / "__main__.py", entrypoint_dir / "__main__.py")
+            (package_dir / "__init__.py").write_text("", encoding="utf-8")
+            (package_dir / "canonical_build.py").write_text(
+                "def main():\n    print('vendored-cadgen-loaded')\n    return 0\n",
+                encoding="utf-8",
+            )
+            (ambient_dir / "__init__.py").write_text("", encoding="utf-8")
+            (ambient_dir / "canonical_build.py").write_text(
+                "def main():\n    print('ambient-cadgen-loaded')\n    return 0\n",
+                encoding="utf-8",
+            )
+
+            env = dict(os.environ)
+            env.pop("PYTHONPATH", None)
+            entrypoint = entrypoint_dir / "__main__.py"
+            runtime_root = package_dir.parent
+            bootstrap = "\n".join(
+                (
+                    "import runpy, sys",
+                    f"sys.path[:0] = [{str(ambient_dir.parent)!r}, {str(runtime_root)!r}]",
+                    f"runpy.run_path({str(entrypoint)!r}, run_name='__main__')",
+                )
+            )
+            result = subprocess.run(
+                [sys.executable, "-I", "-c", bootstrap],
+                cwd=root,
+                env=env,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("vendored-cadgen-loaded", result.stdout.strip())
+
     def test_public_adapter_preserves_world_placement_and_excludes_unreturned_helper_geometry(self) -> None:
         with temporary_directory(prefix="cad-canonical-placement-") as temp_dir:
             root = Path(temp_dir)
