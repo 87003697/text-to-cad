@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -84,6 +86,125 @@ class PrepareSandboxMcpConfigTests(unittest.TestCase):
             fake_skill.mkdir(parents=True)
             upper = runner.prepare_sandbox(exp, [fake_skill])
             self.assertTrue((upper / "skills" / "fake-skill").is_dir())
+
+
+class ExperimentGitHistoryTests(unittest.TestCase):
+    def test_successful_finalize_compacts_but_preserves_git_history(self):
+        runner = _load_runner()
+        with TemporaryDirectory() as tmp:
+            exp = Path(tmp) / "outputs/group/exp"
+            runner.prepare_exp(exp)
+            for index in range(8):
+                artifact = exp / f"artifact-{index}.txt"
+                artifact.write_text((f"revision-{index}\n" * 128), encoding="utf-8")
+                runner.run_git(exp, ["add", artifact.name])
+                runner.run_git(exp, ["commit", "--quiet", "-m", f"step {index}"])
+            runner.run_git(exp, ["config", "gc.reflogExpire", "now"])
+            runner.run_git(exp, ["config", "gc.reflogExpireUnreachable", "now"])
+            runner.run_git(exp, ["config", "gc.pruneExpire", "now"])
+            head_before = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=exp,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            reflog_before = subprocess.run(
+                ["git", "reflog", "--format=%H %gs"],
+                cwd=exp,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            refs_before = subprocess.run(
+                ["git", "show-ref"],
+                cwd=exp,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            index_before = (exp / ".git/index").read_bytes()
+            count_before = subprocess.run(
+                ["git", "count-objects", "-v"],
+                cwd=exp,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            upper = exp / "run/.codex-upper/sessions/a/b/c"
+            upper.mkdir(parents=True)
+            (upper / "rollout-test.jsonl").write_text("{}\n", encoding="utf-8")
+
+            with mock.patch.object(runner, "validate_workspace_delivery", return_value={}):
+                status = runner.finalize_pilot(exp, 0, {"KEEP_STATE": "1"})
+
+            count_after = subprocess.run(
+                ["git", "count-objects", "-v"],
+                cwd=exp,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            head_after = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=exp,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            reflog_after = subprocess.run(
+                ["git", "reflog", "--format=%H %gs"],
+                cwd=exp,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            refs_after = subprocess.run(
+                ["git", "show-ref"],
+                cwd=exp,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            index_after = (exp / ".git/index").read_bytes()
+            fsck = subprocess.run(
+                ["git", "fsck", "--no-dangling"],
+                cwd=exp,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+        self.assertEqual(0, status)
+        self.assertRegex(count_before, r"(?m)^count: [1-9][0-9]*$")
+        self.assertRegex(count_after, r"(?m)^count: 0$")
+        self.assertEqual(head_before, head_after)
+        self.assertEqual(reflog_before, reflog_after)
+        self.assertEqual(refs_before, refs_after)
+        self.assertEqual(index_before, index_after)
+        self.assertEqual(0, fsck.returncode, fsck.stderr)
+
+    def test_invalid_workspace_delivery_skips_git_compaction(self):
+        runner = _load_runner()
+        with TemporaryDirectory() as tmp:
+            exp = Path(tmp) / "outputs/group/exp"
+            runner.prepare_exp(exp)
+            upper = exp / "run/.codex-upper/sessions/a/b/c"
+            upper.mkdir(parents=True)
+            (upper / "rollout-test.jsonl").write_text("{}\n", encoding="utf-8")
+
+            with (
+                mock.patch.object(
+                    runner,
+                    "validate_workspace_delivery",
+                    side_effect=runner.PilotError("invalid final delivery"),
+                ),
+                mock.patch.object(runner, "compact_exp_history") as compact,
+            ):
+                status = runner.finalize_pilot(exp, 0, {"KEEP_STATE": "1"})
+
+        self.assertEqual(runner.ARTIFACT_CONTRACT_STATUS, status)
+        compact.assert_not_called()
 
 
 class BuildBwrapArgvSeamTests(unittest.TestCase):

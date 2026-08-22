@@ -1009,6 +1009,18 @@ def prepare_exp(exp_dir: Path) -> None:
         )
 
 
+def compact_exp_history(exp_dir: Path) -> None:
+    """Pack successful pilot commits before cvm-pull preserves the Git authority."""
+
+    try:
+        run_git(exp_dir, ["repack", "-Adq"])
+    except PilotError as exc:
+        print(
+            f"pilot-runner: warning: cannot compact experiment Git history: {exc}",
+            file=sys.stderr,
+        )
+
+
 def validate_workspace_delivery(exp_dir: Path) -> dict[str, object]:
     """Validate canonical Workspace authority and return its Final Delivery."""
 
@@ -1178,6 +1190,8 @@ def finalize_pilot(
         except PilotError as exc:
             print(f"pilot-runner: {exc}", file=sys.stderr)
             final_status = ARTIFACT_CONTRACT_STATUS
+    if final_status == 0:
+        compact_exp_history(exp_dir)
     if not publish_artifact_manifest(exp_dir, workload_status, final_status):
         if workload_status == 0:
             final_status = ARTIFACT_CONTRACT_STATUS

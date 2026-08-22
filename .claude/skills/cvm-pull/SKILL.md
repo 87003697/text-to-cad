@@ -83,6 +83,9 @@ Parse request → Discover plan → Qualify terminal/postmortem
   `final_status` 的 `artifact_manifest.json`；missing/invalid 时 exit 9，不上传、不
   清理，并回到 `$cvm-monitor`。monitor 返回不能代替 pull 重验。
 - **`run/rollout.jsonl` 默认上传**，它是 pilot 的 cost/事故真相源。
+- **实验 Git authority 默认上传**：成功 runner 在发布 terminal manifest 前 pack
+  commit history；pull 保留 `.git/` 的 commits、refs、index 和 logs，仅排除重复的
+  `.git/lfs/` payload cache，供 pilot-review 审计 iteration history。
 - **浏览器安装始终排除**：`run/playwright/` 与
   `run/playwright-browsers/` 是数百 MiB 的 disposable runtime，即使使用
   `--include-byproducts` 也不上传；保留 rollout、trace 和版本/身份记录即可复盘。
