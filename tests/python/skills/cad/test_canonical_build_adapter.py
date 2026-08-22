@@ -376,7 +376,25 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
 
             for result in (absolute_source, absolute_output, escaped_output):
                 self.assertNotEqual(0, result.returncode)
-                self.assertIn("confined relative path", result.stderr)
+                # The adapter has two adjacent rejection branches for a
+                # path that would escape the build root, both defined in
+                # ``packages/cadgen/src/cadgen/canonical_build.py``:
+                # ``must be a confined relative path`` fires for a
+                # POSIX-form absolute path or a segment in
+                # ``{"", ".", ".."}``; ``must be a non-empty POSIX
+                # relative path`` fires for any input containing the
+                # native Windows path separator ``\``. Which of the two
+                # a caller hits depends on ``str(Path)`` on the running
+                # host -- POSIX renders absolute paths as ``/...`` and
+                # trips the first branch, Windows renders them as
+                # ``C:\...`` and trips the second. Both branches are the
+                # same confinement contract: the adapter refuses inputs
+                # that are not root-relative POSIX paths. Assert against
+                # the contract, not the platform-specific message.
+                self.assertRegex(
+                    result.stderr,
+                    r"must be a (confined relative path|non-empty POSIX relative path)",
+                )
 
     def test_adapter_requires_every_local_source_input_to_be_declared(self) -> None:
         with temporary_directory(prefix="cad-canonical-inputs-") as temp_dir:
@@ -578,12 +596,21 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             "unlink": "Path('victim.txt').unlink()",
             "rename": "Path('victim.txt').rename('moved.txt')",
             "mkdir": "Path('outside').mkdir()",
-            "mkfifo": "os.mkfifo('outside.fifo')",
             "hardlink": (
                 "os.link('victim.txt', 'candidate/hardlink.txt'); "
                 "Path('candidate/hardlink.txt').write_text('changed', encoding='utf-8')"
             ),
         }
+        # ``os.mkfifo`` is POSIX-only -- Windows does not expose it, and
+        # the source policy in ``packages/cadgen/src/cadgen/canonical_build.py``
+        # patches it via ``setattr(os, mutation_name, ...)``. Enumerate
+        # the platform-supported mutation APIs so the test still asserts
+        # the same confinement contract for every wrapper present on the
+        # host without raising ``AttributeError`` inside the child
+        # process. POSIX still covers mkfifo; Windows still covers
+        # unlink/rename/mkdir/hardlink.
+        if hasattr(os, "mkfifo"):
+            cases["mkfifo"] = "os.mkfifo('outside.fifo')"
         for name, mutation in cases.items():
             with self.subTest(name=name), temporary_directory(prefix=f"cad-canonical-{name}-") as temp_dir:
                 root = Path(temp_dir)

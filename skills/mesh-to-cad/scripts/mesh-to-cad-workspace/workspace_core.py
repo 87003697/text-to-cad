@@ -11,7 +11,7 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import signal
 import shutil
@@ -78,11 +78,52 @@ def _run_bounded_command(
     cwd: Path,
     timeout_seconds: int,
     text: bool = False,
+    posix: bool | None = None,
 ) -> tuple[subprocess.CompletedProcess[Any], bool]:
-    """Run argv under the Workspace deadline and cancel its complete process tree."""
+    """Run argv under the Workspace deadline and cancel its complete process tree.
 
-    if os.name != "posix":
-        raise OSError("bounded command tree cancellation requires a POSIX host")
+    Both branches share the same outer contract: a successful
+    ``communicate`` returns ``(CompletedProcess, False)``, a timeout
+    returns ``(CompletedProcess(returncode=124), True)`` and cannot
+    leave descendants running past the return, and any failure to
+    launch the child (missing binary, unavailable subtree primitive on
+    the host) raises ``OSError`` which ``_run_attempt_command`` maps to
+    exit code 127.
+
+    POSIX starts the child in a fresh session so a timeout can send
+    ``SIGTERM``/``SIGKILL`` to the whole tree via ``killpg``. Windows
+    has no process-group primitive equivalent, so we bind the child to
+    a Job Object with ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`` --
+    ``TerminateJobObject`` on timeout, and ``CloseHandle`` on scope
+    exit, both terminate every process in the subtree atomically. See
+    ``_WindowsProcessTree`` below for the nested-job/breakaway
+    reasoning and the fail-closed setup contract.
+
+    ``posix`` defaults to the running host but can be set explicitly by
+    tests to force the Windows branch on POSIX CI. On POSIX the Windows
+    branch fails closed at Job Object creation (kernel32 is
+    unavailable) rather than silently degrading to parent-only
+    termination.
+    """
+
+    if posix is None:
+        posix = os.name == "posix"
+    if posix:
+        return _run_bounded_command_posix(
+            argv, cwd=cwd, timeout_seconds=timeout_seconds, text=text
+        )
+    return _run_bounded_command_windows(
+        argv, cwd=cwd, timeout_seconds=timeout_seconds, text=text
+    )
+
+
+def _run_bounded_command_posix(
+    argv: list[str],
+    *,
+    cwd: Path,
+    timeout_seconds: int,
+    text: bool,
+) -> tuple[subprocess.CompletedProcess[Any], bool]:
     process = subprocess.Popen(
         argv,
         cwd=cwd,
@@ -117,6 +158,347 @@ def _run_bounded_command(
         if stdout is None or stderr is None:
             stdout, stderr = process.communicate()
         return subprocess.CompletedProcess(argv, 124, stdout, stderr), True
+
+
+def _run_bounded_command_windows(
+    argv: list[str],
+    *,
+    cwd: Path,
+    timeout_seconds: int,
+    text: bool,
+) -> tuple[subprocess.CompletedProcess[Any], bool]:
+    # Create the job before launching the child. If the kernel refuses
+    # to build a Job Object (kernel32 unavailable on the host, out of
+    # handles, ACL denial), surface OSError to the caller -- the
+    # Workspace maps that to exit code 127. Refuse to run rather than
+    # spawn a child we cannot cancel.
+    tree = _WindowsProcessTree.create()
+    try:
+        process = _spawn_windows_suspended_in_tree(
+            argv, cwd=cwd, text=text, tree=tree
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
+            return subprocess.CompletedProcess(
+                argv, process.returncode, stdout, stderr
+            ), False
+        except subprocess.TimeoutExpired:
+            tree.terminate()
+            # ``TerminateJobObject`` marks every process in the job for
+            # termination atomically. Descendants that inherited our
+            # captured stdout/stderr pipe writer ends die with the job,
+            # so ``communicate`` returns as soon as the pipes drain --
+            # it cannot deadlock waiting for a still-live descendant.
+            # We still bound the drain read so a driver-level pipe
+            # hold cannot block the Workspace deadline.
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=COMMAND_TERMINATION_GRACE_SECONDS
+                )
+            except subprocess.TimeoutExpired:
+                _release_pipe_readers(process)
+                stdout, stderr = _empty_stdio(text)
+            return subprocess.CompletedProcess(argv, 124, stdout, stderr), True
+    finally:
+        # ``kill-on-close`` guarantees the subtree cannot outlive this
+        # call even on unexpected exceptions between assign, resume,
+        # and terminate: the OS terminates every process in the job
+        # when the final handle closes.
+        tree.close()
+
+
+# ``CreateProcessW`` flag that starts the primary thread in the
+# suspended state. Value is fixed by the Win32 ABI; kept as a module
+# constant so the launch sequence is grep-able and so tests can assert
+# the same value is passed to ``subprocess.Popen``.
+_WINDOWS_CREATE_SUSPENDED = 0x00000004
+
+
+def _spawn_windows_suspended_in_tree(
+    argv: list[str],
+    *,
+    cwd: Path,
+    text: bool,
+    tree: "_WindowsProcessTree",
+    popen_factory: Any = subprocess.Popen,
+) -> subprocess.Popen[Any]:
+    """Race-free Windows spawn: suspend, assign, then resume.
+
+    The reviewer's finding was that ``subprocess.Popen`` returning a
+    running child means the child can spawn descendants before
+    ``AssignProcessToJobObject`` reaches it -- those descendants are
+    not retroactively inherited by the new job, so they can survive
+    ``TerminateJobObject``. Windows solves this with
+    ``CREATE_SUSPENDED``: the child is created with its primary
+    thread suspended and cannot execute a single instruction, let
+    alone spawn a descendant, until ``NtResumeProcess`` runs. We
+    call ``AssignProcessToJobObject`` between the two, so by the time
+    any user code executes, the process (and therefore every future
+    descendant it spawns while the job is alive) is inside the
+    kill-on-close job.
+
+    Error mapping preserves the ``_run_attempt_command`` contract:
+
+    * A missing binary raises ``OSError`` from ``subprocess.Popen``
+      before the child ever exists; caller maps to exit code 127.
+    * Assignment failure kills the still-suspended child and re-raises
+      ``OSError``; caller maps to 127. The child never ran a user
+      instruction, so no descendant can exist to leak.
+    * Resume failure raises ``OSError``. Falls through to
+      ``tree.close()`` in the outer scope; ``KILL_ON_JOB_CLOSE``
+      terminates the suspended child on handle close, so we never
+      leave an unresumed process behind.
+
+    ``popen_factory`` is exposed only so unit tests can inject a
+    stand-in and assert the launch pipeline without needing a real
+    Windows host.
+    """
+
+    process = popen_factory(
+        argv,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=text,
+        creationflags=_WINDOWS_CREATE_SUSPENDED,
+    )
+    try:
+        tree.assign(process)
+    except OSError:
+        # The child is still suspended; TerminateProcess kills a
+        # suspended process cleanly, and no descendant could exist
+        # because no user code has executed.
+        try:
+            process.kill()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=COMMAND_TERMINATION_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+    try:
+        tree.resume(process)
+    except OSError:
+        # Assignment succeeded, so the suspended child is in the job.
+        # Falling through raises OSError; the outer ``tree.close()``
+        # closes the job handle, which under KILL_ON_JOB_CLOSE
+        # terminates the suspended child. Explicitly close the pipe
+        # read ends we own so a driver-level buffer cannot outlive
+        # the child.
+        _release_pipe_readers(process)
+        raise
+    return process
+
+
+def _release_pipe_readers(process: subprocess.Popen[Any]) -> None:
+    """Force-close pipe read ends so ``communicate`` cannot block.
+
+    Only exercised in the pathological Windows path where the pipe
+    drain read still times out after ``TerminateJobObject``; the job's
+    processes are already terminated by the kernel, so unread bytes
+    are discarded rather than blocking the Workspace deadline.
+    """
+
+    for stream in (process.stdout, process.stderr):
+        if stream is None:
+            continue
+        try:
+            stream.close()
+        except OSError:
+            pass
+
+
+def _empty_stdio(text: bool) -> tuple[Any, Any]:
+    return ("", "") if text else (b"", b"")
+
+
+# Windows Job Object bindings and helper. Kept in this module rather
+# than a shared helper because the Workspace is the only bounded-
+# command caller and self-containment is a hard requirement of the
+# skill (see ``skills/mesh-to-cad/scripts/mesh-to-cad-workspace/
+# workspace_core.py`` module docstring).
+_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+_JobObjectExtendedLimitInformation = 9
+
+
+class _WindowsProcessTree:
+    """Kill-on-close Windows Job Object bound to a Popen'd child.
+
+    Windows has no direct equivalent of POSIX ``setsid``/``killpg`` in
+    the standard library. A Job Object is the native mechanism the
+    kernel uses to group related processes for lifetime management. We
+    create the job with ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`` so
+    ``TerminateJobObject`` on timeout or ``CloseHandle`` on scope exit
+    terminates every process associated with the job. Since Windows 8,
+    processes created by a jobbed child inherit the parent's job
+    (nested-job semantics) unless the caller explicitly requests
+    ``JOB_OBJECT_LIMIT_BREAKAWAY_OK`` or passes
+    ``CREATE_BREAKAWAY_FROM_JOB``; the tools the Workspace invokes do
+    neither, so terminating this job terminates the entire subtree.
+
+    Setup or assignment failure is fail-closed. ``create()`` surfaces
+    ``OSError`` if kernel32 is not available (POSIX host with the
+    Windows branch forced by tests) or the kernel refuses to build the
+    job. ``assign()`` surfaces ``OSError`` if the just-spawned process
+    cannot be attached, and the caller kills the parent and re-raises
+    -- we do not silently degrade to parent-only termination.
+    """
+
+    __slots__ = ("_handle", "_kernel32", "_ntdll", "_ctypes")
+
+    @classmethod
+    def create(cls) -> "_WindowsProcessTree":
+        if os.name != "nt":
+            # The Windows branch was forced (posix=False) on a POSIX
+            # host; kernel32 does not exist here, so refuse to run
+            # rather than silently degrading. Matches the OSError the
+            # caller expects when a subtree primitive is unavailable.
+            raise OSError(
+                "Windows bounded command tree requires kernel32; "
+                "os.name is not 'nt'"
+            )
+        return cls()
+
+    def __init__(self) -> None:
+        if os.name != "nt":  # pragma: no cover - construction gated by create()
+            raise OSError("Windows Job Object requires os.name == 'nt'")
+        import ctypes
+        from ctypes import wintypes
+
+        class _IO_COUNTERS(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_ulonglong),
+                ("WriteOperationCount", ctypes.c_ulonglong),
+                ("OtherOperationCount", ctypes.c_ulonglong),
+                ("ReadTransferCount", ctypes.c_ulonglong),
+                ("WriteTransferCount", ctypes.c_ulonglong),
+                ("OtherTransferCount", ctypes.c_ulonglong),
+            ]
+
+        class _JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", wintypes.LARGE_INTEGER),
+                ("PerJobUserTimeLimit", wintypes.LARGE_INTEGER),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _JOBOBJECT_BASIC_LIMIT_INFORMATION),
+                ("IoInfo", _IO_COUNTERS),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        kernel32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        kernel32.AssignProcessToJobObject.argtypes = [
+            wintypes.HANDLE,
+            wintypes.HANDLE,
+        ]
+        kernel32.TerminateJobObject.restype = wintypes.BOOL
+        kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+        # ``NtResumeProcess`` resumes every thread in a target process by
+        # handle. It is stable since NT 4, re-exported by every supported
+        # Windows version, and the standard mechanism paired with
+        # ``CREATE_SUSPENDED`` when the caller does not hold the main-
+        # thread handle (which ``subprocess.Popen`` closes before
+        # returning). A ``CREATE_SUSPENDED`` process has exactly one
+        # thread until it starts running, so a single-shot resume is
+        # deterministic. NTSTATUS 0 means success.
+        ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
+        ntdll.NtResumeProcess.restype = ctypes.c_long
+        ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+
+        handle = kernel32.CreateJobObjectW(None, None)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+            info.BasicLimitInformation.LimitFlags = (
+                _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            )
+            ok = kernel32.SetInformationJobObject(
+                handle,
+                _JobObjectExtendedLimitInformation,
+                ctypes.byref(info),
+                ctypes.sizeof(info),
+            )
+            if not ok:
+                raise ctypes.WinError(ctypes.get_last_error())
+        except BaseException:
+            kernel32.CloseHandle(handle)
+            raise
+        self._handle = handle
+        self._kernel32 = kernel32
+        self._ntdll = ntdll
+        self._ctypes = ctypes
+
+    def assign(self, process: subprocess.Popen[Any]) -> None:
+        if self._handle is None:
+            raise OSError("Windows Job Object is closed")
+        if not self._kernel32.AssignProcessToJobObject(
+            self._handle, int(process._handle)
+        ):
+            raise self._ctypes.WinError(self._ctypes.get_last_error())
+
+    def resume(self, process: subprocess.Popen[Any]) -> None:
+        """Resume a ``CREATE_SUSPENDED`` child previously bound to the job.
+
+        ``subprocess.Popen`` on Windows closes the main-thread handle
+        before returning, so we cannot ``ResumeThread`` from a
+        Popen-visible field. ``NtResumeProcess`` resumes by process
+        handle instead. A ``CREATE_SUSPENDED`` process has exactly one
+        thread (the initial thread), so a single call transitions the
+        child from "cannot execute any instruction" to "runs the
+        requested argv" atomically with respect to job membership --
+        assignment is already committed on entry.
+        """
+
+        if self._handle is None:
+            raise OSError("Windows Job Object is closed")
+        status = self._ntdll.NtResumeProcess(int(process._handle))
+        if status != 0:
+            # NTSTATUS is a signed 32-bit code; surface as OSError so
+            # the caller maps to exit code 127 rather than pretending
+            # the child ran.
+            raise OSError(
+                f"NtResumeProcess failed with NTSTATUS 0x{status & 0xFFFFFFFF:08X}"
+            )
+
+    def terminate(self) -> None:
+        if self._handle is not None:
+            # Non-zero exit code signals to any tool inspecting the job
+            # afterwards that the tree was force-killed rather than
+            # exiting cleanly.
+            self._kernel32.TerminateJobObject(self._handle, 1)
+
+    def close(self) -> None:
+        if self._handle is not None:
+            handle = self._handle
+            self._handle = None
+            self._kernel32.CloseHandle(handle)
 
 _EXPERIMENT_FIELDS = {
     "schema",
@@ -242,6 +624,64 @@ _NOTES_HEADINGS = (
     "## Final Selection",
     "## Verification",
 )
+
+
+def _is_canonical_absolute_path(value: str) -> bool:
+    """Fail-closed check for a native absolute filesystem path.
+
+    Registered tool entrypoints live on the executor host. On a POSIX host
+    that means a single-leading-slash absolute path; on Windows it means a
+    drive-letter or UNC path in native form. In both cases the string must
+    match the host's canonical spelling (no ``..``, no double roots, no
+    mixed separators, no trailing separator) so a serialized registry
+    cannot smuggle a traversal or a foreign-flavored path through the
+    permissive host parser.
+    """
+
+    if not value or "\0" in value:
+        return False
+    if os.name == "nt":
+        return _is_canonical_windows_absolute_path(value)
+    return _is_canonical_posix_absolute_path(value)
+
+
+def _is_canonical_posix_absolute_path(value: str) -> bool:
+    if not value.startswith("/") or value.startswith("//"):
+        return False
+    if "\\" in value:
+        return False
+    pure = PurePosixPath(value)
+    if pure.as_posix() != value:
+        return False
+    return ".." not in pure.parts
+
+
+def _is_canonical_windows_absolute_path(value: str) -> bool:
+    # ``PureWindowsPath`` normalizes ``/`` to ``\`` internally, so compare
+    # against the object's rendered form to reject mixed separators and
+    # non-canonical spellings like ``C:\\foo\\..\\bar``.
+    if "/" in value:
+        return False
+    if "\0" in value:
+        return False
+    pure = PureWindowsPath(value)
+    if not pure.is_absolute():
+        return False
+    if ".." in pure.parts:
+        return False
+    # A drive-letter absolute path always has a two-character drive (``C:``)
+    # or a UNC anchor of at least ``\\server\share``; reject truncated
+    # anchors that ``PureWindowsPath`` would otherwise silently accept.
+    if pure.drive.startswith("\\\\"):
+        anchor_parts = pure.drive.split("\\")
+        # A well-formed UNC drive splits as ``['', '', server, share]`` with
+        # both host and share non-empty. Anything else is a truncated anchor.
+        if len(anchor_parts) != 4 or not anchor_parts[2] or not anchor_parts[3]:
+            return False
+    else:
+        if len(pure.drive) != 2 or not pure.drive[0].isalpha() or pure.drive[1] != ":":
+            return False
+    return str(pure) == value
 
 
 class WorkspaceError(RuntimeError):
@@ -1440,12 +1880,8 @@ def _validate_tool_registry_document(value: Mapping[str, Any]) -> dict[str, Any]
     ):
         if schema == TOOL_REGISTRY_SCHEMA:
             entrypoint = entry["entrypoint"]
-            if (
-                not isinstance(entrypoint, str)
-                or not entrypoint.startswith("/")
-                or entrypoint.startswith("//")
-                or PurePosixPath(entrypoint).as_posix() != entrypoint
-                or ".." in PurePosixPath(entrypoint).parts
+            if not isinstance(entrypoint, str) or not _is_canonical_absolute_path(
+                entrypoint
             ):
                 _fail(
                     "untrusted_tool",

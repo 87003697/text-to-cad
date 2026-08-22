@@ -55,6 +55,15 @@ jobs:
       - name: Check generated outputs against sources
         run: scripts/bundle/bundle.sh --check
 
+      # Release deferences symlinked generated-output roots before the
+      # production bundle so scripts/github-workflows/check-builds.sh sees the
+      # provider-safe layout. The Linux test job asserts the same production
+      # invariant against the same layout and so must materialize the same way;
+      # otherwise a bundled skill can pass CI while carrying a symlink that
+      # Codex plugin install silently drops.
+      - name: Materialize production bundle layout
+        run: scripts/bundle/materialize-production-layout.sh
+
       - name: Bundle production outputs
         run: scripts/bundle/bundle.sh --clean
 

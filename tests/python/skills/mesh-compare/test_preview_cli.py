@@ -27,6 +27,88 @@ from meshscope.voxblame.exterior import measure_exterior_surface  # noqa: E402
 from meshshot import RenderedPreview, load_profile  # noqa: E402
 
 
+def _rendered_preview_for_scene(
+    variant: str,
+    *,
+    exterior_directions: tuple[str, ...] = (),
+) -> RenderedPreview:
+    """Build a contract-valid ``RenderedPreview`` without a Browser Runtime.
+
+    Why this fixture exists: the CLI's job in these three tests is to bind
+    scene identity, publish the metadata/PNG pair atomically, propagate
+    exterior direction markers, and honour the variant/dimension contract
+    in ``packages/meshscope/src/meshscope/voxblame/preview.py`` --
+    ``publish_preview`` validates the PNG mode/size against
+    ``profile.variants[variant].image_pixels`` and walks each view for
+    the ``name/kind/direction/up/horizontal_flip/framing.projection``
+    tuple. Everything the CLI observes about the render is here, and
+    everything the renderer itself does (mesh -> PNG transport) has its
+    own coverage in ``tests/python/packages/meshshot/test_renderer.py``.
+
+    The real ``render_residual_preview`` reaches out to a Browser Runtime
+    that only exists inside the sandbox image, so on a clean laptop,
+    macOS CI, Linux CI or Windows CI the runtime capability at
+    ``/run/meshshot-browser/runtime.json`` is absent and the CLI reports
+    ``preview_failed: browser runtime capability is required``. Mocking
+    ``cli.render_residual_preview`` with a fixture that returns a valid
+    preview keeps the CLI-side assertions honest without weakening the
+    production capability requirement -- the fail-closed capability
+    guard lives in ``packages/meshshot/src/meshshot/runtime_client.py``
+    and its own tests cover the required/replaceable/invalid branches.
+    """
+
+    loaded = load_profile()
+    pixels = tuple(loaded.profile["variants"][variant]["image_pixels"])
+    image = Image.new("RGB", pixels, (0, 0, 0))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    marker_direction = exterior_directions[0] if exterior_directions else None
+    views = tuple(
+        {
+            **view,
+            "framing": {
+                "projection": (
+                    "orthographic"
+                    if view["kind"] == "axial_depth"
+                    else "perspective"
+                )
+            },
+            "markers": (
+                [{"direction": marker_direction}]
+                if marker_direction is not None
+                else []
+            ),
+        }
+        for view in loaded.profile["views"]
+    )
+    return RenderedPreview(
+        png_bytes=encoded.getvalue(),
+        variant=variant,
+        profile_sha256=loaded.sha256,
+        views=views,
+    )
+
+
+def _mock_render_residual_preview():
+    """Deterministic ``cli.render_residual_preview`` stand-in.
+
+    Captures the ``variant`` and ``exterior_directions`` the CLI supplies
+    and returns a ``RenderedPreview`` shaped for that request so the
+    downstream ``publish_preview`` call sees the profile-conformant view
+    order and the marker directions taken from the scene's exterior
+    measurement.
+    """
+
+    def _stub(reference, candidate, *, variant="step", exterior_directions=()):
+        del reference, candidate
+        return _rendered_preview_for_scene(
+            variant,
+            exterior_directions=tuple(str(value) for value in exterior_directions),
+        )
+
+    return mock.patch.object(cli, "render_residual_preview", side_effect=_stub)
+
+
 class PreviewCliTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -117,7 +199,8 @@ class PreviewCliTests(unittest.TestCase):
             "step",
         )
 
-        status, payload, stderr = self.invoke(*arguments)
+        with _mock_render_residual_preview():
+            status, payload, stderr = self.invoke(*arguments)
 
         self.assertEqual(0, status, stderr)
         self.assertTrue(payload["ok"])
@@ -151,7 +234,8 @@ class PreviewCliTests(unittest.TestCase):
             self.assertEqual("RGB", image.mode)
             self.assertEqual((504, 1008), image.size)
         first_png = (output / "preview.png").read_bytes()
-        status, rerun, stderr = self.invoke(*arguments)
+        with _mock_render_residual_preview():
+            status, rerun, stderr = self.invoke(*arguments)
         self.assertEqual(0, status, stderr)
         self.assertTrue(rerun["idempotent"])
         self.assertEqual(first_png, (output / "preview.png").read_bytes())
@@ -172,15 +256,16 @@ class PreviewCliTests(unittest.TestCase):
         objective = measure_exterior_surface(np.asarray(reloaded.triangles, dtype=np.float64))
         output = self.root / "exterior-preview"
 
-        status, payload, stderr = self.invoke(*self.preview_arguments(
-            str(candidate),
-            "--reference",
-            str(self.reference),
-            "--output",
-            str(output),
-            "--variant",
-            "step",
-        ))
+        with _mock_render_residual_preview():
+            status, payload, stderr = self.invoke(*self.preview_arguments(
+                str(candidate),
+                "--reference",
+                str(self.reference),
+                "--output",
+                str(output),
+                "--variant",
+                "step",
+            ))
 
         self.assertEqual(0, status, stderr)
         evidence = payload["preview"]["exterior_surface"]
@@ -218,19 +303,20 @@ class PreviewCliTests(unittest.TestCase):
         output = self.root / "final-preview"
         selected_summary = self.write_selected_summary(step=1)
 
-        status, payload, stderr = self.invoke(*self.preview_arguments(
-            str(self.candidate),
-            "--reference",
-            str(self.reference),
-            "--output",
-            str(output),
-            "--variant",
-            "final",
-            "--selected-step",
-            "1",
-            "--selected-summary",
-            str(selected_summary),
-        ))
+        with _mock_render_residual_preview():
+            status, payload, stderr = self.invoke(*self.preview_arguments(
+                str(self.candidate),
+                "--reference",
+                str(self.reference),
+                "--output",
+                str(output),
+                "--variant",
+                "final",
+                "--selected-step",
+                "1",
+                "--selected-summary",
+                str(selected_summary),
+            ))
 
         self.assertEqual(0, status, stderr)
         metadata = payload["preview"]

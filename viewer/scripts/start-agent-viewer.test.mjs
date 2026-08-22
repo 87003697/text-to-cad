@@ -159,7 +159,12 @@ test("buildAgentViewerGit returns a worktree and branch value when git exists", 
 
   const git = buildAgentViewerGit({ env: {}, cwd: packageRoot });
   assert.match(git, /#test-branch$/);
-  assert.match(git, /\/\.git#test-branch$/);
+  // The git dir is a native filesystem path; on Windows the segment
+  // separator ahead of ``.git`` is a backslash. Accepting either sep keeps
+  // the "path ends at the ``.git`` directory of a real worktree" contract
+  // portable without reshaping the production return value.
+  const gitDirSeparator = path.sep === "\\" ? "\\\\" : "/";
+  assert.match(git, new RegExp(`${gitDirSeparator}\\.git#test-branch$`));
 });
 
 test("buildAgentViewerGit is empty outside git", async (t) => {
@@ -169,9 +174,10 @@ test("buildAgentViewerGit is empty outside git", async (t) => {
 });
 
 test("buildAgentStartCommand prepares dev mode without a server lifetime", () => {
+  const packageRoot = "/project/viewer";
   const command = buildAgentStartCommand({
     mode: "dev",
-    packageRoot: "/project/viewer",
+    packageRoot,
     forwardedArgs: ["--host", "127.0.0.1", "--dir", "/project/models", "--port", "4178"],
     env: {},
     nodePath: "/node",
@@ -179,8 +185,14 @@ test("buildAgentStartCommand prepares dev mode without a server lifetime", () =>
   });
 
   assert.equal(command.command, "/node");
+  // The dev-mode Vite entrypoint is a native filesystem path anchored at
+  // ``path.resolve(packageRoot)``. On Windows the resolver anchors to the
+  // current drive and uses ``\`` separators. Assert against the same
+  // ``path.join`` composition the implementation runs rather than a
+  // hard-coded POSIX string, so the same test is valid on either OS.
+  const resolvedPackageRoot = path.resolve(packageRoot);
   assert.deepEqual(command.args, [
-    "/project/viewer/node_modules/vite/bin/vite.js",
+    path.join(resolvedPackageRoot, "node_modules", "vite", "bin", "vite.js"),
     "dev",
     "--host",
     "127.0.0.1",
@@ -197,17 +209,19 @@ test("resolveAgentStartCommand keeps server-only flags on the production server 
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-agent-start-directory-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
 
+  const packageRoot = "/project/viewer";
   const command = resolveAgentStartCommand({
     argv: ["--viewer-start-mode", "serve", "--dir", directory],
     env: {},
-    packageRoot: "/project/viewer",
+    packageRoot,
     nodePath: "/node",
   });
 
   assert.equal(command.mode, "serve");
   assert.equal(command.env.VIEWER_AGENT_START_MODE, "serve");
+  const resolvedPackageRoot = path.resolve(packageRoot);
   assert.deepEqual(command.args, [
-    "/project/viewer/src/server/server.mjs",
+    path.join(resolvedPackageRoot, "src", "server", "server.mjs"),
     "--dir",
     directory,
   ]);
@@ -572,10 +586,11 @@ test("resolveAgentStartLaunch starts the selected free port", async (t) => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "cad-viewer-agent-start-directory-"));
   t.after(() => fs.rm(directory, { recursive: true, force: true }));
 
+  const packageRoot = "/project/viewer";
   const result = await resolveAgentStartLaunch({
     argv: ["--viewer-start-mode", "serve", "--host", "127.0.0.1", "--dir", directory, "--port", "4178"],
     env: {},
-    packageRoot: "/project/viewer",
+    packageRoot,
     nodePath: "/node",
     registryServers: [],
     probePort: async ({ host, port }) => ({
@@ -587,8 +602,9 @@ test("resolveAgentStartLaunch starts the selected free port", async (t) => {
 
   assert.equal(result.action, "start");
   assert.equal(result.port, 4179);
+  const resolvedPackageRoot = path.resolve(packageRoot);
   assert.deepEqual(result.command.args, [
-    "/project/viewer/src/server/server.mjs",
+    path.join(resolvedPackageRoot, "src", "server", "server.mjs"),
     "--host",
     "127.0.0.1",
     "--dir",

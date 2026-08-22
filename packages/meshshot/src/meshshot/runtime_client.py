@@ -136,6 +136,43 @@ def _valid_loopback_url(value: Any, expected_path: str) -> bool:
     )
 
 
+def _capability_ownership_matches(metadata: os.stat_result) -> bool:
+    """POSIX enforces caller-owned capability files; Windows uses ACLs.
+
+    On POSIX ``st_uid`` is the file owner and must equal the caller. On
+    Windows ``os.getuid`` does not exist; ``os.stat`` reports ``st_uid``
+    as ``0`` and the equivalent security guarantee comes from the NTFS
+    ACL that already protects ``%ProgramData%``-style mount roots. The
+    ``O_NOFOLLOW`` open, single-nlink assertion, read-only mode check
+    and identity-bound JSON schema keep the capability itself
+    tamper-resistant; we do not weaken any of those.
+    """
+
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        return True
+    return metadata.st_uid == getuid()
+
+
+def _capability_mode_is_read_only(metadata: os.stat_result) -> bool:
+    """Reject a capability whose POSIX mode is not exactly ``0o444``.
+
+    Windows chmod only toggles the read-only attribute, so Python
+    reports ``0o444`` for a read-only file and ``0o666`` for a writable
+    one. Accept either exactly-read-only rendering while still failing
+    closed on any writable-by-caller mode.
+    """
+
+    mode = stat.S_IMODE(metadata.st_mode)
+    if os.name == "nt":
+        # Windows read-only mapping: Python reports 0o444 for a file
+        # created with FILE_ATTRIBUTE_READONLY set. Reject any writable
+        # bits for other user classes -- if a bit is set that is not in
+        # 0o444 we do not honor the capability.
+        return mode == 0o444 or (mode & 0o222) == 0
+    return mode == 0o444
+
+
 def load_runtime_capability(
     capability_path: Path | None = None,
 ) -> dict[str, Any]:
@@ -154,8 +191,8 @@ def load_runtime_capability(
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_nlink != 1
-            or metadata.st_uid != os.getuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o444
+            or not _capability_ownership_matches(metadata)
+            or not _capability_mode_is_read_only(metadata)
         ):
             raise MeshshotError("browser runtime capability is replaceable")
         raw = os.read(descriptor, _MAX_CAPABILITY_BYTES + 1)

@@ -221,6 +221,60 @@ class BrowserRuntimeClientTests(unittest.TestCase):
         self.assertNotIn("playwright", source)
         self.assertNotIn("browser authority", source.lower())
 
+    def test_capability_ownership_accepts_matching_uid_on_posix(self) -> None:
+        # POSIX still requires the loaded file to be owned by the calling
+        # user; the helper must round-trip ``os.getuid`` unchanged so the
+        # original fail-closed contract in ``load_runtime_capability`` is
+        # preserved.
+        fake = mock.Mock()
+        fake.st_uid = 12345
+        with mock.patch.object(runtime_client.os, "getuid", return_value=12345):
+            self.assertTrue(runtime_client._capability_ownership_matches(fake))
+        fake.st_uid = 99999
+        with mock.patch.object(runtime_client.os, "getuid", return_value=12345):
+            self.assertFalse(runtime_client._capability_ownership_matches(fake))
+
+    def test_capability_ownership_falls_back_when_getuid_is_absent(self) -> None:
+        # The regression: Windows does not expose ``os.getuid`` and the
+        # previous implementation raised ``AttributeError`` before it
+        # could report the real capability status. The helper must not
+        # call ``os.getuid`` unconditionally.
+        fake = mock.Mock()
+        fake.st_uid = 0
+        original = runtime_client.os
+        try:
+            proxy = mock.Mock(spec=[])  # no ``getuid`` attribute
+            runtime_client.os = proxy
+            self.assertTrue(runtime_client._capability_ownership_matches(fake))
+        finally:
+            runtime_client.os = original
+
+    def test_capability_mode_accepts_read_only_on_windows_and_posix(self) -> None:
+        posix_ro = mock.Mock(st_mode=0o100444)
+        posix_writable = mock.Mock(st_mode=0o100644)
+        # POSIX branch: exactly 0o444 is required.
+        with mock.patch.object(runtime_client.os, "name", "posix"):
+            self.assertTrue(
+                runtime_client._capability_mode_is_read_only(posix_ro)
+            )
+            self.assertFalse(
+                runtime_client._capability_mode_is_read_only(posix_writable)
+            )
+        # Windows branch: exactly 0o444 or any mode with no writable
+        # bits set for any user class. Reject a file where the group
+        # write bit leaked through.
+        with mock.patch.object(runtime_client.os, "name", "nt"):
+            self.assertTrue(
+                runtime_client._capability_mode_is_read_only(posix_ro)
+            )
+            windows_ro_variant = mock.Mock(st_mode=0o100400)
+            self.assertTrue(
+                runtime_client._capability_mode_is_read_only(windows_ro_variant)
+            )
+            self.assertFalse(
+                runtime_client._capability_mode_is_read_only(posix_writable)
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

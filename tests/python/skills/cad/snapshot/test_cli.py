@@ -1583,6 +1583,61 @@ class SnapshotCliTests(unittest.TestCase):
             for token in forbidden:
                 self.assertNotIn(token, text, f"{checked_file} should not reference {token}")
 
+    def test_snapshot_capability_ownership_and_mode_helpers_are_windows_safe(self) -> None:
+        # Regression for the exact Windows CI ``os.getuid`` stack:
+        # ``load_snapshot_runtime_capability`` used to call ``os.getuid``
+        # unconditionally against ``metadata.st_uid`` inside the
+        # ``fstat``-guarded block. Windows does not expose ``os.getuid``
+        # so any test that populated the capability path (see
+        # ``test_snapshot_renderer_posts_content_addressed_assets_to_runtime``)
+        # crashed with ``AttributeError`` before reporting the actual
+        # capability status. Assert the helpers directly so a future
+        # regression cannot re-introduce that call under any platform.
+        posix_metadata = mock.Mock(st_uid=12345)
+        with mock.patch.object(snapshot_core.os, "getuid", return_value=12345):
+            self.assertTrue(
+                snapshot_core._capability_ownership_matches(posix_metadata)
+            )
+        stranger_metadata = mock.Mock(st_uid=99999)
+        with mock.patch.object(snapshot_core.os, "getuid", return_value=12345):
+            self.assertFalse(
+                snapshot_core._capability_ownership_matches(stranger_metadata)
+            )
+        # Windows path: ``os.getuid`` is not defined, so the helper must
+        # accept the file's ownership and defer to the NTFS ACL on the
+        # mount root (the ``O_NOFOLLOW`` open + single-nlink check +
+        # identity-bound JSON schema still enforce the rest of the
+        # closed contract).
+        proxy_os = mock.Mock(spec=[])
+        original_os = snapshot_core.os
+        try:
+            snapshot_core.os = proxy_os
+            self.assertTrue(
+                snapshot_core._capability_ownership_matches(posix_metadata)
+            )
+        finally:
+            snapshot_core.os = original_os
+
+        # Mode helper: 0o444 is the exact POSIX invariant; on Windows a
+        # read-only file may report any mode with no writable bits.
+        with mock.patch.object(snapshot_core.os, "name", "posix"):
+            self.assertTrue(
+                snapshot_core._capability_mode_is_read_only(mock.Mock(st_mode=0o100444))
+            )
+            self.assertFalse(
+                snapshot_core._capability_mode_is_read_only(mock.Mock(st_mode=0o100644))
+            )
+        with mock.patch.object(snapshot_core.os, "name", "nt"):
+            self.assertTrue(
+                snapshot_core._capability_mode_is_read_only(mock.Mock(st_mode=0o100444))
+            )
+            self.assertTrue(
+                snapshot_core._capability_mode_is_read_only(mock.Mock(st_mode=0o100400))
+            )
+            self.assertFalse(
+                snapshot_core._capability_mode_is_read_only(mock.Mock(st_mode=0o100664))
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,26 @@ import test from "node:test";
 
 import { createLocalAssetBackend } from "./localAssetBackend.mjs";
 
+// The local asset backend returns catalog file identifiers -- ``entry.file``,
+// ``moduleFile``, ``assetFile``, the artifact GLB path, generation-status keys,
+// ``access.file`` -- as POSIX-slashed absolute paths. That is the URL-facing
+// contract: the same string is written into ``/__cad/asset?file=...`` and
+// walked by the browser package-asset resolver, which splits on ``/`` alone.
+// The underlying filesystem paths (``access.path``, the values passed to
+// ``sourceFileOpener``, and ``request.stepPath`` handed to the artifact
+// generator) stay native.
+//
+// ``path.join`` yields native paths, so an assertion of the form
+// ``entry.file === path.join(root, "sample.stl")`` succeeds only on POSIX
+// where ``path.sep === "/"``. On Windows the same production string uses
+// ``/`` and the expected value uses ``\`` -- the test fails without any
+// production regression. ``toPosix`` normalizes an expected native path
+// into the same POSIX identifier the backend emits so the test can run
+// unchanged on either OS.
+function toPosix(value) {
+  return String(value).split(path.sep).join("/");
+}
+
 async function withTempDirectoryRoot(callback) {
   const directoryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cad-viewer-backend-"));
   try {
@@ -55,7 +75,7 @@ test("local backend serves catalog from an in-memory scan without writing catalo
       hasHash: Boolean(entry.hash),
       bytes: entry.bytes,
     })), [{
-      file: path.join(modelRoot, "sample.stl"),
+      file: toPosix(path.join(modelRoot, "sample.stl")),
       rootRelativeFile: "sample.stl",
       kind: "stl",
       hasUrl: true,
@@ -103,7 +123,10 @@ test("local backend keeps directory mode for file params that look absolute", as
     const catalog = backend.readCatalog({ rootDir: "models", fileRef: outsidePath });
 
     assert.deepEqual(catalog.entries.map((entry) => entry.rootRelativeFile), ["inside.stl"]);
-    assert.deepEqual(catalog.entries.map((entry) => entry.file), [path.join(directoryRoot, "models", "inside.stl")]);
+    assert.deepEqual(
+      catalog.entries.map((entry) => entry.file),
+      [toPosix(path.join(directoryRoot, "models", "inside.stl"))],
+    );
   });
 });
 
@@ -199,7 +222,7 @@ test("local backend incrementally refreshes STEP entries when sidecars change", 
     fs.writeFileSync(modulePath, "export default { manifest: { schemaVersion: 1 } };\n");
     const withModule = backend.refreshCatalogForPath({ filePath: modulePath });
     assert.ok(withModule.entries[0].moduleUrl.startsWith("/__cad/asset?file="));
-    assert.equal(withModule.entries[0].moduleFile, modulePath);
+    assert.equal(withModule.entries[0].moduleFile, toPosix(modulePath));
 
     fs.unlinkSync(modulePath);
     const withoutModule = backend.refreshCatalogForPath({ filePath: modulePath });
@@ -227,8 +250,9 @@ test("local backend reports active generator status for the active root", async 
 
     const status = backend.readGenerationStatus();
 
-    assert.equal(status.files[path.join(modelRoot, "part.step")].running, true);
-    assert.equal(status.files[path.join(modelRoot, "part.step")].generator, "gen_step");
+    const partStepKey = toPosix(path.join(modelRoot, "part.step"));
+    assert.equal(status.files[partStepKey].running, true);
+    assert.equal(status.files[partStepKey].generator, "gen_step");
     assert.equal(backend.generationStatusDir(), modelRoot);
     assert.equal(backend.isGenerationStatusPath(statusPath), true);
   });
@@ -420,11 +444,14 @@ test("local backend defers STEP artifact status to current-file status reads", a
     const catalogEntry = backend.readCatalog().entries[0];
     const status = backend.readStepSourceStatus({ fileRef: "part.step" });
 
-    assert.equal(catalogEntry.file, path.join(modelRoot, "part.step"));
+    assert.equal(catalogEntry.file, toPosix(path.join(modelRoot, "part.step")));
     assert.equal(catalogEntry.rootRelativeFile, "part.step");
     assert.equal(catalogEntry.artifact, undefined);
     assert.equal(status.artifact.error, "missing_glb");
-    assert.equal(status.artifact.glbPath, path.join(modelRoot, ".part.step.glb"));
+    assert.equal(
+      status.artifact.glbPath,
+      toPosix(path.join(modelRoot, ".part.step.glb")),
+    );
   });
 });
 
@@ -463,7 +490,7 @@ test("local backend resolves selected output files instead of generated GLB arti
     assert.deepEqual(openedPaths, [stepPath]);
     assert.deepEqual(opened, {
       asset: "output",
-      file: stepPath,
+      file: toPosix(stepPath),
       filename: "part.step",
       opened: true,
     });
@@ -488,7 +515,7 @@ test("local backend resolves generated GLB artifact assets from catalog URLs", a
     });
 
     assert.equal(access.asset, "artifact");
-    assert.equal(access.file, artifactPath);
+    assert.equal(access.file, toPosix(artifactPath));
     assert.equal(access.rootRelativeFile, ".part.step.glb");
     assert.equal(access.path, artifactPath);
     assert.equal(access.filename, ".part.step.glb");
@@ -512,7 +539,7 @@ test("local backend resolves catalog output files whose names begin with two dot
     });
 
     assert.equal(access.path, stepPath);
-    assert.equal(access.file, stepPath);
+    assert.equal(access.file, toPosix(stepPath));
     assert.equal(access.rootRelativeFile, "..part.step");
     assert.equal(access.filename, "..part.step");
   });

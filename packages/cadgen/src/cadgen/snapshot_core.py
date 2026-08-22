@@ -782,6 +782,38 @@ def _valid_runtime_url(value: object, expected_path: str) -> bool:
     )
 
 
+def _capability_ownership_matches(metadata: os.stat_result) -> bool:
+    """POSIX enforces caller-owned capability files; Windows uses ACLs.
+
+    ``os.getuid`` is not defined on Windows, and ``os.stat`` reports
+    ``st_uid`` as ``0`` there. On POSIX we still require the caller to
+    own the file; on Windows the equivalent guarantee is the NTFS ACL of
+    the mount root plus the ``O_NOFOLLOW`` open and single-nlink check
+    performed above.
+    """
+
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        return True
+    return metadata.st_uid == getuid()
+
+
+def _capability_mode_is_read_only(metadata: os.stat_result) -> bool:
+    """Reject a writable capability without breaking Windows semantics.
+
+    Python's ``os.chmod(path, 0o444)`` on Windows only toggles the
+    read-only attribute, and ``os.stat`` reflects that as ``0o444`` for
+    a read-only file. We accept the exact 0o444 rendering on either OS
+    and, on Windows, tolerate other read-only mappings as long as no
+    "writable" bit is set for any user class.
+    """
+
+    mode = stat.S_IMODE(metadata.st_mode)
+    if os.name == "nt":
+        return mode == 0o444 or (mode & 0o222) == 0
+    return mode == 0o444
+
+
 def load_snapshot_runtime_capability(
     path: Path = RUNTIME_CAPABILITY_PATH,
 ) -> dict[str, object]:
@@ -799,8 +831,8 @@ def load_snapshot_runtime_capability(
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_nlink != 1
-            or metadata.st_uid != os.getuid()
-            or stat.S_IMODE(metadata.st_mode) != 0o444
+            or not _capability_ownership_matches(metadata)
+            or not _capability_mode_is_read_only(metadata)
         ):
             raise SnapshotError("Browser Runtime capability is replaceable")
         raw = os.read(descriptor, _MAX_RUNTIME_CAPABILITY_BYTES + 1)
