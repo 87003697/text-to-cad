@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 from pathlib import Path
@@ -269,13 +270,31 @@ def _write_step_scene_cache(scene: LoadedStepScene, *, step_hash: str) -> None:
             json.dumps(metadata, sort_keys=True, separators=(",", ":")),
             encoding="utf-8",
         )
-        try:
-            temp_dir.rename(cache_dir)
-            _prune_step_scene_cache_siblings(cache_dir)
-        except FileExistsError:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        _commit_step_scene_cache_dir(temp_dir, cache_dir)
     except Exception:  # noqa: BLE001 - a failed cache write must not fail the load; drop the temp dir
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _commit_step_scene_cache_dir(temp_dir: Path, cache_dir: Path) -> None:
+    """Rename the fully written temp dir into place, yielding to a peer that won.
+
+    Two processes writing the SAME cache entry race here: the loser's rename onto the
+    winner's populated directory collides. POSIX reports that as an ``OSError`` with
+    errno ``ENOTEMPTY``/``EEXIST`` (Python maps only EEXIST to FileExistsError, so the
+    old ``except FileExistsError`` was dead code exactly where the race actually
+    happens); Windows raises FileExistsError (EEXIST) or PermissionError (EACCES) when
+    another handle holds it. Any of those means the winner's cache stands and this
+    loser just drops its temp dir. Anything else is a real error for the caller's
+    cleanup to handle.
+    """
+    try:
+        temp_dir.rename(cache_dir)
+        _prune_step_scene_cache_siblings(cache_dir)
+    except OSError as exc:
+        if exc.errno in (errno.EEXIST, errno.ENOTEMPTY, errno.EACCES):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return
+        raise
 
 
 def _prune_step_scene_cache_siblings(cache_dir: Path) -> None:
