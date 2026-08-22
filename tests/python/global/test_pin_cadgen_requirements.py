@@ -32,10 +32,23 @@ class PinScriptPresenceTest(unittest.TestCase):
 
     def test_release_workflow_runs_it_before_the_publish_commit(self):
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text()
-        self.assertIn("scripts/release/pin-cadgen-requirements.sh", workflow)
-        pin_at = workflow.index("scripts/release/pin-cadgen-requirements.sh")
+        # release.yml delegates to finalize-publish-tree.sh, which owns the
+        # trim + pin transformation shared with scripts/release/smoke-installed-plugin.sh.
+        self.assertIn("scripts/release/finalize-publish-tree.sh", workflow)
+        finalize_at = workflow.index("scripts/release/finalize-publish-tree.sh")
         commit_at = workflow.index("Commit publish result")
-        self.assertLess(pin_at, commit_at, "pinning must run before the publish commit")
+        self.assertLess(
+            finalize_at,
+            commit_at,
+            "finalize-publish-tree.sh (which pins cadgen) must run before the publish commit",
+        )
+        finalize_script = (REPO_ROOT / "scripts" / "release" / "finalize-publish-tree.sh").read_text()
+        self.assertIn("pin-cadgen-requirements.sh", finalize_script)
+        self.assertIn(
+            "pin-cadgen-requirements.sh\" --check",
+            finalize_script,
+            "the finalize script must re-verify pinning with --check",
+        )
 
     def test_checked_in_requirements_stay_editable(self):
         """A source checkout must NOT be pinned — the pin is publish-only."""

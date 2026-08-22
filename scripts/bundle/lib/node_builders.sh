@@ -76,6 +76,12 @@ ensure_node_builder_deps() {
     return 0
   fi
 
+  if [ "${BUNDLE_INSTALL_DEPS:-1}" -eq 0 ]; then
+    echo "Missing or stale cached Node-builder dependencies in $NODE_BUILDER_BUILD_DEPS_DIR." >&2
+    echo "Offline production bundling refuses to run npm install." >&2
+    return 1
+  fi
+
   mkdir -p "$NODE_BUILDER_BUILD_DEPS_DIR"
   npm install --prefix "$NODE_BUILDER_BUILD_DEPS_DIR" --no-audit --no-fund \
     --fetch-retries=1 --fetch-timeout=10000 \

@@ -12,7 +12,10 @@ Use these durable entrypoints for normal work:
 | Run code tests | `scripts/test/test.sh` |
 | Run docs checks | `scripts/test/test-docs.sh` |
 | Check canonical release version | `scripts/release/check-version.sh` |
+| Materialize generated outputs in a production staging tree | `scripts/bundle/materialize-production-layout.sh [--tree DIR]` |
 | Pin cadgen to PyPI in a publish tree | `scripts/release/pin-cadgen-requirements.sh` |
+| Finalize a bundled tree into the publish shape | `scripts/release/finalize-publish-tree.sh [--tree DIR]` |
+| Installed-plugin smoke (real Codex CLI, isolated CODEX_HOME) | `scripts/release/smoke-installed-plugin.sh` |
 | Install local skills into agents | `scripts/install/install-skills.sh --agent codex` |
 | Uninstall local skill links | `scripts/install/uninstall-skills.sh --agent codex` |
 | Run one Toys4K pilot | `scripts/pilot/toys4k-pilot.sh <object> <group>` |

@@ -97,8 +97,13 @@ fi
 ensure_build_deps() {
   if [ ! -x "$MESHSHOT_ESBUILD" ] || ! npm ls \
     --prefix "$MESHSHOT_PACKAGE_DIR" \
-    --depth=0 \
-    --silent >/dev/null 2>&1; then
+      --depth=0 \
+      --silent >/dev/null 2>&1; then
+    if [ "${BUNDLE_INSTALL_DEPS:-1}" -eq 0 ]; then
+      echo "Missing or stale cached meshshot dependencies in $MESHSHOT_PACKAGE_DIR/node_modules." >&2
+      echo "Offline production bundling refuses to run npm ci." >&2
+      return 1
+    fi
     npm ci --prefix "$MESHSHOT_PACKAGE_DIR" \
       --ignore-scripts \
       --no-audit \

@@ -58,7 +58,7 @@ if [ "$PRINT_OUTPUTS" -eq 1 ]; then
 fi
 
 require_python_package "$CADGEN_PACKAGE_DIR" cadgen
-ensure_snapshot_runtime_deps "$SNAPSHOT_BUILD_DEPS_DIR" 1
+ensure_snapshot_runtime_deps "$SNAPSHOT_BUILD_DEPS_DIR" "${BUNDLE_INSTALL_DEPS:-1}"
 
 if [ "$CLEAN" -eq 1 ]; then
   rm -rf "$CHECK_DIR"

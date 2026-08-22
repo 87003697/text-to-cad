@@ -76,7 +76,7 @@ if [ "$CLEAN" -eq 1 ]; then
   rm -rf "$CHECK_DIR" "$SNAPSHOT_BUILD_DEPS_DIR"
 fi
 
-ensure_snapshot_runtime_deps "$SNAPSHOT_BUILD_DEPS_DIR" 1
+ensure_snapshot_runtime_deps "$SNAPSHOT_BUILD_DEPS_DIR" "${BUNDLE_INSTALL_DEPS:-1}"
 
 if [ "$MODE" = "check" ]; then
   rm -rf "$CHECK_DIR"

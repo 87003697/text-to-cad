@@ -78,6 +78,15 @@ Run the smallest path-targeted check that covers the change:
 - Viewer / packages: `npm --prefix <path> test|build`
 - Docs: `npm --prefix docs run check`
 - Targeted Python: `./.venv/bin/python -m unittest <changed paths>`
+- Installed-plugin smoke (**required before production or paid-pilot
+  claims** about the shipped plugin surface):
+  `scripts/release/smoke-installed-plugin.sh`. Materializes and bundles a
+  detached worktree, runs `scripts/release/finalize-publish-tree.sh` (the
+  same production-layout + trim + pin path Release uses), installs through
+  the real Codex plugin CLI in an isolated CODEX_HOME, and writes an auditable JSON receipt to
+  `tmp/installed-plugin-smoke/receipt.json`. Fails closed on symlink
+  omission, manifest divergence, missing critical runtime, or
+  source-checkout fallback.
 
 ## Environments (quick notes)
 

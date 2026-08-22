@@ -13,7 +13,7 @@ source "$SCRIPT_DIR/../lib/node_builders.sh"
 
 MODE="write"
 CLEAN=0
-INSTALL_DEPS=1
+INSTALL_DEPS="${BUNDLE_INSTALL_DEPS:-1}"
 PRINT_OUTPUTS=0
 
 

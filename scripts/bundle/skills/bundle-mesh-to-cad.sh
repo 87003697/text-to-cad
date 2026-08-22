@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 MODE="write"
+PRINT_OUTPUTS=0
 
 SOURCE="$REPO_ROOT/skills/mesh-to-cad/scripts/mesh-to-cad-review/__main__.py"
 TARGET="$REPO_ROOT/.claude/skills/pilot-review/scripts/review.py"
@@ -15,8 +16,11 @@ while [ "$#" -gt 0 ]; do
       ;;
     --clean)
       ;;
+    --print-outputs)
+      PRINT_OUTPUTS=1
+      ;;
     -h|--help)
-      echo "Usage: scripts/bundle/bundle-skill.sh mesh-to-cad [--check] [--clean]"
+      echo "Usage: scripts/bundle/bundle-skill.sh mesh-to-cad [--check] [--clean] [--print-outputs]"
       exit 0
       ;;
     *)
@@ -26,6 +30,11 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+if [ "$PRINT_OUTPUTS" -eq 1 ]; then
+  printf '%s\n' "${TARGET#"$REPO_ROOT/"}"
+  exit 0
+fi
 
 if [ ! -f "$SOURCE" ]; then
   echo "Missing mesh-to-cad reviewer source: ${SOURCE#"$REPO_ROOT/"}" >&2

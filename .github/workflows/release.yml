@@ -358,6 +358,10 @@ jobs:
         if: steps.gate.outputs.should_publish == 'true'
         run: scripts/dev/setup-symlinks.sh --check
 
+      - name: Materialize production bundle layout
+        if: steps.gate.outputs.should_publish == 'true'
+        run: scripts/bundle/materialize-production-layout.sh
+
       - name: Bundle production outputs
         if: steps.gate.outputs.should_publish == 'true'
         run: scripts/bundle/bundle.sh --clean
@@ -435,48 +439,20 @@ jobs:
       # PUBLISH_TREE_REMOVED_ROOTS is the single source of truth for what was
       # dropped: the commit step below reads it both to assert the roots are
       # absent and to stop demanding the generated outputs that lived under them.
-      - name: Trim publish tree
+      #
+      # finalize-publish-tree.sh owns the trim + pin + no-symlinks +
+      # no-repo-root-packages-refs rules so this workflow and scripts/release/smoke-installed-
+      # plugin.sh transform the tree identically. Do not reintroduce the logic
+      # inline here.
+      - name: Finalize publish tree
         if: steps.gate.outputs.should_publish == 'true'
         run: |
-          removed_roots="models viewer tests requirements-dev.txt docs packages"
-          for root in $removed_roots; do
-            rm -rf "$root"
-            if [ -e "$root" ]; then
-              echo "Failed to remove $root from the publish tree." >&2
-              exit 1
-            fi
-          done
-          if [ ! -f skills/cad-viewer/scripts/viewer/package.json ]; then
-            echo "Refusing to publish without the bundled CAD Viewer runtime:" >&2
-            echo "  skills/cad-viewer/scripts/viewer/package.json is missing." >&2
-            exit 1
-          fi
-          # Every skill vendors what it needs, so no skill SOURCE may reach
-          # repo-root packages/ -- one that does would break silently on install
-          # rather than here. Generated artifacts are exempt: a bundled dist/ is
-          # self-contained, and its sourcemaps name the original source paths as
-          # debug metadata, which is not a runtime reference.
-          skill_packages_refs() {
-            grep -rIlE '\.\./\.\./\.\./packages/|["'"'"']\.\./\.\./packages/' skills \
-              --exclude='*.map' --exclude-dir=dist 2>/dev/null || true
-          }
-          if [ -n "$(skill_packages_refs)" ]; then
-            echo "A skill references repo-root packages/, which is not published:" >&2
-            skill_packages_refs >&2
+          removed_roots="$(scripts/release/finalize-publish-tree.sh --print-removed-roots | tail -n 1)"
+          if [ -z "$removed_roots" ]; then
+            echo "finalize-publish-tree.sh did not report removed roots." >&2
             exit 1
           fi
           echo "PUBLISH_TREE_REMOVED_ROOTS=$removed_roots" >> "$GITHUB_ENV"
-          echo "Trimmed from the publish tree: $removed_roots"
-
-      # Published skills have no sibling packages/cadgen to install editable
-      # from, so the publish tree resolves cadgen from PyPI at this release's
-      # version. Runs after the bundle so vendored runtime copies are pinned too,
-      # and is verified below before the tree is committed.
-      - name: Pin cadgen requirements to the published PyPI version
-        if: steps.gate.outputs.should_publish == 'true'
-        run: |
-          scripts/release/pin-cadgen-requirements.sh
-          scripts/release/pin-cadgen-requirements.sh --check
 
       - name: Commit publish result
         if: steps.gate.outputs.should_publish == 'true'
