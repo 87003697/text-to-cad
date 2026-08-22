@@ -517,13 +517,24 @@ class WindowsLockBackendTests(unittest.TestCase):
         # Finding: the CRT refuses a region lock through a READ-ONLY descriptor (EBADF,
         # not a contention errno), and the old probe opened the mutex ``rb`` -- so every
         # real Windows probe failed EBADF and reported a writer-held mutex as
-        # degraded-idle. The fake raises EBADF for read-only fds, so this pins the open
-        # mode the backend actually probes with.
+        # degraded-idle. The open mode is captured at Path.open, which reads the same on
+        # every platform; the fake's fd-mode ledger additionally pins O_RDWR where the
+        # fd flags are readable at all (POSIX -- Windows has no fcntl).
         with exclusive(self.lock_path):
             pass
+        observed_modes: list[str] = []
+        real_open = Path.open
+
+        def recording_open(path_self, mode="r", *args, **kwargs):
+            observed_modes.append(mode)
+            return real_open(path_self, mode, *args, **kwargs)
+
         lock.msvcrt.locked_access_modes.clear()  # drop the acquire's own "a+b" lock record
-        self.assertEqual((False, False), lock.probe(self.lock_path))
-        self.assertEqual([os.O_RDWR], lock.msvcrt.locked_access_modes)
+        with mock.patch.object(Path, "open", recording_open):
+            self.assertEqual((False, False), lock.probe(self.lock_path))
+        self.assertEqual(["r+b"], observed_modes)
+        if os.name != "nt":
+            self.assertEqual([os.O_RDWR], lock.msvcrt.locked_access_modes)
 
     def test_a_probe_never_materialises_a_missing_mutex(self) -> None:
         # The reason the old probe opened read-only: a status GET must not create a

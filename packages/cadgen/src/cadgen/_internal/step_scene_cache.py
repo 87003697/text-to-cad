@@ -283,18 +283,41 @@ def _commit_step_scene_cache_dir(temp_dir: Path, cache_dir: Path) -> None:
     errno ``ENOTEMPTY``/``EEXIST`` (Python maps only EEXIST to FileExistsError, so the
     old ``except FileExistsError`` was dead code exactly where the race actually
     happens); Windows raises FileExistsError (EEXIST) or PermissionError (EACCES) when
-    another handle holds it. Any of those means the winner's cache stands and this
-    loser just drops its temp dir. Anything else is a real error for the caller's
-    cleanup to handle.
+    another handle holds it -- and on Windows a rename over an EXISTING directory
+    fails even when it is empty. Any of those means this writer either lands below or
+    yields; anything else is a real error for the caller's cleanup to handle.
     """
     try:
         temp_dir.rename(cache_dir)
-        _prune_step_scene_cache_siblings(cache_dir)
+        landed = True
     except OSError as exc:
-        if exc.errno in (errno.EEXIST, errno.ENOTEMPTY, errno.EACCES):
+        if exc.errno not in (errno.EEXIST, errno.ENOTEMPTY, errno.EACCES):
+            raise
+
+        def target_is_empty_remnant() -> bool:
+            # No scene.json means no winner ever landed here (a crashed writer's
+            # remnant), so replacing it costs nothing.
+            try:
+                return cache_dir.is_dir() and not (cache_dir / "scene.json").exists()
+            except OSError:
+                return False
+
+        landed = False
+        if target_is_empty_remnant():
+            # POSIX would have replaced an empty target outright; Windows cannot
+            # rename over any existing directory. Drop the remnant and land once --
+            # a second collision means a peer populated it first, and it yields.
+            try:
+                shutil.rmtree(cache_dir, ignore_errors=True)
+                temp_dir.rename(cache_dir)
+                landed = True
+            except OSError as retry_exc:
+                if retry_exc.errno not in (errno.EEXIST, errno.ENOTEMPTY, errno.EACCES):
+                    raise
+        if not landed:
             shutil.rmtree(temp_dir, ignore_errors=True)
             return
-        raise
+    _prune_step_scene_cache_siblings(cache_dir)
 
 
 def _prune_step_scene_cache_siblings(cache_dir: Path) -> None:

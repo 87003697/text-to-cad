@@ -55,13 +55,37 @@ class CommitStepSceneCacheDirTest(unittest.TestCase):
         self.assertFalse(loser.exists())
 
     def test_an_empty_stale_target_is_replaced_by_the_commit(self):
-        # An empty target (a crashed writer's remnant) does NOT collide: POSIX replaces
-        # it. The commit must still go through, leaving exactly one valid entry.
+        # An empty target (a crashed writer's remnant) does NOT collide on POSIX: the
+        # rename replaces it. The commit must still go through, leaving exactly one
+        # valid entry.
         stale = self.root / "cache"
         stale.mkdir()
         incoming = self._populated(".cache.incoming.tmp", "incoming")
 
         _commit_step_scene_cache_dir(incoming, stale)
+
+        self.assertEqual("incoming", (stale / "scene.json").read_text(encoding="utf-8"))
+        self.assertFalse(incoming.exists())
+
+    def test_a_platform_that_cannot_rename_over_an_empty_remnant_lands_after_replacing_it(self):
+        # Windows refuses a rename over ANY existing directory, empty included -- and
+        # yielding there would wedge the entry forever (every load rewrites the temp
+        # dir, collides with the empty remnant, and yields again, never caching).
+        # The commit must replace a scene.json-less remnant and land.
+        stale = self.root / "cache"
+        stale.mkdir()
+        incoming = self._populated(".cache.incoming.tmp", "incoming")
+        real_rename = Path.rename
+        attempts = {"count": 0}
+
+        def refuse_first(path_self, target):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                raise OSError(errno.EEXIST, "exists")
+            return real_rename(path_self, target)
+
+        with mock.patch.object(Path, "rename", refuse_first):
+            _commit_step_scene_cache_dir(incoming, stale)
 
         self.assertEqual("incoming", (stale / "scene.json").read_text(encoding="utf-8"))
         self.assertFalse(incoming.exists())
