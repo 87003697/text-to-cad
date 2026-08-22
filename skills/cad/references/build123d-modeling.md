@@ -68,6 +68,24 @@ XY: main base/sketch plane
 
 Use `Location`, `Plane`, and `Axis` intentionally. For positioning-sensitive tasks and source-level assembly relationships, read `positioning.md`.
 
+`Shape.located(location)` sets an **absolute** location; it does not compose with
+the shape's existing `Location`. Applying it after an earlier `located()` or
+`moved()` can therefore silently discard that transform while still producing
+plausible geometry. Use `Shape.moved(location)` to compose another transform, or
+construct one `Location(position, rotation)` and apply it once. (`Shape.rotate()`
+is different: it transforms the geometry itself, so a later `located()` does not
+undo it.)
+
+```python
+placed = box.located(Location((0, 0, 0), (0, 0, 90)))
+wrong = placed.located(Location((5, 0, 0)))  # prior Location rotation is discarded
+right = placed.moved(Location((5, 0, 0)))    # translation composes with it
+also_right = box.located(Location((5, 0, 0), (0, 0, 90)))
+```
+
+This mistake does not raise an error; detect it by inspecting the transformed
+bounding box, orientation, or downstream boolean/clearance result.
+
 ## Builder contexts
 
 Use the context that matches the geometry:
