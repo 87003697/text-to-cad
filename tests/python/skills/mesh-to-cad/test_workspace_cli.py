@@ -100,7 +100,7 @@ class WorkspaceCliTests(unittest.TestCase):
                 "--attempt",
                 "1",
                 "--phase",
-                "build",
+                "preview",
                 "--",
                 "true",
             ]
@@ -109,7 +109,43 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertEqual(1800, parsed.timeout_seconds)
         self.assertEqual(1800, self.cli.run_attempt_command.__globals__["MAX_COMMAND_SECONDS"])
 
-    def test_workspace_run_builds_source_relative_declared_input(self) -> None:
+    def test_generic_run_rejects_canonical_build_phase(self) -> None:
+        status, _initialized, stderr = self.invoke(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--prepared",
+            str(self.prepared_setup()),
+        )
+        self.assertEqual(0, status, stderr)
+        status, attempt, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(self.initial_plan()),
+            "--intended-step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+
+        status, result, _stderr = self.invoke(
+            "run",
+            "--workspace",
+            str(self.workspace),
+            "--attempt",
+            str(attempt["attempt"]["attempt"]),
+            "--phase",
+            "build",
+            "--",
+            "true",
+        )
+
+        self.assertEqual(2, status)
+        self.assertEqual("invalid_command", result["error"]["classification"])
+        self.assertFalse((self.workspace / "work/attempts/000001/commands").exists())
+
+    def test_workspace_build_preflights_registered_entrypoint(self) -> None:
         status, _initialized, stderr = self.invoke(
             "init",
             "--workspace",
@@ -154,32 +190,32 @@ class WorkspaceCliTests(unittest.TestCase):
         sidecar_relative = sidecar.relative_to(self.workspace).as_posix()
         output_relative = "work/attempts/000001/candidate/artifacts"
 
+        registry = self.final_tool_arguments()[-1]
         status, command, stderr = self.invoke(
-            "run",
+            "build",
             "--workspace",
             str(self.workspace),
             "--attempt",
             str(attempt["attempt"]["attempt"]),
-            "--phase",
-            "build",
-            "--",
-            sys.executable,
-            str(CAD_BUILD_ENTRYPOINT),
-            "build",
             "--source",
             source_relative,
             "--input",
             sidecar_relative,
             "--output-dir",
             output_relative,
+            "--tool-registry",
+            registry,
         )
 
+        self.assertEqual(0, status, (stderr, command))
         command_stderr = (
             self.workspace
             / "work/attempts/000001/commands/000001/stderr.log"
         ).read_text(encoding="utf-8")
-        self.assertEqual(0, status, (stderr, command, command_stderr))
+        self.assertEqual("", command_stderr)
         self.assertEqual(0, command["command"]["exit_code"])
+        self.assertEqual(sys.executable, command["command"]["argv"][0])
+        self.assertEqual(str(CAD_BUILD_ENTRYPOINT), command["command"]["argv"][1])
         output = self.workspace / output_relative
         self.assertTrue((output / "build.json").is_file())
         self.assertTrue((output / "measurement.glb").is_file())
@@ -206,6 +242,59 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertEqual(0, rebuilt.returncode, rebuilt.stderr)
         self.assertTrue((isolated / "rebuilt/build.json").is_file())
         self.assertTrue((isolated / "rebuilt/measurement.glb").is_file())
+
+    def test_workspace_build_preflight_failure_does_not_spend_command(self) -> None:
+        status, _initialized, stderr = self.invoke(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--prepared",
+            str(self.prepared_setup()),
+        )
+        self.assertEqual(0, status, stderr)
+        status, attempt, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(self.initial_plan()),
+            "--intended-step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+
+        candidate = self.workspace / "work/attempts/000001/candidate"
+        source = candidate / "source/model.py"
+        source.parent.mkdir(parents=True)
+        source.write_text(
+            "from build123d import Compound\n\n"
+            "def gen_step():\n"
+            "    return Compound.make_compound([])\n",
+            encoding="utf-8",
+        )
+        output_relative = "work/attempts/000001/candidate/artifacts"
+
+        status, result, _stderr = self.invoke(
+            "build",
+            "--workspace",
+            str(self.workspace),
+            "--attempt",
+            str(attempt["attempt"]["attempt"]),
+            "--source",
+            source.relative_to(self.workspace).as_posix(),
+            "--output-dir",
+            output_relative,
+            "--tool-registry",
+            self.final_tool_arguments()[-1],
+        )
+
+        self.assertEqual(2, status)
+        self.assertEqual("build_preflight_failed", result["error"]["classification"])
+        self.assertFalse(
+            (self.workspace / "work/attempts/000001/commands").exists(),
+            "a provider-free source error must not spend the Attempt command budget",
+        )
+        self.assertFalse((self.workspace / output_relative).exists())
 
     def test_incomplete_transaction_scan_skips_runtime_telemetry_tree(self) -> None:
         runtime_stage = self.workspace / "run/playwright/.tmp-browser-cache"
@@ -1705,7 +1794,7 @@ time.sleep(60)
                     "--attempt",
                     str(started["attempt"]["attempt"]),
                     "--phase",
-                    "build",
+                    "preview",
                     "--timeout-seconds",
                     "1",
                     "--",
@@ -1780,7 +1869,7 @@ time.sleep(60)
                     "--attempt",
                     str(attempt),
                     "--phase",
-                    "build",
+                    "preview",
                     "--",
                     sys.executable,
                     "-c",
@@ -1915,7 +2004,7 @@ time.sleep(60)
                     "--attempt",
                     str(attempt),
                     "--phase",
-                    "build",
+                    "preview",
                     "--",
                     sys.executable,
                     "-c",
@@ -2074,7 +2163,7 @@ time.sleep(60)
                         "--attempt",
                         str(failed_id),
                         "--phase",
-                        "build",
+                        "preview",
                         "--",
                         sys.executable,
                         "-c",
@@ -2384,7 +2473,7 @@ time.sleep(60)
             "--attempt",
             str(attempt_id),
             "--phase",
-            "build",
+            "preview",
             "--",
             "/definitely/missing/workspace-command",
         )

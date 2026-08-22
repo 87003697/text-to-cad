@@ -22,6 +22,7 @@ from workspace_core import (
     recover_workspace,
     rebuild_index,
     run_attempt_command,
+    run_canonical_build,
     validate_workspace,
     workspace_status,
 )
@@ -96,6 +97,19 @@ def _parser() -> argparse.ArgumentParser:
         "--timeout-seconds", type=int, default=DEFAULT_COMMAND_SECONDS
     )
     run.add_argument("argv", nargs=argparse.REMAINDER)
+
+    build = commands.add_parser(
+        "build", help="Preflight and run the registered canonical CAD builder"
+    )
+    _workspace_argument(build)
+    build.add_argument("--attempt", type=int, required=True)
+    build.add_argument("--source", required=True)
+    build.add_argument("--input", action="append", default=[])
+    build.add_argument("--output-dir", required=True)
+    build.add_argument("--tool-registry", type=Path, required=True)
+    build.add_argument(
+        "--timeout-seconds", type=int, default=DEFAULT_COMMAND_SECONDS
+    )
 
     record = commands.add_parser("record-attempt", help="Publish a failed Attempt")
     _workspace_argument(record)
@@ -175,6 +189,18 @@ def main(argv: list[str] | None = None) -> int:
                 attempt=args.attempt,
                 phase=args.phase,
                 argv=argv,
+                timeout_seconds=args.timeout_seconds,
+            )
+            _emit({"ok": value["exit_code"] == 0, "command": value})
+            return value["exit_code"]
+        elif args.command == "build":
+            value = run_canonical_build(
+                args.workspace,
+                attempt=args.attempt,
+                source=args.source,
+                inputs=args.input,
+                output_dir=args.output_dir,
+                tool_registry=args.tool_registry,
                 timeout_seconds=args.timeout_seconds,
             )
             _emit({"ok": value["exit_code"] == 0, "command": value})

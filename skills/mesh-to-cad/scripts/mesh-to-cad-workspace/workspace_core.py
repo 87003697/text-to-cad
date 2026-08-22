@@ -516,13 +516,14 @@ def publish_step_zero(
     return {**document, "graph": graph}
 
 
-def run_attempt_command(
+def _run_attempt_command(
     workspace: Path,
     *,
     attempt: int,
     phase: str,
     argv: list[str],
     timeout_seconds: int,
+    canonical_output: Path | None,
 ) -> dict[str, Any]:
     """Run one bounded argv command without a shell and freeze its audit log."""
 
@@ -530,6 +531,12 @@ def run_attempt_command(
     validate_workspace(workspace)
     active_root, _active, _plan = _load_active_attempt(workspace, attempt)
     _nonempty_string(phase, "$.phase")
+    if phase == "build" and canonical_output is None:
+        _fail(
+            "invalid_command",
+            "canonical builds must use the registered Workspace build command",
+            "$.phase",
+        )
     if not argv or any(not isinstance(value, str) or "\0" in value for value in argv):
         _fail("invalid_command", "command argv must contain non-empty strings")
     if timeout_seconds <= 0 or timeout_seconds > MAX_COMMAND_SECONDS:
@@ -538,12 +545,11 @@ def run_attempt_command(
             f"timeout must be between 1 and {MAX_COMMAND_SECONDS} seconds",
         )
     commands_root = active_root / "commands"
-    commands_root.mkdir(exist_ok=True)
     existing = [
         int(path.name)
         for path in commands_root.iterdir()
         if path.is_dir() and path.name.isdigit()
-    ]
+    ] if commands_root.is_dir() else []
     if len(existing) >= MAX_COMMANDS_PER_ATTEMPT:
         _fail("budget_violation", "attempt has exhausted its command allowance")
     command_id = max(existing, default=0) + 1
@@ -565,6 +571,21 @@ def run_attempt_command(
         stderr = f"command launch failed: {exc}\n".encode("utf-8", errors="replace")
         timed_out = False
     duration_ms = max(0, round((time.monotonic() - started) * 1000))
+    if canonical_output is not None and (
+        timed_out
+        or exit_code != 0
+        or not (canonical_output / "build.json").is_file()
+        or not (canonical_output / "measurement.glb").is_file()
+    ):
+        detail_source = stderr or stdout
+        detail = _compact_process_detail(
+            detail_source.decode("utf-8", errors="replace")
+        )
+        shutil.rmtree(canonical_output, ignore_errors=True)
+        _fail(
+            "build_preflight_failed",
+            detail or "canonical build preflight did not publish required artifacts",
+        )
     stored_stdout, stdout_metadata = _bounded_log(stdout)
     stored_stderr, stderr_metadata = _bounded_log(stderr)
     stdout_metadata["path"] = f"commands/{command_id:06d}/stdout.log"
@@ -580,6 +601,7 @@ def run_attempt_command(
         "stdout": stdout_metadata,
         "stderr": stderr_metadata,
     }
+    commands_root.mkdir(exist_ok=True)
     stage = commands_root / f".tmp-{command_id:06d}-{uuid.uuid4().hex}"
     stage.mkdir()
     (stage / "stdout.log").write_bytes(stored_stdout)
@@ -587,6 +609,71 @@ def run_attempt_command(
     _write_json(stage / "command.json", document)
     stage.rename(commands_root / f"{command_id:06d}")
     return document
+
+
+def run_attempt_command(
+    workspace: Path,
+    *,
+    attempt: int,
+    phase: str,
+    argv: list[str],
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    return _run_attempt_command(
+        workspace,
+        attempt=attempt,
+        phase=phase,
+        argv=argv,
+        timeout_seconds=timeout_seconds,
+        canonical_output=None,
+    )
+
+
+def run_canonical_build(
+    workspace: Path,
+    *,
+    attempt: int,
+    source: str,
+    inputs: list[str],
+    output_dir: str,
+    tool_registry: Path,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    """Preflight and run the registered canonical builder for one Attempt."""
+
+    workspace = workspace.resolve()
+    validate_workspace(workspace)
+    active_root, _active, _plan = _load_active_attempt(workspace, attempt)
+    candidate_root = active_root / "candidate"
+    source_path = _candidate_file(workspace, candidate_root, source, "$.source")
+    input_paths = [
+        _candidate_file(workspace, candidate_root, value, f"$.inputs[{index}]")
+        for index, value in enumerate(inputs)
+    ]
+    output_path = _candidate_output(
+        workspace, candidate_root, output_dir, "$.output_dir"
+    )
+    entrypoint = _registered_tool_entrypoint(tool_registry, "rebuild")
+
+    argv = [
+        sys.executable,
+        str(entrypoint),
+        "build",
+        "--source",
+        source_path.relative_to(workspace).as_posix(),
+    ]
+    for path in input_paths:
+        argv.extend(("--input", path.relative_to(workspace).as_posix()))
+    argv.extend(("--output-dir", output_path.relative_to(workspace).as_posix()))
+
+    return _run_attempt_command(
+        workspace,
+        attempt=attempt,
+        phase="build",
+        argv=argv,
+        timeout_seconds=timeout_seconds,
+        canonical_output=output_path,
+    )
 
 
 def record_attempt(
@@ -1288,6 +1375,27 @@ def _load_tool_registry(
         if _file_sha256(entrypoint) != entry["entrypoint_sha256"]:
             _fail("untrusted_tool", "tool entrypoint digest conflicts with registry", field)
     return registry
+
+
+def _registered_tool_entrypoint(path: Path, tool: str) -> Path:
+    registry = _validate_tool_registry_document(_read_json(path, "$.tool_registry"))
+    if registry["schema"] != TOOL_REGISTRY_SCHEMA:
+        _fail(
+            "untrusted_tool",
+            "canonical build requires a registry with an absolute entrypoint",
+            "$.tool_registry.schema",
+        )
+    entry = registry[tool]
+    entrypoint = _external_entrypoint(
+        Path(entry["entrypoint"]), f"$.tool_registry.{tool}.entrypoint"
+    )
+    if _file_sha256(entrypoint) != entry["entrypoint_sha256"]:
+        _fail(
+            "untrusted_tool",
+            "tool entrypoint digest conflicts with registry",
+            f"$.tool_registry.{tool}.entrypoint_sha256",
+        )
+    return entrypoint
 
 
 def _validate_tool_registry_document(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -4165,6 +4273,49 @@ def _relative_member(root: Path, value: str, path_label: str) -> Path:
     return target
 
 
+def _candidate_file(
+    workspace: Path, candidate_root: Path, value: str, path_label: str
+) -> Path:
+    target = _relative_member(workspace, value, path_label)
+    try:
+        target.resolve().relative_to(candidate_root.resolve())
+    except ValueError:
+        _fail(
+            "invalid_workspace_path",
+            "canonical build inputs must belong to the active candidate",
+            path_label,
+        )
+    return target
+
+
+def _candidate_output(
+    workspace: Path, candidate_root: Path, value: str, path_label: str
+) -> Path:
+    if not isinstance(value, str):
+        _fail("invalid_workspace_path", "path must be a string", path_label)
+    pure = PurePosixPath(value)
+    if pure.is_absolute() or not pure.parts or any(
+        part in {"", ".", ".."} for part in pure.parts
+    ):
+        _fail("invalid_workspace_path", "path must be normalized and relative", path_label)
+    target = workspace.joinpath(*pure.parts)
+    try:
+        target.resolve().relative_to(candidate_root.resolve())
+    except ValueError:
+        _fail(
+            "invalid_workspace_path",
+            "canonical build output must belong to the active candidate",
+            path_label,
+        )
+    if target.exists():
+        _fail(
+            "invalid_workspace_path",
+            "canonical build output must be new",
+            path_label,
+        )
+    return target
+
+
 def _workspace_relative(workspace: Path, path: Path) -> str:
     try:
         relative = path.resolve().relative_to(workspace.resolve())
@@ -4255,6 +4406,7 @@ __all__ = [
     "recover_workspace",
     "rebuild_index",
     "run_attempt_command",
+    "run_canonical_build",
     "validate_workspace",
     "workspace_status",
 ]

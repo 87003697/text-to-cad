@@ -8,6 +8,7 @@ Invoke it with the active project Python:
 
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace init ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace begin-attempt ...
+    python skills/mesh-to-cad/scripts/mesh-to-cad-workspace build ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace run ... -- <argv>
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace record-attempt ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace publish-step-zero ...
@@ -32,6 +33,9 @@ run returns the wrapped command's exit code.
   closed mesh-to-cad.experiment/1 manifest.
 - begin-attempt freezes either an initial plan or a validated
   voxblame.repair-batch/1.
+- build resolves the sole canonical CAD launcher from the trusted registry,
+  confines source, inputs, and output to the active candidate, and performs an
+  unrecorded provider-free preflight before spending an Attempt command.
 - publish-step-zero cross-checks the candidate mesh, formal preview,
   canonical `voxblame.summary/1` measurement, Canonical Reference, canonical
   frame, and preview profile before publishing steps/000000/. Objective facts
@@ -70,8 +74,9 @@ three Attempts, at most two of which may end as actual tool failures. Failed
 Attempts consume no cycle. A successfully published geometric no-op consumes
 one cycle.
 
-run executes argv directly without a shell. It permits eight commands per
-Attempt, defaults to and caps time at 1800 seconds (30 minutes), stores at most
+build owns the reserved `build` phase; generic run rejects that phase. run
+executes all other argv directly without a shell. An Attempt permits eight
+commands. Each command defaults to and caps time at 1800 seconds (30 minutes), stores at most
 64 KiB from each output stream using a versioned head/tail policy, and redacts known secret-bearing
 arguments and Authorization headers.
 

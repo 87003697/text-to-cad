@@ -61,9 +61,10 @@ Do not write authority files directly after initialization.
 
 ### Attempt command recording
 
-After `begin-attempt`, invoke every fallible build, preview, measurement, and
-diff command through `mesh-to-cad-workspace run` with an explicit phase. A
-nonzero command completes the Attempt only after its command document is
+After `begin-attempt`, invoke canonical CAD through
+`mesh-to-cad-workspace build`; invoke every other fallible preview,
+measurement, and diff command through `mesh-to-cad-workspace run` with an
+explicit phase. A nonzero command completes the Attempt only after its command document is
 published and `record-attempt` records `result=tool_failure` with the tool's
 reported classification. In particular, a `preview_failed` result is a tool
 failure named `preview_failed`; it is not evidence of a representation limit
@@ -78,24 +79,35 @@ python skills/mesh-to-cad/scripts/mesh-to-cad-workspace begin-attempt \
   --workspace <EXP_DIR> --plan <initial-plan.json> --intended-step 0
 ```
 
-2. Run each build operation through the bounded `run` command. `$cad`
-   must build directly in canonical coordinates and leave a complete source
+2. Run each build operation through the bounded, registered `build` command.
+   `$cad` must build directly in canonical coordinates and leave a complete source
    bundle, registered offline rebuild recipe, CAD artifacts, and measurement
    GLB under the Attempt's candidate directory. From Step 0 onward, keep the
    rebuild recipe bundle-relative and ready for isolated finalization. Give
    every rebuild a new empty output directory.
 
-   Before spending a `run` command, freeze the canonical-build argv as a
-   direct argv list. The child cwd is the experiment root: invoke the absolute
-   registered entrypoint and pass `--source`, every `--input`, and
-   `--output-dir` as experiment-root-relative paths. Canonical source execution
+   Pass `--source`, every `--input`, and `--output-dir` as
+   experiment-root-relative paths. The Workspace reads the absolute adapter
+   and digest from the trusted registry; do not supply or reconstruct a
+   launcher. Canonical source execution
    uses the candidate bundle as cwd, so a generator reads each sidecar through
    its bundle-relative path (for example `Path("source/width.txt")`); that same
    file is passed to the initial build through experiment-root-relative
-   `--input`. The preflight is complete only when
-   the argv has no shell wrapper or nested cwd change, the output directory is
-   new and empty, and a local provider-free invocation produces both
-   `build.json` and `measurement.glb`.
+   `--input`. The output directory must be new. `build` treats the exact
+   provider-free invocation as provisional until it produces both `build.json`
+   and `measurement.glb`; a preflight failure is cleaned and spends no command
+   from the active Attempt. On success, that invocation is recorded as the
+   formal build command:
+
+```bash
+python skills/mesh-to-cad/scripts/mesh-to-cad-workspace build \
+  --workspace <EXP_DIR> --attempt <A> \
+  --source work/attempts/<A>/candidate/source/model.py \
+  --input work/attempts/<A>/candidate/source/width.txt \
+  --output-dir work/attempts/<A>/candidate/artifacts \
+  --tool-registry /run/meshshot-browser/trusted-tool-registry.json
+```
+
 3. Run `$mesh-compare voxblame-preview` on the candidate and inspect all eight
    views.
 4. Run `$mesh-compare voxblame-measure` with `--step 0` and no parent.
