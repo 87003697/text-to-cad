@@ -29,6 +29,7 @@ class FakeRunner:
         self.local: list[tuple[tuple[str, ...], Path]] = []
         self.remote_commands: list[str] = []
         self.streams: list[tuple[tuple[str, ...], Path]] = []
+        self.stream_envs: list[dict[str, str] | None] = []
         self.responses: list[tuple[str, int, str]] = []
         self.stream_status = 0
         self.stream_output = ""
@@ -49,6 +50,7 @@ class FakeRunner:
 
     def stream(self, argv, *, cwd, log_path, env=None, echo):
         self.streams.append((tuple(argv), Path(cwd)))
+        self.stream_envs.append(None if env is None else dict(env))
         Path(log_path).parent.mkdir(parents=True, exist_ok=True)
         with Path(log_path).open("a", encoding="utf-8") as log:
             log.write(self.stream_output)
@@ -851,6 +853,37 @@ class TransferAndVerifyTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_bundle_stage_reuses_the_validated_snapshot_toolchain(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repo = create_repo(root)
+            stage = root / "stage"
+            stage.mkdir()
+            runner = FakeRunner()
+            workflow = cvm_push.CvmPush(
+                runner,
+                repo_root=repo,
+                environ={"KEEP": "value"},
+            )
+
+            workflow.bundle_stage(stage)
+
+        self.assertEqual(runner.stream_status, 0)
+        self.assertEqual(len(runner.stream_envs), 1)
+        env = runner.stream_envs[0]
+        assert env is not None
+        expected = str(stage / "tmp/cad-snapshot-build")
+        self.assertEqual(env["KEEP"], "value")
+        for name in (
+            "CAD_SNAPSHOT_BUILD_DEPS_DIR",
+            "DXF_SNAPSHOT_BUILD_DEPS_DIR",
+            "SDF_SNAPSHOT_BUILD_DEPS_DIR",
+            "SRDF_SNAPSHOT_BUILD_DEPS_DIR",
+            "URDF_SNAPSHOT_BUILD_DEPS_DIR",
+            "NODE_BUILDER_BUILD_DEPS_DIR",
+        ):
+            self.assertEqual(env[name], expected)
+
     def test_staging_failure_exits_before_remote_transfer(self) -> None:
         runner = FakeRunner()
         workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})

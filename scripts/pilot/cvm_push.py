@@ -621,11 +621,15 @@ class CvmPush:
     def bundle_stage(self, stage: Path) -> None:
         """Materialize every production skill runtime inside staging."""
 
+        snapshot_build_deps = str(stage / "tmp/cad-snapshot-build")
         env = {
             **self.environ,
-            "CAD_SNAPSHOT_BUILD_DEPS_DIR": str(
-                stage / "tmp/cad-snapshot-build"
-            ),
+            "CAD_SNAPSHOT_BUILD_DEPS_DIR": snapshot_build_deps,
+            "DXF_SNAPSHOT_BUILD_DEPS_DIR": snapshot_build_deps,
+            "SDF_SNAPSHOT_BUILD_DEPS_DIR": snapshot_build_deps,
+            "SRDF_SNAPSHOT_BUILD_DEPS_DIR": snapshot_build_deps,
+            "URDF_SNAPSHOT_BUILD_DEPS_DIR": snapshot_build_deps,
+            "NODE_BUILDER_BUILD_DEPS_DIR": snapshot_build_deps,
         }
         status = self.runner.stream(
             ["scripts/bundle/bundle-skill.sh", "--all"],
