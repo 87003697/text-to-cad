@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import base64
 import hashlib
-import struct
 import subprocess
 import unittest
 from pathlib import Path
@@ -195,26 +194,20 @@ class JobFactoryTests(unittest.TestCase):
                     image_ref=EXACT_IMAGE,
                 )
 
-    def test_viewer_mount_requires_hydrated_native_glb(self):
+    def test_viewer_mount_requires_materialized_runtime(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             runtime = root / "viewer"
-            models = root / "models"
-            (runtime / "backend").mkdir(parents=True)
-            (runtime / "dist").mkdir()
-            models.mkdir()
-            (runtime / "backend/server.mjs").write_text("// server\n")
-            (runtime / "dist/index.html").write_text("<!doctype html>\n")
-            model = models / job_module.VIEWER_SMOKE_DOCUMENT
-            model.write_text("version https://git-lfs.github.com/spec/v1\n")
+            runtime.mkdir()
             job = BrowserRuntimeJob(
                 owner_nonce="abcdef0123456789abcd",
                 capability_dir=root / "authority",
                 image_ref=EXACT_IMAGE,
                 viewer_runtime_dir=runtime,
-                viewer_model_dir=models,
                 docker=_fake_docker(),
             )
+            job.capability_dir.mkdir()
+            job._stage_viewer_smoke_document()
 
             with self.assertRaisesRegex(
                 BrowserRuntimeError, "Viewer runtime assets"
@@ -225,22 +218,16 @@ class JobFactoryTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             runtime = root / "viewer"
-            models = root / "models"
             (runtime / "backend").mkdir(parents=True)
             (runtime / "dist").mkdir()
-            models.mkdir()
             (runtime / "backend/server.mjs").write_text("// server\n")
             (runtime / "dist/index.html").write_text("<!doctype html>\n")
-            (models / job_module.VIEWER_SMOKE_DOCUMENT).write_bytes(
-                struct.pack("<4sII", b"glTF", 2, 12)
-            )
             docker = _fake_docker()
             job = BrowserRuntimeJob(
                 owner_nonce="abcdef0123456789abcd",
                 capability_dir=root / "authority",
                 image_ref=EXACT_IMAGE,
                 viewer_runtime_dir=runtime,
-                viewer_model_dir=models,
                 docker=docker,
             )
             job._wait_for_port = lambda: None  # type: ignore[method-assign]
@@ -255,10 +242,77 @@ class JobFactoryTests(unittest.TestCase):
             ]
             self.assertEqual(len(mounts), 2)
             self.assertTrue(all(value.endswith(",readonly") for value in mounts))
+            smoke_document = (
+                job.capability_dir
+                / "viewer-smoke-assets"
+                / job_module.VIEWER_SMOKE_DOCUMENT
+            )
+            self.assertTrue(job_module.BrowserRuntimeJob._is_self_consistent_glb(
+                smoke_document
+            ))
+            self.assertEqual(smoke_document.stat().st_mode & 0o777, 0o444)
+            self.assertEqual(smoke_document.parent.stat().st_mode & 0o777, 0o555)
+            expected_digest = "sha256:" + hashlib.sha256(
+                smoke_document.read_bytes()
+            ).hexdigest()
+            self.assertEqual(job._viewer_document_sha256, expected_digest)
+            job._stage_viewer_smoke_document()
+            self.assertEqual(job._viewer_document_sha256, expected_digest)
+            self.assertIn(
+                "source=" + str(smoke_document.parent.resolve()),
+                mounts[1],
+            )
             exec_call = next(
                 a for a in docker.calls if a[:3] == ["docker", "exec", "--detach"]
             )
             self.assertIn("/opt/text-to-cad/viewer/backend/server.mjs", exec_call)
+
+    def test_viewer_mount_rejects_comma_delimited_source_path(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "experiment,invalid"
+            runtime = root / "viewer"
+            (runtime / "backend").mkdir(parents=True)
+            (runtime / "dist").mkdir()
+            (runtime / "backend/server.mjs").write_text("// server\n")
+            (runtime / "dist/index.html").write_text("<!doctype html>\n")
+            job = BrowserRuntimeJob(
+                owner_nonce="abcdef0123456789abcd",
+                capability_dir=root / "authority",
+                image_ref=EXACT_IMAGE,
+                viewer_runtime_dir=runtime,
+                docker=_fake_docker(),
+            )
+            job.capability_dir.mkdir(parents=True)
+            job._stage_viewer_smoke_document()
+
+            with self.assertRaisesRegex(
+                BrowserRuntimeError, "unsupported delimiter"
+            ):
+                job._build_run_argv()
+
+    def test_viewer_staging_rejects_unsafe_retained_temporary(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runtime = root / "viewer"
+            runtime.mkdir()
+            job = BrowserRuntimeJob(
+                owner_nonce="abcdef0123456789abcd",
+                capability_dir=root / "authority",
+                image_ref=EXACT_IMAGE,
+                viewer_runtime_dir=runtime,
+                docker=_fake_docker(),
+            )
+            model_dir = job.capability_dir / "viewer-smoke-assets"
+            model_dir.mkdir(parents=True)
+            temporary = model_dir / f".{job_module.VIEWER_SMOKE_DOCUMENT}.tmp"
+            temporary.symlink_to(root / "outside")
+            model_dir.chmod(0o555)
+
+            with self.assertRaisesRegex(
+                BrowserRuntimeError, "cannot stage CAD Viewer smoke document"
+            ):
+                job._stage_viewer_smoke_document()
+            self.assertTrue(temporary.is_symlink())
 
     def test_missing_locked_id_fails_without_tag_fallback(self):
         with TemporaryDirectory() as tmp:
@@ -454,6 +508,7 @@ class LifecycleTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             job, _ = self._make_job(tmp)
             job.start()
+            job._viewer_document_sha256 = "sha256:" + "a" * 64
             png = b"\x89PNG\r\n\x1a\nviewer-smoke"
             tool_names = [
                 "browser_navigate",

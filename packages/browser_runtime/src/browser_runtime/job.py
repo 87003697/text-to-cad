@@ -21,6 +21,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import struct
 import subprocess
 import time
@@ -83,7 +84,6 @@ class BrowserRuntimeJob:
     image_ref: str | None = None
     image_lock_path: Path | None = None
     viewer_runtime_dir: Path | None = None
-    viewer_model_dir: Path | None = None
     docker: DockerRunner = field(default=_run_docker)
     port_ready_timeout_s: float = 20.0
     port_ready_poll_s: float = 0.15
@@ -139,15 +139,8 @@ class BrowserRuntimeJob:
             if self.viewer_runtime_dir is not None
             else None
         )
-        self.viewer_model_dir = (
-            Path(self.viewer_model_dir).resolve()
-            if self.viewer_model_dir is not None
-            else None
-        )
-        if (self.viewer_runtime_dir is None) != (self.viewer_model_dir is None):
-            raise BrowserRuntimeError(
-                "viewer runtime and model directories must be supplied together"
-            )
+        self._viewer_model_dir: Path | None = None
+        self._viewer_document_sha256: str | None = None
 
     # -- factory ----------------------------------------------------------
 
@@ -160,7 +153,6 @@ class BrowserRuntimeJob:
         image_ref: str | None = None,
         image_lock_path: Path | None = None,
         viewer_runtime_dir: Path | None = None,
-        viewer_model_dir: Path | None = None,
         docker: DockerRunner | None = None,
     ) -> "BrowserRuntimeJob":
         """Allocate a per-job capability directory under EXP_DIR/run/."""
@@ -177,8 +169,6 @@ class BrowserRuntimeJob:
             kwargs["image_lock_path"] = image_lock_path
         if viewer_runtime_dir is not None:
             kwargs["viewer_runtime_dir"] = viewer_runtime_dir
-        if viewer_model_dir is not None:
-            kwargs["viewer_model_dir"] = viewer_model_dir
         if docker is not None:
             kwargs["docker"] = docker
         return cls(**kwargs)
@@ -218,6 +208,8 @@ class BrowserRuntimeJob:
         self._captured_ledger_bytes = None
         self._captured_ledger_count = None
         self.capability_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
+        if self.viewer_runtime_dir is not None:
+            self._stage_viewer_smoke_document()
         self._resolve_local_image_ref()
         self._docker_or_raise(
             ["docker", "network", "create", self.network_name],
@@ -444,6 +436,8 @@ class BrowserRuntimeJob:
     def preflight_mcp(self, viewer_url: str = VIEWER_SMOKE_URL) -> None:
         """Prove MCP tool discovery and a real production Viewer page before paid work."""
 
+        if self._viewer_document_sha256 is None:
+            raise BrowserRuntimeError("CAD Viewer smoke document is unavailable")
         parsed = urlsplit(viewer_url)
         if (
             parsed.scheme != "http"
@@ -597,6 +591,7 @@ class BrowserRuntimeJob:
             "toolNames": sorted(tool_names),
             "viewerUrl": viewer_url,
             "viewerDocument": VIEWER_SMOKE_DOCUMENT,
+            "viewerDocumentSha256": self._viewer_document_sha256,
             "modelReady": True,
             "snapshotSha256": "sha256:"
             + hashlib.sha256(snapshot_text.encode("utf-8")).hexdigest(),
@@ -724,18 +719,24 @@ class BrowserRuntimeJob:
             "--pids-limit", str(self.pids_limit),
             "--stop-timeout", "5",
         ]
-        if self.viewer_runtime_dir is not None and self.viewer_model_dir is not None:
-            viewer_document = self.viewer_model_dir / VIEWER_SMOKE_DOCUMENT
+        if self.viewer_runtime_dir is not None and self._viewer_model_dir is not None:
+            viewer_document = self._viewer_model_dir / VIEWER_SMOKE_DOCUMENT
             required = (
                 self.viewer_runtime_dir / "backend/server.mjs",
                 self.viewer_runtime_dir / "dist/index.html",
             )
             if (
                 any(not path.is_file() for path in required)
-                or not self.viewer_model_dir.is_dir()
+                or not self._viewer_model_dir.is_dir()
                 or not self._is_self_consistent_glb(viewer_document)
             ):
                 raise BrowserRuntimeError("CAD Viewer runtime assets are unavailable")
+            if "," in os.fspath(self.viewer_runtime_dir) or "," in os.fspath(
+                self._viewer_model_dir
+            ):
+                raise BrowserRuntimeError(
+                    "CAD Viewer runtime paths contain an unsupported delimiter"
+                )
             argv.extend(
                 [
                     "--mount",
@@ -744,12 +745,170 @@ class BrowserRuntimeJob:
                     + ",target=/opt/text-to-cad/viewer,readonly",
                     "--mount",
                     "type=bind,source="
-                    + os.fspath(self.viewer_model_dir)
+                    + os.fspath(self._viewer_model_dir)
                     + ",target=/opt/text-to-cad/viewer-models,readonly",
                 ]
             )
         argv.append(self.image_ref)
         return argv
+
+    def _stage_viewer_smoke_document(self) -> None:
+        """Create one fixed native GLB without relying on repository LFS state."""
+
+        model_dir = self.capability_dir / "viewer-smoke-assets"
+        target = model_dir / VIEWER_SMOKE_DOCUMENT
+        temporary = model_dir / f".{VIEWER_SMOKE_DOCUMENT}.tmp"
+        glb = self._viewer_smoke_glb()
+        temporary_owned = False
+        try:
+            try:
+                model_dir.mkdir(mode=0o750)
+            except FileExistsError:
+                metadata = model_dir.lstat()
+                if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(
+                    metadata.st_mode
+                ):
+                    raise OSError("CAD Viewer smoke asset root is invalid")
+                entries = {entry.name: entry for entry in model_dir.iterdir()}
+                allowed_entries = {
+                    VIEWER_SMOKE_DOCUMENT,
+                    temporary.name,
+                }
+                if set(entries) - allowed_entries:
+                    raise OSError("CAD Viewer smoke asset root is not closed")
+                if temporary.name in entries:
+                    temporary_metadata = temporary.lstat()
+                    if (
+                        not stat.S_ISREG(temporary_metadata.st_mode)
+                        or stat.S_ISLNK(temporary_metadata.st_mode)
+                    ):
+                        raise OSError("CAD Viewer smoke temporary is invalid")
+                    os.chmod(model_dir, 0o750)
+                    temporary.unlink()
+                if VIEWER_SMOKE_DOCUMENT in entries:
+                    target_metadata = target.lstat()
+                    if (
+                        not stat.S_ISREG(target_metadata.st_mode)
+                        or stat.S_ISLNK(target_metadata.st_mode)
+                        or target.read_bytes() != glb
+                    ):
+                        raise OSError("CAD Viewer smoke document conflicts")
+                    os.chmod(target, 0o444)
+                    os.chmod(model_dir, 0o555)
+                    self._viewer_model_dir = model_dir.resolve()
+                    self._viewer_document_sha256 = (
+                        "sha256:" + hashlib.sha256(glb).hexdigest()
+                    )
+                    return
+                os.chmod(model_dir, 0o750)
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o400,
+            )
+            temporary_owned = True
+            try:
+                payload = memoryview(glb)
+                while payload:
+                    written = os.write(descriptor, payload)
+                    if written <= 0:
+                        raise OSError("short CAD Viewer smoke document write")
+                    payload = payload[written:]
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, target)
+            temporary_owned = False
+            os.chmod(target, 0o444)
+            os.chmod(model_dir, 0o555)
+        except OSError as exc:
+            if temporary_owned:
+                try:
+                    os.chmod(model_dir, 0o750)
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+            raise BrowserRuntimeError(
+                "cannot stage CAD Viewer smoke document"
+            ) from exc
+        self._viewer_model_dir = model_dir.resolve()
+        self._viewer_document_sha256 = (
+            "sha256:" + hashlib.sha256(glb).hexdigest()
+        )
+
+    @staticmethod
+    def _viewer_smoke_glb() -> bytes:
+        positions = struct.pack(
+            "<9f",
+            -0.6,
+            -0.45,
+            0.0,
+            0.6,
+            -0.45,
+            0.0,
+            0.0,
+            0.65,
+            0.0,
+        )
+        indices = struct.pack("<3H", 0, 1, 2)
+        binary = positions + indices
+        binary += b"\0" * (-len(binary) % 4)
+        document = {
+            "asset": {"version": "2.0", "generator": "text-to-cad-viewer-smoke"},
+            "scene": 0,
+            "scenes": [{"nodes": [0]}],
+            "nodes": [{"mesh": 0}],
+            "meshes": [
+                {
+                    "primitives": [
+                        {"attributes": {"POSITION": 0}, "indices": 1}
+                    ]
+                }
+            ],
+            "accessors": [
+                {
+                    "bufferView": 0,
+                    "componentType": 5126,
+                    "count": 3,
+                    "type": "VEC3",
+                    "min": [-0.6, -0.45, 0.0],
+                    "max": [0.6, 0.65, 0.0],
+                },
+                {
+                    "bufferView": 1,
+                    "componentType": 5123,
+                    "count": 3,
+                    "type": "SCALAR",
+                },
+            ],
+            "bufferViews": [
+                {"buffer": 0, "byteOffset": 0, "byteLength": len(positions)},
+                {
+                    "buffer": 0,
+                    "byteOffset": len(positions),
+                    "byteLength": len(indices),
+                    "target": 34963,
+                },
+            ],
+            "buffers": [{"byteLength": len(positions) + len(indices)}],
+        }
+        json_chunk = json.dumps(
+            document,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("ascii")
+        json_chunk += b" " * (-len(json_chunk) % 4)
+        total_length = 12 + 8 + len(json_chunk) + 8 + len(binary)
+        return b"".join(
+            (
+                struct.pack("<4sII", b"glTF", 2, total_length),
+                struct.pack("<I4s", len(json_chunk), b"JSON"),
+                json_chunk,
+                struct.pack("<I4s", len(binary), b"BIN\0"),
+                binary,
+            )
+        )
 
     @staticmethod
     def _is_self_consistent_glb(path: Path) -> bool:

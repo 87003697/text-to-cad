@@ -91,16 +91,14 @@ class BrowserRuntimeResidualIntegrationTests(unittest.TestCase):
 
         repo_root = Path(__file__).resolve().parents[2]
         viewer_runtime = repo_root / "tmp/cad-viewer-runtime-check"
-        viewer_models = repo_root / "models/mesh/glb"
         if not (viewer_runtime / "backend/server.mjs").is_file():
             self.skipTest("materialized CAD Viewer runtime was not built")
 
-        with TemporaryDirectory() as temp:
+        with TemporaryDirectory(dir=repo_root / "tmp") as temp:
             job = BrowserRuntimeJob.create(
                 Path(temp),
                 image_lock_path=IMAGE_LOCK_PATH,
                 viewer_runtime_dir=viewer_runtime,
-                viewer_model_dir=viewer_models,
             )
             try:
                 job.start()
@@ -121,6 +119,15 @@ class BrowserRuntimeResidualIntegrationTests(unittest.TestCase):
                 self.assertTrue(smoke["modelReady"])
                 self.assertTrue(smoke["passed"])
                 self.assertRegex(smoke["screenshotSha256"], r"sha256:[0-9a-f]{64}")
+                smoke_document = (
+                    job.capability_dir
+                    / "viewer-smoke-assets"
+                    / "spur_gear_blank.glb"
+                )
+                self.assertEqual(
+                    smoke["viewerDocumentSha256"],
+                    "sha256:" + hashlib.sha256(smoke_document.read_bytes()).hexdigest(),
+                )
             finally:
                 job.stop()
 

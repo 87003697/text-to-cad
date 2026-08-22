@@ -63,7 +63,6 @@ WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace
 CAD_REBUILD_ENTRYPOINT = REPO_ROOT / "skills/cad/scripts/canonical-build/__main__.py"
 GEOMETRY_ENTRYPOINT = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare/__main__.py"
 VIEWER_RUNTIME_DIR = REPO_ROOT / "skills/cad-viewer/scripts/viewer"
-VIEWER_MODEL_DIR = REPO_ROOT / "models/mesh/glb"
 TRUSTED_TOOL_REGISTRY_NAME = "trusted-tool-registry.json"
 SYSTEM_RO_PATHS = (
     Path("/usr"),
@@ -1230,7 +1229,6 @@ def run_pilot(
                 exp_dir,
                 image_lock_path=HOST_IMAGE_LOCK_PATH,
                 viewer_runtime_dir=VIEWER_RUNTIME_DIR,
-                viewer_model_dir=VIEWER_MODEL_DIR,
             )
             sidecar.start()
             publish_tool_registry(sidecar.capability_dir)
