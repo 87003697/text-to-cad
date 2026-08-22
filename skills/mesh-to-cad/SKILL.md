@@ -84,6 +84,18 @@ python skills/mesh-to-cad/scripts/mesh-to-cad-workspace begin-attempt \
    GLB under the Attempt's candidate directory. From Step 0 onward, keep the
    rebuild recipe bundle-relative and ready for isolated finalization. Give
    every rebuild a new empty output directory.
+
+   Before spending a `run` command, freeze the canonical-build argv as a
+   direct argv list. The child cwd is the experiment root: invoke the absolute
+   registered entrypoint and pass `--source`, every `--input`, and
+   `--output-dir` as experiment-root-relative paths. Canonical source execution
+   uses the candidate bundle as cwd, so a generator reads each sidecar through
+   its bundle-relative path (for example `Path("source/width.txt")`); that same
+   file is passed to the initial build through experiment-root-relative
+   `--input`. The preflight is complete only when
+   the argv has no shell wrapper or nested cwd change, the output directory is
+   new and empty, and a local provider-free invocation produces both
+   `build.json` and `measurement.glb`.
 3. Run `$mesh-compare voxblame-preview` on the candidate and inspect all eight
    views.
 4. Run `$mesh-compare voxblame-measure` with `--step 0` and no parent.

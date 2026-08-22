@@ -262,6 +262,24 @@ class VoxBlameWorkflowContractTests(unittest.TestCase):
             with self.subTest(contract="pilot-review", term=term):
                 self.assertIn(term, pilot_review)
 
+    def test_mesh_to_cad_freezes_canonical_build_path_semantics(self) -> None:
+        contract = (REPO_ROOT / "skills/mesh-to-cad/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+
+        for required in (
+            "direct argv list",
+            "child cwd is the experiment root",
+            "experiment-root-relative paths",
+            "candidate bundle as cwd",
+            'Path("source/width.txt")',
+            "experiment-root-relative\n   `--input`",
+            "no shell wrapper or nested cwd change",
+            "`build.json` and `measurement.glb`",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, contract)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -626,17 +626,22 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
     # I/O. Some dependencies populate their own interpreter cache on import.
     import build123d  # noqa: F401
 
-    with _source_execution_policy(
-        root=root,
-        declared_inputs={path for path, _relative in declared_inputs},
-        output_dir=output_path,
-    ):
-        generated_scene = _run_script_generator_inner(
-            spec,
-            "gen_step",
-            logger=CliLogger("canonical-build"),
-            force=True,
-        )
+    original_cwd = Path.cwd()
+    os.chdir(bundle_root)
+    try:
+        with _source_execution_policy(
+            root=bundle_root,
+            declared_inputs={path for path, _relative in declared_inputs},
+            output_dir=output_path,
+        ):
+            generated_scene = _run_script_generator_inner(
+                spec,
+                "gen_step",
+                logger=CliLogger("canonical-build"),
+                force=True,
+            )
+    finally:
+        os.chdir(original_cwd)
     if generated_scene is None or generated_scene.doc is None:
         raise RuntimeError("canonical CAD source did not produce an exportable XCAF scene")
     source_digest = _sha256(source_path)

@@ -109,6 +109,104 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertEqual(1800, parsed.timeout_seconds)
         self.assertEqual(1800, self.cli.run_attempt_command.__globals__["MAX_COMMAND_SECONDS"])
 
+    def test_workspace_run_builds_source_relative_declared_input(self) -> None:
+        status, _initialized, stderr = self.invoke(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--prepared",
+            str(self.prepared_setup()),
+        )
+        self.assertEqual(0, status, stderr)
+        status, attempt, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(self.initial_plan()),
+            "--intended-step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+
+        candidate = self.workspace / "work/attempts/000001/candidate"
+        source = candidate / "source/model.py"
+        sidecar = candidate / "input/params.json"
+        source.parent.mkdir(parents=True)
+        sidecar.parent.mkdir(parents=True)
+        source.write_text(
+            "\n".join(
+                (
+                    "import json",
+                    "from pathlib import Path",
+                    "from build123d import Box",
+                    "",
+                    "def gen_step():",
+                    "    params = json.loads(Path('input/params.json').read_text())",
+                    "    return Box(params['length'], 1, 1)",
+                    "",
+                )
+            ),
+            encoding="utf-8",
+        )
+        _write_json(sidecar, {"length": 2})
+        source_relative = source.relative_to(self.workspace).as_posix()
+        sidecar_relative = sidecar.relative_to(self.workspace).as_posix()
+        output_relative = "work/attempts/000001/candidate/artifacts"
+
+        status, command, stderr = self.invoke(
+            "run",
+            "--workspace",
+            str(self.workspace),
+            "--attempt",
+            str(attempt["attempt"]["attempt"]),
+            "--phase",
+            "build",
+            "--",
+            sys.executable,
+            str(CAD_BUILD_ENTRYPOINT),
+            "build",
+            "--source",
+            source_relative,
+            "--input",
+            sidecar_relative,
+            "--output-dir",
+            output_relative,
+        )
+
+        command_stderr = (
+            self.workspace
+            / "work/attempts/000001/commands/000001/stderr.log"
+        ).read_text(encoding="utf-8")
+        self.assertEqual(0, status, (stderr, command, command_stderr))
+        self.assertEqual(0, command["command"]["exit_code"])
+        output = self.workspace / output_relative
+        self.assertTrue((output / "build.json").is_file())
+        self.assertTrue((output / "measurement.glb").is_file())
+
+        isolated = self.root / "isolated"
+        shutil.copytree(candidate / "source", isolated / "source")
+        shutil.copytree(candidate / "input", isolated / "input")
+        shutil.copy2(output / "rebuild.json", isolated / "rebuild.json")
+        rebuilt = subprocess.run(
+            (
+                sys.executable,
+                str(CAD_BUILD_ENTRYPOINT),
+                "rebuild",
+                "--recipe",
+                "rebuild.json",
+                "--output-dir",
+                "rebuilt",
+            ),
+            cwd=isolated,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(0, rebuilt.returncode, rebuilt.stderr)
+        self.assertTrue((isolated / "rebuilt/build.json").is_file())
+        self.assertTrue((isolated / "rebuilt/measurement.glb").is_file())
+
     def test_incomplete_transaction_scan_skips_runtime_telemetry_tree(self) -> None:
         runtime_stage = self.workspace / "run/playwright/.tmp-browser-cache"
         authority_stage = self.workspace / "work/attempts/000001/.tmp-command"
@@ -1381,6 +1479,9 @@ class WorkspaceCliTests(unittest.TestCase):
                 return None
 
             def preflight(self):
+                return None
+
+            def preflight_mcp(self):
                 return None
 
             def stop(self):
