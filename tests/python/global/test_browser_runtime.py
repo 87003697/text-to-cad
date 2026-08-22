@@ -42,6 +42,8 @@ def _fake_docker(port_by_container: dict[tuple[str, int], int] | None = None):
 
     port_by_container = port_by_container or {}
     call_log: list[list[str]] = []
+    containers: set[str] = set()
+    networks: set[str] = set()
 
     def _docker(argv):
         argv = list(argv)
@@ -49,9 +51,11 @@ def _fake_docker(port_by_container: dict[tuple[str, int], int] | None = None):
         if argv[:3] == ["docker", "image", "inspect"]:
             return _completed()
         if argv[:3] == ["docker", "network", "create"]:
+            networks.add(argv[-1])
             return _completed(stdout=argv[-1] + "\n")
         if argv[:2] == ["docker", "run"]:
             container = argv[argv.index("--name") + 1]
+            containers.add(container)
             for index, item in enumerate(argv):
                 if item != "--publish":
                     continue
@@ -73,12 +77,30 @@ def _fake_docker(port_by_container: dict[tuple[str, int], int] | None = None):
             if "State.Status" in fmt:
                 return _completed(stdout="running\n")
             return _completed(stdout="")
-        if argv[:2] == ["docker", "rm"] or argv[:3] == ["docker", "network", "rm"]:
+        if argv[:2] == ["docker", "rm"]:
+            containers.discard(argv[-1])
             return _completed()
+        if argv[:3] == ["docker", "network", "rm"]:
+            networks.discard(argv[-1])
+            return _completed()
+        if argv[:3] == ["docker", "container", "inspect"]:
+            if argv[-1] not in containers:
+                raise subprocess.CalledProcessError(
+                    1, argv, stderr=f"Error: No such object: {argv[-1]}"
+                )
+            return _completed(stdout="{}\n")
+        if argv[:3] == ["docker", "network", "inspect"]:
+            if argv[-1] not in networks:
+                raise subprocess.CalledProcessError(
+                    1, argv, stderr=f"Error: No such network: {argv[-1]}"
+                )
+            return _completed(stdout="{}\n")
         raise AssertionError(f"unexpected docker call: {argv}")
 
     _docker.calls = call_log  # type: ignore[attr-defined]
     _docker.ports = port_by_container  # type: ignore[attr-defined]
+    _docker.containers = containers  # type: ignore[attr-defined]
+    _docker.networks = networks  # type: ignore[attr-defined]
     return _docker
 
 
@@ -222,6 +244,16 @@ class LifecycleTests(unittest.TestCase):
         )
         # Skip the real socket poll — port-open check needs a live listener.
         job._wait_for_port = lambda: None  # type: ignore[method-assign]
+        def capture_ledger():
+            value = {
+                "schema": "text-to-cad.browser-runtime-render-ledger/1",
+                "jobId": job.owner_nonce,
+                "imageRef": job.image_ref,
+                "programs": dict(job_module.CAD_RENDER_PROGRAMS),
+                "requests": [],
+            }
+            return job._publish_json_receipt("render-ledger.json", value), 0
+        job._capture_render_ledger = capture_ledger  # type: ignore[method-assign]
         return job, docker
 
     def test_start_creates_network_then_container(self):
@@ -403,6 +435,243 @@ class LifecycleTests(unittest.TestCase):
             self.assertTrue(
                 any(a[:3] == ["docker", "network", "rm"] and a[-1] == job.network_name for a in docker.calls)
             )
+
+    def test_stop_publishes_ledger_bound_cleanup_absence_receipt(self):
+        with TemporaryDirectory() as tmp:
+            job, _ = self._make_job(tmp)
+            job.start()
+            job.stop()
+            ledger_path = job.capability_dir / "render-ledger.json"
+            cleanup_path = job.capability_dir / "cleanup.json"
+            ledger_bytes = ledger_path.read_bytes()
+            cleanup = json.loads(cleanup_path.read_text(encoding="ascii"))
+            self.assertEqual(ledger_path.stat().st_mode & 0o777, 0o444)
+            self.assertEqual(cleanup_path.stat().st_mode & 0o777, 0o444)
+            self.assertEqual(
+                cleanup,
+                {
+                    "schema": "text-to-cad.browser-runtime-cleanup/1",
+                    "jobId": job.owner_nonce,
+                    "imageRef": EXACT_IMAGE,
+                    "containerName": job.container_name,
+                    "networkName": job.network_name,
+                    "renderLedgerSha256": "sha256:"
+                    + job_module.hashlib.sha256(ledger_bytes).hexdigest(),
+                    "renderRequestCount": 0,
+                    "containerAbsent": True,
+                    "networkAbsent": True,
+                    "passed": True,
+                },
+            )
+
+    def test_stop_fails_closed_when_absence_cannot_be_proved(self):
+        with TemporaryDirectory() as tmp:
+            job, docker = self._make_job(tmp)
+            job.start()
+
+            def retained_container(argv):
+                argv = list(argv)
+                if argv[:2] == ["docker", "rm"]:
+                    return _completed()
+                return docker(argv)
+
+            job.docker = retained_container
+            with self.assertRaisesRegex(BrowserRuntimeError, "container remains"):
+                job.stop()
+            cleanup = json.loads(
+                (job.capability_dir / "cleanup.json").read_text(encoding="ascii")
+            )
+            self.assertFalse(cleanup["passed"])
+            self.assertFalse(cleanup["containerAbsent"])
+
+    def test_stop_retry_after_receipt_write_failure_preserves_ledger_binding(self):
+        with TemporaryDirectory() as tmp:
+            job, _ = self._make_job(tmp)
+            job.start()
+            original_publish = job._publish_cleanup_receipt
+            attempts = 0
+
+            def fail_once(**kwargs):
+                nonlocal attempts
+                attempts += 1
+                if attempts == 1:
+                    raise BrowserRuntimeError("injected cleanup receipt failure")
+                return original_publish(**kwargs)
+
+            job._publish_cleanup_receipt = fail_once  # type: ignore[method-assign]
+            with self.assertRaisesRegex(BrowserRuntimeError, "injected"):
+                job.stop()
+            self.assertFalse(job._started)
+            self.assertIsNotNone(job._captured_ledger_bytes)
+            job.stop()
+            cleanup = json.loads(
+                (job.capability_dir / "cleanup.json").read_text(encoding="ascii")
+            )
+            self.assertTrue(cleanup["passed"])
+            self.assertIsNotNone(cleanup["renderLedgerSha256"])
+            self.assertEqual(cleanup["renderRequestCount"], 0)
+
+    def test_capture_render_ledger_exact_validates_and_publishes(self):
+        with TemporaryDirectory() as tmp:
+            job, _ = self._make_job(tmp)
+            job.start()
+            value = {
+                "schema": "text-to-cad.cad-render-request-ledger/1",
+                "jobId": job.owner_nonce,
+                "programs": dict(job_module.CAD_RENDER_PROGRAMS),
+                "requests": [{
+                    "sequence": 0,
+                    "program": "snapshot",
+                    "programDigest": job_module.CAD_RENDER_PROGRAMS["snapshot"],
+                    "requestBytes": 123,
+                    "requestSha256": "sha256:" + "1" * 64,
+                    "responseStatus": 200,
+                    "responseBytes": 456,
+                    "responseSha256": "sha256:" + "2" * 64,
+                    "outcome": "succeeded",
+                }],
+            }
+
+            class Response:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def read(self, limit):
+                    return json.dumps(value).encode("ascii")
+
+            with mock.patch.object(job_module._LOOPBACK_OPENER, "open", return_value=Response()):
+                encoded, count = BrowserRuntimeJob._capture_render_ledger(job)
+            self.assertEqual(count, 1)
+            self.assertEqual(
+                encoded,
+                (job.capability_dir / "render-ledger.json").read_bytes(),
+            )
+            durable = json.loads(encoded)
+            self.assertEqual(durable["imageRef"], EXACT_IMAGE)
+            self.assertEqual(durable["requests"], value["requests"])
+
+    def test_capture_render_ledger_rejects_impossible_outcome(self):
+        with TemporaryDirectory() as tmp:
+            job, _ = self._make_job(tmp)
+            job.start()
+            value = {
+                "schema": "text-to-cad.cad-render-request-ledger/1",
+                "jobId": job.owner_nonce,
+                "programs": dict(job_module.CAD_RENDER_PROGRAMS),
+                "requests": [{
+                    "sequence": 0,
+                    "program": "residual",
+                    "programDigest": job_module.CAD_RENDER_PROGRAMS["residual"],
+                    "requestBytes": 1,
+                    "requestSha256": "sha256:" + "1" * 64,
+                    "responseStatus": 500,
+                    "responseBytes": 1,
+                    "responseSha256": "sha256:" + "2" * 64,
+                    "outcome": "succeeded",
+                }],
+            }
+
+            class Response:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def read(self, limit):
+                    return json.dumps(value).encode("ascii")
+
+            with mock.patch.object(job_module._LOOPBACK_OPENER, "open", return_value=Response()):
+                with self.assertRaisesRegex(BrowserRuntimeError, "ledger row"):
+                    BrowserRuntimeJob._capture_render_ledger(job)
+
+    def test_capture_render_ledger_rejects_boolean_and_out_of_budget_numbers(self):
+        with TemporaryDirectory() as tmp:
+            job, _ = self._make_job(tmp)
+            job.start()
+            row = {
+                "sequence": 0,
+                "program": "residual",
+                "programDigest": job_module.CAD_RENDER_PROGRAMS["residual"],
+                "requestBytes": 1,
+                "requestSha256": "sha256:" + "1" * 64,
+                "responseStatus": 200,
+                "responseBytes": 1,
+                "responseSha256": "sha256:" + "2" * 64,
+                "outcome": "succeeded",
+            }
+            variants = [
+                {**row, "sequence": False},
+                {**row, "requestBytes": True},
+                {
+                    **row,
+                    "requestBytes": job_module._MAX_RENDER_REQUEST_BYTES + 1,
+                },
+                {**row, "responseBytes": True},
+                {
+                    **row,
+                    "responseBytes": job_module._MAX_RENDER_RESPONSE_BYTES + 1,
+                },
+            ]
+
+            class Response:
+                def __init__(self, value):
+                    self.value = value
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def read(self, limit):
+                    return json.dumps(self.value).encode("ascii")
+
+            for invalid_row in variants:
+                value = {
+                    "schema": "text-to-cad.cad-render-request-ledger/1",
+                    "jobId": job.owner_nonce,
+                    "programs": dict(job_module.CAD_RENDER_PROGRAMS),
+                    "requests": [invalid_row],
+                }
+                with (
+                    self.subTest(row=invalid_row),
+                    mock.patch.object(
+                        job_module._LOOPBACK_OPENER,
+                        "open",
+                        return_value=Response(value),
+                    ),
+                    self.assertRaisesRegex(BrowserRuntimeError, "ledger row"),
+                ):
+                    BrowserRuntimeJob._capture_render_ledger(job)
+
+    def test_capture_render_ledger_rejects_more_than_registered_budget(self):
+        with TemporaryDirectory() as tmp:
+            job, _ = self._make_job(tmp)
+            job.start()
+            value = {
+                "schema": "text-to-cad.cad-render-request-ledger/1",
+                "jobId": job.owner_nonce,
+                "programs": dict(job_module.CAD_RENDER_PROGRAMS),
+                "requests": [{}] * (job_module._MAX_RENDER_LEDGER_ENTRIES + 1),
+            }
+
+            class Response:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    return False
+
+                def read(self, limit):
+                    return json.dumps(value).encode("ascii")
+
+            with mock.patch.object(job_module._LOOPBACK_OPENER, "open", return_value=Response()):
+                with self.assertRaisesRegex(BrowserRuntimeError, "ledger identity"):
+                    BrowserRuntimeJob._capture_render_ledger(job)
 
     def test_start_rolls_back_network_when_container_run_fails(self):
         with TemporaryDirectory() as tmp:

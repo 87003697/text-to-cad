@@ -7,8 +7,10 @@ const crypto = require("node:crypto");
 
 const REQUEST_SCHEMA = "text-to-cad.cad-render-request/2";
 const RESPONSE_SCHEMA = "text-to-cad.cad-render-response/1";
+const AUDIT_SCHEMA = "text-to-cad.cad-render-request-ledger/1";
 const MAX_REQUEST_BYTES = 160 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+const MAX_LEDGER_ENTRIES = 4096;
 const DEFAULT_PORT = 9224;
 const DEFAULT_REQUEST_BODY_TIMEOUT_MS = 10_000;
 const DEFAULT_RENDER_TIMEOUT_MS = 110_000;
@@ -173,19 +175,24 @@ function validateRegisteredRequest(value, programs, jobId) {
 }
 
 function jsonResponse(response, status, value) {
-  const body = Buffer.from(JSON.stringify(value));
+  let actualStatus = status;
+  let body = Buffer.from(JSON.stringify(value));
   if (body.length > MAX_RESPONSE_BYTES) {
-    response.writeHead(500, { "content-type": "application/json", connection: "close" });
-    response.end(JSON.stringify({ ok: false, error: "render response is too large" }));
-    return;
+    actualStatus = 500;
+    body = Buffer.from(JSON.stringify({ ok: false, error: "render response is too large" }));
   }
-  response.writeHead(status, {
+  response.writeHead(actualStatus, {
     "content-type": "application/json",
     "content-length": String(body.length),
     "cache-control": "no-store",
     connection: "close",
   });
   response.end(body);
+  return { status: actualStatus, body };
+}
+
+function sha256(bytes) {
+  return `sha256:${crypto.createHash("sha256").update(bytes).digest("hex")}`;
 }
 
 async function renderWithDeadline(render, payload, timeoutMs) {
@@ -216,6 +223,8 @@ function createCadRenderServer({
   renderTimeoutMs = DEFAULT_RENDER_TIMEOUT_MS,
 }) {
   const registeredPrograms = programs || { residual: programDigest };
+  const requestLedger = [];
+  let acceptedRequestCount = 0;
   if (!/^[0-9a-f]{64}$/.test(token)) throw new Error("CAD render token is invalid");
   if (
     !exactKeys(registeredPrograms, ["residual", "snapshot"].filter((key) => registeredPrograms[key])) ||
@@ -235,6 +244,26 @@ function createCadRenderServer({
       jsonResponse(response, 200, {
         schema: "text-to-cad.cad-render-health/1",
         programs: registeredPrograms,
+      });
+      return;
+    }
+    if (request.method === "GET" && request.url === "/cad/audit/requests") {
+      if (request.headers.authorization !== `Bearer ${token}`) {
+        jsonResponse(response, 401, { ok: false, error: "unauthorized" });
+        return;
+      }
+      if (
+        requestLedger.length !== acceptedRequestCount ||
+        requestLedger.filter((row) => row !== undefined).length !== acceptedRequestCount
+      ) {
+        jsonResponse(response, 409, { ok: false, error: "render requests are still active" });
+        return;
+      }
+      jsonResponse(response, 200, {
+        schema: AUDIT_SCHEMA,
+        jobId,
+        programs: registeredPrograms,
+        requests: requestLedger,
       });
       return;
     }
@@ -324,19 +353,47 @@ function createCadRenderServer({
         jsonResponse(response, 400, { ok: false, error: "invalid request" });
         return;
       }
+      if (acceptedRequestCount >= MAX_LEDGER_ENTRIES) {
+        jsonResponse(response, 429, { ok: false, error: "render request budget exceeded" });
+        return;
+      }
+      const sequence = acceptedRequestCount;
+      acceptedRequestCount += 1;
+      const requestBytes = Buffer.concat(chunks);
+      const ledgerBase = {
+        sequence,
+        program: value.program,
+        programDigest: value.programDigest,
+        requestBytes: requestBytes.length,
+        requestSha256: sha256(requestBytes),
+      };
       try {
         const selectedRender = value.program === "snapshot" ? renderSnapshot : render;
         if (typeof selectedRender !== "function") throw new Error("render program is unavailable");
         const result = await renderWithDeadline(selectedRender, value.payload, renderTimeoutMs);
-        jsonResponse(response, 200, {
+        const sent = jsonResponse(response, 200, {
           schema: RESPONSE_SCHEMA,
           jobId: value.jobId,
           program: value.program,
           programDigest: value.programDigest,
           result,
         });
+        requestLedger[sequence] = {
+          ...ledgerBase,
+          responseStatus: sent.status,
+          responseBytes: sent.body.length,
+          responseSha256: sha256(sent.body),
+          outcome: sent.status === 200 ? "succeeded" : "render-failed",
+        };
       } catch {
-        jsonResponse(response, 500, { ok: false, error: "render failed" });
+        const sent = jsonResponse(response, 500, { ok: false, error: "render failed" });
+        requestLedger[sequence] = {
+          ...ledgerBase,
+          responseStatus: sent.status,
+          responseBytes: sent.body.length,
+          responseSha256: sha256(sent.body),
+          outcome: "render-failed",
+        };
       }
     });
     request.on("close", () => clearTimeout(bodyTimer));
@@ -460,6 +517,7 @@ async function startProductionService() {
 }
 
 module.exports = {
+  AUDIT_SCHEMA,
   REQUEST_SCHEMA,
   RESPONSE_SCHEMA,
   createCadRenderServer,

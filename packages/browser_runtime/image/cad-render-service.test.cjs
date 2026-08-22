@@ -55,6 +55,27 @@ function request(port, body, authorization = `Bearer ${token}`, requestPath = "/
   });
 }
 
+function audit(port, authorization = `Bearer ${token}`) {
+  return new Promise((resolve, reject) => {
+    const operation = http.request({
+      host: "127.0.0.1",
+      port,
+      path: "/cad/audit/requests",
+      method: "GET",
+      headers: { authorization },
+    }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => resolve({
+        status: response.statusCode,
+        value: JSON.parse(Buffer.concat(chunks)),
+      }));
+    });
+    operation.on("error", reject);
+    operation.end();
+  });
+}
+
 test("serves one closed residual operation", async (context) => {
   const expectedResult = { ok: true, pngDataUrl: "data:image/png;base64,AA==", views: [] };
   const server = createCadRenderServer({
@@ -88,6 +109,40 @@ test("serves one closed residual operation", async (context) => {
     programDigest,
     result: expectedResult,
   });
+  const ledger = await audit(port);
+  assert.equal(ledger.status, 200);
+  assert.equal(ledger.value.schema, "text-to-cad.cad-render-request-ledger/1");
+  assert.equal(ledger.value.jobId, jobId);
+  assert.deepEqual(ledger.value.programs, { residual: programDigest });
+  assert.equal(ledger.value.requests.length, 1);
+  assert.deepEqual(Object.keys(ledger.value.requests[0]).sort(), [
+    "outcome", "program", "programDigest", "requestBytes", "requestSha256",
+    "responseBytes", "responseSha256", "responseStatus", "sequence",
+  ]);
+  assert.equal(ledger.value.requests[0].sequence, 0);
+  assert.equal(ledger.value.requests[0].program, "residual");
+  assert.equal(ledger.value.requests[0].outcome, "succeeded");
+  assert.match(ledger.value.requests[0].requestSha256, /^sha256:[0-9a-f]{64}$/);
+  assert.match(ledger.value.requests[0].responseSha256, /^sha256:[0-9a-f]{64}$/);
+});
+
+test("audit ledger is authenticated and excludes rejected requests", async (context) => {
+  const server = createCadRenderServer({
+    token,
+    programDigest,
+    jobId,
+    assets: { html: Buffer.from("html"), javascript: Buffer.from("js") },
+    render: async () => assert.fail("render must not run"),
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  context.after(() => new Promise((resolve) => server.close(resolve)));
+  const port = server.address().port;
+  const rejected = await request(port, {}, "Bearer wrong");
+  assert.equal(rejected.status, 401);
+  const unauthorizedAudit = await audit(port, "Bearer wrong");
+  assert.equal(unauthorizedAudit.status, 401);
+  const ledger = await audit(port);
+  assert.deepEqual(ledger.value.requests, []);
 });
 
 test("serves the registered snapshot operation with verified assets", async (context) => {

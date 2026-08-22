@@ -20,6 +20,13 @@ skill environments contain no Playwright dependency.
 The outer runner requires the exact locked image ID and fails before paid work
 when the image or fixed render program is unavailable.
 
+At terminal cleanup the outer owner writes two read-only evidence files beside
+`runtime.json`: `render-ledger.json` binds every accepted residual/snapshot
+request and actual response by digest without retaining model payloads, and
+`cleanup.json` binds that ledger to exact post-removal container and network
+absence checks. Either missing evidence or failed cleanup makes the pilot fail
+closed.
+
 Build the image from the repository root so the Dockerfile-specific allowlist
 can include the fixed meshshot assets without sending unrelated workspace
 content:

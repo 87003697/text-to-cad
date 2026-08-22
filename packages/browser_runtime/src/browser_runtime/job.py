@@ -26,7 +26,7 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -40,7 +40,12 @@ from .config import (
 
 _LOOPBACK_OPENER = urllib_request.build_opener(urllib_request.ProxyHandler({}))
 _MAX_HEALTH_RESPONSE_BYTES = 4096
+_MAX_AUDIT_RESPONSE_BYTES = 4 * 1024 * 1024
+_MAX_RENDER_LEDGER_ENTRIES = 4096
+_MAX_RENDER_REQUEST_BYTES = 160 * 1024 * 1024
+_MAX_RENDER_RESPONSE_BYTES = 64 * 1024 * 1024
 _EXACT_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
 class BrowserRuntimeError(RuntimeError):
@@ -94,6 +99,10 @@ class BrowserRuntimeJob:
         ):
             raise BrowserRuntimeError("browser runtime requires an exact image ID")
         self._started = False
+        self._stop_completed = False
+        self._render_ledger_required = False
+        self._captured_ledger_bytes: bytes | None = None
+        self._captured_ledger_count: int | None = None
         self._published_port: int | None = None
         self._cad_render_published_port: int | None = None
         self._cad_render_token = secrets.token_hex(32)
@@ -156,6 +165,10 @@ class BrowserRuntimeJob:
     # -- lifecycle --------------------------------------------------------
 
     def start(self) -> None:
+        self._stop_completed = False
+        self._render_ledger_required = False
+        self._captured_ledger_bytes = None
+        self._captured_ledger_count = None
         self.capability_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
         self._resolve_local_image_ref()
         self._docker_or_raise(
@@ -197,13 +210,66 @@ class BrowserRuntimeJob:
             raise BrowserRuntimeError("docker executable not found") from exc
 
     def stop(self) -> None:
+        if self._stop_completed:
+            return
+        if self._started:
+            self._render_ledger_required = True
+        ledger_required = self._render_ledger_required
+        errors: list[str] = []
+        if ledger_required and self._captured_ledger_bytes is None:
+            try:
+                (
+                    self._captured_ledger_bytes,
+                    self._captured_ledger_count,
+                ) = self._capture_render_ledger()
+            except BrowserRuntimeError as exc:
+                errors.append(str(exc))
+
+        ledger_bytes = self._captured_ledger_bytes
+        ledger_count = self._captured_ledger_count
+
         self._docker_ignore(
             ["docker", "rm", "--force", "--volumes", self.container_name]
         )
         self._docker_ignore(["docker", "network", "rm", self.network_name])
+        try:
+            container_absent = self._docker_resource_absent(
+                ["docker", "container", "inspect", self.container_name],
+                missing_markers=("no such object", "no such container"),
+            )
+        except BrowserRuntimeError as exc:
+            errors.append(str(exc))
+            container_absent = False
+        try:
+            network_absent = self._docker_resource_absent(
+                ["docker", "network", "inspect", self.network_name],
+                missing_markers=("no such network",),
+            )
+        except BrowserRuntimeError as exc:
+            errors.append(str(exc))
+            network_absent = False
+        if not container_absent:
+            errors.append("browser runtime container remains after cleanup")
+        if not network_absent:
+            errors.append("browser runtime network remains after cleanup")
+
+        cleanup_passed = not errors and (not ledger_required or ledger_bytes is not None)
+        try:
+            self._publish_cleanup_receipt(
+                ledger_bytes=ledger_bytes,
+                ledger_count=ledger_count,
+                container_absent=container_absent,
+                network_absent=network_absent,
+                passed=cleanup_passed,
+            )
+            self._stop_completed = True
+        except BrowserRuntimeError as exc:
+            errors.append(str(exc))
         self._started = False
         self._published_port = None
         self._cad_render_published_port = None
+        if errors:
+            raise BrowserRuntimeError("; ".join(dict.fromkeys(errors)))
 
     def poll_failed(self) -> bool:
         """Return True if the container is no longer in a healthy running state."""
@@ -485,6 +551,159 @@ class BrowserRuntimeJob:
             target.chmod(0o444)
         except OSError as exc:
             raise BrowserRuntimeError("cannot publish CAD render preflight") from exc
+
+    def _capture_render_ledger(self) -> tuple[bytes, int]:
+        if self._cad_render_published_port is None:
+            raise BrowserRuntimeError("CAD render audit endpoint is unavailable")
+        audit_url = (
+            f"http://127.0.0.1:{self._cad_render_published_port}"
+            "/cad/audit/requests"
+        )
+        request = urllib_request.Request(
+            audit_url,
+            headers={"authorization": f"Bearer {self._cad_render_token}"},
+            method="GET",
+        )
+        try:
+            with _LOOPBACK_OPENER.open(request, timeout=10.0) as response:
+                raw = response.read(_MAX_AUDIT_RESPONSE_BYTES + 1)
+        except (OSError, urllib_error.URLError) as exc:
+            raise BrowserRuntimeError("cannot collect browser runtime render ledger") from exc
+        if not raw or len(raw) > _MAX_AUDIT_RESPONSE_BYTES:
+            raise BrowserRuntimeError("browser runtime render ledger has an invalid size")
+        try:
+            value = json.loads(raw)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BrowserRuntimeError("browser runtime render ledger is invalid") from exc
+        requests = value.get("requests") if isinstance(value, dict) else None
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"schema", "jobId", "programs", "requests"}
+            or value.get("schema") != "text-to-cad.cad-render-request-ledger/1"
+            or value.get("jobId") != self.owner_nonce
+            or value.get("programs") != dict(CAD_RENDER_PROGRAMS)
+            or not isinstance(requests, list)
+            or len(requests) > _MAX_RENDER_LEDGER_ENTRIES
+        ):
+            raise BrowserRuntimeError("browser runtime render ledger identity is invalid")
+        row_keys = {
+            "sequence", "program", "programDigest", "requestBytes",
+            "requestSha256", "responseStatus", "responseBytes",
+            "responseSha256", "outcome",
+        }
+        for sequence, row in enumerate(requests):
+            if (
+                not isinstance(row, dict)
+                or set(row) != row_keys
+                or not isinstance(row.get("sequence"), int)
+                or isinstance(row.get("sequence"), bool)
+                or row.get("sequence") != sequence
+                or row.get("program") not in CAD_RENDER_PROGRAMS
+                or row.get("programDigest")
+                != CAD_RENDER_PROGRAMS.get(row.get("program"))
+                or not isinstance(row.get("requestBytes"), int)
+                or isinstance(row.get("requestBytes"), bool)
+                or row["requestBytes"] <= 0
+                or row["requestBytes"] > _MAX_RENDER_REQUEST_BYTES
+                or not isinstance(row.get("responseBytes"), int)
+                or isinstance(row.get("responseBytes"), bool)
+                or row["responseBytes"] <= 0
+                or row["responseBytes"] > _MAX_RENDER_RESPONSE_BYTES
+                or row.get("responseStatus") not in {200, 500}
+                or not isinstance(row.get("requestSha256"), str)
+                or _SHA256.fullmatch(row["requestSha256"]) is None
+                or not isinstance(row.get("responseSha256"), str)
+                or _SHA256.fullmatch(row["responseSha256"]) is None
+                or row.get("outcome") not in {"succeeded", "render-failed"}
+                or (row["responseStatus"] == 200) != (row["outcome"] == "succeeded")
+            ):
+                raise BrowserRuntimeError("browser runtime render ledger row is invalid")
+        durable = {
+            "schema": "text-to-cad.browser-runtime-render-ledger/1",
+            "jobId": self.owner_nonce,
+            "imageRef": self.image_ref,
+            "programs": dict(CAD_RENDER_PROGRAMS),
+            "requests": requests,
+        }
+        encoded = self._publish_json_receipt("render-ledger.json", durable)
+        return encoded, len(requests)
+
+    def _publish_cleanup_receipt(
+        self,
+        *,
+        ledger_bytes: bytes | None,
+        ledger_count: int | None,
+        container_absent: bool,
+        network_absent: bool,
+        passed: bool,
+    ) -> None:
+        receipt = {
+            "schema": "text-to-cad.browser-runtime-cleanup/1",
+            "jobId": self.owner_nonce,
+            "imageRef": self.image_ref,
+            "containerName": self.container_name,
+            "networkName": self.network_name,
+            "renderLedgerSha256": (
+                "sha256:" + hashlib.sha256(ledger_bytes).hexdigest()
+                if ledger_bytes is not None
+                else None
+            ),
+            "renderRequestCount": ledger_count,
+            "containerAbsent": container_absent,
+            "networkAbsent": network_absent,
+            "passed": passed,
+        }
+        self._publish_json_receipt("cleanup.json", receipt)
+
+    def _publish_json_receipt(self, name: str, value: dict[str, Any]) -> bytes:
+        encoded = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("ascii")
+        target = self.capability_dir / name
+        temporary = self.capability_dir / f".{name}.tmp"
+        try:
+            self.capability_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
+            descriptor = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o400,
+            )
+            try:
+                view = memoryview(encoded)
+                while view:
+                    written = os.write(descriptor, view)
+                    if written <= 0:
+                        raise OSError("short receipt write")
+                    view = view[written:]
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.chmod(temporary, 0o444)
+            os.replace(temporary, target)
+            return encoded
+        except OSError as exc:
+            temporary.unlink(missing_ok=True)
+            raise BrowserRuntimeError(f"cannot publish browser runtime {name}") from exc
+
+    def _docker_resource_absent(
+        self,
+        argv: Sequence[str],
+        *,
+        missing_markers: tuple[str, ...],
+    ) -> bool:
+        try:
+            self.docker(argv)
+        except FileNotFoundError as exc:
+            raise BrowserRuntimeError("docker CLI unavailable during cleanup proof") from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").lower()
+            if any(marker in detail for marker in missing_markers):
+                return True
+            raise BrowserRuntimeError("docker cleanup absence proof failed") from exc
+        return False
 
     def _docker_or_raise(self, argv: Sequence[str], *, purpose: str) -> None:
         try:
