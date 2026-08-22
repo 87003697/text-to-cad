@@ -70,6 +70,8 @@ VIEWER_REQUIRED_PACKAGES = (
 CAD_REQUIRED_EXECUTABLES = ("node_modules/.bin/esbuild",)
 CAD_SNAPSHOT_ESBUILD_VERSION = "0.27.7"
 CAD_LOCKED_PACKAGES = ("three", "gifenc", "meshoptimizer")
+MESHSHOT_REQUIRED_EXECUTABLES = (".bin/esbuild",)
+MESHSHOT_REQUIRED_PACKAGES = ("esbuild", "three")
 
 
 class PushError(RuntimeError):
@@ -109,6 +111,7 @@ class BuildInputs:
 
     viewer_node_modules: Path
     cad_build_dependencies: Path
+    meshshot_node_modules: Path
 
 
 @dataclass(frozen=True)
@@ -316,6 +319,34 @@ def cad_dependency_errors(candidate: Path, repo_root: Path) -> tuple[str, ...]:
     return tuple(errors)
 
 
+def meshshot_dependency_errors(candidate: Path, repo_root: Path) -> tuple[str, ...]:
+    """Return every reason a meshshot browser-build candidate is incomplete."""
+
+    errors: list[str] = []
+    for relative in MESHSHOT_REQUIRED_EXECUTABLES:
+        path = candidate / relative
+        if not path.is_file() or not os.access(path, os.X_OK):
+            errors.append(f"missing executable {relative}")
+    lock = _read_json(
+        repo_root / "packages/meshshot/package-lock.json",
+        "meshshot lockfile",
+    )
+    packages = lock.get("packages") if isinstance(lock, dict) else None
+    if not isinstance(packages, dict):
+        raise PushError("meshshot package-lock.json has no packages object", 4)
+    for package in MESHSHOT_REQUIRED_PACKAGES:
+        locked = packages.get(f"node_modules/{package}")
+        expected = locked.get("version") if isinstance(locked, dict) else None
+        actual = _package_version(_package_path(candidate, package))
+        if not isinstance(expected, str):
+            errors.append(f"lockfile has no version for {package}")
+        elif actual is None:
+            errors.append(f"missing package {package}")
+        elif actual != expected:
+            errors.append(f"{package} version {actual} does not match {expected}")
+    return tuple(errors)
+
+
 class CvmPush:
     """Orchestrate Preflight -> Stage -> Attest -> Transfer -> Verify."""
 
@@ -513,9 +544,11 @@ class CvmPush:
         primary = self._primary_checkout()
         viewer_candidates = [self.repo_root / "viewer/node_modules"]
         cad_candidates = [self.repo_root / "tmp/cad-snapshot-build"]
+        meshshot_candidates = [self.repo_root / "packages/meshshot/node_modules"]
         if primary is not None:
             viewer_candidates.append(primary / "viewer/node_modules")
             cad_candidates.append(primary / "tmp/cad-snapshot-build")
+            meshshot_candidates.append(primary / "packages/meshshot/node_modules")
         return BuildInputs(
             viewer_node_modules=self._resolve_source(
                 label="Viewer dependencies",
@@ -531,6 +564,15 @@ class CvmPush:
                 explicit_name="CVM_PUSH_CAD_BUILD_DEPS_SOURCE",
                 candidates=cad_candidates,
                 validate=lambda path: cad_dependency_errors(
+                    path,
+                    self.repo_root,
+                ),
+            ),
+            meshshot_node_modules=self._resolve_source(
+                label="meshshot build dependencies",
+                explicit_name="CVM_PUSH_MESHSHOT_NODE_MODULES_SOURCE",
+                candidates=meshshot_candidates,
+                validate=lambda path: meshshot_dependency_errors(
                     path,
                     self.repo_root,
                 ),
@@ -589,6 +631,11 @@ class CvmPush:
             (
                 inputs.cad_build_dependencies,
                 stage / "tmp/cad-snapshot-build",
+                (),
+            ),
+            (
+                inputs.meshshot_node_modules,
+                stage / "packages/meshshot/node_modules",
                 (),
             ),
         )

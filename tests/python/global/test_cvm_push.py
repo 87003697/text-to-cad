@@ -89,6 +89,13 @@ def create_repo(root: Path) -> Path:
         (REPO_ROOT / "packages/cadjs/package-lock.json").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    (repo / "packages/meshshot").mkdir(parents=True)
+    (repo / "packages/meshshot/package-lock.json").write_text(
+        (REPO_ROOT / "packages/meshshot/package-lock.json").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
     return repo
 
 
@@ -113,6 +120,21 @@ def create_cad_dependencies(root: Path, repo_root: Path | None = None) -> Path:
     for package, version in versions.items():
         write_package(build / "node_modules", package, version)
     return build
+
+
+def create_meshshot_dependencies(root: Path) -> Path:
+    lock = json.loads(
+        (REPO_ROOT / "packages/meshshot/package-lock.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    modules = root / "packages/meshshot/node_modules"
+    for executable in cvm_push.MESHSHOT_REQUIRED_EXECUTABLES:
+        make_executable(modules / executable)
+    for package in cvm_push.MESHSHOT_REQUIRED_PACKAGES:
+        version = lock["packages"][f"node_modules/{package}"]["version"]
+        write_package(modules, package, version)
+    return modules
 
 
 def create_runtime(stage: Path) -> cvm_push.RuntimeAttestation:
@@ -206,7 +228,9 @@ class AgentModeTests(unittest.TestCase):
             )
             workflow.inspect_source = mock.Mock(return_value=source)
             workflow.resolve_build_inputs = mock.Mock(
-                return_value=cvm_push.BuildInputs(root / "viewer", root / "cad")
+                return_value=cvm_push.BuildInputs(
+                    root / "viewer", root / "cad", root / "meshshot"
+                )
             )
             workflow.copy_source_to_stage = mock.Mock()
             workflow.copy_build_inputs = mock.Mock()
@@ -459,6 +483,22 @@ class BuildInputTests(unittest.TestCase):
                 cvm_push.cad_dependency_errors(candidate, repo),
             )
 
+    def test_meshshot_dependencies_follow_meshshot_lockfile(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            repo = create_repo(root)
+            candidate = create_meshshot_dependencies(root)
+
+            self.assertEqual(
+                cvm_push.meshshot_dependency_errors(candidate, repo),
+                (),
+            )
+            write_package(candidate, "three", "0.0.0-stale")
+            self.assertIn(
+                "three version 0.0.0-stale does not match 0.160.0",
+                cvm_push.meshshot_dependency_errors(candidate, repo),
+            )
+
     def test_incomplete_worktree_inputs_fall_back_to_complete_primary(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
@@ -466,8 +506,10 @@ class BuildInputTests(unittest.TestCase):
             primary = root / "primary"
             viewer = create_viewer_dependencies(primary)
             cad = create_cad_dependencies(primary)
+            meshshot = create_meshshot_dependencies(primary)
             (repo / "viewer/node_modules/react").mkdir(parents=True)
             (repo / "tmp/cad-snapshot-build/node_modules").mkdir(parents=True)
+            (repo / "packages/meshshot/node_modules").mkdir(parents=True)
 
             runner = FakeRunner()
 
@@ -495,6 +537,7 @@ class BuildInputTests(unittest.TestCase):
 
             self.assertEqual(inputs.viewer_node_modules, viewer.resolve())
             self.assertEqual(inputs.cad_build_dependencies, cad.resolve())
+            self.assertEqual(inputs.meshshot_node_modules, meshshot.resolve())
 
     def test_incomplete_explicit_source_fails_instead_of_falling_back(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -586,6 +629,7 @@ class StageTests(unittest.TestCase):
             repo = create_repo(root)
             viewer = create_viewer_dependencies(root / "inputs")
             cad = create_cad_dependencies(root / "inputs")
+            meshshot = create_meshshot_dependencies(root / "inputs")
             outside = root / "outside"
             (outside / "cadjs").mkdir(parents=True)
             (outside / "cadjs/secret.txt").write_text("source\n", encoding="utf-8")
@@ -600,7 +644,7 @@ class StageTests(unittest.TestCase):
 
             workflow.copy_build_inputs(
                 stage,
-                cvm_push.BuildInputs(viewer, cad),
+                cvm_push.BuildInputs(viewer, cad, meshshot),
             )
 
             cadjs_link = stage / "viewer/node_modules/cadjs"
@@ -610,6 +654,12 @@ class StageTests(unittest.TestCase):
                 (
                     stage
                     / "tmp/cad-snapshot-build/node_modules/three/package.json"
+                ).is_file()
+            )
+            self.assertTrue(
+                (
+                    stage
+                    / "packages/meshshot/node_modules/three/package.json"
                 ).is_file()
             )
 
@@ -919,7 +969,9 @@ class WorkflowTests(unittest.TestCase):
                 environ={"TMPDIR": str(root)},
             )
             events: list[str] = []
-            inputs = cvm_push.BuildInputs(root / "viewer", root / "cad")
+            inputs = cvm_push.BuildInputs(
+                root / "viewer", root / "cad", root / "meshshot"
+            )
             attestation = cvm_push.RuntimeAttestation(hashes={})
             workflow.preflight_local = lambda: events.append("local")
             workflow.preflight_remote = lambda: (
