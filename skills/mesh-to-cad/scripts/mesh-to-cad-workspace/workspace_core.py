@@ -437,6 +437,7 @@ def publish_step_zero(
     active_root, active, plan = _load_active_attempt(workspace, attempt)
     if active["intended_step"] != 0 or active["from_step"] is not None:
         _fail("parent_mismatch", "attempt does not belong to Step 0")
+    _require_successful_attempt_commands(active_root)
     evidence = _prepare_step_evidence(
         workspace,
         step=0,
@@ -603,6 +604,14 @@ def record_attempt(
         _fail("invalid_attempt", "unsupported terminal Attempt result")
     _nonempty_string(classification, "$.classification")
     command_documents = _load_command_documents(active_root)
+    has_failing_command = any(
+        command["exit_code"] != 0 for command in command_documents
+    )
+    if has_failing_command and result != TOOL_FAILURE_RESULT:
+        _fail(
+            "invalid_attempt",
+            "Attempt with a failing command must be recorded as tool_failure",
+        )
     if result == TOOL_FAILURE_RESULT and not any(
         command["exit_code"] != 0 for command in command_documents
     ):
@@ -692,6 +701,7 @@ def publish_cycle(
     intended_step = active["intended_step"]
     if intended_step <= 0 or active["intended_cycle"] != intended_step:
         _fail("invalid_attempt", "attempt is not a Repair Cycle attempt")
+    _require_successful_attempt_commands(active_root)
     validate_workspace(workspace, allowed_voxblame_step=intended_step)
     existing_cycles = _published_numbers(workspace / "cycles")
     expected_cycle = len(existing_cycles) + 1
@@ -3053,6 +3063,17 @@ def _load_command_documents(active_root: Path) -> list[dict[str, Any]]:
     return documents
 
 
+def _require_successful_attempt_commands(active_root: Path) -> None:
+    if any(
+        command["exit_code"] != 0
+        for command in _load_command_documents(active_root)
+    ):
+        _fail(
+            "invalid_attempt",
+            "Attempt with a failing command must be recorded as tool_failure",
+        )
+
+
 def _validate_published_attempt(root: Path, *, expected_attempt: int) -> dict[str, Any]:
     value = _read_json(root / "attempt.json", "$.attempt")
     document = _closed_object(value, _PUBLISHED_ATTEMPT_FIELDS, "$.attempt")
@@ -3168,16 +3189,29 @@ def _bounded_log(data: bytes) -> tuple[bytes, dict[str, Any]]:
 
 
 def _check_attempt_budget(workspace: Path, intended_step: int) -> None:
+    active_root = workspace / "work/attempts"
+    if active_root.exists():
+        for path in active_root.glob(
+            "[0-9][0-9][0-9][0-9][0-9][0-9]/attempt.json"
+        ):
+            value = _read_json(path, "$.attempt")
+            if value.get("intended_step") == intended_step:
+                _fail(
+                    "workspace_conflict",
+                    "intended step already has an active Attempt",
+                )
+    if (
+        _published_tool_failure_count(workspace, intended_step)
+        >= MAX_TOOL_FAILURES_PER_STEP
+    ):
+        _fail(
+            "budget_violation",
+            "intended step has exhausted its tool failure allowance",
+        )
     attempts = 0
     attempts_root = workspace / "attempts"
     if attempts_root.exists():
         for path in attempts_root.glob("[0-9][0-9][0-9][0-9][0-9][0-9]/attempt.json"):
-            value = _read_json(path, "$.attempt")
-            if value.get("intended_step") == intended_step:
-                attempts += 1
-    active_root = workspace / "work/attempts"
-    if active_root.exists():
-        for path in active_root.glob("[0-9][0-9][0-9][0-9][0-9][0-9]/attempt.json"):
             value = _read_json(path, "$.attempt")
             if value.get("intended_step") == intended_step:
                 attempts += 1

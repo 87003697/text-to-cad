@@ -1583,6 +1583,19 @@ time.sleep(60)
         )
         self.assertEqual(0, status, stderr)
         attempt = started["attempt"]["attempt"]
+        status, rejected, _stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(plan),
+            "--intended-step",
+            "1",
+            "--from-step",
+            "0",
+        )
+        self.assertEqual(2, status)
+        self.assertEqual("workspace_conflict", rejected["error"]["classification"])
         stdout = io.StringIO()
         command_stderr = io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(command_stderr):
@@ -1685,7 +1698,7 @@ time.sleep(60)
         )
         self.assertEqual(0, status, stderr)
 
-        status, third, stderr = self.invoke(
+        status, rejected, _stderr = self.invoke(
             "begin-attempt",
             "--workspace",
             str(self.workspace),
@@ -1696,54 +1709,98 @@ time.sleep(60)
             "--from-step",
             "0",
         )
+        self.assertEqual(2, status)
+        self.assertEqual("budget_violation", rejected["error"]["classification"])
+
+    def test_failing_command_cannot_publish_a_successful_step(self) -> None:
+        status, _payload, stderr = self.invoke(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--prepared",
+            str(self.prepared_setup()),
+        )
         self.assertEqual(0, status, stderr)
-        third_id = third["attempt"]["attempt"]
-        stdout = io.StringIO()
-        with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
-            self.assertEqual(
-                10,
-                self.cli.main(
-                    [
-                        "run",
-                        "--workspace",
-                        str(self.workspace),
-                        "--attempt",
-                        str(third_id),
-                        "--phase",
-                        "preview",
-                        "--",
-                        sys.executable,
-                        "-c",
-                        "raise SystemExit(10)",
-                    ]
-                ),
+        status, started, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(self.initial_plan()),
+            "--intended-step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+        attempt = started["attempt"]["attempt"]
+
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            command_status = self.cli.main(
+                [
+                    "run",
+                    "--workspace",
+                    str(self.workspace),
+                    "--attempt",
+                    str(attempt),
+                    "--phase",
+                    "build",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    "raise SystemExit(7)",
+                ]
             )
+        self.assertEqual(7, command_status)
+
+        candidate, candidate_sha = self.candidate("failed-candidate", b"failed candidate")
+        measurement = self.measurement(
+            step=0,
+            compare_to=None,
+            candidate_sha=candidate_sha,
+            observable_sha="9" * 64,
+            accepted=False,
+        )
+        preview = self.preview("failed-preview", candidate_sha)
         status, rejected, _stderr = self.invoke(
-            "record-attempt",
+            "publish-step-zero",
             "--workspace",
             str(self.workspace),
             "--attempt",
-            str(third_id),
-            "--result",
-            "tool_failure",
-            "--classification",
-            "third_tool_failure",
+            str(attempt),
+            "--candidate",
+            str(candidate),
+            "--candidate-mesh",
+            "artifacts/model.glb",
+            "--measurement",
+            str(measurement),
+            "--preview",
+            str(preview),
         )
         self.assertEqual(2, status)
-        self.assertEqual("budget_violation", rejected["error"]["classification"])
+        self.assertEqual("invalid_attempt", rejected["error"]["classification"])
+
+        shutil.rmtree(self.workspace / "voxblame")
         status, _recorded, stderr = self.invoke(
             "record-attempt",
             "--workspace",
             str(self.workspace),
             "--attempt",
-            str(third_id),
+            str(attempt),
             "--result",
-            "strategy_changed",
+            "tool_failure",
             "--classification",
-            "tool_path_abandoned",
+            "synthetic_build_failed",
         )
         self.assertEqual(0, status, stderr)
-        status, rejected, _stderr = self.invoke(
+        status, payload, stderr = self.invoke(
+            "status", "--workspace", str(self.workspace)
+        )
+        self.assertEqual(0, status, stderr)
+        self.assertEqual(1, payload["status"]["tool_failures"])
+
+    def test_failing_command_cannot_publish_a_successful_cycle(self) -> None:
+        self.publish_initial_flow()
+        plan = self.repair_plan("failed-cycle-plan", from_step=0)
+        status, started, stderr = self.invoke(
             "begin-attempt",
             "--workspace",
             str(self.workspace),
@@ -1754,8 +1811,66 @@ time.sleep(60)
             "--from-step",
             "0",
         )
+        self.assertEqual(0, status, stderr)
+        attempt = started["attempt"]["attempt"]
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            command_status = self.cli.main(
+                [
+                    "run",
+                    "--workspace",
+                    str(self.workspace),
+                    "--attempt",
+                    str(attempt),
+                    "--phase",
+                    "preview",
+                    "--",
+                    sys.executable,
+                    "-c",
+                    "raise SystemExit(8)",
+                ]
+            )
+        self.assertEqual(8, command_status)
+
+        candidate, candidate_sha = self.candidate("failed-cycle-candidate", b"cycle")
+        measurement = self.measurement(
+            step=1,
+            compare_to=0,
+            candidate_sha=candidate_sha,
+            observable_sha="a" * 64,
+            accepted=False,
+        )
+        status, rejected, _stderr = self.invoke(
+            "publish-cycle",
+            "--workspace",
+            str(self.workspace),
+            "--attempt",
+            str(attempt),
+            "--candidate",
+            str(candidate),
+            "--candidate-mesh",
+            "artifacts/model.glb",
+            "--measurement",
+            str(measurement),
+            "--preview",
+            str(self.preview("failed-cycle-preview", candidate_sha)),
+            "--region-diff",
+            str(
+                self.region_diff(
+                    "failed-cycle-diff",
+                    plan=plan,
+                    from_step=0,
+                    to_step=1,
+                    before_observable="9" * 64,
+                    after_observable="a" * 64,
+                )
+            ),
+            "--assessment",
+            str(self.assessment("failed-cycle", from_step=0, to_step=1)),
+            "--source-changes",
+            str(self.source_changes("failed-cycle", from_step=0, to_step=1)),
+        )
         self.assertEqual(2, status)
-        self.assertEqual("budget_violation", rejected["error"]["classification"])
+        self.assertEqual("invalid_attempt", rejected["error"]["classification"])
 
     def test_synthetic_end_to_end_publishes_a_branched_immutable_graph(self) -> None:
         self.publish_initial_flow()
@@ -2122,6 +2237,30 @@ time.sleep(60)
         serialized = json.dumps(inline["command"]["argv"])
         self.assertNotIn("INLINE-SECRET", serialized)
         self.assertNotIn("SECOND-SECRET", serialized)
+
+        status, _recorded, stderr = self.invoke(
+            "record-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--attempt",
+            str(attempt_id),
+            "--result",
+            "tool_failure",
+            "--classification",
+            "command_launch_failed",
+        )
+        self.assertEqual(0, status, stderr)
+        status, attempt, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(self.initial_plan()),
+            "--intended-step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+        attempt_id = attempt["attempt"]["attempt"]
 
         candidate, candidate_sha = self.candidate("bad-evidence", b"bad evidence")
         measurement = self.measurement(
