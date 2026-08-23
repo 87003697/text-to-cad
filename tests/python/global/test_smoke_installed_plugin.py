@@ -63,6 +63,22 @@ class ManifestTests(unittest.TestCase):
                 smoke.compute_manifest(root)
             self.assertIn("symlink", str(ctx.exception).lower())
 
+    def test_private_mode_is_allowed_only_for_explicit_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.toml"
+            config.write_text("[plugins]\n")
+            config.chmod(0o600)
+
+            with self.assertRaises(smoke.SmokeError):
+                smoke.compute_manifest(root)
+
+            manifest = smoke.compute_manifest(
+                root,
+                private_paths=("config.toml",),
+            )
+            self.assertEqual(manifest.entries[0].mode, "0600")
+
 
 class ManifestParityTests(unittest.TestCase):
     def _tree(self, contents: dict[str, str]) -> Path:

@@ -928,7 +928,11 @@ def read_receipt(path: Path) -> DeploymentReceipt:
     return _receipt_from_document(document)
 
 
-def _compute_manifest_digest(root: Path) -> tuple[str, int]:
+def _compute_manifest_digest(
+    root: Path,
+    *,
+    private_paths: tuple[str, ...] = (),
+) -> tuple[str, int]:
     """Return (digest, file_count) of ``root`` reusing the smoke manifest rules.
 
     Centralizing this call ensures the authority tree and the smoke share one
@@ -940,7 +944,7 @@ def _compute_manifest_digest(root: Path) -> tuple[str, int]:
     from scripts.release import smoke_installed_plugin as smoke
 
     try:
-        manifest = smoke.compute_manifest(Path(root))
+        manifest = smoke.compute_manifest(Path(root), private_paths=private_paths)
     except smoke.SmokeError as exc:
         raise PluginAuthorityError(str(exc)) from exc
     return manifest.digest, len(manifest.entries)
@@ -1149,7 +1153,9 @@ def validate_deployment_slot(
         raise PluginAuthorityError(
             "installed cache manifest differs from the identity-bound publish tree"
         )
-    codex_home_digest, _ = _compute_manifest_digest(expected_codex_home)
+    codex_home_digest, _ = _compute_manifest_digest(
+        expected_codex_home, private_paths=(CONFIG_TOML_NAME,)
+    )
     if codex_home_digest != receipt.codex_home_manifest_digest:
         raise PluginAuthorityError(
             "codex home manifest digest recompute differs from receipt: "
@@ -1553,7 +1559,9 @@ def materialize_job_codex_home(
     target.mkdir(mode=0o700)
     try:
         _copy_tree(source_home, target)
-        recopy_digest, _ = _compute_manifest_digest(target)
+        recopy_digest, _ = _compute_manifest_digest(
+            target, private_paths=(CONFIG_TOML_NAME,)
+        )
         if recopy_digest != receipt.codex_home_manifest_digest:
             raise PluginAuthorityError(
                 "materialized codex home manifest differs from authority receipt"

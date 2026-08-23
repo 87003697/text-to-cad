@@ -268,7 +268,8 @@ class _PublishHarness:
             # enablement flag. The publisher includes it in the whole-home
             # manifest and parses it for registration semantics, so the harness must emit an
             # equivalent minimal document.
-            (codex_home / "config.toml").write_text(
+            config_path = codex_home / "config.toml"
+            config_path.write_text(
                 "[marketplaces.text-to-cad]\n"
                 f'source = "{publish_tree}"\n'
                 'source_type = "local"\n'
@@ -276,6 +277,7 @@ class _PublishHarness:
                 "enabled = true\n",
                 encoding="utf-8",
             )
+            config_path.chmod(0o600)
             return {"installed_path": str(installed)}
 
         _pkg_smoke.install_plugin_isolated = fake_install  # type: ignore[assignment]

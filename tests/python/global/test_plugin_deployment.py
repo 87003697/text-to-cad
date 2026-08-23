@@ -239,7 +239,8 @@ class ResolveCurrentAuthorityTests(unittest.TestCase):
                 fixture.installed_path
             ).digest
             document["codex_home_manifest_digest"] = smoke.compute_manifest(
-                fixture.codex_home
+                fixture.codex_home,
+                private_paths=(plugin_deployment.CONFIG_TOML_NAME,),
             ).digest
             receipt_path = fixture.deployment_dir / plugin_deployment.RECEIPT_FILE
             receipt_path.write_text(

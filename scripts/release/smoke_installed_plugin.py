@@ -99,7 +99,11 @@ class Manifest:
         return {entry.path for entry in self.entries}
 
 
-def compute_manifest(root: Path) -> Manifest:
+def compute_manifest(
+    root: Path,
+    *,
+    private_paths: Sequence[str] = (),
+) -> Manifest:
     """Deterministic manifest of relative regular-file paths + content sha256.
 
     Fails closed on any symlink so the caller can rely on Manifest as evidence
@@ -113,6 +117,7 @@ def compute_manifest(root: Path) -> Manifest:
     if root_mode not in {0o700, 0o755}:
         raise SmokeError(f"unsafe root directory mode {root_mode:04o}: {root}")
     entries: list[ManifestEntry] = []
+    private = set(private_paths)
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames.sort()
         # os.walk yields directories that are symlinks with followlinks=False
@@ -135,7 +140,8 @@ def compute_manifest(root: Path) -> Manifest:
             rel = full.relative_to(root).as_posix()
             metadata = full.stat()
             mode = f"{stat.S_IMODE(metadata.st_mode):04o}"
-            if mode not in {"0644", "0755"}:
+            allowed_modes = {"0600"} if rel in private else {"0644", "0755"}
+            if mode not in allowed_modes:
                 raise SmokeError(
                     f"unsafe permission mode {mode} in tree: {rel}"
                 )

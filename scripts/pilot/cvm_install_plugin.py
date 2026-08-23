@@ -405,7 +405,10 @@ def _publish_under_lock(
         # installed cache. Semantic registration checks below additionally
         # reject a disabled plugin or redirected marketplace.
         try:
-            codex_home_manifest = smoke.compute_manifest(codex_home_final)
+            codex_home_manifest = smoke.compute_manifest(
+                codex_home_final,
+                private_paths=(plugin_deployment.CONFIG_TOML_NAME,),
+            )
         except smoke.SmokeError as exc:
             raise InstallError(str(exc), stage="verify") from exc
         try:

@@ -178,7 +178,8 @@ def build_authority(
     final_codex_home = deployment_dir / plugin_deployment.CODEX_HOME_DIRNAME
     final_installed = final_codex_home / installed_rel
 
-    (codex_home_stage / "config.toml").write_text(
+    config_path = codex_home_stage / "config.toml"
+    config_path.write_text(
         "[marketplaces.text-to-cad]\n"
         f'source = "{final_publish_tree}"\n'
         'source_type = "local"\n'
@@ -186,8 +187,12 @@ def build_authority(
         "enabled = true\n",
         encoding="utf-8",
     )
+    config_path.chmod(0o600)
 
-    codex_home_manifest = smoke.compute_manifest(codex_home_stage)
+    codex_home_manifest = smoke.compute_manifest(
+        codex_home_stage,
+        private_paths=(plugin_deployment.CONFIG_TOML_NAME,),
+    )
 
     receipt = plugin_deployment.DeploymentReceipt(
         schema=plugin_deployment.RECEIPT_SCHEMA,
