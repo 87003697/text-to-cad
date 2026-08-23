@@ -64,9 +64,10 @@ class SmokeError(RuntimeError):
 class ManifestEntry:
     path: str
     sha256: str
+    mode: str
 
     def as_dict(self) -> dict[str, str]:
-        return {"path": self.path, "sha256": self.sha256}
+        return {"path": self.path, "sha256": self.sha256, "mode": self.mode}
 
 
 @dataclass
@@ -81,6 +82,8 @@ class Manifest:
             h.update(entry.path.encode("utf-8"))
             h.update(b"\0")
             h.update(entry.sha256.encode("ascii"))
+            h.update(b"\0")
+            h.update(entry.mode.encode("ascii"))
             h.update(b"\n")
         return h.hexdigest()
 
@@ -106,6 +109,9 @@ def compute_manifest(root: Path) -> Manifest:
     root = root.resolve()
     if not root.is_dir():
         raise SmokeError(f"manifest root is not a directory: {root}")
+    root_mode = stat.S_IMODE(root.stat().st_mode)
+    if root_mode not in {0o700, 0o755}:
+        raise SmokeError(f"unsafe root directory mode {root_mode:04o}: {root}")
     entries: list[ManifestEntry] = []
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         dirnames.sort()
@@ -116,12 +122,24 @@ def compute_manifest(root: Path) -> Manifest:
             full = Path(dirpath) / name
             if full.is_symlink():
                 raise SmokeError(f"symlink in tree: {full.relative_to(root)}")
+            mode = stat.S_IMODE(full.stat().st_mode)
+            if mode != 0o755:
+                raise SmokeError(
+                    f"unsafe directory mode {mode:04o} in tree: "
+                    f"{full.relative_to(root)}"
+                )
         for name in sorted(filenames):
             full = Path(dirpath) / name
             if full.is_symlink():
                 raise SmokeError(f"symlink in tree: {full.relative_to(root)}")
             rel = full.relative_to(root).as_posix()
-            entries.append(ManifestEntry(rel, _hash_file(full)))
+            metadata = full.stat()
+            mode = f"{stat.S_IMODE(metadata.st_mode):04o}"
+            if mode not in {"0644", "0755"}:
+                raise SmokeError(
+                    f"unsafe permission mode {mode} in tree: {rel}"
+                )
+            entries.append(ManifestEntry(rel, _hash_file(full), mode))
     entries.sort(key=lambda e: e.path)
     return Manifest(root=root, entries=entries)
 
@@ -149,8 +167,12 @@ def assert_manifests_equal(
     """
 
     ignored = set(ignore_paths)
-    prepared_by_path = {e.path: e.sha256 for e in prepared.entries if e.path not in ignored}
-    installed_by_path = {e.path: e.sha256 for e in installed.entries if e.path not in ignored}
+    prepared_by_path = {
+        e.path: (e.sha256, e.mode) for e in prepared.entries if e.path not in ignored
+    }
+    installed_by_path = {
+        e.path: (e.sha256, e.mode) for e in installed.entries if e.path not in ignored
+    }
     missing = sorted(set(prepared_by_path) - set(installed_by_path))
     extra = sorted(set(installed_by_path) - set(prepared_by_path))
     mismatched = sorted(

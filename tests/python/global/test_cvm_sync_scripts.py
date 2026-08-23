@@ -10,6 +10,7 @@ from tests.python.support.tmp_root import temporary_directory
 
 PUSH_SCRIPT = REPO_ROOT / "scripts" / "pilot" / "cvm-push.sh"
 PUSH_MODULE = REPO_ROOT / "scripts" / "pilot" / "cvm_push.py"
+PLUGIN_DEPLOYMENT_MODULE = REPO_ROOT / "scripts" / "pilot" / "plugin_deployment.py"
 PULL_SCRIPT = REPO_ROOT / "scripts" / "pilot" / "cvm-pull.sh"
 PUSH_SKILL = REPO_ROOT / ".claude" / "skills" / "cvm-push" / "SKILL.md"
 
@@ -31,6 +32,7 @@ class CvmSyncContractTests(unittest.TestCase):
         ignores = (REPO_ROOT / ".cvmignore").read_text(encoding="utf-8").splitlines()
         wrapper = PUSH_SCRIPT.read_text(encoding="utf-8")
         module = PUSH_MODULE.read_text(encoding="utf-8")
+        deployment_module = PLUGIN_DEPLOYMENT_MODULE.read_text(encoding="utf-8")
         skill = PUSH_SKILL.read_text(encoding="utf-8")
 
         self.assertIn(".git/", ignores)
@@ -55,7 +57,11 @@ class CvmSyncContractTests(unittest.TestCase):
             "CVM production staging failed; no files transferred",
             module,
         )
-        self.assertIn('"/.cvm-agent-jobs/"', module)
+        self.assertIn(
+            "STAGE_SOURCE_EXCLUDES = _plugin_deployment.DEPLOYMENT_EXCLUDE_PATTERNS",
+            module,
+        )
+        self.assertIn('"/.cvm-agent-jobs/"', deployment_module)
         self.assertIn('["ssh", "-n", "cvm", command]', module)
         self.assertNotIn("prepare_remote_runtime_dirs", module)
         self.assertNotIn("unlink --", module)

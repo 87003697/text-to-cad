@@ -545,11 +545,14 @@ def _materialize_worker_codex_home(
         extra_toml = plugin_deployment.render_venus_provider_toml(
             base_url=proxy_url, bearer_token=client_token
         )
+        publish_snapshot = plugin_deployment.materialize_job_publish_tree(
+            receipt, codex_home.with_name(f"{codex_home.name}-publish-tree")
+        )
         plugin_deployment.materialize_job_codex_home(
             receipt,
             codex_home,
             extra_toml=extra_toml,
-            sandbox_marketplace_source=None,
+            sandbox_marketplace_source=str(publish_snapshot),
         )
     except plugin_deployment.PluginAuthorityError as exc:
         raise AgentError(
@@ -598,6 +601,8 @@ def _run_codex(
         config_path = codex_home / "config.toml"
         config_path.chmod(0o600)
         _chown_tree(codex_home, NOBODY_UID, NOBODY_GID)
+        publish_snapshot = codex_home.with_name(f"{codex_home.name}-publish-tree")
+        _chown_tree(publish_snapshot, NOBODY_UID, NOBODY_GID)
         environment = {
             "HOME": os.fspath(home),
             "CODEX_HOME": os.fspath(codex_home),

@@ -23,6 +23,8 @@ from typing import Iterator, Mapping, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 REMOTE_ROOT = "~/text-to-cad"
 REMOTE_DESTINATION = f"cvm:{REMOTE_ROOT}/"
 RSYNC_SUMMARY_PATTERN = re.compile(
@@ -30,30 +32,19 @@ RSYNC_SUMMARY_PATTERN = re.compile(
     r"([\d,]+(?:\.\d+)?) bytes/sec"
 )
 
-# Source -> staging is intentionally different from staging -> CVM. The
-# staging copy keeps build-only inputs such as viewer/ and packages/
-# while excluding local state that must never become deployment material.
-STAGE_SOURCE_EXCLUDES = (
-    "/.git",
-    "/.venv/",
-    "/.agents/",
-    "/.claude/",
-    "/.codex/",
-    "/.DS_Store",
-    "/.cvm-jobs/",
-    "/.cvm-agent-jobs/",
-    "/.text-to-cad-codex/",
-    "/outputs/",
-    "/models/",
-    "/docs/",
-    "/tmp/",
-    "node_modules/",
-    "__pycache__/",
-    "*.pyc",
-    "*.swp",
-    "*.tmp",
-    "/viewer/dist/",
-)
+from scripts.pilot import plugin_deployment as _plugin_deployment  # noqa: E402
+
+# Mac-side staging hygiene only. This keeps ``.venv/`` symlinks, ``.agents/``,
+# editor scratch, and other local state from ever entering the stage in the
+# first place. It is NOT a substitute for exact remote snapshot identity —
+# the CVM ``~/text-to-cad`` overlay is persistent and non-deleting, so files
+# a prior push wrote there that later disappeared from the Mac stage will
+# linger regardless of what we exclude here. The stage manifest written by
+# :func:`plugin_deployment.write_stage_manifest` and validated by
+# :func:`plugin_deployment.materialize_from_stage_manifest` is what enforces
+# identity end-to-end.
+STAGE_SOURCE_EXCLUDES = _plugin_deployment.DEPLOYMENT_EXCLUDE_PATTERNS
+TRANSFER_TREE_DIRNAME = ".cvm-transfer-tree"
 
 # Remote helper that produces the installed-plugin authority receipt after
 # verify_remote has already confirmed the transferred bytes are healthy.
@@ -159,8 +150,7 @@ PRODUCTION_RUNTIME = RuntimeContract(
         "skills/cad-viewer/scripts/viewer/dist/index.html",
     ),
     hash_files=(
-        "skills/cad-viewer/scripts/viewer/backend/server.mjs",
-        "skills/cad-viewer/scripts/viewer/scripts/start-agent-viewer.mjs",
+        *_plugin_deployment.REQUIRED_RUNTIME_ATTESTATION_PATHS,
     ),
 )
 
@@ -382,6 +372,7 @@ class CvmPush:
         self.transfer_summary = TransferSummary()
         self.remote_head: str | None = None
         self.plugin_authority: dict | None = None
+        self.stage_manifest_digest: str | None = None
 
     def _log(self, message: str, *, stderr: bool = False) -> None:
         if not self.agent:
@@ -781,6 +772,39 @@ class CvmPush:
         }
         return RuntimeAttestation(hashes=hashes)
 
+    def prepare_transfer_tree(self, stage: Path) -> Path:
+        """Filter the build stage once, then bind exactly what rsync sends."""
+
+        transfer_tree = stage / TRANSFER_TREE_DIRNAME
+        if transfer_tree.exists() or transfer_tree.is_symlink():
+            raise PushError(
+                f"CVM transfer tree already exists: {transfer_tree}", 4
+            )
+        transfer_tree.mkdir()
+        result = self.runner.run(
+            [
+                "rsync",
+                "-a",
+                f"--exclude=/{TRANSFER_TREE_DIRNAME}/",
+                f"--exclude-from={self.repo_root / '.cvmignore'}",
+                f"{stage}/",
+                f"{transfer_tree}/",
+            ],
+            cwd=self.repo_root,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise PushError(
+                f"Cannot prepare exact CVM transfer tree: {result.stderr.strip()}",
+                4,
+            )
+        try:
+            digest = _plugin_deployment.write_stage_manifest(transfer_tree)
+        except _plugin_deployment.PluginAuthorityError as exc:
+            raise PushError(f"CVM transfer tree is not manifestable: {exc}", 4) from exc
+        self.stage_manifest_digest = digest
+        return transfer_tree
+
     def transfer_stage(self, stage: Path) -> None:
         """Perform the one and only remote rsync for a complete stage."""
 
@@ -792,7 +816,6 @@ class CvmPush:
             "rsync",
             "-avz",
             "--progress",
-            f"--exclude-from={self.repo_root / '.cvmignore'}",
             f"{stage}/",
             REMOTE_DESTINATION,
         ]
@@ -933,11 +956,18 @@ class CvmPush:
                 INSTALL_EXIT_CODE,
                 transferred=True,
             )
+        if self.stage_manifest_digest is None:
+            raise PushError(
+                "cannot install plugin authority before stage manifest is written",
+                INSTALL_EXIT_CODE,
+                transferred=True,
+            )
         return {
-            "schema": "text-to-cad.push-provenance/1",
+            "schema": _plugin_deployment.PROVENANCE_SCHEMA,
             "mac_branch": self.source.branch,
             "mac_head": self.source.head,
             "mac_state": self.source.state,
+            "stage_manifest_digest": self.stage_manifest_digest,
             "transfer_summary": {
                 "sent_bytes": self.transfer_summary.sent_bytes,
                 "received_bytes": self.transfer_summary.received_bytes,
@@ -1015,7 +1045,7 @@ class CvmPush:
                 f"CVM plugin {stage} failed: {detail}"
             )
             raise PushError(message, status, transferred=True)
-        if payload is None or payload.get("schema") != "text-to-cad.plugin-authority/1":
+        if payload is None or payload.get("schema") != _plugin_deployment.RECEIPT_SCHEMA:
             raise PushError(
                 "CVM plugin install returned no authority receipt on stdout",
                 VERIFY_EXIT_CODE,
@@ -1061,8 +1091,9 @@ class CvmPush:
                 self.bundle_stage(stage)
                 self.validate_stage(stage)
                 attestation = self.attest_stage(stage)
+                transfer_tree = self.prepare_transfer_tree(stage)
                 self._enter_phase("transfer")
-                self.transfer_stage(stage)
+                self.transfer_stage(transfer_tree)
                 self.remove_legacy_plugin_tree()
                 self._enter_phase("verify")
                 self.verify_remote(attestation)

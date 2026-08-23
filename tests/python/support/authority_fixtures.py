@@ -135,16 +135,20 @@ def build_authority(
     """
 
     provenance = transfer_provenance or {
-        "schema": "text-to-cad.push-provenance/1",
+        "schema": "text-to-cad.push-provenance/2",
         "mac_branch": "develop",
         "mac_head": "0" * 40,
         "mac_state": "clean",
+        "stage_manifest_digest": "b" * 64,
         "transfer_summary": {
             "sent_bytes": 1,
             "received_bytes": 1,
             "bytes_per_second": 1.0,
         },
-        "runtime_attestation": {"scripts/pilot/runner.py": "a" * 64},
+        "runtime_attestation": {
+            path: "a" * 64
+            for path in plugin_deployment.REQUIRED_RUNTIME_ATTESTATION_PATHS
+        },
     }
     deployments_root = plugin_deployment.ensure_authority_root(codex_home_root)
 
@@ -166,7 +170,9 @@ def build_authority(
     smoke.assert_manifests_equal(prepared, installed_manifest)
     critical_runtimes = smoke.assert_critical_runtimes(installed_stage)
 
-    deployment_id = plugin_deployment.compute_deployment_id(prepared.digest, version)
+    deployment_id = plugin_deployment.compute_deployment_id(
+        prepared.digest, version, provenance
+    )
     deployment_dir = plugin_deployment.deployment_directory(codex_home_root, deployment_id)
     final_publish_tree = deployment_dir / plugin_deployment.PUBLISH_TREE_DIRNAME
     final_codex_home = deployment_dir / plugin_deployment.CODEX_HOME_DIRNAME
@@ -181,6 +187,8 @@ def build_authority(
         encoding="utf-8",
     )
 
+    codex_home_manifest = smoke.compute_manifest(codex_home_stage)
+
     receipt = plugin_deployment.DeploymentReceipt(
         schema=plugin_deployment.RECEIPT_SCHEMA,
         deployment_id=deployment_id,
@@ -188,9 +196,10 @@ def build_authority(
         plugin_selector="cad@text-to-cad",
         prepared_manifest_digest=prepared.digest,
         installed_manifest_digest=installed_manifest.digest,
+        codex_home_manifest_digest=codex_home_manifest.digest,
         codex_version=codex_version,
         published_at="2026-08-23T00:00:00Z",
-        source_git_sha="deadbeef" * 5,
+        source_git_sha=provenance["mac_head"],
         deployment_dir=deployment_dir,
         publish_tree=final_publish_tree,
         codex_home=final_codex_home,

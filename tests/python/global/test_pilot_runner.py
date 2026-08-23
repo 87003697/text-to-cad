@@ -1088,6 +1088,10 @@ class ProductionPathContractTests(unittest.TestCase):
             )
             (exp_dir / "run/.codex-home").mkdir(parents=True)
             (exp_dir / "run/.codex-home/state.db").write_bytes(b"private")
+            (exp_dir / "run/.plugin-publish-tree/skills/cad").mkdir(parents=True)
+            (exp_dir / "run/.plugin-publish-tree/skills/cad/SKILL.md").write_text(
+                "private snapshot\n", encoding="utf-8"
+            )
             (exp_dir / "run/stderr.log").write_text("diagnostic\n", encoding="utf-8")
             (exp_dir / "run/venus-retry.jsonl").write_text(
                 '{"attempt":1,"status":200,"error_code":null}\n',
@@ -1481,14 +1485,13 @@ class ProductionPathContractTests(unittest.TestCase):
             ],
             triples,
         )
-        # The authority publish tree is bound read-only at the fixed sandbox
-        # marketplace source path referenced by the rewritten config.toml.
-        # The runner passes ``receipt.publish_tree`` verbatim (no ``.resolve()``
-        # — the receipt is authoritative), so match the receipt-stored form.
+        # A verified job-private publish-tree snapshot is bound read-only at
+        # the fixed sandbox marketplace source path.
+        job_publish_tree = exp_dir / "run" / ".plugin-publish-tree"
         self.assertIn(
             [
                 "--ro-bind",
-                str(fixture.publish_tree),
+                str(job_publish_tree),
                 str(runner.SANDBOX_PUBLISH_TREE),
             ],
             triples,
@@ -1496,11 +1499,13 @@ class ProductionPathContractTests(unittest.TestCase):
         # Each installed skill directory is bound read-only at
         # SANDBOX_REPO_ROOT/skills/<name>. The legacy SANDBOX_CODEX_HOME/skills
         # mount has been dropped now that the whole codex home mounts in.
+        installed_relative = fixture.installed_path.relative_to(fixture.codex_home)
         for skill_dir in expected_skill_dirs:
+            job_skill_dir = job_codex_home / installed_relative / "skills" / skill_dir.name
             self.assertIn(
                 [
                     "--ro-bind",
-                    str(skill_dir),
+                    str(job_skill_dir),
                     f"/workspace/repo/skills/{skill_dir.name}",
                 ],
                 triples,
@@ -1604,6 +1609,7 @@ class ProductionPathContractTests(unittest.TestCase):
             repo_root = Path(temp) / "repo"
             exp_dir = repo_root / "outputs" / "group" / "exp"
             (exp_dir / "run/.codex-home").mkdir(parents=True)
+            (exp_dir / "run/.plugin-publish-tree").mkdir(parents=True)
             runner = load_runner()
             with mock.patch.object(runner, "REPO_ROOT", repo_root):
                 first = runner.main(["clean", str(exp_dir)])

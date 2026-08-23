@@ -65,9 +65,10 @@ SANDBOX_HOME = Path("/home/pilot")
 SANDBOX_CODEX_HOME = SANDBOX_HOME / ".codex"
 SANDBOX_PUBLISH_TREE = Path(plugin_deployment.SANDBOX_MARKETPLACE_SOURCE)
 JOB_CODEX_HOME_REL = "run/.codex-home"
+JOB_PUBLISH_TREE_REL = "run/.plugin-publish-tree"
 ARTIFACT_CONTRACT_STATUS = 4
 MANIFEST_EXCLUDED_ROOTS = {".git"}
-MANIFEST_EXCLUDED_PREFIXES = {JOB_CODEX_HOME_REL}
+MANIFEST_EXCLUDED_PREFIXES = {JOB_CODEX_HOME_REL, JOB_PUBLISH_TREE_REL}
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
 CAD_REBUILD_ENTRYPOINT = REPO_ROOT / "skills/cad/scripts/canonical-build/__main__.py"
 GEOMETRY_ENTRYPOINT = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare/__main__.py"
@@ -573,6 +574,25 @@ def prepare_job_codex_home(
     return target
 
 
+def prepare_job_publish_tree(
+    exp_dir: Path,
+    receipt: plugin_deployment.DeploymentReceipt,
+) -> Path:
+    """Rebuild the verified job-private publish snapshot for one pilot run."""
+
+    target = exp_dir / JOB_PUBLISH_TREE_REL
+    try:
+        if target.is_symlink():
+            target.unlink()
+        elif target.exists():
+            shutil.rmtree(target)
+        return plugin_deployment.materialize_job_publish_tree(receipt, target)
+    except plugin_deployment.PluginAuthorityError as exc:
+        raise PilotError(f"cannot materialize job publish tree: {exc}") from exc
+    except OSError as exc:
+        raise PilotError(f"cannot prepare job publish tree: {exc}") from exc
+
+
 def validate_exp_dir(repo_root: Path, exp_dir: Path) -> Path:
     """Require a resolved experiment child below the checkout outputs directory."""
 
@@ -713,7 +733,6 @@ def build_bwrap_argv(
     exp_dir = validate_exp_dir(repo_root, exp_dir)
     inputs = validate_input_paths(repo_root, input_paths)
     receipt = resolve_deployed_authority(host_home)
-    skill_dirs = plugin_deployment.resolved_skill_directories(receipt)
     relative_exp = exp_dir.relative_to(repo_root)
     sandbox_exp = SANDBOX_REPO_ROOT / relative_exp
     gateway = repo_root / "gateway" / "codex-tap-gpt56"
@@ -724,6 +743,11 @@ def build_bwrap_argv(
         raise PilotError(f"pilot runtime not found: {venv}")
     job_codex_home = prepare_job_codex_home(
         exp_dir, receipt, browser_mcp_url=browser_mcp_url
+    )
+    job_publish_tree = prepare_job_publish_tree(exp_dir, receipt)
+    installed_relative = Path(receipt.installed_path).relative_to(receipt.codex_home)
+    skill_dirs = plugin_deployment.skill_directories_under_installed(
+        job_codex_home / installed_relative
     )
     if browser_capability_dir is not None:
         browser_capability_dir = browser_capability_dir.resolve()
@@ -798,7 +822,7 @@ def build_bwrap_argv(
         str(job_codex_home),
         str(SANDBOX_CODEX_HOME),
         "--ro-bind",
-        str(receipt.publish_tree),
+        str(job_publish_tree),
         str(SANDBOX_PUBLISH_TREE),
     ]
     for path in existing_system_paths():
@@ -1136,10 +1160,12 @@ def publish_artifact_manifest(
 def cleanup_sandbox(exp_dir: Path) -> None:
     """Remove the deterministic isolated Codex home if present."""
 
-    for name in (JOB_CODEX_HOME_REL,):
+    for name in (JOB_CODEX_HOME_REL, JOB_PUBLISH_TREE_REL):
         path = exp_dir / name
         try:
-            if path.exists():
+            if path.is_symlink():
+                path.unlink()
+            elif path.exists():
                 shutil.rmtree(path)
         except OSError as exc:
             raise PilotError(f"cannot remove {path}: {exc}") from exc

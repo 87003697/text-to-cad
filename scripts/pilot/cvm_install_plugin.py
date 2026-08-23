@@ -33,12 +33,12 @@ import argparse
 import base64
 import binascii
 import errno
-import fcntl
 import json
 import os
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -119,27 +119,30 @@ def _ensure_codex_version_gate(codex_executable: str) -> str:
     return version_string
 
 
-def _rsync_copy(src: Path, dst: Path) -> None:
-    dst.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        [
-            "rsync",
-            "-a",
-            "--exclude=/.git",
-            "--exclude=/.git/",
-            "--exclude=/.text-to-cad-codex/",
-            f"{src}/",
-            f"{dst}/",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise InstallError(
-            f"rsync into publish staging failed: {result.stderr.strip()}",
-            stage="install",
+def _materialize_publish_source(
+    src: Path, dst: Path, *, expected_manifest_digest: str
+) -> None:
+    """Copy exactly the manifest-listed files from ``src`` into ``dst``.
+
+    ``src`` is the persistent ``~/text-to-cad`` overlay on the CVM. Because
+    ``cvm-push`` never uses ``rsync --delete``, that overlay accumulates every
+    file any prior push, pilot, or ad-hoc SSH session ever left there. An
+    exclusion list can never guarantee identity against that overlay — a
+    tracked file that existed in an earlier push and later disappeared from
+    the Mac stage would simply linger. Instead, we materialize publish-tree-src
+    from exactly the paths listed in the stage manifest whose digest was
+    bound into the push provenance, hashing each file at copy time and failing
+    closed on any absent/symlinked/mismatched entry.
+    """
+
+    try:
+        plugin_deployment.materialize_from_stage_manifest(
+            src,
+            dst,
+            expected_manifest_digest=expected_manifest_digest,
         )
+    except plugin_deployment.PluginAuthorityError as exc:
+        raise InstallError(str(exc), stage="install") from exc
 
 
 def _run_finalize(publish_tree: Path) -> None:
@@ -164,19 +167,7 @@ def _run_finalize(publish_tree: Path) -> None:
 
 
 def _atomic_receipt(path: Path, value: dict[str, Any]) -> None:
-    tmp = path.with_name(f".{path.name}.tmp")
-    try:
-        with open(tmp, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, sort_keys=True, separators=(",", ":"))
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(tmp, path)
-    finally:
-        try:
-            tmp.unlink()
-        except FileNotFoundError:
-            pass
+    plugin_deployment._atomic_write_json(path, value)
 
 
 def _rmtree_force(path: Path) -> None:
@@ -247,35 +238,47 @@ def publish(
 ) -> dict[str, Any]:
     """Assemble one deployment slot and atomically publish its pointer."""
 
-    transferred_source = Path(transferred_source).resolve()
+    transferred_source = Path(transferred_source).expanduser()
+    if not transferred_source.is_absolute():
+        transferred_source = Path.cwd() / transferred_source
+    # The parent is host-owned/trusted; canonicalize it, but preserve and
+    # lstat the transfer-root leaf so a redirected ~/text-to-cad is rejected.
+    transferred_source = transferred_source.parent.resolve() / transferred_source.name
     codex_home_root = Path(codex_home_root).expanduser()
-    if not transferred_source.is_dir():
+    try:
+        transferred_metadata = os.lstat(transferred_source)
+    except OSError as exc:
         raise InstallError(
-            f"transferred source is missing: {transferred_source}",
+            f"transferred source is inaccessible: {transferred_source}: {exc}",
+            stage="install",
+        ) from exc
+    if stat.S_ISLNK(transferred_metadata.st_mode) or not stat.S_ISDIR(
+        transferred_metadata.st_mode
+    ):
+        raise InstallError(
+            f"transferred source is not a physical directory: {transferred_source}",
             stage="install",
         )
     codex_version_string = _ensure_codex_version_gate(codex_executable)
-    version = _read_version(transferred_source)
 
     deployments_root = plugin_deployment.ensure_authority_root(codex_home_root)
     lock_file = deployments_root / plugin_deployment.LOCK_NAME
     source_sha = provenance["mac_head"]
 
-    with open(lock_file, "a", encoding="utf-8") as lock_handle:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
-        try:
+    try:
+        with plugin_deployment.publication_lock(lock_file) as verify_lock:
             return _publish_under_lock(
                 transferred_source=transferred_source,
                 codex_home_root=codex_home_root,
                 deployments_root=deployments_root,
-                version=version,
                 provenance=provenance,
                 source_sha=source_sha,
                 codex_version_string=codex_version_string,
                 codex_executable=codex_executable,
+                verify_lock=verify_lock,
             )
-        finally:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    except plugin_deployment.PluginAuthorityError as exc:
+        raise InstallError(str(exc), stage="install") from exc
 
 
 def _publish_under_lock(
@@ -283,23 +286,30 @@ def _publish_under_lock(
     transferred_source: Path,
     codex_home_root: Path,
     deployments_root: Path,
-    version: str,
     provenance: dict[str, Any],
     source_sha: str,
     codex_version_string: str,
     codex_executable: str,
+    verify_lock,
 ) -> dict[str, Any]:
     staging_dir = deployments_root / f".staging-{secrets.token_hex(8)}"
     staging_dir.mkdir(mode=0o755)
     keep_staging = False
     try:
         publish_src = staging_dir / "publish-tree-src"
-        _rsync_copy(transferred_source, publish_src)
+        _materialize_publish_source(
+            transferred_source,
+            publish_src,
+            expected_manifest_digest=provenance["stage_manifest_digest"],
+        )
         _run_finalize(publish_src)
+        version = _read_version(publish_src)
         prepared_manifest = smoke.compute_manifest(publish_src)
         prepared_digest = prepared_manifest.digest
         deployment_id = plugin_deployment.compute_deployment_id(
-            prepared_digest, version
+            prepared_digest,
+            version,
+            provenance,
         )
         target_dir = plugin_deployment.deployment_directory(
             codex_home_root, deployment_id
@@ -313,8 +323,26 @@ def _publish_under_lock(
                     existing.prepared_manifest_digest == prepared_digest
                     and existing.version == version
                 ):
+                    # Same content-bound identity is not enough: the slot
+                    # on disk may have been tampered with (config.toml
+                    # ``enabled = false``, critical runtime deletion, etc.)
+                    # between the previous publication and now. Fully
+                    # revalidate the existing slot before republishing
+                    # its pointer; anything divergent maps to verify-stage
+                    # (exit 8) rather than silently reusing a broken slot.
+                    try:
+                        plugin_deployment.validate_deployment_slot(
+                            existing, codex_home_root=codex_home_root
+                        )
+                    except plugin_deployment.PluginAuthorityError as exc:
+                        raise InstallError(
+                            f"existing deployment slot failed revalidation: {exc}",
+                            stage="verify",
+                        ) from exc
                     plugin_deployment._publish_pointer_locked(
-                        existing, codex_home_root=codex_home_root
+                        existing,
+                        codex_home_root=codex_home_root,
+                        verify_lock=verify_lock,
                     )
                     return existing.as_dict()
             raise InstallError(
@@ -360,6 +388,37 @@ def _publish_under_lock(
         final_codex_home = target_dir / plugin_deployment.CODEX_HOME_DIRNAME
         final_installed_path = final_codex_home / installed_rel
 
+        config_path = codex_home_final / plugin_deployment.CONFIG_TOML_NAME
+        try:
+            config = config_path.read_text(encoding="utf-8")
+            config = plugin_deployment._rewrite_marketplace_source(
+                config, str(final_publish_tree)
+            )
+            config_path.write_text(config, encoding="utf-8")
+        except (OSError, plugin_deployment.PluginAuthorityError) as exc:
+            raise InstallError(
+                f"cannot bind marketplace registration to final publish tree: {exc}",
+                stage="verify",
+            ) from exc
+
+        # Bind the whole isolated CODEX_HOME, including config.toml and the
+        # installed cache. Semantic registration checks below additionally
+        # reject a disabled plugin or redirected marketplace.
+        try:
+            codex_home_manifest = smoke.compute_manifest(codex_home_final)
+        except smoke.SmokeError as exc:
+            raise InstallError(str(exc), stage="verify") from exc
+        try:
+            plugin_deployment._assert_registration_intact(
+                codex_home_final,
+                expected_marketplace_source=final_publish_tree,
+            )
+            plugin_deployment._assert_codex_home_scope(
+                codex_home_final, staged_installed_path
+            )
+        except plugin_deployment.PluginAuthorityError as exc:
+            raise InstallError(str(exc), stage="verify") from exc
+
         receipt = plugin_deployment.DeploymentReceipt(
             schema=plugin_deployment.RECEIPT_SCHEMA,
             deployment_id=deployment_id,
@@ -367,6 +426,7 @@ def _publish_under_lock(
             plugin_selector=PLUGIN_SELECTOR,
             prepared_manifest_digest=prepared_digest,
             installed_manifest_digest=installed_manifest.digest,
+            codex_home_manifest_digest=codex_home_manifest.digest,
             codex_version=codex_version_string,
             published_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             source_git_sha=source_sha,
@@ -385,6 +445,7 @@ def _publish_under_lock(
             receipt.as_dict(),
         )
         try:
+            verify_lock()
             plugin_deployment.move_into_place(staging_dir, target_dir)
         except plugin_deployment.PluginAuthorityError:
             # Race: another publisher (or a stale slot) already occupies the
@@ -399,7 +460,9 @@ def _publish_under_lock(
             )
         keep_staging = True
         plugin_deployment._publish_pointer_locked(
-            receipt, codex_home_root=codex_home_root
+            receipt,
+            codex_home_root=codex_home_root,
+            verify_lock=verify_lock,
         )
         return receipt.as_dict()
     except OSError as exc:
@@ -454,7 +517,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         required=True,
         help=(
             "URL-safe base64 canonical JSON encoding of the Mac-side push "
-            "provenance document (schema text-to-cad.push-provenance/1)."
+            f"provenance document (schema {plugin_deployment.PROVENANCE_SCHEMA})."
         ),
     )
     parser.add_argument(

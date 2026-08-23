@@ -238,10 +238,13 @@ class AgentModeTests(unittest.TestCase):
             workflow.bundle_stage = mock.Mock()
             workflow.validate_stage = mock.Mock()
             workflow.attest_stage = mock.Mock(return_value=attestation)
+            workflow.prepare_transfer_tree = mock.Mock(
+                return_value=root / "transfer"
+            )
             workflow.transfer_stage = mock.Mock()
             workflow.verify_remote = mock.Mock()
             authority_receipt = {
-                "schema": "text-to-cad.plugin-authority/1",
+                "schema": "text-to-cad.plugin-authority/2",
                 "deployment_id": "d" * 64,
                 "version": "0.4.21",
                 "installed_manifest_digest": "a" * 64,
@@ -718,7 +721,7 @@ class StageTests(unittest.TestCase):
 
 
 class TransferAndVerifyTests(unittest.TestCase):
-    def test_transfer_uses_one_rsync_with_repository_excludes(self) -> None:
+    def test_transfer_uses_one_unfiltered_rsync_from_exact_tree(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
             repo = create_repo(root)
@@ -734,8 +737,9 @@ class TransferAndVerifyTests(unittest.TestCase):
 
             self.assertEqual(len(runner.streams), 1)
             argv = runner.streams[0][0]
-            exclude = f"--exclude-from={repo.resolve() / '.cvmignore'}"
-            self.assertIn(exclude, argv)
+            self.assertFalse(
+                any(arg.startswith("--exclude") for arg in argv), argv
+            )
             self.assertEqual(argv[-2], f"{stage}/")
             self.assertEqual(argv[-1], cvm_push.REMOTE_DESTINATION)
 
@@ -831,13 +835,12 @@ class TransferAndVerifyTests(unittest.TestCase):
             self.assertEqual(error.exception.status, 23)
             self.assertTrue(error.exception.transferred)
 
-    def test_real_rsync_filter_keeps_nested_runtime_and_excludes_root_viewer(
+    def test_exact_transfer_tree_manifest_matches_real_rsync_filter(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
             source = root / "source"
-            target = root / "target"
             repo = create_repo(root)
             root_viewer = source / "viewer/root.txt"
             nested_viewer = (
@@ -846,27 +849,45 @@ class TransferAndVerifyTests(unittest.TestCase):
             for path in (root_viewer, nested_viewer):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("x\n", encoding="utf-8")
-            target.mkdir()
-
-            result = subprocess.run(
-                [
-                    "rsync",
-                    "-a",
-                    f"--exclude-from={repo / '.cvmignore'}",
-                    f"{source}/",
-                    f"{target}/",
-                ],
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            workflow = cvm_push.CvmPush(
+                cvm_push.CommandRunner(),
+                repo_root=repo,
+                environ={"TMPDIR": str(root)},
+            )
+            transfer_tree = workflow.prepare_transfer_tree(source)
+            target = root / "materialized"
+            cvm_push._plugin_deployment.materialize_from_stage_manifest(
+                transfer_tree,
+                target,
+                expected_manifest_digest=workflow.stage_manifest_digest,
             )
 
-            self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse((target / "viewer").exists())
             self.assertTrue(
                 (target / "skills/cad-viewer/scripts/viewer/nested.txt").is_file()
             )
+
+    def test_exact_transfer_tree_rejects_any_unmanifested_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            source = root / "source"
+            source.mkdir()
+            repo = create_repo(root)
+            outside = root / "outside.txt"
+            outside.write_text("outside\n", encoding="utf-8")
+            os.symlink(outside, source / "unlisted-link")
+            workflow = cvm_push.CvmPush(
+                cvm_push.CommandRunner(),
+                repo_root=repo,
+                environ={"TMPDIR": str(root)},
+            )
+
+            with self.assertRaisesRegex(
+                cvm_push.PushError,
+                "unmanifested symlink",
+            ) as error:
+                workflow.prepare_transfer_tree(source)
+            self.assertEqual(error.exception.status, 4)
 
     def test_remote_verification_uses_full_contract_and_exact_hashes(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -1012,12 +1033,16 @@ class WorkflowTests(unittest.TestCase):
                 events.append("attest"),
                 attestation,
             )[1]
+            workflow.prepare_transfer_tree = lambda stage: (
+                events.append("prepare-transfer"),
+                stage,
+            )[1]
             workflow.transfer_stage = lambda stage: events.append("transfer")
             workflow.remove_legacy_plugin_tree = lambda: events.append("cleanup-plugin")
             workflow.verify_remote = lambda expected: events.append("verify")
             workflow.install_plugin_authority = lambda _attestation: (
                 events.append("install"),
-                {"schema": "text-to-cad.plugin-authority/1"},
+                {"schema": "text-to-cad.plugin-authority/2"},
             )[1]
             workflow.remote_git_base = lambda: "remote-head"
 
@@ -1036,6 +1061,7 @@ class WorkflowTests(unittest.TestCase):
                     "bundle",
                     "validate",
                     "attest",
+                    "prepare-transfer",
                     "transfer",
                     "cleanup-plugin",
                     "verify",
@@ -1049,7 +1075,7 @@ class InstallPluginAuthorityTests(unittest.TestCase):
 
     def _authority_payload(self) -> dict:
         return {
-            "schema": "text-to-cad.plugin-authority/1",
+            "schema": "text-to-cad.plugin-authority/2",
             "deployment_id": "d" * 64,
             "version": "0.4.21",
             "plugin_selector": "cad@text-to-cad",
@@ -1064,10 +1090,11 @@ class InstallPluginAuthorityTests(unittest.TestCase):
             "installed_path": "/home/pilot/.text-to-cad-codex/deployments/" + "d" * 64 + "/codex-home/plugins/cache/cad",
             "critical_runtimes": [],
             "transfer_provenance": {
-                "schema": "text-to-cad.push-provenance/1",
+                "schema": "text-to-cad.push-provenance/2",
                 "mac_branch": "develop",
                 "mac_head": "0" * 40,
                 "mac_state": "clean",
+                "stage_manifest_digest": "0" * 64,
             },
         }
 
@@ -1080,12 +1107,19 @@ class InstallPluginAuthorityTests(unittest.TestCase):
         workflow.source = cvm_push.SourceProvenance(
             branch="develop", head="0" * 40, state="clean"
         )
+        # The stage manifest is authored between ``attest`` and ``transfer``
+        # in the real workflow; unit tests exercising install-authority skip
+        # the earlier phases, so we pin a stable digest directly.
+        workflow.stage_manifest_digest = "0" * 64
         return workflow
 
     @staticmethod
     def _attestation() -> "cvm_push.RuntimeAttestation":
         return cvm_push.RuntimeAttestation(
-            hashes={"scripts/pilot/runner.py": "b" * 64}
+            hashes={
+                path: "b" * 64
+                for path in cvm_push._plugin_deployment.REQUIRED_RUNTIME_ATTESTATION_PATHS
+            }
         )
 
     def test_install_success_embeds_authority_receipt(self) -> None:
@@ -1124,13 +1158,42 @@ class InstallPluginAuthorityTests(unittest.TestCase):
         idx = tokens.index("--provenance-b64")
         encoded = tokens[idx + 1]
         decoded = json.loads(_b64.urlsafe_b64decode(encoded.encode("ascii")).decode())
-        self.assertEqual(decoded["schema"], "text-to-cad.push-provenance/1")
+        self.assertEqual(decoded["schema"], "text-to-cad.push-provenance/2")
         self.assertEqual(decoded["mac_branch"], "develop")
         self.assertEqual(decoded["mac_head"], "0" * 40)
         self.assertEqual(decoded["mac_state"], "clean")
+        self.assertEqual(decoded["stage_manifest_digest"], "0" * 64)
         self.assertEqual(
-            decoded["runtime_attestation"], {"scripts/pilot/runner.py": "b" * 64}
+            decoded["runtime_attestation"],
+            {
+                path: "b" * 64
+                for path in cvm_push._plugin_deployment.REQUIRED_RUNTIME_ATTESTATION_PATHS
+            },
         )
+
+    def test_install_before_stage_manifest_fails_closed(self) -> None:
+        # Regression: install-authority must refuse to build a provenance
+        # blob when no stage manifest digest has been recorded — otherwise
+        # the CVM publisher would materialize publish-tree-src from a
+        # persistent overlay it cannot bound, silently entering deployment
+        # identity.
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            runner = FakeRunner()
+            workflow = cvm_push.CvmPush(
+                runner,
+                repo_root=create_repo(root),
+                environ={"TMPDIR": str(root)},
+            )
+            workflow.source = cvm_push.SourceProvenance(
+                branch="develop", head="0" * 40, state="clean"
+            )
+            # Note: stage_manifest_digest deliberately left as None.
+            with self.assertRaises(cvm_push.PushError) as ctx:
+                workflow.install_plugin_authority(self._attestation())
+            self.assertEqual(ctx.exception.status, cvm_push.INSTALL_EXIT_CODE)
+            self.assertTrue(ctx.exception.transferred)
+            self.assertIn("stage manifest", str(ctx.exception).lower())
 
     def test_install_before_source_inspection_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
