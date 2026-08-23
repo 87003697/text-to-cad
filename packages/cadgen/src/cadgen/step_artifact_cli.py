@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Mapping
 from dataclasses import replace
 import json
-from pathlib import Path
+import os
+from pathlib import Path, PureWindowsPath
 
 from cadgen.cli_logging import CliLogger
 from cadgen._internal.cli_locking import (
@@ -193,7 +195,42 @@ def _existing_result_payload(spec: EntrySpec, artifact: StepTopologyArtifact) ->
     )
 
 
-def _current_artifact_for_spec(spec: EntrySpec) -> StepTopologyArtifact | None:
+def _closure_paths_are_trusted(
+    spec: EntrySpec,
+    manifest: Mapping[str, object],
+    repo_root: Path,
+) -> bool:
+    if str(manifest.get("sourceKind") or "").strip().lower() != "python":
+        return True
+    relative_files = manifest.get("sourceClosureFiles")
+    if not isinstance(relative_files, list) or not relative_files or spec.step_path is None:
+        return False
+    trusted_root = repo_root.expanduser().resolve()
+    base = spec.step_path.parent
+    for value in relative_files:
+        raw = str(value or "").strip()
+        candidate = Path(raw)
+        if not raw or candidate.is_absolute() or PureWindowsPath(raw).is_absolute():
+            return False
+        lexical = Path(os.path.abspath(base / candidate))
+        try:
+            real = lexical.resolve(strict=True)
+            lexical.relative_to(trusted_root)
+            real.relative_to(trusted_root)
+        except (OSError, ValueError):
+            return False
+        if os.path.normcase(str(lexical)) != os.path.normcase(str(real)):
+            return False
+    return True
+
+
+def _current_artifact_for_spec(
+    spec: EntrySpec,
+    *,
+    repo_root: Path | None = None,
+) -> StepTopologyArtifact | None:
+    if spec.step_export_path is not None and not spec.step_export_path.is_file():
+        return None
     if not _existing_topology_artifact_matches_spec_without_scene(spec):
         return None
     package_dir = render_package_dir(spec.entry_path)
@@ -221,6 +258,8 @@ def _current_artifact_for_spec(spec: EntrySpec) -> StepTopologyArtifact | None:
             return None
         manifest = read_package_descriptor(package_dir)
         if not isinstance(manifest, dict):
+            return None
+        if repo_root is not None and not _closure_paths_are_trusted(spec, manifest, repo_root):
             return None
         return StepTopologyArtifact(
             cad_path=spec.cad_ref,
@@ -265,6 +304,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--force", action="store_true", help="Regenerate even if a current artifact exists.")
     parser.add_argument("--mesh-tolerance", type=float, help="Override automatic mesh linear deflection.")
     parser.add_argument("--mesh-angular-tolerance", type=float, help="Override automatic mesh angular deflection.")
+    parser.add_argument(
+        "--step-export",
+        help=(
+            "For generator mode (``--source-path``), also write the STEP file to this path in the "
+            "SAME generator evaluation that builds the render package. Sets "
+            "``EntrySpec.step_export_path`` so ``_generate_part_outputs`` schedules the STEP export "
+            "and the package build from ONE scene -- see cadgen._internal.generation. Rejects "
+            "callers that ask for a STEP export without a generator source (imported STEP models "
+            "have no separate export step)."
+        ),
+    )
     parser.add_argument("--verbose", action="store_true", help="Show detailed timing on stderr.")
     add_lock_timeout_argument(parser)
     return parser
@@ -279,6 +329,7 @@ def build_step_artifact(
     force: bool = False,
     mesh_tolerance: float | None = None,
     mesh_angular_tolerance: float | None = None,
+    step_export_path: Path | None = None,
     reset_runtime_closure: bool = False,
     verbose: bool = False,
     logger: CliLogger | None = None,
@@ -334,11 +385,26 @@ def build_step_artifact(
         logger = CliLogger("step-artifact", verbose=verbose)
     mesh_tolerance = normalize_mesh_numeric(mesh_tolerance, field_name="mesh_tolerance")
     mesh_angular_tolerance = normalize_mesh_numeric(mesh_angular_tolerance, field_name="mesh_angular_tolerance")
+    if step_export_path is not None:
+        # ``step_export_path`` piggybacks on the SAME generator evaluation that
+        # builds the render package. ``_generate_part_outputs`` (see
+        # cadgen._internal.generation) writes both the STEP file and the
+        # component-GLB package from one preloaded scene when
+        # ``EntrySpec.step_export_path`` is set. Importing a STEP file (no
+        # generator) has nothing to export -- the source IS the STEP -- so
+        # refuse this combination up front.
+        if not from_generator:
+            raise ValueError(
+                "--step-export requires --source-path; imported STEP models are already on disk"
+            )
+        step_export_path = Path(step_export_path).expanduser().resolve()
+        if step_export_path != step_path:
+            raise ValueError("--step-export must match --step so package identity binds to the exported STEP")
     if from_generator:
         existing_spec = spec
+        replace_kwargs: dict[str, object] = {}
         if mesh_tolerance is not None or mesh_angular_tolerance is not None:
-            existing_spec = replace(
-                existing_spec,
+            replace_kwargs.update(
                 mesh_tolerance=mesh_tolerance if mesh_tolerance is not None else existing_spec.mesh_tolerance,
                 mesh_angular_tolerance=(
                     mesh_angular_tolerance
@@ -348,6 +414,10 @@ def build_step_artifact(
                 mesh_tolerance_explicit=mesh_tolerance is not None,
                 mesh_angular_tolerance_explicit=mesh_angular_tolerance is not None,
             )
+        if step_export_path is not None:
+            replace_kwargs["step_export_path"] = step_export_path
+        if replace_kwargs:
+            existing_spec = replace(existing_spec, **replace_kwargs)
     else:
         existing_spec = EntrySpec(
             source_ref=_relative_to_base(repo_root, step_path),
@@ -370,7 +440,7 @@ def build_step_artifact(
     # already-current model never pays for a lock acquisition. It is NOT the real gate --
     # see the is_current= re-check below, which is the one that has to be right.
     if not force:
-        existing_artifact = _current_artifact_for_spec(existing_spec)
+        existing_artifact = _current_artifact_for_spec(existing_spec, repo_root=repo_root)
         if existing_artifact is not None:
             return _existing_result_payload(existing_spec, existing_artifact)
 
@@ -393,7 +463,7 @@ def build_step_artifact(
     ) as progress_sink, artifact_build(
         STEP_PACKAGE,
         package_dir,
-        is_current=lambda: _current_artifact_for_spec(existing_spec) is not None,
+        is_current=lambda: _current_artifact_for_spec(existing_spec, repo_root=repo_root) is not None,
         force=force,
         deadline_ms=deadline_ms(lock_timeout_s),
         on_wait=lock_wait_notice(logger, existing_spec.source_ref),
@@ -410,7 +480,7 @@ def build_step_artifact(
                 stepPath=relative_to_cwd(existing_spec.step_path),
             )
         if progress.skipped:
-            artifact = _current_artifact_for_spec(existing_spec)
+            artifact = _current_artifact_for_spec(existing_spec, repo_root=repo_root)
             if artifact is not None:
                 return _existing_result_payload(existing_spec, artifact)
         if from_generator:
@@ -449,8 +519,23 @@ def build_step_artifact(
             logger=logger,
             progress=progress,
         )
+        if from_generator:
+            from cadgen._internal.component_package import read_package_descriptor
+
+            manifest = read_package_descriptor(render_package_dir(spec.entry_path))
+            if not isinstance(manifest, dict) or not _closure_paths_are_trusted(spec, manifest, repo_root):
+                raise ValueError(
+                    "Python source closure must contain only canonical files inside the repo root"
+                )
     stats = result.selector_bundle.manifest.get("stats") if result.selector_bundle is not None else {}
-    return _generated_result_payload(spec, scene, stats if isinstance(stats, dict) else {})
+    payload = _generated_result_payload(spec, scene, stats if isinstance(stats, dict) else {})
+    if step_export_path is not None:
+        # Report where the STEP file was written by the SAME evaluation
+        # that built the render package. Callers reconciling one build to
+        # its STEP get the exact path back rather than guessing from
+        # ``spec.step_path``.
+        payload["stepExportPath"] = relative_to_cwd(step_export_path)
+    return payload
 
 
 def run_cli_payload(
@@ -472,6 +557,7 @@ def run_cli_payload(
         force=bool(args.force),
         mesh_tolerance=args.mesh_tolerance,
         mesh_angular_tolerance=args.mesh_angular_tolerance,
+        step_export_path=Path(args.step_export) if args.step_export else None,
         reset_runtime_closure=reset_runtime_closure,
         logger=logger,
         lock_timeout_s=float(args.lock_timeout or 0.0),

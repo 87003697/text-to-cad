@@ -5,12 +5,16 @@ import path from "node:path";
 import test from "node:test";
 import { Readable, Writable } from "node:stream";
 
+import fsSync from "node:fs";
+
 import {
   contentTypeForStaticAsset,
   createCadViewerApiMiddleware,
   createLocalAssetMiddleware,
   serveDistAsset,
 } from "./httpHandlers.mjs";
+import { createLocalAssetBackend } from "./localAssetBackend.mjs";
+import { __setSafeOpenPreOpenHookForTests } from "./safeAssetOpen.mjs";
 
 
 function createResponse() {
@@ -598,4 +602,130 @@ test("CAD Viewer API middleware rejects non-filesystem STEP artifact backends", 
   assert.deepEqual(JSON.parse(res.body), {
     error: "STEP artifact generation requires a local filesystem CAD Viewer backend",
   });
+});
+
+
+// P1 production local asset middleware integration: ``serveStaticFile``
+// must take the capability-style (safeAssetOpen) branch for user-
+// controlled assets. Interpose a swap between the segment walk and
+// the ``open`` syscall via the shared preOpenHook. If ``trustedRoot``
+// were NOT threaded, ``serveStaticFile`` would fall back to the
+// legacy ``lstat + createReadStream(path)`` branch and never invoke
+// the hook -- so hook firing proves the safe path is exercised, and
+// the resulting 403 proves the swap was caught before bytes were
+// served.
+test("createLocalAssetMiddleware routes user assets through the safe handle path (interposed swap rejected)", async (t) => {
+  const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "cad-mw-safe-"));
+  t.after(async () => { await fs.rm(rootDir, { recursive: true, force: true }); });
+  const insidePath = path.join(rootDir, "part.stl");
+  await fs.writeFile(insidePath, "solid part\nendsolid part\n");
+  const outsidePath = path.join(rootDir, "..", `cad-mw-outside-${process.pid}.stl`);
+  await fs.writeFile(outsidePath, "SECRET\n");
+  t.after(async () => { await fs.rm(outsidePath, { force: true }); });
+
+  let hookFired = false;
+  __setSafeOpenPreOpenHookForTests(() => {
+    hookFired = true;
+    // Deterministic swap: after the segment walk has captured the
+    // legit inode, replace the leaf with a symlink pointing at the
+    // outside secret. On POSIX ``O_NOFOLLOW`` will refuse the
+    // symlink; either way the fstat-vs-lstat identity check catches
+    // it.
+    try { fsSync.unlinkSync(insidePath); } catch { /* race with cleanup */ }
+    try { fsSync.symlinkSync(outsidePath, insidePath); }
+    catch (error) { if (!error || (error.code !== "EPERM" && error.code !== "EACCES")) throw error; }
+  });
+  t.after(() => __setSafeOpenPreOpenHookForTests(null));
+  // Detect unprivileged Windows sandboxes that cannot create
+  // symlinks by first trying a probe symlink; if it fails we skip.
+  const probeLink = path.join(rootDir, `probe-${process.pid}.link`);
+  try {
+    fsSync.symlinkSync(insidePath, probeLink);
+    fsSync.unlinkSync(probeLink);
+  } catch (error) {
+    if (error && (error.code === "EPERM" || error.code === "EACCES")) {
+      t.skip(`filesystem does not permit unprivileged symbolic links: ${error.message}`);
+      return;
+    }
+    throw error;
+  }
+
+  const middleware = createLocalAssetMiddleware({
+    backend: {
+      // Minimal local-backend shim: resolveRequestRoot returns the
+      // trusted root; assetPathForFileRef returns the validated path.
+      resolveRequestRoot: () => ({ dir: rootDir, rootPath: rootDir, rootName: path.basename(rootDir) }),
+      assetPathForFileRef: () => insidePath,
+      contentTypeForPath: () => "model/stl",
+    },
+  });
+  const req = {
+    method: "GET",
+    url: `/__cad/asset?file=${encodeURIComponent(insidePath)}&dir=${encodeURIComponent(rootDir)}`,
+    headers: {},
+  };
+  const res = createWritableResponse();
+  let nextCalled = false;
+  middleware(req, res, () => { nextCalled = true; });
+  // The safe path throws inside ``openAssetHandleUnderRoot`` and
+  // returns via ``next()`` (404 not-found from safe-open branch) or
+  // 403 from a containment error. Await the response event either way.
+  await Promise.race([
+    res.finished,
+    new Promise((resolve) => setTimeout(resolve, 200)),
+  ]);
+  assert.equal(hookFired, true, "the safe handle path must have fired the preOpenHook (proves trustedRoot threaded)");
+  const body = typeof res.bodyText === "function" ? res.bodyText() : "";
+  assert.ok(!body.includes("SECRET"), `outside bytes must never be served, got ${JSON.stringify(body)}`);
+  assert.ok(
+    res.statusCode !== 200 || nextCalled,
+    `swapped-asset request must be refused or fall through, got status=${res.statusCode} next=${nextCalled}`,
+  );
+});
+
+
+test("local asset middleware serves a cadgen package descriptor and its component GLB", async (t) => {
+  const directoryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "cad-package-assets-"));
+  t.after(async () => { await fs.rm(directoryRoot, { recursive: true, force: true }); });
+  const modelRoot = path.join(directoryRoot, "models");
+  const packageDir = path.join(modelRoot, "__cadgen__", "models", "part.py");
+  const descriptorPath = path.join(packageDir, "assembly.json");
+  const componentPath = path.join(packageDir, "components", "part.glb");
+  await fs.mkdir(path.dirname(componentPath), { recursive: true });
+  const descriptor = JSON.stringify({
+    schemaVersion: 4,
+    packageSchemaVersion: 3,
+    components: { part: { glb: "components/part.glb", contentHash: "fixture" } },
+  });
+  const component = Buffer.from("glTFcomponent");
+  await fs.writeFile(descriptorPath, descriptor);
+  await fs.writeFile(componentPath, component);
+
+  const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
+  const middleware = createLocalAssetMiddleware({ backend });
+  const requestAsset = async (filePath) => {
+    const req = {
+      method: "GET",
+      url: `/__cad/asset?file=${encodeURIComponent(filePath)}&dir=${encodeURIComponent("models")}`,
+      headers: {},
+    };
+    const res = createWritableResponse();
+    let nextCalled = false;
+    middleware(req, res, () => { nextCalled = true; });
+    await Promise.race([
+      res.finished,
+      new Promise((resolve) => setTimeout(resolve, 1000)),
+    ]);
+    assert.equal(nextCalled, false, `${filePath} must be claimed by local asset middleware`);
+    assert.equal(res.statusCode, 200, `${filePath} must be served`);
+    return res;
+  };
+
+  const descriptorResponse = await requestAsset(descriptorPath);
+  assert.equal(descriptorResponse.getHeader("content-type"), "application/json; charset=utf-8");
+  assert.equal(descriptorResponse.bodyText(), descriptor);
+
+  const componentResponse = await requestAsset(componentPath);
+  assert.equal(componentResponse.getHeader("content-type"), "model/gltf-binary");
+  assert.deepEqual(Buffer.from(componentResponse.bodyText()), component);
 });

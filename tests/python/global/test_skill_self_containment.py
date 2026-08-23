@@ -420,7 +420,7 @@ class SkillSelfContainmentTest(unittest.TestCase):
             (package / "__init__.py").write_text("", encoding="utf-8")
             (voxblame / "__init__.py").write_text(
                 "PrepareReferenceError = Exception\n"
-                "measure_step = page_repair_targets = prepare_preview_scene = "
+                "measure_step = page_repair_targets = inspect_repair_frontier = prepare_preview_scene = "
                 "prepare_reference = publish_preview = publish_region_diff = "
                 "publish_prepare_failure = validate_preview_identity = "
                 "verify_step = lambda *args, **kwargs: None\n",

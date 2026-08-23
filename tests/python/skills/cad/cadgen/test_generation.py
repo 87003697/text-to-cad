@@ -1710,6 +1710,9 @@ class CadGenerationTests(unittest.TestCase):
         manifest = {
             "sourceClosureHash": closure.closure_hash,
             "sourceClosureFiles": list(closure.files),
+            "sourceClosureByteHashes": cad_source_hash.closure_byte_hashes(
+                closure.files, base=self.temp_root
+            ),
         }
 
         with mock.patch.object(cad_generation, "read_step_topology_manifest_from_glb", return_value=manifest):
@@ -1754,6 +1757,9 @@ class CadGenerationTests(unittest.TestCase):
         manifest = {
             "sourceClosureHash": closure.closure_hash,
             "sourceClosureFiles": list(closure.files),
+            "sourceClosureByteHashes": cad_source_hash.closure_byte_hashes(
+                closure.files, base=self.temp_root
+            ),
         }
         with mock.patch.object(cad_generation, "read_step_topology_manifest_from_glb", return_value=manifest):
             self.assertTrue(cad_generation._generated_assembly_glb_closure_current(spec))

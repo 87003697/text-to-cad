@@ -336,6 +336,20 @@ class RecordedPathHelpersTest(unittest.TestCase):
                     render.relative_to_directory(dependency, root),
                 )
 
+    def test_persisted_relative_paths_use_posix_separators_on_windows(self) -> None:
+        from cadgen import render
+
+        with tempfile.TemporaryDirectory(prefix="cadrel-") as temp_dir:
+            root = Path(temp_dir)
+            with (
+                unittest.mock.patch.object(os.path, "relpath", return_value=r"..\generated\robot.step"),
+                unittest.mock.patch.object(os, "sep", "\\"),
+            ):
+                self.assertEqual(
+                    "../generated/robot.step",
+                    render.relative_to_directory(root / "generated" / "robot.step", root / "sources"),
+                )
+
     def test_the_source_identity_carries_no_path_at_all(self) -> None:
         # The field that used to be here was cwd-relative, or absolute when the model was not
         # under the cwd, and was read by nothing -- one attribute away from values that ARE

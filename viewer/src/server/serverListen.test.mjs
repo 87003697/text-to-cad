@@ -121,9 +121,16 @@ test("buildViewerStartupUrl omits ?dir= when no directory was requested", () => 
 });
 
 test("buildViewerStartupUrl resolves relative directories against the startup directory", () => {
+  // ``buildViewerStartupUrl`` runs ``path.resolve`` on the requested
+  // directory (see viewer/src/server/serverListen.mjs). On POSIX
+  // ``path.resolve("/absolute/models") === "/absolute/models"``; on
+  // Windows the same call returns ``C:\\absolute\\models``. The URL is
+  // the native absolute path percent-encoded, not a hard-coded POSIX
+  // spelling, so the expected value uses the same ``path.resolve``
+  // call the production seam runs.
   assert.equal(
     buildViewerStartupUrl({ host, port: 4178, rootDir: "/absolute/models" }),
-    `http://127.0.0.1:4178/?dir=${encodeURIComponent("/absolute/models")}`,
+    `http://127.0.0.1:4178/?dir=${encodeURIComponent(path.resolve("/absolute/models"))}`,
   );
   assert.equal(
     buildViewerStartupUrl({ host, port: 4178, rootDir: "models", cwd: "/repo" }),
@@ -132,10 +139,13 @@ test("buildViewerStartupUrl resolves relative directories against the startup di
 });
 
 test("buildViewerStartupJson matches the documented handshake shape", () => {
+  // The startup handshake carries the same native-absolute encoded
+  // directory ``buildViewerStartupUrl`` produces; see that test above
+  // for the ``path.resolve`` rationale.
   assert.deepEqual(
     buildViewerStartupJson({ host, port: 4180, rootDir: "/absolute/models" }),
     {
-      url: `http://127.0.0.1:4180/?dir=${encodeURIComponent("/absolute/models")}`,
+      url: `http://127.0.0.1:4180/?dir=${encodeURIComponent(path.resolve("/absolute/models"))}`,
       host: "127.0.0.1",
       port: 4180,
       action: "start",

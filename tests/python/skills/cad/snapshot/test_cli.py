@@ -5,6 +5,7 @@ import base64
 import hashlib
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -1583,6 +1584,46 @@ class SnapshotCliTests(unittest.TestCase):
             for token in forbidden:
                 self.assertNotIn(token, text, f"{checked_file} should not reference {token}")
 
+    @unittest.skipUnless(
+        os.name == "nt",
+        "Windows-native CreateFileW / FILE_FLAG_OPEN_REPARSE_POINT path; runs on Windows CI",
+    )
+    def test_windows_load_capability_rejects_symlink_without_o_nofollow(self) -> None:
+        # Regression: Windows has no ``O_NOFOLLOW``. Before this fix,
+        # ``load_snapshot_runtime_capability`` on Windows opened via
+        # ``os.open`` which followed a symlink/reparse point through
+        # to its target -- an attacker who could plant a reparse point
+        # could substitute the file. The Windows branch now uses
+        # ``CreateFileW`` with ``FILE_FLAG_OPEN_REPARSE_POINT`` and
+        # rejects any handle whose attributes indicate a reparse
+        # point.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / "target.json"
+            capability = {
+                "schema": snapshot_core.RUNTIME_CAPABILITY_SCHEMA,
+                "jobId": "a" * 32,
+                "imageRef": "sha256:" + "b" * 64,
+                "mcpUrl": "http://127.0.0.1:31001/mcp",
+                "cadRenderUrl": "http://127.0.0.1:31002/cad/render/residual",
+                "cadRenderToken": "c" * 64,
+                "programs": {
+                    "residual": snapshot_core.EXPECTED_RESIDUAL_PROGRAM,
+                    "snapshot": snapshot_core.EXPECTED_SNAPSHOT_PROGRAM,
+                },
+            }
+            target.write_text(json.dumps(capability), encoding="ascii")
+            target.chmod(0o444)
+            link = root / "runtime.json"
+            try:
+                os.symlink(target, link)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(
+                    f"cannot create a symlink on this Windows host (SeCreateSymbolicLink required): {exc}"
+                )
+            with self.assertRaises(snapshot_core.SnapshotError):
+                snapshot_core.load_snapshot_runtime_capability(link)
+
     def test_snapshot_capability_ownership_and_mode_helpers_are_windows_safe(self) -> None:
         # Regression for the exact Windows CI ``os.getuid`` stack:
         # ``load_snapshot_runtime_capability`` used to call ``os.getuid``
@@ -1593,13 +1634,17 @@ class SnapshotCliTests(unittest.TestCase):
         # crashed with ``AttributeError`` before reporting the actual
         # capability status. Assert the helpers directly so a future
         # regression cannot re-introduce that call under any platform.
+        # ``mock.patch.object(os, "getuid", ...)`` uses ``create=True``
+        # because ``os.getuid`` does not exist on Windows; without it
+        # the patch raises ``AttributeError`` on Windows CI before the
+        # helper is invoked at all.
         posix_metadata = mock.Mock(st_uid=12345)
-        with mock.patch.object(snapshot_core.os, "getuid", return_value=12345):
+        with mock.patch.object(snapshot_core.os, "getuid", return_value=12345, create=True):
             self.assertTrue(
                 snapshot_core._capability_ownership_matches(posix_metadata)
             )
         stranger_metadata = mock.Mock(st_uid=99999)
-        with mock.patch.object(snapshot_core.os, "getuid", return_value=12345):
+        with mock.patch.object(snapshot_core.os, "getuid", return_value=12345, create=True):
             self.assertFalse(
                 snapshot_core._capability_ownership_matches(stranger_metadata)
             )

@@ -1,5 +1,6 @@
 export const STEP_TOPOLOGY_EXTENSION = "STEP_topology";
 export const STEP_TOPOLOGY_SCHEMA_VERSION = 2;
+export const STEP_PACKAGE_SCHEMA_VERSION = 3;
 export const STEP_TOPOLOGY_EDGE_CLASSIFICATION_ALGORITHM = "oc-brep-continuity-v1";
 export const STEP_TOPOLOGY_SURFACE_EDGE_ALGORITHM = "oc-polygon-on-triangulation-v1";
 export const STEP_TOPOLOGY_EDGE_ANGULAR_TOLERANCE_DEG = 2;

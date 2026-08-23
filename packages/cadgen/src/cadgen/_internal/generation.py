@@ -68,6 +68,7 @@ from cadgen.metadata import (
     resolve_mesh_settings,
 )
 from cadgen.render import (
+    relative_to_directory,
     relative_to_file,
     relative_to_cwd,
 )
@@ -75,6 +76,8 @@ from cadgen._internal.source_hash import (
     PythonSourceClosure,
     PythonSourceHash,
     capture_runtime_closure,
+    closure_byte_hashes,
+    closure_byte_hashes_match,
     closure_hash_matches,
     evict_first_party_modules,
     python_source_hash,
@@ -401,6 +404,7 @@ def _assembly_provenance_manifest(
     selector_options: SelectorOptions,
     step_path: Path,
     entry_kind: str,
+    entry_path: Path | None = None,
 ) -> dict[str, object]:
     """The index-manifest provenance an assembly package descriptor carries, mirroring
     the monolithic GLB's embedded STEP_topology index — but WITHOUT the expensive
@@ -408,7 +412,6 @@ def _assembly_provenance_manifest(
     and the STEP hash, so the build freshness gates can read it from assembly.json
     exactly as they read the monolithic manifest.
     """
-    import os
     from datetime import datetime, timezone
 
     from cadgen._internal.glb_topology import step_topology_capabilities
@@ -423,12 +426,25 @@ def _assembly_provenance_manifest(
     }
     if isinstance(getattr(selector_options, "mesh_resolution", None), dict):
         mesh["resolution"] = selector_options.mesh_resolution
+    # ``stepPath`` is recorded relative to the ENTRY's directory (the
+    # ``.py`` generator's parent for generated models, the STEP's own
+    # directory for imported STEPs). Same-directory same-stem builds
+    # yield the plain basename (e.g. ``robot.step``) as before;
+    # explicit non-same-stem builds (``sources/assembly.py`` ->
+    # ``generated/robot.step``) yield the traversal-carrying form
+    # (``../generated/robot.step``) so a downstream reader with the
+    # entry location can uniquely recover the STEP output location.
+    entry_dir = (
+        entry_path.parent
+        if entry_path is not None
+        else step_path.parent
+    )
     minimal: dict[str, object] = {
         "sourceKind": source_kind,
         "capabilities": step_topology_capabilities(selector_options.edge_visibility_classes),
         "edgeRendering": {"visibilityClasses": list(selector_options.edge_visibility_classes)},
         "mesh": mesh,
-        "stepPath": os.path.relpath(step_path, step_path.parent),
+        "stepPath": relative_to_directory(step_path, entry_dir),
     }
     source_path = str(getattr(scene, "source_path", "") or "")
     if source_path:
@@ -445,6 +461,9 @@ def _assembly_provenance_manifest(
         if closure_hash and closure_files:
             minimal["sourceClosureHash"] = closure_hash
             minimal["sourceClosureFiles"] = list(closure_files)
+            byte_hashes = closure_byte_hashes(closure_files, base=step_path.parent)
+            if byte_hashes:
+                minimal["sourceClosureByteHashes"] = byte_hashes
         minimal["generatedAt"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
     step_hash = (
         step_file_hash(step_path)
@@ -565,15 +584,29 @@ def _generate_part_outputs(
     # descriptor. There is no monolithic GLB and no file-vs-dir split.
     source_compound = getattr(scene, "source_compound", None)
     single_component = spec.kind != "assembly"
-    package_provenance = _assembly_provenance_manifest(
-        scene, selector_options=selector_options, step_path=spec.step_path, entry_kind=spec.kind
-    )
 
     def component_package_job() -> dict[str, object]:
         # Lazy import: component_package imports from this module, so a top-level
         # import would cycle.
         from cadgen._internal.component_package import build_package_from_compound
         from cadgen._internal.legacy_artifacts import prune_legacy_artifacts
+
+        # Provenance is built HERE, not before ``_run_artifact_jobs``, so a
+        # preceding ``--step-export`` job that just wrote ``spec.step_path``
+        # is visible to ``_assembly_provenance_manifest``. Otherwise the
+        # descriptor would record no ``stepHash`` for generator mode --
+        # even though the STEP file now exists -- and the viewer's
+        # descriptor-driven freshness gate could accept a stale package
+        # after a source edit. ``_run_artifact_jobs`` schedules the STEP
+        # export before this job (see ``jobs.append`` order), so by the
+        # time this closure runs the STEP file is on disk.
+        package_provenance = _assembly_provenance_manifest(
+            scene,
+            selector_options=selector_options,
+            step_path=spec.step_path,
+            entry_kind=spec.kind,
+            entry_path=spec.entry_path,
+        )
 
         shape = source_compound
         if shape is None:
@@ -924,7 +957,14 @@ def _manifest_source_closure_unchanged(manifest: Mapping[str, object], base: Pat
     recorded_files = manifest.get("sourceClosureFiles")
     if not recorded_hash or not isinstance(recorded_files, list) or not recorded_files:
         return False
-    return closure_hash_matches(recorded_hash, recorded_files, base=base)
+    return (
+        closure_hash_matches(recorded_hash, recorded_files, base=base)
+        and closure_byte_hashes_match(
+            manifest.get("sourceClosureByteHashes"),
+            recorded_files,
+            base=base,
+        )
+    )
 
 
 def _assembly_is_current(spec: EntrySpec) -> bool:

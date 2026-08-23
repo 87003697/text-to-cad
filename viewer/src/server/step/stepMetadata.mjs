@@ -1,10 +1,20 @@
 import fs from "node:fs";
 
-export const TEXT_TO_CAD_GENERATOR = "cadpy";
-export const TEXT_TO_CAD_GENERATOR_PROPERTY = "cadpy:generator";
-export const TEXT_TO_CAD_ENTRY_KIND_PROPERTY = "cadpy:entryKind";
-export const TEXT_TO_CAD_SOURCE_PATH_PROPERTY = "cadpy:sourcePath";
-export const TEXT_TO_CAD_SOURCE_HASH_PROPERTY = "cadpy:sourceHash";
+// The Python STEP-export code was renamed from ``cadpy`` to ``cadgen`` (see
+// packages/cadgen/README.md and the DESCRIPTIVE_REPRESENTATION_ITEM writer
+// at packages/cadgen/src/cadgen/_internal/step_metadata.py). Accept both
+// property prefixes so a STEP file written by the current cadgen or an
+// older cadpy still resolves to the same metadata fields.
+export const TEXT_TO_CAD_GENERATOR = "cadgen";
+export const TEXT_TO_CAD_GENERATOR_PROPERTY = "cadgen:generator";
+export const TEXT_TO_CAD_ENTRY_KIND_PROPERTY = "cadgen:entryKind";
+export const TEXT_TO_CAD_SOURCE_PATH_PROPERTY = "cadgen:sourcePath";
+export const TEXT_TO_CAD_SOURCE_HASH_PROPERTY = "cadgen:sourceHash";
+const _LEGACY_CADPY_GENERATOR_PROPERTY = "cadpy:generator";
+const _LEGACY_CADPY_ENTRY_KIND_PROPERTY = "cadpy:entryKind";
+const _LEGACY_CADPY_ENTRY_KIND_PROPERTY_SNAKE = "cadpy:entry_kind";
+const _LEGACY_CADPY_SOURCE_PATH_PROPERTY = "cadpy:sourcePath";
+const _LEGACY_CADPY_SOURCE_HASH_PROPERTY = "cadpy:sourceHash";
 
 const STEP_STRING_PATTERN = "'(?:''|[^'])*'";
 
@@ -55,7 +65,11 @@ export function readTextToCadStepMetadataText(stepText) {
       propertyName === TEXT_TO_CAD_ENTRY_KIND_PROPERTY ||
       propertyName === TEXT_TO_CAD_SOURCE_PATH_PROPERTY ||
       propertyName === TEXT_TO_CAD_SOURCE_HASH_PROPERTY ||
-      propertyName === "cadpy:entry_kind"
+      propertyName === _LEGACY_CADPY_GENERATOR_PROPERTY ||
+      propertyName === _LEGACY_CADPY_ENTRY_KIND_PROPERTY ||
+      propertyName === _LEGACY_CADPY_ENTRY_KIND_PROPERTY_SNAKE ||
+      propertyName === _LEGACY_CADPY_SOURCE_PATH_PROPERTY ||
+      propertyName === _LEGACY_CADPY_SOURCE_HASH_PROPERTY
     ) {
       propertyDefinitions.set(`#${match[1]}`, propertyName);
     }
@@ -73,19 +87,29 @@ export function readTextToCadStepMetadataText(stepText) {
     if (!item) {
       continue;
     }
-    if (propertyName === TEXT_TO_CAD_GENERATOR_PROPERTY) {
+    if (
+      propertyName === TEXT_TO_CAD_GENERATOR_PROPERTY ||
+      propertyName === _LEGACY_CADPY_GENERATOR_PROPERTY
+    ) {
       metadata.generator = item.value;
     } else if (
       propertyName === TEXT_TO_CAD_ENTRY_KIND_PROPERTY ||
-      propertyName === "cadpy:entry_kind"
+      propertyName === _LEGACY_CADPY_ENTRY_KIND_PROPERTY ||
+      propertyName === _LEGACY_CADPY_ENTRY_KIND_PROPERTY_SNAKE
     ) {
       const entryKind = normalizeTextToCadEntryKind(item.value);
       if (entryKind) {
         metadata.entryKind = entryKind;
       }
-    } else if (propertyName === TEXT_TO_CAD_SOURCE_HASH_PROPERTY) {
+    } else if (
+      propertyName === TEXT_TO_CAD_SOURCE_HASH_PROPERTY ||
+      propertyName === _LEGACY_CADPY_SOURCE_HASH_PROPERTY
+    ) {
       metadata.sourceHash = item.value;
-    } else if (propertyName === TEXT_TO_CAD_SOURCE_PATH_PROPERTY) {
+    } else if (
+      propertyName === TEXT_TO_CAD_SOURCE_PATH_PROPERTY ||
+      propertyName === _LEGACY_CADPY_SOURCE_PATH_PROPERTY
+    ) {
       metadata.sourcePath = item.value;
     }
   }
