@@ -48,7 +48,7 @@ _PILOT_GROUP = re.compile(r"^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$")
 _DIAGNOSTIC_PREFIXES = ("pilot-runner:", "warning:")
 _DIAGNOSTIC_MAX_BYTES = 256 * 1024
 _DIAGNOSTIC_MAX_LINES = 12
-_DIAGNOSTIC_MAX_LINE_BYTES = 160
+_PUBLIC_LINE_MAX_BYTES = 160
 _TRACEBACK_HEADER = "Traceback (most recent call last):"
 _TRACEBACK_FILE = re.compile(
     r'^\s*File\s+"[^"]+",\s+line\s+([0-9]+),\s+in\s+([A-Za-z0-9_<>]+)\s*$'
@@ -78,10 +78,12 @@ def _validate_pilot_group(group: str) -> str:
     return group
 
 
-def _sanitize_diagnostic_line(line: str) -> str:
+def _sanitize_public_line(line: str) -> str:
     redacted = _SECRET_HEADLINE.sub("<redacted>", line)
     redacted = _ABSOLUTE_PATH.sub("<path>", redacted)
-    return redacted[:_DIAGNOSTIC_MAX_LINE_BYTES]
+    return redacted.encode("utf-8")[:_PUBLIC_LINE_MAX_BYTES].decode(
+        "utf-8", "ignore"
+    )
 
 
 def _normalize_traceback_line(line: str) -> str | None:
@@ -137,11 +139,11 @@ def _runner_diagnostics(handle: str) -> tuple[str, int, list[str]]:
     selected = []
     for line in text.splitlines():
         if line.startswith(_DIAGNOSTIC_PREFIXES):
-            selected.append(_sanitize_diagnostic_line(line))
+            selected.append(_sanitize_public_line(line))
             continue
         normalized = _normalize_traceback_line(line)
         if normalized is not None:
-            selected.append(_sanitize_diagnostic_line(normalized))
+            selected.append(_sanitize_public_line(normalized))
     diagnostics = selected[-_DIAGNOSTIC_MAX_LINES:]
     if diagnostics:
         status = "ready"
@@ -156,14 +158,13 @@ def diagnose_job(
     handle: str,
     *,
     state_root: Path | None = None,
-    stale_after: float = DEFAULT_STALE_AFTER,
 ) -> dict[str, Any]:
     """Return bounded, redacted runner diagnostics for one failed pilot."""
 
     state = load_state(_root(state_root), handle)
     if state["state"] != "failed":
         raise ProtocolError("diagnose requires a failed pilot")
-    result = public_state(state, stale_after)
+    result = public_state(state, DEFAULT_STALE_AFTER)
     status, byte_count, diagnostics = _runner_diagnostics(handle)
     result["diagnostic_status"] = status
     result["diagnostic_bytes"] = byte_count
@@ -637,9 +638,7 @@ def _observe_pilot(state: dict[str, Any]) -> dict[str, Any]:
         )
         headline = completed.stdout.strip()
         if completed.returncode == 0 and headline:
-            headline = _SECRET_HEADLINE.sub("<redacted>", headline)
-            headline = _ABSOLUTE_PATH.sub("<path>", headline)
-            result["last_checkpoint"] = headline[:160]
+            result["last_checkpoint"] = _sanitize_public_line(headline)
     except (OSError, subprocess.SubprocessError):
         pass
     return result

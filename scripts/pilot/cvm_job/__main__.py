@@ -44,7 +44,6 @@ def _parser() -> argparse.ArgumentParser:
 
     diagnose = subparsers.add_parser("diagnose")
     diagnose.add_argument("handle")
-    diagnose.add_argument("--stale-after", type=float, default=DEFAULT_STALE_AFTER)
 
     wait = subparsers.add_parser("wait")
     wait.add_argument("handle")
@@ -89,7 +88,6 @@ def main(argv: list[str] | None = None) -> int:
             result = diagnose_job(
                 args.handle,
                 state_root=root,
-                stale_after=args.stale_after,
             )
             status = 1
         else:

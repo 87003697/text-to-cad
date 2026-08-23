@@ -495,6 +495,47 @@ class CvmJobTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertFalse(payload["ok"])
 
+    def test_diagnose_cli_has_no_staleness_configuration(self) -> None:
+        result = subprocess.run(
+            [sys.executable, "-m", "scripts.pilot.cvm_job", "diagnose", "--help"],
+            cwd=Path(__file__).resolve().parents[3],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("--stale-after", result.stdout)
+
+    def test_checkpoint_reuses_public_line_sanitizer(self) -> None:
+        headline = f"step: /root/private api_key=secret {'界' * 200}\n"
+        completed = subprocess.CompletedProcess(
+            args=["git"],
+            returncode=0,
+            stdout=headline,
+        )
+        state = {"exp_dir": "outputs/group/exp"}
+        with (
+            mock.patch.object(
+                runtime.tap_observer,
+                "observe_exp",
+                return_value={"tap": {"availability": "ready"}},
+            ),
+            mock.patch.object(runtime.subprocess, "run", return_value=completed),
+        ):
+            result = runtime._observe_pilot(state)
+
+        checkpoint = result["last_checkpoint"]
+        self.assertLessEqual(
+            len(checkpoint.encode("utf-8")),
+            runtime._PUBLIC_LINE_MAX_BYTES,
+        )
+        self.assertIn("<path>", checkpoint)
+        self.assertIn("<redacted>", checkpoint)
+        self.assertNotIn("/root/private", checkpoint)
+        self.assertNotIn("secret", checkpoint)
+
     def test_failed_job_diagnose_returns_only_redacted_runner_lines(self) -> None:
         handle = self.submit()
         protocol.transition(self.state_root, handle, "running")
@@ -572,6 +613,33 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(result["diagnostics"], [])
         self.assertNotIn("private prompt", json.dumps(result))
 
+    def test_failed_job_diagnose_limits_multibyte_lines_by_utf8_bytes(self) -> None:
+        handle = self.submit()
+        protocol.transition(self.state_root, handle, "running")
+        protocol.transition(self.state_root, handle, "failed")
+        parsed = protocol.parse_handle(handle)
+        stderr = (
+            self.repo_root
+            / "outputs"
+            / parsed["group"]
+            / parsed["exp"]
+            / "run"
+            / "stderr.log"
+        )
+        stderr.parent.mkdir(parents=True)
+        stderr.write_text(f"warning: {'界' * 200}\n", encoding="utf-8")
+
+        result = runtime.diagnose_job(handle, state_root=self.state_root)
+
+        self.assertEqual(result["diagnostic_status"], "ready")
+        self.assertEqual(len(result["diagnostics"]), 1)
+        diagnostic = result["diagnostics"][0]
+        self.assertLessEqual(
+            len(diagnostic.encode("utf-8")),
+            runtime._PUBLIC_LINE_MAX_BYTES,
+        )
+        self.assertEqual(diagnostic.encode("utf-8").decode("utf-8"), diagnostic)
+
     def test_failed_job_diagnose_normalizes_traceback_without_message_or_source(
         self,
     ) -> None:
@@ -614,7 +682,7 @@ class CvmJobTests(unittest.TestCase):
         )
         self.assertTrue(
             all(
-                len(line) <= runtime._DIAGNOSTIC_MAX_LINE_BYTES
+                len(line.encode("utf-8")) <= runtime._PUBLIC_LINE_MAX_BYTES
                 for line in result["diagnostics"]
             )
         )
