@@ -572,6 +572,60 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(result["diagnostics"], [])
         self.assertNotIn("private prompt", json.dumps(result))
 
+    def test_failed_job_diagnose_normalizes_traceback_without_message_or_source(
+        self,
+    ) -> None:
+        handle = self.submit()
+        protocol.transition(self.state_root, handle, "running")
+        protocol.transition(self.state_root, handle, "failed")
+        parsed = protocol.parse_handle(handle)
+        stderr = (
+            self.repo_root
+            / "outputs"
+            / parsed["group"]
+            / parsed["exp"]
+            / "run"
+            / "stderr.log"
+        )
+        stderr.parent.mkdir(parents=True)
+        long_exception = f"{'A' * 200}Error"
+        stderr.write_text(
+            "Traceback (most recent call last):\n"
+            '  File "/root/private/runner.py", line 41, in main\n'
+            "    private_source_call(secret_value)\n"
+            "ModuleNotFoundError: private-module-name\n"
+            '  File "/root/private/runner.py", line 42, in '
+            "api_key=synthetic-secret-value\n"
+            f"{long_exception}: hidden\n",
+            encoding="utf-8",
+        )
+
+        result = runtime.diagnose_job(handle, state_root=self.state_root)
+
+        self.assertEqual(result["diagnostic_status"], "ready")
+        self.assertEqual(
+            result["diagnostics"],
+            [
+                "Traceback (most recent call last):",
+                "File <path>, line 41, in main",
+                "ModuleNotFoundError",
+                "<redacted>",
+            ],
+        )
+        self.assertTrue(
+            all(
+                len(line) <= runtime._DIAGNOSTIC_MAX_LINE_BYTES
+                for line in result["diagnostics"]
+            )
+        )
+        rendered = json.dumps(result)
+        self.assertNotIn("private_source_call", rendered)
+        self.assertNotIn("secret_value", rendered)
+        self.assertNotIn("private-module-name", rendered)
+        self.assertNotIn("synthetic-secret-value", rendered)
+        self.assertNotIn(long_exception, rendered)
+        self.assertNotIn("/root/private", rendered)
+
     def test_failed_job_diagnose_binds_opened_directories_across_symlink_swap(
         self,
     ) -> None:

@@ -49,6 +49,13 @@ _DIAGNOSTIC_PREFIXES = ("pilot-runner:", "warning:")
 _DIAGNOSTIC_MAX_BYTES = 256 * 1024
 _DIAGNOSTIC_MAX_LINES = 12
 _DIAGNOSTIC_MAX_LINE_BYTES = 160
+_TRACEBACK_HEADER = "Traceback (most recent call last):"
+_TRACEBACK_FILE = re.compile(
+    r'^\s*File\s+"[^"]+",\s+line\s+([0-9]+),\s+in\s+([A-Za-z0-9_<>]+)\s*$'
+)
+_EXCEPTION_TYPE = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception))(?:\s*:.*)?$"
+)
 
 
 def _root(state_root: Path | None) -> Path:
@@ -75,6 +82,18 @@ def _sanitize_diagnostic_line(line: str) -> str:
     redacted = _SECRET_HEADLINE.sub("<redacted>", line)
     redacted = _ABSOLUTE_PATH.sub("<path>", redacted)
     return redacted[:_DIAGNOSTIC_MAX_LINE_BYTES]
+
+
+def _normalize_traceback_line(line: str) -> str | None:
+    if line == _TRACEBACK_HEADER:
+        return line
+    frame = _TRACEBACK_FILE.fullmatch(line)
+    if frame:
+        return f"File <path>, line {frame.group(1)}, in {frame.group(2)}"
+    exception = _EXCEPTION_TYPE.fullmatch(line)
+    if exception:
+        return exception.group(1)
+    return None
 
 
 def _runner_diagnostics(handle: str) -> tuple[str, int, list[str]]:
@@ -115,11 +134,14 @@ def _runner_diagnostics(handle: str) -> tuple[str, int, list[str]]:
     text = payload.decode("utf-8", "replace")
     if offset:
         _, _, text = text.partition("\n")
-    selected = [
-        _sanitize_diagnostic_line(line)
-        for line in text.splitlines()
-        if line.startswith(_DIAGNOSTIC_PREFIXES)
-    ]
+    selected = []
+    for line in text.splitlines():
+        if line.startswith(_DIAGNOSTIC_PREFIXES):
+            selected.append(_sanitize_diagnostic_line(line))
+            continue
+        normalized = _normalize_traceback_line(line)
+        if normalized is not None:
+            selected.append(_sanitize_diagnostic_line(normalized))
     diagnostics = selected[-_DIAGNOSTIC_MAX_LINES:]
     if diagnostics:
         status = "ready"
