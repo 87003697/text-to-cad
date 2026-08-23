@@ -28,6 +28,7 @@ import re
 import secrets
 import shutil
 import stat
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -935,6 +936,26 @@ def read_receipt(path: Path) -> DeploymentReceipt:
     return _receipt_from_document(document)
 
 
+def _load_smoke_installed_plugin() -> Any:
+    """Load release manifest helpers in package and direct-script modes."""
+
+    try:
+        from scripts.release import smoke_installed_plugin as smoke
+    except ModuleNotFoundError as exc:
+        if exc.name != "scripts":
+            raise
+        repo_root = os.fspath(Path(__file__).resolve().parents[2])
+        inserted = repo_root not in sys.path
+        if inserted:
+            sys.path.insert(0, repo_root)
+        try:
+            from scripts.release import smoke_installed_plugin as smoke
+        finally:
+            if inserted:
+                sys.path.remove(repo_root)
+    return smoke
+
+
 def _compute_manifest_digest(
     root: Path,
     *,
@@ -948,7 +969,7 @@ def _compute_manifest_digest(
     byte" attack the P1-2 review flagged.
     """
 
-    from scripts.release import smoke_installed_plugin as smoke
+    smoke = _load_smoke_installed_plugin()
 
     try:
         manifest = smoke.compute_manifest(Path(root), private_paths=private_paths)
@@ -958,7 +979,7 @@ def _compute_manifest_digest(
 
 
 def _recompute_critical_runtimes(installed_path: Path) -> list[dict[str, str]]:
-    from scripts.release import smoke_installed_plugin as smoke
+    smoke = _load_smoke_installed_plugin()
 
     try:
         return smoke.assert_critical_runtimes(Path(installed_path))

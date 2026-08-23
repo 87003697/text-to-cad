@@ -56,6 +56,64 @@ import scripts.pilot.plugin_deployment
         )
         self.assertEqual(0, completed.returncode, completed.stderr)
 
+    def test_direct_pilot_import_can_recompute_manifest(self) -> None:
+        script = """
+import tempfile
+import sys
+from pathlib import Path
+
+import plugin_deployment
+
+with tempfile.TemporaryDirectory() as root_text:
+    root = Path(root_text)
+    repo_root = str(Path(plugin_deployment.__file__).resolve().parents[2])
+    assert repo_root not in sys.path
+    (root / "fixture.txt").write_text("fixture", encoding="utf-8")
+    digest, count = plugin_deployment._compute_manifest_digest(root)
+    assert len(digest) == 64
+    assert count == 1
+    assert repo_root not in sys.path
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT / "scripts/pilot",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+
+    def test_direct_pilot_import_preserves_nested_module_error(self) -> None:
+        script = """
+import builtins
+
+import plugin_deployment
+
+real_import = builtins.__import__
+def guarded_import(name, *args, **kwargs):
+    if name == "scripts.release":
+        raise ModuleNotFoundError(
+            "No module named 'nested_dependency'", name="nested_dependency"
+        )
+    return real_import(name, *args, **kwargs)
+
+builtins.__import__ = guarded_import
+try:
+    plugin_deployment._load_smoke_installed_plugin()
+except ModuleNotFoundError as exc:
+    assert exc.name == "nested_dependency"
+else:
+    raise AssertionError("nested dependency error was swallowed")
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT / "scripts/pilot",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+
 
 def _digest(value: str) -> str:
     import hashlib
