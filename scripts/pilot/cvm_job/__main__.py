@@ -10,7 +10,9 @@ from .runtime import (
     DEFAULT_STALE_AFTER,
     DEFAULT_WAIT_TIMEOUT,
     status_job,
+    submit_provider_free_installed_plugin,
     submit_pilot,
+    supervise_provider_free_installed_plugin,
     supervise_pilot,
     wait_job,
 )
@@ -25,8 +27,15 @@ def _parser() -> argparse.ArgumentParser:
     pilot.add_argument("object")
     pilot.add_argument("group")
 
+    provider_free = subparsers.add_parser("submit-provider-free")
+    provider_free.add_argument("scenario", choices=("installed-plugin",))
+    provider_free.add_argument("group")
+
     supervise_one = subparsers.add_parser("supervise-pilot")
     supervise_one.add_argument("--job", required=True)
+
+    supervise_provider_free = subparsers.add_parser("supervise-provider-free")
+    supervise_provider_free.add_argument("--job", required=True)
 
     status = subparsers.add_parser("status")
     status.add_argument("handle")
@@ -51,8 +60,18 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "submit-pilot":
             result = submit_pilot(args.object, args.group, state_root=root)
             status = 0 if result["state"] != "failed" else 1
+        elif args.command == "submit-provider-free":
+            result = submit_provider_free_installed_plugin(
+                args.scenario, args.group, state_root=root
+            )
+            status = 0 if result["state"] != "failed" else 1
         elif args.command == "supervise-pilot":
             result = supervise_pilot(args.job, state_root=root)
+            status = 0 if result["state"] == "succeeded" else 1
+        elif args.command == "supervise-provider-free":
+            result = supervise_provider_free_installed_plugin(
+                args.job, state_root=root
+            )
             status = 0 if result["state"] == "succeeded" else 1
         elif args.command == "status":
             result = status_job(

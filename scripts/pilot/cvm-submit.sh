@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5]" >&2
+    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] | provider-free installed-plugin <group>" >&2
     exit 2
 }
 
@@ -53,6 +53,13 @@ case "$mode" in
         else
             remote_command="$submit_command"
         fi
+        ;;
+    provider-free)
+        [[ $# -eq 3 && "$2" == "installed-plugin" ]] || usage
+        scenario="$2"
+        group="$3"
+        safe_group "$group" || usage
+        remote_command="python3 -m scripts.pilot.cvm_job submit-provider-free '$scenario' '$group'"
         ;;
     *) usage ;;
 esac

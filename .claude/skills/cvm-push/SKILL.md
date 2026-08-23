@@ -126,6 +126,13 @@ blocking wait；terminal completion 会提前 hand back。精确的更早 deadli
   scripts/pilot/cvm-monitor.sh --wait <returned-handle>
   ```
 
+  To verify installed-plugin discovery without a provider or model inference,
+  use the closed provider-free mode after a successful authority publication:
+  ```
+  scripts/pilot/cvm-submit.sh provider-free installed-plugin <same-group>
+  scripts/pilot/cvm-monitor.sh --wait <returned-handle>
+  ```
+
 Do not replace submit or monitoring with raw SSH. For strict deployment proof,
 compare SHA-256 for `scripts/pilot/cvm_job/`, `toys4k-pilot.sh`, and
 `toys4k-batch.sh`; remote Git HEAD is not deployment identity.

@@ -13,6 +13,18 @@ Run exactly one local wrapper command:
 scripts/pilot/cvm-submit.sh pilot <object> <group>
 ```
 
+For the narrow provider-free installed-plugin discovery check, run:
+
+```bash
+scripts/pilot/cvm-submit.sh provider-free installed-plugin <group>
+```
+
+That mode performs no model inference and accepts no token, model, arbitrary
+command, or scenario argument. It binds the current plugin-authority receipt
+at submit time, revalidates it in the detached supervisor, and runs only
+`codex plugin list --marketplace text-to-cad --json` in a network-unshared
+sandbox against job-private authority snapshots.
+
 `group` must use the repository pilot layout:
 `YYYYMMDD-HHMMSS-<lowercase-kebab-slug>`, normally the same group passed to
 `snapshot-batch.sh`.

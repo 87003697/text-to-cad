@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Sequence
 
+from scripts.pilot import plugin_deployment
+
 from . import tap_observer
 from .protocol import (
     ProtocolError,
@@ -84,8 +86,12 @@ def _pilot_record(
     group: str,
     exp: str,
     root: Path,
+    *,
+    token_slot_from_environment: bool = True,
 ) -> dict[str, Any]:
-    raw_token_slot = os.environ.get("VENUS_TOKEN_SLOT")
+    raw_token_slot = (
+        os.environ.get("VENUS_TOKEN_SLOT") if token_slot_from_environment else None
+    )
     token_slot: int | None = None
     if raw_token_slot is not None:
         if not raw_token_slot.isdigit() or int(raw_token_slot) > 49:
@@ -202,6 +208,67 @@ def submit_pilot(
         "-m",
         "scripts.pilot.cvm_job",
         "supervise-pilot",
+        "--job",
+        record["job"],
+    ]
+    try:
+        detach(record["job"], command, root)
+    except Exception as error:
+        transition(
+            root,
+            record["job"],
+            "failed",
+            failure_reason=f"supervisor launch failed: {type(error).__name__}",
+        )
+    state = load_state(root, record["job"])
+    return {"job": state["job"], "state": state["state"], "kind": "pilot"}
+
+
+def submit_provider_free_installed_plugin(
+    scenario: str,
+    group: str,
+    *,
+    state_root: Path | None = None,
+    host_home: Path | None = None,
+    detach: Callable[[str, Sequence[str], Path], int] = _detach,
+) -> dict[str, Any]:
+    """Bind the current plugin authority and launch one offline discovery job."""
+
+    from scripts.pilot import provider_free_installed_plugin as provider_free
+
+    if scenario != provider_free.SCENARIO:
+        raise ProtocolError(f"unsupported provider-free scenario: {scenario!r}")
+    root = _root(state_root)
+    group = _validate_pilot_group(group)
+    try:
+        receipt = plugin_deployment.resolve_current_authority(
+            host_home or Path.home()
+        )
+    except plugin_deployment.PluginAuthorityError as exc:
+        raise ProtocolError(f"cannot bind plugin authority: {exc}") from exc
+    with _allocation_lock(root, group):
+        exp = _allocate_exp(scenario, group, root)
+        record = _pilot_record(
+            scenario,
+            group,
+            exp,
+            root,
+            token_slot_from_environment=False,
+        )
+        record.update(
+            {
+                "provider_free": True,
+                "scenario": scenario,
+                "token_slot": None,
+                "plugin_authority": provider_free.authority_identity(receipt),
+            }
+        )
+        publish_state(root, record)
+    command = [
+        sys.executable,
+        "-m",
+        "scripts.pilot.cvm_job",
+        "supervise-provider-free",
         "--job",
         record["job"],
     ]
@@ -377,6 +444,75 @@ def _supervise_pilot_locked(
                 failure_reason=f"pilot supervisor error: {type(error).__name__}",
             )
         return load_state(root, handle)
+
+
+def supervise_provider_free_installed_plugin(
+    handle: str,
+    *,
+    state_root: Path | None = None,
+    host_home: Path | None = None,
+    interval: float = DEFAULT_HEARTBEAT_INTERVAL,
+    command: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Supervise one provider-free runner and validate its bound evidence."""
+
+    from scripts.pilot import provider_free_installed_plugin as provider_free
+
+    root = _root(state_root)
+    parse_handle(handle)
+    with _supervisor_lock(root, handle):
+        record = load_state(root, handle)
+        if record["state"] != "submitted":
+            raise ProtocolError(f"pilot cannot start from {record['state']}")
+        process_status: int | None = None
+        try:
+            provider_free.assert_current_authority(record, host_home or Path.home())
+            transition(root, handle, "running", supervisor_pid=os.getpid())
+            runner_command = list(command) if command is not None else [
+                sys.executable,
+                "-m",
+                "scripts.pilot.provider_free_installed_plugin",
+                "--job",
+                handle,
+                "--state-root",
+                os.fspath(root),
+            ]
+            process_status, _ = _run_with_heartbeat(
+                root,
+                handle,
+                runner_command,
+                interval=interval,
+                env=provider_free.build_runner_env(os.environ),
+            )
+            evidence_path, manifest_path = provider_free.validate_artifacts(
+                REPO_ROOT, record
+            )
+            updates = {
+                "runner_final_status": 0,
+                "artifact_manifest": _relative(manifest_path),
+                "provider_free_evidence": _relative(evidence_path),
+                "process_exit_code": process_status,
+            }
+            if process_status == 0:
+                return transition(root, handle, "succeeded", **updates)
+            return transition(
+                root,
+                handle,
+                "failed",
+                failure_reason=f"provider-free runner exited {process_status}",
+                **updates,
+            )
+        except Exception as error:
+            current = load_state(root, handle)
+            if current["state"] in {"submitted", "running"}:
+                transition(
+                    root,
+                    handle,
+                    "failed",
+                    process_exit_code=process_status,
+                    failure_reason=f"provider-free supervisor error: {error}",
+                )
+            return load_state(root, handle)
 
 
 def _observe_pilot(state: dict[str, Any]) -> dict[str, Any]:
