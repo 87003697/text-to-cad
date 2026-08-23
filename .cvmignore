@@ -2,6 +2,7 @@
 .git/
 .git
 .venv/
+node_modules
 node_modules/
 outputs
 __pycache__/

@@ -78,7 +78,7 @@ def create_repo(root: Path) -> Path:
     (repo / "viewer").mkdir()
     (repo / "AGENTS.md").write_text("test\n", encoding="utf-8")
     (repo / ".cvmignore").write_text(
-        ".git/\n.git\nnode_modules/\n/viewer/\n.cvm-jobs/\n",
+        ".git/\n.git\nnode_modules\nnode_modules/\n/viewer/\n.cvm-jobs/\n",
         encoding="utf-8",
     )
     (repo / "viewer/package-lock.json").write_text(
@@ -851,6 +851,9 @@ class TransferAndVerifyTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("x\n", encoding="utf-8")
             nested_viewer.chmod(0o700)
+            linked_modules = source / "packages/cadjs/node_modules"
+            linked_modules.parent.mkdir(parents=True)
+            os.symlink("../../viewer/node_modules", linked_modules)
             workflow = cvm_push.CvmPush(
                 cvm_push.CommandRunner(),
                 repo_root=repo,
@@ -865,6 +868,10 @@ class TransferAndVerifyTests(unittest.TestCase):
             )
 
             self.assertFalse((target / "viewer").exists())
+            self.assertFalse((transfer_tree / "packages/cadjs/node_modules").exists())
+            self.assertFalse(
+                (transfer_tree / "packages/cadjs/node_modules").is_symlink()
+            )
             self.assertTrue(
                 (target / "skills/cad-viewer/scripts/viewer/nested.txt").is_file()
             )
@@ -1268,6 +1275,14 @@ class InstallPluginAuthorityTests(unittest.TestCase):
 
 
 class StageExclusionTests(unittest.TestCase):
+    def test_shipped_cvmignore_excludes_node_modules_symlink_leaves(self) -> None:
+        rules = {
+            line.strip()
+            for line in (REPO_ROOT / ".cvmignore").read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        self.assertIn("node_modules", rules)
+
     def test_stage_source_excludes_the_local_authority_root(self) -> None:
         # The CVM-published plugin authority must never rsync back into
         # Mac -> CVM staging: it is CVM-owned deployment state.
