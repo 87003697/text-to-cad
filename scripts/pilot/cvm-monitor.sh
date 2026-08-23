@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 --once <handle> | --wait [--until terminal|terminal-or-stale] [--timeout SEC] <handle>" >&2
+    echo "Usage: $0 --once <handle> | --diagnose <handle> | --wait [--until terminal|terminal-or-stale] [--timeout SEC] <handle>" >&2
     exit 2
 }
 
@@ -17,6 +17,11 @@ case "$mode" in
         [[ $# -eq 1 ]] || usage
         handle="$1"
         remote_command="python3 -m scripts.pilot.cvm_job status '$handle'"
+        ;;
+    --diagnose)
+        [[ $# -eq 1 ]] || usage
+        handle="$1"
+        remote_command="python3 -m scripts.pilot.cvm_job diagnose '$handle'"
         ;;
     --wait)
         while [[ $# -gt 1 ]]; do

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -40,10 +41,14 @@ DEFAULT_STALE_AFTER = 60.0
 DEFAULT_WAIT_TIMEOUT = 12 * 60 * 60.0
 PROCESS_TERMINATION_GRACE = 5.0
 _SECRET_HEADLINE = re.compile(
-    r"(?i)(token|secret|password|api[_-]?key)\s*[=:]\s*\S+|[A-Za-z0-9_=-]{32,}"
+    r"(?i)(token|secret|password|api(?:[\s_-]+)?key)\s*[=:]\s*\S+|[A-Za-z0-9_=-]{32,}"
 )
-_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9_.-])/(?:[^\s/]+/)+[^\s]*")
+_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9_.-])/(?:[^\s/]+(?:/[^\s/]*)*)")
 _PILOT_GROUP = re.compile(r"^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$")
+_DIAGNOSTIC_PREFIXES = ("pilot-runner:", "warning:")
+_DIAGNOSTIC_MAX_BYTES = 256 * 1024
+_DIAGNOSTIC_MAX_LINES = 12
+_DIAGNOSTIC_MAX_LINE_BYTES = 160
 
 
 def _root(state_root: Path | None) -> Path:
@@ -64,6 +69,72 @@ def _validate_pilot_group(group: str) -> str:
             f"invalid pilot group: {group!r}; expected YYYYMMDD-HHMMSS-<slug>"
         )
     return group
+
+
+def _sanitize_diagnostic_line(line: str) -> str:
+    redacted = _SECRET_HEADLINE.sub("<redacted>", line)
+    redacted = _ABSOLUTE_PATH.sub("<path>", redacted)
+    return redacted[:_DIAGNOSTIC_MAX_LINE_BYTES]
+
+
+def _runner_diagnostics(handle: str) -> list[str]:
+    parsed = parse_handle(handle)
+    outputs = REPO_ROOT / "outputs"
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    directories: list[int] = []
+    descriptor: int | None = None
+    try:
+        directories.append(os.open(outputs, directory_flags))
+        for component in (parsed["group"], parsed["exp"], "run"):
+            directories.append(
+                os.open(component, directory_flags, dir_fd=directories[-1])
+            )
+        descriptor = os.open("stderr.log", file_flags, dir_fd=directories[-1])
+    except OSError:
+        return []
+    finally:
+        for directory in reversed(directories):
+            os.close(directory)
+    assert descriptor is not None
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            return []
+        offset = max(0, metadata.st_size - _DIAGNOSTIC_MAX_BYTES)
+        os.lseek(descriptor, offset, os.SEEK_SET)
+        payload = os.read(descriptor, _DIAGNOSTIC_MAX_BYTES)
+    finally:
+        os.close(descriptor)
+    text = payload.decode("utf-8", "replace")
+    if offset:
+        _, _, text = text.partition("\n")
+    selected = [
+        _sanitize_diagnostic_line(line)
+        for line in text.splitlines()
+        if line.startswith(_DIAGNOSTIC_PREFIXES)
+    ]
+    return selected[-_DIAGNOSTIC_MAX_LINES:]
+
+
+def diagnose_job(
+    handle: str,
+    *,
+    state_root: Path | None = None,
+    stale_after: float = DEFAULT_STALE_AFTER,
+) -> dict[str, Any]:
+    """Return bounded, redacted runner diagnostics for one failed pilot."""
+
+    state = load_state(_root(state_root), handle)
+    if state["state"] != "failed":
+        raise ProtocolError("diagnose requires a failed pilot")
+    result = public_state(state, stale_after)
+    result["diagnostics"] = _runner_diagnostics(handle)
+    return result
 
 
 def _allocate_exp(object_name: str, group: str, root: Path) -> str:

@@ -495,6 +495,101 @@ class CvmJobTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertFalse(payload["ok"])
 
+    def test_failed_job_diagnose_returns_only_redacted_runner_lines(self) -> None:
+        handle = self.submit()
+        protocol.transition(self.state_root, handle, "running")
+        protocol.transition(
+            self.state_root,
+            handle,
+            "failed",
+            process_exit_code=1,
+            failure_reason="artifact manifest missing",
+        )
+        parsed = protocol.parse_handle(handle)
+        stderr = (
+            self.repo_root
+            / "outputs"
+            / parsed["group"]
+            / parsed["exp"]
+            / "run"
+            / "stderr.log"
+        )
+        stderr.parent.mkdir(parents=True)
+        stderr.write_text(
+            "prompt body must stay private\n"
+            "pilot-runner: cannot open /root/private/source.json\n"
+            "warning: api_key=super-secret-value\n"
+            "warning: api key: short-secret\n"
+            "pilot-runner: cannot inspect /tmp or /etc\n",
+            encoding="utf-8",
+        )
+
+        result = runtime.diagnose_job(handle, state_root=self.state_root)
+
+        self.assertEqual(result["job"], handle)
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(
+            result["diagnostics"],
+            [
+                "pilot-runner: cannot open <path>",
+                "warning: <redacted>",
+                "warning: <redacted>",
+                "pilot-runner: cannot inspect <path> or <path>",
+            ],
+        )
+        rendered = json.dumps(result)
+        self.assertNotIn("prompt body", rendered)
+        self.assertNotIn("super-secret-value", rendered)
+        self.assertNotIn("short-secret", rendered)
+        self.assertNotIn("/root/private", rendered)
+        self.assertNotIn("/tmp", rendered)
+        self.assertNotIn("/etc", rendered)
+
+    def test_failed_job_diagnose_binds_opened_directories_across_symlink_swap(
+        self,
+    ) -> None:
+        handle = self.submit()
+        protocol.transition(self.state_root, handle, "running")
+        protocol.transition(self.state_root, handle, "failed")
+        parsed = protocol.parse_handle(handle)
+        exp = self.repo_root / "outputs" / parsed["group"] / parsed["exp"]
+        run = exp / "run"
+        run.mkdir(parents=True)
+        (run / "stderr.log").write_text(
+            "pilot-runner: original diagnostic\n",
+            encoding="utf-8",
+        )
+        outside = self.workspace / "outside"
+        (outside / "run").mkdir(parents=True)
+        (outside / "run" / "stderr.log").write_text(
+            "pilot-runner: external diagnostic\n",
+            encoding="utf-8",
+        )
+        detached = exp.with_name(f"{exp.name}-detached")
+        real_open = os.open
+        swapped = False
+
+        def racing_open(path, flags, mode=0o777, *, dir_fd=None):
+            nonlocal swapped
+            path_text = os.fspath(path)
+            if not swapped and (
+                path_text == os.fspath(run / "stderr.log")
+                or (path_text == "run" and dir_fd is not None)
+            ):
+                exp.rename(detached)
+                exp.symlink_to(outside, target_is_directory=True)
+                swapped = True
+            return real_open(path, flags, mode, dir_fd=dir_fd)
+
+        with mock.patch.object(runtime.os, "open", side_effect=racing_open):
+            result = runtime.diagnose_job(handle, state_root=self.state_root)
+
+        self.assertTrue(swapped)
+        self.assertEqual(
+            result["diagnostics"],
+            ["pilot-runner: original diagnostic"],
+        )
+
     def test_cli_status_and_wait_preserve_terminal_exit_codes(self) -> None:
         env = {**os.environ, "CVM_JOB_STATE_ROOT": os.fspath(self.state_root)}
         cwd = Path(__file__).resolve().parents[3]
@@ -554,6 +649,7 @@ class CvmJobTests(unittest.TestCase):
         self.assertIn("ServerAliveCountMax=6", monitor)
         self.assertIn("scripts.pilot.cvm_job status", monitor)
         self.assertIn("scripts.pilot.cvm_job wait", monitor)
+        self.assertIn("scripts.pilot.cvm_job diagnose", monitor)
         for forbidden in (" ps ", " stat ", " find ", "git log"):
             self.assertNotIn(forbidden, monitor)
 

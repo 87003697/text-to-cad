@@ -9,6 +9,7 @@ from .protocol import ProtocolError, default_state_root
 from .runtime import (
     DEFAULT_STALE_AFTER,
     DEFAULT_WAIT_TIMEOUT,
+    diagnose_job,
     status_job,
     submit_provider_free_installed_plugin,
     submit_pilot,
@@ -40,6 +41,10 @@ def _parser() -> argparse.ArgumentParser:
     status = subparsers.add_parser("status")
     status.add_argument("handle")
     status.add_argument("--stale-after", type=float, default=DEFAULT_STALE_AFTER)
+
+    diagnose = subparsers.add_parser("diagnose")
+    diagnose.add_argument("handle")
+    diagnose.add_argument("--stale-after", type=float, default=DEFAULT_STALE_AFTER)
 
     wait = subparsers.add_parser("wait")
     wait.add_argument("handle")
@@ -80,6 +85,13 @@ def main(argv: list[str] | None = None) -> int:
                 stale_after=args.stale_after,
             )
             status = 0
+        elif args.command == "diagnose":
+            result = diagnose_job(
+                args.handle,
+                state_root=root,
+                stale_after=args.stale_after,
+            )
+            status = 1
         else:
             result, status = wait_job(
                 args.handle,
