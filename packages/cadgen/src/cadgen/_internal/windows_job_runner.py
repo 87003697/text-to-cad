@@ -1,8 +1,8 @@
 """Run one Python command in a kill-on-close Windows Job Object.
 
 The viewer launches this wrapper on Windows and owns only the wrapper
-process handle.  If the viewer terminates the wrapper at its deadline,
-Windows closes the job handle and atomically terminates the command and
+process handle. Closing the Job Object after the command exits, or when
+the viewer terminates the wrapper at its deadline, atomically terminates
 all descendants, including children that inherited stdout/stderr.
 """
 
@@ -16,8 +16,6 @@ from typing import Sequence
 _CREATE_SUSPENDED = 0x00000004
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
-_INFINITE = 0xFFFFFFFF
-_WAIT_FAILED = 0xFFFFFFFF
 
 
 def _run_in_job(argv: Sequence[str]) -> int:
@@ -74,8 +72,6 @@ def _run_in_job(argv: Sequence[str]) -> int:
     kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-    kernel32.WaitForSingleObject.restype = wintypes.DWORD
-    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
     ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
     ntdll.NtResumeProcess.restype = ctypes.c_long
     ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
@@ -104,19 +100,11 @@ def _run_in_job(argv: Sequence[str]) -> int:
         status = ntdll.NtResumeProcess(int(process._handle))
         if status != 0:
             raise OSError(f"NtResumeProcess failed with NTSTATUS 0x{status & 0xFFFFFFFF:08X}")
-        return_code = process.wait()
-        # A Job Object becomes signaled only when its active process
-        # count reaches zero. Keep the wrapper (and therefore the job
-        # handle) alive while descendants remain. If Node reaches its
-        # deadline and kills this wrapper, KILL_ON_JOB_CLOSE atomically
-        # terminates those descendants and releases inherited pipes.
-        wait_result = kernel32.WaitForSingleObject(job, _INFINITE)
-        if wait_result == _WAIT_FAILED:
-            raise ctypes.WinError(ctypes.get_last_error())
-        return return_code
+        return process.wait()
     finally:
-        # KILL_ON_JOB_CLOSE is the fail-closed path for exceptions and
-        # for external termination of this wrapper by the Node parent.
+        # Closing the job after the direct command exits terminates any
+        # descendants it left behind and releases inherited pipes. It is
+        # also the fail-closed path for exceptions or external termination.
         kernel32.CloseHandle(job)
 
 

@@ -34,7 +34,7 @@ test("Python STEP artifact module uses the current cadgen name", () => {
   );
 });
 
-test("Python STEP artifact timeout kills descendants that inherit output pipes", async (t) => {
+test("Python STEP artifact cleanup kills descendants that inherit output pipes", async (t) => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "cad-step-timeout-"));
   t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
   const generatorPath = path.join(tmp, "model.py");
@@ -51,6 +51,7 @@ test("Python STEP artifact timeout kills descendants that inherit output pipes",
     "",
   ].join("\n"));
 
+  const timeoutMs = process.platform === "win32" ? 30_000 : 8_000;
   const started = Date.now();
   const result = await ensurePythonStepTopologyArtifact({
     repoRoot: tmp,
@@ -58,11 +59,18 @@ test("Python STEP artifact timeout kills descendants that inherit output pipes",
     sourcePath: generatorPath,
     force: true,
     writeStepAfterArtifact: true,
-    timeoutMs: 8_000,
+    timeoutMs,
   });
-  assert.equal(result.ok, false);
-  assert.match(result.error, /timed out/);
-  assert.ok(Date.now() - started < 14_000, "timeout must remain bounded when a descendant owns the pipes");
+  if (process.platform === "win32") {
+    assert.equal(result.ok, true, result.error);
+  } else {
+    assert.equal(result.ok, false);
+    assert.match(result.error, /timed out/);
+  }
+  assert.ok(
+    Date.now() - started < timeoutMs + 6_000,
+    "cleanup must remain bounded when a descendant owns the pipes",
+  );
   assert.equal(fs.existsSync(pidPath), true, "fixture descendant must have started");
   const descendantPid = Number(fs.readFileSync(pidPath, "utf8"));
   let alive = true;
