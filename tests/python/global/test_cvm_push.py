@@ -1155,7 +1155,12 @@ class InstallPluginAuthorityTests(unittest.TestCase):
         # from untrusted paths) and pass the fixed HOME-rooted authority root plus
         # the encoded provenance blob.
         self.assertIn("cvm_install_plugin.py", command)
-        self.assertIn("--transferred-source", command)
+        self.assertIn('remote_root="$HOME/text-to-cad"', command)
+        self.assertIn(
+            'python3 "$remote_root/scripts/pilot/cvm_install_plugin.py"', command
+        )
+        self.assertIn('--transferred-source "$remote_root"', command)
+        self.assertNotIn("~/text-to-cad/scripts/pilot/cvm_install_plugin.py", command)
         self.assertIn("--codex-home-root", command)
         self.assertIn("--provenance-b64", command)
 

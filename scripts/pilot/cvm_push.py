@@ -48,7 +48,7 @@ TRANSFER_TREE_DIRNAME = ".cvm-transfer-tree"
 
 # Remote helper that produces the installed-plugin authority receipt after
 # verify_remote has already confirmed the transferred bytes are healthy.
-REMOTE_INSTALL_HELPER = f"{REMOTE_ROOT}/scripts/pilot/cvm_install_plugin.py"
+REMOTE_INSTALL_HELPER_REL = "scripts/pilot/cvm_install_plugin.py"
 REMOTE_AUTHORITY_HOME_ROOT = "$HOME"
 INSTALL_EXIT_CODE = 7
 VERIFY_EXIT_CODE = 8
@@ -1008,9 +1008,10 @@ class CvmPush:
         # base64url provenance blob shell-quoted below.
         command = (
             "set -eu\n"
-            f"python3 {shlex.quote(REMOTE_INSTALL_HELPER)} "
-            f"--transferred-source {shlex.quote(REMOTE_ROOT)} "
-            f"--codex-home-root {REMOTE_AUTHORITY_HOME_ROOT} "
+            'remote_root="$HOME/text-to-cad"\n'
+            f'python3 "$remote_root/{REMOTE_INSTALL_HELPER_REL}" '
+            '--transferred-source "$remote_root" '
+            f'--codex-home-root "{REMOTE_AUTHORITY_HOME_ROOT}" '
             f"--provenance-b64 {shlex.quote(encoded)}"
         )
         result = self.runner.remote(
