@@ -31,6 +31,7 @@ EXPECTED_SKILLS = {
     "bambu-labs",
     "cad",
     "cad-viewer",
+    "dfam-check",
     "dxf",
     "gcode",
     "mesh-compare",
