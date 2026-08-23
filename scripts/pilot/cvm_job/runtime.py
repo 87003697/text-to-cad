@@ -77,7 +77,7 @@ def _sanitize_diagnostic_line(line: str) -> str:
     return redacted[:_DIAGNOSTIC_MAX_LINE_BYTES]
 
 
-def _runner_diagnostics(handle: str) -> list[str]:
+def _runner_diagnostics(handle: str) -> tuple[str, int, list[str]]:
     parsed = parse_handle(handle)
     outputs = REPO_ROOT / "outputs"
     directory_flags = (
@@ -95,8 +95,10 @@ def _runner_diagnostics(handle: str) -> list[str]:
                 os.open(component, directory_flags, dir_fd=directories[-1])
             )
         descriptor = os.open("stderr.log", file_flags, dir_fd=directories[-1])
+    except FileNotFoundError:
+        return "missing", 0, []
     except OSError:
-        return []
+        return "unavailable", 0, []
     finally:
         for directory in reversed(directories):
             os.close(directory)
@@ -104,7 +106,7 @@ def _runner_diagnostics(handle: str) -> list[str]:
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
-            return []
+            return "unavailable", 0, []
         offset = max(0, metadata.st_size - _DIAGNOSTIC_MAX_BYTES)
         os.lseek(descriptor, offset, os.SEEK_SET)
         payload = os.read(descriptor, _DIAGNOSTIC_MAX_BYTES)
@@ -118,7 +120,14 @@ def _runner_diagnostics(handle: str) -> list[str]:
         for line in text.splitlines()
         if line.startswith(_DIAGNOSTIC_PREFIXES)
     ]
-    return selected[-_DIAGNOSTIC_MAX_LINES:]
+    diagnostics = selected[-_DIAGNOSTIC_MAX_LINES:]
+    if diagnostics:
+        status = "ready"
+    elif metadata.st_size:
+        status = "filtered"
+    else:
+        status = "empty"
+    return status, metadata.st_size, diagnostics
 
 
 def diagnose_job(
@@ -133,7 +142,10 @@ def diagnose_job(
     if state["state"] != "failed":
         raise ProtocolError("diagnose requires a failed pilot")
     result = public_state(state, stale_after)
-    result["diagnostics"] = _runner_diagnostics(handle)
+    status, byte_count, diagnostics = _runner_diagnostics(handle)
+    result["diagnostic_status"] = status
+    result["diagnostic_bytes"] = byte_count
+    result["diagnostics"] = diagnostics
     return result
 
 

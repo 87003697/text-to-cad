@@ -528,6 +528,8 @@ class CvmJobTests(unittest.TestCase):
 
         self.assertEqual(result["job"], handle)
         self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["diagnostic_status"], "ready")
+        self.assertGreater(result["diagnostic_bytes"], 0)
         self.assertEqual(
             result["diagnostics"],
             [
@@ -544,6 +546,31 @@ class CvmJobTests(unittest.TestCase):
         self.assertNotIn("/root/private", rendered)
         self.assertNotIn("/tmp", rendered)
         self.assertNotIn("/etc", rendered)
+
+    def test_failed_job_diagnose_reports_filtered_stderr_without_exposing_it(
+        self,
+    ) -> None:
+        handle = self.submit()
+        protocol.transition(self.state_root, handle, "running")
+        protocol.transition(self.state_root, handle, "failed")
+        parsed = protocol.parse_handle(handle)
+        stderr = (
+            self.repo_root
+            / "outputs"
+            / parsed["group"]
+            / parsed["exp"]
+            / "run"
+            / "stderr.log"
+        )
+        stderr.parent.mkdir(parents=True)
+        stderr.write_text("private prompt material\n", encoding="utf-8")
+
+        result = runtime.diagnose_job(handle, state_root=self.state_root)
+
+        self.assertEqual(result["diagnostic_status"], "filtered")
+        self.assertEqual(result["diagnostic_bytes"], 24)
+        self.assertEqual(result["diagnostics"], [])
+        self.assertNotIn("private prompt", json.dumps(result))
 
     def test_failed_job_diagnose_binds_opened_directories_across_symlink_swap(
         self,
