@@ -518,6 +518,30 @@ class PublishLockReentryRegressionTests(unittest.TestCase):
                     )
             self.assertEqual(pointer.read_bytes(), previous_pointer)
 
+    def test_codex_cli_temporary_directory_is_not_published(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            transferred, stage_digest = _build_transferred_source(root)
+            codex_home_root = root / "home"
+            codex_home_root.mkdir()
+            with _PublishHarness(transferred, codex_home_root):
+                base_install = _pkg_smoke.install_plugin_isolated
+
+                def install_with_cli_tmp(*args, **kwargs):
+                    result = base_install(*args, **kwargs)
+                    cli_tmp = Path(args[1]) / "tmp" / "arg0"
+                    cli_tmp.mkdir(parents=True, mode=0o700)
+                    return result
+
+                _pkg_smoke.install_plugin_isolated = install_with_cli_tmp  # type: ignore[assignment]
+                receipt = self._publish_with_timeout(
+                    transferred,
+                    codex_home_root,
+                    stage_digest,
+                )
+
+            self.assertFalse((Path(receipt["codex_home"]) / "tmp").exists())
+
     def test_different_transfers_that_finalize_identically_keep_own_provenance(
         self,
     ) -> None:

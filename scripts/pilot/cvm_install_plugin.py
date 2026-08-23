@@ -187,6 +187,24 @@ def _rmtree_force(path: Path) -> None:
     shutil.rmtree(path, onerror=onerror)
 
 
+def _remove_codex_cli_tmp(codex_home: Path) -> None:
+    """Drop task-local CLI scratch state before sealing CODEX_HOME."""
+
+    cli_tmp = codex_home / "tmp"
+    try:
+        metadata = os.lstat(cli_tmp)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise InstallError(f"cannot inspect Codex CLI tmp: {exc}", stage="verify") from exc
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        raise InstallError("Codex CLI tmp is not a physical directory", stage="verify")
+    try:
+        shutil.rmtree(cli_tmp)
+    except OSError as exc:
+        raise InstallError(f"cannot remove Codex CLI tmp: {exc}", stage="verify") from exc
+
+
 def _decode_provenance(encoded: str | None) -> dict[str, Any]:
     """Decode the caller-provided base64url canonical JSON provenance.
 
@@ -365,6 +383,8 @@ def _publish_under_lock(
             )
         except smoke.SmokeError as exc:
             raise InstallError(str(exc), stage="install") from exc
+
+        _remove_codex_cli_tmp(codex_home_final)
 
         staged_installed_path = Path(install_result["installed_path"]).resolve()
         try:
