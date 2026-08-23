@@ -544,6 +544,39 @@ def write_stage_manifest(stage: Path) -> str:
     return digest
 
 
+def normalize_stage_permissions(stage: Path) -> None:
+    """Normalize a physical transfer tree to portable safe publish modes."""
+
+    stage_path = Path(stage)
+    root_metadata = os.lstat(stage_path)
+    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(root_metadata.st_mode):
+        raise PluginAuthorityError(
+            f"stage root is not a physical directory: {stage_path}"
+        )
+    os.chmod(stage_path, 0o755)
+    for dirpath, dirnames, filenames in os.walk(stage_path, followlinks=False):
+        for name in dirnames:
+            path = Path(dirpath) / name
+            metadata = os.lstat(path)
+            if stat.S_ISLNK(metadata.st_mode):
+                continue
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise PluginAuthorityError(
+                    f"stage contains an unsupported filesystem object: {path}"
+                )
+            os.chmod(path, 0o755)
+        for name in filenames:
+            path = Path(dirpath) / name
+            metadata = os.lstat(path)
+            if stat.S_ISLNK(metadata.st_mode):
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise PluginAuthorityError(
+                    f"stage contains an unsupported filesystem object: {path}"
+                )
+            os.chmod(path, 0o755 if metadata.st_mode & 0o111 else 0o644)
+
+
 def _open_directory_no_follow(path: Path, *, label: str) -> int:
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
     try:

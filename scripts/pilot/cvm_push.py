@@ -799,6 +799,7 @@ class CvmPush:
                 4,
             )
         try:
+            _plugin_deployment.normalize_stage_permissions(transfer_tree)
             digest = _plugin_deployment.write_stage_manifest(transfer_tree)
         except _plugin_deployment.PluginAuthorityError as exc:
             raise PushError(f"CVM transfer tree is not manifestable: {exc}", 4) from exc

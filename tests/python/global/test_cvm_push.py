@@ -5,6 +5,7 @@ import io
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -849,6 +850,7 @@ class TransferAndVerifyTests(unittest.TestCase):
             for path in (root_viewer, nested_viewer):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("x\n", encoding="utf-8")
+            nested_viewer.chmod(0o700)
             workflow = cvm_push.CvmPush(
                 cvm_push.CommandRunner(),
                 repo_root=repo,
@@ -865,6 +867,14 @@ class TransferAndVerifyTests(unittest.TestCase):
             self.assertFalse((target / "viewer").exists())
             self.assertTrue(
                 (target / "skills/cad-viewer/scripts/viewer/nested.txt").is_file()
+            )
+            self.assertEqual(
+                stat.S_IMODE(
+                    (transfer_tree / "skills/cad-viewer/scripts/viewer/nested.txt")
+                    .stat()
+                    .st_mode
+                ),
+                0o755,
             )
 
     def test_exact_transfer_tree_rejects_any_unmanifested_symlink(self) -> None:
