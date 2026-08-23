@@ -21,7 +21,6 @@ must fail closed rather than fall back to legacy ``~/.codex/skills`` symlinks.
 from __future__ import annotations
 
 import errno
-import fcntl
 import hashlib
 import json
 import os
@@ -33,6 +32,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
+
+try:
+    import fcntl
+except ModuleNotFoundError:  # Windows can audit authority but cannot publish it.
+    fcntl = None  # type: ignore[assignment]
 
 
 AUTHORITY_ROOT_NAME = ".text-to-cad-codex"
@@ -256,6 +260,9 @@ def _reject_preexisting_symlink(path: Path, *, label: str) -> None:
 @contextmanager
 def publication_lock(path: Path):
     """Lock one physical regular file without following a replaced symlink."""
+
+    if fcntl is None:
+        raise PluginAuthorityError("plugin authority publication requires POSIX fcntl")
 
     flags = os.O_CREAT | os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW
     try:

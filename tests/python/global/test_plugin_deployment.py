@@ -15,6 +15,7 @@ import json
 import multiprocessing
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -30,6 +31,30 @@ plugin_deployment = authority_fixtures.plugin_deployment
 smoke = authority_fixtures.smoke
 PluginAuthorityError = plugin_deployment.PluginAuthorityError
 DeploymentReceipt = plugin_deployment.DeploymentReceipt
+
+
+class PortableImportTests(unittest.TestCase):
+    def test_module_import_does_not_require_posix_fcntl(self) -> None:
+        script = """
+import builtins
+
+real_import = builtins.__import__
+def portable_import(name, *args, **kwargs):
+    if name == "fcntl":
+        raise ModuleNotFoundError("No module named 'fcntl'", name="fcntl")
+    return real_import(name, *args, **kwargs)
+
+builtins.__import__ = portable_import
+import scripts.pilot.plugin_deployment
+"""
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
 
 
 def _digest(value: str) -> str:

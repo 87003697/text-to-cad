@@ -1179,9 +1179,9 @@ test("scanCadFile preserves authoritative ambiguity for an existing STEP whose m
     "ambiguous_package_binding",
     `full scan must fail closed on the ambiguous mapping, got ${JSON.stringify(fullEntry.artifact)}`,
   );
-  const authoritative = new Set((fullCatalog.authoritativeAmbiguousStepPaths || []).map((p) => path.resolve(p)));
+  const authoritative = new Set((fullCatalog.authoritativeAmbiguousStepPaths || []).map(filesystemPathIdentity));
   assert.ok(
-    authoritative.has(path.resolve(stepPath)),
+    authoritative.has(filesystemPathIdentity(stepPath)),
     "scanCadDirectory must expose the authoritative ambiguous STEP path so targeted refreshes can preserve it",
   );
 
