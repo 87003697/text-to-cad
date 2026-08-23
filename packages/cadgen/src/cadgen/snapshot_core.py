@@ -814,18 +814,141 @@ def _capability_mode_is_read_only(metadata: os.stat_result) -> bool:
     return mode == 0o444
 
 
+def _windows_open_capability_no_reparse(capability_path: Path | str) -> int:
+    """Open ``capability_path`` on Windows without following reparse points.
+
+    Duplicated here from ``meshshot.runtime_client`` because
+    ``AGENTS.md`` forbids sibling packages under ``packages/`` from
+    importing each other -- cadgen and meshshot are separate skill
+    runtimes and each must remain self-contained. The implementation
+    is identical: ``CreateFileW`` with ``FILE_FLAG_OPEN_REPARSE_POINT``
+    opens the reparse object itself, we reject any handle whose
+    attributes indicate a reparse point, and the same handle is
+    handed to the CRT via ``msvcrt.open_osfhandle`` so ``os.fstat``/
+    ``os.read``/``os.close`` operate on it. The reparse check and the
+    read happen on the same kernel handle -- no name is looked up
+    twice -- so a TOCTOU replacement cannot substitute a different
+    file between the check and the read.
+    """
+
+    if os.name != "nt":  # pragma: no cover - dispatched from load_snapshot_runtime_capability
+        raise SnapshotError("Windows capability open requires Windows")
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    _GENERIC_READ = 0x80000000
+    _FILE_SHARE_READ = 0x00000001
+    _OPEN_EXISTING = 3
+    _FILE_ATTRIBUTE_NORMAL = 0x00000080
+    _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+    _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    class _BY_HANDLE_FILE_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
+    kernel32.GetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_BY_HANDLE_FILE_INFORMATION),
+    ]
+
+    handle = kernel32.CreateFileW(
+        str(capability_path),
+        _GENERIC_READ,
+        _FILE_SHARE_READ,
+        None,
+        _OPEN_EXISTING,
+        _FILE_ATTRIBUTE_NORMAL | _FILE_FLAG_OPEN_REPARSE_POINT,
+        None,
+    )
+    if not handle or handle == _INVALID_HANDLE_VALUE:
+        code = ctypes.get_last_error()
+        if code in (2, 3):  # ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND
+            raise SnapshotError(
+                "Browser Runtime capability is required for CAD snapshot"
+            ) from ctypes.WinError(code)
+        raise SnapshotError(
+            "Browser Runtime capability is unavailable for CAD snapshot"
+        ) from ctypes.WinError(code)
+
+    try:
+        info = _BY_HANDLE_FILE_INFORMATION()
+        if not kernel32.GetFileInformationByHandle(handle, ctypes.byref(info)):
+            raise SnapshotError(
+                "Browser Runtime capability is unavailable for CAD snapshot"
+            ) from ctypes.WinError(ctypes.get_last_error())
+        if info.dwFileAttributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+            raise SnapshotError("Browser Runtime capability is replaceable")
+    except BaseException:
+        kernel32.CloseHandle(handle)
+        raise
+
+    try:
+        fd = msvcrt.open_osfhandle(int(handle), os.O_RDONLY)
+    except OSError as exc:
+        kernel32.CloseHandle(handle)
+        raise SnapshotError(
+            "Browser Runtime capability is unavailable for CAD snapshot"
+        ) from exc
+    return fd
+
+
 def load_snapshot_runtime_capability(
     path: Path = RUNTIME_CAPABILITY_PATH,
 ) -> dict[str, object]:
-    """Load the one immutable Browser Runtime capability; there is no local fallback."""
+    """Load the one immutable Browser Runtime capability; there is no local fallback.
 
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(path, flags)
-    except FileNotFoundError as exc:
-        raise SnapshotError("Browser Runtime capability is required for CAD snapshot") from exc
-    except OSError as exc:
-        raise SnapshotError("Browser Runtime capability is unavailable for CAD snapshot") from exc
+    POSIX opens with ``O_NOFOLLOW`` so a symlink at the capability
+    path yields ``ELOOP`` and fails closed. Windows does not expose
+    ``O_NOFOLLOW`` -- a plain ``os.open`` follows symlinks and
+    mount-point reparse points, which would let an attacker who can
+    plant a reparse point substitute the file. On Windows we open
+    via ``CreateFileW`` with ``FILE_FLAG_OPEN_REPARSE_POINT`` and
+    reject any handle whose attributes carry
+    ``FILE_ATTRIBUTE_REPARSE_POINT``; the reparse check and the read
+    happen on the same kernel handle so there is no check-then-open
+    TOCTOU race. The POSIX invariants (single ``st_nlink``,
+    caller-owned via ``st_uid``, exact 0o444 read-only, identity-
+    bound JSON schema) are unchanged.
+    """
+
+    if os.name == "nt":
+        descriptor = _windows_open_capability_no_reparse(path)
+    else:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags)
+        except FileNotFoundError as exc:
+            raise SnapshotError("Browser Runtime capability is required for CAD snapshot") from exc
+        except OSError as exc:
+            raise SnapshotError("Browser Runtime capability is unavailable for CAD snapshot") from exc
     try:
         metadata = os.fstat(descriptor)
         if (

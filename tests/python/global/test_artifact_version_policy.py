@@ -45,6 +45,17 @@ class TopologySchemaVersionMirrorTest(unittest.TestCase):
 
 
 class PackageVersionIsOneNumberPerFileTypeTest(unittest.TestCase):
+    def test_python_and_js_declare_the_same_step_package_version(self) -> None:
+        source = (ROOT / "packages/cadjs/src/common/stepTopology.mjs").read_text()
+        match = re.search(r"STEP_PACKAGE_SCHEMA_VERSION\s*=\s*(\d+)", source)
+        self.assertIsNotNone(match, "cadjs must declare STEP_PACKAGE_SCHEMA_VERSION")
+        self.assertEqual(
+            STEP_PACKAGE_VERSION,
+            int(match.group(1)),
+            "cadgen and cadjs disagree on STEP package schema; producer and viewer must "
+            "invalidate the same component packages",
+        )
+
     def test_the_step_cid_salt_is_the_package_version_itself(self) -> None:
         # Not merely equal to it: the same constant. A separate payload version is the
         # split this rule exists to prevent.

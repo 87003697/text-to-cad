@@ -115,6 +115,77 @@ class StepArtifactSkipTest(unittest.TestCase):
         self.assertFalse(rebuilt.get("skipped"), "an edited generator must rebuild")
         self.assertEqual(2, self._generator_runs())
 
+    def test_step_export_rebuilds_when_the_requested_step_is_missing(self):
+        step_path = self.root / "widget.step"
+        first = self._build("--step-export", str(step_path))
+        self.assertFalse(first.get("skipped"), "the first STEP export must build")
+        self.assertTrue(step_path.is_file(), "the first STEP export must create the STEP")
+        self.assertEqual(1, self._generator_runs())
+
+        step_path.unlink()
+        rebuilt = self._build("--step-export", str(step_path))
+
+        self.assertFalse(
+            rebuilt.get("skipped"),
+            "a current package must not hide a missing requested STEP export",
+        )
+        self.assertTrue(step_path.is_file(), "the cache-hit rebuild must restore the STEP")
+        self.assertEqual(
+            2,
+            self._generator_runs(),
+            "restoring STEP + package must use one fresh generator evaluation",
+        )
+
+    def test_step_export_rejects_a_different_logical_step_path(self):
+        proc = subprocess.run(
+            [
+                sys.executable, "-m", "cadgen.step_artifact_cli",
+                "--repo-root", str(self.root),
+                "--step", str(self.root / "widget.step"),
+                "--source-path", str(self.generator),
+                "--step-export", str(self.root / "other.step"),
+            ],
+            cwd=str(self.root),
+            env=_child_env(),
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("must match --step", proc.stderr)
+        self.assertEqual(0, self._generator_runs(), "path mismatch must fail before generation")
+
+    def test_viewer_build_rejects_a_source_closure_outside_repo_root(self):
+        with tempfile.TemporaryDirectory(prefix="cadskip-external-") as outside:
+            helper_dir = Path(outside)
+            (helper_dir / "outside_helper.py").write_text("SIZE = 3.0\n")
+            self.generator.write_text(
+                "from pathlib import Path\n"
+                "import sys\n"
+                f"sys.path.insert(0, {str(helper_dir)!r})\n"
+                "from outside_helper import SIZE\n"
+                "from build123d import Box\n\n"
+                "def gen_step():\n"
+                "    return Box(SIZE, 1, 1)\n"
+            )
+            proc = subprocess.run(
+                [
+                    sys.executable, "-m", "cadgen.step_artifact_cli",
+                    "--repo-root", str(self.root),
+                    "--step", str(self.root / "widget.step"),
+                    "--source-path", str(self.generator),
+                    "--step-export", str(self.root / "widget.step"),
+                ],
+                cwd=str(self.root),
+                env=_child_env(),
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("source closure", proc.stderr)
+        self.assertIn("repo root", proc.stderr)
+
     def test_a_queued_producer_finds_the_package_current_and_skips(self):
         """Two contenders on a COLD package must run gen_step() exactly once between them.
 

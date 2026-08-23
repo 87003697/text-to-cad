@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from io import BytesIO
 import json
+import os
 from pathlib import Path
 import struct
 import tempfile
@@ -225,13 +226,17 @@ class BrowserRuntimeClientTests(unittest.TestCase):
         # POSIX still requires the loaded file to be owned by the calling
         # user; the helper must round-trip ``os.getuid`` unchanged so the
         # original fail-closed contract in ``load_runtime_capability`` is
-        # preserved.
+        # preserved. ``mock.patch.object(os, "getuid", ...)`` uses
+        # ``create=True`` because ``os.getuid`` does not exist on Windows;
+        # without it the patch itself raises ``AttributeError`` before
+        # the fail-closed helper is invoked, which is precisely the
+        # cross-platform-portability regression we are guarding against.
         fake = mock.Mock()
         fake.st_uid = 12345
-        with mock.patch.object(runtime_client.os, "getuid", return_value=12345):
+        with mock.patch.object(runtime_client.os, "getuid", return_value=12345, create=True):
             self.assertTrue(runtime_client._capability_ownership_matches(fake))
         fake.st_uid = 99999
-        with mock.patch.object(runtime_client.os, "getuid", return_value=12345):
+        with mock.patch.object(runtime_client.os, "getuid", return_value=12345, create=True):
             self.assertFalse(runtime_client._capability_ownership_matches(fake))
 
     def test_capability_ownership_falls_back_when_getuid_is_absent(self) -> None:
@@ -248,6 +253,35 @@ class BrowserRuntimeClientTests(unittest.TestCase):
             self.assertTrue(runtime_client._capability_ownership_matches(fake))
         finally:
             runtime_client.os = original
+
+    @unittest.skipUnless(
+        os.name == "nt",
+        "Windows-native CreateFileW / FILE_FLAG_OPEN_REPARSE_POINT path; runs on Windows CI",
+    )
+    def test_windows_load_capability_rejects_symlink_without_o_nofollow(self) -> None:
+        # Regression: Windows has no ``O_NOFOLLOW``. Before this fix,
+        # ``load_runtime_capability`` on Windows opened via ``os.open``
+        # which followed a symlink/reparse point through to its target
+        # and returned that target's bytes -- an attacker who could
+        # plant a reparse point could substitute the file. The
+        # Windows branch now uses ``CreateFileW`` with
+        # ``FILE_FLAG_OPEN_REPARSE_POINT`` and rejects any handle
+        # whose attributes indicate a reparse point.
+        import tempfile as _tempfile
+        with _tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / "target.json"
+            target.write_text(json.dumps(_capability()), encoding="ascii")
+            target.chmod(0o444)
+            link = root / "runtime.json"
+            try:
+                os.symlink(target, link)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(
+                    f"cannot create a symlink on this Windows host (SeCreateSymbolicLink required): {exc}"
+                )
+            with self.assertRaisesRegex(MeshshotError, "capability"):
+                runtime_client.load_runtime_capability(link)
 
     def test_capability_mode_accepts_read_only_on_windows_and_posix(self) -> None:
         posix_ro = mock.Mock(st_mode=0o100444)

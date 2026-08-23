@@ -82,6 +82,12 @@ class RunBoundedCommandContractTests(unittest.TestCase):
                 timeout_seconds=5,
             )
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "kernel32 is available on Windows, so the Windows branch does not "
+        "fail closed at setup on the Windows CI runner; the real subtree "
+        "cancellation is covered by WindowsSubtreeTerminationTests below.",
+    )
     def test_windows_branch_fails_closed_when_kernel32_absent(self) -> None:
         # Regression: an earlier iteration of this file returned a
         # ``CompletedProcess`` from the Windows branch on POSIX by
@@ -113,6 +119,12 @@ class WindowsProcessTreeSetupTests(unittest.TestCase):
     def setUp(self) -> None:
         self.core = _load_workspace_core()
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "kernel32 is available on Windows so create() succeeds there; the "
+        "non-Windows fail-closed guarantee is only meaningful on POSIX hosts "
+        "where ``os.name != 'nt'``.",
+    )
     def test_create_raises_oserror_on_non_windows_host(self) -> None:
         with self.assertRaises(OSError):
             self.core._WindowsProcessTree.create()

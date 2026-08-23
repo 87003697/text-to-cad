@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { openAssetHandleUnderRoot } from "./safeAssetOpen.mjs";
+
 const STATIC_CONTENT_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
   [".html", "text/html; charset=utf-8"],
@@ -160,12 +162,74 @@ function sendBufferDownload(res, {
   res.end(bytes);
 }
 
-export function serveStaticFile(filePath, req, res, next, { contentType, headers = {} } = {}) {
-  fs.stat(filePath, (error, stats) => {
+export function serveStaticFile(filePath, req, res, next, { contentType, headers = {}, trustedRoot = null } = {}) {
+  // Capability-style serving: when ``trustedRoot`` is threaded through
+  // by the backend, open the file via the handle-based helper (see
+  // ``viewer/src/server/safeAssetOpen.mjs``). The helper walks every
+  // path segment, opens with ``O_NOFOLLOW`` where available, fstat-
+  // validates the returned handle, and re-lstat-validates the ancestor
+  // chain -- all BEFORE we accept the fd. We then stream from the
+  // *already-open handle*, never by pathname. This closes the
+  // check-vs-open race that ``fs.stat`` + ``fs.createReadStream(path)``
+  // leaves open.
+  //
+  // When no trusted root is threaded (legacy callers such as the
+  // static viewer bundle) we fall back to the lstat + O_NOFOLLOW
+  // pattern for defense in depth.
+  if (trustedRoot) {
+    let handle;
+    try {
+      handle = openAssetHandleUnderRoot(trustedRoot, filePath);
+    } catch (error) {
+      if (error && Number(error.statusCode) === 403) {
+        sendJson(res, 403, { error: "Forbidden" });
+        return;
+      }
+      next();
+      return;
+    }
+    if (res.destroyed) {
+      fs.closeSync(handle.fd);
+      return;
+    }
+    if (contentType) {
+      res.setHeader("content-type", contentType);
+    }
+    for (const [name, value] of Object.entries(headers)) {
+      if (value !== undefined && value !== null && value !== "") {
+        res.setHeader(name, value);
+      }
+    }
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("content-length", String(handle.size));
+    // ``fd`` is what we stream from -- Node's ``createReadStream``
+    // takes ownership and closes it when the stream ends.
+    const stream = fs.createReadStream(null, { fd: handle.fd, autoClose: true });
+    res.on("close", () => {
+      if (!res.writableEnded) {
+        stream.destroy();
+      }
+    });
+    stream.on("error", () => {
+      if (!res.headersSent) {
+        next();
+      } else {
+        res.destroy();
+      }
+    });
+    stream.pipe(res);
+    return;
+  }
+  // Legacy path (no trusted root). ``fs.lstat`` refuses to follow the
+  // link at the leaf, and on POSIX we open with ``O_NOFOLLOW`` so the
+  // kernel rejects a symlink at the final component even if it
+  // appeared between lstat and open. Ancestor swaps are NOT caught on
+  // this path.
+  fs.lstat(filePath, (lstatError, lstats) => {
     if (res.destroyed) {
       return;
     }
-    if (error || !stats.isFile()) {
+    if (lstatError || lstats.isSymbolicLink() || !lstats.isFile()) {
       next();
       return;
     }
@@ -178,8 +242,9 @@ export function serveStaticFile(filePath, req, res, next, { contentType, headers
       }
     }
     res.setHeader("cache-control", "no-store");
-    res.setHeader("content-length", String(stats.size));
-    const stream = fs.createReadStream(filePath);
+    res.setHeader("content-length", String(lstats.size));
+    const openFlags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+    const stream = fs.createReadStream(filePath, { flags: openFlags });
     res.on("close", () => {
       if (!res.writableEnded) {
         stream.destroy();
@@ -331,6 +396,9 @@ export function createCadViewerApiMiddleware({
 
         const access = await backend.resolveFileAssetAccess(request);
         if (access?.path) {
+          const resolvedRoot = typeof backend.resolveRequestRoot === "function"
+            ? backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef })
+            : null;
           serveStaticFile(access.path, req, res, () => {
             sendJson(res, 404, {
               error: "File asset not found",
@@ -340,6 +408,7 @@ export function createCadViewerApiMiddleware({
             headers: {
               "content-disposition": attachmentContentDisposition(access.filename || access.file || access.path),
             },
+            trustedRoot: resolvedRoot?.rootPath || null,
           });
           return;
         }
@@ -377,11 +446,12 @@ export function createCadViewerApiMiddleware({
           });
           return;
         }
+        const resolvedRootForAsset = typeof backend.resolveRequestRoot === "function" && (activeRootDir || activeFileRef)
+          ? backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef })
+          : null;
         const assetPath = backend.assetPathForFileRef(activeFileRef, {
           rootDir: activeRootDir,
-          ...(typeof backend.resolveRequestRoot === "function" && (activeRootDir || activeFileRef)
-            ? { resolvedRoot: backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef }) }
-            : {}),
+          ...(resolvedRootForAsset ? { resolvedRoot: resolvedRootForAsset } : {}),
         });
         if (!assetPath) {
           sendJson(res, 404, {
@@ -395,6 +465,7 @@ export function createCadViewerApiMiddleware({
           });
         }, {
           contentType: backend.contentTypeForPath?.(assetPath) || "application/octet-stream",
+          trustedRoot: resolvedRootForAsset?.rootPath || null,
         });
       } catch (error) {
         if (Number(error?.statusCode) === 403) {
@@ -539,15 +610,17 @@ export function createLocalAssetMiddleware({ backend, rootDir } = {}) {
       return;
     }
     let assetPath = null;
+    let resolvedRoot = null;
     try {
       const refererUrl = requestRefererUrl(req);
       const activeRootDir = requestRootDir(requestUrl) || requestRootDir(refererUrl) || rootDir || "";
       const activeFileRef = requestFileRef(requestUrl) || fallbackFileRef;
+      resolvedRoot = typeof backend.resolveRequestRoot === "function" && (activeRootDir || activeFileRef)
+        ? backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef })
+        : null;
       assetPath = backend.assetPathForFileRef(activeFileRef, {
         rootDir: activeRootDir,
-        ...(typeof backend.resolveRequestRoot === "function" && (activeRootDir || activeFileRef)
-          ? { resolvedRoot: backend.resolveRequestRoot({ rootDir: activeRootDir, fileRef: activeFileRef }) }
-          : {}),
+        ...(resolvedRoot ? { resolvedRoot } : {}),
       });
     } catch (error) {
       if (Number(error?.statusCode) === 403) {
@@ -562,12 +635,29 @@ export function createLocalAssetMiddleware({ backend, rootDir } = {}) {
       next();
       return;
     }
+    // Thread the resolved trusted root through so ``serveStaticFile``
+    // takes the capability-style handle path (safeAssetOpen). Without
+    // it, this production middleware would fall back to the legacy
+    // pathname-reopen branch, which does not catch ancestor-directory
+    // swaps between resolver validation and stream open.
     serveStaticFile(assetPath, req, res, next, {
       contentType: backend.contentTypeForPath?.(assetPath) || undefined,
+      trustedRoot: resolvedRoot?.rootPath || null,
     });
   };
 }
 
+// ``serveDistAsset`` serves the immutable built viewer bundle out of
+// ``distRoot``. Its contents are shipped with the plugin and are NOT
+// user-controlled -- there is no attacker write path to plant a
+// symlink/junction inside ``distRoot``. This is the ONE remaining
+// ``serveStaticFile`` call that stays on the legacy branch (no
+// ``trustedRoot`` argument). All user-controlled asset serves --
+// ``/__cad/download`` (line ~402), ``/__cad/asset`` API middleware
+// (line ~462), and ``createLocalAssetMiddleware`` (line ~636) --
+// thread the resolved trusted root through ``serveStaticFile`` so
+// bytes come from the already-open, handle-validated fd (see
+// ``viewer/src/server/safeAssetOpen.mjs``).
 export function serveDistAsset({ distRoot, indexHtmlPath = path.join(distRoot, "index.html") } = {}) {
   return function distAssetMiddleware(req, res, next) {
     const requestUrl = new URL(req.url || "/", "http://localhost");

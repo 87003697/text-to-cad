@@ -10,11 +10,14 @@ import {
   STEP_TOPOLOGY_SCHEMA_VERSION
 } from "cadjs/common/stepTopology.mjs";
 import {
+  bindCadgenPackage,
+  filesystemPathIdentity,
   isCatalogRelevantPath,
   isServedCadAsset,
   catalogFileRefForPath,
   normalizeViewerRootDir,
   readStepSourceStatus,
+  resolveTrustedMetadataPath,
   resolveViewerRoot,
   scanCadDirectory,
   scanCadFile,
@@ -38,6 +41,107 @@ function writeStep(filePath, content = "ISO-10303-21;\nEND-ISO-10303-21;\n") {
   writeFile(filePath, content);
   return sha256Buffer(Buffer.from(content));
 }
+
+test("bindCadgenPackage accepts a contained STEP name beginning with two dots", () => {
+  const repoRoot = makeTempRepo();
+  try {
+    const stepPath = path.join(repoRoot, "..part.step");
+    writeStep(stepPath);
+    const packageDir = path.join(repoRoot, "__cadgen__", "models", "..part.step");
+    writeFile(path.join(packageDir, "components", "part.glb"), "glTFbytes");
+    writeFile(path.join(packageDir, "assembly.json"), JSON.stringify({
+      packageSchemaVersion: 3,
+      sourceKind: "step",
+      stepPath: "..part.step",
+      stepHash: sha256Buffer(fs.readFileSync(stepPath)),
+      components: { part: { glb: "components/part.glb" } },
+    }));
+
+    const binding = bindCadgenPackage({ packageDir, trustedRoot: repoRoot, entryPath: stepPath });
+    assert.ok(binding, "a filename prefix is not a parent-directory traversal segment");
+    assert.equal(binding.logicalStepPath, stepPath);
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("filesystemPathIdentity case-folds Windows path identities only", () => {
+  const upper = filesystemPathIdentity("workspace/generated/Robot.step", { platform: "win32" });
+  const lower = filesystemPathIdentity("workspace/generated/robot.step", { platform: "win32" });
+  assert.equal(upper, lower);
+  assert.notEqual(
+    filesystemPathIdentity("workspace/generated/Robot.step", { platform: "linux" }),
+    filesystemPathIdentity("workspace/generated/robot.step", { platform: "linux" }),
+  );
+});
+
+test("Windows catalog marks case-variant descriptor targets ambiguous", {
+  skip: process.platform === "win32" ? false : "Windows filesystem identity regression",
+}, () => {
+  const repoRoot = makeTempRepo();
+  try {
+    const workspace = path.join(repoRoot, "workspace");
+    for (const [name, target] of [["a", "Robot.step"], ["b", "robot.step"]]) {
+      const generatorPath = path.join(workspace, name, "gen.py");
+      writeFile(generatorPath, "def gen_step():\n    return None\n");
+      const packageDir = path.join(workspace, name, "__cadgen__", "models", "gen.py");
+      writeFile(path.join(packageDir, "assembly.json"), JSON.stringify({
+        sourceKind: "python",
+        sourcePath: `../${name}/gen.py`,
+        stepPath: `../shared/${target}`,
+      }));
+    }
+
+    const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
+    const ambiguous = catalog.entries.filter((entry) => entry.artifact?.error === "ambiguous_package_binding");
+    assert.equal(ambiguous.length, 1);
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("Windows targeted refresh retains a case-variant package binding", {
+  skip: process.platform === "win32" ? false : "Windows filesystem identity regression",
+}, () => {
+  const repoRoot = makeTempRepo();
+  try {
+    const stepPath = path.join(repoRoot, "workspace", "robot.step");
+    const stepHash = writeStep(stepPath);
+    const packageDir = path.join(repoRoot, "workspace", "__cadgen__", "models", "robot.step");
+    writeFile(path.join(packageDir, "components", "part.glb"), "glTFbytes");
+    writeFile(path.join(packageDir, "assembly.json"), JSON.stringify({
+      packageSchemaVersion: 3,
+      sourceKind: "step",
+      stepPath: "Robot.step",
+      stepHash,
+      components: { part: { glb: "components/part.glb" } },
+    }));
+
+    const entry = scanCadFile({ repoRoot, rootDir: "workspace", filePath: stepPath });
+    assert.ok(entry);
+    assert.notEqual(entry.artifact?.error, "missing_package");
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("scanCadDirectory ignores descriptor logical STEP targets outside the selected rootDir", () => {
+  const repoRoot = makeTempRepo();
+  try {
+    const generatorPath = path.join(repoRoot, "workspace", "gen.py");
+    writeFile(generatorPath, "def gen_step():\n    return None\n");
+    writeFile(path.join(repoRoot, "workspace", "__cadgen__", "models", "gen.py", "assembly.json"), JSON.stringify({
+      sourceKind: "python",
+      sourcePath: "../workspace/gen.py",
+      stepPath: "../other/model.step",
+    }));
+
+    const catalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
+    assert.equal(catalog.entries.some((entry) => String(entry.file).includes("../other")), false);
+  } finally {
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+  }
+});
 
 function writeStepWithSourceMetadata(filePath, {
   sourcePath,
@@ -945,4 +1049,206 @@ test("isServedCadAsset serves inline GLBs and ignores legacy STEP artifact files
 
 test("isServedCadAsset does not expose workspace-local JavaScript files", () => {
   assert.equal(isServedCadAsset(path.join("workspace", "sample_robot.js")), false);
+});
+
+test("isServedCadAsset narrowly serves canonical cadgen package descriptors", () => {
+  assert.equal(
+    isServedCadAsset(path.join("workspace", "__cadgen__", "models", "part.py", "assembly.json")),
+    true,
+  );
+  assert.equal(isServedCadAsset(path.join("workspace", "part.py", "assembly.json")), false);
+  assert.equal(isServedCadAsset(path.join("workspace", "__cadgen__", "assembly.json")), false);
+  assert.equal(isServedCadAsset(path.join("workspace", "__cadgen__", "models", "part.py", "other.json")), false);
+});
+
+
+test("scanCadFile for an existing ordinary STEP does not traverse unrelated __cadgen__ siblings", () => {
+  // Reviewer regression: the previous ``scanCadFile`` STEP path
+  // eagerly ran ``_buildPackageEntryMap`` (a full recursive walk of
+  // the entire viewer root) for EVERY STEP file -- even an ordinary
+  // same-stem or imported STEP whose canonical package location is
+  // derivable from the STEP file itself. That defeated the documented
+  // incremental (O(single entry)) contract and made a poisoned or
+  // unreadable ``__cadgen__`` sibling elsewhere in the tree affect a
+  // scan of the target file. Instrumenting ``fs.readdirSync`` proves
+  // scanning an existing same-stem STEP no longer descends into
+  // sibling ``__cadgen__/models/*`` directories.
+  const repoRoot = makeTempRepo();
+  const stepPath = path.join(repoRoot, "workspace/sample_part/sample_part.step");
+  const stepHash = writeStep(stepPath);
+  writeFile(path.join(repoRoot, "workspace/sample_part/.sample_part.step.glb"), topologyGlb({
+    sourcePath: "workspace/sample_part/sample_part.step",
+    stepHash,
+    entryKind: "part",
+  }));
+  // Plant an UNRELATED ``__cadgen__`` in a sibling directory. If
+  // ``scanCadFile`` did a full-tree package-map build it would open
+  // ``workspace/unrelated/__cadgen__/models`` here. Targeted binding
+  // must NOT touch this directory.
+  const unrelatedCadgen = path.join(repoRoot, "workspace/unrelated/__cadgen__/models");
+  fs.mkdirSync(unrelatedCadgen, { recursive: true });
+  fs.writeFileSync(path.join(unrelatedCadgen, "marker.txt"), "TRIP");
+
+  const originalReaddirSync = fs.readdirSync;
+  const visited = [];
+  fs.readdirSync = (target, options) => {
+    visited.push(String(target));
+    return originalReaddirSync(target, options);
+  };
+  try {
+    const entry = scanCadFile({ repoRoot, rootDir: "workspace", filePath: stepPath });
+    assert.equal(entry?.file, "sample_part/sample_part.step");
+  } finally {
+    fs.readdirSync = originalReaddirSync;
+  }
+  const walkedUnrelated = visited.some((entry) => entry.includes(`unrelated${path.sep}__cadgen__`));
+  assert.equal(
+    walkedUnrelated,
+    false,
+    `scanCadFile must not walk unrelated __cadgen__ siblings; visited: ${visited.filter((v) => v.includes("__cadgen__")).join(", ")}`,
+  );
+});
+
+
+test("scanCadFile preserves authoritative ambiguity for an existing STEP whose metadata names only one candidate", async () => {
+  // Reviewer regression: the targeted binder in ``scanCadFile`` sees
+  // only candidates reachable from the STEP file itself (same-stem
+  // sibling, imported self-package, and the STEP's own
+  // ``cadgen:sourcePath`` metadata).  When TWO non-same-stem packages
+  // elsewhere in the tree both claim the same existing STEP, the
+  // authoritative full ``scanCadDirectory`` correctly marks it
+  // ``ambiguous_package_binding``; a subsequent request-shaped
+  // ``scanCadFile`` sees only the metadata-named claimant and
+  // downgraded the entry back to accepted -- immediately before
+  // regeneration.  ``authoritativeAmbiguousSteps`` (a Set derived from
+  // the last full scan) is threaded in so targeted refresh may only
+  // STRENGTHEN, never downgrade.  A red run without the fix would
+  // return a python-bound STEP entry with an accepted URL; the fix
+  // must emit ``ambiguous_package_binding``.
+  const { bindCadgenPackage } = await import("./cadDirectoryScanner.mjs");
+  void bindCadgenPackage;
+  const repoRoot = makeTempRepo();
+  const workspace = path.join(repoRoot, "workspace");
+  const sharedDir = path.join(workspace, "shared");
+  fs.mkdirSync(sharedDir, { recursive: true });
+  // Existing STEP with metadata naming ``packageA`` only.
+  const stepPath = path.join(sharedDir, "robot.step");
+  writeStepWithSourceMetadata(stepPath, {
+    sourcePath: "../packageA/gen.py",
+    sourceHash: "0".repeat(64),
+  });
+  const sharedStepHash = sha256Buffer(fs.readFileSync(stepPath));
+  // Two valid non-same-stem packages, each claiming
+  // ``../shared/robot.step``.  Each package is descriptor-valid on
+  // its own: sourcePath relative to STEP dir resolves back to the
+  // generator, sourceHash matches the generator content.
+  const makePackage = (subdir, sourcePathRel) => {
+    const generatorPath = path.join(workspace, subdir, "gen.py");
+    fs.mkdirSync(path.dirname(generatorPath), { recursive: true });
+    const src = "def gen_step():\n    return None\n";
+    fs.writeFileSync(generatorPath, src);
+    const packageDir = path.join(workspace, subdir, "__cadgen__", "models", "gen.py");
+    fs.mkdirSync(path.join(packageDir, "components"), { recursive: true });
+    fs.writeFileSync(path.join(packageDir, "components", "c.glb"), Buffer.from("glTFbytes"));
+    const hash = sha256Buffer(Buffer.from(src));
+    fs.writeFileSync(path.join(packageDir, "assembly.json"), JSON.stringify({
+      schemaVersion: 4,
+      packageSchemaVersion: 3,
+      sourceKind: "python",
+      sourcePath: sourcePathRel,
+      sourceHash: hash,
+      sourceClosureHash: "semantic-fixture",
+      sourceClosureFiles: [sourcePathRel],
+      sourceClosureByteHashes: { [sourcePathRel]: hash },
+      stepPath: "../shared/robot.step",
+      stepHash: sharedStepHash,
+      components: { c: { glb: "components/c.glb", contentHash: "abc" } },
+    }));
+  };
+  makePackage("packageA", "../packageA/gen.py");
+  makePackage("packageB", "../packageB/gen.py");
+
+  // Full scan is authoritative: both packages seen, mapping is
+  // ambiguous.  Confirm the truth-source before proving targeted
+  // refresh cannot downgrade it.
+  const fullCatalog = scanCadDirectory({ repoRoot, rootDir: "workspace" });
+  const fullEntry = fullCatalog.entries.find((e) => e.file === "shared/robot.step");
+  assert.ok(fullEntry, "full scan must yield a shared/robot.step entry");
+  assert.equal(
+    fullEntry.artifact?.error,
+    "ambiguous_package_binding",
+    `full scan must fail closed on the ambiguous mapping, got ${JSON.stringify(fullEntry.artifact)}`,
+  );
+  const authoritative = new Set((fullCatalog.authoritativeAmbiguousStepPaths || []).map((p) => path.resolve(p)));
+  assert.ok(
+    authoritative.has(path.resolve(stepPath)),
+    "scanCadDirectory must expose the authoritative ambiguous STEP path so targeted refreshes can preserve it",
+  );
+
+  // Sanity: without the authoritative hint the targeted binder for
+  // this STEP alone sees only ``packageA`` (via metadata) and
+  // downgrades to accepted -- this is the red state.
+  const naive = scanCadFile({ repoRoot, rootDir: "workspace", filePath: stepPath });
+  assert.ok(naive, "scanCadFile must return an entry for the existing STEP");
+  assert.notEqual(
+    naive.artifact?.error,
+    "ambiguous_package_binding",
+    "sanity: without the authoritative hint, targeted binding sees only the metadata-named claimant (packageA)",
+  );
+
+  // With the authoritative hint, targeted refresh must preserve the
+  // ambiguous_package_binding diagnostic.
+  const guarded = scanCadFile({
+    repoRoot,
+    rootDir: "workspace",
+    filePath: stepPath,
+    authoritativeAmbiguousSteps: authoritative,
+  });
+  assert.ok(guarded, "guarded scanCadFile must return an entry for the existing STEP");
+  assert.equal(
+    guarded.artifact?.error,
+    "ambiguous_package_binding",
+    `targeted refresh must not downgrade an authoritative ambiguous mapping, got ${JSON.stringify(guarded.artifact)}`,
+  );
+  const guardedUrl = String(guarded.url || "");
+  assert.ok(
+    !guardedUrl.includes("packageA") && !guardedUrl.includes("packageB"),
+    `no package must be selected under authoritative ambiguity, got url=${guardedUrl}`,
+  );
+});
+
+
+test("resolveTrustedMetadataPath rejects an in-root symlink ancestor reroute", (t) => {
+  const repoRoot = makeTempRepo();
+  t.after(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+  const realDir = path.join(repoRoot, "workspace", "real");
+  const linkedDir = path.join(repoRoot, "workspace", "linked");
+  const stepPath = path.join(repoRoot, "workspace", "part.step");
+  fs.mkdirSync(realDir, { recursive: true });
+  fs.writeFileSync(path.join(realDir, "gen.py"), "def gen_step():\n    return None\n");
+  fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
+  try {
+    fs.symlinkSync(realDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    t.skip(`directory symlinks unavailable: ${error?.code || error}`);
+    return;
+  }
+
+  assert.equal(
+    resolveTrustedMetadataPath(stepPath, "linked/gen.py", repoRoot),
+    "",
+    "metadata must not select a generator through a symlink/junction ancestor",
+  );
+});
+
+
+test("isCatalogRelevantPath / isCadgenPackageDescriptorPath route descriptor changes to a full refresh", async () => {
+  const { isCatalogRelevantPath: guard, isCadgenPackageDescriptorPath } = await import("./cadDirectoryScanner.mjs");
+  const descriptor = path.join("workspace", "packageA", "__cadgen__", "models", "gen.py", "assembly.json");
+  assert.equal(isCadgenPackageDescriptorPath(descriptor), true, "descriptor path must be recognized");
+  assert.equal(guard(descriptor), true, "descriptor path must be catalog-relevant so watchers fire");
+  // A random assembly.json elsewhere must NOT be treated as a
+  // cadgen descriptor -- structural placement is required.
+  const bogus = path.join("workspace", "packageA", "assembly.json");
+  assert.equal(isCadgenPackageDescriptorPath(bogus), false, "non-cadgen assembly.json must not be recognized");
 });

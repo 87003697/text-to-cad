@@ -188,6 +188,7 @@ def build_step_topology_index_manifest(
         "sourceHash",
         "sourceClosureHash",
         "sourceClosureFiles",
+        "sourceClosureByteHashes",
         "generatedAt",
         "stepPath",
         "stepHash",

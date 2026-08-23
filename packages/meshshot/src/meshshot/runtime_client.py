@@ -173,19 +173,149 @@ def _capability_mode_is_read_only(metadata: os.stat_result) -> bool:
     return mode == 0o444
 
 
+def _windows_open_capability_no_reparse(capability_path: Path | str) -> int:
+    """Open ``capability_path`` on Windows without following reparse points.
+
+    ``CreateFileW`` with ``FILE_FLAG_OPEN_REPARSE_POINT`` opens the
+    symbolic-link / mount-point / IO-reparse object itself rather than
+    the target. If the resulting handle's file attributes indicate a
+    reparse point, close it and raise ``MeshshotError`` so the caller
+    fails closed. The handle is otherwise converted to a CRT file
+    descriptor and returned so the same ``os.fstat``/``os.read``/
+    ``os.close`` path used on POSIX applies unchanged, with the
+    reparse check and the read happening against the same kernel
+    handle -- no filesystem name is looked up twice, so a TOCTOU
+    replacement cannot substitute a different file between the check
+    and the read.
+    """
+
+    if os.name != "nt":  # pragma: no cover - dispatched from load_runtime_capability
+        raise MeshshotError("Windows capability open requires Windows")
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    _GENERIC_READ = 0x80000000
+    _FILE_SHARE_READ = 0x00000001
+    _OPEN_EXISTING = 3
+    _FILE_ATTRIBUTE_NORMAL = 0x00000080
+    _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    _FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
+    _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.GetFileAttributesW.restype = wintypes.DWORD
+    kernel32.GetFileAttributesW.argtypes = [wintypes.LPCWSTR]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    class _BY_HANDLE_FILE_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("dwFileAttributes", wintypes.DWORD),
+            ("ftCreationTime", wintypes.FILETIME),
+            ("ftLastAccessTime", wintypes.FILETIME),
+            ("ftLastWriteTime", wintypes.FILETIME),
+            ("dwVolumeSerialNumber", wintypes.DWORD),
+            ("nFileSizeHigh", wintypes.DWORD),
+            ("nFileSizeLow", wintypes.DWORD),
+            ("nNumberOfLinks", wintypes.DWORD),
+            ("nFileIndexHigh", wintypes.DWORD),
+            ("nFileIndexLow", wintypes.DWORD),
+        ]
+
+    kernel32.GetFileInformationByHandle.restype = wintypes.BOOL
+    kernel32.GetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_BY_HANDLE_FILE_INFORMATION),
+    ]
+
+    handle = kernel32.CreateFileW(
+        str(capability_path),
+        _GENERIC_READ,
+        _FILE_SHARE_READ,
+        None,
+        _OPEN_EXISTING,
+        _FILE_ATTRIBUTE_NORMAL | _FILE_FLAG_OPEN_REPARSE_POINT,
+        None,
+    )
+    if not handle or handle == _INVALID_HANDLE_VALUE:
+        code = ctypes.get_last_error()
+        # ERROR_FILE_NOT_FOUND == 2, ERROR_PATH_NOT_FOUND == 3
+        if code in (2, 3):
+            raise MeshshotError(
+                "browser runtime capability is required"
+            ) from ctypes.WinError(code)
+        raise MeshshotError(
+            "browser runtime capability is unavailable"
+        ) from ctypes.WinError(code)
+
+    try:
+        info = _BY_HANDLE_FILE_INFORMATION()
+        if not kernel32.GetFileInformationByHandle(handle, ctypes.byref(info)):
+            raise MeshshotError(
+                "browser runtime capability is unavailable"
+            ) from ctypes.WinError(ctypes.get_last_error())
+        if info.dwFileAttributes & _FILE_ATTRIBUTE_REPARSE_POINT:
+            # ``FILE_ATTRIBUTE_REPARSE_POINT`` covers symbolic links,
+            # mount points, and any IO-reparse tag the OS supports.
+            # Fail closed: refuse to read from a reparse target.
+            raise MeshshotError("browser runtime capability is replaceable")
+    except BaseException:
+        kernel32.CloseHandle(handle)
+        raise
+
+    # Transfer ownership of the native handle to the CRT so the caller
+    # can use os.fstat/os.read/os.close as with any other fd. On
+    # failure, close the native handle -- the CRT never takes ownership.
+    try:
+        fd = msvcrt.open_osfhandle(int(handle), os.O_RDONLY)
+    except OSError as exc:
+        kernel32.CloseHandle(handle)
+        raise MeshshotError("browser runtime capability is unavailable") from exc
+    return fd
+
+
 def load_runtime_capability(
     capability_path: Path | None = None,
 ) -> dict[str, Any]:
-    """Load the required job-owned Browser Runtime capability."""
+    """Load the required job-owned Browser Runtime capability.
+
+    POSIX opens with ``O_NOFOLLOW`` so a symlink at the capability path
+    yields ``ELOOP`` and fails closed inside the ``except OSError``
+    branch. Windows does not expose ``O_NOFOLLOW``; a plain ``os.open``
+    follows symlinks and mount-point reparse points, which would let an
+    attacker who can plant a reparse point substitute a different file
+    for the capability. On Windows we therefore open via
+    ``CreateFileW`` with ``FILE_FLAG_OPEN_REPARSE_POINT`` (so the OS
+    does not follow the reparse) and require the resulting handle's
+    file attributes to not carry ``FILE_ATTRIBUTE_REPARSE_POINT`` --
+    both checks happen on the same kernel handle so there is no
+    check-then-open TOCTOU race. The remaining POSIX invariants
+    (single ``st_nlink``, caller-owned via ``st_uid``, exact 0o444
+    read-only, identity-bound JSON schema) are unchanged.
+    """
 
     capability_path = capability_path or RUNTIME_CAPABILITY_PATH
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        descriptor = os.open(capability_path, flags)
-    except FileNotFoundError as exc:
-        raise MeshshotError("browser runtime capability is required") from exc
-    except OSError as exc:
-        raise MeshshotError("browser runtime capability is unavailable") from exc
+    if os.name == "nt":
+        descriptor = _windows_open_capability_no_reparse(capability_path)
+    else:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(capability_path, flags)
+        except FileNotFoundError as exc:
+            raise MeshshotError("browser runtime capability is required") from exc
+        except OSError as exc:
+            raise MeshshotError("browser runtime capability is unavailable") from exc
     try:
         metadata = os.fstat(descriptor)
         if (

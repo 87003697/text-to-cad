@@ -66,6 +66,7 @@ COMPONENT_PROVENANCE_KEYS = (
     "sourceHash",
     "sourceClosureHash",
     "sourceClosureFiles",
+    "sourceClosureByteHashes",
     "stepPath",
     "stepHash",
     "generatedAt",

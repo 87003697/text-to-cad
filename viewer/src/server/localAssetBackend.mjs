@@ -5,10 +5,12 @@ import { spawn } from "node:child_process";
 import {
   CAD_CATALOG_SCHEMA_VERSION,
   catalogFileRefForPath,
+  isCadgenPackageDescriptorPath,
   isServedCadAsset,
   readStepSourceStatus,
   scanCadDirectory,
   scanCadFile,
+  filesystemPathIdentity,
   sortCatalogEntries,
 } from "./catalog/cadDirectoryScanner.mjs";
 import {
@@ -90,6 +92,67 @@ function ensurePathInsideRoot(filePath, resolvedRoot) {
   if (!(filePath === resolvedRoot.rootPath || pathIsInside(filePath, resolvedRoot.rootPath))) {
     throw new Error("Requested file is outside the active CAD Viewer root");
   }
+}
+
+// Fail-closed real-containment check that resists TOCTOU/symlink-swap
+// attacks against ``/__cad/asset``. Lexical containment (``pathIsInside``)
+// only checks the raw string, so after the catalog scan an attacker who
+// can write inside the served tree can replace a validated leaf (or any
+// ancestor) with a symlink/junction/reparse-point pointing outside the
+// trusted root and the plain ``fs.createReadStream(path)`` would follow
+// it. This helper:
+//   1. rejects symlinks at the leaf via ``lstat`` (Node also reports
+//      Windows junctions/reparse points as symbolic links here),
+//   2. requires the target to resolve to a regular file,
+//   3. resolves BOTH the leaf and the trusted root via ``realpath`` --
+//      so any symlink ancestor along the target's path is followed and
+//      re-compared against the trusted root's real path.
+// Callers MUST perform this check right before they open the file /
+// hand the path to ``serveStaticFile``. ``serveStaticFile`` in turn
+// re-checks with ``lstat`` before streaming to shrink the residual
+// check-vs-open race.
+function assertSafeAssetContainment(filePath, resolvedRoot) {
+  ensurePathInsideRoot(filePath, resolvedRoot);
+  let leafStat;
+  try {
+    leafStat = fs.lstatSync(filePath);
+  } catch {
+    const error = new Error("Asset file not found");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (leafStat.isSymbolicLink()) {
+    const error = new Error("Symbolic links are not served as CAD Viewer assets");
+    error.statusCode = 403;
+    throw error;
+  }
+  if (!leafStat.isFile()) {
+    const error = new Error("Requested asset is not a regular file");
+    error.statusCode = 403;
+    throw error;
+  }
+  let realFile;
+  let realRoot;
+  try {
+    realFile = fs.realpathSync(filePath);
+    realRoot = fs.realpathSync(resolvedRoot.rootPath);
+  } catch {
+    const error = new Error("Asset file cannot be resolved");
+    error.statusCode = 404;
+    throw error;
+  }
+  const rel = path.relative(realRoot, realFile);
+  // Segment-aware containment: reject empty (== root), absolute
+  // (different drive on Windows), and a literal ``..`` first segment
+  // (real escape). ``..part.step`` is a legal FILENAME whose relative
+  // component merely starts with two dots and must NOT be rejected.
+  const firstSegment = rel.split(/[\\/]/, 1)[0];
+  if (rel === "" || firstSegment === ".." || path.isAbsolute(rel)) {
+    const error = new Error("Requested file is outside the active CAD Viewer root");
+    error.statusCode = 403;
+    throw error;
+  }
+  return realFile;
 }
 
 function normalizedFileAssetKind(value) {
@@ -401,6 +464,17 @@ export function createLocalAssetBackend({
     ? absoluteFileRef(normalizedRootDir(rootDir, baseDirectoryRoot))
     : absoluteFileRef(baseDirectoryRoot);
   const catalogCache = new Map();
+  // Authoritative "logical STEP -> ambiguous" set from the last full
+  // ``scanCadDirectory`` scan, keyed by ``dir:${resolvedRoot.dir}``.
+  // Threaded into every per-file ``scanCadFile`` so a request-shaped
+  // incremental refresh can only STRENGTHEN a mapping to error --
+  // never downgrade an authoritative ``ambiguous_package_binding``
+  // back to an accepted binding when the STEP's own metadata names
+  // only one of the two conflicting packages.  Only a subsequent full
+  // ``refreshCatalog`` (triggered by an initial load, a package
+  // descriptor change, or an explicit invalidation) reconciles the
+  // ambiguity set with the current on-disk descriptor state.
+  const authoritativeAmbiguousStepsByDir = new Map();
 
   function effectiveRootDirForRequest(rootDir = "") {
     return rootDir || defaultRootDir;
@@ -472,11 +546,24 @@ export function createLocalAssetBackend({
     const rawCatalog = scanCadDirectory({
       repoRoot: context.scanRepoRoot,
       rootDir: context.scanRootDir,
-      includeArtifactStatus: false,
+      includeArtifactStatus: true,
     });
+    const cacheKey = `dir:${resolvedRoot.dir}`;
+    // Capture the authoritative ambiguity set from the raw scan
+    // BEFORE ``absolutizeCatalog`` (which runs ``normalizeCatalog`` and
+    // drops any field outside {schemaVersion, entries}). Stored as a
+    // Set of filesystem-identity keys (case-folded on Windows).
+    const authoritativePaths = Array.isArray(rawCatalog?.authoritativeAmbiguousStepPaths)
+      ? new Set(rawCatalog.authoritativeAmbiguousStepPaths.map((p) => filesystemPathIdentity(String(p || ""))))
+      : new Set();
+    authoritativeAmbiguousStepsByDir.set(cacheKey, authoritativePaths);
     const catalog = absolutizeCatalog(rawCatalog, context);
-    catalogCache.set(`dir:${resolvedRoot.dir}`, catalog);
+    catalogCache.set(cacheKey, catalog);
     return catalog;
+  }
+
+  function authoritativeAmbiguousStepsForDir(resolvedRoot) {
+    return authoritativeAmbiguousStepsByDir.get(`dir:${resolvedRoot.dir}`) || null;
   }
 
   function replaceCatalogEntry(catalog, fileRef, nextEntry) {
@@ -503,7 +590,8 @@ export function createLocalAssetBackend({
       repoRoot: context.scanRepoRoot,
       rootDir: context.scanRootDir,
       filePath,
-      includeArtifactStatus: false,
+      includeArtifactStatus: true,
+      authoritativeAmbiguousSteps: authoritativeAmbiguousStepsForDir(resolvedRoot),
     });
     const nextEntry = rawEntry ? absolutizeCatalogEntry(rawEntry, context) : null;
     const rawFileRef = rawEntry?.file || catalogFileRefForPath({
@@ -535,7 +623,8 @@ export function createLocalAssetBackend({
         repoRoot: context.scanRepoRoot,
         rootDir: context.scanRootDir,
         filePath: sameStemStepPath,
-        includeArtifactStatus: false,
+        includeArtifactStatus: true,
+        authoritativeAmbiguousSteps: authoritativeAmbiguousStepsForDir(resolvedRoot),
       });
       const sameStemEntry = rawSameStemEntry ? absolutizeCatalogEntry(rawSameStemEntry, context) : null;
       const sameStemFileRef = sameStemEntry?.file || absoluteFileRef(sameStemStepPath);
@@ -555,7 +644,8 @@ export function createLocalAssetBackend({
         repoRoot: context.scanRepoRoot,
         rootDir: context.scanRootDir,
         filePath: outputPath,
-        includeArtifactStatus: false,
+        includeArtifactStatus: true,
+        authoritativeAmbiguousSteps: authoritativeAmbiguousStepsForDir(resolvedRoot),
       });
       nextCatalog = replaceCatalogEntry(
         nextCatalog,
@@ -568,6 +658,15 @@ export function createLocalAssetBackend({
   }
 
   function refreshCatalogForPath({ rootDir: nextRootDir = defaultRootDir, filePath } = {}) {
+    // A change to a cadgen package descriptor (add/remove a package,
+    // switch its ``stepPath`` or ``sourcePath``) may alter the
+    // authoritative "logical STEP -> ambiguous" state that per-file
+    // targeted refresh cannot re-derive from a single STEP file.
+    // Route these events to a full ``refreshCatalog`` so the
+    // ambiguity set is reconciled with the current descriptor state.
+    if (isCadgenPackageDescriptorPath(filePath)) {
+      return refreshCatalog({ rootDir: nextRootDir });
+    }
     const extension = path.extname(String(filePath || "")).toLowerCase();
     if (extension === ".py") {
       return refreshCatalogForPythonSource({ rootDir: nextRootDir, filePath });
@@ -583,6 +682,53 @@ export function createLocalAssetBackend({
     return path.isAbsolute(normalized)
       ? path.resolve(normalized)
       : path.resolve(resolvedRoot.rootPath, normalized);
+  }
+
+  // Discover a python source bound to ``stepAbsPath`` via the trusted
+  // catalog, NOT via client-supplied metadata. The scanner has already
+  // routed every STEP entry through ``bindCadgenPackage``, so the
+  // ``entry.source.file`` field on a python-kind catalog entry is
+  // authoritative. Returns "" when no such binding exists.
+  //
+  // ``readCatalog`` may run a per-file incremental refresh that
+  // returns null when the STEP file is missing (descriptor-only
+  // mapping). To avoid dropping the authoritative binding we look up
+  // the caller-supplied catalog first, then the cached full-scan
+  // catalog, and finally trigger a full ``refreshCatalog`` -- never
+  // the per-file incremental path.
+  function catalogBoundPythonSource(fileRef, resolvedRoot, catalog) {
+    const cacheKey = `dir:${resolvedRoot.dir}`;
+    const activeCatalog = catalog
+      || catalogCache.get(cacheKey)
+      || (() => {
+        try {
+          return refreshCatalog({ rootDir: resolvedRoot.dir });
+        } catch {
+          return null;
+        }
+      })();
+    if (!activeCatalog || !Array.isArray(activeCatalog.entries)) {
+      return "";
+    }
+    const entry = catalogEntryForFileRef(activeCatalog, fileRef);
+    if (!entry) return "";
+    if (String(entry.sourceKind || "").toLowerCase() !== "python") return "";
+    const rawSource = entry.source?.file || entry.source?.sourcePath || "";
+    if (!rawSource) return "";
+    const abs = normalizedFileRef(rawSource);
+    if (!abs) return "";
+    const candidate = path.isAbsolute(abs)
+      ? path.resolve(abs)
+      : path.resolve(resolvedRoot.rootPath, abs);
+    if (!(candidate === resolvedRoot.rootPath || pathIsInside(candidate, resolvedRoot.rootPath))) {
+      return "";
+    }
+    try {
+      if (!fs.statSync(candidate).isFile()) return "";
+    } catch {
+      return "";
+    }
+    return candidate;
   }
 
   function resolveStepSource(fileRef, { resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
@@ -619,11 +765,16 @@ export function createLocalAssetBackend({
         if (extension !== ".step" && extension !== ".stp") {
           throw new Error("Only STEP/STP sources or same-stem Python generators can generate STEP topology artifacts");
         }
-        const generatorPath = sameStemPythonGeneratorPath(candidatePath);
+        // A catalog-bound source has already passed the package
+        // identity checks and is authoritative. Only use same-stem
+        // inference when no such package binding exists.
+        const boundGenerator = catalogBoundPythonSource(fileRef, resolvedRoot, catalog);
+        const generatorPath = boundGenerator || sameStemPythonGeneratorPath(candidatePath);
         return {
           stepPath: candidatePath,
           sourcePath: generatorPath,
           skipStepWrite: Boolean(generatorPath),
+          fromCatalogBinding: Boolean(boundGenerator),
         };
       }
     }
@@ -633,9 +784,29 @@ export function createLocalAssetBackend({
     ));
     if (candidatePath) {
       const extension = path.extname(candidatePath).toLowerCase();
-      const generatorPath = sameStemPythonGeneratorPath(candidatePath);
-      if ((extension === ".step" || extension === ".stp") && generatorPath) {
-        return { stepPath: candidatePath, sourcePath: generatorPath, skipStepWrite: true };
+      // Descriptor-only non-same-stem mapping: STEP file is missing,
+      // and the trusted catalog binding says a python source elsewhere
+      // in the tree produces this STEP. It is authoritative and must
+      // win over an unrelated same-stem heuristic candidate. Use it
+      // and request one-pass regeneration. The
+      // ``fromCatalogBinding`` flag distinguishes this case from
+      // ``sameStemPythonGeneratorPath`` fallback so ``generateStepArtifact``
+      // can allow missing-STEP regeneration ONLY when the catalog
+      // authoritatively says the STEP will be produced.
+      if (extension === ".step" || extension === ".stp") {
+        const boundGenerator = catalogBoundPythonSource(fileRef, resolvedRoot, catalog);
+        if (boundGenerator) {
+          return {
+            stepPath: candidatePath,
+            sourcePath: boundGenerator,
+            skipStepWrite: false,
+            fromCatalogBinding: true,
+          };
+        }
+        const sameStemGenerator = sameStemPythonGeneratorPath(candidatePath);
+        if (sameStemGenerator) {
+          return { stepPath: candidatePath, sourcePath: sameStemGenerator, skipStepWrite: true };
+        }
       }
       throw new Error(`STEP file not found: ${normalizedRef}`);
     }
@@ -689,10 +860,9 @@ export function createLocalAssetBackend({
     const { entry, relativeFileRef, resolvedRoot } = requireCatalogEntryForFileRef(fileRef, options);
     const outputRef = normalizedFileRef(entry?.file || relativeFileRef);
     const outputPath = filePathFromRef(outputRef, resolvedRoot);
-    ensurePathInsideRoot(outputPath, resolvedRoot);
-    if (!fs.existsSync(outputPath) || !fs.statSync(outputPath).isFile()) {
-      throw new Error(`Output file not found: ${outputRef || relativeFileRef}`);
-    }
+    // ``assertSafeAssetContainment`` does the lstat + realpath check
+    // that closes the symlink-swap escape past lexical containment.
+    assertSafeAssetContainment(outputPath, resolvedRoot);
     return outputPath;
   }
 
@@ -717,10 +887,7 @@ export function createLocalAssetBackend({
       throw new Error(`Artifact asset is not available for ${relativeFileRef}`);
     }
     const artifactPath = filePathFromRef(artifactRef, resolvedRoot);
-    ensurePathInsideRoot(artifactPath, resolvedRoot);
-    if (!fs.existsSync(artifactPath) || !fs.statSync(artifactPath).isFile()) {
-      throw new Error(`Artifact file not found: ${artifactRef}`);
-    }
+    assertSafeAssetContainment(artifactPath, resolvedRoot);
     return artifactPath;
   }
 
@@ -733,23 +900,31 @@ export function createLocalAssetBackend({
         path.resolve(baseDirectoryRoot, explicitSourceRef),
       ];
       for (const sourcePath of [...new Set(sourceCandidates)]) {
-        if (
-          (sourcePath === resolvedRoot.rootPath || pathIsInside(sourcePath, resolvedRoot.rootPath)) &&
-          fs.existsSync(sourcePath) &&
-          fs.statSync(sourcePath).isFile()
-        ) {
-          return sourcePath;
+        if (sourcePath === resolvedRoot.rootPath || pathIsInside(sourcePath, resolvedRoot.rootPath)) {
+          try {
+            assertSafeAssetContainment(sourcePath, resolvedRoot);
+            return sourcePath;
+          } catch {
+            // Try the next candidate; a symlink here MUST NOT be
+            // followed but a sibling lexical candidate might still
+            // resolve to a valid regular file under the real root.
+            continue;
+          }
         }
       }
     }
     const extension = path.extname(relativeFileRef).toLowerCase();
     if (extension === ".step" || extension === ".stp") {
       const { stepPath, sourcePath } = resolveStepSourceStatus(relativeFileRef, { resolvedRoot, catalog: currentCatalog });
-      if (sourcePath && fs.existsSync(sourcePath) && fs.statSync(sourcePath).isFile()) {
-        ensurePathInsideRoot(sourcePath, resolvedRoot);
-        return sourcePath;
+      if (sourcePath) {
+        try {
+          assertSafeAssetContainment(sourcePath, resolvedRoot);
+          return sourcePath;
+        } catch {
+          // Fall through -- the STEP itself will be checked below.
+        }
       }
-      ensurePathInsideRoot(stepPath, resolvedRoot);
+      assertSafeAssetContainment(stepPath, resolvedRoot);
     }
 
     throw new Error(`Source code is not available for ${relativeFileRef}`);
@@ -798,25 +973,64 @@ export function createLocalAssetBackend({
   }
 
   async function generateStepArtifact({ fileRef, force = false, resolvedRoot = resolveRequestRoot({ fileRef }), catalog = null } = {}) {
-    const { stepPath } = resolveStepSource(fileRef, { resolvedRoot, catalog });
+    const resolvedSource = resolveStepSource(fileRef, { resolvedRoot, catalog });
+    const { stepPath, sourcePath: boundSource, fromCatalogBinding = false } = resolvedSource;
+    // Regeneration refuses ambiguous descriptor mappings outright.
+    // The authoritative source of truth is (a) the catalog entry's
+    // ``ambiguous_package_binding`` diagnostic, and (b) the last full
+    // scan's authoritative ambiguous set.  Either being present means
+    // two descriptors both claim this logical STEP -- no candidate is
+    // trusted, so the generator MUST NOT be invoked.
+    const activeCatalog = catalog || catalogCache.get(`dir:${resolvedRoot.dir}`) || null;
+    const resolvedStepPath = path.resolve(stepPath);
+    const resolvedStepKey = filesystemPathIdentity(resolvedStepPath);
+    const authoritative = authoritativeAmbiguousStepsForDir(resolvedRoot);
+    const catalogAmbiguity = activeCatalog
+      && Array.isArray(activeCatalog.entries)
+      && activeCatalog.entries.some((entry) => (
+        String(entry?.artifact?.error || "") === "ambiguous_package_binding"
+        && filesystemPathIdentity(String(entry?.file || "")) === resolvedStepKey
+      ));
+    if (catalogAmbiguity || (authoritative && authoritative.has(resolvedStepKey))) {
+      throw new Error(
+        `CAD Viewer refuses to regenerate ${fileRef}: multiple cadgen packages claim this logical STEP (ambiguous_package_binding).`,
+      );
+    }
     const extension = path.extname(stepPath).toLowerCase();
+    if (extension !== ".step" && extension !== ".stp") {
+      throw new Error("CAD Viewer only regenerates GLB artifacts for existing STEP/STP files.");
+    }
     let hasStepFile = false;
     try {
-      hasStepFile = (extension === ".step" || extension === ".stp") && fs.statSync(stepPath).isFile();
+      hasStepFile = fs.statSync(stepPath).isFile();
     } catch {
       hasStepFile = false;
     }
-    if (!hasStepFile) {
+    // Missing STEP file is only accepted when the trusted catalog
+    // binding authoritatively says a python source produces it -- the
+    // reviewer-mandated non-same-stem regeneration path. Same-stem
+    // inference alone (``sameStemPythonGeneratorPath`` beside a missing
+    // STEP) still fails closed with the historic diagnostic so the
+    // client cannot silently trigger a build that was never registered
+    // in the catalog.
+    if (!hasStepFile && !fromCatalogBinding) {
       throw new Error("CAD Viewer only regenerates GLB artifacts for existing STEP/STP files.");
     }
+    const writeStepAfterArtifact = fromCatalogBinding && Boolean(boundSource);
     const context = scanContextForRoot(resolvedRoot);
+    // A trusted catalog binding is authoritative even when the STEP
+    // already exists. Hand cadgen that explicit Python source and ask
+    // it to regenerate STEP + package from one evaluation; otherwise
+    // non-same-stem mappings can silently fall back to imported-STEP
+    // or same-stem behavior and leave their real package stale.
+    const generatorSourcePath = writeStepAfterArtifact ? boundSource : "";
     const result = await stepArtifactGenerator({
       repoRoot: context.scanRepoRoot,
       stepPath,
-      sourcePath: "",
+      sourcePath: generatorSourcePath,
       force,
       skipStepWrite: false,
-      writeStepAfterArtifact: false,
+      writeStepAfterArtifact,
     });
     return {
       ok: Boolean(result?.ok),
@@ -883,10 +1097,20 @@ export function createLocalAssetBackend({
       return null;
     }
     const activeRoot = resolvedRoot || (rootDir ? resolveRoot(rootDir) : null);
-    if (activeRoot && !(candidatePath === activeRoot.rootPath || pathIsInside(candidatePath, activeRoot.rootPath))) {
-      const error = new Error("Forbidden");
-      error.statusCode = 403;
-      throw error;
+    if (activeRoot) {
+      // Lexical containment first (cheap early-out), then the safe
+      // real-containment/symlink-rejection check.
+      if (!(candidatePath === activeRoot.rootPath || pathIsInside(candidatePath, activeRoot.rootPath))) {
+        const error = new Error("Forbidden");
+        error.statusCode = 403;
+        throw error;
+      }
+      // ``assertSafeAssetContainment`` throws HTTP-status-tagged errors;
+      // the ``/__cad/asset`` handler in ``httpHandlers.mjs`` routes them
+      // through the error path, so a symlink/junction replacement of a
+      // scanned component surfaces as 403 rather than serving bytes
+      // from outside the tree.
+      assertSafeAssetContainment(candidatePath, activeRoot);
     }
     return candidatePath;
   }

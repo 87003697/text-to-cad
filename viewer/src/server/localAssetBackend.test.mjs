@@ -434,7 +434,7 @@ test("local backend reports missing Python-backed STEP files dynamically", async
   });
 });
 
-test("local backend defers STEP artifact status to current-file status reads", async () => {
+test("local backend reports STEP artifact status in catalog and current-file reads", async () => {
   await withTempDirectoryRoot((directoryRoot) => {
     const modelRoot = path.join(directoryRoot, "models");
     fs.mkdirSync(modelRoot, { recursive: true });
@@ -446,7 +446,7 @@ test("local backend defers STEP artifact status to current-file status reads", a
 
     assert.equal(catalogEntry.file, toPosix(path.join(modelRoot, "part.step")));
     assert.equal(catalogEntry.rootRelativeFile, "part.step");
-    assert.equal(catalogEntry.artifact, undefined);
+    assert.equal(catalogEntry.artifact?.error, "missing_glb");
     assert.equal(status.artifact.error, "missing_glb");
     assert.equal(
       status.artifact.glbPath,
@@ -665,6 +665,350 @@ test("local backend writes only served CAD assets inside the active root", async
     await assert.rejects(
       () => backend.writeAsset({ fileRef: "../escape.glb", body: Buffer.from("bad") }),
       /inside the active CAD Viewer root/
+    );
+  });
+});
+
+// P1 asset-serving TOCTOU / symlink-escape: after the catalog scan
+// validated a leaf as a regular file inside the active root, an
+// attacker who can write inside the tree could replace that leaf with
+// a symlink whose target lives OUTSIDE the trusted root. Lexical
+// containment ("pathIsInside") only checks the raw request string, so
+// naive resolvers happily returned that path and ``serveStaticFile``
+// followed the symlink to disclose outside bytes.
+//
+// Fix requires the resolver to reject symlinks at the leaf via
+// ``lstat`` AND compare ``realpath(leaf)`` against ``realpath(root)``
+// so an attacker-planted symlink ancestor (junction, reparse point)
+// also fails closed. This test is written to be RED without that fix.
+test("asset resolvers reject a scanned component swapped for a symlink out of the root", async (t) => {
+  await withTempDirectoryRoot((directoryRoot) => {
+    const modelRoot = path.join(directoryRoot, "models");
+    fs.mkdirSync(modelRoot, { recursive: true });
+    const insidePath = path.join(modelRoot, "part.stl");
+    const outsideSecret = path.join(directoryRoot, "outside-secret.stl");
+    fs.writeFileSync(insidePath, "solid part\nendsolid part\n");
+    fs.writeFileSync(outsideSecret, "solid secret\nendsolid secret\n");
+    const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
+
+    // Scan valid state so the catalog records ``part.stl``.
+    const catalog = backend.readCatalog();
+    const partEntry = catalog.entries.find((entry) => entry.rootRelativeFile === "part.stl");
+    assert.ok(partEntry, "part.stl catalog entry present after initial scan");
+
+    // Swap the validated leaf for a symlink pointing OUTSIDE the root.
+    fs.unlinkSync(insidePath);
+    try {
+      fs.symlinkSync(outsideSecret, insidePath);
+    } catch (error) {
+      if (error && (error.code === "EPERM" || error.code === "EACCES")) {
+        t.skip(`filesystem does not permit unprivileged symbolic links: ${error.message}`);
+        return;
+      }
+      throw error;
+    }
+
+    // resolveFileAssetAccess is what /__cad/asset uses to derive the
+    // path handed to serveStaticFile. It must refuse the symlink at
+    // open time rather than return a path that follows outside.
+    assert.throws(
+      () => backend.resolveFileAssetAccess({ fileRef: partEntry.file, asset: "output" }),
+      /(symbolic|outside the active CAD Viewer root|regular file)/i,
+      "resolveFileAssetAccess must fail closed on symlink-swap of a scanned component",
+    );
+
+    // assetPathForFileRef is the second serving path. Same fail-closed
+    // contract.
+    assert.throws(
+      () => backend.assetPathForFileRef(partEntry.file, { rootDir: "models" }),
+      /(symbolic|outside the active CAD Viewer root|regular file)/i,
+      "assetPathForFileRef must fail closed on symlink-swap of a scanned component",
+    );
+  });
+});
+
+// HTTP-shaped descriptor-only regeneration: the CAD Viewer route
+// calls ``readCatalog({rootDir, fileRef})``, which internally triggers
+// the per-file refresh path (``refreshCatalogEntryForFile`` ->
+// ``scanCadFile``). Before this fix the per-file refresh returned
+// null for a descriptor-only STEP whose file is not on disk and
+// removed the entry from the cache, so ``generateStepArtifact`` saw
+// nothing to regenerate. This test simulates the request shape end
+// to end: full ``refreshCatalog`` discovers the mapping, then a
+// per-file ``readCatalog({fileRef})`` MUST preserve it via binder-
+// validated reconstruction (never via unvalidated cache lookup), and
+// then generation MUST succeed.
+test("HTTP-shaped descriptor-only STEP regeneration preserves the binder-validated entry across per-file readCatalog", async () => {
+  await withTempDirectoryRoot(async (directoryRoot) => {
+    const modelRoot = path.join(directoryRoot, "models");
+    const generatorPath = path.join(modelRoot, "sources", "assembly.py");
+    fs.mkdirSync(path.dirname(generatorPath), { recursive: true });
+    fs.writeFileSync(generatorPath, "def gen_step():\n    return None\n");
+    const packageDir = path.join(modelRoot, "sources", "__cadgen__", "models", "assembly.py");
+    fs.mkdirSync(path.join(packageDir, "components"), { recursive: true });
+    fs.writeFileSync(path.join(packageDir, "components", "c1.glb"), Buffer.from("glTFsample"));
+    const cryptoModule = await import("node:crypto");
+    const generatorHash = cryptoModule.createHash("sha256")
+      .update(fs.readFileSync(generatorPath))
+      .digest("hex");
+    fs.writeFileSync(path.join(packageDir, "assembly.json"), JSON.stringify({
+      schemaVersion: 4,
+      packageSchemaVersion: 3,
+      sourceKind: "python",
+      sourcePath: "../sources/assembly.py",
+      sourceHash: generatorHash,
+      sourceClosureHash: "semantic-fixture",
+      sourceClosureFiles: ["../sources/assembly.py"],
+      sourceClosureByteHashes: { "../sources/assembly.py": generatorHash },
+      stepPath: "../generated/robot.step",
+      stepHash: "0".repeat(64),
+      components: { c1: { glb: "components/c1.glb", contentHash: "abc" } },
+    }));
+    const stepPath = path.join(modelRoot, "generated", "robot.step");
+    fs.mkdirSync(path.dirname(stepPath), { recursive: true });
+    const heuristicGeneratorPath = path.join(modelRoot, "generated", "robot.py");
+    fs.writeFileSync(
+      heuristicGeneratorPath,
+      "def gen_step():\n    raise RuntimeError('decoy must not be selected')\n",
+    );
+
+    let observedRequest = null;
+    const backend = createLocalAssetBackend({
+      directoryRoot,
+      rootDir: "models",
+      stepArtifactGenerator: async (request) => {
+        observedRequest = request;
+        fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
+        return { ok: true, validation: { ok: true } };
+      },
+    });
+
+    // Step 1: full refresh discovers the descriptor-only mapping.
+    const fullRefresh = backend.refreshCatalog();
+    const initialEntry = fullRefresh.entries.find((e) => e.rootRelativeFile === "generated/robot.step");
+    assert.ok(initialEntry, "full refresh must surface the descriptor-only STEP entry");
+    assert.equal(initialEntry.sourceKind, "python");
+    assert.ok(
+      initialEntry.source?.file && String(initialEntry.source.file).endsWith("sources/assembly.py"),
+      `initial entry must carry the descriptor-bound source, got ${JSON.stringify(initialEntry.source)}`,
+    );
+
+    // Step 2: HTTP-shaped ``readCatalog({rootDir, fileRef})``. The
+    // fix: per-file refresh reconstructs the descriptor-only entry
+    // via ``bindCadgenPackage`` (never a stale cache lookup) so the
+    // authoritative binding survives.
+    const perFileCatalog = backend.readCatalog({ rootDir: "models", fileRef: "generated/robot.step" });
+    const preservedEntry = perFileCatalog.entries.find((e) => e.rootRelativeFile === "generated/robot.step");
+    assert.ok(preservedEntry, "per-file readCatalog must preserve the descriptor-only STEP entry");
+    assert.equal(preservedEntry.sourceKind, "python", "entry must remain python-bound after per-file refresh");
+    assert.ok(
+      preservedEntry.source?.file && String(preservedEntry.source.file).endsWith("sources/assembly.py"),
+      `preserved entry must retain the descriptor-bound source, got ${JSON.stringify(preservedEntry.source)}`,
+    );
+
+    // Step 3: generation succeeds using the (still-present) binding.
+    const result = await backend.generateStepArtifact({
+      fileRef: "generated/robot.step",
+      force: true,
+    });
+    assert.equal(result.ok, true, "generation must succeed after HTTP-shaped readCatalog");
+    assert.equal(observedRequest?.stepPath, stepPath);
+    assert.equal(observedRequest?.sourcePath, generatorPath);
+    assert.equal(observedRequest?.writeStepAfterArtifact, true);
+  });
+});
+
+
+// P2 descriptor-only non-same-stem regeneration: a python generator
+// at ``workspace/sources/assembly.py`` publishes its STEP to
+// ``workspace/generated/robot.step`` via the cadgen render-package
+// descriptor. When the STEP file is not on disk, the backend must
+// still honor the client's "regenerate" request by:
+//   * consulting the trusted catalog to map ``generated/robot.step``
+//     to the descriptor-bound python source
+//   * calling the artifact generator with that bound source and
+//     ``writeStepAfterArtifact: true`` for one-pass STEP + package
+//     regeneration
+// It must NOT accept a client-supplied source (untrusted). This test
+// is red-capable: the pre-fix ``resolveStepSource`` throws "STEP file
+// not found" and ``generateStepArtifact`` refuses on the missing STEP.
+test("local backend regenerates a stale descriptor-only non-same-stem STEP via its trusted identity binding", async () => {
+  await withTempDirectoryRoot(async (directoryRoot) => {
+    const modelRoot = path.join(directoryRoot, "models");
+    const generatorPath = path.join(modelRoot, "sources", "assembly.py");
+    fs.mkdirSync(path.dirname(generatorPath), { recursive: true });
+    fs.writeFileSync(generatorPath, "def gen_step():\n    return None\n");
+    // Descriptor-only mapping: no STEP file on disk, but a cadgen
+    // render-package descriptor names ``../generated/robot.step`` as
+    // the target and provides valid provenance the binder accepts.
+    const packageDir = path.join(modelRoot, "sources", "__cadgen__", "models", "assembly.py");
+    fs.mkdirSync(path.join(packageDir, "components"), { recursive: true });
+    const componentBytes = Buffer.from("glTFsample bytes");
+    fs.writeFileSync(path.join(packageDir, "components", "c1.glb"), componentBytes);
+    const cryptoModule = await import("node:crypto");
+    const generatorHash = cryptoModule.createHash("sha256")
+      .update(fs.readFileSync(generatorPath))
+      .digest("hex");
+    fs.writeFileSync(path.join(packageDir, "assembly.json"), JSON.stringify({
+      schemaVersion: 4,
+      packageSchemaVersion: 3,
+      sourceKind: "python",
+      sourcePath: "../sources/assembly.py",
+      sourceHash: generatorHash,
+      sourceClosureHash: "semantic-fixture",
+      sourceClosureFiles: ["../sources/assembly.py"],
+      sourceClosureByteHashes: { "../sources/assembly.py": generatorHash },
+      stepPath: "../generated/robot.step",
+      stepHash: "0".repeat(64),
+      components: {
+        c1: { glb: "components/c1.glb", contentHash: "abc" },
+      },
+    }));
+    const stepPath = path.join(modelRoot, "generated", "robot.step");
+    // ``generated/`` must exist as a real directory so the generator
+    // can write the STEP into it (the backend does not create the
+    // parent directory).
+    fs.mkdirSync(path.dirname(stepPath), { recursive: true });
+    // Make the package stale after its identity was recorded. The
+    // catalog must retain the safe generator -> logical STEP mapping
+    // for regeneration, while refusing to publish this stale package.
+    fs.writeFileSync(generatorPath, "def gen_step():\n    return 'changed'\n");
+
+    let observedRequest = null;
+    const backend = createLocalAssetBackend({
+      directoryRoot,
+      rootDir: "models",
+      stepArtifactGenerator: async (request) => {
+        observedRequest = request;
+        // Simulate the one-pass STEP + package build.
+        fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
+        return { ok: true, validation: { ok: true } };
+      },
+    });
+    // Prime the catalog so the trusted identity binding is present.
+    const catalog = backend.refreshCatalog();
+    const staleEntry = catalog.entries.find((entry) => entry.rootRelativeFile === "generated/robot.step");
+    assert.ok(staleEntry, "stale descriptor-only package must remain discoverable for rebuilding");
+    assert.equal(staleEntry.sourceKind, "python");
+    assert.ok(
+      staleEntry.source?.file && String(staleEntry.source.file).endsWith("sources/assembly.py"),
+      `stale entry must retain its trusted generator binding, got ${JSON.stringify(staleEntry.source)}`,
+    );
+    assert.equal(
+      String(staleEntry.url || "").includes("__cadgen__/models"),
+      false,
+      "stale package URL must not be published before regeneration",
+    );
+
+    const result = await backend.generateStepArtifact({
+      fileRef: "generated/robot.step",
+      force: true,
+    });
+    assert.equal(result.ok, true, `generation must succeed for a descriptor-only mapping: ${JSON.stringify(result)}`);
+    assert.equal(observedRequest?.stepPath, stepPath, "generator must be called with the bound stepPath");
+    assert.equal(
+      observedRequest?.sourcePath,
+      generatorPath,
+      "generator must receive the descriptor-bound python source (not client-supplied, not empty)",
+    );
+    assert.equal(
+      observedRequest?.writeStepAfterArtifact,
+      true,
+      "descriptor-only regeneration must request one-pass STEP write",
+    );
+    assert.equal(fs.existsSync(stepPath), true, "STEP file must have been produced by the generator");
+  });
+});
+
+
+test("local backend regenerates an existing non-same-stem Python STEP from its trusted catalog source", async () => {
+  await withTempDirectoryRoot(async (directoryRoot) => {
+    const modelRoot = path.join(directoryRoot, "models");
+    const generatorPath = path.join(modelRoot, "sources", "assembly.py");
+    const stepPath = path.join(modelRoot, "generated", "robot.step");
+    fs.mkdirSync(path.dirname(generatorPath), { recursive: true });
+    fs.mkdirSync(path.dirname(stepPath), { recursive: true });
+    fs.writeFileSync(generatorPath, "def gen_step():\n    return None\n");
+    fs.writeFileSync(stepPath, "ISO-10303-21;\nEND-ISO-10303-21;\n");
+
+    const cryptoModule = await import("node:crypto");
+    const generatorHash = cryptoModule.createHash("sha256").update(fs.readFileSync(generatorPath)).digest("hex");
+    const stepHash = cryptoModule.createHash("sha256").update(fs.readFileSync(stepPath)).digest("hex");
+    const packageDir = path.join(modelRoot, "sources", "__cadgen__", "models", "assembly.py");
+    fs.mkdirSync(path.join(packageDir, "components"), { recursive: true });
+    fs.writeFileSync(path.join(packageDir, "components", "c1.glb"), "glTFsample");
+    fs.writeFileSync(path.join(packageDir, "assembly.json"), JSON.stringify({
+      packageSchemaVersion: 3,
+      sourceKind: "python",
+      sourcePath: "../sources/assembly.py",
+      sourceHash: generatorHash,
+      sourceClosureHash: "semantic-fixture",
+      sourceClosureFiles: ["../sources/assembly.py"],
+      sourceClosureByteHashes: { "../sources/assembly.py": generatorHash },
+      stepPath: "../generated/robot.step",
+      stepHash,
+      components: { c1: { glb: "components/c1.glb" } },
+    }));
+
+    let observedRequest = null;
+    const backend = createLocalAssetBackend({
+      directoryRoot,
+      rootDir: "models",
+      stepArtifactGenerator: async (request) => {
+        observedRequest = request;
+        return { ok: true, validation: { ok: true } };
+      },
+    });
+    backend.refreshCatalog();
+
+    const result = await backend.generateStepArtifact({ fileRef: "generated/robot.step", force: true });
+    assert.equal(result.ok, true);
+    assert.equal(observedRequest?.sourcePath, generatorPath);
+    assert.equal(observedRequest?.stepPath, stepPath);
+    assert.equal(observedRequest?.writeStepAfterArtifact, true);
+  });
+});
+
+
+test("asset resolvers reject a leaf whose ancestor became a symlink pointing outside the root", async (t) => {
+  await withTempDirectoryRoot((directoryRoot) => {
+    const modelRoot = path.join(directoryRoot, "models");
+    fs.mkdirSync(path.join(modelRoot, "parts"), { recursive: true });
+    const insidePath = path.join(modelRoot, "parts", "leaf.stl");
+    fs.writeFileSync(insidePath, "solid leaf\nendsolid leaf\n");
+    const attackerRoot = path.join(directoryRoot, "attacker");
+    fs.mkdirSync(attackerRoot, { recursive: true });
+    fs.writeFileSync(path.join(attackerRoot, "leaf.stl"), "solid attacker\nendsolid attacker\n");
+
+    const backend = createLocalAssetBackend({ directoryRoot, rootDir: "models" });
+    const catalog = backend.readCatalog();
+    const leafEntry = catalog.entries.find((entry) => entry.rootRelativeFile === "parts/leaf.stl");
+    assert.ok(leafEntry, "leaf.stl catalog entry present after initial scan");
+
+    // Replace the validated ANCESTOR directory with a symlink to an
+    // attacker-controlled directory outside the root. Lexical
+    // containment still passes because the request string is
+    // unchanged; only real-containment via realpath detects this.
+    fs.rmSync(path.join(modelRoot, "parts"), { recursive: true, force: true });
+    try {
+      fs.symlinkSync(attackerRoot, path.join(modelRoot, "parts"), "dir");
+    } catch (error) {
+      if (error && (error.code === "EPERM" || error.code === "EACCES")) {
+        t.skip(`filesystem does not permit unprivileged directory symbolic links: ${error.message}`);
+        return;
+      }
+      throw error;
+    }
+
+    assert.throws(
+      () => backend.resolveFileAssetAccess({ fileRef: leafEntry.file, asset: "output" }),
+      /(symbolic|outside the active CAD Viewer root|regular file)/i,
+      "ancestor-symlink escape must be rejected on read path",
+    );
+    assert.throws(
+      () => backend.assetPathForFileRef(leafEntry.file, { rootDir: "models" }),
+      /(symbolic|outside the active CAD Viewer root|regular file)/i,
+      "ancestor-symlink escape must be rejected on /__cad/asset path",
     );
   });
 });

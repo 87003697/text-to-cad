@@ -511,3 +511,34 @@ def closure_hash_matches(recorded_hash: object, relative_files: object, *, base:
         return False
     current = _recompute_closure_hash(relative_files, base=base, hasher=_semantic_source_hash)
     return current is not None and current == recorded
+
+
+def closure_byte_hashes(relative_files: object, *, base: Path) -> dict[str, str] | None:
+    """Portable byte identities for a recorded closure's individual files.
+
+    The semantic aggregate remains cadgen's authoritative generation cache key. These
+    per-file byte hashes let non-Python package consumers prove freshness without trying
+    to reproduce Python's AST hashing. A byte-only edit may therefore trigger one extra
+    rebuild, but no semantic edit can be served stale.
+    """
+    base_dir = base.expanduser().resolve()
+    result: dict[str, str] = {}
+    for relative in relative_files:
+        rel = str(relative or "").strip()
+        if not rel or rel in result:
+            return None
+        resolved = _resolve_against_base(rel, base_dir)
+        if resolved is None:
+            return None
+        try:
+            result[rel] = _sha256_file(resolved)
+        except OSError:
+            return None
+    return result or None
+
+
+def closure_byte_hashes_match(recorded_hashes: object, relative_files: object, *, base: Path) -> bool:
+    if not isinstance(recorded_hashes, dict) or not recorded_hashes:
+        return False
+    current = closure_byte_hashes(relative_files, base=base)
+    return current is not None and current == recorded_hashes
