@@ -33,7 +33,7 @@ Parse request → Discover plan → Qualify terminal/postmortem
 模块。每个 exp 必须 verify 成功后才进入 cleanup。
 
 1. 解析 flags：
-   - `--include-byproducts`：上传 `run/.codex-upper` 等诊断副产物后才清理失败实验；
+   - `--include-byproducts`：上传 `run/.codex-home` 等诊断副产物后才清理失败实验；
      每实验的 Playwright/Chromium 安装仍作为 disposable runtime 排除；
    - `--include-byproducts --retain-cvm-source`：上传并验证完整失败实验，刷新
      Mac mount，但保留 CVM 源；用于需要审阅 postmortem 且清理未获授权的情况；
@@ -41,7 +41,7 @@ Parse request → Discover plan → Qualify terminal/postmortem
    - `--exp <group>/<exp>`：只处理一个 child handle；
    - `--group <group>`：处理一个 batch group；
    - 默认无 scope：扫描全部实验；
-   - 失败实验或存在 `run/.codex-upper` 的实验保留在 CVM，不上传、不清理。
+   - 失败实验或存在 `run/.codex-home` 的实验保留在 CVM，不上传、不清理。
    两个 flags 互斥；`--discard-postmortem` 是不可恢复操作，只有用户明确授权丢弃
    本轮列出的失败实验状态时才能使用，不能由 agent 推断。
    `$cvm-monitor` 返回 handle `<group>/<exp>` 时原样传给 `--exp`；`--group` 用于
@@ -66,8 +66,8 @@ Parse request → Discover plan → Qualify terminal/postmortem
 - **上传后 verify 通过才清理 CVM 本地**：对 CVM 与 S3 应用相同 exclude 后，
   相对文件 key 集合必须完全相等；只比较数量会让一个多余对象抵消一个缺失对象。
   **verify fail 保留 CVM local + exit 5**，绝不盲删源。
-- **失败态默认不清理**：Runner 为非零状态保留 `run/.codex-upper`。默认 pull 检测
-  `artifact_manifest.json.final_status != 0` 或 `run/.codex-upper` 后跳过该 exp；
+- **失败态默认不清理**：Runner 为非零状态保留 `run/.codex-home`。默认 pull 检测
+  `artifact_manifest.json.final_status != 0` 或 `run/.codex-home` 后跳过该 exp；
   只有显式 `--include-byproducts` 或 `--discard-postmortem` 才能越过。
 - **保留源模式仍须完整验证**：`--retain-cvm-source` 仅能与
   `--include-byproducts` 同时使用。它执行同一 upload、CVM/S3 key 集合验证和 mount

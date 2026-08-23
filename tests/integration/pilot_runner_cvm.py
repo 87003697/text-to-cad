@@ -228,7 +228,7 @@ def validate_case(case: Case, result: subprocess.CompletedProcess[str]) -> int:
     require((case.exp_dir / "run/rollout.jsonl").is_file(), "synthetic rollout was not collected")
     manifest = json.loads((case.exp_dir / "artifact_manifest.json").read_text(encoding="utf-8"))
     require(manifest["final_status"] == 1, "manifest did not record final status 1")
-    require((case.exp_dir / "run/.codex-upper").is_dir(), "failed run did not preserve isolated state")
+    require((case.exp_dir / "run/.codex-home").is_dir(), "failed run did not preserve isolated state")
     log = (case.exp_dir / "run/.claude-tap.log").read_text(encoding="utf-8", errors="replace")
     match = READY_PATTERN.search(log)
     require(match is not None, "tap ready port missing from log")
@@ -247,7 +247,7 @@ def clean_case(case: Case) -> None:
             text=True,
         )
         require(result.returncode == 0, f"clean failed: {result.stderr}")
-    require(not (case.exp_dir / "run/.codex-upper").exists(), "clean left isolated state")
+    require(not (case.exp_dir / "run/.codex-home").exists(), "clean left isolated state")
     require((case.exp_dir / "artifact_manifest.json").is_file(), "clean removed durable artifacts")
 
 

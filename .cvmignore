@@ -19,3 +19,4 @@ tmp/
 .cvm-jobs/
 .cvm-agent-jobs/
 /.cvm-browser-runtime/
+/.text-to-cad-codex/

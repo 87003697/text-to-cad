@@ -503,7 +503,7 @@ class PullPlanTests(unittest.TestCase):
         command = runner.remote_commands[-1]
         for pattern in cvm_pull.DISPOSABLE_RUNTIME_EXCLUDES:
             self.assertIn(f"--exclude '{pattern}'", command)
-        self.assertNotIn(".codex-upper", command)
+        self.assertNotIn(".codex-home", command)
 
     def test_full_postmortem_excludes_browser_and_git_lfs_caches(
         self,

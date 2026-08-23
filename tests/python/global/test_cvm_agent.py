@@ -153,6 +153,21 @@ class CvmAgentTests(unittest.TestCase):
             kwargs["stream"].write(b'{"usage":{"input_tokens":1}}\n')
             return 0
 
+        def fake_materialize(codex_home, *, proxy_url, client_token):
+            codex_home.mkdir(parents=True)
+            (codex_home / "config.toml").write_text(
+                "[marketplaces.text-to-cad]\n"
+                'source = "/opt/text-to-cad-publish-tree"\n'
+                '[plugins."cad@text-to-cad"]\n'
+                "enabled = true\n"
+                'model_provider = "venus"\n'
+                "[model_providers.venus]\n"
+                f"base_url = \"{proxy_url}\"\n"
+                f'experimental_bearer_token = "{client_token}"\n',
+                encoding="utf-8",
+            )
+            return mock.Mock()
+
         class FakeProxy:
             url = "http://127.0.0.1:12345/v1"
 
@@ -182,6 +197,11 @@ class CvmAgentTests(unittest.TestCase):
             mock.patch.object(cvm_agent, "_require_closed_docker_socket"),
             mock.patch.object(cvm_agent, "_run_process_group", side_effect=fake_run),
             mock.patch.object(cvm_agent, "RetryProxy", FakeProxy),
+            mock.patch.object(
+                cvm_agent,
+                "_materialize_worker_codex_home",
+                side_effect=fake_materialize,
+            ),
             mock.patch.dict(os.environ, {"VENUS_TOKEN": "sensitive-value"}),
         ):
             status = cvm_agent._run_codex(
@@ -201,10 +221,8 @@ class CvmAgentTests(unittest.TestCase):
         config = control / "home/.codex/config.toml"
         self.assertNotIn("sensitive-value", observed["config"])
         self.assertIn(str(observed["client_token"]), observed["config"])
-        self.assertIn(
-            mock.call(config, cvm_agent.NOBODY_UID, cvm_agent.NOBODY_GID),
-            chown.call_args_list,
-        )
+        self.assertIn('[marketplaces.text-to-cad]', observed["config"])
+        self.assertIn('[plugins."cad@text-to-cad"]', observed["config"])
         self.assertFalse(config.exists())
 
     def test_normal_codex_exit_still_terminates_the_process_group(self) -> None:
@@ -467,6 +485,56 @@ class CvmAgentTests(unittest.TestCase):
         self.assertIn("source worktree must be clean", wrapper)
         self.assertIn("ssh -n cvm", wrapper)
         self.assertIn(".secrets/text-to-cad.env", remote_wrapper)
+
+
+class MaterializeWorkerCodexHomeTests(unittest.TestCase):
+    """Fail-closed contract for cvm_agent worker CODEX_HOME materialization."""
+
+    def test_missing_authority_pointer_aborts_the_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as home_text:
+            home = Path(home_text)
+            with mock.patch.object(cvm_agent.Path, "home", return_value=home):
+                with self.assertRaisesRegex(
+                    cvm_agent.AgentError, "no valid plugin-authority pointer"
+                ):
+                    cvm_agent._materialize_worker_codex_home(
+                        home / "worker-codex",
+                        proxy_url="http://127.0.0.1:1/v1",
+                        client_token="tok",
+                    )
+
+    def test_published_authority_materializes_and_preserves_registration(self) -> None:
+        from tests.python.support import authority_fixtures
+
+        with tempfile.TemporaryDirectory() as home_text:
+            home = Path(home_text)
+            fixture = authority_fixtures.build_authority(home)
+            target = home / "worker-codex"
+            with mock.patch.object(cvm_agent.Path, "home", return_value=home):
+                observed = cvm_agent._materialize_worker_codex_home(
+                    target,
+                    proxy_url="http://127.0.0.1:1/v1",
+                    client_token="sentinel-token",
+                )
+            self.assertEqual(observed.deployment_id, fixture.receipt.deployment_id)
+            config = (target / "config.toml").read_text(encoding="utf-8")
+            self.assertIn("[marketplaces.text-to-cad]", config)
+            self.assertIn('[plugins."cad@text-to-cad"]', config)
+            self.assertIn("enabled = true", config)
+            self.assertIn("sentinel-token", config)
+            self.assertIn("http://127.0.0.1:1/v1", config)
+            # Provider TOML must NOT overwrite the marketplace source with the
+            # in-sandbox path; cvm_agent runs the CLI directly (not in bwrap).
+            self.assertNotIn("/opt/text-to-cad-publish-tree", config)
+            self.assertTrue(
+                (
+                    target
+                    / "plugins/cache/text-to-cad/cad"
+                    / fixture.receipt.version
+                    / ".codex-plugin"
+                    / "plugin.json"
+                ).is_file()
+            )
 
 
 if __name__ == "__main__":

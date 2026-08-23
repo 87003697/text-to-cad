@@ -352,7 +352,7 @@ print(json.dumps({
     "path_safe": True,
     "complete": complete,
     "final_status": value if complete else None,
-    "has_postmortem": (exp / "run/.codex-upper").is_dir(),
+    "has_postmortem": (exp / "run/.codex-home").is_dir(),
 }, separators=(",", ":")))
 """.strip()
         command = " ".join(

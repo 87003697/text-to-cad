@@ -30,6 +30,13 @@ except ModuleNotFoundError as exc:
         raise
     from venus_retry_proxy import RetryProxy
 
+try:
+    from scripts.pilot import plugin_deployment
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    import plugin_deployment  # type: ignore[no-redef]
+
 sys.path.insert(
     0,
     os.fspath(
@@ -56,9 +63,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SANDBOX_REPO_ROOT = Path("/workspace/repo")
 SANDBOX_HOME = Path("/home/pilot")
 SANDBOX_CODEX_HOME = SANDBOX_HOME / ".codex"
+SANDBOX_PUBLISH_TREE = Path(plugin_deployment.SANDBOX_MARKETPLACE_SOURCE)
+JOB_CODEX_HOME_REL = "run/.codex-home"
 ARTIFACT_CONTRACT_STATUS = 4
 MANIFEST_EXCLUDED_ROOTS = {".git"}
-MANIFEST_EXCLUDED_PREFIXES = {"run/.codex-upper"}
+MANIFEST_EXCLUDED_PREFIXES = {JOB_CODEX_HOME_REL}
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
 CAD_REBUILD_ENTRYPOINT = REPO_ROOT / "skills/cad/scripts/canonical-build/__main__.py"
 GEOMETRY_ENTRYPOINT = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare/__main__.py"
@@ -526,30 +535,42 @@ def export_html(
         temporary.unlink(missing_ok=True)
 
 
-def prepare_sandbox(
+def prepare_job_codex_home(
     exp_dir: Path,
-    skill_dirs: list[Path],
+    receipt: plugin_deployment.DeploymentReceipt,
     *,
     browser_mcp_url: str | None = None,
 ) -> Path:
-    """Create the isolated Codex home, skill mount points, and MCP config."""
+    """Materialize a job-private writable CODEX_HOME from the plugin authority.
 
-    upper = exp_dir / "run/.codex-upper"
+    Deep-copies the verified authority ``codex_home`` (config.toml with the
+    marketplace + plugin registration and the installed plugin cache) into a
+    per-experiment directory, rewrites the marketplace source to the stable
+    in-sandbox path, and merges the browser MCP fragment when supplied. The
+    materialization is manifest-verified against the authority receipt so a
+    torn copy cannot silently degrade the pilot.
+    """
+
+    target = exp_dir / JOB_CODEX_HOME_REL
     try:
-        upper.mkdir(parents=True, exist_ok=True)
-        for skill_dir in skill_dirs:
-            (upper / "skills" / skill_dir.name).mkdir(
-                parents=True,
-                exist_ok=True,
-            )
-        if browser_mcp_url is not None:
-            (upper / "config.toml").write_text(
-                render_mcp_config(browser_mcp_url),
-                encoding="utf-8",
-            )
+        if target.exists():
+            shutil.rmtree(target)
+        (target.parent).mkdir(parents=True, exist_ok=True)
+        extra_toml = (
+            render_mcp_config(browser_mcp_url) if browser_mcp_url is not None else None
+        )
+        plugin_deployment.materialize_job_codex_home(
+            receipt,
+            target,
+            extra_toml=extra_toml,
+        )
+    except plugin_deployment.PluginAuthorityError as exc:
+        raise PilotError(
+            f"cannot materialize job CODEX_HOME: {exc}"
+        ) from exc
     except OSError as exc:
         raise PilotError(f"cannot prepare sandbox state: {exc}") from exc
-    return upper
+    return target
 
 
 def validate_exp_dir(repo_root: Path, exp_dir: Path) -> Path:
@@ -587,39 +608,28 @@ def validate_input_paths(repo_root: Path, input_paths: list[Path]) -> list[Path]
     return resolved_inputs
 
 
-def resolve_installed_skill_dirs(
-    repo_root: Path,
-    host_codex_home: Path,
-) -> list[Path]:
-    """Return Codex-installed skills whose links target this checkout."""
+def resolve_deployed_authority(host_home: Path) -> plugin_deployment.DeploymentReceipt:
+    """Return the current plugin-authority receipt or fail closed.
 
-    skills_root = (repo_root / "skills").resolve()
-    installed_root = host_codex_home / "skills"
-    if not installed_root.is_dir():
-        raise PilotError(
-            "Codex skills are not installed; run "
-            "scripts/install/install-skills.sh --agent codex"
-        )
-    skills = []
+    Reads ``current.json`` under ``<host_home>/.text-to-cad-codex/deployments/``
+    through :mod:`plugin_deployment` so every pilot consumes the exact bytes
+    that the shipped ``cvm_install_plugin.py`` installed and verified through
+    the real Codex plugin CLI. The receipt drives both the sandbox mount
+    layout (whole authority ``codex-home`` at ``SANDBOX_CODEX_HOME`` + publish
+    tree at the marketplace path) and the legacy per-skill script mounts under
+    ``SANDBOX_REPO_ROOT/skills``. Any missing authority, digest mismatch, or
+    path escape raises :class:`PilotError` — consumers must not fall back to
+    legacy ``~/.codex/skills`` symlinks.
+    """
+
     try:
-        entries = sorted(installed_root.iterdir(), key=lambda path: path.name)
-        for entry in entries:
-            if not entry.is_symlink():
-                continue
-            target = entry.resolve()
-            try:
-                target.relative_to(skills_root)
-            except ValueError:
-                continue
-            if target.is_dir() and (target / "SKILL.md").is_file():
-                skills.append(target)
-    except OSError as exc:
-        raise PilotError(f"cannot inspect installed Codex skills: {exc}") from exc
-    if not skills:
+        return plugin_deployment.resolve_current_authority(host_home)
+    except plugin_deployment.PluginAuthorityError as exc:
         raise PilotError(
-            f"no installed Codex skills target this checkout: {installed_root}"
-        )
-    return skills
+            "no valid plugin-authority pointer for CVM Codex; "
+            "publish one via scripts/pilot/cvm-push.sh before running a pilot: "
+            f"{exc}"
+        ) from exc
 
 
 def resolve_sandbox_codex(environ: Mapping[str, str]) -> Path:
@@ -698,16 +708,12 @@ def build_bwrap_argv(
     host_home_value = environ.get("HOME")
     if not host_home_value:
         raise PilotError("HOME must be set")
-    host_codex_home = Path(
-        environ.get("CODEX_HOME", str(Path(host_home_value) / ".codex"))
-    ).resolve()
+    host_home = Path(host_home_value)
 
     exp_dir = validate_exp_dir(repo_root, exp_dir)
     inputs = validate_input_paths(repo_root, input_paths)
-    skill_dirs = resolve_installed_skill_dirs(
-        repo_root,
-        host_codex_home,
-    )
+    receipt = resolve_deployed_authority(host_home)
+    skill_dirs = plugin_deployment.resolved_skill_directories(receipt)
     relative_exp = exp_dir.relative_to(repo_root)
     sandbox_exp = SANDBOX_REPO_ROOT / relative_exp
     gateway = repo_root / "gateway" / "codex-tap-gpt56"
@@ -716,7 +722,9 @@ def build_bwrap_argv(
     venv = repo_root / ".venv"
     if not venv.is_dir():
         raise PilotError(f"pilot runtime not found: {venv}")
-    upper = prepare_sandbox(exp_dir, skill_dirs, browser_mcp_url=browser_mcp_url)
+    job_codex_home = prepare_job_codex_home(
+        exp_dir, receipt, browser_mcp_url=browser_mcp_url
+    )
     if browser_capability_dir is not None:
         browser_capability_dir = browser_capability_dir.resolve()
         if not browser_capability_dir.is_dir():
@@ -760,6 +768,8 @@ def build_bwrap_argv(
         "--dir",
         "/home",
         "--dir",
+        "/opt",
+        "--dir",
         "/run",
         "--dir",
         str(SANDBOX_HOME),
@@ -785,8 +795,11 @@ def build_bwrap_argv(
         str(exp_dir),
         str(sandbox_exp),
         "--bind",
-        str(upper),
+        str(job_codex_home),
         str(SANDBOX_CODEX_HOME),
+        "--ro-bind",
+        str(receipt.publish_tree),
+        str(SANDBOX_PUBLISH_TREE),
     ]
     for path in existing_system_paths():
         argv.extend(["--ro-bind", str(path), str(path)])
@@ -807,9 +820,6 @@ def build_bwrap_argv(
                 "--ro-bind",
                 str(skill_dir),
                 str(SANDBOX_REPO_ROOT / "skills" / skill_dir.name),
-                "--ro-bind",
-                str(skill_dir),
-                str(SANDBOX_CODEX_HOME / "skills" / skill_dir.name),
             ]
         )
     if browser_capability_dir is not None:
@@ -1126,7 +1136,7 @@ def publish_artifact_manifest(
 def cleanup_sandbox(exp_dir: Path) -> None:
     """Remove the deterministic isolated Codex home if present."""
 
-    for name in ("run/.codex-upper",):
+    for name in (JOB_CODEX_HOME_REL,):
         path = exp_dir / name
         try:
             if path.exists():
@@ -1144,7 +1154,7 @@ def finalize_pilot(
 ) -> int:
     """Collect the unique rollout, apply cleanup policy, and choose final status."""
 
-    upper = exp_dir / "run/.codex-upper"
+    upper = exp_dir / JOB_CODEX_HOME_REL
     signal_status = workload_status in {
         128 + signal.SIGINT,
         128 + signal.SIGTERM,

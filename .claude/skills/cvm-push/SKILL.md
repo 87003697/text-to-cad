@@ -28,8 +28,20 @@ description: >-
 脚本会把当前 checkout 复制到隔离 staging，在 staging 内物化全部 production skill
 runtime，再把实体 bundle 上传到 CVM；不会修改 source checkout 的开发 symlink 或共享
 依赖缓存。稳定 shell 入口只负责调用 `cvm_push.py`；Python workflow 按
-`Preflight → Stage → Transfer → Verify` 编排，并用同一份 runtime contract 做本地和远端
+`Preflight → Stage → Transfer → Verify → Install` 编排，并用同一份 runtime contract 做本地和远端
 验收。
+
+**Install** 阶段把 Mac source provenance、transfer summary 和 runtime attestation 编成
+严格 schema 的 canonical JSON/base64url 参数。CVM 在 publication lock 内先检查 Codex
+CLI ≥ 0.142.0，再复制已验证的 `~/text-to-cad/`，执行现有 publish-tree finalizer，
+通过真实 `codex plugin marketplace add` + `codex plugin add cad@text-to-cad` 安装到
+隔离 `CODEX_HOME`，并重算 prepared/installed manifests 与 critical runtimes。全部通过
+后才原子替换 `current.json`；相同内容重推幂等。
+
+Pilot 与 `cvm_agent` 从该 authority 深拷贝完整、已注册 plugin 的 `CODEX_HOME` 到每个
+job 的私有可写目录。Pilot 把 marketplace source 重写为
+`/opt/text-to-cad-publish-tree`，并把已验证 publish tree 只读挂载到该路径；不再用
+`~/.codex/skills` 或 loose-skill mounts 代替 plugin 注册状态。
 
 ## Long wait
 
@@ -71,12 +83,16 @@ blocking wait；terminal completion 会提前 hand back。精确的更早 deadli
 - **source → staging 必须排除本地状态**：`.agents/`、`.claude/`、`.codex/`、
   `.git`、`.venv`、outputs/models、缓存和构建产物不能成为 deployment material；
   但当前 dirty worktree 的源码必须保留。
+- **plugin authority 只在全部 checks 通过后才 publish**：staging 阶段完成 finalize + `codex plugin add` + manifest/critical-runtime 校验以前，不能改动 `~/.text-to-cad-codex/deployments/current.json`；install/verify 任一失败保留旧 pointer。
+- **pilot 与 cvm_agent 不再回退到 `~/.codex/skills`**：唯一授权来源是 `current.json` 指向的 deployment `codex-home`；缺失或校验失败必须 fail closed 而非查找旧 symlink。
 - Push 只部署代码；不创建、查询、等待、重试或清理 job。
 
 ## 边界条件
 
 - 假定 `ssh cvm` alias 已配（见 `.agents/DEVCLOUD.md`）；未配 → 用户先配。
 - 假定 CVM 上 `~/text-to-cad/` 已存在；不做 bootstrap。
+- 假定 CVM 上 Codex CLI ≥ 0.142.0；版本不足或无法解析在任何 marketplace mutation
+  之前 exit 7。
 - 只做 code push；`models/` 靠 CVM 本地已 hydrate 的 LFS content，不通过 skill 推。
 - linked worktree 缺少 `viewer/node_modules` 或 `tmp/cad-snapshot-build` 时，脚本自动
   查找 primary checkout；仅存在半成品目录不算可用，会继续回退。也可用
@@ -85,7 +101,8 @@ blocking wait；terminal completion 会提前 hand back。精确的更早 deadli
   依赖只作为 staging 输入，不直接上传 root `node_modules`。
 - 一次 skill 调用 = 一次完整同步（无 partial / resume 概念）；rsync 天然增量。
 - rsync 不更新 CVM `.git`。CVM HEAD 只是远端 checkout 基线，不是本次部署内容的
-  identity；真正的 source provenance 是脚本输出的 branch/HEAD/dirty state。
+  identity；真正的 source provenance 是 receipt 绑定的 Mac branch/HEAD/dirty state、
+  transfer summary、runtime attestation 和 content-bound plugin deployment id。
 - push 结束前必须按同一 runtime contract 确认 Viewer runtime 是实体目录，
   launcher/backend/dist 存在，并比较 Viewer backend 与 launcher 的 SHA-256。
   任一失败均不得进入 pilot。
@@ -98,6 +115,8 @@ blocking wait；terminal completion 会提前 hand back。精确的更早 deadli
 - 传输总量 / speed（receipt `transfer`；rsync 未提供可解析 summary 时为 `null`）
 - source branch / HEAD / clean-or-dirty state（receipt `source`）
 - CVM Git base（receipt `remote_git_base`，并明确它不是 deployment identity）
+- Plugin authority（receipt `plugin_authority`）：`deployment_id`、版本、Codex 版本、
+  prepared/installed digest、critical runtimes 和已绑定的 Mac push provenance
 - 关键运行文件如需严格部署证明，比较 source/CVM SHA-256；不能只引用 CVM HEAD
 - 下一步提示（推荐先做 group snapshot，再 submit + monitor）：
   ```
@@ -125,6 +144,10 @@ compare SHA-256 for `scripts/pilot/cvm_job/`, `toys4k-pilot.sh`, and
   staging 与 CVM 的精确 runtime 文件
 - exit 6（Playwright browser revision 缺失）→ 在 CVM host 安装脚本报告的 revision，
   随后重新 push
+- exit 7（Codex 版本 gate、publish-tree finalize 或 `codex plugin marketplace add` /
+  `codex plugin add cad@text-to-cad` 失败）→ 看 remote error JSON 的 `error`；
+  `current.json` 未变，不 submit pilot
+- exit 8（installed plugin cache 与 prepared publish tree 的 manifest/critical runtime 不一致）→ 视为部署 authority 未通过；`current.json` 未变，不 submit pilot
 - rsync code 23 且包含 `could not make way for new regular file: .git` →
   检查 `.cvmignore` 同时包含 `.git/` 和 `.git`
 - 其他 → 汇报 receipt `phase` / `error`；信息不足时再贴过滤后的 log 尾 20 行

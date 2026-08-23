@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -41,6 +42,7 @@ STAGE_SOURCE_EXCLUDES = (
     "/.DS_Store",
     "/.cvm-jobs/",
     "/.cvm-agent-jobs/",
+    "/.text-to-cad-codex/",
     "/outputs/",
     "/models/",
     "/docs/",
@@ -52,6 +54,13 @@ STAGE_SOURCE_EXCLUDES = (
     "*.tmp",
     "/viewer/dist/",
 )
+
+# Remote helper that produces the installed-plugin authority receipt after
+# verify_remote has already confirmed the transferred bytes are healthy.
+REMOTE_INSTALL_HELPER = f"{REMOTE_ROOT}/scripts/pilot/cvm_install_plugin.py"
+REMOTE_AUTHORITY_HOME_ROOT = "$HOME"
+INSTALL_EXIT_CODE = 7
+VERIFY_EXIT_CODE = 8
 
 VIEWER_REQUIRED_EXECUTABLES = (
     ".bin/esbuild",
@@ -372,6 +381,7 @@ class CvmPush:
         self.source: SourceProvenance | None = None
         self.transfer_summary = TransferSummary()
         self.remote_head: str | None = None
+        self.plugin_authority: dict | None = None
 
     def _log(self, message: str, *, stderr: bool = False) -> None:
         if not self.agent:
@@ -904,6 +914,116 @@ class CvmPush:
             )
 
 
+    def _build_push_provenance(
+        self, attestation: RuntimeAttestation
+    ) -> dict[str, object]:
+        """Assemble the Mac-side provenance document bound into the receipt.
+
+        The publisher on the CVM never consults its own local git checkout —
+        that would just tell us the CVM received the bytes, not who sent them.
+        The Mac-observed branch/head/dirty flag plus the exact runtime
+        attestation hashes computed *before* the rsync are what a downstream
+        auditor uses to answer "which Mac working tree produced this
+        authority?".
+        """
+
+        if self.source is None:
+            raise PushError(
+                "cannot install plugin authority before source is inspected",
+                INSTALL_EXIT_CODE,
+                transferred=True,
+            )
+        return {
+            "schema": "text-to-cad.push-provenance/1",
+            "mac_branch": self.source.branch,
+            "mac_head": self.source.head,
+            "mac_state": self.source.state,
+            "transfer_summary": {
+                "sent_bytes": self.transfer_summary.sent_bytes,
+                "received_bytes": self.transfer_summary.received_bytes,
+                "bytes_per_second": self.transfer_summary.bytes_per_second,
+            },
+            "runtime_attestation": dict(attestation.hashes),
+        }
+
+    @staticmethod
+    def _encode_provenance(document: Mapping[str, object]) -> str:
+        canonical = json.dumps(
+            document, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+        return base64.urlsafe_b64encode(canonical).decode("ascii")
+
+    def install_plugin_authority(self, attestation: RuntimeAttestation) -> dict:
+        """Gate 4: finalize + install + verify + publish the plugin authority.
+
+        Invokes the shipped ``cvm_install_plugin.py`` helper over ``ssh -n cvm``
+        (the same transport the rest of this workflow uses) so the transferred
+        bytes are finalized into a symlink-free publish tree, installed through
+        the real Codex plugin CLI in an isolated CODEX_HOME, verified against
+        the prepared tree, and atomically published via ``current.json``. The
+        Mac-side push provenance (branch, head, dirty flag, transfer totals,
+        runtime attestation hashes) is transported as a strict base64url
+        canonical JSON blob on the SSH command line so we do not need a second
+        control-plane transport and so a hostile receipt content cannot escape
+        shell quoting. On failure the previous authority pointer is untouched.
+        Install failures surface as exit code 7; verify failures surface as
+        exit code 8.
+        """
+
+        provenance = self._build_push_provenance(attestation)
+        encoded = self._encode_provenance(provenance)
+        # The helper reads paths from argv, not from a shell-composed string,
+        # and every argument value is either a fixed constant or the strict
+        # base64url provenance blob shell-quoted below.
+        command = (
+            "set -eu\n"
+            f"python3 {shlex.quote(REMOTE_INSTALL_HELPER)} "
+            f"--transferred-source {shlex.quote(REMOTE_ROOT)} "
+            f"--codex-home-root {REMOTE_AUTHORITY_HOME_ROOT} "
+            f"--provenance-b64 {shlex.quote(encoded)}"
+        )
+        result = self.runner.remote(
+            command,
+            cwd=self.repo_root,
+            check=False,
+        )
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        payload: dict | None = None
+        if stdout:
+            try:
+                document = json.loads(stdout.splitlines()[-1])
+            except json.JSONDecodeError:
+                document = None
+            if isinstance(document, dict):
+                payload = document
+        if result.returncode != 0 or (
+            isinstance(payload, dict)
+            and payload.get("schema") == "text-to-cad.plugin-authority-error/1"
+        ):
+            stage = "install"
+            detail = stderr or stdout or "unknown remote install failure"
+            if isinstance(payload, dict):
+                stage_value = payload.get("stage")
+                if stage_value in {"install", "verify"}:
+                    stage = str(stage_value)
+                error_value = payload.get("error")
+                if isinstance(error_value, str) and error_value:
+                    detail = error_value
+            status = INSTALL_EXIT_CODE if stage == "install" else VERIFY_EXIT_CODE
+            message = (
+                f"CVM plugin {stage} failed: {detail}"
+            )
+            raise PushError(message, status, transferred=True)
+        if payload is None or payload.get("schema") != "text-to-cad.plugin-authority/1":
+            raise PushError(
+                "CVM plugin install returned no authority receipt on stdout",
+                VERIFY_EXIT_CODE,
+                transferred=True,
+            )
+        self.plugin_authority = payload
+        return payload
+
     def remote_git_base(self) -> str:
         result = self.runner.remote(
             (
@@ -946,6 +1066,8 @@ class CvmPush:
                 self.remove_legacy_plugin_tree()
                 self._enter_phase("verify")
                 self.verify_remote(attestation)
+                self._enter_phase("install")
+                self.install_plugin_authority(attestation)
         except PushError as exc:
             if exc.status == 4 and not exc.transferred:
                 self._log_best_effort(
@@ -989,6 +1111,7 @@ class CvmPush:
                 "bytes_per_second": self.transfer_summary.bytes_per_second,
             },
             "remote_git_base": self.remote_head,
+            "plugin_authority": self.plugin_authority,
         }
 
     def write_receipt(self, receipt: Mapping[str, object]) -> None:

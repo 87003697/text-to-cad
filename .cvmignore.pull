@@ -25,8 +25,8 @@ __pycache__/*
 # $EXP_DIR/run/rollout.jsonl. What's left is sqlite state, plugin locks,
 # and socket/FIFO tmp files that aws warns on. Default cvm-pull now preserves
 # failed/postmortem CVM dirs instead of excluding this state and deleting it.
-.codex-upper/*
-*/.codex-upper/*
+.codex-home/*
+*/.codex-home/*
 .codex-work/*
 */.codex-work/*
 # Preserve per-exp Git commits, objects, index, and refs: they are canonical

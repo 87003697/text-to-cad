@@ -240,6 +240,18 @@ class AgentModeTests(unittest.TestCase):
             workflow.attest_stage = mock.Mock(return_value=attestation)
             workflow.transfer_stage = mock.Mock()
             workflow.verify_remote = mock.Mock()
+            authority_receipt = {
+                "schema": "text-to-cad.plugin-authority/1",
+                "deployment_id": "d" * 64,
+                "version": "0.4.21",
+                "installed_manifest_digest": "a" * 64,
+            }
+            workflow.install_plugin_authority = mock.Mock(
+                side_effect=lambda _attestation: (
+                    setattr(workflow, "plugin_authority", authority_receipt)
+                    or authority_receipt
+                )
+            )
             workflow.remote_git_base = mock.Mock(return_value="remote-head")
 
             stdout = io.StringIO()
@@ -255,7 +267,7 @@ class AgentModeTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(
             [record["phase"] for record in records[:-1]],
-            ["preflight", "stage", "transfer", "verify"],
+            ["preflight", "stage", "transfer", "verify", "install"],
         )
         self.assertTrue(
             all(record["schema"] == "cvm-push.event/1" for record in records[:-1])
@@ -274,6 +286,7 @@ class AgentModeTests(unittest.TestCase):
             {"sent_bytes": None, "received_bytes": None, "bytes_per_second": None},
         )
         self.assertEqual(receipt["remote_git_base"], "remote-head")
+        self.assertEqual(receipt["plugin_authority"], authority_receipt)
 
     def test_agent_failure_preserves_exit_code_and_writes_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -1002,6 +1015,10 @@ class WorkflowTests(unittest.TestCase):
             workflow.transfer_stage = lambda stage: events.append("transfer")
             workflow.remove_legacy_plugin_tree = lambda: events.append("cleanup-plugin")
             workflow.verify_remote = lambda expected: events.append("verify")
+            workflow.install_plugin_authority = lambda _attestation: (
+                events.append("install"),
+                {"schema": "text-to-cad.plugin-authority/1"},
+            )[1]
             workflow.remote_git_base = lambda: "remote-head"
 
             workflow.run()
@@ -1022,8 +1039,166 @@ class WorkflowTests(unittest.TestCase):
                     "transfer",
                     "cleanup-plugin",
                     "verify",
+                    "install",
                 ],
             )
+
+
+class InstallPluginAuthorityTests(unittest.TestCase):
+    """Cover the SSH-hosted install/verify/publish-authority phase."""
+
+    def _authority_payload(self) -> dict:
+        return {
+            "schema": "text-to-cad.plugin-authority/1",
+            "deployment_id": "d" * 64,
+            "version": "0.4.21",
+            "plugin_selector": "cad@text-to-cad",
+            "prepared_manifest_digest": "a" * 64,
+            "installed_manifest_digest": "a" * 64,
+            "codex_version": "codex-cli 0.147.0",
+            "published_at": "2026-08-23T00:00:00Z",
+            "source_git_sha": "deadbeef" * 5,
+            "deployment_dir": "/home/pilot/.text-to-cad-codex/deployments/" + "d" * 64,
+            "publish_tree": "/home/pilot/.text-to-cad-codex/deployments/" + "d" * 64 + "/publish-tree",
+            "codex_home": "/home/pilot/.text-to-cad-codex/deployments/" + "d" * 64 + "/codex-home",
+            "installed_path": "/home/pilot/.text-to-cad-codex/deployments/" + "d" * 64 + "/codex-home/plugins/cache/cad",
+            "critical_runtimes": [],
+            "transfer_provenance": {
+                "schema": "text-to-cad.push-provenance/1",
+                "mac_branch": "develop",
+                "mac_head": "0" * 40,
+                "mac_state": "clean",
+            },
+        }
+
+    def _workflow(self, root: Path, runner: FakeRunner) -> "cvm_push.CvmPush":
+        workflow = cvm_push.CvmPush(
+            runner,
+            repo_root=create_repo(root),
+            environ={"TMPDIR": str(root)},
+        )
+        workflow.source = cvm_push.SourceProvenance(
+            branch="develop", head="0" * 40, state="clean"
+        )
+        return workflow
+
+    @staticmethod
+    def _attestation() -> "cvm_push.RuntimeAttestation":
+        return cvm_push.RuntimeAttestation(
+            hashes={"scripts/pilot/runner.py": "b" * 64}
+        )
+
+    def test_install_success_embeds_authority_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            runner = FakeRunner()
+            payload = self._authority_payload()
+            runner.respond("cvm_install_plugin.py", json.dumps(payload))
+            workflow = self._workflow(root, runner)
+            embedded = workflow.install_plugin_authority(self._attestation())
+        self.assertEqual(embedded, payload)
+        self.assertEqual(workflow.plugin_authority, payload)
+        self.assertEqual(len(runner.remote_commands), 1)
+        command = runner.remote_commands[0]
+        # Command must invoke the CVM helper explicitly with argv (not shell-composed
+        # from untrusted paths) and pass the fixed HOME-rooted authority root plus
+        # the encoded provenance blob.
+        self.assertIn("cvm_install_plugin.py", command)
+        self.assertIn("--transferred-source", command)
+        self.assertIn("--codex-home-root", command)
+        self.assertIn("--provenance-b64", command)
+
+    def test_install_command_transports_provenance_blob(self) -> None:
+        import base64 as _b64
+        import shlex as _shlex
+
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            runner = FakeRunner()
+            payload = self._authority_payload()
+            runner.respond("cvm_install_plugin.py", json.dumps(payload))
+            workflow = self._workflow(root, runner)
+            workflow.install_plugin_authority(self._attestation())
+            command = runner.remote_commands[0]
+        tokens = _shlex.split(command)
+        idx = tokens.index("--provenance-b64")
+        encoded = tokens[idx + 1]
+        decoded = json.loads(_b64.urlsafe_b64decode(encoded.encode("ascii")).decode())
+        self.assertEqual(decoded["schema"], "text-to-cad.push-provenance/1")
+        self.assertEqual(decoded["mac_branch"], "develop")
+        self.assertEqual(decoded["mac_head"], "0" * 40)
+        self.assertEqual(decoded["mac_state"], "clean")
+        self.assertEqual(
+            decoded["runtime_attestation"], {"scripts/pilot/runner.py": "b" * 64}
+        )
+
+    def test_install_before_source_inspection_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            runner = FakeRunner()
+            workflow = cvm_push.CvmPush(
+                runner,
+                repo_root=create_repo(root),
+                environ={"TMPDIR": str(root)},
+            )
+            with self.assertRaises(cvm_push.PushError) as ctx:
+                workflow.install_plugin_authority(self._attestation())
+            self.assertEqual(ctx.exception.status, cvm_push.INSTALL_EXIT_CODE)
+
+    def test_install_failure_maps_to_exit_code_7(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            runner = FakeRunner()
+            error_payload = {
+                "schema": "text-to-cad.plugin-authority-error/1",
+                "stage": "install",
+                "error": "codex plugin add failed",
+            }
+            runner.respond(
+                "cvm_install_plugin.py", json.dumps(error_payload), status=1
+            )
+            workflow = self._workflow(root, runner)
+            with self.assertRaises(cvm_push.PushError) as ctx:
+                workflow.install_plugin_authority(self._attestation())
+            self.assertEqual(ctx.exception.status, cvm_push.INSTALL_EXIT_CODE)
+            self.assertTrue(ctx.exception.transferred)
+            self.assertIn("codex plugin add failed", str(ctx.exception))
+
+    def test_verify_failure_maps_to_exit_code_8(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            runner = FakeRunner()
+            error_payload = {
+                "schema": "text-to-cad.plugin-authority-error/1",
+                "stage": "verify",
+                "error": "installed cache does not match prepared publish tree",
+            }
+            runner.respond(
+                "cvm_install_plugin.py", json.dumps(error_payload), status=1
+            )
+            workflow = self._workflow(root, runner)
+            with self.assertRaises(cvm_push.PushError) as ctx:
+                workflow.install_plugin_authority(self._attestation())
+            self.assertEqual(ctx.exception.status, cvm_push.VERIFY_EXIT_CODE)
+            self.assertTrue(ctx.exception.transferred)
+
+    def test_missing_authority_payload_fails_verify(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            runner = FakeRunner()
+            runner.respond("cvm_install_plugin.py", "", status=0)
+            workflow = self._workflow(root, runner)
+            with self.assertRaises(cvm_push.PushError) as ctx:
+                workflow.install_plugin_authority(self._attestation())
+            self.assertEqual(ctx.exception.status, cvm_push.VERIFY_EXIT_CODE)
+            self.assertTrue(ctx.exception.transferred)
+
+
+class StageExclusionTests(unittest.TestCase):
+    def test_stage_source_excludes_the_local_authority_root(self) -> None:
+        # The CVM-published plugin authority must never rsync back into
+        # Mac -> CVM staging: it is CVM-owned deployment state.
+        self.assertIn("/.text-to-cad-codex/", cvm_push.STAGE_SOURCE_EXCLUDES)
 
 
 if __name__ == "__main__":

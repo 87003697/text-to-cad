@@ -2839,7 +2839,7 @@ def _run_synthetic_runner_workload(workspace: Path) -> int:
         candidate_mesh_relative="built/measurement.glb",
         accepted=True,
     )
-    rollout = workspace / "run/.codex-upper/sessions/a/b/c/rollout-synthetic.jsonl"
+    rollout = workspace / "run/.codex-home/sessions/a/b/c/rollout-synthetic.jsonl"
     rollout.parent.mkdir(parents=True, exist_ok=True)
     rollout.write_text("{}\n", encoding="utf-8")
     return 0

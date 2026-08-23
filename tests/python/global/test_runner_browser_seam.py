@@ -55,37 +55,59 @@ class PrepareSandboxMcpConfigTests(unittest.TestCase):
             )
 
     def test_prepare_sandbox_without_mcp_url_omits_config(self):
+        from tests.python.support.authority_fixtures import build_authority
+
         runner = _load_runner()
         with TemporaryDirectory() as tmp:
+            host_home = Path(tmp) / "home"
+            host_home.mkdir()
+            fixture = build_authority(host_home, dedupe_token="seam-no-mcp")
             exp = Path(tmp) / "outputs" / "job-a"
             (exp / "run").mkdir(parents=True)
-            upper = runner.prepare_sandbox(exp, [])
-            self.assertTrue(upper.is_dir())
-            self.assertFalse((upper / "config.toml").exists())
+            job_home = runner.prepare_job_codex_home(exp, fixture.receipt)
+            self.assertTrue(job_home.is_dir())
+            body = (job_home / "config.toml").read_text(encoding="utf-8")
+            self.assertNotIn("[mcp_servers.browser]", body)
 
     def test_prepare_sandbox_writes_config_toml_with_mcp_url(self):
+        from tests.python.support.authority_fixtures import build_authority
+
         runner = _load_runner()
         with TemporaryDirectory() as tmp:
+            host_home = Path(tmp) / "home"
+            host_home.mkdir()
+            fixture = build_authority(host_home, dedupe_token="seam-mcp")
             exp = Path(tmp) / "outputs" / "job-b"
             (exp / "run").mkdir(parents=True)
             url = "http://127.0.0.1:59321/mcp"
-            upper = runner.prepare_sandbox(exp, [], browser_mcp_url=url)
-            config_path = upper / "config.toml"
+            job_home = runner.prepare_job_codex_home(
+                exp, fixture.receipt, browser_mcp_url=url
+            )
+            config_path = job_home / "config.toml"
             self.assertTrue(config_path.is_file())
             body = config_path.read_text(encoding="utf-8")
             self.assertIn("[mcp_servers.browser]", body)
             self.assertIn(f'url = "{url}"', body)
             self.assertIn('transport = "http"', body)
 
-    def test_prepare_sandbox_creates_skill_mount_dirs(self):
+    def test_prepare_sandbox_installs_marketplace_source_rewrite(self):
+        from tests.python.support.authority_fixtures import build_authority
+
         runner = _load_runner()
+        plugin_deployment = runner.plugin_deployment
         with TemporaryDirectory() as tmp:
+            host_home = Path(tmp) / "home"
+            host_home.mkdir()
+            fixture = build_authority(host_home, dedupe_token="seam-source")
             exp = Path(tmp) / "outputs" / "job-c"
             (exp / "run").mkdir(parents=True)
-            fake_skill = Path(tmp) / "skills" / "fake-skill"
-            fake_skill.mkdir(parents=True)
-            upper = runner.prepare_sandbox(exp, [fake_skill])
-            self.assertTrue((upper / "skills" / "fake-skill").is_dir())
+            job_home = runner.prepare_job_codex_home(exp, fixture.receipt)
+            body = (job_home / "config.toml").read_text(encoding="utf-8")
+            self.assertIn(
+                f'source = "{plugin_deployment.SANDBOX_MARKETPLACE_SOURCE}"',
+                body,
+            )
+            self.assertNotIn(str(fixture.publish_tree), body)
 
 
 class ExperimentGitHistoryTests(unittest.TestCase):
@@ -131,7 +153,7 @@ class ExperimentGitHistoryTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             ).stdout
-            upper = exp / "run/.codex-upper/sessions/a/b/c"
+            upper = exp / "run/.codex-home/sessions/a/b/c"
             upper.mkdir(parents=True)
             (upper / "rollout-test.jsonl").write_text("{}\n", encoding="utf-8")
 
@@ -189,7 +211,7 @@ class ExperimentGitHistoryTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             exp = Path(tmp) / "outputs/group/exp"
             runner.prepare_exp(exp)
-            upper = exp / "run/.codex-upper/sessions/a/b/c"
+            upper = exp / "run/.codex-home/sessions/a/b/c"
             upper.mkdir(parents=True)
             (upper / "rollout-test.jsonl").write_text("{}\n", encoding="utf-8")
 

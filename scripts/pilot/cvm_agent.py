@@ -21,6 +21,7 @@ import time
 from typing import Any, Callable, Sequence
 
 from scripts.pilot.venus_retry_proxy import RetryProxy
+from scripts.pilot import plugin_deployment
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -525,6 +526,38 @@ def _run_process_group(
     return return_code
 
 
+def _materialize_worker_codex_home(
+    codex_home: Path,
+    *,
+    proxy_url: str,
+    client_token: str,
+) -> plugin_deployment.DeploymentReceipt:
+    """Deep-copy the authority CODEX_HOME into a worker-private directory.
+
+    Uses the same helper as the pilot runner so both consumers produce a
+    fully-registered isolated home from the verified authority. The Venus
+    provider TOML is appended without touching the marketplace or plugin
+    registration so a merge conflict with the plugin authority is impossible.
+    """
+
+    try:
+        receipt = plugin_deployment.resolve_current_authority(Path.home())
+        extra_toml = plugin_deployment.render_venus_provider_toml(
+            base_url=proxy_url, bearer_token=client_token
+        )
+        plugin_deployment.materialize_job_codex_home(
+            receipt,
+            codex_home,
+            extra_toml=extra_toml,
+            sandbox_marketplace_source=None,
+        )
+    except plugin_deployment.PluginAuthorityError as exc:
+        raise AgentError(
+            f"no valid plugin-authority pointer for CVM Codex: {exc}"
+        ) from exc
+    return receipt
+
+
 def _run_codex(
     workspace: Path,
     control: Path,
@@ -538,7 +571,6 @@ def _run_codex(
     home = control / "home"
     codex_home = home / ".codex"
     home.mkdir()
-    codex_home.mkdir()
     token = os.environ.get("VENUS_TOKEN")
     if not token:
         raise AgentError("Venus token is unavailable")
@@ -554,18 +586,18 @@ def _run_codex(
         required_client_bearer_token=client_token,
         max_upstream_attempts=MAX_UPSTREAM_ATTEMPTS,
     ) as proxy:
-        config = (
-            'model_provider = "venus"\n'
-            "[model_providers.venus]\n"
-            'name = "Venus GPT-5.6-sol"\n'
-            f"base_url = {json.dumps(proxy.url)}\n"
-            'wire_api = "responses"\n'
-            f"experimental_bearer_token = {json.dumps(client_token)}\n"
+        # Materialize the job home only after the retry proxy is running so the
+        # provider TOML embedded in the copy points at a live upstream. The
+        # helper merges the Venus provider block without touching the
+        # marketplace + plugin registration inherited from the authority.
+        _materialize_worker_codex_home(
+            codex_home,
+            proxy_url=proxy.url,
+            client_token=client_token,
         )
         config_path = codex_home / "config.toml"
-        config_path.write_text(config, encoding="utf-8")
         config_path.chmod(0o600)
-        os.chown(config_path, NOBODY_UID, NOBODY_GID)
+        _chown_tree(codex_home, NOBODY_UID, NOBODY_GID)
         environment = {
             "HOME": os.fspath(home),
             "CODEX_HOME": os.fspath(codex_home),
@@ -582,7 +614,7 @@ def _run_codex(
                     environment=environment,
                 )
             finally:
-                config_path.unlink(missing_ok=True)
+                shutil.rmtree(codex_home, ignore_errors=True)
 
 
 def _usage(events: Path) -> dict[str, int] | None:

@@ -890,7 +890,7 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertIn("LifecycleState", runner)
         self.assertNotIn('"--ro-bind",\n        "/",\n        "/"', runner)
         self.assertNotIn("list_skill_dirs", runner)
-        self.assertIn("resolve_installed_skill_dirs", runner)
+        self.assertIn("resolve_deployed_authority", runner)
         self.assertIn('subparsers.add_parser("clean")', runner)
         self.assertIn("--skip-git-repo-check", pilot)
         self.assertIn("--disable\n    plugins", pilot)
@@ -1086,8 +1086,8 @@ class ProductionPathContractTests(unittest.TestCase):
                 "{}\n",
                 encoding="utf-8",
             )
-            (exp_dir / "run/.codex-upper").mkdir(parents=True)
-            (exp_dir / "run/.codex-upper/state.db").write_bytes(b"private")
+            (exp_dir / "run/.codex-home").mkdir(parents=True)
+            (exp_dir / "run/.codex-home/state.db").write_bytes(b"private")
             (exp_dir / "run/stderr.log").write_text("diagnostic\n", encoding="utf-8")
             (exp_dir / "run/venus-retry.jsonl").write_text(
                 '{"attempt":1,"status":200,"error_code":null}\n',
@@ -1108,7 +1108,7 @@ class ProductionPathContractTests(unittest.TestCase):
                 "run/venus-retry.jsonl",
             ],
         )
-        self.assertNotIn("run/.codex-upper/state.db", paths)
+        self.assertNotIn("run/.codex-home/state.db", paths)
 
     def test_workspace_delivery_gate_uses_public_validator_graph(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1177,7 +1177,7 @@ class ProductionPathContractTests(unittest.TestCase):
     def test_finalize_keeps_rollout_anomaly_priority(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             exp_dir = Path(temp) / "exp"
-            (exp_dir / "run/.codex-upper").mkdir(parents=True)
+            (exp_dir / "run/.codex-home").mkdir(parents=True)
             status = load_runner().finalize_pilot(exp_dir, 7, {})
             manifest = json.loads(
                 (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
@@ -1193,7 +1193,7 @@ class ProductionPathContractTests(unittest.TestCase):
             with self.subTest(signum=signum, failure="missing-rollout"):
                 with tempfile.TemporaryDirectory() as temp:
                     exp_dir = Path(temp) / "exp"
-                    (exp_dir / "run/.codex-upper").mkdir(parents=True)
+                    (exp_dir / "run/.codex-home").mkdir(parents=True)
                     runner = load_runner()
                     with mock.patch.object(
                         runner,
@@ -1208,7 +1208,7 @@ class ProductionPathContractTests(unittest.TestCase):
                     exp_dir = Path(temp) / "exp"
                     rollout = (
                         exp_dir
-                        / "run/.codex-upper/sessions/a/b/c/rollout-test.jsonl"
+                        / "run/.codex-home/sessions/a/b/c/rollout-test.jsonl"
                     )
                     rollout.parent.mkdir(parents=True)
                     rollout.write_text("{}\n", encoding="utf-8")
@@ -1229,7 +1229,7 @@ class ProductionPathContractTests(unittest.TestCase):
             exp_dir = Path(temp) / "exp"
             rollout = (
                 exp_dir
-                / "run/.codex-upper"
+                / "run/.codex-home"
                 / "sessions"
                 / "a"
                 / "b"
@@ -1240,7 +1240,7 @@ class ProductionPathContractTests(unittest.TestCase):
             rollout.write_text("{}\n", encoding="utf-8")
             status = load_runner().finalize_pilot(exp_dir, 9, {})
             captured = (exp_dir / "run/rollout.jsonl").read_text(encoding="utf-8")
-            upper_exists = (exp_dir / "run/.codex-upper").exists()
+            upper_exists = (exp_dir / "run/.codex-home").exists()
             manifest_exists = (exp_dir / "artifact_manifest.json").is_file()
         self.assertEqual(status, 9)
         self.assertEqual(captured, "{}\n")
@@ -1252,7 +1252,7 @@ class ProductionPathContractTests(unittest.TestCase):
             exp_dir = Path(temp) / "exp"
             rollout = (
                 exp_dir
-                / "run/.codex-upper"
+                / "run/.codex-home"
                 / "sessions"
                 / "a"
                 / "b"
@@ -1262,7 +1262,7 @@ class ProductionPathContractTests(unittest.TestCase):
             rollout.parent.mkdir(parents=True)
             rollout.write_text("{}\n", encoding="utf-8")
             status = load_runner().finalize_pilot(exp_dir, 0, {})
-            upper_exists = (exp_dir / "run/.codex-upper").exists()
+            upper_exists = (exp_dir / "run/.codex-home").exists()
             manifest = json.loads(
                 (exp_dir / "artifact_manifest.json").read_text(encoding="utf-8")
             )
@@ -1275,7 +1275,7 @@ class ProductionPathContractTests(unittest.TestCase):
             exp_dir = Path(temp) / "exp"
             rollout = (
                 exp_dir
-                / "run/.codex-upper"
+                / "run/.codex-home"
                 / "sessions"
                 / "a"
                 / "b"
@@ -1292,7 +1292,7 @@ class ProductionPathContractTests(unittest.TestCase):
             ):
                 status = runner.finalize_pilot(exp_dir, 0, {})
             captured = (exp_dir / "run/rollout.jsonl").read_text(encoding="utf-8")
-            upper_exists = (exp_dir / "run/.codex-upper").exists()
+            upper_exists = (exp_dir / "run/.codex-home").exists()
             manifest_exists = (exp_dir / "artifact_manifest.json").is_file()
         self.assertEqual(status, 0)
         self.assertEqual(captured, "{}\n")
@@ -1304,7 +1304,7 @@ class ProductionPathContractTests(unittest.TestCase):
             exp_dir = Path(temp) / "exp"
             rollout = (
                 exp_dir
-                / "run/.codex-upper"
+                / "run/.codex-home"
                 / "sessions"
                 / "a"
                 / "b"
@@ -1324,17 +1324,18 @@ class ProductionPathContractTests(unittest.TestCase):
                     0,
                     {"KEEP_STATE": "1"},
                 )
-            upper_exists = (exp_dir / "run/.codex-upper").exists()
+            upper_exists = (exp_dir / "run/.codex-home").exists()
         self.assertEqual(status, 0)
         self.assertTrue(upper_exists)
 
     def test_build_bwrap_argv_exposes_only_task_and_installed_repo_files(
         self,
     ) -> None:
+        from tests.python.support.authority_fixtures import build_authority
+
         with tempfile.TemporaryDirectory() as temp:
             repo_root = (Path(temp) / "repo").resolve()
             exp_dir = repo_root / "outputs" / "group" / "exp with spaces"
-            skill_dir = repo_root / "skills" / "fake"
             outside_skill = Path(temp) / "outside-skill"
             input_path = repo_root / "models" / "toys4k" / "input.ply"
             other_input = repo_root / "models" / "toys4k" / "other.ply"
@@ -1343,42 +1344,45 @@ class ProductionPathContractTests(unittest.TestCase):
             venv = repo_root / ".venv"
             host_home = Path(temp) / "host-home"
             playwright = host_home / ".cache" / "ms-playwright"
-            installed_skills = host_home / ".codex" / "skills"
             capability_dir = (
                 exp_dir / "run" / "browser-runtime" / "0123456789abcdef"
             )
             exp_dir.mkdir(parents=True)
-            skill_dir.mkdir(parents=True)
             outside_skill.mkdir()
             capability_dir.mkdir(parents=True)
             input_path.parent.mkdir(parents=True)
             gateway.parent.mkdir(parents=True)
             venv.mkdir()
             playwright.mkdir(parents=True)
-            installed_skills.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# fake\n", encoding="utf-8")
+            host_home.mkdir(parents=True, exist_ok=True)
             (outside_skill / "SKILL.md").write_text(
                 "# unrelated\n",
                 encoding="utf-8",
             )
-            (installed_skills / "fake").symlink_to(
-                skill_dir,
-                target_is_directory=True,
-            )
-            (installed_skills / "unrelated").symlink_to(
-                outside_skill,
-                target_is_directory=True,
-            )
-            (installed_skills / "system-skill").mkdir()
             input_path.write_text("ply\n", encoding="utf-8")
             other_input.write_text("ply\n", encoding="utf-8")
             gateway.write_text("#!/bin/sh\n", encoding="utf-8")
+
+            # Seed a real plugin-deployment authority under ``host_home`` — the
+            # fixture builds a symlink-free publish tree carrying every
+            # critical-runtime probe and a byte-identical installed cache, so
+            # ``resolve_deployed_authority``'s manifest recompute + probe check
+            # pass end-to-end without mocks.
+            runner = load_runner()
+            fixture = build_authority(host_home, dedupe_token="bwrap-argv")
+            expected_skill_dirs = list(
+                sorted(
+                    (fixture.installed_path / "skills").iterdir(),
+                    key=lambda p: p.name,
+                )
+            )
+            self.assertTrue(expected_skill_dirs, "fixture must plant at least one skill")
+
             environ = {
                 "HOME": str(host_home),
                 "PATH": "/fake/bin",
                 "VENUS_TOKEN": "super-secret-token",
             }
-            runner = load_runner()
             with (
                 mock.patch.object(
                     runner.shutil,
@@ -1465,22 +1469,57 @@ class ProductionPathContractTests(unittest.TestCase):
             ],
             triples,
         )
+        # The job-private codex home is bound writable at SANDBOX_CODEX_HOME as
+        # a whole tree — the deep copy under exp_dir/run/.codex-home holds the
+        # per-job marketplace source rewrite and the venus provider block.
+        job_codex_home = (exp_dir / "run" / ".codex-home").resolve()
         self.assertIn(
             [
-                "--ro-bind",
-                str(skill_dir.resolve()),
-                "/workspace/repo/skills/fake",
+                "--bind",
+                str(job_codex_home),
+                str(runner.SANDBOX_CODEX_HOME),
             ],
             triples,
         )
+        # The authority publish tree is bound read-only at the fixed sandbox
+        # marketplace source path referenced by the rewritten config.toml.
+        # The runner passes ``receipt.publish_tree`` verbatim (no ``.resolve()``
+        # — the receipt is authoritative), so match the receipt-stored form.
         self.assertIn(
             [
                 "--ro-bind",
-                str(skill_dir.resolve()),
-                "/home/pilot/.codex/skills/fake",
+                str(fixture.publish_tree),
+                str(runner.SANDBOX_PUBLISH_TREE),
             ],
             triples,
         )
+        # Each installed skill directory is bound read-only at
+        # SANDBOX_REPO_ROOT/skills/<name>. The legacy SANDBOX_CODEX_HOME/skills
+        # mount has been dropped now that the whole codex home mounts in.
+        for skill_dir in expected_skill_dirs:
+            self.assertIn(
+                [
+                    "--ro-bind",
+                    str(skill_dir),
+                    f"/workspace/repo/skills/{skill_dir.name}",
+                ],
+                triples,
+            )
+            self.assertNotIn(
+                [
+                    "--ro-bind",
+                    str(skill_dir),
+                    f"/home/pilot/.codex/skills/{skill_dir.name}",
+                ],
+                triples,
+            )
+        # /opt is created inside the sandbox so the ro-bind of the publish tree
+        # at /opt/text-to-cad-publish-tree has a mount point to land on.
+        opt_dir_indexes = [
+            index for index, token in enumerate(argv) if token == "--dir"
+        ]
+        opt_dir_targets = {argv[index + 1] for index in opt_dir_indexes}
+        self.assertIn("/opt", opt_dir_targets)
         self.assertNotIn("--overlay-src", argv)
         self.assertEqual(argv[argv.index("--chdir") + 1], "/workspace/repo")
 
@@ -1531,7 +1570,7 @@ class ProductionPathContractTests(unittest.TestCase):
             exp_dir = Path(temp) / "exp"
             rollout = (
                 exp_dir
-                / "run/.codex-upper"
+                / "run/.codex-home"
                 / "sessions"
                 / "a"
                 / "b"
@@ -1564,7 +1603,7 @@ class ProductionPathContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
             exp_dir = repo_root / "outputs" / "group" / "exp"
-            (exp_dir / "run/.codex-upper").mkdir(parents=True)
+            (exp_dir / "run/.codex-home").mkdir(parents=True)
             runner = load_runner()
             with mock.patch.object(runner, "REPO_ROOT", repo_root):
                 first = runner.main(["clean", str(exp_dir)])
@@ -1575,11 +1614,11 @@ class ProductionPathContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             repo_root = Path(temp) / "repo"
             outside = repo_root / "do-not-delete"
-            (outside / "run/.codex-upper").mkdir(parents=True)
+            (outside / "run/.codex-home").mkdir(parents=True)
             runner = load_runner()
             with mock.patch.object(runner, "REPO_ROOT", repo_root):
                 status = runner.main(["clean", str(outside)])
-            upper_exists = (outside / "run/.codex-upper").exists()
+            upper_exists = (outside / "run/.codex-home").exists()
         self.assertEqual(status, 1)
         self.assertTrue(upper_exists)
 
