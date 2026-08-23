@@ -45,20 +45,27 @@ job 的私有可写目录。Pilot 把 marketplace source 重写为
 
 ## Long wait
 
+把本节同时应用于 push terminal，以及 Handoff 中 submit 后启动的每个
+`cvm-monitor.sh --wait`。这不授权 push 自行创建或监控 job。
+
 把等待保持为暂停的 orchestration state：每个 quiet interval 只做一次 runtime-max
 blocking wait；terminal completion 会提前 hand back。精确的更早 deadline 可以缩短
 等待，普通进度不能。
+
+每个 submit 返回的 handle 恰好启动一个持久 `--wait`；并发 handle 各保留一个独立
+session。orchestration yield 后继续等待原 session，直至 terminal handback。
 
 - **Codex**：保留启动命令返回的 terminal session；用空输入 `write_stdin` 等待，内部
   terminal wait 与外层 orchestration yield 都取各自 runtime 支持的最长 interval。
 - **Claude**：用 background Bash 启动并保留 task handle；用一个 blocking
   `TaskOutput` 等待，timeout 取 runtime 支持的最大值。
 
-一次工具等待窗口无事件结束不是 push 失败。此时至多做一次只读状态检查；状态未变则
-重新进入同样的 long wait。terminal handback 后直接解析 receipt，不做例行状态读取。
-用户主动询问、精确 deadline 或真正的 runtime timeout 可以单独唤醒检查。正常路径不
-启动 `tail -F`，不循环短 wait，也不周期性读取 log、`ps` 或远端状态。`wait_agent`
-只用于 subagent；这里复用其 long-wait 规则，不用它等待 terminal。
+一次 orchestration wait 窗口无事件结束不是 terminal handback；继续阻塞等待原
+session，不读取状态。terminal handback 后直接解析 receipt 或 job status，不做例行状态
+读取。只有原 terminal 已结束却缺少 receipt/status、用户主动询问、精确 deadline 或真正的
+runtime timeout 才允许一次额外只读检查。正常路径不启动 `tail -F`，不循环短 wait，也不
+周期性读取 log、`ps` 或远端状态。`wait_agent` 只用于 subagent；这里复用其 long-wait
+规则，不用它等待 terminal。
 
 ## Non-negotiable
 
@@ -125,6 +132,8 @@ blocking wait；terminal completion 会提前 hand back。精确的更早 deadli
   scripts/pilot/cvm-submit.sh pilot <obj> <same-group>
   scripts/pilot/cvm-monitor.sh --wait <returned-handle>
   ```
+
+  Submit 后等待遵循 § Long wait。
 
   To verify installed-plugin discovery without a provider or model inference,
   use the closed provider-free mode after a successful authority publication:
