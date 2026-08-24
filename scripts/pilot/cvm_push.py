@@ -917,7 +917,7 @@ class CvmPush:
         return hashes
 
     def verify_remote(self, attestation: RuntimeAttestation) -> None:
-        """Gate 3: verify physical files, hashes, and browser cache on CVM."""
+        """Gate 3: verify transferred files and prepare the pilot runtime."""
 
         result = self.runner.remote(
             self._remote_runtime_command(),
@@ -935,6 +935,25 @@ class CvmPush:
             raise PushError(
                 "CVM runtime verification failed: runtime hash mismatch",
                 5,
+            )
+
+        command = (
+            "set -eu\n"
+            f"cd {REMOTE_ROOT}\n"
+            "test -x .venv/bin/python\n"
+            ".venv/bin/python -m pip install "
+            "--disable-pip-version-check --no-input --no-build-isolation "
+            "--no-deps --force-reinstall --editable packages/meshscope\n"
+            ".venv/bin/python -c 'from meshscope.voxblame import _native; "
+            "assert callable(_native.build)'"
+        )
+        result = self.runner.remote(command, cwd=self.repo_root, check=False)
+        if result.returncode != 0:
+            raise PushError(
+                "CVM pilot Python runtime provisioning failed: "
+                "meshscope native backend is unavailable",
+                5,
+                transferred=True,
             )
 
 

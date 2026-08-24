@@ -939,6 +939,38 @@ class TransferAndVerifyTests(unittest.TestCase):
                 )
             self.assertEqual(error.exception.status, 5)
 
+    def test_remote_pilot_runtime_rebuilds_and_probes_native_meshscope(self) -> None:
+        runner = FakeRunner()
+        runner.respond("sha256sum", "")
+        workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})
+
+        workflow.verify_remote(cvm_push.RuntimeAttestation(hashes={}))
+
+        self.assertEqual(len(runner.remote_commands), 2)
+        command = runner.remote_commands[1]
+        self.assertIn("cd ~/text-to-cad", command)
+        self.assertIn(".venv/bin/python -m pip install", command)
+        self.assertIn("--no-build-isolation", command)
+        self.assertIn("--no-deps", command)
+        self.assertIn("--force-reinstall", command)
+        self.assertIn("--editable packages/meshscope", command)
+        self.assertIn("from meshscope.voxblame import _native", command)
+
+    def test_remote_pilot_runtime_fails_closed_without_native_probe(self) -> None:
+        runner = FakeRunner()
+        runner.respond("sha256sum", "")
+        runner.respond(".venv/bin/python -m pip install", status=1)
+        workflow = cvm_push.CvmPush(
+            runner, repo_root=REPO_ROOT, environ={}
+        )
+
+        with self.assertRaisesRegex(
+            cvm_push.PushError, "pilot Python runtime provisioning failed"
+        ) as error:
+            workflow.verify_remote(cvm_push.RuntimeAttestation(hashes={}))
+
+        self.assertEqual(error.exception.status, 5)
+
     def test_legacy_plugin_cleanup_is_strictly_scoped(self) -> None:
         runner = FakeRunner()
         workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})
