@@ -308,7 +308,9 @@ class VoxBlameWorkflowContractTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, contract)
 
-    def test_mesh_to_cad_reconstruction_spec_contract_is_opt_in_and_separate(self) -> None:
+    def test_mesh_to_cad_reconstruction_spec_contract_is_default_on_and_separate(
+        self,
+    ) -> None:
         contract = (REPO_ROOT / "skills/mesh-to-cad/SKILL.md").read_text(
             encoding="utf-8"
         )
@@ -328,8 +330,8 @@ class VoxBlameWorkflowContractTests(unittest.TestCase):
         normalized_adr = " ".join(adr.split())
 
         for required in (
-            "off by default",
-            "task or pilot instruction explicitly requests Reconstruction Spec",
+            "default-on (enabled by default)",
+            "task or pilot instruction may explicitly opt out",
             "Do not add a CLI mode, experiment field, or automatic detection",
             "<EXP_DIR>/run/reconstruction-spec.json",
             "before each Repair Hypothesis",
@@ -338,8 +340,12 @@ class VoxBlameWorkflowContractTests(unittest.TestCase):
         ):
             with self.subTest(document="SKILL.md", required=required):
                 self.assertIn(required, normalized_contract)
+        self.assertNotIn("off by default", normalized_contract)
 
         for required in (
+            "The Reconstruction Spec is enabled by default",
+            "task or pilot instruction may explicitly opt out",
+            "When enabled (the default unless the task or pilot explicitly opts out)",
             "top level has exactly these three arrays: `components`, `features`, and `relations`",
             "Every Component, Feature, and Relation ID is globally unique",
             "every relation endpoint must name an existing Component or Feature ID",
@@ -351,6 +357,7 @@ class VoxBlameWorkflowContractTests(unittest.TestCase):
         ):
             with self.subTest(document="reconstruction-spec.md", required=required):
                 self.assertIn(required, normalized_reference)
+        self.assertNotIn("off by default", normalized_reference)
 
         for document_name, document in (
             ("CONTEXT.md", normalized_context),
@@ -360,6 +367,8 @@ class VoxBlameWorkflowContractTests(unittest.TestCase):
                 self.assertIn("mutable", document)
                 self.assertIn("working document", document)
                 self.assertIn("Workspace authority", document)
+                self.assertIn("default-on", document)
+                self.assertIn("opt out", document)
                 self.assertTrue(
                     "not Workspace authority" in document
                     or "outside Workspace authority" in document

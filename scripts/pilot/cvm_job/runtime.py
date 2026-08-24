@@ -199,7 +199,7 @@ def _pilot_record(
     *,
     model: str | None = None,
     plugin_mode: str = "direct",
-    reconstruction_spec: bool = False,
+    reconstruction_spec: bool = True,
     include_model: bool = True,
     token_slot_from_environment: bool = True,
 ) -> dict[str, Any]:
@@ -247,8 +247,11 @@ def _pilot_record(
     }
     if resolved_model is not None:
         record["model"] = resolved_model
-    if reconstruction_spec:
-        record["reconstruction_spec"] = True
+    if include_model:
+        # New provider-backed pilot records state the effective default
+        # explicitly.  Provider-free records intentionally retain their
+        # historical shape and do not participate in this option.
+        record["reconstruction_spec"] = reconstruction_spec
     return record
 
 
@@ -323,7 +326,7 @@ def submit_pilot(
     *,
     model: str | None = None,
     plugin_mode: str = "direct",
-    reconstruction_spec: bool = False,
+    reconstruction_spec: bool = True,
     state_root: Path | None = None,
     detach: Callable[[str, Sequence[str], Path], int] = _detach,
 ) -> dict[str, Any]:
@@ -365,6 +368,7 @@ def submit_pilot(
         "state": state["state"],
         "kind": "pilot",
         "model": requested_model(state),
+        "reconstruction_spec": requested_reconstruction_spec(state),
     }
 
 
@@ -551,8 +555,15 @@ def _supervise_pilot_locked(
         record["exp"],
         requested_plugin_mode(record),
     ]
-    if command is None and requested_reconstruction_spec(record):
-        pilot_command.append("--reconstruction-spec")
+    # The shell pilot is default-on, so every provider-backed record needs an
+    # explicit mode.  Historical records lack the field and
+    # requested_reconstruction_spec() intentionally resolves them to false.
+    if command is None:
+        pilot_command.append(
+            "--reconstruction-spec"
+            if requested_reconstruction_spec(record)
+            else "--no-reconstruction-spec"
+        )
     pilot_environment = os.environ.copy()
     if command is None:
         pilot_environment["MODEL"] = selector_for_model(requested_model(record))

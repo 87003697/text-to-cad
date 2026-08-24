@@ -121,7 +121,10 @@ def requested_plugin_mode(state: dict[str, Any]) -> str:
 
 
 def requested_reconstruction_spec(state: dict[str, Any]) -> bool:
-    """Return the requested pilot-only Reconstruction Spec opt-in."""
+    """Return the requested pilot-only Reconstruction Spec mode.
+
+    Records from before this field existed remain historical opt-outs.
+    """
 
     value = state.get("reconstruction_spec", False)
     if not isinstance(value, bool):
@@ -284,8 +287,7 @@ def public_state(state: dict[str, Any], stale_after: float) -> dict[str, Any]:
     if not state.get("provider_free"):
         result["model"] = requested_model(state)
         result["plugin_mode"] = requested_plugin_mode(state)
-        if requested_reconstruction_spec(state):
-            result["reconstruction_spec"] = True
+        result["reconstruction_spec"] = requested_reconstruction_spec(state)
     if state["state"] in TERMINAL_STATES:
         result.update(
             {

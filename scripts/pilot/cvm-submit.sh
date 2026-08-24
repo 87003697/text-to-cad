@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] (default: gpt-5.5) [--plugin-mode direct|e2e] [--reconstruction-spec] | provider-free installed-plugin <group>" >&2
+    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] (default: gpt-5.5) [--plugin-mode direct|e2e] [--reconstruction-spec|--no-reconstruction-spec] (default: --reconstruction-spec) | provider-free installed-plugin <group>" >&2
     exit 2
 }
 
@@ -26,13 +26,21 @@ case "$mode" in
         token_slot=""
         model=""
         plugin_mode=""
-        reconstruction_spec=0
+        reconstruction_spec=1
+        reconstruction_spec_flag_seen=0
         shift 3
         while [[ $# -gt 0 ]]; do
             case "$1" in
                 --reconstruction-spec)
-                    [[ "$reconstruction_spec" == 0 ]] || usage
+                    [[ "$reconstruction_spec_flag_seen" == 0 ]] || usage
                     reconstruction_spec=1
+                    reconstruction_spec_flag_seen=1
+                    shift
+                    ;;
+                --no-reconstruction-spec)
+                    [[ "$reconstruction_spec_flag_seen" == 0 ]] || usage
+                    reconstruction_spec=0
+                    reconstruction_spec_flag_seen=1
                     shift
                     ;;
                 --token-slot)
@@ -66,6 +74,8 @@ case "$mode" in
         fi
         if [[ "$reconstruction_spec" == 1 ]]; then
             submit_command+=" --reconstruction-spec"
+        else
+            submit_command+=" --no-reconstruction-spec"
         fi
         model_export=""
         if [[ -n "$selected_model" ]]; then

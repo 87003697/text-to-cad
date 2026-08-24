@@ -159,47 +159,62 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(state["model"], "gpt-5.6-sol")
         self.assertEqual(state["plugin_mode"], "e2e")
         self.assertEqual(captured["env"]["MODEL"], "sol")
-        self.assertEqual(captured["command"][-1], "e2e")
-
-    def test_submit_records_reconstruction_spec_only_when_enabled(self) -> None:
-        off = runtime.submit_pilot(
-            "airplane",
-            self.group,
-            state_root=self.state_root,
-            detach=lambda *args: 1,
-        )
-        off_state = protocol.load_state(self.state_root, off["job"])
-        self.assertNotIn("reconstruction_spec", off_state)
-        self.assertNotIn(
-            "reconstruction_spec", protocol.public_state(off_state, 60)
+        self.assertEqual(
+            captured["command"][-2:], ["e2e", "--reconstruction-spec"]
         )
 
+    def test_submit_records_reconstruction_spec_by_default_and_supports_opt_out(
+        self,
+    ) -> None:
         on = runtime.submit_pilot(
             "airplane",
             self.group,
-            reconstruction_spec=True,
             state_root=self.state_root,
             detach=lambda *args: 1,
         )
         on_state = protocol.load_state(self.state_root, on["job"])
         self.assertTrue(on_state["reconstruction_spec"])
         self.assertTrue(protocol.public_state(on_state, 60)["reconstruction_spec"])
+        self.assertTrue(on["reconstruction_spec"])
 
-    def test_submit_pilot_parser_defaults_reconstruction_spec_off_and_accepts_opt_in(
+        off = runtime.submit_pilot(
+            "airplane",
+            self.group,
+            reconstruction_spec=False,
+            state_root=self.state_root,
+            detach=lambda *args: 1,
+        )
+        off_state = protocol.load_state(self.state_root, off["job"])
+        self.assertFalse(off_state["reconstruction_spec"])
+        self.assertFalse(protocol.public_state(off_state, 60)["reconstruction_spec"])
+        self.assertFalse(off["reconstruction_spec"])
+
+    def test_submit_pilot_parser_defaults_reconstruction_spec_on_and_accepts_opt_out(
         self,
     ) -> None:
         parser = cvm_job_main._parser()
-        off = parser.parse_args(["submit-pilot", "airplane", self.group])
+        default = parser.parse_args(["submit-pilot", "airplane", self.group])
         on = parser.parse_args(
             ["submit-pilot", "airplane", self.group, "--reconstruction-spec"]
+        )
+        off = parser.parse_args(
+            ["submit-pilot", "airplane", self.group, "--no-reconstruction-spec"]
         )
         sol = parser.parse_args(
             ["submit-pilot", "airplane", self.group, "--model", "sol"]
         )
         self.assertIsNone(off.model)
         self.assertEqual(sol.model, "sol")
-        self.assertFalse(off.reconstruction_spec)
+        self.assertTrue(default.reconstruction_spec)
         self.assertTrue(on.reconstruction_spec)
+        self.assertFalse(off.reconstruction_spec)
+        for flags in (
+            ("--reconstruction-spec", "--reconstruction-spec"),
+            ("--no-reconstruction-spec", "--no-reconstruction-spec"),
+            ("--reconstruction-spec", "--no-reconstruction-spec"),
+        ):
+            with self.subTest(flags=flags), self.assertRaises(SystemExit):
+                parser.parse_args(["submit-pilot", "airplane", self.group, *flags])
 
     def test_reconstruction_spec_reaches_direct_and_e2e_pilot_commands(self) -> None:
         for plugin_mode in ("direct", "e2e"):
@@ -232,6 +247,108 @@ class CvmJobTests(unittest.TestCase):
                     captured["command"][-2:],
                     [plugin_mode, "--reconstruction-spec"],
                 )
+
+    def test_reconstruction_spec_opt_out_reaches_direct_and_e2e_pilot_commands(
+        self,
+    ) -> None:
+        for plugin_mode in ("direct", "e2e"):
+            with self.subTest(plugin_mode=plugin_mode):
+                result = runtime.submit_pilot(
+                    "airplane",
+                    self.group,
+                    plugin_mode=plugin_mode,
+                    reconstruction_spec=False,
+                    state_root=self.state_root,
+                    detach=lambda *args: 1,
+                )
+                handle = result["job"]
+                self.write_manifest(handle, 0)
+                captured: dict[str, object] = {}
+
+                def fake_run(root, job, command, **kwargs):
+                    captured["command"] = list(command)
+                    return 0, 4321
+
+                with mock.patch.object(
+                    runtime, "_run_with_heartbeat", side_effect=fake_run
+                ):
+                    state = runtime.supervise_pilot(
+                        handle, state_root=self.state_root
+                    )
+
+                self.assertEqual(state["state"], "succeeded")
+                self.assertEqual(
+                    captured["command"][-2:],
+                    [plugin_mode, "--no-reconstruction-spec"],
+                )
+
+    def test_historical_missing_reconstruction_spec_is_false_and_has_explicit_opt_out(
+        self,
+    ) -> None:
+        handle = self.submit()
+        path = protocol.state_path(self.state_root, handle)
+        state = json.loads(path.read_text(encoding="utf-8"))
+        del state["reconstruction_spec"]
+        path.write_text(json.dumps(state), encoding="utf-8")
+        pilot_root = self.repo_root / "scripts" / "pilot"
+        pilot_root.mkdir(parents=True)
+        real_pilot = pilot_root / "toys4k-pilot.sh"
+        shutil.copy2(PILOT_ROOT / "toys4k-pilot.sh", real_pilot)
+        real_pilot.chmod(0o755)
+        (self.repo_root / "models" / "toys4k").mkdir(parents=True)
+        (self.repo_root / "models" / "toys4k" / "airplane.ply").write_text(
+            "ply\n", encoding="utf-8"
+        )
+        self.write_executable(
+            pilot_root / "runner.py",
+            """import pathlib, sys
+pathlib.Path(sys.argv[4], "artifact_manifest.json").write_text(
+    '{"final_status":0}\\n', encoding="utf-8"
+)
+""",
+        )
+        argv_path = self.workspace / "historical-pilot-argv.log"
+        pilot_wrapper = self.workspace / "historical-pilot-wrapper.sh"
+        self.write_executable(
+            pilot_wrapper,
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" > "$HISTORICAL_ARGV"
+exec "$HISTORICAL_REAL_PILOT" "$@"
+""",
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "HISTORICAL_ARGV": os.fspath(argv_path),
+                    "HISTORICAL_REAL_PILOT": os.fspath(real_pilot),
+                },
+            ),
+            mock.patch.object(runtime, "PILOT_SCRIPT", pilot_wrapper),
+        ):
+            result = runtime.supervise_pilot(
+                handle, state_root=self.state_root, interval=0.001
+            )
+
+        self.assertEqual(result["state"], "succeeded")
+        constructed_argv = argv_path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(
+            constructed_argv[-2:], ["direct", "--no-reconstruction-spec"]
+        )
+        prompt = (
+            self.repo_root
+            / "outputs"
+            / handle
+            / "run"
+            / "prompt.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Reconstruction Spec is disabled for this run", prompt)
+        self.assertIn("Do not create, read, or update", prompt)
+        self.assertNotIn("Reconstruction Spec is enabled", prompt)
+        self.assertNotIn("create and maintain", prompt)
+        self.assertFalse(protocol.requested_reconstruction_spec(state))
+        self.assertFalse(protocol.public_state(state, 60)["reconstruction_spec"])
 
     def test_submit_rejects_invalid_plugin_mode(self) -> None:
         with self.assertRaisesRegex(protocol.ProtocolError, "invalid plugin mode"):
@@ -288,7 +405,9 @@ class CvmJobTests(unittest.TestCase):
             result = runtime.supervise_pilot(handle, state_root=self.state_root)
 
         self.assertEqual(result["state"], "succeeded")
-        self.assertEqual(captured["command"][-1], "direct")
+        self.assertEqual(
+            captured["command"][-2:], ["direct", "--reconstruction-spec"]
+        )
         self.assertEqual(protocol.public_state(state, 60)["plugin_mode"], "direct")
 
     def test_pre_model_state_keeps_legacy_sol_model(self) -> None:
@@ -439,6 +558,7 @@ class CvmJobTests(unittest.TestCase):
                 self.group,
                 parsed["exp"],
                 "direct",
+                "--reconstruction-spec",
             ],
         )
 
@@ -462,7 +582,9 @@ class CvmJobTests(unittest.TestCase):
             state = runtime.supervise_pilot(handle, state_root=self.state_root)
 
         self.assertEqual(state["state"], "succeeded")
-        self.assertEqual(captured["command"][-1], "e2e")
+        self.assertEqual(
+            captured["command"][-2:], ["e2e", "--reconstruction-spec"]
+        )
 
     def test_heartbeat_updates_while_child_is_running(self) -> None:
         handle = self.submit()
@@ -1112,7 +1234,7 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
         self.assertIn("scripts.pilot.cvm_job submit-pilot", commands[0])
         self.assertIn("20260805-170000-audit", commands[0])
         self.assertNotIn("--model", commands[0])
-        self.assertNotIn("--reconstruction-spec", commands[0])
+        self.assertIn("--reconstruction-spec", commands[0])
         self.assertIn("ServerAliveInterval=30", commands[1])
         self.assertIn("scripts.pilot.cvm_job wait", commands[1])
 
@@ -1364,6 +1486,86 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
         command = command_log.read_text(encoding="utf-8")
         self.assertIn("--plugin-mode 'e2e'", command)
         self.assertIn("--reconstruction-spec", command)
+
+    def test_submit_no_reconstruction_spec_is_forwarded_to_remote_job_command(
+        self,
+    ) -> None:
+        fake_bin = self.workspace / "no-reconstruction-spec-bin"
+        fake_bin.mkdir()
+        command_log = self.workspace / "no-reconstruction-spec-commands.log"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$CVM_WRAPPER_LOG"
+printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_WRAPPER_LOG": os.fspath(command_log),
+        }
+        result = subprocess.run(
+            [
+                os.fspath(SUBMIT_SCRIPT),
+                "pilot",
+                "airplane",
+                "20260805-170000-audit",
+                "--no-reconstruction-spec",
+            ],
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        command = command_log.read_text(encoding="utf-8")
+        self.assertIn("--no-reconstruction-spec", command)
+        self.assertNotIn("--reconstruction-spec", command)
+
+    def test_submit_rejects_duplicate_or_conflicting_reconstruction_flags(
+        self,
+    ) -> None:
+        fake_bin = self.workspace / "duplicate-reconstruction-spec-bin"
+        fake_bin.mkdir()
+        marker = self.workspace / "duplicate-reconstruction-spec-ssh-called"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+touch "$CVM_SSH_MARKER"
+exit 99
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_SSH_MARKER": os.fspath(marker),
+        }
+        for flags in (
+            ("--reconstruction-spec", "--reconstruction-spec"),
+            ("--no-reconstruction-spec", "--no-reconstruction-spec"),
+            ("--reconstruction-spec", "--no-reconstruction-spec"),
+        ):
+            with self.subTest(flags=flags):
+                result = subprocess.run(
+                    [
+                        os.fspath(SUBMIT_SCRIPT),
+                        "pilot",
+                        "airplane",
+                        "20260805-170000-audit",
+                        *flags,
+                    ],
+                    env=env,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertFalse(marker.exists())
 
     def test_submit_rejects_duplicate_plugin_mode_without_ssh(self) -> None:
         fake_bin = self.workspace / "duplicate-plugin-mode-bin"

@@ -5,7 +5,11 @@ This context defines the language used by reconstruction evaluation, provider-fr
 ## Reconstruction Language
 
 **Reconstruction Spec**:
-An optional, Agent-authored JSON working document describing the observable components, features, and relations hypothesized for one Canonical Reference. It may be corrected in place as reconstruction evidence changes and is not Workspace authority.
+A default-on (enabled by default), Agent-authored JSON working document
+describing the observable components, features, and relations hypothesized for
+one Canonical Reference. A task or pilot instruction may explicitly opt out
+for a controlled execution. It may be corrected in place as reconstruction
+evidence changes and is not Workspace authority.
 _Avoid_: CAD plan, source plan, ground truth, Workspace manifest, reconstruct-spec
 
 **Initial Spec**:

@@ -10,7 +10,7 @@ description: >-
 Run exactly one local wrapper command:
 
 ```bash
-scripts/pilot/cvm-submit.sh pilot <object> <group> [--model sol|terra|luna|gpt-5.5] [--plugin-mode direct|e2e] [--reconstruction-spec]
+scripts/pilot/cvm-submit.sh pilot <object> <group> [--model sol|terra|luna|gpt-5.5] [--plugin-mode direct|e2e] [--reconstruction-spec|--no-reconstruction-spec]
 ```
 
 `direct` is the default and preserves the benchmark path: it names
@@ -32,12 +32,13 @@ status. Those fields prove the requested mode, not which skill Codex actually
 invoked. Confirm the rollout together with the bound plugin-authority receipt
 before claiming successful installed-plugin invocation.
 
-`--reconstruction-spec` is an explicit, opt-in benchmark-harness flag. When
-present, the pilot prompt asks the model to enable the optional Reconstruction
-Spec workflow and create and maintain
-`<EXP_DIR>/run/reconstruction-spec.json`. It is off by default, is not a
-Workspace CLI mode or experiment field, and is not auto-detected; omit it to
-preserve the benchmark baseline.
+Reconstruction Spec is enabled by default for Toys4K pilots. The pilot prompt
+asks the model to create and maintain the mutable
+`<EXP_DIR>/run/reconstruction-spec.json`; use `--no-reconstruction-spec` for a
+controlled opt-out. The legacy `--reconstruction-spec` flag remains accepted
+as an explicit reaffirmation. The document is not a Workspace CLI mode or
+Workspace experiment field, is not Workspace authority, and does not change
+the Workspace schema.
 
 For the narrow provider-free installed-plugin discovery check, run:
 

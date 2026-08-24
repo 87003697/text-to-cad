@@ -1,12 +1,13 @@
 # Reconstruction Spec
 
-Use this document only when the task or pilot instruction explicitly requests
-a Reconstruction Spec. It is off by default. Do not add a CLI mode, an
-experiment field, or automatic detection for it.
+Use this document by default for mesh-to-cad executions. The Reconstruction
+Spec is enabled by default; a task or pilot instruction may explicitly opt out
+for a controlled execution. Do not add a CLI mode, an experiment field, or
+automatic detection for it.
 
 ## Lifecycle
 
-When enabled:
+When enabled (the default unless the task or pilot explicitly opts out):
 
 1. Inspect the raw input with `$mesh-inspect` and prepare the Canonical
    Reference with `$mesh-compare` using the normal workflow.

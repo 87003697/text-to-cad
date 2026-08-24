@@ -38,20 +38,21 @@ Read `references/workspace-contract.md` for helper commands and transaction
 semantics. Read `references/output-schemas.md` before authoring any setup,
 plan, assessment, selection, or notes document.
 
-## Optional Reconstruction Spec
+## Reconstruction Spec (enabled by default)
 
-The Reconstruction Spec is off by default. Enable it only when the task or
-pilot instruction explicitly requests Reconstruction Spec. Do not add a CLI
-mode, experiment field, or automatic detection. Read
+The Reconstruction Spec is default-on (enabled by default). A task or pilot
+instruction may explicitly opt out for a controlled execution. Do not add a
+CLI mode, experiment field, or automatic detection. Read
 `references/reconstruction-spec.md` for its small JSON contract.
 
-When enabled, the Agent creates `<EXP_DIR>/run/reconstruction-spec.json` only
-after raw-input inspection and Canonical Reference preparation, and before
-the first CAD authoring or Step 0. Read it before initial modeling; before
-each Repair Hypothesis, read it again. If the geometric understanding changes,
-update the same file in place. Use raw-mesh inspection and Canonical Reference
-geometry as evidence, and ignore user-provided category, function, or part
-semantic hints.
+When enabled (the default unless the task or pilot explicitly opts out), the
+Agent creates `<EXP_DIR>/run/reconstruction-spec.json` only after raw-input
+inspection and Canonical Reference preparation, and before the first CAD
+authoring or Step 0. Read it before initial modeling; before each Repair
+Hypothesis, read it again. If the geometric understanding changes, update the
+same file in place. Use raw-mesh inspection and Canonical Reference geometry
+as evidence, and ignore user-provided category, function, or part semantic
+hints.
 
 This is a mutable working document, not a CAD or source plan. It stays in the
 `run/` non-authority area and never enters Workspace `setup/`, `steps/`,
@@ -82,9 +83,10 @@ python skills/mesh-to-cad/scripts/mesh-to-cad-workspace init \
 
 Do not write authority files directly after initialization.
 
-5. If Reconstruction Spec was explicitly enabled, create
-   `<EXP_DIR>/run/reconstruction-spec.json` now. It must remain mutable and
-   outside Workspace authority; do not pass it to a Workspace helper.
+5. If Reconstruction Spec is enabled (the default unless the task or pilot
+   explicitly opts out), create `<EXP_DIR>/run/reconstruction-spec.json` now.
+   It must remain mutable and outside Workspace authority; do not pass it to a
+   Workspace helper.
 
 ### Attempt command recording
 
@@ -262,8 +264,8 @@ or verification without the corresponding authority artifact.
 
 ## Progressive references
 
-- `references/reconstruction-spec.md`: opt-in mutable reference-semantics
-  working document.
+- `references/reconstruction-spec.md`: default-on, mutable reference-semantics
+  working document; task or pilot executions may explicitly opt out.
 - `references/output-schemas.md`: Agent-authored setup and evidence documents.
 - `references/workspace-contract.md`: helper commands, bounds, recovery, Git,
   LFS, and Final Delivery publication.

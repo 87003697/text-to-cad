@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/pilot/toys4k-pilot.sh <object_name> <group> [exp_name] [direct|e2e] [--reconstruction-spec]
+# scripts/pilot/toys4k-pilot.sh <object_name> <group> [exp_name] [direct|e2e] [--reconstruction-spec|--no-reconstruction-spec]
 # MODEL selects the Venus gateway variant; it defaults to the public gpt-5.5 slug.
 # Toys4K mesh-to-CAD benchmark pilot. Reads models/toys4k/<name>.ply,
 # writes outputs/<group>/<TS>-<name>/. Group format: YYYYMMDD-HHMMSS-<slug>.
@@ -20,15 +20,57 @@ if [[ -z "${VENUS_TOKEN:-}" && -f "$SECRETS_FILE" ]]; then
     source "$SECRETS_FILE"
 fi
 
-OBJ="${1:?Usage: toys4k-pilot.sh <object_name> <group>}"
-GROUP="${2:?Usage: toys4k-pilot.sh <object_name> <group>}"
+USAGE="Usage: toys4k-pilot.sh <object_name> <group> [exp_name] [direct|e2e] [--reconstruction-spec|--no-reconstruction-spec] (default: Reconstruction Spec on)"
+OBJ="${1:?$USAGE}"
+GROUP="${2:?$USAGE}"
 [[ "$GROUP" =~ ^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$ ]] \
     || { echo "Bad group: '$GROUP'. Expect YYYYMMDD-HHMMSS-<slug>." >&2; exit 1; }
 
 PLY="models/toys4k/${OBJ}.ply"
 [[ -f "$PLY" ]] || { echo "Missing mesh: $PLY" >&2; exit 1; }
 
-EXP_NAME="${3:-$(date +%Y%m%d-%H%M%S)-${OBJ}}"
+EXP_NAME="$(date +%Y%m%d-%H%M%S)-${OBJ}"
+PLUGIN_MODE="direct"
+RECONSTRUCTION_SPEC=1
+RECONSTRUCTION_SPEC_FLAG_SEEN=0
+PILOT_ARGS=("${@:3}")
+ARG_INDEX=0
+
+# Keep the historical positional form while allowing the reconstruction flag
+# wherever the old opt-in flag was accepted (with or without an explicit exp
+# name and plugin mode).
+if (( ARG_INDEX < ${#PILOT_ARGS[@]} )) \
+    && [[ "${PILOT_ARGS[$ARG_INDEX]}" != --* ]]; then
+    EXP_NAME="${PILOT_ARGS[$ARG_INDEX]}"
+    ((ARG_INDEX += 1))
+fi
+if (( ARG_INDEX < ${#PILOT_ARGS[@]} )) \
+    && [[ "${PILOT_ARGS[$ARG_INDEX]}" != --* ]]; then
+    PLUGIN_MODE="${PILOT_ARGS[$ARG_INDEX]}"
+    ((ARG_INDEX += 1))
+fi
+while (( ARG_INDEX < ${#PILOT_ARGS[@]} )); do
+    case "${PILOT_ARGS[$ARG_INDEX]}" in
+        --reconstruction-spec)
+            [[ "$RECONSTRUCTION_SPEC_FLAG_SEEN" == 0 ]] \
+                || { echo "Duplicate or conflicting reconstruction spec flag." >&2; exit 2; }
+            RECONSTRUCTION_SPEC=1
+            RECONSTRUCTION_SPEC_FLAG_SEEN=1
+            ;;
+        --no-reconstruction-spec)
+            [[ "$RECONSTRUCTION_SPEC_FLAG_SEEN" == 0 ]] \
+                || { echo "Duplicate or conflicting reconstruction spec flag." >&2; exit 2; }
+            RECONSTRUCTION_SPEC=0
+            RECONSTRUCTION_SPEC_FLAG_SEEN=1
+            ;;
+        *)
+            echo "Bad pilot option: '${PILOT_ARGS[$ARG_INDEX]}'. Expect --reconstruction-spec or --no-reconstruction-spec." >&2
+            exit 2
+            ;;
+    esac
+    ((ARG_INDEX += 1))
+done
+
 if [[ ! "$EXP_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ \
     || "$EXP_NAME" == "." || "$EXP_NAME" == ".." ]]; then
     echo "Unsafe exp name: '$EXP_NAME'" >&2
@@ -43,19 +85,6 @@ case "$MODEL_SELECTOR" in
         exit 2
         ;;
 esac
-PLUGIN_MODE="${4:-direct}"
-RECONSTRUCTION_SPEC=0
-if [[ "$PLUGIN_MODE" == "--reconstruction-spec" ]]; then
-    RECONSTRUCTION_SPEC=1
-    PLUGIN_MODE="direct"
-fi
-if [[ $# -ge 5 ]]; then
-    [[ "$5" == "--reconstruction-spec" && "$RECONSTRUCTION_SPEC" == 0 ]] \
-        || { echo "Bad pilot option: '$5'. Expect --reconstruction-spec." >&2; exit 2; }
-    RECONSTRUCTION_SPEC=1
-fi
-[[ $# -le 5 ]] \
-    || { echo "Too many pilot arguments." >&2; exit 2; }
 case "$PLUGIN_MODE" in
     direct|e2e) ;;
     *)
@@ -67,12 +96,18 @@ esac
 RECONSTRUCTION_SPEC_INSTRUCTION=""
 if [[ "$RECONSTRUCTION_SPEC" == 1 ]]; then
     RECONSTRUCTION_SPEC_INSTRUCTION=$(cat <<EOF
-Reconstruction Spec is explicitly enabled for this pilot. Enable the optional
-Reconstruction Spec workflow: after raw-mesh inspection and Canonical Reference
-preparation, create and maintain the mutable file
+Reconstruction Spec is enabled for this pilot. After raw-mesh inspection and
+Canonical Reference preparation, create and maintain the mutable file
 ${EXP_DIR}/run/reconstruction-spec.json. Read it before initial CAD authoring
 and before each Repair Hypothesis; update it in place when geometric
 understanding changes. Keep it under run/ outside Workspace authority.
+EOF
+    )
+else
+    RECONSTRUCTION_SPEC_INSTRUCTION=$(cat <<EOF
+Reconstruction Spec is disabled for this run. Do not create, read, or update
+${EXP_DIR}/run/reconstruction-spec.json; continue without this working
+document.
 EOF
     )
 fi
@@ -108,9 +143,9 @@ ${EXP_DIR}/reviews/ and never substitutes for formal Measured Step or Final
 Delivery previews.
 ${RECONSTRUCTION_SPEC_INSTRUCTION}
 
-Do not call \`view_image\` in this Venus-backed pilot: its Responses
-continuation rejects image tool output. Still generate and cite every required
-PNG, and use the formal preview JSON plus objective measurements for decisions.
+Use \`view_image\` to inspect key generated setup/formal preview PNGs for
+initial modeling, Repair Hypothesis parent/child comparison, and final
+selection, alongside objective measurements.
 
 Stay under ${EXP_DIR}; do not modify skills/, packages/, or files outside.
 EOF

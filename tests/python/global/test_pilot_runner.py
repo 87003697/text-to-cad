@@ -900,7 +900,10 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertIn("WORKLOAD+=(--disable plugins)", pilot)
         self.assertIn("run/plugin-mode.txt", pilot)
         self.assertNotIn("--disable\n    view_image", pilot)
-        self.assertIn("Do not call \\`view_image\\`", pilot)
+        self.assertNotIn("Do not call \\`view_image\\`", pilot)
+        self.assertIn("Use \\`view_image\\`", pilot)
+        self.assertIn("setup/formal preview PNGs", pilot)
+        self.assertIn("parent/child comparison", pilot)
         self.assertIn("danger-full-access", pilot)
         self.assertNotIn("workspace-write", pilot)
         self.assertTrue(gateway.startswith("#!/usr/bin/env bash\n"))
@@ -1005,7 +1008,9 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                     f"{mode}\n",
                 )
 
-    def test_toys4k_reconstruction_spec_opt_in_is_explicit_for_both_modes(self) -> None:
+    def test_toys4k_reconstruction_spec_defaults_on_and_supports_opt_out(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp:
             repo = Path(temp) / "repo"
             pilot_root = repo / "scripts" / "pilot"
@@ -1026,10 +1031,21 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
             )
 
             for mode in ("direct", "e2e"):
-                for enabled in (False, True):
-                    with self.subTest(mode=mode, enabled=enabled):
-                        exp = f"exp-{mode}-{'on' if enabled else 'off'}"
-                        capture = Path(temp) / f"{mode}-{'on' if enabled else 'off'}.json"
+                for spec_option in (
+                    None,
+                    "--no-reconstruction-spec",
+                    "--reconstruction-spec",
+                ):
+                    with self.subTest(mode=mode, spec_option=spec_option):
+                        label = (
+                            "default"
+                            if spec_option is None
+                            else "off"
+                            if spec_option == "--no-reconstruction-spec"
+                            else "on"
+                        )
+                        exp = f"exp-{mode}-{label}"
+                        capture = Path(temp) / f"{mode}-{label}.json"
                         env = {
                             **os.environ,
                             "HOME": os.fspath(Path(temp) / "home"),
@@ -1044,8 +1060,8 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                             exp,
                             mode,
                         ]
-                        if enabled:
-                            args.append("--reconstruction-spec")
+                        if spec_option:
+                            args.append(spec_option)
                         result = subprocess.run(
                             args,
                             cwd=repo,
@@ -1071,19 +1087,36 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                             / "run"
                             / "prompt.txt"
                         ).read_text(encoding="utf-8")
-                        if enabled:
+                        if spec_option != "--no-reconstruction-spec":
                             self.assertIn("Reconstruction Spec", prompt)
-                            self.assertIn(
-                                "Enable the optional", prompt
-                            )
+                            self.assertIn("enabled for this pilot", prompt)
                             self.assertIn("create and maintain", prompt)
                             self.assertIn(
                                 f"outputs/20260805-170000-audit/{exp}/run/reconstruction-spec.json",
                                 prompt,
                             )
+                            self.assertNotIn(
+                                "Reconstruction Spec is disabled", prompt
+                            )
+                            self.assertNotIn(
+                                "Do not create, read, or update", prompt
+                            )
                         else:
-                            self.assertNotIn("Reconstruction Spec", prompt)
-                            self.assertNotIn("reconstruction-spec.json", prompt)
+                            self.assertIn(
+                                "Reconstruction Spec is disabled for this run",
+                                prompt,
+                            )
+                            self.assertIn(
+                                "Do not create, read, or update",
+                                prompt,
+                            )
+                            self.assertNotIn(
+                                "Reconstruction Spec is enabled", prompt
+                            )
+                            self.assertNotIn("create and maintain", prompt)
+                        self.assertIn("Use `view_image`", prompt)
+                        self.assertIn("setup/formal preview PNGs", prompt)
+                        self.assertIn("parent/child comparison", prompt)
                         if mode == "direct":
                             self.assertIn("--disable", workload)
                             self.assertEqual(
@@ -1094,6 +1127,33 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                         else:
                             self.assertNotIn("--disable", workload)
                             self.assertNotIn("$mesh-to-cad", workload[-1])
+
+            for flags in (
+                ("--reconstruction-spec", "--reconstruction-spec"),
+                ("--no-reconstruction-spec", "--no-reconstruction-spec"),
+                ("--reconstruction-spec", "--no-reconstruction-spec"),
+            ):
+                with self.subTest(flags=flags):
+                    result = subprocess.run(
+                        [
+                            os.fspath(pilot),
+                            "airplane",
+                            "20260805-170000-audit",
+                            "exp-conflicting-flags",
+                            "direct",
+                            *flags,
+                        ],
+                        cwd=repo,
+                        env={
+                            **os.environ,
+                            "HOME": os.fspath(Path(temp) / "home"),
+                            "PYTHON_BIN": sys.executable,
+                        },
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 2)
 
     def test_gateway_rejects_missing_url_before_codex(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
