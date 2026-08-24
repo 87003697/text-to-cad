@@ -77,6 +77,76 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(state["token_slot"], 3)
         self.assertEqual(protocol.public_state(state, 60)["token_slot"], 3)
 
+    def test_submit_records_plugin_mode(self) -> None:
+        result = runtime.submit_pilot(
+            "airplane",
+            self.group,
+            plugin_mode="e2e",
+            state_root=self.state_root,
+            detach=lambda *args: 1,
+        )
+        state = protocol.load_state(self.state_root, result["job"])
+        self.assertEqual(state["plugin_mode"], "e2e")
+        self.assertEqual(protocol.public_state(state, 60)["plugin_mode"], "e2e")
+
+    def test_submit_rejects_invalid_plugin_mode(self) -> None:
+        with self.assertRaisesRegex(protocol.ProtocolError, "invalid plugin mode"):
+            runtime.submit_pilot(
+                "airplane",
+                self.group,
+                plugin_mode="unknown",
+                state_root=self.state_root,
+                detach=lambda *args: 1,
+            )
+
+    def test_protocol_rejects_invalid_persisted_plugin_mode(self) -> None:
+        for invalid in ("unknown", [], {}):
+            with self.subTest(invalid=invalid):
+                state = runtime._pilot_record(
+                    "airplane",
+                    self.group,
+                    "20260805-170000-airplane",
+                    self.state_root,
+                )
+                state["plugin_mode"] = invalid
+                with self.assertRaisesRegex(
+                    protocol.ProtocolError, "invalid plugin mode"
+                ):
+                    protocol.validate_state(state)
+
+    def test_plugin_mode_is_immutable_through_protocol_updates(self) -> None:
+        handle = self.submit()
+
+        def transition_to_running(root, job, **updates):
+            return protocol.transition(root, job, "running", **updates)
+
+        for update in (protocol.heartbeat, transition_to_running):
+            with self.subTest(update=update.__name__):
+                with self.assertRaisesRegex(protocol.ProtocolError, "plugin_mode"):
+                    update(self.state_root, handle, plugin_mode="e2e")
+
+    def test_pre_plugin_mode_state_defaults_to_direct(self) -> None:
+        handle = self.submit()
+        path = protocol.state_path(self.state_root, handle)
+        state = json.loads(path.read_text(encoding="utf-8"))
+        del state["plugin_mode"]
+        path.write_text(json.dumps(state), encoding="utf-8")
+        self.write_manifest(handle, 0)
+        captured: dict[str, object] = {}
+
+        def fake_run(root, job, command, **kwargs):
+            captured["command"] = list(command)
+            return 0, 4321
+
+        with mock.patch.object(
+            runtime, "_run_with_heartbeat", side_effect=fake_run
+        ):
+            result = runtime.supervise_pilot(handle, state_root=self.state_root)
+
+        self.assertEqual(result["state"], "succeeded")
+        self.assertEqual(captured["command"][-1], "direct")
+        self.assertEqual(protocol.public_state(state, 60)["plugin_mode"], "direct")
+
     def test_submit_rejects_invalid_token_slot(self) -> None:
         with (
             mock.patch.dict(os.environ, {"VENUS_TOKEN_SLOT": "50"}),
@@ -183,7 +253,9 @@ class CvmJobTests(unittest.TestCase):
             captured["command"] = list(command)
             return 0, 4321
 
-        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+        with mock.patch.object(
+            runtime, "_run_with_heartbeat", side_effect=fake_run
+        ):
             state = runtime.supervise_pilot(
                 handle,
                 state_root=self.state_root,
@@ -198,8 +270,31 @@ class CvmJobTests(unittest.TestCase):
                 "airplane",
                 self.group,
                 parsed["exp"],
+                "direct",
             ],
         )
+
+    def test_default_pilot_command_forwards_e2e_mode(self) -> None:
+        result = runtime.submit_pilot(
+            "airplane",
+            self.group,
+            plugin_mode="e2e",
+            state_root=self.state_root,
+            detach=lambda *args: 1,
+        )
+        handle = result["job"]
+        self.write_manifest(handle, 0)
+        captured: dict[str, object] = {}
+
+        def fake_run(root, job, command, **kwargs):
+            captured["command"] = list(command)
+            return 0, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_pilot(handle, state_root=self.state_root)
+
+        self.assertEqual(state["state"], "succeeded")
+        self.assertEqual(captured["command"][-1], "e2e")
 
     def test_heartbeat_updates_while_child_is_running(self) -> None:
         handle = self.submit()
@@ -927,6 +1022,79 @@ printf '%s\n' '{"job":"group/exp","state":"submitted"}'
         self.assertIn("VENUS_TOKENS[1]", command)
         self.assertIn("VENUS_TOKEN_SLOT='1'", command)
         self.assertIn("MODEL='gpt-5.5'", command)
+
+    def test_submit_plugin_mode_is_forwarded(self) -> None:
+        fake_bin = self.workspace / "plugin-mode-bin"
+        fake_bin.mkdir()
+        command_log = self.workspace / "plugin-mode-commands.log"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$CVM_WRAPPER_LOG"
+printf '%s\n' '{"job":"group/exp","state":"submitted"}'
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_WRAPPER_LOG": os.fspath(command_log),
+        }
+        result = subprocess.run(
+            [
+                os.fspath(SUBMIT_SCRIPT),
+                "pilot",
+                "airplane",
+                "20260805-170000-audit",
+                "--plugin-mode",
+                "e2e",
+            ],
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        command = command_log.read_text(encoding="utf-8")
+        self.assertIn("--plugin-mode 'e2e'", command)
+
+    def test_submit_rejects_duplicate_plugin_mode_without_ssh(self) -> None:
+        fake_bin = self.workspace / "duplicate-plugin-mode-bin"
+        fake_bin.mkdir()
+        marker = self.workspace / "duplicate-plugin-mode-ssh-called"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+touch "$CVM_SSH_MARKER"
+exit 99
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_SSH_MARKER": os.fspath(marker),
+        }
+        result = subprocess.run(
+            [
+                os.fspath(SUBMIT_SCRIPT),
+                "pilot",
+                "airplane",
+                "20260805-170000-audit",
+                "--plugin-mode",
+                "direct",
+                "--plugin-mode",
+                "e2e",
+            ],
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(marker.exists())
 
     def test_submit_rejects_unlisted_model_without_ssh(self) -> None:
         fake_bin = self.workspace / "invalid-model-bin"

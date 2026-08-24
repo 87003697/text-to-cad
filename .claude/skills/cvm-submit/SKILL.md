@@ -10,8 +10,21 @@ description: >-
 Run exactly one local wrapper command:
 
 ```bash
-scripts/pilot/cvm-submit.sh pilot <object> <group>
+scripts/pilot/cvm-submit.sh pilot <object> <group> [--plugin-mode direct|e2e]
 ```
+
+`direct` is the default and preserves the benchmark path: it names
+`$mesh-to-cad` in the prompt and disables Codex plugin discovery. Use `e2e`
+when the paid pilot must exercise discovery of the installed plugin: it keeps
+the same verified job-private plugin authority and `CODEX_HOME`, enables plugin
+discovery, and gives Codex a natural-language CAD request. Production or paid
+claims that the installed plugin was discovered require an `e2e` pilot; normal
+benchmark batches remain `direct`.
+
+Both modes write `run/plugin-mode.txt` and expose `plugin_mode` through job
+status. Those fields prove the requested mode, not which skill Codex actually
+invoked. Confirm the rollout together with the bound plugin-authority receipt
+before claiming successful installed-plugin invocation.
 
 For the narrow provider-free installed-plugin discovery check, run:
 

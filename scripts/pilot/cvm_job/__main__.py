@@ -27,6 +27,7 @@ def _parser() -> argparse.ArgumentParser:
     pilot = subparsers.add_parser("submit-pilot")
     pilot.add_argument("object")
     pilot.add_argument("group")
+    pilot.add_argument("--plugin-mode", choices=("direct", "e2e"), default="direct")
 
     provider_free = subparsers.add_parser("submit-provider-free")
     provider_free.add_argument("scenario", choices=("installed-plugin",))
@@ -62,7 +63,12 @@ def main(argv: list[str] | None = None) -> int:
     root = args.state_root or default_state_root()
     try:
         if args.command == "submit-pilot":
-            result = submit_pilot(args.object, args.group, state_root=root)
+            result = submit_pilot(
+                args.object,
+                args.group,
+                plugin_mode=args.plugin_mode,
+                state_root=root,
+            )
             status = 0 if result["state"] != "failed" else 1
         elif args.command == "submit-provider-free":
             result = submit_provider_free_installed_plugin(

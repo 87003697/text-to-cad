@@ -9,6 +9,7 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -893,7 +894,10 @@ class ProductionPathContractTests(unittest.TestCase):
         self.assertIn("resolve_deployed_authority", runner)
         self.assertIn('subparsers.add_parser("clean")', runner)
         self.assertIn("--skip-git-repo-check", pilot)
-        self.assertIn("--disable\n    plugins", pilot)
+        self.assertIn("PLUGIN_MODE=", pilot)
+        self.assertIn("direct|e2e", pilot)
+        self.assertIn("WORKLOAD+=(--disable plugins)", pilot)
+        self.assertIn("run/plugin-mode.txt", pilot)
         self.assertNotIn("--disable\n    view_image", pilot)
         self.assertIn("Do not call \\`view_image\\`", pilot)
         self.assertIn("danger-full-access", pilot)
@@ -915,6 +919,87 @@ class ProductionPathContractTests(unittest.TestCase):
             "sandbox-clean.sh",
         ):
             self.assertFalse((UTILS_ROOT / legacy_path).exists())
+
+    def test_toys4k_plugin_modes_change_only_plugin_discovery_request(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            pilot_root = repo / "scripts" / "pilot"
+            model_root = repo / "models" / "toys4k"
+            pilot_root.mkdir(parents=True)
+            model_root.mkdir(parents=True)
+            (model_root / "airplane.ply").write_text("ply\n", encoding="utf-8")
+            pilot = pilot_root / "toys4k-pilot.sh"
+            pilot.write_bytes((PILOT_ROOT / "toys4k-pilot.sh").read_bytes())
+            pilot.chmod(0o755)
+            (pilot_root / "runner.py").write_text(
+                """import json, os, pathlib, sys
+pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
+    "argv": sys.argv,
+    "codex_home": os.environ.get("CODEX_HOME"),
+}))
+""",
+                encoding="utf-8",
+            )
+
+            captures: dict[str, dict[str, object]] = {}
+            for mode in ("direct", "e2e"):
+                capture = Path(temp) / f"{mode}.json"
+                env = {
+                    **os.environ,
+                    "HOME": os.fspath(Path(temp) / "home"),
+                    "PILOT_CAPTURE": os.fspath(capture),
+                    "PYTHON_BIN": sys.executable,
+                    "CODEX_HOME": "/authority/job-private-codex-home",
+                }
+                result = subprocess.run(
+                    [
+                        os.fspath(pilot),
+                        "airplane",
+                        "20260805-170000-audit",
+                        f"exp-{mode}",
+                        mode,
+                    ],
+                    cwd=repo,
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                captures[mode] = json.loads(capture.read_text(encoding="utf-8"))
+                self.assertEqual(
+                    captures[mode]["codex_home"],
+                    "/authority/job-private-codex-home",
+                )
+
+            direct = captures["direct"]["argv"]
+            e2e = captures["e2e"]["argv"]
+            self.assertIsInstance(direct, list)
+            self.assertIsInstance(e2e, list)
+            assert isinstance(direct, list) and isinstance(e2e, list)
+            self.assertIn("--disable", direct)
+            self.assertEqual(direct[direct.index("--disable") + 1], "plugins")
+            self.assertNotIn("--disable", e2e)
+            self.assertEqual(direct[1:4], e2e[1:4])
+            self.assertEqual(
+                direct[5 : direct.index("--")],
+                e2e[5 : e2e.index("--")],
+            )
+            self.assertIn("$mesh-to-cad", direct[-1])
+            self.assertNotIn("$mesh-to-cad", e2e[-1])
+
+            for mode in ("direct", "e2e"):
+                run_dir = (
+                    repo
+                    / "outputs"
+                    / "20260805-170000-audit"
+                    / f"exp-{mode}"
+                    / "run"
+                )
+                self.assertEqual(
+                    (run_dir / "plugin-mode.txt").read_text(encoding="utf-8"),
+                    f"{mode}\n",
+                )
 
     def test_gateway_rejects_missing_url_before_codex(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

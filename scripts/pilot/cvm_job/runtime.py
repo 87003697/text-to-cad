@@ -27,6 +27,7 @@ from .protocol import (
     parse_handle,
     public_state,
     publish_state,
+    requested_plugin_mode,
     state_path,
     transition,
     utc_now,
@@ -193,6 +194,7 @@ def _pilot_record(
     exp: str,
     root: Path,
     *,
+    plugin_mode: str = "direct",
     token_slot_from_environment: bool = True,
 ) -> dict[str, Any]:
     raw_token_slot = (
@@ -212,6 +214,7 @@ def _pilot_record(
         "group": group,
         "exp": exp,
         "object": object_name,
+        "plugin_mode": plugin_mode,
         "token_slot": token_slot,
         "exp_dir": f"outputs/{handle}",
         "state": "submitted",
@@ -299,6 +302,7 @@ def submit_pilot(
     object_name: str,
     group: str,
     *,
+    plugin_mode: str = "direct",
     state_root: Path | None = None,
     detach: Callable[[str, Sequence[str], Path], int] = _detach,
 ) -> dict[str, Any]:
@@ -307,7 +311,13 @@ def submit_pilot(
     group = _validate_pilot_group(group)
     with _allocation_lock(root, group):
         exp = _allocate_exp(object_name, group, root)
-        record = _pilot_record(object_name, group, exp, root)
+        record = _pilot_record(
+            object_name,
+            group,
+            exp,
+            root,
+            plugin_mode=plugin_mode,
+        )
         publish_state(root, record)
     command = [
         sys.executable,
@@ -510,6 +520,7 @@ def _supervise_pilot_locked(
         record["object"],
         record["group"],
         record["exp"],
+        requested_plugin_mode(record),
     ]
     process_status: int | None = None
     try:

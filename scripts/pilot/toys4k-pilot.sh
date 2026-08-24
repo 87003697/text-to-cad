@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/pilot/toys4k-pilot.sh <object_name> <group> [exp_name]
+# scripts/pilot/toys4k-pilot.sh <object_name> <group> [exp_name] [direct|e2e]
 # Toys4K mesh-to-CAD benchmark pilot. Reads models/toys4k/<name>.ply,
 # writes outputs/<group>/<TS>-<name>/. Group format: YYYYMMDD-HHMMSS-<slug>.
 
@@ -34,13 +34,35 @@ if [[ ! "$EXP_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ \
     exit 1
 fi
 EXP_DIR="outputs/${GROUP}/${EXP_NAME}"
+PLUGIN_MODE="${4:-direct}"
+case "$PLUGIN_MODE" in
+    direct|e2e) ;;
+    *)
+        echo "Bad plugin mode: '$PLUGIN_MODE'. Expect direct or e2e." >&2
+        exit 2
+        ;;
+esac
 
 # Minimal orchestrator prompt — peer skills, references, and commit
 # conventions live in skills/mesh-to-cad/SKILL.md; duplicating them here
 # would drift.
-PROMPT=$(cat <<EOF
-You are the \$mesh-to-cad skill orchestrator. Follow
+if [[ "$PLUGIN_MODE" == "direct" ]]; then
+    PROMPT_PREAMBLE=$(cat <<'EOF'
+You are the $mesh-to-cad skill orchestrator. Follow
 skills/mesh-to-cad/SKILL.md verbatim; it is the authoritative contract.
+EOF
+    )
+else
+    PROMPT_PREAMBLE=$(cat <<'EOF'
+Convert the provided Toys4K mesh into an editable parametric CAD model.
+Inspect the mesh, reconstruct the object, validate the result, and produce
+the canonical Workspace and its atomically published Final Delivery.
+EOF
+    )
+fi
+
+PROMPT=$(cat <<EOF
+${PROMPT_PREAMBLE}
 
 Input mesh: ${PLY}
 Experiment directory (already an initialized local git repo, write ALL
@@ -63,14 +85,18 @@ echo "[pilot] $OBJ → $EXP_DIR"
 
 mkdir -p "$EXP_DIR/run"
 printf '%s' "$PROMPT" > "${EXP_DIR}/run/prompt.txt"
+printf '%s\n' "$PLUGIN_MODE" > "${EXP_DIR}/run/plugin-mode.txt"
 
 WORKLOAD=(
     "gateway/codex-tap-gpt56"
     "${MODEL:-sol}"
     exec
     --skip-git-repo-check
-    --disable
-    plugins
+)
+if [[ "$PLUGIN_MODE" == "direct" ]]; then
+    WORKLOAD+=(--disable plugins)
+fi
+WORKLOAD+=(
     -s
     danger-full-access
     "$PROMPT"

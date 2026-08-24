@@ -26,6 +26,7 @@ _RESERVED_UPDATE_FIELDS = frozenset(
         "job",
         "group",
         "exp",
+        "plugin_mode",
         "state",
         "submitted_at",
         "started_at",
@@ -100,6 +101,16 @@ def _validate_common(state: dict[str, Any]) -> None:
         raise ProtocolError("group does not match handle")
     if state.get("exp") != parsed["exp"]:
         raise ProtocolError("exp does not match handle")
+    requested_plugin_mode(state)
+
+
+def requested_plugin_mode(state: dict[str, Any]) -> str:
+    """Return the requested pilot mode, defaulting pre-mode records to direct."""
+
+    value = state.get("plugin_mode", "direct")
+    if not isinstance(value, str) or value not in {"direct", "e2e"}:
+        raise ProtocolError(f"invalid plugin mode: {value!r}")
+    return value
 
 
 def validate_state(state: dict[str, Any]) -> dict[str, Any]:
@@ -236,6 +247,8 @@ def public_state(state: dict[str, Any], stale_after: float) -> dict[str, Any]:
     }
     if state.get("token_slot") is not None:
         result["token_slot"] = state["token_slot"]
+    if not state.get("provider_free"):
+        result["plugin_mode"] = requested_plugin_mode(state)
     if state["state"] in TERMINAL_STATES:
         result.update(
             {

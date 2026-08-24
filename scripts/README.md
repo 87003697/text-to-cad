@@ -18,11 +18,11 @@ Use these durable entrypoints for normal work:
 | Installed-plugin smoke (real Codex CLI, isolated CODEX_HOME) | `scripts/release/smoke-installed-plugin.sh` |
 | Install local skills into agents | `scripts/install/install-skills.sh --agent codex` |
 | Uninstall local skill links | `scripts/install/uninstall-skills.sh --agent codex` |
-| Run one Toys4K pilot | `scripts/pilot/toys4k-pilot.sh <object> <group>` |
+| Run one Toys4K pilot | `scripts/pilot/toys4k-pilot.sh <object> <group> [exp] [direct\|e2e]` |
 | Run a Toys4K pilot batch | `scripts/pilot/toys4k-batch.sh <slug> <object>...` |
 | Push the current source overlay to CVM | `scripts/pilot/cvm-push.sh` |
 | Install/probe the exact Browser Runtime image | `scripts/pilot/cvm-browser-runtime.sh install|probe|status ...` |
-| Submit a detached CVM pilot | `scripts/pilot/cvm-submit.sh pilot <object> <group>` |
+| Submit a detached CVM pilot | `scripts/pilot/cvm-submit.sh pilot <object> <group> [--plugin-mode direct\|e2e]` |
 | Submit an offline installed-plugin discovery pilot | `scripts/pilot/cvm-submit.sh provider-free installed-plugin <group>` |
 | Monitor a CVM job | `scripts/pilot/cvm-monitor.sh --once|--wait <handle>` |
 | Pull terminal CVM outputs | `scripts/pilot/cvm-pull.sh --exp|--group ...` |
@@ -47,6 +47,13 @@ Lower-level scripts stay grouped by ownership:
 
 Root `tests/` contains repo-wide policy tests that are not owned by one package,
 skill, or app runtime.
+
+Detached pilots default to `--plugin-mode direct`, which invokes the benchmark
+orchestrator explicitly with plugin discovery disabled. Use `e2e` only when a
+paid pilot must test natural-language discovery through the verified
+job-private installed plugin authority. `run/plugin-mode.txt` and job status
+record the request; the rollout and authority receipt are still required to
+prove which installed skill actually ran.
 
 ## Bundle
 

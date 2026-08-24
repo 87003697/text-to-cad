@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] | provider-free installed-plugin <group>" >&2
+    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] [--plugin-mode direct|e2e] | provider-free installed-plugin <group>" >&2
     exit 2
 }
 
@@ -25,6 +25,7 @@ case "$mode" in
         safe_component "$object_name" && safe_group "$group" || usage
         token_slot=""
         model=""
+        plugin_mode=""
         shift 3
         while [[ $# -gt 0 ]]; do
             [[ $# -ge 2 ]] || usage
@@ -37,11 +38,15 @@ case "$mode" in
                     [[ -z "$model" && "$2" =~ ^(sol|terra|luna|gpt-5[.]5)$ ]] || usage
                     model="$2"
                     ;;
+                --plugin-mode)
+                    [[ -z "$plugin_mode" && "$2" =~ ^(direct|e2e)$ ]] || usage
+                    plugin_mode="$2"
+                    ;;
                 *) usage ;;
             esac
             shift 2
         done
-        submit_command="python3 -m scripts.pilot.cvm_job submit-pilot '$object_name' '$group'"
+        submit_command="python3 -m scripts.pilot.cvm_job submit-pilot '$object_name' '$group' --plugin-mode '${plugin_mode:-direct}'"
         model_export=""
         if [[ -n "$model" ]]; then
             model_export=" MODEL='$model'"
