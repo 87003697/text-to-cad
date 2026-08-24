@@ -10,7 +10,7 @@ description: >-
 Run exactly one local wrapper command:
 
 ```bash
-scripts/pilot/cvm-submit.sh pilot <object> <group> [--plugin-mode direct|e2e] [--reconstruction-spec]
+scripts/pilot/cvm-submit.sh pilot <object> <group> [--model sol|terra|luna|gpt-5.5] [--plugin-mode direct|e2e] [--reconstruction-spec]
 ```
 
 `direct` is the default and preserves the benchmark path: it names
@@ -20,6 +20,12 @@ the same verified job-private plugin authority and `CODEX_HOME`, enables plugin
 discovery, and gives Codex a natural-language CAD request. Production or paid
 claims that the installed plugin was discovered require an `e2e` pilot; normal
 benchmark batches remain `direct`.
+
+The model defaults to the public `gpt-5.5` Responses API slug. Selection
+precedence is explicit `--model`, then the `MODEL` environment variable, then
+that default. Pass `sol`, `terra`, or `luna` through either selector path to
+retain the explicit GPT-5.6 Venus variants; the job state reports the resolved
+concrete model.
 
 Both modes write `run/plugin-mode.txt` and expose `plugin_mode` through job
 status. Those fields prove the requested mode, not which skill Codex actually

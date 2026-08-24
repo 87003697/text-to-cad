@@ -874,6 +874,7 @@ class ProductionPathContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("gateway/codex-tap-gpt56", pilot)
+        self.assertIn('MODEL_SELECTOR="${MODEL:-gpt-5.5}"', pilot)
         self.assertIn("runner.py", pilot)
         self.assertNotIn("sandbox-run.sh", pilot)
         self.assertNotIn("eval ", pilot)
@@ -985,6 +986,9 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                 direct[5 : direct.index("--")],
                 e2e[5 : e2e.index("--")],
             )
+            gateway_index = direct.index("gateway/codex-tap-gpt56")
+            self.assertEqual(direct[gateway_index + 1], "gpt-5.5")
+            self.assertEqual(e2e[gateway_index + 1], "gpt-5.5")
             self.assertIn("$mesh-to-cad", direct[-1])
             self.assertNotIn("$mesh-to-cad", e2e[-1])
 

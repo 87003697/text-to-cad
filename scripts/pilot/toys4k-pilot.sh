@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # scripts/pilot/toys4k-pilot.sh <object_name> <group> [exp_name] [direct|e2e] [--reconstruction-spec]
+# MODEL selects the Venus gateway variant; it defaults to the public gpt-5.5 slug.
 # Toys4K mesh-to-CAD benchmark pilot. Reads models/toys4k/<name>.ply,
 # writes outputs/<group>/<TS>-<name>/. Group format: YYYYMMDD-HHMMSS-<slug>.
 
@@ -34,6 +35,14 @@ if [[ ! "$EXP_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ \
     exit 1
 fi
 EXP_DIR="outputs/${GROUP}/${EXP_NAME}"
+MODEL_SELECTOR="${MODEL:-gpt-5.5}"
+case "$MODEL_SELECTOR" in
+    sol|terra|luna|gpt-5.5) ;;
+    *)
+        echo "Bad model selector: '$MODEL_SELECTOR'. Expect sol|terra|luna|gpt-5.5." >&2
+        exit 2
+        ;;
+esac
 PLUGIN_MODE="${4:-direct}"
 RECONSTRUCTION_SPEC=0
 if [[ "$PLUGIN_MODE" == "--reconstruction-spec" ]]; then
@@ -115,7 +124,7 @@ printf '%s\n' "$PLUGIN_MODE" > "${EXP_DIR}/run/plugin-mode.txt"
 
 WORKLOAD=(
     "gateway/codex-tap-gpt56"
-    "${MODEL:-sol}"
+    "$MODEL_SELECTOR"
     exec
     --skip-git-repo-check
 )

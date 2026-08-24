@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from scripts.pilot.cvm_job import __main__ as cvm_job_main
-from scripts.pilot.cvm_job import protocol, runtime
+from scripts.pilot.cvm_job import model, protocol, runtime
 from tests.python.support.paths import REPO_ROOT
 from tests.python.support.tmp_root import temporary_directory
 
@@ -90,6 +90,77 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(state["plugin_mode"], "e2e")
         self.assertEqual(protocol.public_state(state, 60)["plugin_mode"], "e2e")
 
+    def test_submit_defaults_to_gpt55_and_records_resolved_model(self) -> None:
+        with mock.patch.dict(os.environ, {"MODEL": ""}):
+            result = runtime.submit_pilot(
+                "airplane",
+                self.group,
+                state_root=self.state_root,
+                detach=lambda *args: 1,
+            )
+        state = protocol.load_state(self.state_root, result["job"])
+        self.assertEqual(result["model"], "gpt-5.5")
+        self.assertEqual(state["model"], "gpt-5.5")
+        self.assertEqual(protocol.public_state(state, 60)["model"], "gpt-5.5")
+
+    def test_submit_uses_model_selector_from_environment(self) -> None:
+        with mock.patch.dict(os.environ, {"MODEL": "terra"}):
+            result = runtime.submit_pilot(
+                "airplane",
+                self.group,
+                state_root=self.state_root,
+                detach=lambda *args: 1,
+            )
+        state = protocol.load_state(self.state_root, result["job"])
+        self.assertEqual(result["model"], "gpt-5.6-terra")
+        self.assertEqual(state["model"], "gpt-5.6-terra")
+
+    def test_explicit_model_selectors_keep_their_resolved_receipt_models(self) -> None:
+        for selector, resolved in model.MODEL_RESOLUTION.items():
+            with self.subTest(selector=selector):
+                result = runtime.submit_pilot(
+                    "airplane",
+                    self.group,
+                    model=selector,
+                    state_root=self.state_root,
+                    detach=lambda *args: 1,
+                )
+                state = protocol.load_state(self.state_root, result["job"])
+                self.assertEqual(result["model"], resolved)
+                self.assertEqual(state["model"], resolved)
+                self.assertEqual(
+                    protocol.public_state(state, 60)["model"], resolved
+                )
+
+    def test_supervise_passes_resolved_model_selector_without_changing_plugin_mode(
+        self,
+    ) -> None:
+        result = runtime.submit_pilot(
+            "airplane",
+            self.group,
+            model="sol",
+            plugin_mode="e2e",
+            state_root=self.state_root,
+            detach=lambda *args: 1,
+        )
+        handle = result["job"]
+        self.write_manifest(handle, 0)
+        captured: dict[str, object] = {}
+
+        def fake_run(root, job, command, **kwargs):
+            captured["command"] = list(command)
+            captured["env"] = dict(kwargs["env"])
+            return 0, 4321
+
+        with mock.patch.object(runtime, "_run_with_heartbeat", side_effect=fake_run):
+            state = runtime.supervise_pilot(handle, state_root=self.state_root)
+
+        self.assertEqual(state["state"], "succeeded")
+        self.assertEqual(state["model"], "gpt-5.6-sol")
+        self.assertEqual(state["plugin_mode"], "e2e")
+        self.assertEqual(captured["env"]["MODEL"], "sol")
+        self.assertEqual(captured["command"][-1], "e2e")
+
     def test_submit_records_reconstruction_spec_only_when_enabled(self) -> None:
         off = runtime.submit_pilot(
             "airplane",
@@ -122,6 +193,11 @@ class CvmJobTests(unittest.TestCase):
         on = parser.parse_args(
             ["submit-pilot", "airplane", self.group, "--reconstruction-spec"]
         )
+        sol = parser.parse_args(
+            ["submit-pilot", "airplane", self.group, "--model", "sol"]
+        )
+        self.assertIsNone(off.model)
+        self.assertEqual(sol.model, "sol")
         self.assertFalse(off.reconstruction_spec)
         self.assertTrue(on.reconstruction_spec)
 
@@ -214,6 +290,30 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(result["state"], "succeeded")
         self.assertEqual(captured["command"][-1], "direct")
         self.assertEqual(protocol.public_state(state, 60)["plugin_mode"], "direct")
+
+    def test_pre_model_state_keeps_legacy_sol_model(self) -> None:
+        handle = self.submit()
+        path = protocol.state_path(self.state_root, handle)
+        state = json.loads(path.read_text(encoding="utf-8"))
+        del state["model"]
+        path.write_text(json.dumps(state), encoding="utf-8")
+        self.write_manifest(handle, 0)
+        captured: dict[str, object] = {}
+
+        def fake_run(root, job, command, **kwargs):
+            captured["env"] = dict(kwargs["env"])
+            return 0, 4321
+
+        with mock.patch.object(
+            runtime, "_run_with_heartbeat", side_effect=fake_run
+        ):
+            result = runtime.supervise_pilot(handle, state_root=self.state_root)
+
+        self.assertEqual(result["state"], "succeeded")
+        self.assertEqual(captured["env"]["MODEL"], "sol")
+        self.assertEqual(
+            protocol.public_state(result, 60)["model"], "gpt-5.6-sol"
+        )
 
     def test_submit_rejects_invalid_token_slot(self) -> None:
         with (
@@ -982,6 +1082,7 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "CVM_WRAPPER_LOG": os.fspath(command_log),
         }
+        env.pop("MODEL", None)
         submitted = subprocess.run(
             [
                 os.fspath(SUBMIT_SCRIPT),
@@ -1010,6 +1111,7 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
         self.assertEqual(len(commands), 2)
         self.assertIn("scripts.pilot.cvm_job submit-pilot", commands[0])
         self.assertIn("20260805-170000-audit", commands[0])
+        self.assertNotIn("--model", commands[0])
         self.assertNotIn("--reconstruction-spec", commands[0])
         self.assertIn("ServerAliveInterval=30", commands[1])
         self.assertIn("scripts.pilot.cvm_job wait", commands[1])
@@ -1031,6 +1133,7 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "CVM_WRAPPER_LOG": os.fspath(command_log),
         }
+        env.pop("MODEL", None)
         result = subprocess.run(
             [
                 os.fspath(SUBMIT_SCRIPT),
@@ -1050,7 +1153,99 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
         command = command_log.read_text(encoding="utf-8")
         self.assertIn("VENUS_TOKENS[1]", command)
         self.assertIn("VENUS_TOKEN_SLOT='1'", command)
+        self.assertIn("export MODEL", command)
         self.assertNotIn("secret-", command)
+
+    def test_submit_uses_environment_model_unless_cli_overrides_it(self) -> None:
+        fake_bin = self.workspace / "environment-model-bin"
+        fake_bin.mkdir()
+        command_log = self.workspace / "environment-model-commands.log"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$CVM_WRAPPER_LOG"
+printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_WRAPPER_LOG": os.fspath(command_log),
+            "MODEL": "terra",
+        }
+
+        inherited = subprocess.run(
+            [
+                os.fspath(SUBMIT_SCRIPT),
+                "pilot",
+                "airplane",
+                "20260805-170000-audit",
+            ],
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        explicit = subprocess.run(
+            [
+                os.fspath(SUBMIT_SCRIPT),
+                "pilot",
+                "airplane",
+                "20260805-170000-audit",
+                "--model",
+                "sol",
+            ],
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(inherited.returncode, 0, inherited.stderr)
+        self.assertEqual(explicit.returncode, 0, explicit.stderr)
+        commands = command_log.read_text(encoding="utf-8").splitlines()
+        self.assertIn("MODEL='terra'", commands[0])
+        self.assertIn("--model 'terra'", commands[0])
+        self.assertIn("MODEL='sol'", commands[1])
+        self.assertIn("--model 'sol'", commands[1])
+        self.assertNotIn("terra", commands[1])
+
+    def test_submit_rejects_invalid_environment_model_before_ssh(self) -> None:
+        fake_bin = self.workspace / "invalid-environment-model-bin"
+        fake_bin.mkdir()
+        command_log = self.workspace / "invalid-environment-model.log"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$CVM_WRAPPER_LOG"
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_WRAPPER_LOG": os.fspath(command_log),
+            "MODEL": "unknown",
+        }
+
+        result = subprocess.run(
+            [
+                os.fspath(SUBMIT_SCRIPT),
+                "pilot",
+                "airplane",
+                "20260805-170000-audit",
+            ],
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(command_log.exists())
 
     def test_submit_model_slot_combines_with_token_slot(self) -> None:
         fake_bin = self.workspace / "model-bin"
@@ -1091,6 +1286,7 @@ printf '%s\n' '{"job":"group/exp","state":"submitted"}'
         self.assertIn("VENUS_TOKENS[1]", command)
         self.assertIn("VENUS_TOKEN_SLOT='1'", command)
         self.assertIn("MODEL='gpt-5.5'", command)
+        self.assertIn("--model 'gpt-5.5'", command)
 
     def test_submit_plugin_mode_is_forwarded(self) -> None:
         fake_bin = self.workspace / "plugin-mode-bin"
@@ -1117,6 +1313,8 @@ printf '%s\n' '{"job":"group/exp","state":"submitted"}'
                 "20260805-170000-audit",
                 "--plugin-mode",
                 "e2e",
+                "--model",
+                "sol",
             ],
             env=env,
             check=False,
@@ -1127,6 +1325,7 @@ printf '%s\n' '{"job":"group/exp","state":"submitted"}'
         self.assertEqual(result.returncode, 0, result.stderr)
         command = command_log.read_text(encoding="utf-8")
         self.assertIn("--plugin-mode 'e2e'", command)
+        self.assertIn("--model 'sol'", command)
 
     def test_submit_reconstruction_spec_is_forwarded_to_remote_job_command(self) -> None:
         fake_bin = self.workspace / "reconstruction-spec-bin"

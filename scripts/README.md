@@ -22,7 +22,7 @@ Use these durable entrypoints for normal work:
 | Run a Toys4K pilot batch | `scripts/pilot/toys4k-batch.sh <slug> <object>...` |
 | Push the current source overlay to CVM | `scripts/pilot/cvm-push.sh` |
 | Install/probe the exact Browser Runtime image | `scripts/pilot/cvm-browser-runtime.sh install|probe|status ...` |
-| Submit a detached CVM pilot | `scripts/pilot/cvm-submit.sh pilot <object> <group> [--plugin-mode direct\|e2e]` |
+| Submit a detached CVM pilot | `scripts/pilot/cvm-submit.sh pilot <object> <group> [--model sol\|terra\|luna\|gpt-5.5] [--plugin-mode direct\|e2e]` |
 | Submit an offline installed-plugin discovery pilot | `scripts/pilot/cvm-submit.sh provider-free installed-plugin <group>` |
 | Monitor a CVM job | `scripts/pilot/cvm-monitor.sh --once|--wait <handle>` |
 | Pull terminal CVM outputs | `scripts/pilot/cvm-pull.sh --exp|--group ...` |
@@ -54,6 +54,11 @@ paid pilot must test natural-language discovery through the verified
 job-private installed plugin authority. `run/plugin-mode.txt` and job status
 record the request; the rollout and authority receipt are still required to
 prove which installed skill actually ran.
+
+CVM pilots default to the public `gpt-5.5` model slug. An explicit `--model`
+overrides the `MODEL` environment variable; either can select `sol`, `terra`,
+or `luna` and resolve to the corresponding GPT-5.6 Venus variant. The detached
+job state exposes the resolved concrete model.
 
 ## Bundle
 

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] [--plugin-mode direct|e2e] [--reconstruction-spec] | provider-free installed-plugin <group>" >&2
+    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] (default: gpt-5.5) [--plugin-mode direct|e2e] [--reconstruction-spec] | provider-free installed-plugin <group>" >&2
     exit 2
 }
 
@@ -56,18 +56,25 @@ case "$mode" in
                 *) usage ;;
             esac
         done
+        selected_model="${model:-${MODEL:-}}"
+        if [[ -n "$selected_model" && ! "$selected_model" =~ ^(sol|terra|luna|gpt-5[.]5)$ ]]; then
+            usage
+        fi
         submit_command="python3 -m scripts.pilot.cvm_job submit-pilot '$object_name' '$group' --plugin-mode '${plugin_mode:-direct}'"
+        if [[ -n "$selected_model" ]]; then
+            submit_command+=" --model '$selected_model'"
+        fi
         if [[ "$reconstruction_spec" == 1 ]]; then
             submit_command+=" --reconstruction-spec"
         fi
         model_export=""
-        if [[ -n "$model" ]]; then
-            model_export=" MODEL='$model'"
+        if [[ -n "$selected_model" ]]; then
+            model_export=" MODEL='$selected_model'"
         fi
         if [[ -n "$token_slot" ]]; then
-            remote_command="source \"\$HOME/.secrets/text-to-cad.env\" && [[ '$token_slot' -lt \"\${#VENUS_TOKENS[@]}\" ]] && export VENUS_TOKEN=\"\${VENUS_TOKENS[$token_slot]}\" VENUS_TOKEN_SLOT='$token_slot'$model_export && $submit_command"
-        elif [[ -n "$model" ]]; then
-            remote_command="export MODEL='$model' && $submit_command"
+            remote_command="source \"\$HOME/.secrets/text-to-cad.env\" && [[ '$token_slot' -lt \"\${#VENUS_TOKENS[@]}\" ]] && export MODEL && export VENUS_TOKEN=\"\${VENUS_TOKENS[$token_slot]}\" VENUS_TOKEN_SLOT='$token_slot'$model_export && $submit_command"
+        elif [[ -n "$selected_model" ]]; then
+            remote_command="export MODEL='$selected_model' && $submit_command"
         else
             remote_command="$submit_command"
         fi

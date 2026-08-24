@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from .model import MODEL_SELECTORS
 from .protocol import ProtocolError, default_state_root
 from .runtime import (
     DEFAULT_STALE_AFTER,
@@ -27,6 +28,12 @@ def _parser() -> argparse.ArgumentParser:
     pilot = subparsers.add_parser("submit-pilot")
     pilot.add_argument("object")
     pilot.add_argument("group")
+    pilot.add_argument(
+        "--model",
+        choices=MODEL_SELECTORS,
+        default=None,
+        help="model selector (default: gpt-5.5)",
+    )
     pilot.add_argument("--plugin-mode", choices=("direct", "e2e"), default="direct")
     pilot.add_argument("--reconstruction-spec", action="store_true")
 
@@ -67,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
             result = submit_pilot(
                 args.object,
                 args.group,
+                model=args.model,
                 plugin_mode=args.plugin_mode,
                 reconstruction_spec=args.reconstruction_spec,
                 state_root=root,

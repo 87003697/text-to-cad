@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .model import LEGACY_DEFAULT_MODEL, selector_for_model
+
 
 SCHEMA_VERSION = 1
 TERMINAL_STATES = frozenset({"succeeded", "failed"})
@@ -26,6 +28,7 @@ _RESERVED_UPDATE_FIELDS = frozenset(
         "job",
         "group",
         "exp",
+        "model",
         "plugin_mode",
         "reconstruction_spec",
         "state",
@@ -104,6 +107,8 @@ def _validate_common(state: dict[str, Any]) -> None:
         raise ProtocolError("exp does not match handle")
     requested_plugin_mode(state)
     requested_reconstruction_spec(state)
+    if not state.get("provider_free"):
+        requested_model(state)
 
 
 def requested_plugin_mode(state: dict[str, Any]) -> str:
@@ -121,6 +126,24 @@ def requested_reconstruction_spec(state: dict[str, Any]) -> bool:
     value = state.get("reconstruction_spec", False)
     if not isinstance(value, bool):
         raise ProtocolError(f"invalid reconstruction spec flag: {value!r}")
+    return value
+
+
+def requested_model(state: dict[str, Any]) -> str:
+    """Return the resolved model, preserving pre-model historical records."""
+
+    value = state.get("model")
+    if value is None:
+        # Job records created before model receipts were introduced were all
+        # GPT-5.6-sol pilots.  Keep those records runnable and historically
+        # truthful while new records use the GPT-5.5 default.
+        return LEGACY_DEFAULT_MODEL
+    if not isinstance(value, str):
+        raise ProtocolError(f"invalid resolved model: {value!r}")
+    try:
+        selector_for_model(value)
+    except ValueError as error:
+        raise ProtocolError(str(error)) from error
     return value
 
 
@@ -259,6 +282,7 @@ def public_state(state: dict[str, Any], stale_after: float) -> dict[str, Any]:
     if state.get("token_slot") is not None:
         result["token_slot"] = state["token_slot"]
     if not state.get("provider_free"):
+        result["model"] = requested_model(state)
         result["plugin_mode"] = requested_plugin_mode(state)
         if requested_reconstruction_spec(state):
             result["reconstruction_spec"] = True

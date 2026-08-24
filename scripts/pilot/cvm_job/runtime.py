@@ -17,6 +17,7 @@ from typing import Any, Callable, Iterator, Sequence
 from scripts.pilot import plugin_deployment
 
 from . import tap_observer
+from .model import resolve_model, selector_for_model
 from .protocol import (
     ProtocolError,
     TERMINAL_STATES,
@@ -27,6 +28,7 @@ from .protocol import (
     parse_handle,
     public_state,
     publish_state,
+    requested_model,
     requested_plugin_mode,
     requested_reconstruction_spec,
     state_path,
@@ -195,8 +197,10 @@ def _pilot_record(
     exp: str,
     root: Path,
     *,
+    model: str | None = None,
     plugin_mode: str = "direct",
     reconstruction_spec: bool = False,
+    include_model: bool = True,
     token_slot_from_environment: bool = True,
 ) -> dict[str, Any]:
     if not isinstance(reconstruction_spec, bool):
@@ -211,6 +215,12 @@ def _pilot_record(
         token_slot = int(raw_token_slot)
     now = utc_now()
     handle = f"{group}/{exp}"
+    resolved_model: str | None = None
+    if include_model:
+        try:
+            _, resolved_model = resolve_model(model or os.environ.get("MODEL"))
+        except ValueError as error:
+            raise ProtocolError(str(error)) from error
     record = {
         "schema_version": 1,
         "kind": "pilot",
@@ -235,6 +245,8 @@ def _pilot_record(
         "log": _relative(log_path(root, handle)),
         "failure_reason": None,
     }
+    if resolved_model is not None:
+        record["model"] = resolved_model
     if reconstruction_spec:
         record["reconstruction_spec"] = True
     return record
@@ -309,6 +321,7 @@ def submit_pilot(
     object_name: str,
     group: str,
     *,
+    model: str | None = None,
     plugin_mode: str = "direct",
     reconstruction_spec: bool = False,
     state_root: Path | None = None,
@@ -324,6 +337,7 @@ def submit_pilot(
             group,
             exp,
             root,
+            model=model,
             plugin_mode=plugin_mode,
             reconstruction_spec=reconstruction_spec,
         )
@@ -346,7 +360,12 @@ def submit_pilot(
             failure_reason=f"supervisor launch failed: {type(error).__name__}",
         )
     state = load_state(root, record["job"])
-    return {"job": state["job"], "state": state["state"], "kind": "pilot"}
+    return {
+        "job": state["job"],
+        "state": state["state"],
+        "kind": "pilot",
+        "model": requested_model(state),
+    }
 
 
 def submit_provider_free_installed_plugin(
@@ -378,6 +397,7 @@ def submit_provider_free_installed_plugin(
             group,
             exp,
             root,
+            include_model=False,
             token_slot_from_environment=False,
         )
         record.update(
@@ -533,6 +553,9 @@ def _supervise_pilot_locked(
     ]
     if command is None and requested_reconstruction_spec(record):
         pilot_command.append("--reconstruction-spec")
+    pilot_environment = os.environ.copy()
+    if command is None:
+        pilot_environment["MODEL"] = selector_for_model(requested_model(record))
     process_status: int | None = None
     try:
         process_status, pilot_pid = _run_with_heartbeat(
@@ -540,7 +563,7 @@ def _supervise_pilot_locked(
             handle,
             pilot_command,
             interval=interval,
-            env=os.environ.copy(),
+            env=pilot_environment,
         )
         manifest_path = REPO_ROOT / record["exp_dir"] / "artifact_manifest.json"
         runner_status, manifest_error = _manifest_result(manifest_path)
