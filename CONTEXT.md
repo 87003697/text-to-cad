@@ -112,6 +112,38 @@ _Avoid_: Copy of the latest files
 The experiment-local state graph containing immutable measured steps, repair cycles, attempts, VoxBlame evidence, and final delivery, plus an ignored mutable work area.
 _Avoid_: Output folder, VoxBlame directory
 
+**Workspace Authority**:
+The immutable reconstruction facts whose publication changes a Workspace state graph. Runner completion, transfer results, review verdicts, and evaluation scores are outside this authority.
+_Avoid_: Experiment contents, output manifest, review authority
+
+**Workspace View**:
+A validated, read-only projection of Workspace Authority facts for a declared consumer purpose.
+_Avoid_: Workspace copy, report, cached directory scan
+
+**Agent Surface**:
+The closed set of reconstruction intents and purpose-bound Workspace facts available to a Modeling Agent without exposing Workspace Authority or its publication machinery.
+_Avoid_: Internal, Workspace interface, authority CLI
+
+**Agent Intent**:
+A domain-level request made through the Agent Surface to observe a reference, develop or measure a candidate, submit a repair result, select a step, or request delivery.
+_Avoid_: Authority publication, shell command, file operation
+
+**Consumer Verdict**:
+A conclusion produced by a runner, reviewer, evaluator, or transfer process from a Workspace View without becoming Workspace Authority.
+_Avoid_: Workspace fact, acceptance fact, transaction result
+
+**Reference Capability**:
+A job-private authority to request a closed set of bounded observations of one Canonical Reference without exposing its raw representation.
+_Avoid_: Mesh path, read-only mesh, geometry export
+
+**Reference Observation**:
+A bounded fact or rendering returned through a Reference Capability for reconstruction reasoning.
+_Avoid_: Raw mesh, Workspace inspection, arbitrary geometry query
+
+**Terminal Validation Result**:
+The reusable result of the required complete Workspace validation after pilot execution reaches a terminal state.
+_Avoid_: Final Delivery, review verdict, repeated review validation
+
 ## Browser Runtime Language
 
 **Local Rendering Browser**:
