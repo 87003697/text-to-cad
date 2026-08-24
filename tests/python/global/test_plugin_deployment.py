@@ -57,6 +57,8 @@ import scripts.pilot.plugin_deployment
         self.assertEqual(0, completed.returncode, completed.stderr)
 
     def test_direct_pilot_import_can_recompute_manifest(self) -> None:
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
         script = """
 import tempfile
 import sys
@@ -77,6 +79,7 @@ with tempfile.TemporaryDirectory() as root_text:
         completed = subprocess.run(
             [sys.executable, "-c", script],
             cwd=REPO_ROOT / "scripts/pilot",
+            env=env,
             capture_output=True,
             text=True,
             check=False,
