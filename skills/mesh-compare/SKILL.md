@@ -84,6 +84,11 @@ canonical operations above.
    exterior `alerts`, then follow `repair_targets.next_offset` until every
    interior Repair Target has been inspected. Mesh Compare owns the
    deterministic repair depth; the Agent must not choose or advance it.
+   The compact CLI page exposes `missing_surface_count` and
+   `excess_surface_count` directly on each `repair_targets.items[]` and exterior
+   signals in separate top-level `alerts`; use rich fields such as
+   `error_profile` and `exterior_surface` only in persisted report/summary
+   documents.
    Targets are grouped at that depth while retaining exact depth-8 masks. Item
    order is deterministic attention order by objective error impact, not a CAD
    edit instruction.

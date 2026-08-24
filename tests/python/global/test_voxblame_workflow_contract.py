@@ -274,6 +274,20 @@ class VoxBlameWorkflowContractTests(unittest.TestCase):
             with self.subTest(contract="pilot-review", term=term):
                 self.assertIn(term, pilot_review)
 
+    def test_mesh_compare_distinguishes_cli_pages_from_persisted_targets(self) -> None:
+        contract = (REPO_ROOT / "skills/mesh-compare/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        normalized = " ".join(contract.split())
+
+        for required in (
+            "`missing_surface_count` and `excess_surface_count` directly on each",
+            "exterior signals in separate top-level `alerts`",
+            "`error_profile` and `exterior_surface` only in persisted report/summary",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, normalized)
+
     def test_mesh_to_cad_freezes_registered_build_path_semantics(self) -> None:
         contract = (REPO_ROOT / "skills/mesh-to-cad/SKILL.md").read_text(
             encoding="utf-8"
