@@ -937,21 +937,36 @@ class CvmPush:
                 5,
             )
 
-        command = (
+        install_command = (
             "set -eu\n"
             f"cd {REMOTE_ROOT}\n"
             "test -x .venv/bin/python\n"
             ".venv/bin/python -m pip install "
             "--disable-pip-version-check --no-input --no-build-isolation "
-            "--no-deps --force-reinstall --editable packages/meshscope\n"
+            "--no-deps --force-reinstall --editable packages/meshscope"
+        )
+        result = self.runner.remote(
+            install_command, cwd=self.repo_root, check=False
+        )
+        if result.returncode != 0:
+            raise PushError(
+                "CVM pilot Python runtime provisioning failed during "
+                "meshscope install",
+                5,
+                transferred=True,
+            )
+
+        probe_command = (
+            "set -eu\n"
+            f"cd {REMOTE_ROOT}\n"
             ".venv/bin/python -c 'from meshscope.voxblame import _native; "
             "assert callable(_native.build)'"
         )
-        result = self.runner.remote(command, cwd=self.repo_root, check=False)
+        result = self.runner.remote(probe_command, cwd=self.repo_root, check=False)
         if result.returncode != 0:
             raise PushError(
-                "CVM pilot Python runtime provisioning failed: "
-                "meshscope native backend is unavailable",
+                "CVM pilot Python runtime provisioning failed during "
+                "meshscope native probe",
                 5,
                 transferred=True,
             )

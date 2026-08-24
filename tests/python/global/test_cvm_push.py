@@ -946,30 +946,59 @@ class TransferAndVerifyTests(unittest.TestCase):
 
         workflow.verify_remote(cvm_push.RuntimeAttestation(hashes={}))
 
-        self.assertEqual(len(runner.remote_commands), 2)
-        command = runner.remote_commands[1]
-        self.assertIn("cd ~/text-to-cad", command)
-        self.assertIn(".venv/bin/python -m pip install", command)
-        self.assertIn("--no-build-isolation", command)
-        self.assertIn("--no-deps", command)
-        self.assertIn("--force-reinstall", command)
-        self.assertIn("--editable packages/meshscope", command)
-        self.assertIn("from meshscope.voxblame import _native", command)
+        self.assertEqual(len(runner.remote_commands), 3)
+        install = runner.remote_commands[1]
+        probe = runner.remote_commands[2]
+        self.assertIn("cd ~/text-to-cad", install)
+        self.assertIn(".venv/bin/python -m pip install", install)
+        self.assertIn("--no-build-isolation", install)
+        self.assertIn("--no-deps", install)
+        self.assertIn("--force-reinstall", install)
+        self.assertIn("--editable packages/meshscope", install)
+        self.assertIn("from meshscope.voxblame import _native", probe)
 
-    def test_remote_pilot_runtime_fails_closed_without_native_probe(self) -> None:
+    def test_remote_pilot_runtime_reports_meshscope_install_failure(self) -> None:
         runner = FakeRunner()
         runner.respond("sha256sum", "")
-        runner.respond(".venv/bin/python -m pip install", status=1)
+        runner.respond(
+            ".venv/bin/python -m pip install",
+            stdout="native compiler failed",
+            status=1,
+        )
         workflow = cvm_push.CvmPush(
             runner, repo_root=REPO_ROOT, environ={}
         )
 
-        with self.assertRaisesRegex(
-            cvm_push.PushError, "pilot Python runtime provisioning failed"
-        ) as error:
+        with self.assertRaises(cvm_push.PushError) as error:
             workflow.verify_remote(cvm_push.RuntimeAttestation(hashes={}))
 
         self.assertEqual(error.exception.status, 5)
+        self.assertTrue(error.exception.transferred)
+        self.assertEqual(
+            str(error.exception),
+            "CVM pilot Python runtime provisioning failed during meshscope install",
+        )
+        self.assertEqual(len(runner.remote_commands), 2)
+
+    def test_remote_pilot_runtime_reports_native_probe_failure(self) -> None:
+        runner = FakeRunner()
+        runner.respond("sha256sum", "")
+        runner.respond(
+            "from meshscope.voxblame import _native",
+            stdout="ImportError: incompatible module",
+            status=1,
+        )
+        workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})
+
+        with self.assertRaises(cvm_push.PushError) as error:
+            workflow.verify_remote(cvm_push.RuntimeAttestation(hashes={}))
+
+        self.assertEqual(error.exception.status, 5)
+        self.assertTrue(error.exception.transferred)
+        self.assertEqual(
+            str(error.exception),
+            "CVM pilot Python runtime provisioning failed during meshscope native probe",
+        )
 
     def test_legacy_plugin_cleanup_is_strictly_scoped(self) -> None:
         runner = FakeRunner()
