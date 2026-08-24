@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from workspace_core import (
+from workspace import (
     DEFAULT_COMMAND_SECONDS,
     FAILED_ATTEMPT_RESULTS,
     WorkspaceError,
@@ -23,6 +23,8 @@ from workspace_core import (
     rebuild_index,
     run_attempt_command,
     run_canonical_build,
+    compile_terminal_validation,
+    verify_terminal_validation,
     validate_workspace,
     workspace_status,
 )
@@ -59,6 +61,16 @@ class _JsonArgumentParser(argparse.ArgumentParser):
 
 def _emit(value: dict) -> None:
     print(json.dumps(value, separators=(",", ":")))
+
+
+def _read_json_file(path: Path) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raise WorkspaceError("invalid_terminal_bundle", "cannot read terminal bundle", "$.bundle")
+    if not isinstance(value, dict):
+        raise WorkspaceError("invalid_terminal_bundle", "terminal bundle must be an object", "$.bundle")
+    return value
 
 
 def _workspace_argument(parser: argparse.ArgumentParser) -> None:
@@ -144,6 +156,18 @@ def _parser() -> argparse.ArgumentParser:
 
     validate = commands.add_parser("validate", help="Validate Workspace authority")
     _workspace_argument(validate)
+
+    terminal_validate_command = commands.add_parser(
+        "terminal-validate", help="Compile terminal validation evidence"
+    )
+    _workspace_argument(terminal_validate_command)
+
+    terminal_result = commands.add_parser(
+        "terminal-result", help="Verify a terminal validation bundle"
+    )
+    _workspace_argument(terminal_result)
+    terminal_result.add_argument("--bundle", type=Path, required=True)
+    terminal_result.add_argument("--expected-terminal-identity", required=True)
 
     rebuild = commands.add_parser("rebuild-index", help="Rebuild the derived graph index")
     _workspace_argument(rebuild)
@@ -239,6 +263,20 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "validate":
             result = validate_workspace(args.workspace)
             _emit({"ok": True, "valid": True, "graph": result.graph, "recovery": result.recovery})
+        elif args.command == "terminal-validate":
+            _emit({"ok": True, **compile_terminal_validation(args.workspace)})
+        elif args.command == "terminal-result":
+            bundle = _read_json_file(args.bundle)
+            _emit(
+                {
+                    "ok": True,
+                    "terminal_validation": verify_terminal_validation(
+                        args.workspace,
+                        bundle,
+                        args.expected_terminal_identity,
+                    ),
+                }
+            )
         elif args.command == "rebuild-index":
             _emit({"ok": True, "step_index": rebuild_index(args.workspace)})
         elif args.command == "status":

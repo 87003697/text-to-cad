@@ -22,6 +22,11 @@ Invoke it with the active project Python:
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace rebuild-index ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace recover ...
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace validate ...
+    python skills/mesh-to-cad/scripts/mesh-to-cad-workspace terminal-validate \
+      --workspace <EXP_DIR>
+    python skills/mesh-to-cad/scripts/mesh-to-cad-workspace terminal-result \
+      --workspace <EXP_DIR> --bundle <terminal-bundle.json> \
+      --expected-terminal-identity <SHA256>
 
 Every machine response is exactly one JSON object on stdout. Contract failures
 return exit 2 with error.classification, error.path, and error.detail.
@@ -124,3 +129,26 @@ The helper never uses broad staging or disables LFS filters. run/ and work/
 are ignored mutable areas. Runner logs or transfer manifests are never
 Workspace authority and cannot change validation, acceptance facts, ancestry,
 or budget.
+
+## Workspace facade and terminal result
+
+Repository callers import the Workspace boundary from
+`scripts/mesh-to-cad-workspace/workspace.py`. It reuses the existing helper
+implementation for mutations, current validated state, recovery, and Git/LFS
+publication. Callers do not import `workspace_core.py` directly.
+
+`terminal-validate` compiles one closed, versioned in-memory bundle after a
+validated terminal state. It returns the bundle and a stable
+`terminal_identity_sha256` handoff; it does not write Workspace files, claim a
+handoff path, create stages, or perform crash recovery. The exact content
+manifest lists every immutable Workspace file with its SHA-256 and byte size;
+mutable `run/` and `work/` trees and Git metadata are excluded.
+`terminal-result` accepts a bundle JSON path plus the caller-supplied expected
+identity and verifies closure, deterministic review/evaluation facts, and
+every listed Workspace byte without rerunning complete validation or using
+`.git`. Recomputed internal digests cannot pass against the original expected
+identity. Publication persistence, handoff storage, and retry after process
+death belong to the outer W4 runner. A hard crash may cause the supervisor to
+compile again; exactly-once means one validator call per successful compilation
+only. Any content, schema, or identity mismatch fails closed with the normal
+Workspace JSON error shape.

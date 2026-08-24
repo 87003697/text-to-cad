@@ -62,6 +62,16 @@ After pilot execution reaches a terminal state, the Workspace module runs the ex
 - existing objective facts needed by evaluation;
 - the identity of an exact content manifest.
 
+The Workspace copy does not authenticate the bundle by itself. Compilation
+returns a stable terminal identity covering the closed bundle and exact
+manifest; the trusted outer supervisor retains that identity and bundle out of
+band. Verification requires the expected identity, fails closed when it is
+absent or mismatched, and does not rerun complete validation or use Git.
+Workspace persistence and crash retry belong to the outer W4 runner. A hard
+crash may cause another compilation; exactly-once means one validator call per
+successful compilation. W4/W5 carries the bundle and identity to transfer and
+review. This is an identity handoff, not a generalized receipt framework.
+
 The transfer path verifies the content manifest while moving files. Review verifies and consumes the retained result; it does not run the complete Workspace validator or reconstruct the graph. Review verdicts and evaluation scores remain Consumer Verdicts outside Workspace Authority.
 
 ## Compatibility and migration
