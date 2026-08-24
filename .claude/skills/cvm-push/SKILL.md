@@ -29,8 +29,11 @@ description: >-
 runtime，再把实体 bundle 上传到 CVM；不会修改 source checkout 的开发 symlink 或共享
 依赖缓存。稳定 shell 入口只负责调用 `cvm_push.py`；Python workflow 按
 `Preflight → Stage → Transfer → Verify → Install` 编排，并用同一份 runtime contract 做本地和远端
-验收。Verify 在代码哈希一致后，用 `uv pip` 和已传输的 `packages/meshscope` 在 CVM
-project venv 重建 native extension，并以真实 import/callable probe 关门；probe 通过后
+验收。Preflight 会在任何 staging/transfer 前依次检查 CVM project venv、`uv`、磁盘；远端
+`uv` 检查显式纳入标准 `$HOME/.local/bin`/`$HOME/.cargo/bin`，不依赖非交互 shell 的
+profile。Verify
+在代码哈希一致后，用 `uv pip` 和已传输的 `packages/meshscope` 在 CVM project venv
+重建 native extension，并以真实 import/callable probe 关门；probe 通过后
 才进入 Install。构建失败只公开由固定命令结果证明的 classification；未使用的原始构建
 输出直接丢弃，不跨越远端边界。
 
@@ -75,7 +78,11 @@ runtime timeout 才允许一次额外只读检查。正常路径不启动 `tail 
 - **永不加 `rsync --delete`**。事故：session 2026-07-23 曾用 `--delete` 抹掉
   CVM `models/toys4k/`。改名 / 删文件后 CVM 上残留靠手动 `ssh cvm 'rm ...'` 清，
   脚本层不做 `--delete`。
-- **CVM 磁盘 < 3G 强制中止**（脚本 exit 3）。
+- **CVM pilot runtime 必须先过预检**：`.venv/bin/python` 缺失或 `uv` 不可用时，在
+  磁盘检查、staging 和 transfer 前以 exit 5 + 固定
+  `python-runtime-unavailable`/`installer-unavailable` classification fail closed；不得把
+  远端构建或 provider 输出当作分类依据。
+- **CVM 磁盘 < 3G 强制中止**（脚本 exit 3）；仅在 Python 与 `uv` 预检通过后检查。
 - **source 必须是 repo checkout/worktree**（脚本按自身位置解析 repo 根，
   `AGENTS.md` 缺失则 exit 1）。
 - **`.git/` 和 `.git` 都不得传输**：前者覆盖普通 checkout，后者覆盖 linked
@@ -98,6 +105,9 @@ runtime timeout 才允许一次额外只读检查。正常路径不启动 `tail 
   .venv/bin/python --no-deps --reinstall` 从已验证的 CVM source 重建 `meshscope`，并 require
   `meshscope.voxblame._native.build` callable；不得把旧 editable install 当作当前 source
   的运行证明。
+- **生成的 Python 包元数据不属于 transfer manifest**：`*.egg-info/` 必须从 source stage
+  与 exact transfer tree 排除；`uv` editable rebuild 可以在 project source 下重写这些文件，
+  但不得改变 plugin authority 要 materialize 的任何 manifest-bound byte。
 - **pilot 与 cvm_agent 不再回退到 `~/.codex/skills`**：唯一授权来源是 `current.json` 指向的 deployment `codex-home`；缺失或校验失败必须 fail closed 而非查找旧 symlink。
 - Push 只部署代码；不创建、查询、等待、重试或清理 job。
 
@@ -163,8 +173,9 @@ compare SHA-256 for `scripts/pilot/cvm_job/`, `toys4k-pilot.sh`, and
 - exit 3（磁盘 <3G） → 汇报剩余 GB + 提示 `ssh cvm 'du -sh ~/*'` 清理
 - exit 4（production staging 失败）→ 检查 log 中缺失的 Viewer/CAD build dependency、
   bundle command 或残留 skill symlink；此时脚本保证尚未传输任何文件
-- exit 5（远端 runtime 缺失、attested hash 不同或 project venv native probe 失败）→
-  不得 submit pilot；先按 receipt 的稳定错误区分文件 identity 与 native build/import；
+- exit 5（CVM pilot runtime 预检失败、远端 runtime 缺失、attested hash 不同或 project
+  venv native probe 失败）→ 不得 submit pilot；先按 receipt 的稳定错误区分
+  Python/installer availability、文件 identity 与 native build/import；
   install classification 只取 `python-runtime-unavailable`、`installer-unavailable`、
   `install-failed` 或 `unknown`
 - exit 6（Playwright browser revision 缺失）→ 在 CVM host 安装脚本报告的 revision，

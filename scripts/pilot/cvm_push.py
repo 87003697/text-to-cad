@@ -420,20 +420,59 @@ class CvmPush:
             raise PushError("Missing deployment filter: .cvmignore", 1)
 
     def preflight_remote(self) -> RemotePreflight:
-        """Gate 1b: check target existence and disk space with one SSH."""
+        """Gate 1b: check target, pilot runtime, then disk."""
 
-        result = self.runner.remote(
+        python_result = self.runner.remote(
             (
+                "set -eu\n"
                 f"test -d {REMOTE_ROOT} || exit 2\n"
-                'df --output=avail -BG / | tail -1 | tr -dc "0-9"'
+                f"cd {REMOTE_ROOT}\n"
+                "test -x .venv/bin/python || exit 40\n"
             ),
             cwd=self.repo_root,
             check=False,
         )
-        if result.returncode == 2:
+        if python_result.returncode == 2:
             raise PushError("CVM target ~/text-to-cad/ not found", 2)
-        raw = result.stdout.strip()
-        if result.returncode != 0 or not raw.isdigit():
+        if python_result.returncode == 40:
+            raise PushError(
+                "CVM pilot Python runtime preflight failed "
+                f"(classification={PILOT_RUNTIME_FAILURES[40]})",
+                5,
+            )
+        if python_result.returncode != 0:
+            raise PushError("CVM preflight failed", 2)
+
+        uv_result = self.runner.remote(
+            (
+                "set -eu\n"
+                f"cd {REMOTE_ROOT}\n"
+                # ``ssh host command`` is non-interactive, so it does not
+                # source the shell profile that the standard uv installer
+                # updates. Keep the runtime contract independent of that
+                # profile while still allowing a system uv on PATH.
+                'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"\n'
+                "command -v uv >/dev/null 2>&1 || exit 41\n"
+            ),
+            cwd=self.repo_root,
+            check=False,
+        )
+        if uv_result.returncode == 41:
+            raise PushError(
+                "CVM pilot Python runtime preflight failed "
+                f"(classification={PILOT_RUNTIME_FAILURES[41]})",
+                5,
+            )
+        if uv_result.returncode != 0:
+            raise PushError("CVM preflight failed", 2)
+
+        disk_result = self.runner.remote(
+            'df --output=avail -BG / | tail -1 | tr -dc "0-9"',
+            cwd=self.repo_root,
+            check=False,
+        )
+        raw = disk_result.stdout.strip()
+        if disk_result.returncode != 0 or not raw.isdigit():
             raise PushError("CVM preflight failed", 2)
         free_gb = int(raw)
         if free_gb < 3:
@@ -945,6 +984,9 @@ class CvmPush:
         install_command = (
             "set -eu\n"
             f"cd {REMOTE_ROOT}\n"
+            # See preflight_remote: the SSH command is non-interactive and
+            # must not depend on ~/.bashrc exporting the uv install path.
+            'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"\n'
             "test -x .venv/bin/python || exit 40\n"
             "command -v uv >/dev/null 2>&1 || exit 41\n"
             "if uv pip install --python .venv/bin/python --no-deps --reinstall "

@@ -519,6 +519,95 @@ class AgentModeTests(unittest.TestCase):
         self.assertEqual(receipt["error"], "missing inputs")
 
 
+class RemotePreflightTests(unittest.TestCase):
+    def test_preflight_checks_project_python_and_uv_before_disk(self) -> None:
+        runner = FakeRunner()
+        runner.respond("df --output=avail", stdout="20\n")
+        workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})
+
+        preflight = workflow.preflight_remote()
+
+        self.assertEqual(preflight.free_gb, 20)
+        self.assertEqual(len(runner.remote_commands), 3)
+        python_probe, uv_probe, disk_probe = runner.remote_commands
+        self.assertIn("test -x .venv/bin/python || exit 40", python_probe)
+        self.assertIn(
+            'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"',
+            uv_probe,
+        )
+        self.assertIn("command -v uv >/dev/null 2>&1 || exit 41", uv_probe)
+        self.assertIn("df --output=avail", disk_probe)
+
+    def test_preflight_maps_missing_uv_to_stable_installer_classification(
+        self,
+    ) -> None:
+        runner = FakeRunner()
+        runner.respond("command -v uv", status=41)
+        workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})
+        workflow.resolve_build_inputs = mock.Mock()
+        workflow.transfer_stage = mock.Mock()
+
+        with self.assertRaises(cvm_push.PushError) as error:
+            workflow.run()
+
+        self.assertEqual(error.exception.status, 5)
+        self.assertFalse(error.exception.transferred)
+        self.assertEqual(
+            str(error.exception),
+            "CVM pilot Python runtime preflight failed "
+            "(classification=installer-unavailable)",
+        )
+        self.assertEqual(len(runner.remote_commands), 2)
+        self.assertIn("test -x .venv/bin/python", runner.remote_commands[0])
+        self.assertIn("command -v uv", runner.remote_commands[1])
+        self.assertNotIn(
+            "df --output=avail",
+            "\n".join(runner.remote_commands),
+        )
+        workflow.resolve_build_inputs.assert_not_called()
+        workflow.transfer_stage.assert_not_called()
+
+    def test_preflight_maps_missing_python_to_stable_classification(self) -> None:
+        runner = FakeRunner()
+        runner.respond("test -x .venv/bin/python", status=40)
+        workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})
+        workflow.resolve_build_inputs = mock.Mock()
+        workflow.transfer_stage = mock.Mock()
+
+        with self.assertRaises(cvm_push.PushError) as error:
+            workflow.run()
+
+        self.assertEqual(error.exception.status, 5)
+        self.assertFalse(error.exception.transferred)
+        self.assertEqual(
+            str(error.exception),
+            "CVM pilot Python runtime preflight failed "
+            "(classification=python-runtime-unavailable)",
+        )
+        self.assertEqual(len(runner.remote_commands), 1)
+        self.assertIn("test -x .venv/bin/python", runner.remote_commands[0])
+        self.assertNotIn(
+            "df --output=avail",
+            "\n".join(runner.remote_commands),
+        )
+        workflow.resolve_build_inputs.assert_not_called()
+        workflow.transfer_stage.assert_not_called()
+
+    def test_preflight_preserves_disk_gate_after_runtime_probes(self) -> None:
+        runner = FakeRunner()
+        runner.respond("df --output=avail", stdout="2\n")
+        workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})
+
+        with self.assertRaisesRegex(cvm_push.PushError, "disk too full") as error:
+            workflow.preflight_remote()
+
+        self.assertEqual(error.exception.status, 3)
+        self.assertEqual(len(runner.remote_commands), 3)
+        self.assertIn("test -x .venv/bin/python", runner.remote_commands[0])
+        self.assertIn("command -v uv", runner.remote_commands[1])
+        self.assertIn("df --output=avail", runner.remote_commands[2])
+
+
 class BuildInputTests(unittest.TestCase):
     def test_cad_dependencies_follow_cadjs_lockfile(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -661,6 +750,9 @@ class StageTests(unittest.TestCase):
             (repo / "viewer/dist/index.html").write_text("generated\n", encoding="utf-8")
             (repo / "scripts/cache/__pycache__/x.pyc").parent.mkdir(parents=True)
             (repo / "scripts/cache/__pycache__/x.pyc").write_bytes(b"x")
+            egg_info = repo / "packages/meshscope/src/meshscope.egg-info/PKG-INFO"
+            egg_info.parent.mkdir(parents=True)
+            egg_info.write_text("generated metadata\n", encoding="utf-8")
 
             workflow = cvm_push.CvmPush(
                 cvm_push.CommandRunner(),
@@ -679,6 +771,9 @@ class StageTests(unittest.TestCase):
             self.assertFalse((stage / ".codex").exists())
             self.assertFalse((stage / "viewer/dist").exists())
             self.assertFalse((stage / "scripts/cache/__pycache__").exists())
+            self.assertFalse(
+                (stage / "packages/meshscope/src/meshscope.egg-info").exists()
+            )
 
     def test_build_input_copy_does_not_follow_checkout_package_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
@@ -924,6 +1019,33 @@ class TransferAndVerifyTests(unittest.TestCase):
                 0o755,
             )
 
+    def test_exact_transfer_tree_excludes_generated_egg_info(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            source = root / "source"
+            metadata = source / "packages/meshscope/src/meshscope.egg-info/PKG-INFO"
+            metadata.parent.mkdir(parents=True)
+            metadata.write_text("generated metadata\n", encoding="utf-8")
+            workflow = cvm_push.CvmPush(
+                cvm_push.CommandRunner(),
+                repo_root=REPO_ROOT,
+                environ={"TMPDIR": str(root)},
+            )
+
+            transfer_tree = workflow.prepare_transfer_tree(source)
+            manifest = json.loads(
+                (transfer_tree / cvm_push._plugin_deployment.STAGE_MANIFEST_FILENAME)
+                .read_text(encoding="utf-8")
+            )
+
+            self.assertFalse(
+                (transfer_tree / "packages/meshscope/src/meshscope.egg-info").exists()
+            )
+            self.assertNotIn(
+                "packages/meshscope/src/meshscope.egg-info/PKG-INFO",
+                {entry["path"] for entry in manifest["entries"]},
+            )
+
     def test_exact_transfer_tree_rejects_any_unmanifested_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as root_text:
             root = Path(root_text)
@@ -1097,6 +1219,97 @@ class TransferAndVerifyTests(unittest.TestCase):
             str(error.exception),
             "CVM pilot Python runtime provisioning failed during meshscope native probe",
         )
+
+    def test_native_probe_output_stays_out_of_agent_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as root_text:
+            root = Path(root_text)
+            fake_bin = root / "bin"
+            remote_root = root / "remote" / "text-to-cad"
+            probe_capture = root / "probe-capture"
+            fake_bin.mkdir()
+            make_executable(remote_root / ".venv/bin/python")
+            (remote_root / ".venv/bin/python").write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' 'PRIVATE_NATIVE_PROBE_OUTPUT'\n"
+                "printf '%s\\n' 'PRIVATE_NATIVE_PROBE_ERROR' >&2\n"
+                "printf '%s\\n' 'PRIVATE_NATIVE_PROBE_OUTPUT' "
+                ">\"$FAKE_PROBE_CAPTURE\"\n"
+                "printf '%s\\n' 'PRIVATE_NATIVE_PROBE_ERROR' "
+                ">>\"$FAKE_PROBE_CAPTURE\"\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            ssh = fake_bin / "ssh"
+            ssh.write_text(
+                "#!/bin/sh\n"
+                "case \"$3\" in\n"
+                "  *'test ! -e plugins'*) exit 0 ;;\n"
+                "  *'uv pip install'*) exit 0 ;;\n"
+                "esac\n"
+                "HOME=\"$FAKE_REMOTE_HOME\" /bin/sh -c \"$3\"\n",
+                encoding="utf-8",
+            )
+            ssh.chmod(0o755)
+            driver = (
+                "import importlib.util, os, sys\n"
+                "from pathlib import Path\n"
+                "module_path = Path(os.environ['CVM_PUSH_MODULE']).resolve()\n"
+                "spec = importlib.util.spec_from_file_location("
+                "'cvm_push_outer', module_path)\n"
+                "assert spec is not None and spec.loader is not None\n"
+                "module = importlib.util.module_from_spec(spec)\n"
+                "sys.modules[spec.name] = module\n"
+                "spec.loader.exec_module(module)\n"
+                "assert Path(module.__file__).resolve() == module_path\n"
+                "workflow = module.CvmPush("
+                "module.CommandRunner(), repo_root=Path(os.environ['REPO_ROOT']), "
+                "environ={'TMPDIR': os.environ['CVM_PUSH_TMPDIR']}, agent=True)\n"
+                "workflow.run = lambda: workflow.verify_remote("
+                "module.RuntimeAttestation(hashes={}))\n"
+                "raise SystemExit(module.execute(workflow))\n"
+            )
+            env = {
+                **{
+                    key: value
+                    for key, value in os.environ.items()
+                    if key != "PYTHONPATH"
+                },
+                "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                "FAKE_REMOTE_HOME": str(root / "remote"),
+                "FAKE_PROBE_CAPTURE": str(probe_capture),
+                "CVM_PUSH_MODULE": str(MODULE_PATH.resolve()),
+                "CVM_PUSH_TMPDIR": str(root),
+                "REPO_ROOT": str(REPO_ROOT),
+            }
+            result = subprocess.run(
+                [sys.executable, "-c", driver],
+                cwd=REPO_ROOT,
+                env=env,
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            receipt = json.loads(result.stdout.splitlines()[-1])
+            persisted = Path(receipt["receipt_path"]).read_text(encoding="utf-8")
+            log = Path(receipt["log_path"]).read_text(encoding="utf-8")
+            private_capture = probe_capture.read_text(encoding="utf-8")
+
+        self.assertEqual(result.returncode, 5)
+        self.assertEqual(result.stderr, "")
+        self.assertEqual(
+            private_capture,
+            "PRIVATE_NATIVE_PROBE_OUTPUT\nPRIVATE_NATIVE_PROBE_ERROR\n",
+        )
+        self.assertEqual(
+            receipt["error"],
+            "CVM pilot Python runtime provisioning failed during meshscope "
+            "native probe",
+        )
+        for boundary in (result.stdout, result.stderr, persisted, log):
+            self.assertNotIn("PRIVATE_NATIVE_PROBE_OUTPUT", boundary)
+            self.assertNotIn("PRIVATE_NATIVE_PROBE_ERROR", boundary)
 
     def test_legacy_plugin_cleanup_is_strictly_scoped(self) -> None:
         runner = FakeRunner()
@@ -1446,6 +1659,8 @@ class StageExclusionTests(unittest.TestCase):
             if line.strip() and not line.lstrip().startswith("#")
         }
         self.assertIn("node_modules", rules)
+        self.assertIn("*.egg-info/", rules)
+        self.assertIn("*.egg-info/", cvm_push.STAGE_SOURCE_EXCLUDES)
 
     def test_stage_source_excludes_the_local_authority_root(self) -> None:
         # The CVM-published plugin authority must never rsync back into
