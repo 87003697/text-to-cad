@@ -106,8 +106,8 @@ runtime timeout 才允许一次额外只读检查。正常路径不启动 `tail 
   `meshscope.voxblame._native.build` callable；不得把旧 editable install 当作当前 source
   的运行证明。
 - **生成的 Python 包元数据不属于 transfer manifest**：`*.egg-info/` 必须从 source stage
-  与 exact transfer tree 排除；`uv` editable rebuild 可以在 project source 下重写这些文件，
-  但不得改变 plugin authority 要 materialize 的任何 manifest-bound byte。
+  与 exact transfer tree 排除；`uv` local-directory install 从 project source 构建并安装到
+  project venv，但不得改变 plugin authority 要 materialize 的任何 manifest-bound byte。
 - **pilot 与 cvm_agent 不再回退到 `~/.codex/skills`**：唯一授权来源是 `current.json` 指向的 deployment `codex-home`；缺失或校验失败必须 fail closed 而非查找旧 symlink。
 - Push 只部署代码；不创建、查询、等待、重试或清理 job。
 
