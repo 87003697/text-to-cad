@@ -1497,15 +1497,12 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertIsNotNone(runner_spec.loader)
         runner = importlib.util.module_from_spec(runner_spec)
         runner_spec.loader.exec_module(runner)
-        outputs_root = REPO_ROOT / "outputs"
-        outputs_root.mkdir(exist_ok=True)
         runner_temporary = tempfile.TemporaryDirectory(
-            dir=outputs_root,
-            prefix="workspace-cli-runner-test-",
-            ignore_cleanup_errors=True,
+            prefix="workspace-cli-runner-test-"
         )
         self.addCleanup(runner_temporary.cleanup)
-        self.workspace = Path(runner_temporary.name) / "runner-driven-experiment"
+        runner_root = Path(runner_temporary.name)
+        self.workspace = runner_root / "outputs/runner-driven-experiment"
         workload = [
             sys.executable,
             str(Path(__file__).resolve()),
@@ -1591,6 +1588,11 @@ class WorkspaceCliTests(unittest.TestCase):
                 runner,
                 "build_sandbox_environment",
                 return_value=dict(os.environ),
+            ),
+            mock.patch.object(
+                runner,
+                "REPO_ROOT",
+                runner_root,
             ),
             mock.patch.object(
                 runner,
@@ -2374,6 +2376,20 @@ time.sleep(60)
         self.assertEqual(2, status)
         self.assertEqual("corrupt_workspace", corrupt["error"]["classification"])
         candidate.write_bytes(b"candidate zero")
+        target = candidate.resolve()
+        read_bytes = Path.read_bytes
+
+        def fail_target(path: Path) -> bytes:
+            if path.resolve() == target:
+                raise OSError("synthetic unreadable artifact")
+            return read_bytes(path)
+
+        with mock.patch.object(Path, "read_bytes", fail_target):
+            status, unreadable, _stderr = self.invoke(
+                "validate", "--workspace", str(self.workspace)
+            )
+        self.assertEqual(2, status)
+        self.assertEqual("corrupt_workspace", unreadable["error"]["classification"])
 
         unknown_stage = self.workspace / "steps/.tmp-unknown"
         unknown_stage.mkdir()
