@@ -990,7 +990,7 @@ class CvmPush:
             "test -x .venv/bin/python || exit 40\n"
             "command -v uv >/dev/null 2>&1 || exit 41\n"
             "if uv pip install --python .venv/bin/python --no-deps --reinstall "
-            "--editable packages/meshscope >/dev/null 2>&1; then\n"
+            "packages/meshscope >/dev/null 2>&1; then\n"
             "  exit 0\n"
             "fi\n"
             "exit 42"

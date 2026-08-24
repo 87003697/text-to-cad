@@ -4,6 +4,7 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -1137,7 +1138,20 @@ class TransferAndVerifyTests(unittest.TestCase):
         self.assertIn("--python .venv/bin/python", install)
         self.assertIn("--no-deps", install)
         self.assertIn("--reinstall", install)
-        self.assertIn("--editable packages/meshscope", install)
+        self.assertIn(
+            "uv pip install --python .venv/bin/python --no-deps --reinstall "
+            "packages/meshscope",
+            install,
+        )
+        install_tokens = shlex.split(install)
+        self.assertNotIn("--editable", install_tokens)
+        self.assertNotIn("-e", install_tokens)
+        self.assertFalse(
+            any(
+                token.startswith(("--editable=", "-e="))
+                for token in install_tokens
+            )
+        )
         self.assertNotIn("--no-build-isolation", install)
         self.assertIn(">/dev/null 2>&1", install)
         self.assertIn("from meshscope.voxblame import _native", probe)
