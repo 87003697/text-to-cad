@@ -29,9 +29,10 @@ description: >-
 runtime，再把实体 bundle 上传到 CVM；不会修改 source checkout 的开发 symlink 或共享
 依赖缓存。稳定 shell 入口只负责调用 `cvm_push.py`；Python workflow 按
 `Preflight → Stage → Transfer → Verify → Install` 编排，并用同一份 runtime contract 做本地和远端
-验收。Verify 在代码哈希一致后，用已传输的 `packages/meshscope` 在 CVM project venv
-离线重建 native extension，并以真实 import/callable probe 关门；probe 通过后才进入
-Install。
+验收。Verify 在代码哈希一致后，用 `uv pip` 和已传输的 `packages/meshscope` 在 CVM
+project venv 重建 native extension，并以真实 import/callable probe 关门；probe 通过后
+才进入 Install。构建失败只公开由固定命令结果证明的 classification；未使用的原始构建
+输出直接丢弃，不跨越远端边界。
 
 **Install** 阶段把 Mac source provenance、transfer summary 和 runtime attestation 编成
 严格 schema 的 canonical JSON/base64url 参数。CVM 在 publication lock 内先检查 Codex
@@ -93,9 +94,10 @@ runtime timeout 才允许一次额外只读检查。正常路径不启动 `tail 
   `.git`、`.venv`、outputs/models、缓存和构建产物不能成为 deployment material；
   但当前 dirty worktree 的源码必须保留。
 - **plugin authority 只在全部 checks 通过后才 publish**：staging 阶段完成 finalize + `codex plugin add` + manifest/critical-runtime 校验以前，不能改动 `~/.text-to-cad-codex/deployments/current.json`；install/verify 任一失败保留旧 pointer。
-- **付费 pilot 的 project venv 必须随 push 重建并验证**：用 `--no-build-isolation --no-deps`
-  从已验证的 CVM source 重建 `meshscope`，并 require `meshscope.voxblame._native.build`
-  callable；不得把旧 editable install 当作当前 source 的运行证明。
+- **付费 pilot 的 project venv 必须随 push 重建并验证**：用 `uv pip --python
+  .venv/bin/python --no-deps --reinstall` 从已验证的 CVM source 重建 `meshscope`，并 require
+  `meshscope.voxblame._native.build` callable；不得把旧 editable install 当作当前 source
+  的运行证明。
 - **pilot 与 cvm_agent 不再回退到 `~/.codex/skills`**：唯一授权来源是 `current.json` 指向的 deployment `codex-home`；缺失或校验失败必须 fail closed 而非查找旧 symlink。
 - Push 只部署代码；不创建、查询、等待、重试或清理 job。
 
@@ -162,7 +164,9 @@ compare SHA-256 for `scripts/pilot/cvm_job/`, `toys4k-pilot.sh`, and
 - exit 4（production staging 失败）→ 检查 log 中缺失的 Viewer/CAD build dependency、
   bundle command 或残留 skill symlink；此时脚本保证尚未传输任何文件
 - exit 5（远端 runtime 缺失、attested hash 不同或 project venv native probe 失败）→
-  不得 submit pilot；先按 receipt 的稳定错误区分文件 identity 与 native build/import
+  不得 submit pilot；先按 receipt 的稳定错误区分文件 identity 与 native build/import；
+  install classification 只取 `python-runtime-unavailable`、`installer-unavailable`、
+  `install-failed` 或 `unknown`
 - exit 6（Playwright browser revision 缺失）→ 在 CVM host 安装脚本报告的 revision，
   随后重新 push
 - exit 7（Codex 版本 gate、publish-tree finalize 或 `codex plugin marketplace add` /

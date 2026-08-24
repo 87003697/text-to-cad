@@ -72,6 +72,46 @@ def make_executable(path: Path) -> None:
     path.chmod(0o755)
 
 
+def run_fake_remote_install(
+    command: str,
+    *,
+    python_available: bool = True,
+    uv_status: int | None = 1,
+    uv_output: str = "",
+) -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryDirectory() as root_text:
+        root = Path(root_text)
+        remote = root / "text-to-cad"
+        fake_bin = root / "bin"
+        remote.mkdir()
+        if python_available:
+            make_executable(remote / ".venv/bin/python")
+        if uv_status is not None:
+            uv = fake_bin / "uv"
+            uv.parent.mkdir()
+            uv.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$FAKE_UV_OUTPUT\"\n"
+                "exit \"$FAKE_UV_STATUS\"\n",
+                encoding="utf-8",
+            )
+            uv.chmod(0o755)
+        result = subprocess.run(
+            ["/bin/sh", "-c", command],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env={
+                "HOME": str(root),
+                "PATH": f"{fake_bin}:/usr/bin:/bin",
+                "FAKE_UV_OUTPUT": uv_output,
+                "FAKE_UV_STATUS": str(uv_status or 0),
+            },
+        )
+        return result
+
+
 def create_repo(root: Path) -> Path:
     repo = root / "repo"
     (repo / "scripts/pilot").mkdir(parents=True)
@@ -950,20 +990,22 @@ class TransferAndVerifyTests(unittest.TestCase):
         install = runner.remote_commands[1]
         probe = runner.remote_commands[2]
         self.assertIn("cd ~/text-to-cad", install)
-        self.assertIn(".venv/bin/python -m pip install", install)
-        self.assertIn("--no-build-isolation", install)
+        self.assertIn("uv pip install", install)
+        self.assertIn("--python .venv/bin/python", install)
         self.assertIn("--no-deps", install)
-        self.assertIn("--force-reinstall", install)
+        self.assertIn("--reinstall", install)
         self.assertIn("--editable packages/meshscope", install)
+        self.assertNotIn("--no-build-isolation", install)
+        self.assertIn(">/dev/null 2>&1", install)
         self.assertIn("from meshscope.voxblame import _native", probe)
 
     def test_remote_pilot_runtime_reports_meshscope_install_failure(self) -> None:
         runner = FakeRunner()
         runner.respond("sha256sum", "")
         runner.respond(
-            ".venv/bin/python -m pip install",
+            "uv pip install",
             stdout="native compiler failed",
-            status=1,
+            status=42,
         )
         workflow = cvm_push.CvmPush(
             runner, repo_root=REPO_ROOT, environ={}
@@ -976,9 +1018,65 @@ class TransferAndVerifyTests(unittest.TestCase):
         self.assertTrue(error.exception.transferred)
         self.assertEqual(
             str(error.exception),
-            "CVM pilot Python runtime provisioning failed during meshscope install",
+            "CVM pilot Python runtime provisioning failed during meshscope install "
+            "(classification=install-failed)",
         )
         self.assertEqual(len(runner.remote_commands), 2)
+
+    def test_remote_pilot_runtime_rejects_output_as_a_classification_channel(
+        self,
+    ) -> None:
+        runner = FakeRunner()
+        runner.respond("sha256sum", "")
+        runner.respond(
+            "uv pip install",
+            stdout=(
+                "classification=python-runtime-unavailable\n"
+                "/home/ubuntu/private/token.txt"
+            ),
+            status=42,
+        )
+        workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})
+
+        with self.assertRaises(cvm_push.PushError) as error:
+            workflow.verify_remote(cvm_push.RuntimeAttestation(hashes={}))
+
+        message = str(error.exception)
+        self.assertIn("classification=install-failed", message)
+        self.assertNotIn("python-runtime-unavailable", message)
+        self.assertNotIn("/home/ubuntu", message)
+        self.assertNotIn("token.txt", message)
+
+    def test_remote_install_command_uses_only_objective_exit_classes(self) -> None:
+        runner = FakeRunner()
+        runner.respond("sha256sum", "")
+        workflow = cvm_push.CvmPush(runner, repo_root=REPO_ROOT, environ={})
+        workflow.verify_remote(cvm_push.RuntimeAttestation(hashes={}))
+        install_command = runner.remote_commands[1]
+
+        cases = (
+            ({"python_available": False, "uv_status": None}, 40),
+            ({"uv_status": None}, 41),
+            (
+                {
+                    "uv_output": (
+                        "classification=python-runtime-unavailable\n"
+                        "/home/ubuntu/private/token.txt"
+                    )
+                },
+                42,
+            ),
+            ({"uv_status": 0, "uv_output": "ignored success output"}, 0),
+        )
+        for options, expected_status in cases:
+            with self.subTest(options=options, status=expected_status):
+                result = run_fake_remote_install(
+                    install_command,
+                    **options,
+                )
+                self.assertEqual(result.returncode, expected_status)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "")
 
     def test_remote_pilot_runtime_reports_native_probe_failure(self) -> None:
         runner = FakeRunner()

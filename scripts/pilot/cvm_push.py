@@ -72,6 +72,11 @@ CAD_SNAPSHOT_ESBUILD_VERSION = "0.27.7"
 CAD_LOCKED_PACKAGES = ("three", "gifenc", "meshoptimizer")
 MESHSHOT_REQUIRED_EXECUTABLES = (".bin/esbuild",)
 MESHSHOT_REQUIRED_PACKAGES = ("esbuild", "three")
+PILOT_RUNTIME_FAILURES = {
+    40: "python-runtime-unavailable",
+    41: "installer-unavailable",
+    42: "install-failed",
+}
 
 
 class PushError(RuntimeError):
@@ -940,18 +945,26 @@ class CvmPush:
         install_command = (
             "set -eu\n"
             f"cd {REMOTE_ROOT}\n"
-            "test -x .venv/bin/python\n"
-            ".venv/bin/python -m pip install "
-            "--disable-pip-version-check --no-input --no-build-isolation "
-            "--no-deps --force-reinstall --editable packages/meshscope"
+            "test -x .venv/bin/python || exit 40\n"
+            "command -v uv >/dev/null 2>&1 || exit 41\n"
+            "if uv pip install --python .venv/bin/python --no-deps --reinstall "
+            "--editable packages/meshscope >/dev/null 2>&1; then\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 42"
         )
         result = self.runner.remote(
             install_command, cwd=self.repo_root, check=False
         )
         if result.returncode != 0:
+            classification = PILOT_RUNTIME_FAILURES.get(
+                result.returncode,
+                "unknown",
+            )
             raise PushError(
                 "CVM pilot Python runtime provisioning failed during "
-                "meshscope install",
+                "meshscope install "
+                f"(classification={classification})",
                 5,
                 transferred=True,
             )
