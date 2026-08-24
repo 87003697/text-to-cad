@@ -28,6 +28,7 @@ def _parser() -> argparse.ArgumentParser:
     pilot.add_argument("object")
     pilot.add_argument("group")
     pilot.add_argument("--plugin-mode", choices=("direct", "e2e"), default="direct")
+    pilot.add_argument("--reconstruction-spec", action="store_true")
 
     provider_free = subparsers.add_parser("submit-provider-free")
     provider_free.add_argument("scenario", choices=("installed-plugin",))
@@ -67,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.object,
                 args.group,
                 plugin_mode=args.plugin_mode,
+                reconstruction_spec=args.reconstruction_spec,
                 state_root=root,
             )
             status = 0 if result["state"] != "failed" else 1

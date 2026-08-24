@@ -1001,6 +1001,96 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                     f"{mode}\n",
                 )
 
+    def test_toys4k_reconstruction_spec_opt_in_is_explicit_for_both_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            pilot_root = repo / "scripts" / "pilot"
+            model_root = repo / "models" / "toys4k"
+            pilot_root.mkdir(parents=True)
+            model_root.mkdir(parents=True)
+            (model_root / "airplane.ply").write_text("ply\n", encoding="utf-8")
+            pilot = pilot_root / "toys4k-pilot.sh"
+            pilot.write_bytes((PILOT_ROOT / "toys4k-pilot.sh").read_bytes())
+            pilot.chmod(0o755)
+            (pilot_root / "runner.py").write_text(
+                """import json, os, pathlib, sys
+pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
+    "argv": sys.argv,
+}))
+""",
+                encoding="utf-8",
+            )
+
+            for mode in ("direct", "e2e"):
+                for enabled in (False, True):
+                    with self.subTest(mode=mode, enabled=enabled):
+                        exp = f"exp-{mode}-{'on' if enabled else 'off'}"
+                        capture = Path(temp) / f"{mode}-{'on' if enabled else 'off'}.json"
+                        env = {
+                            **os.environ,
+                            "HOME": os.fspath(Path(temp) / "home"),
+                            "PILOT_CAPTURE": os.fspath(capture),
+                            "PYTHON_BIN": sys.executable,
+                            "CODEX_HOME": "/authority/job-private-codex-home",
+                        }
+                        args = [
+                            os.fspath(pilot),
+                            "airplane",
+                            "20260805-170000-audit",
+                            exp,
+                            mode,
+                        ]
+                        if enabled:
+                            args.append("--reconstruction-spec")
+                        result = subprocess.run(
+                            args,
+                            cwd=repo,
+                            env=env,
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        capture_data = json.loads(capture.read_text(encoding="utf-8"))
+                        workload = capture_data["argv"]
+                        self.assertEqual(
+                            (repo / "outputs" / "20260805-170000-audit" / exp / "run" / "plugin-mode.txt").read_text(
+                                encoding="utf-8"
+                            ),
+                            f"{mode}\n",
+                        )
+                        prompt = (
+                            repo
+                            / "outputs"
+                            / "20260805-170000-audit"
+                            / exp
+                            / "run"
+                            / "prompt.txt"
+                        ).read_text(encoding="utf-8")
+                        if enabled:
+                            self.assertIn("Reconstruction Spec", prompt)
+                            self.assertIn(
+                                "Enable the optional", prompt
+                            )
+                            self.assertIn("create and maintain", prompt)
+                            self.assertIn(
+                                f"outputs/20260805-170000-audit/{exp}/run/reconstruction-spec.json",
+                                prompt,
+                            )
+                        else:
+                            self.assertNotIn("Reconstruction Spec", prompt)
+                            self.assertNotIn("reconstruction-spec.json", prompt)
+                        if mode == "direct":
+                            self.assertIn("--disable", workload)
+                            self.assertEqual(
+                                workload[workload.index("--disable") + 1],
+                                "plugins",
+                            )
+                            self.assertIn("$mesh-to-cad", workload[-1])
+                        else:
+                            self.assertNotIn("--disable", workload)
+                            self.assertNotIn("$mesh-to-cad", workload[-1])
+
     def test_gateway_rejects_missing_url_before_codex(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             capture = Path(temp) / "argv"

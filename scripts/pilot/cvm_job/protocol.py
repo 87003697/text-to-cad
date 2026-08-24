@@ -27,6 +27,7 @@ _RESERVED_UPDATE_FIELDS = frozenset(
         "group",
         "exp",
         "plugin_mode",
+        "reconstruction_spec",
         "state",
         "submitted_at",
         "started_at",
@@ -102,6 +103,7 @@ def _validate_common(state: dict[str, Any]) -> None:
     if state.get("exp") != parsed["exp"]:
         raise ProtocolError("exp does not match handle")
     requested_plugin_mode(state)
+    requested_reconstruction_spec(state)
 
 
 def requested_plugin_mode(state: dict[str, Any]) -> str:
@@ -110,6 +112,15 @@ def requested_plugin_mode(state: dict[str, Any]) -> str:
     value = state.get("plugin_mode", "direct")
     if not isinstance(value, str) or value not in {"direct", "e2e"}:
         raise ProtocolError(f"invalid plugin mode: {value!r}")
+    return value
+
+
+def requested_reconstruction_spec(state: dict[str, Any]) -> bool:
+    """Return the requested pilot-only Reconstruction Spec opt-in."""
+
+    value = state.get("reconstruction_spec", False)
+    if not isinstance(value, bool):
+        raise ProtocolError(f"invalid reconstruction spec flag: {value!r}")
     return value
 
 
@@ -249,6 +260,8 @@ def public_state(state: dict[str, Any], stale_after: float) -> dict[str, Any]:
         result["token_slot"] = state["token_slot"]
     if not state.get("provider_free"):
         result["plugin_mode"] = requested_plugin_mode(state)
+        if requested_reconstruction_spec(state):
+            result["reconstruction_spec"] = True
     if state["state"] in TERMINAL_STATES:
         result.update(
             {

@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+from scripts.pilot.cvm_job import __main__ as cvm_job_main
 from scripts.pilot.cvm_job import protocol, runtime
 from tests.python.support.paths import REPO_ROOT
 from tests.python.support.tmp_root import temporary_directory
@@ -88,6 +89,73 @@ class CvmJobTests(unittest.TestCase):
         state = protocol.load_state(self.state_root, result["job"])
         self.assertEqual(state["plugin_mode"], "e2e")
         self.assertEqual(protocol.public_state(state, 60)["plugin_mode"], "e2e")
+
+    def test_submit_records_reconstruction_spec_only_when_enabled(self) -> None:
+        off = runtime.submit_pilot(
+            "airplane",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1,
+        )
+        off_state = protocol.load_state(self.state_root, off["job"])
+        self.assertNotIn("reconstruction_spec", off_state)
+        self.assertNotIn(
+            "reconstruction_spec", protocol.public_state(off_state, 60)
+        )
+
+        on = runtime.submit_pilot(
+            "airplane",
+            self.group,
+            reconstruction_spec=True,
+            state_root=self.state_root,
+            detach=lambda *args: 1,
+        )
+        on_state = protocol.load_state(self.state_root, on["job"])
+        self.assertTrue(on_state["reconstruction_spec"])
+        self.assertTrue(protocol.public_state(on_state, 60)["reconstruction_spec"])
+
+    def test_submit_pilot_parser_defaults_reconstruction_spec_off_and_accepts_opt_in(
+        self,
+    ) -> None:
+        parser = cvm_job_main._parser()
+        off = parser.parse_args(["submit-pilot", "airplane", self.group])
+        on = parser.parse_args(
+            ["submit-pilot", "airplane", self.group, "--reconstruction-spec"]
+        )
+        self.assertFalse(off.reconstruction_spec)
+        self.assertTrue(on.reconstruction_spec)
+
+    def test_reconstruction_spec_reaches_direct_and_e2e_pilot_commands(self) -> None:
+        for plugin_mode in ("direct", "e2e"):
+            with self.subTest(plugin_mode=plugin_mode):
+                result = runtime.submit_pilot(
+                    "airplane",
+                    self.group,
+                    plugin_mode=plugin_mode,
+                    reconstruction_spec=True,
+                    state_root=self.state_root,
+                    detach=lambda *args: 1,
+                )
+                handle = result["job"]
+                self.write_manifest(handle, 0)
+                captured: dict[str, object] = {}
+
+                def fake_run(root, job, command, **kwargs):
+                    captured["command"] = list(command)
+                    return 0, 4321
+
+                with mock.patch.object(
+                    runtime, "_run_with_heartbeat", side_effect=fake_run
+                ):
+                    state = runtime.supervise_pilot(
+                        handle, state_root=self.state_root
+                    )
+
+                self.assertEqual(state["state"], "succeeded")
+                self.assertEqual(
+                    captured["command"][-2:],
+                    [plugin_mode, "--reconstruction-spec"],
+                )
 
     def test_submit_rejects_invalid_plugin_mode(self) -> None:
         with self.assertRaisesRegex(protocol.ProtocolError, "invalid plugin mode"):
@@ -942,6 +1010,7 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
         self.assertEqual(len(commands), 2)
         self.assertIn("scripts.pilot.cvm_job submit-pilot", commands[0])
         self.assertIn("20260805-170000-audit", commands[0])
+        self.assertNotIn("--reconstruction-spec", commands[0])
         self.assertIn("ServerAliveInterval=30", commands[1])
         self.assertIn("scripts.pilot.cvm_job wait", commands[1])
 
@@ -1058,6 +1127,44 @@ printf '%s\n' '{"job":"group/exp","state":"submitted"}'
         self.assertEqual(result.returncode, 0, result.stderr)
         command = command_log.read_text(encoding="utf-8")
         self.assertIn("--plugin-mode 'e2e'", command)
+
+    def test_submit_reconstruction_spec_is_forwarded_to_remote_job_command(self) -> None:
+        fake_bin = self.workspace / "reconstruction-spec-bin"
+        fake_bin.mkdir()
+        command_log = self.workspace / "reconstruction-spec-commands.log"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$CVM_WRAPPER_LOG"
+printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_WRAPPER_LOG": os.fspath(command_log),
+        }
+        result = subprocess.run(
+            [
+                os.fspath(SUBMIT_SCRIPT),
+                "pilot",
+                "airplane",
+                "20260805-170000-audit",
+                "--plugin-mode",
+                "e2e",
+                "--reconstruction-spec",
+            ],
+            env=env,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        command = command_log.read_text(encoding="utf-8")
+        self.assertIn("--plugin-mode 'e2e'", command)
+        self.assertIn("--reconstruction-spec", command)
 
     def test_submit_rejects_duplicate_plugin_mode_without_ssh(self) -> None:
         fake_bin = self.workspace / "duplicate-plugin-mode-bin"

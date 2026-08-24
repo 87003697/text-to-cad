@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] [--plugin-mode direct|e2e] | provider-free installed-plugin <group>" >&2
+    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] [--plugin-mode direct|e2e] [--reconstruction-spec] | provider-free installed-plugin <group>" >&2
     exit 2
 }
 
@@ -26,27 +26,40 @@ case "$mode" in
         token_slot=""
         model=""
         plugin_mode=""
+        reconstruction_spec=0
         shift 3
         while [[ $# -gt 0 ]]; do
-            [[ $# -ge 2 ]] || usage
             case "$1" in
+                --reconstruction-spec)
+                    [[ "$reconstruction_spec" == 0 ]] || usage
+                    reconstruction_spec=1
+                    shift
+                    ;;
                 --token-slot)
+                    [[ $# -ge 2 ]] || usage
                     [[ -z "$token_slot" && "$2" =~ ^([0-9]|[1-4][0-9])$ ]] || usage
                     token_slot="$2"
+                    shift 2
                     ;;
                 --model)
+                    [[ $# -ge 2 ]] || usage
                     [[ -z "$model" && "$2" =~ ^(sol|terra|luna|gpt-5[.]5)$ ]] || usage
                     model="$2"
+                    shift 2
                     ;;
                 --plugin-mode)
+                    [[ $# -ge 2 ]] || usage
                     [[ -z "$plugin_mode" && "$2" =~ ^(direct|e2e)$ ]] || usage
                     plugin_mode="$2"
+                    shift 2
                     ;;
                 *) usage ;;
             esac
-            shift 2
         done
         submit_command="python3 -m scripts.pilot.cvm_job submit-pilot '$object_name' '$group' --plugin-mode '${plugin_mode:-direct}'"
+        if [[ "$reconstruction_spec" == 1 ]]; then
+            submit_command+=" --reconstruction-spec"
+        fi
         model_export=""
         if [[ -n "$model" ]]; then
             model_export=" MODEL='$model'"

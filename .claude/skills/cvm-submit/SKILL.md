@@ -10,7 +10,7 @@ description: >-
 Run exactly one local wrapper command:
 
 ```bash
-scripts/pilot/cvm-submit.sh pilot <object> <group> [--plugin-mode direct|e2e]
+scripts/pilot/cvm-submit.sh pilot <object> <group> [--plugin-mode direct|e2e] [--reconstruction-spec]
 ```
 
 `direct` is the default and preserves the benchmark path: it names
@@ -25,6 +25,13 @@ Both modes write `run/plugin-mode.txt` and expose `plugin_mode` through job
 status. Those fields prove the requested mode, not which skill Codex actually
 invoked. Confirm the rollout together with the bound plugin-authority receipt
 before claiming successful installed-plugin invocation.
+
+`--reconstruction-spec` is an explicit, opt-in benchmark-harness flag. When
+present, the pilot prompt asks the model to enable the optional Reconstruction
+Spec workflow and create and maintain
+`<EXP_DIR>/run/reconstruction-spec.json`. It is off by default, is not a
+Workspace CLI mode or experiment field, and is not auto-detected; omit it to
+preserve the benchmark baseline.
 
 For the narrow provider-free installed-plugin discovery check, run:
 

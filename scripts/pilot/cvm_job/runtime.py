@@ -28,6 +28,7 @@ from .protocol import (
     public_state,
     publish_state,
     requested_plugin_mode,
+    requested_reconstruction_spec,
     state_path,
     transition,
     utc_now,
@@ -195,8 +196,11 @@ def _pilot_record(
     root: Path,
     *,
     plugin_mode: str = "direct",
+    reconstruction_spec: bool = False,
     token_slot_from_environment: bool = True,
 ) -> dict[str, Any]:
+    if not isinstance(reconstruction_spec, bool):
+        raise ProtocolError("reconstruction_spec must be a boolean")
     raw_token_slot = (
         os.environ.get("VENUS_TOKEN_SLOT") if token_slot_from_environment else None
     )
@@ -207,7 +211,7 @@ def _pilot_record(
         token_slot = int(raw_token_slot)
     now = utc_now()
     handle = f"{group}/{exp}"
-    return {
+    record = {
         "schema_version": 1,
         "kind": "pilot",
         "job": handle,
@@ -231,6 +235,9 @@ def _pilot_record(
         "log": _relative(log_path(root, handle)),
         "failure_reason": None,
     }
+    if reconstruction_spec:
+        record["reconstruction_spec"] = True
+    return record
 
 
 def _detach(handle: str, command: Sequence[str], root: Path) -> int:
@@ -303,6 +310,7 @@ def submit_pilot(
     group: str,
     *,
     plugin_mode: str = "direct",
+    reconstruction_spec: bool = False,
     state_root: Path | None = None,
     detach: Callable[[str, Sequence[str], Path], int] = _detach,
 ) -> dict[str, Any]:
@@ -317,6 +325,7 @@ def submit_pilot(
             exp,
             root,
             plugin_mode=plugin_mode,
+            reconstruction_spec=reconstruction_spec,
         )
         publish_state(root, record)
     command = [
@@ -522,6 +531,8 @@ def _supervise_pilot_locked(
         record["exp"],
         requested_plugin_mode(record),
     ]
+    if command is None and requested_reconstruction_spec(record):
+        pilot_command.append("--reconstruction-spec")
     process_status: int | None = None
     try:
         process_status, pilot_pid = _run_with_heartbeat(

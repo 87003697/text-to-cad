@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/pilot/toys4k-pilot.sh <object_name> <group> [exp_name] [direct|e2e]
+# scripts/pilot/toys4k-pilot.sh <object_name> <group> [exp_name] [direct|e2e] [--reconstruction-spec]
 # Toys4K mesh-to-CAD benchmark pilot. Reads models/toys4k/<name>.ply,
 # writes outputs/<group>/<TS>-<name>/. Group format: YYYYMMDD-HHMMSS-<slug>.
 
@@ -35,6 +35,18 @@ if [[ ! "$EXP_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ \
 fi
 EXP_DIR="outputs/${GROUP}/${EXP_NAME}"
 PLUGIN_MODE="${4:-direct}"
+RECONSTRUCTION_SPEC=0
+if [[ "$PLUGIN_MODE" == "--reconstruction-spec" ]]; then
+    RECONSTRUCTION_SPEC=1
+    PLUGIN_MODE="direct"
+fi
+if [[ $# -ge 5 ]]; then
+    [[ "$5" == "--reconstruction-spec" && "$RECONSTRUCTION_SPEC" == 0 ]] \
+        || { echo "Bad pilot option: '$5'. Expect --reconstruction-spec." >&2; exit 2; }
+    RECONSTRUCTION_SPEC=1
+fi
+[[ $# -le 5 ]] \
+    || { echo "Too many pilot arguments." >&2; exit 2; }
 case "$PLUGIN_MODE" in
     direct|e2e) ;;
     *)
@@ -42,6 +54,19 @@ case "$PLUGIN_MODE" in
         exit 2
         ;;
 esac
+
+RECONSTRUCTION_SPEC_INSTRUCTION=""
+if [[ "$RECONSTRUCTION_SPEC" == 1 ]]; then
+    RECONSTRUCTION_SPEC_INSTRUCTION=$(cat <<EOF
+Reconstruction Spec is explicitly enabled for this pilot. Enable the optional
+Reconstruction Spec workflow: after raw-mesh inspection and Canonical Reference
+preparation, create and maintain the mutable file
+${EXP_DIR}/run/reconstruction-spec.json. Read it before initial CAD authoring
+and before each Repair Hypothesis; update it in place when geometric
+understanding changes. Keep it under run/ outside Workspace authority.
+EOF
+    )
+fi
 
 # Minimal orchestrator prompt — peer skills, references, and commit
 # conventions live in skills/mesh-to-cad/SKILL.md; duplicating them here
@@ -72,6 +97,7 @@ The canonical Workspace and its atomically published Final Delivery define
 success. Optional additional human review material belongs under
 ${EXP_DIR}/reviews/ and never substitutes for formal Measured Step or Final
 Delivery previews.
+${RECONSTRUCTION_SPEC_INSTRUCTION}
 
 Do not call \`view_image\` in this Venus-backed pilot: its Responses
 continuation rejects image tool output. Still generate and cite every required
