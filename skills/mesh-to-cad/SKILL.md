@@ -31,6 +31,9 @@ immutable evidence. Mutable modeling files live only under `work/`.
   Repair Targets, Region Diff, previews, and rebuild verification.
 - `scripts/mesh-to-cad-workspace` owns publication, budgets, ancestry,
   protocol-scoped Git/LFS commits, recovery, selection, and Final Delivery.
+- `scripts/mesh-to-cad-agent-surface` owns the closed Agent intent seam and
+  delegates through supervisor-injected opaque handles; it does not discover
+  Workspace or reference paths.
 - The Agent owns Repair Batch selection, Planned Edits, assessments, stop
   reasons, and the Selected Step.
 

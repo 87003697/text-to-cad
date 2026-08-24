@@ -4,6 +4,44 @@ scripts/mesh-to-cad-workspace is the public workflow-state boundary for the
 canonical repair protocol. It is self-contained and uses no imports from peer
 skills or the repository root.
 
+## Agent Surface
+
+`scripts/mesh-to-cad-agent-surface` is the separate Agent-facing seam. Its
+`handler.py` is the shared implementation used by the stdin CLI and the
+minimal newline JSON-RPC/MCP adapter. The handler receives supervisor-injected
+ports; it does not discover or import Workspace, reference, CAD, Git/LFS, or
+authority implementations.
+
+`__main__.py` is the one-object stdin CLI entrypoint; `mcp.py` is the newline
+JSON-RPC adapter. Both are intentionally inert without W4-supplied ports.
+The adapter supports the fixed MCP protocol version `2025-06-18` and the
+`initialize`, `tools/list`, and `tools/call` lifecycle subset; the repository
+environment has no maintained MCP Python SDK, so W3 uses a bounded protocol
+fixture rather than adding a dependency.
+
+Agent requests use the closed `mesh-to-cad.agent-intent/1` envelope and only
+the following intents: `workspace_status`, `start_attempt`,
+`run_candidate_tool`, `submit_step_zero`, `submit_repair`,
+`select_and_finalize`, and `observe_reference`. Workspace, Attempt, candidate,
+plan, evidence, selection, notes, and reference values cross this seam only as
+opaque handles. `run_candidate_tool` accepts a supervisor-registered operation
+handle, never an argv or command string. Reference observations are limited to
+the fixed W2 summary/components operations. Paths, raw geometry, authority
+documents, exceptions, and secrets are rejected or removed from the response
+contract. Each intent has its own closed argument and result projection; there
+is no generic successful-result bag.
+The `observe_reference` port projects W2's summary/components result into that
+closed projection before it reaches the Agent; the W3 handler does not pass a
+generic W2 dictionary through.
+`start_attempt` has two exact argument variants: an initial plan with no parent
+field, or a repair plan with only a bounded `from_step`; the supervisor derives
+the intended step from that branch and parent.
+
+The standalone adapters have no supervisor discovery fallback: without W4
+ports they return a closed `supervisor_unavailable` error. W4 owns the concrete
+ports and the process/filesystem wiring that binds these handles to Workspace,
+candidate execution, and the Restricted Reference Capability.
+
 Invoke it with the active project Python:
 
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace init ...
