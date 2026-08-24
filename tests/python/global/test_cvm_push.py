@@ -1026,6 +1026,9 @@ class TransferAndVerifyTests(unittest.TestCase):
             metadata = source / "packages/meshscope/src/meshscope.egg-info/PKG-INFO"
             metadata.parent.mkdir(parents=True)
             metadata.write_text("generated metadata\n", encoding="utf-8")
+            package_file = source / "packages/meshscope/src/meshscope/__init__.py"
+            package_file.parent.mkdir(parents=True)
+            package_file.write_text("# real package\n", encoding="utf-8")
             workflow = cvm_push.CvmPush(
                 cvm_push.CommandRunner(),
                 repo_root=REPO_ROOT,
@@ -1037,13 +1040,31 @@ class TransferAndVerifyTests(unittest.TestCase):
                 (transfer_tree / cvm_push._plugin_deployment.STAGE_MANIFEST_FILENAME)
                 .read_text(encoding="utf-8")
             )
+            materialized = root / "materialized"
+            cvm_push._plugin_deployment.materialize_from_stage_manifest(
+                transfer_tree,
+                materialized,
+                expected_manifest_digest=workflow.stage_manifest_digest,
+            )
+            listed = {entry["path"] for entry in manifest["entries"]}
 
             self.assertFalse(
                 (transfer_tree / "packages/meshscope/src/meshscope.egg-info").exists()
             )
             self.assertNotIn(
                 "packages/meshscope/src/meshscope.egg-info/PKG-INFO",
-                {entry["path"] for entry in manifest["entries"]},
+                listed,
+            )
+            self.assertIn("packages/meshscope/src/meshscope/__init__.py", listed)
+            self.assertFalse(
+                (materialized / "packages/meshscope/src/meshscope.egg-info").exists()
+            )
+            self.assertEqual(
+                (
+                    materialized
+                    / "packages/meshscope/src/meshscope/__init__.py"
+                ).read_text(encoding="utf-8"),
+                "# real package\n",
             )
 
     def test_exact_transfer_tree_rejects_any_unmanifested_symlink(self) -> None:

@@ -93,6 +93,9 @@ DEPLOYMENT_EXCLUDE_PATTERNS: tuple[str, ...] = (
     "/tmp/",
     "/worktrees/",
     "node_modules/",
+    # uv's editable rebuild regenerates this metadata in the project source;
+    # it must never become part of the content-bound plugin manifest.
+    "*.egg-info/",
     "__pycache__/",
     "*.pyc",
     "*.swp",

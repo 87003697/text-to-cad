@@ -17,6 +17,7 @@ models/
 docs/
 worktrees/
 tmp/
+*.egg-info/
 .cvm-jobs/
 .cvm-agent-jobs/
 /.cvm-browser-runtime/
