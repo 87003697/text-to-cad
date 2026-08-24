@@ -308,6 +308,82 @@ class VoxBlameWorkflowContractTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, contract)
 
+    def test_mesh_to_cad_reconstruction_spec_contract_is_opt_in_and_separate(self) -> None:
+        contract = (REPO_ROOT / "skills/mesh-to-cad/SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        reference_path = (
+            REPO_ROOT / "skills/mesh-to-cad/references/reconstruction-spec.md"
+        )
+        self.assertTrue(reference_path.is_file())
+        reference = reference_path.read_text(encoding="utf-8")
+        normalized_contract = " ".join(contract.split())
+        normalized_reference = " ".join(reference.split())
+        context = (REPO_ROOT / "CONTEXT.md").read_text(encoding="utf-8")
+        adr = (
+            REPO_ROOT
+            / "docs/adr/0005-separate-reference-semantics-from-cad-implementation.md"
+        ).read_text(encoding="utf-8")
+        normalized_context = " ".join(context.split())
+        normalized_adr = " ".join(adr.split())
+
+        for required in (
+            "off by default",
+            "task or pilot instruction explicitly requests Reconstruction Spec",
+            "Do not add a CLI mode, experiment field, or automatic detection",
+            "<EXP_DIR>/run/reconstruction-spec.json",
+            "before each Repair Hypothesis",
+            "Workspace `setup/`, `steps/`, `cycles/`, or final authority/Final Delivery",
+            "Repair Batch and other output schemas do not gain Spec fields",
+        ):
+            with self.subTest(document="SKILL.md", required=required):
+                self.assertIn(required, normalized_contract)
+
+        for required in (
+            "top level has exactly these three arrays: `components`, `features`, and `relations`",
+            "Every Component, Feature, and Relation ID is globally unique",
+            "every relation endpoint must name an existing Component or Feature ID",
+            "`observed`, `inferred`, `hidden`, `uncertain`, or `mixed`",
+            "`part_of`, `depends_on`, and `affects` are reserved Organizational Relations",
+            "Do not create a relation registry or kind-specific endpoint/cardinality ontology",
+            "not a CAD plan or source plan",
+            "do not automatically become Spec items",
+        ):
+            with self.subTest(document="reconstruction-spec.md", required=required):
+                self.assertIn(required, normalized_reference)
+
+        for document_name, document in (
+            ("CONTEXT.md", normalized_context),
+            ("ADR 0005", normalized_adr),
+        ):
+            with self.subTest(document=document_name, boundary="mutable working document"):
+                self.assertIn("mutable", document)
+                self.assertIn("working document", document)
+                self.assertIn("Workspace authority", document)
+                self.assertTrue(
+                    "not Workspace authority" in document
+                    or "outside Workspace authority" in document
+                )
+            for kind in ("part_of", "depends_on", "affects"):
+                with self.subTest(document=document_name, reserved_kind=kind):
+                    self.assertIn(kind, document)
+
+        context_relation = context.split("**Organizational Relation**", 1)[1].split(
+            "**Spec Certainty**", 1
+        )[0].lower()
+        for document_name, document in (
+            ("Organizational Relation context", context_relation),
+            ("ADR 0005", normalized_adr.lower()),
+        ):
+            for forbidden in (
+                "module",
+                "graph invariant",
+                "validator",
+                "runtime semantics",
+            ):
+                with self.subTest(document=document_name, forbidden=forbidden):
+                    self.assertNotIn(forbidden, document)
+
 
 if __name__ == "__main__":
     unittest.main()

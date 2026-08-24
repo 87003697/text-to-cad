@@ -38,6 +38,29 @@ Read `references/workspace-contract.md` for helper commands and transaction
 semantics. Read `references/output-schemas.md` before authoring any setup,
 plan, assessment, selection, or notes document.
 
+## Optional Reconstruction Spec
+
+The Reconstruction Spec is off by default. Enable it only when the task or
+pilot instruction explicitly requests Reconstruction Spec. Do not add a CLI
+mode, experiment field, or automatic detection. Read
+`references/reconstruction-spec.md` for its small JSON contract.
+
+When enabled, the Agent creates `<EXP_DIR>/run/reconstruction-spec.json` only
+after raw-input inspection and Canonical Reference preparation, and before
+the first CAD authoring or Step 0. Read it before initial modeling; before
+each Repair Hypothesis, read it again. If the geometric understanding changes,
+update the same file in place. Use raw-mesh inspection and Canonical Reference
+geometry as evidence, and ignore user-provided category, function, or part
+semantic hints.
+
+This is a mutable working document, not a CAD or source plan. It stays in the
+`run/` non-authority area and never enters Workspace `setup/`, `steps/`,
+`cycles/`, or final authority/Final Delivery. It does not change cadgen/runtime
+or the formal Workspace schema state machine. Repair Targets, source callables,
+AssemblyHelper objects, and STEP labels do not automatically become Spec items.
+Do not add a Spec field to Repair Batch or other Workspace output schemas; cite
+Spec IDs in prose hypotheses, plans, or notes when useful.
+
 ## Required workflow
 
 ### 1. Prepare and initialize
@@ -59,6 +82,10 @@ python skills/mesh-to-cad/scripts/mesh-to-cad-workspace init \
 
 Do not write authority files directly after initialization.
 
+5. If Reconstruction Spec was explicitly enabled, create
+   `<EXP_DIR>/run/reconstruction-spec.json` now. It must remain mutable and
+   outside Workspace authority; do not pass it to a Workspace helper.
+
 ### Attempt command recording
 
 After `begin-attempt`, invoke canonical CAD through
@@ -72,14 +99,16 @@ or of no feasible CAD strategy.
 
 ### 2. Publish Measured Step 0
 
-1. Author `mesh-to-cad.initial-plan/1` and begin Attempt 0:
+1. If Reconstruction Spec is enabled, read
+   `<EXP_DIR>/run/reconstruction-spec.json` before initial CAD authoring.
+2. Author `mesh-to-cad.initial-plan/1` and begin Attempt 0:
 
 ```bash
 python skills/mesh-to-cad/scripts/mesh-to-cad-workspace begin-attempt \
   --workspace <EXP_DIR> --plan <initial-plan.json> --intended-step 0
 ```
 
-2. Run each build operation through the bounded, registered `build` command.
+3. Run each build operation through the bounded, registered `build` command.
    `$cad` must build directly in canonical coordinates and leave a complete source
    bundle, registered offline rebuild recipe, CAD artifacts, and measurement
    GLB under the Attempt's candidate directory. From Step 0 onward, keep the
@@ -108,10 +137,10 @@ python skills/mesh-to-cad/scripts/mesh-to-cad-workspace build \
   --tool-registry /run/meshshot-browser/trusted-tool-registry.json
 ```
 
-3. Run `$mesh-compare voxblame-preview` on the candidate and inspect all eight
+4. Run `$mesh-compare voxblame-preview` on the candidate and inspect all eight
    views.
-4. Run `$mesh-compare voxblame-measure` with `--step 0` and no parent.
-5. Publish only after candidate, preview, measurement, Canonical Reference,
+5. Run `$mesh-compare voxblame-measure` with `--step 0` and no parent.
+6. Publish only after candidate, preview, measurement, Canonical Reference,
    and profile identities agree:
 
 ```bash
@@ -129,11 +158,16 @@ For the chosen parent Measured Step:
    page every current interior Repair Target in attention order. Inspect its
    bounds, objective missing/excess evidence, and formal preview. Do not choose
    or advance repair depth manually.
-2. Form one or more falsifiable Repair Hypotheses from the current Repair
-   Frontier, formal preview, CAD source, and repair history. Decide whether one
-   coherent repair is plausible. If so, select one hypothesis and author one
-   `voxblame.repair-batch/1` selecting one or more Repair Targets and mapping
-   stable Planned Edit keys to them.
+2. If Reconstruction Spec is enabled, reread
+   `<EXP_DIR>/run/reconstruction-spec.json` immediately before forming each
+   Repair Hypothesis. If the current geometric understanding changes, update
+   the Spec in place. Form one or more falsifiable Repair Hypotheses from the
+   current Repair Frontier, formal preview, CAD source, and repair history.
+   Decide whether one coherent repair is plausible. If so, select one
+   hypothesis and author one `voxblame.repair-batch/1` selecting one or more
+   Repair Targets and mapping stable Planned Edit keys to them. The Repair
+   Batch and other output schemas do not gain Spec fields; cite Spec IDs in
+   prose when useful.
 3. Begin an Attempt with an explicit `--from-step <M>` and a new intended step.
 4. Execute the Planned Edits through bounded `run` calls, rebuild into a new
    empty output directory, render the child preview, and measure the child
@@ -228,6 +262,8 @@ or verification without the corresponding authority artifact.
 
 ## Progressive references
 
+- `references/reconstruction-spec.md`: opt-in mutable reference-semantics
+  working document.
 - `references/output-schemas.md`: Agent-authored setup and evidence documents.
 - `references/workspace-contract.md`: helper commands, bounds, recovery, Git,
   LFS, and Final Delivery publication.

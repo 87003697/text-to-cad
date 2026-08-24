@@ -4,6 +4,42 @@ This context defines the language used by reconstruction evaluation, provider-fr
 
 ## Reconstruction Language
 
+**Reconstruction Spec**:
+An optional, Agent-authored JSON working document describing the observable components, features, and relations hypothesized for one Canonical Reference. It may be corrected in place as reconstruction evidence changes and is not Workspace authority.
+_Avoid_: CAD plan, source plan, ground truth, Workspace manifest, reconstruct-spec
+
+**Initial Spec**:
+The first Reconstruction Spec created exclusively from inspected input-mesh geometry and its Canonical Reference before initial CAD authoring.
+_Avoid_: User-provided Spec, user-guided Spec, generated CAD plan
+
+**Spec Item ID**:
+A human-readable identity unique across all Components, Features, and Relations in one Reconstruction Spec. It remains stable while the Agent continues to mean the same item and is independent of source callables, CAD labels, Repair Targets, and array positions.
+_Avoid_: Source symbol, STEP label, target key, display name
+
+**Reference Component**:
+A materially or functionally distinct constituent hypothesized to belong to a Canonical Reference, identified independently of any CAD assembly node or STEP label.
+_Avoid_: CAD module, assembly child, mesh segment
+
+**Reference Feature**:
+A localized form or functional characteristic hypothesized to belong to a Reference Component, identified independently of the CAD operation used to construct it.
+_Avoid_: Boolean operation, source helper, Repair Target
+
+**Reference Relation**:
+A first-class, independently identified, directed semantic claim connecting two Reference Components or Reference Features.
+_Avoid_: CAD constraint, assembly mate, transform
+
+**Organizational Relation**:
+A Reference Relation whose reserved kind is `part_of`, `depends_on`, or `affects`.
+_Avoid_: Custom relation, CAD operation, assembly constraint
+
+**Constructive Relation**:
+A Reference Relation with an open, non-reserved kind that describes a spatial or assembly claim. Its kind carries no kind-specific semantics in the MVP.
+_Avoid_: Organizational Relation, registered relation type, closed relation enum
+
+**Spec Certainty**:
+An optional descriptive label on a Reference Component, Reference Feature, or Reference Relation, using `observed`, `inferred`, `hidden`, `uncertain`, or `mixed`. It is preserved for interpretation but does not control validation, repair, acceptance, or other workflow behavior.
+_Avoid_: Confidence score, workflow state, acceptance level
+
 **Canonical Reference**:
 The evaluated input triangle surface after one Trellis2 max-extent normalization into the fixed `[-0.5, 0.5]^3` coordinate space.
 _Avoid_: Ground truth in world units, normalized candidate
