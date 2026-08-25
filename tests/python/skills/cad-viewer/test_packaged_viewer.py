@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import shutil
 import tempfile
 import pathlib
 import socket
@@ -32,6 +33,15 @@ def _node_available() -> bool:
         return True
     except (OSError, subprocess.TimeoutExpired):
         return False
+
+
+def _npm_command() -> list[str] | None:
+    """The npm launcher as an executable list, or None when npm is unavailable.
+
+    Resolved through PATH because Windows cannot spawn `npm` bare: CreateProcess
+    does not try the .cmd shim."""
+    npm = shutil.which("npm") or shutil.which("npm.cmd")
+    return [npm] if npm else None
 
 
 def _free_port() -> int:
@@ -69,7 +79,10 @@ class PackagedViewerLayoutTests(unittest.TestCase):
         self.assertIn("./scripts/viewer/packages/cadgen", requirements)
 
 
-@unittest.skipUnless(_node_available(), "node is not available")
+@unittest.skipUnless(
+    _node_available() and _npm_command() is not None,
+    "node/npm are not available",
+)
 class PackagedViewerStartSmokeTests(unittest.TestCase):
     """Live: `npm run start` boots the backend and answers /__cad/server."""
 
@@ -85,7 +98,7 @@ class PackagedViewerStartSmokeTests(unittest.TestCase):
         else:
             popen_kwargs["start_new_session"] = True
         proc = subprocess.Popen(
-            ["npm", "--prefix", str(VIEWER_APP), "run", "start", "--",
+            [*_npm_command(), "--prefix", str(VIEWER_APP), "run", "start", "--",
              "--host", "127.0.0.1", "--port", str(port)],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
