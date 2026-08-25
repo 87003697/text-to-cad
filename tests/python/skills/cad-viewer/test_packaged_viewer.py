@@ -157,7 +157,7 @@ class PackagedViewerStartSmokeTests(unittest.TestCase):
         last_error = ""
         while time.monotonic() < deadline:
             if proc.poll() is not None:
-                raise ViewerExitedError(self._drain(proc))
+                raise ViewerExitedError(_drain(proc))
             try:
                 with urllib.request.urlopen(url, timeout=5) as response:
                     payload = json.loads(response.read().decode("utf-8"))
