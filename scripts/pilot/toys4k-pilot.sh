@@ -197,9 +197,6 @@ WORKLOAD=(
 if [[ "$PLUGIN_MODE" == "direct" ]]; then
     WORKLOAD+=(--disable plugins)
 fi
-if [[ "$VIEW_IMAGE" == 0 ]]; then
-    WORKLOAD+=(--disable view_image)
-fi
 WORKLOAD+=(
     -s
     danger-full-access

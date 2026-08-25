@@ -1230,57 +1230,31 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                         if label == "control":
                             self.assertIn("`view_image` is disabled", prompt)
                             self.assertIn("do not call `view_image`", prompt)
-                            self.assertIn("--disable", workload)
-                            disable_indices = [
-                                index
-                                for index, value in enumerate(workload)
-                                if value == "--disable"
-                            ]
-                            self.assertIn(
-                                "view_image",
-                                [
-                                    workload[index + 1]
-                                    for index in disable_indices
-                                ],
-                            )
                         else:
                             self.assertIn("Use `view_image`", prompt)
                             self.assertNotIn("`view_image` is disabled", prompt)
-                            for index, value in enumerate(workload):
-                                if value == "--disable":
-                                    self.assertNotEqual(
-                                        workload[index + 1], "view_image"
-                                    )
-
-            direct_default = captures[("direct", "default")]["argv"]
-            direct_control = captures[("direct", "control")]["argv"]
-            e2e_default = captures[("e2e", "default")]["argv"]
-            e2e_control = captures[("e2e", "control")]["argv"]
-            assert isinstance(direct_default, list)
-            assert isinstance(direct_control, list)
-            assert isinstance(e2e_default, list)
-            assert isinstance(e2e_control, list)
+                        for index, value in enumerate(workload):
+                            if value == "--disable":
+                                self.assertNotEqual(
+                                    workload[index + 1], "view_image"
+                                )
 
             def pilot_workload(argv: list[object]) -> list[object]:
                 return argv[argv.index("--") + 1 :]
 
-            def workload_without_prompt(argv: list[object]) -> list[object]:
-                return pilot_workload(argv)[:-1]
-
-            def without_view_image_disable(values: list[object]) -> list[object]:
-                result: list[object] = []
-                index = 0
-                while index < len(values):
-                    if (
-                        values[index] == "--disable"
-                        and index + 1 < len(values)
-                        and values[index + 1] == "view_image"
-                    ):
-                        index += 2
-                        continue
-                    result.append(values[index])
-                    index += 1
-                return result
+            def normalized_workload_surface(argv: list[object]) -> list[object]:
+                values = pilot_workload(argv)
+                normalized = [
+                    re.sub(
+                        r"outputs/20260805-170000-audit/exp-[^/\s]+",
+                        "outputs/GROUP/EXP",
+                        value,
+                    )
+                    if isinstance(value, str)
+                    else value
+                    for value in values
+                ]
+                return normalized[:-1]
 
             def common_prompt_parts(prompt: str) -> tuple[str, str]:
                 normalized = re.sub(
@@ -1292,19 +1266,13 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                 _, suffix = after.split("\n\nStay under", 1)
                 return before, suffix
 
-            self.assertEqual(
-                workload_without_prompt(direct_default),
-                without_view_image_disable(
-                    workload_without_prompt(direct_control)
-                ),
-            )
-            self.assertEqual(
-                workload_without_prompt(e2e_default),
-                without_view_image_disable(
-                    workload_without_prompt(e2e_control)
-                ),
-            )
             for mode in ("direct", "e2e"):
+                surfaces = [
+                    normalized_workload_surface(captures[(mode, label)]["argv"])
+                    for label in ("default", "treatment", "control")
+                ]
+                self.assertEqual(surfaces[0], surfaces[1])
+                self.assertEqual(surfaces[1], surfaces[2])
                 self.assertEqual(
                     common_prompt_parts(prompts[(mode, "default")]),
                     common_prompt_parts(prompts[(mode, "treatment")]),
@@ -1360,10 +1328,8 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                 self.assertIn("Reconstruction Spec is disabled", prompt)
 
             self.assertEqual(
-                workload_without_prompt(off_spec_argv["treatment"]),
-                without_view_image_disable(
-                    workload_without_prompt(off_spec_argv["control"])
-                ),
+                normalized_workload_surface(off_spec_argv["treatment"]),
+                normalized_workload_surface(off_spec_argv["control"]),
             )
             self.assertEqual(
                 common_prompt_parts(off_spec_prompts["treatment"]),

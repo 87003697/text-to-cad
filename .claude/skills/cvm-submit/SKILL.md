@@ -35,8 +35,9 @@ before claiming successful installed-plugin invocation.
 `view_image` is enabled by default as the treatment. The pilot prompt requires
 visual inspection during setup/initial modeling, Repair Hypothesis parent-child
 comparison, and final selection, and the Codex CLI leaves the tool enabled. Use
-`--no-view-image` for the control; its prompt says not to call `view_image` and
-the CLI invocation mechanically adds `--disable view_image`. The explicit
+`--no-view-image` for the control; its prompt explicitly forbids calling
+`view_image`. Treatment and control use the same Codex CLI/tool surface; audit
+compliance from rollout `view_image` tool-call counts. The explicit
 `--view-image` flag is accepted as a treatment reaffirmation. The effective
 boolean is persisted as `view_image` in provider-backed job state and exposed
 by status. Historical records without the field are treated as controls and

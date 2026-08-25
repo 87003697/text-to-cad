@@ -58,13 +58,13 @@ prove which installed skill actually ran.
 Toys4K pilots enable the `view_image` treatment by default. Setup/initial
 modeling, Repair Hypothesis parent-child comparison, and final selection must
 use `view_image` for visual inspection alongside objective measurements. Use
-`--no-view-image` for a controlled image-tool-free run; the prompt explicitly
-forbids the call and the Codex CLI receives `--disable view_image`. The
-explicit `--view-image` flag is accepted as a treatment reaffirmation. The
-effective mode is persisted and exposed as `view_image` in provider-backed CVM
-job state; historical records missing the field resolve to false and are
-supervised explicitly. Provider-free installed-plugin discovery remains
-model-free and image-free.
+`--no-view-image` for a controlled run; the prompt explicitly forbids the call.
+Treatment and control use the same Codex CLI/tool surface; audit compliance
+from rollout `view_image` tool-call counts. The explicit `--view-image` flag is
+accepted as a treatment reaffirmation. The effective mode is persisted and
+exposed as `view_image` in provider-backed CVM job state; historical records
+missing the field resolve to false and are supervised explicitly. Provider-free
+installed-plugin discovery remains model-free and image-free.
 
 CVM pilots default to the public `gpt-5.5` model slug. An explicit `--model`
 overrides the `MODEL` environment variable; either can select `sol`, `terra`,
