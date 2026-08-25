@@ -10,7 +10,11 @@ import os
 from pathlib import Path
 import shutil
 import sys
+from types import SimpleNamespace
 import unittest
+from unittest import mock
+
+from PIL import Image
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -416,6 +420,200 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
             before_observable=before_observable,
         )
         return cycle_source, repair_stub
+
+    def _real_repair_provider(self, case, *, precreate_preview: bool = False):
+        """Use the production provider with only geometry work replaced by fixtures."""
+
+        from scripts.pilot import repair_evidence
+
+        (
+            _measure_step,
+            _prepare_preview_scene,
+            publish_preview,
+            _publish_region_diff,
+            _validate_preview_identity,
+        ) = repair_evidence._import_meshscope()
+        _MeshGeometry, load_profile, _render = repair_evidence._import_meshshot()
+        loaded_profile = load_profile()
+        candidate_sha = _sha(b"agent cycle")
+        observed: dict[str, object] = {}
+
+        scene = SimpleNamespace(
+            reference_geometry={},
+            candidate_geometry={},
+            reference={
+                "canonical_reference_sha256": case.reference_sha,
+                "triangle_set_sha256": "4" * 64,
+                "mesh_sha256": "3" * 64,
+                "normalization_sha256": "5" * 64,
+            },
+            candidate={
+                "mesh_sha256": candidate_sha,
+                "size_bytes": len(b"agent cycle"),
+                "source_name": "candidate.glb",
+            },
+            exterior=SimpleNamespace(
+                exact={
+                    "surface_present": False,
+                    "nearest_overrun": None,
+                    "farthest_overrun": None,
+                    "outside_directions": [],
+                },
+                snapshot={"cells": []},
+                logical_sha256="7" * 64,
+            ),
+        )
+        identity = SimpleNamespace(
+            profile_name=loaded_profile.profile["name"],
+            profile_sha256=loaded_profile.sha256,
+            variant="step",
+            canonical_reference_sha256=case.reference_sha,
+            candidate_mesh_sha256=candidate_sha,
+            selected_step=None,
+            selected_summary_sha256=None,
+        )
+        pixels = tuple(loaded_profile.profile["variants"]["step"]["image_pixels"])
+        encoded = BytesIO()
+        Image.new("RGB", pixels, (0, 0, 0)).save(encoded, format="PNG")
+        ordered_views = [
+            {
+                **view,
+                "framing": {
+                    "projection": (
+                        "orthographic"
+                        if view["kind"] == "axial_depth"
+                        else "perspective"
+                    )
+                },
+                "markers": [],
+            }
+            for view in loaded_profile.profile["views"]
+        ]
+        rendered = SimpleNamespace(
+            png_bytes=encoded.getvalue(),
+            variant="step",
+            profile_sha256=loaded_profile.sha256,
+            views=ordered_views,
+        )
+
+        def measure_step(
+            _reference, _candidate, output, *, step, compare_to, backend
+        ):
+            observed["voxblame_hydrated"] = (
+                (output / "session.json").is_file()
+                and (output / "reference.vbsvo").is_file()
+            )
+            _write_step_measurement(
+                output,
+                step=step,
+                compare_to=compare_to,
+                reference_sha=case.reference_sha,
+                candidate_sha=candidate_sha,
+                observable_sha="b" * 64,
+                accepted=False,
+            )
+            (output / "steps" / f"{step:06d}" / "measurement.json").write_text(
+                "{}\n", encoding="utf-8"
+            )
+            return object()
+
+        def publish_region_diff(
+            _voxblame, *, from_step, to_step, repair_plan, output
+        ):
+            _write_region_diff(
+                output,
+                plan=repair_plan,
+                from_step=from_step,
+                to_step=to_step,
+                before_observable="9" * 64,
+                after_observable="b" * 64,
+            )
+
+        def provider(request):
+            observed["preview_absent"] = not request.preview_output.exists()
+            if precreate_preview:
+                request.preview_output.mkdir()
+            meshscope_api = (
+                measure_step,
+                lambda _reference, _candidate: scene,
+                publish_preview,
+                publish_region_diff,
+                lambda *_args, **_kwargs: identity,
+            )
+            meshshot_api = (
+                lambda **geometry: geometry,
+                lambda: loaded_profile,
+                lambda *_args, **_kwargs: rendered,
+            )
+            try:
+                with (
+                    mock.patch.object(
+                        repair_evidence, "_import_meshscope", return_value=meshscope_api
+                    ),
+                    mock.patch.object(
+                        repair_evidence, "_import_meshshot", return_value=meshshot_api
+                    ),
+                ):
+                    repair_evidence.real_repair_evidence_provider(
+                        request, renderer=lambda *_args, **_kwargs: rendered
+                    )
+            except repair_evidence.RepairEvidenceError as error:
+                observed["provider_error"] = error.classification
+                raise
+
+        return provider, observed, loaded_profile.sha256
+
+    def test_real_repair_provider_publishes_into_absent_preview_target(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+        provider, observed, profile_sha = self._real_repair_provider(case)
+        case.profile_sha = profile_sha
+        cycle_source, _stub = self._prepare_repair_cycle(case, facade)
+
+        repaired = facade.publish_cycle_from_candidate(
+            case.workspace,
+            attempt=2,
+            source=cycle_source,
+            evidence_provider=provider,
+        )
+
+        self.assertEqual({"step": {"step": 1}, "cycle": 1}, repaired)
+        self.assertTrue(observed["voxblame_hydrated"])
+        self.assertTrue(observed["preview_absent"])
+        self.assertTrue(
+            (case.workspace / "steps/000001/preview/preview.json").is_file()
+        )
+
+    def test_real_repair_provider_rejects_conflicting_preview_target(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+        provider, observed, profile_sha = self._real_repair_provider(
+            case, precreate_preview=True
+        )
+        case.profile_sha = profile_sha
+        cycle_source, _stub = self._prepare_repair_cycle(case, facade)
+
+        with self.assertRaises(facade.WorkspaceError) as raised:
+            facade.publish_cycle_from_candidate(
+                case.workspace,
+                attempt=2,
+                source=cycle_source,
+                evidence_provider=provider,
+            )
+
+        self.assertEqual("repair_evidence_failed", raised.exception.classification)
+        self.assertEqual("preview_failed", observed["provider_error"])
+        self.assertFalse((case.workspace / "steps/000001").exists())
 
     def test_step_and_cycle_ingestion_uses_one_real_facade_target_owner(self) -> None:
         fixture = _load_fixture()

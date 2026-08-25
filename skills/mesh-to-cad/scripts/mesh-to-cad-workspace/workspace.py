@@ -536,9 +536,9 @@ def _open_repair_external_stage(workspace: Path) -> Path:
     with descriptor-safe copies of the canonical reference, the current
     candidate mesh and source subtree, the parent Measured Step's
     voxblame subtree and the parent selected candidate source), and
-    ``outputs/`` (with ``voxblame/``, ``preview/``, ``region-diff.json``
-    slot and ``source-changes.json`` slot) the provider must fill.  W1
-    cleans the stage on every outcome.
+    ``outputs/`` (with a precreated ``voxblame/`` session root plus absent
+    ``preview/``, ``region-diff.json`` and ``source-changes.json`` publication
+    targets) the provider must fill.  W1 cleans the stage on every outcome.
     """
 
     workspace = Path(workspace).resolve()
@@ -560,7 +560,6 @@ def _open_repair_external_stage(workspace: Path) -> Path:
     (stage / "inputs").mkdir(mode=0o700)
     (stage / "outputs").mkdir(mode=0o700)
     (stage / "outputs/voxblame").mkdir(mode=0o700)
-    (stage / "outputs/preview").mkdir(mode=0o700)
     return stage
 
 
