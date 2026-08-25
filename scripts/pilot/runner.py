@@ -1507,6 +1507,8 @@ def _acquire_terminal_publish_lock(exp_dir: Path) -> int:
 
 
 def _release_terminal_publish_lock(descriptor: int) -> None:
+    """Release the experiment publication lock and close its descriptor."""
+
     try:
         if fcntl is not None:
             fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -1517,6 +1519,8 @@ def _release_terminal_publish_lock(descriptor: int) -> None:
 
 
 def _read_terminal_json(path: Path) -> dict[str, object] | None:
+    """Read one regular terminal JSON object, or return None when absent."""
+
     if path.is_symlink():
         raise PilotError("terminal_handoff_path_conflict")
     if not path.exists():
@@ -1533,6 +1537,8 @@ def _read_terminal_json(path: Path) -> dict[str, object] | None:
 
 
 def _fsync_terminal_parent(path: Path) -> None:
+    """Make completed directory-entry changes durable."""
+
     descriptor = os.open(
         path,
         os.O_RDONLY
@@ -1601,6 +1607,8 @@ def _validated_handoff(
     exp_dir: Path,
     handoff: Mapping[str, object],
 ) -> tuple[str, Mapping[str, object]]:
+    """Verify a closed handoff and return its trusted identity and bundle."""
+
     if set(handoff) != {"schema", "terminal_identity_sha256", "bundle"}:
         raise PilotError("terminal_handoff_invalid")
     if handoff.get("schema") != "mesh-to-cad.terminal-validation-handoff/1":
@@ -1659,6 +1667,8 @@ def persist_terminal_validation(exp_dir: Path) -> TerminalValidationLocator | No
     created_handoff = False
 
     def remove_own_handoff() -> None:
+        """Remove a handoff created by this failed publication attempt."""
+
         if not created_handoff:
             return
         try:
