@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 import shutil
 import secrets
 import stat
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Protocol
 
@@ -228,31 +229,127 @@ def _reject_candidate_authored_step_zero_evidence(source: Path) -> None:
         )
 
 
-def _open_step_zero_stage(workspace: Path) -> Path:
-    """Create one opaque W1-owned Step 0 evidence stage outside authority."""
+def _remove_stage_tree(root: Path) -> None:
+    """Remove a private W1 stage even after read-only chmod hardening.
+
+    The provider stage installs read-only permissions on hydrated input
+    files/directories to reduce the chance the provider mutates them.
+    Cleanup must succeed regardless: relax every directory back to
+    writable before running :func:`shutil.rmtree`.
+    """
+
+    if not root.exists():
+        return
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        try:
+            os.chmod(dirpath, 0o700)
+        except OSError:
+            pass
+        for name in filenames:
+            try:
+                os.chmod(os.path.join(dirpath, name), 0o600)
+            except OSError:
+                pass
+        for name in dirnames:
+            try:
+                os.chmod(os.path.join(dirpath, name), 0o700)
+            except OSError:
+                pass
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def _open_step_zero_external_stage(workspace: Path) -> Path:
+    """Create a private provider stage outside the Workspace tree entirely.
+
+    The trusted Step 0 evidence provider receives only paths from within
+    this stage: it cannot observe or interpret any Workspace-relative
+    location.  The stage is a fresh directory created by :mod:`tempfile`
+    outside the Workspace root, contains ``inputs/`` (populated by W1
+    with descriptor-safe copies of the canonical reference and the
+    candidate mesh), and ``outputs/voxblame/`` and ``outputs/preview/``
+    subdirectories the provider must fill.  W1 cleans the stage on every
+    outcome.
+    """
 
     workspace = Path(workspace).resolve()
-    work = workspace / "work"
-    if work.is_symlink():
-        _fail("invalid_workspace_path", "Workspace work area is a symlink", "$.work")
+    stage = Path(
+        tempfile.mkdtemp(
+            prefix=f"voxblame-step-zero-{secrets.token_hex(6)}-",
+        )
+    ).resolve()
     try:
-        work.mkdir(exist_ok=True, mode=0o700)
-    except OSError as error:
+        stage.relative_to(workspace)
+    except ValueError:
+        pass
+    else:
+        shutil.rmtree(stage, ignore_errors=True)
         raise WorkspaceError(
             "invalid_workspace_path",
-            "Workspace work area is unavailable",
-        ) from error
-    stage = work / f".step-zero-stage-{secrets.token_hex(12)}"
+            "external provider stage resolved beneath Workspace authority",
+        )
+    (stage / "inputs").mkdir(mode=0o700)
+    (stage / "outputs").mkdir(mode=0o700)
+    (stage / "outputs/voxblame").mkdir(mode=0o700)
+    (stage / "outputs/preview").mkdir(mode=0o700)
+    return stage
+
+
+def _open_step_zero_internal_promotion_stage(workspace: Path) -> Path:
+    """Create a W1-only same-filesystem stage used for atomic promotion.
+
+    The provider never learns this path.  W1 descriptor-copies the
+    validated external provider outputs into this stage and then renames
+    the voxblame subtree onto ``workspace/voxblame`` atomically.  Same
+    filesystem is a hard requirement for atomic rename, which is why
+    this stage lives inside the Workspace tree; it is a transient W1
+    detail that never crosses the provider seam.
+    """
+
+    workspace = Path(workspace).resolve()
+    stage = workspace / f".voxblame-promotion-{secrets.token_hex(12)}"
     if stage.is_symlink():
-        _fail("invalid_workspace_path", "step zero stage is a symlink", "$.work")
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "internal promotion stage path is a symlink",
+        )
     try:
         stage.mkdir(parents=False, exist_ok=False, mode=0o700)
     except OSError as error:
         raise WorkspaceError(
             "invalid_workspace_path",
-            "step zero stage is unavailable",
+            "internal promotion stage is unavailable",
         ) from error
     return stage
+
+
+def _assert_request_paths_outside(
+    request: "StepZeroEvidenceRequest", workspace: Path
+) -> None:
+    """Fail closed if any provider request path resolves inside the Workspace tree.
+
+    A defence-in-depth invariant for the trusted Step 0 seam: the
+    provider may only ever observe paths in the private external stage.
+    Any attempt to hand it a Workspace-relative location — however
+    innocuous — is a policy failure caught here rather than after the
+    fact.
+    """
+
+    workspace = Path(workspace).resolve()
+    for label, path in (
+        ("canonical_reference", request.canonical_reference),
+        ("candidate_mesh", request.candidate_mesh),
+        ("voxblame_output", request.voxblame_output),
+        ("preview_output", request.preview_output),
+    ):
+        resolved = Path(path).resolve()
+        try:
+            resolved.relative_to(workspace)
+        except ValueError:
+            continue
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            f"provider request {label} resolves beneath Workspace authority",
+        )
 
 
 def _assert_stage_regular_file(path: Path, label: str) -> None:
@@ -303,11 +400,13 @@ def _validate_step_zero_stage(voxblame_output: Path, preview_output: Path) -> No
         _assert_stage_regular_file(preview_output / name, f"preview stage {name}")
 
 
-def _promote_step_zero_voxblame(workspace: Path, stage_voxblame: Path) -> Path:
-    """Move the provider-produced voxblame layout into Workspace authority.
+def _promote_step_zero_voxblame(workspace: Path, internal_voxblame: Path) -> Path:
+    """Atomically publish the W1-owned internal voxblame stage into authority.
 
-    Fails closed if the target already exists to preserve the single-writer
-    invariant.  Returns the promoted ``summary.json`` path suitable for
+    ``internal_voxblame`` must already contain descriptor-safe copies of
+    the provider's validated voxblame outputs.  Fails closed if the
+    target already exists to preserve the single-writer invariant.
+    Returns the promoted ``summary.json`` path suitable for
     :func:`publish_step_zero`.
     """
 
@@ -324,7 +423,7 @@ def _promote_step_zero_voxblame(workspace: Path, stage_voxblame: Path) -> Path:
             "voxblame authority path already exists before Step 0 publication",
         )
     try:
-        os.rename(stage_voxblame, target)
+        os.rename(internal_voxblame, target)
     except OSError as error:
         raise WorkspaceError(
             "invalid_workspace_path",
@@ -390,26 +489,36 @@ def publish_step_zero_from_candidate(
             "Workspace document is missing the preview profile",
         )
 
-    stage = _open_step_zero_stage(workspace)
+    external_stage = _open_step_zero_external_stage(workspace)
+    internal_stage: Path | None = None
     promoted = False
     try:
-        candidate_mesh_source = _agent_source_file(authority, CANDIDATE_MESH_RELATIVE)
-        stage_candidate_mesh = stage / "candidate.glb"
-        _copy_agent_file(candidate_mesh_source, stage_candidate_mesh)
-        voxblame_output = stage / "voxblame-stage"
-        preview_output = stage / "preview-stage"
-        voxblame_output.mkdir(mode=0o700)
-        preview_output.mkdir(mode=0o700)
+        # W1 owns descriptor-safe input hydration: only bytes copied from
+        # authority land in the external stage; the provider never sees
+        # any Workspace path.
+        candidate_mesh_authority = _agent_source_file(
+            authority, CANDIDATE_MESH_RELATIVE
+        )
+        external_candidate_mesh = external_stage / "inputs/candidate.glb"
+        _copy_agent_file(candidate_mesh_authority, external_candidate_mesh)
+        external_reference = external_stage / "inputs/reference"
+        _copy_agent_tree(workspace / "input", external_reference)
+        os.chmod(external_reference, 0o500)
+        os.chmod(external_candidate_mesh, 0o400)
+
+        external_voxblame_output = external_stage / "outputs/voxblame"
+        external_preview_output = external_stage / "outputs/preview"
         request = StepZeroEvidenceRequest(
-            canonical_reference=(workspace / "input").resolve(),
-            candidate_mesh=stage_candidate_mesh,
-            voxblame_output=voxblame_output,
-            preview_output=preview_output,
+            canonical_reference=external_reference,
+            candidate_mesh=external_candidate_mesh,
+            voxblame_output=external_voxblame_output,
+            preview_output=external_preview_output,
             preview_profile={
                 "name": preview_profile.get("name"),
                 "sha256": preview_profile.get("sha256"),
             },
         )
+        _assert_request_paths_outside(request, workspace)
         try:
             evidence_provider(request)
         except WorkspaceError:
@@ -419,8 +528,19 @@ def publish_step_zero_from_candidate(
                 "step_zero_evidence_failed",
                 f"trusted Step 0 evidence provider failed: {error.__class__.__name__}",
             ) from error
-        _validate_step_zero_stage(voxblame_output, preview_output)
-        measurement_target = _promote_step_zero_voxblame(workspace, voxblame_output)
+        _validate_step_zero_stage(external_voxblame_output, external_preview_output)
+
+        # Descriptor-copy the validated external outputs into a private
+        # same-filesystem W1 stage.  The provider never learns this path;
+        # only after the copy succeeds is the voxblame subtree renamed
+        # onto workspace/voxblame atomically.
+        internal_stage = _open_step_zero_internal_promotion_stage(workspace)
+        internal_voxblame = internal_stage / "voxblame"
+        internal_preview = internal_stage / "preview"
+        _copy_agent_tree(external_voxblame_output, internal_voxblame)
+        _copy_agent_tree(external_preview_output, internal_preview)
+
+        measurement_target = _promote_step_zero_voxblame(workspace, internal_voxblame)
         promoted = True
         try:
             result = publish_step_zero(
@@ -429,7 +549,7 @@ def publish_step_zero_from_candidate(
                 candidate=authority,
                 candidate_mesh=_agent_relative(authority, CANDIDATE_MESH_RELATIVE),
                 measurement=measurement_target,
-                preview=preview_output,
+                preview=internal_preview,
             )
         except Exception:
             _rollback_step_zero_voxblame(workspace)
@@ -440,7 +560,9 @@ def publish_step_zero_from_candidate(
             _rollback_step_zero_voxblame(workspace)
         raise
     finally:
-        shutil.rmtree(stage, ignore_errors=True)
+        _remove_stage_tree(external_stage)
+        if internal_stage is not None:
+            _remove_stage_tree(internal_stage)
 
     step_value = result.get("step", 0)
     if isinstance(step_value, Mapping):

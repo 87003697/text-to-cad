@@ -63,13 +63,50 @@ class StepZeroEvidenceProvider(Protocol):
     def __call__(self, request: StepZeroEvidenceRequest) -> None: ...
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_MESHSCOPE_SRC = _REPO_ROOT / "packages/meshscope/src"
+_MESHSHOT_SRC = _REPO_ROOT / "packages/meshshot/src"
+
+
+def _ensure_shipped_package(package_root: Path, package_name: str) -> Path:
+    """Add a shipped package source root to :data:`sys.path` fail-closed.
+
+    Resolution is explicit: first attempt an ordinary import (which
+    succeeds when the pilot is running from the installed layout that
+    already has the package on ``sys.path``), and otherwise verify that
+    the source-checkout layout exists at the exact repo-relative
+    location the pilot ships from.  A missing package raises
+    :class:`StepZeroEvidenceError` — the provider never silently falls
+    back to an arbitrary checkout path.
+    """
+
+    try:
+        __import__(package_name)
+        return package_root
+    except ImportError:
+        pass
+    if not (package_root / package_name / "__init__.py").is_file():
+        raise StepZeroEvidenceError(
+            "provider_dependency_missing",
+            f"{package_name} package is not importable and its source root "
+            f"is missing at {package_root}",
+        )
+    if str(package_root) not in sys.path:
+        sys.path.insert(0, str(package_root))
+    try:
+        __import__(package_name)
+    except ImportError as error:
+        raise StepZeroEvidenceError(
+            "provider_dependency_missing",
+            f"{package_name} source root exists but the module is not importable: {error}",
+        ) from error
+    return package_root
+
+
 def _import_meshscope():
     """Import the shipped meshscope.voxblame canonical measurement API."""
 
-    repo_root = Path(__file__).resolve().parents[1]
-    package_root = repo_root / "packages/meshscope/src"
-    if str(package_root) not in sys.path:
-        sys.path.insert(0, str(package_root))
+    _ensure_shipped_package(_MESHSCOPE_SRC, "meshscope")
     from meshscope.voxblame import (  # type: ignore
         measure_step,
         prepare_preview_scene,
@@ -82,10 +119,7 @@ def _import_meshscope():
 def _import_meshshot():
     """Import the shipped meshshot canonical Browser Runtime renderer."""
 
-    repo_root = Path(__file__).resolve().parents[1]
-    package_root = repo_root / "packages/meshshot/src"
-    if str(package_root) not in sys.path:
-        sys.path.insert(0, str(package_root))
+    _ensure_shipped_package(_MESHSHOT_SRC, "meshshot")
     from meshshot import (  # type: ignore
         MeshGeometry,
         load_profile,

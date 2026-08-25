@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -253,12 +254,17 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
         self.assertEqual({"step": 0}, published)
         self.assertTrue((case.workspace / "steps/000000").is_dir())
         self.assertTrue((case.workspace / "voxblame/steps/000000/summary.json").is_file())
-        # W1 owns the stage lifecycle: no residue survives publication.
-        residue = [
-            entry for entry in (case.workspace / "work").iterdir()
-            if entry.name.startswith(".step-zero-stage-")
+        # W1 owns the stage lifecycle: no external or internal stage
+        # residue survives publication.  The external stage lives in
+        # the system temp root and is cleaned up in the finally block;
+        # the internal promotion stage was renamed onto voxblame/ and
+        # the empty parent removed.
+        workspace_residue = [
+            entry.name
+            for entry in case.workspace.iterdir()
+            if entry.name.startswith(".voxblame-promotion-")
         ]
-        self.assertEqual([], residue)
+        self.assertEqual([], workspace_residue)
 
         plan = case.repair_plan("agent-cycle-plan", from_step=0)
         facade.begin_attempt(case.workspace, plan, intended_step=1, from_step=0)
@@ -367,6 +373,290 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
         self.assertEqual(
             "invalid_step_zero_candidate", raised.exception.classification
         )
+
+    def _prepare_ready_workspace(self, case, *, candidate_bytes: bytes = b"agent step"):
+        """Initialize, begin an attempt, and stage one candidate GLB source tree."""
+
+        case.invoke(
+            "init", "--workspace", str(case.workspace), "--prepared", str(case.prepared_setup())
+        )
+        case.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(case.workspace),
+            "--plan",
+            str(case.initial_plan()),
+            "--intended-step",
+            "0",
+        )
+        facade = _load_facade()
+        facade.run_attempt_command(
+            case.workspace,
+            attempt=1,
+            phase="candidate",
+            argv=[sys.executable, "-c", ""],
+            timeout_seconds=60,
+        )
+        candidate, candidate_sha = case.candidate("agent-step", candidate_bytes)
+        source = case.root / "agent-step-source"
+        (source / "candidate").mkdir(parents=True)
+        shutil.copytree(candidate, source / "candidate", dirs_exist_ok=True)
+        shutil.copy2(
+            source / "candidate/artifacts/model.glb", source / "candidate.glb"
+        )
+        return facade, source, candidate_sha
+
+    def test_provider_request_paths_are_outside_workspace_authority(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+
+        facade, source, candidate_sha = self._prepare_ready_workspace(case)
+
+        observed: dict = {}
+        workspace_root = case.workspace.resolve()
+
+        def capturing_provider(request):
+            observed["request"] = request
+            observed["candidate_bytes"] = request.candidate_mesh.read_bytes()
+            observed["reference_entries"] = sorted(
+                str(child.relative_to(request.canonical_reference))
+                for child in request.canonical_reference.rglob("*")
+                if child.is_file()
+            )
+            for label, path in (
+                ("canonical_reference", request.canonical_reference),
+                ("candidate_mesh", request.candidate_mesh),
+                ("voxblame_output", request.voxblame_output),
+                ("preview_output", request.preview_output),
+            ):
+                resolved = Path(path).resolve()
+                observed.setdefault("paths", {})[label] = resolved
+                try:
+                    resolved.relative_to(workspace_root)
+                except ValueError:
+                    continue
+                raise AssertionError(
+                    f"provider {label} path is inside Workspace: {resolved}"
+                )
+            _write_step_measurement(
+                request.voxblame_output,
+                step=0,
+                compare_to=None,
+                reference_sha=case.reference_sha,
+                candidate_sha=candidate_sha,
+                observable_sha="9" * 64,
+                accepted=False,
+            )
+            _write_step_preview(
+                request.preview_output,
+                reference_sha=case.reference_sha,
+                profile_sha=case.profile_sha,
+                candidate_sha=candidate_sha,
+            )
+
+        published = facade.publish_step_zero_from_candidate(
+            case.workspace, attempt=1, source=source, evidence_provider=capturing_provider
+        )
+        self.assertEqual({"step": 0}, published)
+        # All four request paths must be outside the Workspace tree.
+        for label, path in observed["paths"].items():
+            with self.assertRaises(ValueError, msg=f"{label} escaped Workspace"):
+                path.relative_to(workspace_root)
+        # The provider actually read the private canonical/candidate copies,
+        # confirming they are hydrated with real bytes rather than empty stubs.
+        self.assertTrue(observed["candidate_bytes"])
+        self.assertIn("reference.ply", observed["reference_entries"])
+
+    def test_provider_stage_leaks_no_paths_and_cleans_up(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+
+        facade, source, candidate_sha = self._prepare_ready_workspace(case)
+
+        seen_stage_dirs: list[Path] = []
+
+        def observing_provider(request):
+            seen_stage_dirs.extend(
+                [request.voxblame_output, request.preview_output,
+                 request.canonical_reference, request.candidate_mesh]
+            )
+            _write_step_measurement(
+                request.voxblame_output,
+                step=0,
+                compare_to=None,
+                reference_sha=case.reference_sha,
+                candidate_sha=candidate_sha,
+                observable_sha="9" * 64,
+                accepted=False,
+            )
+            _write_step_preview(
+                request.preview_output,
+                reference_sha=case.reference_sha,
+                profile_sha=case.profile_sha,
+                candidate_sha=candidate_sha,
+            )
+
+        facade.publish_step_zero_from_candidate(
+            case.workspace, attempt=1, source=source, evidence_provider=observing_provider
+        )
+        # External stage cleanup: nothing the provider saw survives.
+        for path in seen_stage_dirs:
+            self.assertFalse(path.exists(), f"stage residue survived: {path}")
+        # No promotion-stage residue inside Workspace.
+        self.assertEqual(
+            [],
+            [
+                child.name
+                for child in case.workspace.iterdir()
+                if child.name.startswith(".voxblame-promotion-")
+            ],
+        )
+
+    def test_provider_symlink_output_fails_closed(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+
+        facade, source, candidate_sha = self._prepare_ready_workspace(case)
+
+        def symlink_provider(request):
+            _write_step_measurement(
+                request.voxblame_output,
+                step=0,
+                compare_to=None,
+                reference_sha=case.reference_sha,
+                candidate_sha=candidate_sha,
+                observable_sha="9" * 64,
+                accepted=False,
+            )
+            _write_step_preview(
+                request.preview_output,
+                reference_sha=case.reference_sha,
+                profile_sha=case.profile_sha,
+                candidate_sha=candidate_sha,
+            )
+            # Turn one required voxblame artifact into a symlink after
+            # writing legitimate bytes: an ordinary content check would
+            # not catch this alone.
+            summary = request.voxblame_output / "steps/000000/summary.json"
+            replacement = request.voxblame_output / "steps/000000/summary-real.json"
+            summary.rename(replacement)
+            summary.symlink_to(replacement)
+
+        with self.assertRaises(facade.WorkspaceError) as raised:
+            facade.publish_step_zero_from_candidate(
+                case.workspace,
+                attempt=1,
+                source=source,
+                evidence_provider=symlink_provider,
+            )
+        self.assertIn(
+            raised.exception.classification,
+            {"invalid_step_zero_evidence", "invalid_workspace_path"},
+        )
+        # Failed evidence never lands under Workspace authority.
+        self.assertFalse((case.workspace / "voxblame").exists())
+        self.assertFalse((case.workspace / "steps/000000").exists())
+
+    def test_provider_hardlink_output_fails_closed(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+
+        facade, source, candidate_sha = self._prepare_ready_workspace(case)
+
+        def hardlink_provider(request):
+            _write_step_measurement(
+                request.voxblame_output,
+                step=0,
+                compare_to=None,
+                reference_sha=case.reference_sha,
+                candidate_sha=candidate_sha,
+                observable_sha="9" * 64,
+                accepted=False,
+            )
+            _write_step_preview(
+                request.preview_output,
+                reference_sha=case.reference_sha,
+                profile_sha=case.profile_sha,
+                candidate_sha=candidate_sha,
+            )
+            summary = request.voxblame_output / "steps/000000/summary.json"
+            twin = summary.with_name("twin.json")
+            os.link(summary, twin)
+
+        with self.assertRaises(facade.WorkspaceError) as raised:
+            facade.publish_step_zero_from_candidate(
+                case.workspace,
+                attempt=1,
+                source=source,
+                evidence_provider=hardlink_provider,
+            )
+        self.assertIn(
+            raised.exception.classification,
+            {"invalid_step_zero_evidence", "invalid_workspace_path"},
+        )
+        self.assertFalse((case.workspace / "voxblame").exists())
+
+    def test_provider_oversized_output_fails_closed(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+
+        facade, source, candidate_sha = self._prepare_ready_workspace(case)
+
+        # Coax a very small allowed size so the test does not need to write
+        # a real 512 MiB file: a small ceiling still exercises the fail-closed
+        # code path W1 uses to bound stage artifacts.
+        original = facade._MAX_STEP_ZERO_STAGE_FILE_BYTES
+        facade._MAX_STEP_ZERO_STAGE_FILE_BYTES = 32
+        self.addCleanup(setattr, facade, "_MAX_STEP_ZERO_STAGE_FILE_BYTES", original)
+
+        def large_provider(request):
+            _write_step_measurement(
+                request.voxblame_output,
+                step=0,
+                compare_to=None,
+                reference_sha=case.reference_sha,
+                candidate_sha=candidate_sha,
+                observable_sha="9" * 64,
+                accepted=False,
+            )
+            _write_step_preview(
+                request.preview_output,
+                reference_sha=case.reference_sha,
+                profile_sha=case.profile_sha,
+                candidate_sha=candidate_sha,
+            )
+
+        with self.assertRaises(facade.WorkspaceError) as raised:
+            facade.publish_step_zero_from_candidate(
+                case.workspace,
+                attempt=1,
+                source=source,
+                evidence_provider=large_provider,
+            )
+        self.assertEqual(
+            "invalid_step_zero_evidence", raised.exception.classification
+        )
+        self.assertFalse((case.workspace / "voxblame").exists())
 
 
 if __name__ == "__main__":
