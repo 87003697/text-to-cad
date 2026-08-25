@@ -66,6 +66,10 @@ ALLOWED_SOURCES: tuple[tuple[str, str], ...] = (
         "skills/mesh-to-cad/references/assessment.md",
     ),
     (
+        "skills/mesh-to-cad/agent-source/references/agent-selection-claim.md",
+        "skills/mesh-to-cad/references/agent-selection-claim.md",
+    ),
+    (
         "scripts/pilot/agent_surface_client.py",
         CLIENT_PROJECTED_REL,
     ),

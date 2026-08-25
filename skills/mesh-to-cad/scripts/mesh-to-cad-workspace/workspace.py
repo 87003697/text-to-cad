@@ -1392,42 +1392,192 @@ def _discard_finalization_staging(workspace: Path) -> None:
         shutil.rmtree(target)
 
 
-def finalize_agent_submission(
+AGENT_SELECTION_CLAIM_SCHEMA = "mesh-to-cad.agent-selection-claim/1"
+_AGENT_CLAIM_MAX_TEXT = 4096
+
+
+def _claim_fail(detail: str, path: str = "$.selection_claim") -> None:
+    raise WorkspaceError("invalid_contract", detail, path)
+
+
+def _claim_nonempty_string(value: Any, detail: str, path: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > _AGENT_CLAIM_MAX_TEXT:
+        _claim_fail(detail, path)
+    return value
+
+
+def _validate_agent_selection_claim(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != {
+        "schema",
+        "preview_observation",
+        "stop_reason",
+        "conflict",
+        "conflict_details",
+        "rationale",
+    }:
+        _claim_fail("Agent selection claim keys are closed and required")
+    if value["schema"] != AGENT_SELECTION_CLAIM_SCHEMA:
+        _claim_fail("Agent selection claim schema mismatch", "$.selection_claim.schema")
+    stop_reason = value["stop_reason"]
+    if stop_reason not in _core._STOP_REASONS:
+        _claim_fail("Agent stop_reason is not a recognized enum", "$.selection_claim.stop_reason")
+    conflict = value["conflict"]
+    if not isinstance(conflict, bool):
+        _claim_fail("Agent conflict flag must be boolean", "$.selection_claim.conflict")
+    conflict_details = value["conflict_details"]
+    if conflict:
+        _claim_nonempty_string(
+            conflict_details,
+            "Agent conflict requires concise conflict_details",
+            "$.selection_claim.conflict_details",
+        )
+    elif conflict_details is not None:
+        _claim_fail(
+            "clear preview must leave conflict_details null",
+            "$.selection_claim.conflict_details",
+        )
+    return {
+        "schema": AGENT_SELECTION_CLAIM_SCHEMA,
+        "preview_observation": _claim_nonempty_string(
+            value["preview_observation"],
+            "Agent preview_observation must be a concise nonempty string",
+            "$.selection_claim.preview_observation",
+        ),
+        "stop_reason": stop_reason,
+        "conflict": conflict,
+        "conflict_details": conflict_details,
+        "rationale": _claim_nonempty_string(
+            value["rationale"],
+            "Agent rationale must be a concise nonempty string",
+            "$.selection_claim.rationale",
+        ),
+    }
+
+
+def finalize_from_agent_selection_claim(
     workspace: Path,
     *,
     source: Path,
     selection: str,
     notes: str,
+    selected_step: int,
     rebuild_entrypoint: Path,
     geometry_entrypoint: Path,
     tool_registry: Path,
     scope: _core.ExecutionScope | None = None,
 ) -> dict[str, Any]:
-    """Stage Agent selection/evidence and finalize without exposing internal paths."""
+    """Finalize from an opaque Selected Step handle plus bounded semantic claim.
+
+    W1 owns every trusted fact.  It reads the Selected Step's canonical
+    manifest, measurement, and preview identity from Workspace authority,
+    binds them to the Agent's semantic claim, and constructs the closed
+    ``mesh-to-cad.final-selection/1`` document itself.  Agent-authored
+    evidence paths, hashes, accepted facts, considered_step lists, and
+    preview identity claims are refused: the Agent may only report the
+    bounded observation/stop_reason/conflict/rationale fields.  Any
+    contradiction with the canonical Selected Step fails closed before
+    any rebuild is attempted.
+    """
 
     raw_source = Path(source)
     if raw_source.is_symlink() or not raw_source.is_dir():
         raise WorkspaceError("invalid_workspace_path", "Agent candidate source is unavailable")
     source = raw_source.resolve()
+    workspace = Path(workspace).resolve()
+    if (
+        type(selected_step) is not int
+        or isinstance(selected_step, bool)
+        or selected_step < 0
+        or selected_step > _core.MAX_REPAIR_CYCLES
+    ):
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "Selected Step ordinal is out of range",
+            "$.selected_step",
+        )
+    graph = _core._build_graph(workspace, validate_steps=True)
+    existing = {item["step"]: item for item in graph["steps"]}
+    if selected_step not in existing:
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "Selected Step is not present in the canonical graph",
+            "$.selected_step",
+        )
+    if selected_step not in graph["heads"]:
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "Selected Step is not a selectable current head",
+            "$.selected_step",
+        )
+    step_document = _read_authority_json(
+        workspace,
+        workspace / "steps" / f"{selected_step:06d}" / "step.json",
+        f"$.steps[{selected_step}]",
+    )
+    accepted = step_document["accepted"]
+    preview_identity = step_document["preview_identity_sha256"]
     staging = _reset_finalization_staging(workspace)
     try:
         selection_source = _agent_source_file(source, selection)
         notes_source = _agent_source_file(source, notes)
-        _copy_agent_file(selection_source, staging / "selection.json")
+        _copy_agent_file(selection_source, staging / "claim.json")
         _copy_agent_file(notes_source, staging / "notes.md")
-        document = json.loads((staging / "selection.json").read_text(encoding="utf-8"))
-        evidence = document.get("evidence")
-        if not isinstance(evidence, list):
-            raise WorkspaceError("invalid_contract", "selection evidence is invalid")
-        for item in evidence:
-            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
-                raise WorkspaceError("invalid_contract", "selection evidence is invalid")
-            relative = PurePosixPath(item["path"])
-            evidence_source = _agent_source_file(source, relative.as_posix())
-            destination = staging / relative
-            _copy_agent_file(evidence_source, destination)
-            item["path"] = (staging.relative_to(Path(workspace).resolve()) / relative).as_posix()
-        _write_json(staging / "selection.json", document)
+        try:
+            raw_claim = json.loads((staging / "claim.json").read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise WorkspaceError(
+                "invalid_contract",
+                "Agent selection claim is not readable JSON",
+                "$.selection_claim",
+            ) from error
+        claim = _validate_agent_selection_claim(raw_claim)
+        if claim["conflict"]:
+            raise WorkspaceError(
+                "agent_semantic_conflict",
+                "Agent-reported material semantic conflict blocks Final Delivery",
+                "$.selection_claim.conflict",
+            )
+        if accepted and claim["stop_reason"] != "acceptance_satisfied":
+            raise WorkspaceError(
+                "identity_conflict",
+                "accepted Selected Step requires acceptance_satisfied stop_reason",
+                "$.selection_claim.stop_reason",
+            )
+        if not accepted and claim["stop_reason"] == "acceptance_satisfied":
+            raise WorkspaceError(
+                "identity_conflict",
+                "unaccepted Selected Step cannot claim acceptance_satisfied",
+                "$.selection_claim.stop_reason",
+            )
+        measurement_relative = f"steps/{selected_step:06d}/measurement.json"
+        measurement_path = workspace / measurement_relative
+        if not measurement_path.is_file() or measurement_path.is_symlink():
+            raise WorkspaceError(
+                "corrupt_workspace",
+                "Selected Step measurement is unavailable",
+                "$.selected_step.measurement",
+            )
+        selection_document = {
+            "schema": _core.FINAL_SELECTION_SCHEMA,
+            "considered_steps": sorted(existing),
+            "selected_step": selected_step,
+            "preview": {
+                "identity_sha256": preview_identity,
+                "observation": claim["preview_observation"],
+                "evidence_conflict": False,
+                "conflict_details": None,
+            },
+            "accepted": accepted,
+            "stop_reason": claim["stop_reason"],
+            "evidence": [
+                {
+                    "kind": "measurement",
+                    "path": measurement_relative,
+                    "sha256": _core._file_sha256(measurement_path),
+                }
+            ],
+        }
+        _write_json(staging / "selection.json", selection_document)
         result = finalize_workspace(
             workspace,
             selection=staging / "selection.json",
@@ -2590,8 +2740,9 @@ __all__ = [
     "begin_attempt",
     "cancel_active_commands",
     "compile_terminal_validation",
+    "AGENT_SELECTION_CLAIM_SCHEMA",
     "finalize_workspace",
-    "finalize_agent_submission",
+    "finalize_from_agent_selection_claim",
     "initialize_workspace",
     "publish_cycle",
     "publish_cycle_from_candidate",

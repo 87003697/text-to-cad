@@ -70,6 +70,7 @@ class SupervisorPorts(Protocol):
     def select_and_finalize(
         self,
         workspace_handle: str,
+        step_handle: str,
         selection_handle: str,
         notes_handle: str,
     ) -> Mapping[str, Any]: ...
@@ -625,7 +626,7 @@ _OPERATION_SPECS = (
     ),), _validate_run_candidate_result, "Run one supervisor-registered candidate operation."),
     _OperationSpec("submit_step_zero", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle")),), _validate_step_zero_result, "Submit one measured Step 0 through the supervisor."),
     _OperationSpec("submit_repair", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle")),), _validate_repair_result, "Submit one measured Repair Cycle through the supervisor."),
-    _OperationSpec("select_and_finalize", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "selection_handle", "notes_handle")),), _validate_finalize_result, "Select and request supervisor-owned Final Delivery."),
+    _OperationSpec("select_and_finalize", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "step_handle", "selection_handle", "notes_handle")),), _validate_finalize_result, "Select and request supervisor-owned Final Delivery."),
     _OperationSpec("observe_reference", ((
         _FieldSpec("reference_handle", "handle"), _FieldSpec("observation", "observation_request"),
     ),), _validate_observe_result, "Request one fixed Reference Capability observation."),

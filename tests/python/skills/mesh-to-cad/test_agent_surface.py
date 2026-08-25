@@ -252,9 +252,15 @@ class FakePorts:
             candidate_handle,
         )
 
-    def select_and_finalize(self, workspace_handle, selection_handle, notes_handle):
+    def select_and_finalize(
+        self, workspace_handle, step_handle, selection_handle, notes_handle
+    ):
         return self._call(
-            "select_and_finalize", workspace_handle, selection_handle, notes_handle
+            "select_and_finalize",
+            workspace_handle,
+            step_handle,
+            selection_handle,
+            notes_handle,
         )
 
     def observe_reference(self, reference_handle, observation):
@@ -280,6 +286,7 @@ class AgentSurfaceTests(unittest.TestCase):
             "attempt_handle": "attempt:1",
             "candidate_handle": "candidate:1",
             "operation_handle": "operation:build",
+            "step_handle": "step:0",
             "selection_handle": "selection:1",
             "notes_handle": "notes:1",
             "reference_handle": "reference:1",
@@ -320,7 +327,7 @@ class AgentSurfaceTests(unittest.TestCase):
             _request(
                 "select_and_finalize",
                 {key: handles[key] for key in (
-                    "workspace_handle", "selection_handle", "notes_handle",
+                    "workspace_handle", "step_handle", "selection_handle", "notes_handle",
                 )},
             ),
             _request(
@@ -499,7 +506,7 @@ class AgentSurfaceTests(unittest.TestCase):
             _request("submit_repair", {
                 "workspace_handle": "ws:1", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1",
             }),
-            _request("select_and_finalize", {"workspace_handle": "ws:1", "selection_handle": "selection:1", "notes_handle": "notes:1"}),
+            _request("select_and_finalize", {"workspace_handle": "ws:1", "step_handle": "step:0", "selection_handle": "selection:1", "notes_handle": "notes:1"}),
             _request("observe_reference", {"reference_handle": "reference:1", "observation": {"method": "summary", "args": {}}}),
         ]
         for request in requests:
@@ -520,7 +527,7 @@ class AgentSurfaceTests(unittest.TestCase):
             ("run_candidate_tool", {"workspace_handle": "ws:1", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1", "operation_handle": "operation:1"}, ("run_candidate_tool", "ws:1", "attempt:1", "candidate:1", "operation:1"), "candidate_handle"),
             ("submit_step_zero", {"workspace_handle": "ws:1", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1"}, ("submit_step_zero", "ws:1", "attempt:1", "candidate:1"), "state"),
             ("submit_repair", {"workspace_handle": "ws:1", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1"}, ("submit_repair", "ws:1", "attempt:1", "candidate:1"), "cycle_handle"),
-            ("select_and_finalize", {"workspace_handle": "ws:1", "selection_handle": "selection:1", "notes_handle": "notes:1"}, ("select_and_finalize", "ws:1", "selection:1", "notes:1"), "final_delivery_handle"),
+            ("select_and_finalize", {"workspace_handle": "ws:1", "step_handle": "step:0", "selection_handle": "selection:1", "notes_handle": "notes:1"}, ("select_and_finalize", "ws:1", "step:0", "selection:1", "notes:1"), "final_delivery_handle"),
             ("observe_reference", {"reference_handle": "reference:1", "observation": {"method": "summary", "args": {}}}, ("observe_reference", "reference:1", {"method": "summary", "args": {}}), "reference_id"),
         ]
         for intent, args, port_args, field in cases:

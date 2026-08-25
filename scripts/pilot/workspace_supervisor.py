@@ -151,7 +151,7 @@ class WorkspaceAPI(Protocol):
         self, workspace: Path, *, step: int
     ) -> Mapping[str, Any]: ...
 
-    def finalize_agent_submission(
+    def finalize_from_agent_selection_claim(
         self, workspace: Path, *, scope: Any | None = None, **kwargs: Any
     ) -> Mapping[str, Any]: ...
 
@@ -1945,6 +1945,7 @@ class WorkspaceSupervisor:
     def select_and_finalize(
         self,
         workspace_handle: str,
+        step_handle: str,
         selection_handle: str,
         notes_handle: str,
     ) -> Mapping[str, Any]:
@@ -1954,6 +1955,7 @@ class WorkspaceSupervisor:
         try:
             return self._select_and_finalize(
                 workspace_handle,
+                step_handle,
                 selection_handle,
                 notes_handle,
             )
@@ -1963,10 +1965,12 @@ class WorkspaceSupervisor:
     def _select_and_finalize(
         self,
         workspace_handle: str,
+        step_handle: str,
         selection_handle: str,
         notes_handle: str,
     ) -> Mapping[str, Any]:
         self._workspace(workspace_handle)
+        selected_step = self.registry.resolve(step_handle, "step")
         selection = self.registry.resolve(selection_handle, "selection")
         notes = self.registry.resolve(notes_handle, "notes")
         _safe_relative(self.candidate_root, selection)
@@ -1978,11 +1982,12 @@ class WorkspaceSupervisor:
         ):
             raise SupervisorError("finalization_unavailable")
         try:
-            finalized = self.workspace_api.finalize_agent_submission(
+            finalized = self.workspace_api.finalize_from_agent_selection_claim(
                 self.workspace,
                 source=self.candidate_root,
                 selection=selection.relative_to(self.candidate_root).as_posix(),
                 notes=notes.relative_to(self.candidate_root).as_posix(),
+                selected_step=selected_step,
                 rebuild_entrypoint=self._rebuild_entrypoint,
                 geometry_entrypoint=self._geometry_entrypoint,
                 tool_registry=self._tool_registry,

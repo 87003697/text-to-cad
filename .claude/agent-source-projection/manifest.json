@@ -7,8 +7,13 @@
     },
     {
       "path": "skills/mesh-to-cad/SKILL.md",
-      "sha256": "59990084d1dd845915976fdb81a35af3c58a2e1c5ee79883d655775feb5ca9ed",
-      "size": 13051
+      "sha256": "3b56a5fdf98e15e814e1afbd134223f85265eeb7589bcd6dd018fe96268d362e",
+      "size": 13452
+    },
+    {
+      "path": "skills/mesh-to-cad/references/agent-selection-claim.md",
+      "sha256": "4586a9203e58454e4f0241e9c5136776d3ceb377e8d1ac7f494dfb6232b7d035",
+      "size": 4528
     },
     {
       "path": "skills/mesh-to-cad/references/assessment.md",

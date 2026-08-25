@@ -3044,6 +3044,358 @@ time.sleep(60)
         self.assertFalse(list((self.workspace / "work").glob(".tmp-step-zero-*")))
 
 
+def _valid_agent_claim(
+    *,
+    stop_reason: str = "cycle_limit",
+    conflict: bool = False,
+    conflict_details=None,
+    preview_observation: str = "Preview matches intent.",
+    rationale: str = "Only head available under budget.",
+) -> dict:
+    return {
+        "schema": "mesh-to-cad.agent-selection-claim/1",
+        "preview_observation": preview_observation,
+        "stop_reason": stop_reason,
+        "conflict": conflict,
+        "conflict_details": conflict_details,
+        "rationale": rationale,
+    }
+
+
+class AgentSelectionClaimSchemaTests(unittest.TestCase):
+    """Pure schema tests for ``_validate_agent_selection_claim``.
+
+    The claim schema is the entire agent-to-W1 boundary for select_and_finalize;
+    the validator must be closed and fail-closed so no evidence path, hash,
+    accepted flag, step id, provider fact, or authority schema can leak
+    through as an extra key.
+    """
+
+    def setUp(self) -> None:
+        self.helper = _load_workspace_helper()
+
+    def _reject(self, claim: dict, path: str) -> None:
+        with self.assertRaises(self.helper.WorkspaceError) as ctx:
+            self.helper._validate_agent_selection_claim(claim)
+        self.assertEqual("invalid_contract", ctx.exception.classification)
+        self.assertEqual(path, ctx.exception.path)
+
+    def test_valid_clear_preview_round_trips_normalized(self) -> None:
+        claim = _valid_agent_claim()
+        normalized = self.helper._validate_agent_selection_claim(claim)
+        self.assertEqual(claim, normalized)
+
+    def test_valid_conflict_requires_details_and_round_trips(self) -> None:
+        claim = _valid_agent_claim(
+            conflict=True,
+            conflict_details="Preview shows unexpected feature not requested.",
+            stop_reason="modeling_intent_conflict",
+        )
+        normalized = self.helper._validate_agent_selection_claim(claim)
+        self.assertEqual(claim, normalized)
+
+    def test_schema_field_must_match_exact_agent_claim_version(self) -> None:
+        claim = _valid_agent_claim()
+        claim["schema"] = "mesh-to-cad.agent-selection-claim/2"
+        self._reject(claim, "$.selection_claim.schema")
+
+    def test_missing_required_key_is_refused(self) -> None:
+        claim = _valid_agent_claim()
+        del claim["rationale"]
+        self._reject(claim, "$.selection_claim")
+
+    def test_extra_key_would_be_refused_even_if_named_evidence(self) -> None:
+        # The whole point of the closed schema is that an agent cannot
+        # smuggle evidence paths, hashes, accepted facts, considered_steps,
+        # step_id, provider facts, or authority schemas into finalization.
+        for extra_key in (
+            "evidence",
+            "evidence_sha256",
+            "considered_steps",
+            "selected_step",
+            "step_id",
+            "accepted",
+            "measurement_path",
+            "preview_identity_sha256",
+            "provider_fact",
+            "authority",
+        ):
+            with self.subTest(extra_key=extra_key):
+                claim = _valid_agent_claim()
+                claim[extra_key] = "smuggled"
+                self._reject(claim, "$.selection_claim")
+
+    def test_unknown_stop_reason_is_refused(self) -> None:
+        claim = _valid_agent_claim(stop_reason="operator_stop")
+        self._reject(claim, "$.selection_claim.stop_reason")
+
+    def test_all_seven_stop_reasons_are_accepted(self) -> None:
+        for stop_reason in (
+            "acceptance_satisfied",
+            "cycle_limit",
+            "no_feasible_strategy",
+            "representation_limit",
+            "modeling_intent_conflict",
+            "repeated_ineffective_strategy",
+            "tool_failure",
+        ):
+            with self.subTest(stop_reason=stop_reason):
+                claim = _valid_agent_claim(stop_reason=stop_reason)
+                self.helper._validate_agent_selection_claim(claim)
+
+    def test_conflict_flag_must_be_bool_not_truthy_int(self) -> None:
+        claim = _valid_agent_claim()
+        claim["conflict"] = 1
+        self._reject(claim, "$.selection_claim.conflict")
+
+    def test_conflict_true_requires_nonempty_details(self) -> None:
+        claim = _valid_agent_claim(conflict=True, conflict_details=None)
+        self._reject(claim, "$.selection_claim.conflict_details")
+        claim = _valid_agent_claim(conflict=True, conflict_details="")
+        self._reject(claim, "$.selection_claim.conflict_details")
+
+    def test_clear_preview_must_leave_conflict_details_null(self) -> None:
+        claim = _valid_agent_claim(conflict=False, conflict_details="lingering")
+        self._reject(claim, "$.selection_claim.conflict_details")
+
+    def test_preview_observation_and_rationale_must_be_bounded_nonempty(self) -> None:
+        for field, path in (
+            ("preview_observation", "$.selection_claim.preview_observation"),
+            ("rationale", "$.selection_claim.rationale"),
+        ):
+            for bad in ("", "x" * 4097, 42, None, ["listy"]):
+                with self.subTest(field=field, bad=bad):
+                    claim = _valid_agent_claim()
+                    claim[field] = bad
+                    self._reject(claim, path)
+
+    def test_top_level_must_be_dict(self) -> None:
+        for bad in (None, "string", 5, [], (1, 2, 3)):
+            with self.subTest(bad=bad):
+                with self.assertRaises(self.helper.WorkspaceError) as ctx:
+                    self.helper._validate_agent_selection_claim(bad)
+                self.assertEqual("invalid_contract", ctx.exception.classification)
+                self.assertEqual("$.selection_claim", ctx.exception.path)
+
+
+class AgentSelectionClaimFinalizationTests(unittest.TestCase):
+    """Adversarial coverage for ``finalize_from_agent_selection_claim``.
+
+    Uses composition with WorkspaceCliTests to reuse the workspace/publish
+    helpers without inheriting its (unrelated) test methods.
+    """
+
+    def setUp(self) -> None:
+        self._fixture = WorkspaceCliTests(methodName="setUp")
+        self._fixture.setUp()
+        self.addCleanup(self._fixture.doCleanups)
+        self.root = self._fixture.root
+        self.workspace = self._fixture.workspace
+
+    def _prepare_source(
+        self,
+        *,
+        claim: dict | str,
+        notes_text: str | None = None,
+        notes_symlink_target: Path | None = None,
+    ) -> tuple[Path, str, str]:
+        source = self.root / "agent-source"
+        source.mkdir()
+        selection_rel = "claim.json"
+        notes_rel = "notes.md"
+        selection_path = source / selection_rel
+        if isinstance(claim, str):
+            selection_path.write_text(claim, encoding="utf-8")
+        else:
+            selection_path.write_text(
+                json.dumps(claim, sort_keys=True) + "\n", encoding="utf-8"
+            )
+        notes_path = source / notes_rel
+        if notes_symlink_target is not None:
+            os.symlink(notes_symlink_target, notes_path)
+        else:
+            notes_path.write_text(
+                notes_text if notes_text is not None else "notes body\n",
+                encoding="utf-8",
+            )
+        return source, selection_rel, notes_rel
+
+    def _finalize(
+        self,
+        *,
+        selected_step,
+        claim: dict | str,
+        notes_text: str | None = None,
+        notes_symlink_target: Path | None = None,
+        source: Path | None = None,
+    ):
+        helper = _load_workspace_helper()
+        prepared_source, selection_rel, notes_rel = self._prepare_source(
+            claim=claim,
+            notes_text=notes_text,
+            notes_symlink_target=notes_symlink_target,
+        )
+        return helper.finalize_from_agent_selection_claim(
+            self.workspace,
+            source=source if source is not None else prepared_source,
+            selection=selection_rel,
+            notes=notes_rel,
+            selected_step=selected_step,
+            rebuild_entrypoint=Path("/dev/null"),
+            geometry_entrypoint=Path("/dev/null"),
+            tool_registry=Path("/dev/null"),
+        )
+
+    def _assert_no_final_state(self) -> None:
+        final_dir = self.workspace / "final"
+        if final_dir.exists():
+            self.assertFalse(
+                any(final_dir.iterdir()),
+                f"final/ should be empty on fail-closed, saw {list(final_dir.iterdir())}",
+            )
+        for tmp in (self.workspace / "work").glob(".tmp-final-*"):
+            self.fail(f"finalization staging leaked: {tmp}")
+
+    def test_finalize_rejects_selected_step_below_zero(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=-1, claim=_valid_agent_claim())
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self.assertEqual("$.selected_step", ctx.exception.path)
+        self._assert_no_final_state()
+
+    def test_finalize_rejects_selected_step_above_repair_budget(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=6, claim=_valid_agent_claim())
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self._assert_no_final_state()
+
+    def test_finalize_rejects_bool_selected_step_disguised_as_int(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=True, claim=_valid_agent_claim())
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+
+    def test_finalize_rejects_selected_step_absent_from_graph(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=3, claim=_valid_agent_claim())
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self._assert_no_final_state()
+
+    def test_finalize_rejects_non_head_ancestor_step(self) -> None:
+        # After a repair cycle publishes step 1 from step 0, step 0 is no
+        # longer a selectable current head; agent cannot re-select it.
+        self._fixture.publish_initial_flow()
+        self._fixture.publish_one_cycle()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=0, claim=_valid_agent_claim())
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self._assert_no_final_state()
+
+    def test_finalize_fails_closed_on_agent_semantic_conflict(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        conflict_claim = _valid_agent_claim(
+            conflict=True,
+            conflict_details="Preview identity mismatches modeling intent.",
+            stop_reason="modeling_intent_conflict",
+        )
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=0, claim=conflict_claim)
+        self.assertEqual("agent_semantic_conflict", ctx.exception.classification)
+        self.assertEqual("$.selection_claim.conflict", ctx.exception.path)
+        self._assert_no_final_state()
+
+    def test_finalize_refuses_acceptance_satisfied_on_unaccepted_step(self) -> None:
+        # publish_initial_flow publishes step 0 with accepted=False; the
+        # agent cannot claim acceptance_satisfied against it.
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(
+                selected_step=0,
+                claim=_valid_agent_claim(stop_reason="acceptance_satisfied"),
+            )
+        self.assertEqual("identity_conflict", ctx.exception.classification)
+        self.assertEqual("$.selection_claim.stop_reason", ctx.exception.path)
+        self._assert_no_final_state()
+
+    def test_finalize_refuses_extra_smuggled_evidence_key_in_claim(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        smuggled = _valid_agent_claim()
+        smuggled["evidence"] = [
+            {"path": "steps/000000/measurement.json", "sha256": "0" * 64}
+        ]
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=0, claim=smuggled)
+        self.assertEqual("invalid_contract", ctx.exception.classification)
+        self._assert_no_final_state()
+
+    def test_finalize_refuses_preview_identity_injection_in_claim(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        smuggled = _valid_agent_claim()
+        smuggled["preview_identity_sha256"] = "f" * 64
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=0, claim=smuggled)
+        self.assertEqual("invalid_contract", ctx.exception.classification)
+
+    def test_finalize_refuses_non_json_claim_body(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=0, claim="not-a-json-object\n")
+        self.assertEqual("invalid_contract", ctx.exception.classification)
+        self.assertEqual("$.selection_claim", ctx.exception.path)
+        self._assert_no_final_state()
+
+    def test_finalize_refuses_symlinked_notes_inside_source(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        target = self.root / "elsewhere.md"
+        target.write_text("outside\n", encoding="utf-8")
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(
+                selected_step=0,
+                claim=_valid_agent_claim(),
+                notes_symlink_target=target,
+            )
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self._assert_no_final_state()
+
+    def test_finalize_refuses_symlinked_source_root(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        real = self.root / "real-agent-source"
+        real.mkdir()
+        (real / "claim.json").write_text(
+            json.dumps(_valid_agent_claim()) + "\n", encoding="utf-8"
+        )
+        (real / "notes.md").write_text("notes\n", encoding="utf-8")
+        linked = self.root / "linked-agent-source"
+        os.symlink(real, linked)
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.finalize_from_agent_selection_claim(
+                self.workspace,
+                source=linked,
+                selection="claim.json",
+                notes="notes.md",
+                selected_step=0,
+                rebuild_entrypoint=Path("/dev/null"),
+                geometry_entrypoint=Path("/dev/null"),
+                tool_registry=Path("/dev/null"),
+            )
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+
+
 def _run_synthetic_runner_workload(workspace: Path) -> int:
     case = WorkspaceCliTests(
         methodName="test_runner_accepts_and_reviewer_audits_real_synthetic_delivery"

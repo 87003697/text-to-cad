@@ -53,7 +53,11 @@ a closed result plus the list of intents permitted next.
   supervisor using only the workspace, attempt, and candidate handles.
   The supervisor discovers evidence from the trusted candidate tree.
 - `select_and_finalize` — request the supervisor's final result from an
-  authored selection handle and notes handle.
+  opaque `step_handle` naming the Selected Step plus an authored
+  selection handle (a bounded semantic claim) and notes handle. You do
+  not name evidence, steps, hashes, or acceptance; the supervisor
+  reads those from the Selected Step and refuses any evidence or
+  provenance smuggled into the claim body.
 - `observe_reference` — request one bounded, structured observation of
   the Canonical Reference through a fixed Reference Capability.
 
@@ -323,3 +327,5 @@ identifiers.
   parametric candidate source under `/candidate/work/source/`.
 - `references/assessment.md` — how to author
   `/candidate/work/assessment.json` from returned decision facts.
+- `references/agent-selection-claim.md` — the bounded selection-claim
+  schema `select_and_finalize` reads from your selection handle.

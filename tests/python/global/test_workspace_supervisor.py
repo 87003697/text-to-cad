@@ -276,7 +276,7 @@ class _Workspace:
         self.finalize_calls += 1
         return {"identity_sha256": "f" * 64, "graph": {"final_delivery": {}}}
 
-    def finalize_agent_submission(self, _workspace: Path, **kwargs) -> dict:
+    def finalize_from_agent_selection_claim(self, _workspace: Path, **kwargs) -> dict:
         return self.finalize_workspace(_workspace, **kwargs)
 
     def run_attempt_command(self, *_args, **_kwargs):
@@ -393,7 +393,8 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         self.assertIn("seed_repair_source_from_parent_step", source)
         self.assertNotIn("publish_step_zero_from_agent", source)
         self.assertNotIn("publish_cycle_from_agent", source)
-        self.assertIn("finalize_agent_submission", source)
+        self.assertIn("finalize_from_agent_selection_claim", source)
+        self.assertNotIn("finalize_agent_submission", source)
 
     def test_bootstrap_preallocates_three_attempts_for_all_six_steps(self) -> None:
         contract = self.sup.agent_bootstrap_contract()
@@ -1796,12 +1797,10 @@ class WorkspaceSupervisorTests(unittest.TestCase):
 
     def test_synthetic_intent_lifecycle_crosses_one_concrete_boundary(self) -> None:
         attempt, candidate = self._start()
-        self.assertEqual(
-            "published",
-            self.sup.submit_step_zero(
-                self.sup.workspace_handle, attempt, candidate
-            )["state"],
+        step_zero = self.sup.submit_step_zero(
+            self.sup.workspace_handle, attempt, candidate
         )
+        self.assertEqual("published", step_zero["state"])
         # W1 facade owns publication and receives only the trusted candidate
         # tree plus the fixed Step 0 evidence provider; the supervisor never
         # forwarded Agent-named evidence handles.
@@ -1816,12 +1815,25 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             {k: v for k, v in published.items() if k != "provider"},
         )
         self.assertTrue(callable(published["provider"]))
+        # The Agent-authored selection.json now carries only the closed
+        # semantic claim schema; trusted evidence, considered-step lists,
+        # accepted facts, and preview identities are constructed inside W1
+        # from the opaque Selected Step handle plus canonical workspace
+        # authority.
         selection = self.sup.candidate_root / "selection.json"
-        evidence = self.sup.candidate_root / "evidence.txt"
-        evidence.write_text("evidence", encoding="utf-8")
         selection.write_text(
-            '{"evidence":[{"kind":"preview","path":"evidence.txt","sha256":"%s"}]}\n'
-            % __import__("hashlib").sha256(b"evidence").hexdigest(),
+            json.dumps(
+                {
+                    "schema": "mesh-to-cad.agent-selection-claim/1",
+                    "preview_observation": "Preview matches intent.",
+                    "stop_reason": "cycle_limit",
+                    "conflict": False,
+                    "conflict_details": None,
+                    "rationale": "Only head available under budget.",
+                },
+                sort_keys=True,
+            )
+            + "\n",
             encoding="utf-8",
         )
         notes = self.sup.candidate_root / "notes.md"
@@ -1829,10 +1841,125 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         selection_handle = self.sup.register_selection(selection)
         notes_handle = self.sup.register_notes(notes)
         final = self.sup.select_and_finalize(
-            self.sup.workspace_handle, selection_handle, notes_handle
+            self.sup.workspace_handle,
+            step_zero["step_handle"],
+            selection_handle,
+            notes_handle,
         )
         self.assertEqual("finalized", final["state"])
         self.assertEqual(1, self.workspace.finalize_calls)
+
+    def _prepare_finalize_inputs(self, *, claim: dict) -> tuple[str, str]:
+        selection = self.sup.candidate_root / "selection.json"
+        selection.write_text(json.dumps(claim, sort_keys=True) + "\n", encoding="utf-8")
+        notes = self.sup.candidate_root / "notes.md"
+        notes.write_text("## Input\n", encoding="utf-8")
+        return (
+            self.sup.register_selection(selection),
+            self.sup.register_notes(notes),
+        )
+
+    def _valid_agent_claim(self) -> dict:
+        return {
+            "schema": "mesh-to-cad.agent-selection-claim/1",
+            "preview_observation": "Preview matches intent.",
+            "stop_reason": "cycle_limit",
+            "conflict": False,
+            "conflict_details": None,
+            "rationale": "Only head available under budget.",
+        }
+
+    def test_select_and_finalize_rejects_wrong_kind_or_cross_supervisor_step_handle(
+        self,
+    ) -> None:
+        # Only opaque supervisor-issued step handles are accepted; a
+        # workspace handle in the step slot, a step handle from a foreign
+        # supervisor, and a value with wrong prefix are all refused.
+        attempt, candidate = self._start()
+        self.sup.submit_step_zero(self.sup.workspace_handle, attempt, candidate)
+        selection_handle, notes_handle = self._prepare_finalize_inputs(
+            claim=self._valid_agent_claim()
+        )
+        with self.assertRaises(SupervisorError):
+            self.sup.select_and_finalize(
+                self.sup.workspace_handle,
+                self.sup.workspace_handle,
+                selection_handle,
+                notes_handle,
+            )
+        with self.assertRaises(SupervisorError):
+            self.sup.select_and_finalize(
+                self.sup.workspace_handle,
+                "h:not-a-real-handle",
+                selection_handle,
+                notes_handle,
+            )
+        other = WorkspaceSupervisor(
+            self.workspace_root,
+            candidate_root=self.root / "candidate-cross",
+            staging_dir=self.root / "staging-cross",
+            workspace_api=self.workspace,
+            step_zero_evidence_provider=lambda request: None,
+        )
+        try:
+            other_attempt, other_candidate = (
+                self._start_on(other)
+            )
+            other.submit_step_zero(other.workspace_handle, other_attempt, other_candidate)
+            foreign_step = next(
+                token
+                for token, record in other.registry._records.items()
+                if record.kind == "step"
+            )
+            with self.assertRaises(SupervisorError):
+                self.sup.select_and_finalize(
+                    self.sup.workspace_handle,
+                    foreign_step,
+                    selection_handle,
+                    notes_handle,
+                )
+        finally:
+            other.close()
+
+    def _start_on(self, supervisor: WorkspaceSupervisor) -> tuple[str, str]:
+        plan = supervisor.candidate_root / "plan.json"
+        plan.write_text("{}", encoding="utf-8")
+        plan_handle = supervisor.register_plan(plan)
+        result = supervisor.start_attempt(supervisor.workspace_handle, plan_handle, None)
+        return result["attempt_handle"], result["candidate_handle"]
+
+    def test_select_and_finalize_forwards_step_and_claim_paths_to_w1_only(
+        self,
+    ) -> None:
+        # The supervisor never touches workspace authority; it forwards the
+        # resolved Selected Step ordinal plus the Agent-authored claim and
+        # notes handles unchanged, and W1 receives no numeric step from
+        # the Agent surface itself.
+        attempt, candidate = self._start()
+        step_zero = self.sup.submit_step_zero(
+            self.sup.workspace_handle, attempt, candidate
+        )
+        selection_handle, notes_handle = self._prepare_finalize_inputs(
+            claim=self._valid_agent_claim()
+        )
+        observed: dict = {}
+        original = self.workspace.finalize_from_agent_selection_claim
+
+        def spy(_workspace, **kwargs):
+            observed.update(kwargs)
+            return original(_workspace, **kwargs)
+
+        self.workspace.finalize_from_agent_selection_claim = spy  # type: ignore[assignment]
+        result = self.sup.select_and_finalize(
+            self.sup.workspace_handle,
+            step_zero["step_handle"],
+            selection_handle,
+            notes_handle,
+        )
+        self.assertEqual("finalized", result["state"])
+        self.assertEqual(0, observed["selected_step"])
+        self.assertEqual("selection.json", observed["selection"])
+        self.assertEqual("notes.md", observed["notes"])
 
     def test_submit_intents_return_closed_w1_decision_facts(self) -> None:
         # submit_step_zero returns the bounded decision facts the W1 facade
@@ -2805,42 +2932,24 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 step = json.loads(
                     (case.workspace / "steps/000000/step.json").read_text()
                 )
-                preview_document = json.loads(
-                    (case.workspace / "steps/000000/preview/preview.json").read_text()
-                )
-                evidence = supervisor.candidate_root / "evidence.json"
-                evidence.write_bytes(
-                    (case.workspace / "steps/000000/measurement.json").read_bytes()
-                )
-                evidence_sha = hashlib.sha256(evidence.read_bytes()).hexdigest()
                 selection = supervisor.candidate_root / "selection.json"
                 selection.write_text(
                     json.dumps(
                         {
-                            "schema": "mesh-to-cad.final-selection/1",
-                            "considered_steps": [0],
-                            "selected_step": 0,
-                            "preview": {
-                                "identity_sha256": preview_document[
-                                    "preview_identity_sha256"
-                                ],
-                                "observation": "The final preview was inspected.",
-                                "evidence_conflict": False,
-                                "conflict_details": None,
-                            },
-                            "accepted": step["accepted"],
+                            "schema": "mesh-to-cad.agent-selection-claim/1",
+                            "preview_observation": (
+                                "The final preview was inspected."
+                            ),
                             "stop_reason": (
                                 "acceptance_satisfied"
                                 if step["accepted"]
                                 else "cycle_limit"
                             ),
-                            "evidence": [
-                                {
-                                    "kind": "measurement",
-                                    "path": "evidence.json",
-                                    "sha256": evidence_sha,
-                                }
-                            ],
+                            "conflict": False,
+                            "conflict_details": None,
+                            "rationale": (
+                                "Sole selectable head after Step 0 publication."
+                            ),
                         },
                         sort_keys=True,
                     )
@@ -2870,6 +2979,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     "select_and_finalize",
                     {
                         "workspace_handle": supervisor.workspace_handle,
+                        "step_handle": published["step_handle"],
                         "selection_handle": selection_handle,
                         "notes_handle": notes_handle,
                     },
