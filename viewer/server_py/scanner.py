@@ -154,10 +154,18 @@ def scan_relative_path(root_path: str, file_path: str) -> str:
 
 
 def path_is_inside(file_path: str, root_path: str) -> bool:
-    # Real paths, not lexical ones: a symlink inside the root that points outside
-    # (or a symlinked model folder escaping the root) must not smuggle files past
-    # containment. macOS's /var -> /private/var compares clean because BOTH sides
-    # resolve to the same real directory.
+    # Real paths exist here for ALIAS EQUALITY, never refusal: macOS's /var ->
+    # /private/var (and symlinked model folders) must compare as inside, so a path
+    # is contained when EITHER its lexical or its resolved location stays inside
+    # the root. Symlinked model directories are a feature -- the develop checkout
+    # itself runs a symlink layout, and pointing a link at a shared parts library
+    # outside the folder is a normal way to bring external content in. A link out
+    # of the open directory grants no reach the URL did not already grant: the
+    # viewer opens any absolute directory named in the page URL.
+    file_abs = os.path.abspath(file_path)
+    root_abs = os.path.abspath(root_path)
+    if relative_path_stays_inside_root(os.path.relpath(file_abs, root_abs)):
+        return True
     return relative_path_stays_inside_root(
         os.path.relpath(os.path.realpath(file_path), os.path.realpath(root_path))
     )
@@ -266,16 +274,9 @@ def _collect_cad_source_files(root_path: str, result: list, visited: set | None 
         entry_path = os.path.join(root_path, entry.name)
         if entry.is_dir():
             if not _should_skip_directory(entry.name):
-                try:
-                    real_dir = os.path.realpath(entry_path)
-                except OSError:
-                    continue
-                # A directory symlink that ESCAPES the served root is never scanned:
-                # its files would be denied at serve time by the backend's real-path
-                # containment, so listing them in the catalog is worse than omitting
-                # them. A symlink that stays inside the root scans normally.
-                if real_dir == real_root or relative_path_stays_inside_root(os.path.relpath(real_dir, real_root)):
-                    _collect_cad_source_files(entry_path, result, visited=visited, depth=depth + 1)
+                # Directory symlinks are followed on purpose: symlinked model folders
+                # are how external content (a shared parts library) joins a workspace.
+                _collect_cad_source_files(entry_path, result, visited=visited, depth=depth + 1)
             continue
         if not entry.is_file():
             continue

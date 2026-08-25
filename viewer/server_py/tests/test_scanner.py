@@ -131,19 +131,25 @@ class ScannerPathTests(unittest.TestCase):
         self.assertFalse(scanner.path_is_inside("/a/x.step", "/a/b"))
         self.assertTrue(scanner.path_is_inside("/a/b", "/a/b"))
 
-    def test_path_is_inside_resolves_symlinks_before_containment(self):
+    def test_path_is_inside_never_refuses_a_lexically_contained_link(self):
+        # realpath exists for ALIAS EQUALITY, never refusal: a link inside the root
+        # is contained even when its target lives elsewhere (symlinked model folders
+        # are a feature), and macOS's /var vs /private/var compares equal.
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            outside_dir = pathlib.Path(tempfile.gettempdir()) / "scan-escape-target"
+            outside_dir = pathlib.Path(tempfile.gettempdir()) / "scan-alias-target"
             outside_dir.mkdir(exist_ok=True)
             try:
-                link = root / "escape"
+                link = root / "library"
                 link.symlink_to(outside_dir, target_is_directory=True)
             except OSError:
                 self.skipTest("symlinks unavailable")
             try:
-                self.assertFalse(scanner.path_is_inside(str(link / "part.step"), tmp))
+                self.assertTrue(scanner.path_is_inside(str(link / "part.step"), tmp))
                 self.assertTrue(scanner.path_is_inside(str(root / "part.step"), tmp))
+                # Alias equality: the same directory by either spelling.
+                self.assertTrue(scanner.path_is_inside(str(outside_dir / "part.step"), str(outside_dir)))
+                self.assertFalse(scanner.path_is_inside(str(outside_dir / "part.step"), tmp))
             finally:
                 with contextlib.suppress(OSError):
                     outside_dir.rmdir()
@@ -159,19 +165,21 @@ class ScannerPathTests(unittest.TestCase):
             raw = scanner.scan_cad_directory(str(root), include_artifact_status=False)
             self.assertEqual({entry["file"] for entry in raw["entries"]}, {"part.step"})
 
-    def test_directory_symlink_escaping_the_root_is_not_scanned(self):
+    def test_directory_symlink_pointing_outside_the_root_is_scanned(self):
+        # Symlinked model folders are a feature: a link to content elsewhere joins
+        # the catalog like any other subfolder. Only loops are guarded (visited set).
         with tempfile.TemporaryDirectory() as tmp:
             root = pathlib.Path(tmp)
-            outside_dir = pathlib.Path(tempfile.gettempdir()) / "scan-skip-escape"
+            outside_dir = pathlib.Path(tempfile.gettempdir()) / "scan-include-link"
             outside_dir.mkdir(exist_ok=True)
-            (outside_dir / "leak.step").write_text("leak", encoding="utf-8")
+            (outside_dir / "linked.step").write_text("linked", encoding="utf-8")
             try:
                 (root / "link").symlink_to(outside_dir, target_is_directory=True)
             except OSError:
                 self.skipTest("symlinks unavailable")
             try:
                 raw = scanner.scan_cad_directory(str(root), include_artifact_status=False)
-                self.assertEqual({entry["file"] for entry in raw["entries"]}, set())
+                self.assertIn("link/linked.step", {entry["file"] for entry in raw["entries"]})
             finally:
                 with contextlib.suppress(OSError):
                     outside_dir.rmdir()

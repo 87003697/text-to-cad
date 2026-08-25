@@ -104,7 +104,11 @@ class ServerRouteSecurityTest(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(json.loads(body)["error"], "Not found")
 
-    def test_symlinked_file_escaping_the_root_is_forbidden(self):
+    def test_symlinked_file_pointing_outside_the_root_still_serves(self):
+        # Symlinked model content is a feature: a link inside the open directory is
+        # contained LEXICALLY and serves even when its target lives elsewhere. The
+        # viewer opens any absolute directory named in the URL, so a link out of the
+        # root grants no reach a direct request did not already have.
         outside = pathlib.Path(tempfile.gettempdir()) / "escape-target.step"
         outside.write_text("escape", encoding="utf-8")
         try:
@@ -113,11 +117,9 @@ class ServerRouteSecurityTest(unittest.TestCase):
         except OSError:
             self.skipTest("symlinks unavailable")
         try:
-            # Real-path containment: the link's target is outside the root, so even
-            # though the request path is lexically inside it, serving is denied.
             status, _, body = _request("GET", self.port, self._assets_url(link, self.root))
-            self.assertEqual(status, 403)
-            self.assertEqual(json.loads(body)["error"], "Forbidden")
+            self.assertEqual(status, 200)
+            self.assertEqual(body, b"escape")
         finally:
             with contextlib.suppress(OSError):
                 outside.unlink()
