@@ -966,6 +966,62 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         )
         self.assertIn(["--ro-bind", os.fspath(runtime), "/runtime"], triples)
 
+    def test_runtime_import_failure_names_only_the_fixed_module(self) -> None:
+        from scripts.pilot import candidate_runtime as runtime_module
+
+        runtime = self.root / "diagnostic-runtime"
+        (runtime / "bin").mkdir(parents=True)
+        (runtime / "bin/python").write_bytes(b"python")
+        (runtime / "lib/python3.12/site-packages").mkdir(parents=True)
+        secret = "/home/build-user/private/libcad.so"
+
+        for failed in runtime_module.CAD_RUNTIME_IMPORTS:
+            with self.subTest(failed=failed):
+                def result(argv, **_kwargs):
+                    module = argv[2].removeprefix("import ")
+                    return subprocess.CompletedProcess(
+                        argv,
+                        1 if module == failed else 0,
+                        stdout=b"",
+                        stderr=f"loader error: {secret}".encode(),
+                    )
+
+                with mock.patch.object(runtime_module.subprocess, "run", side_effect=result):
+                    with self.assertRaises(runtime_module.CandidateRuntimeError) as caught:
+                        runtime_module.validate_candidate_runtime(runtime)
+                self.assertEqual(
+                    f"candidate_runtime_import_failed:{failed}", str(caught.exception)
+                )
+                self.assertNotIn(secret, str(caught.exception))
+                self.assertNotIn("loader error", str(caught.exception))
+
+    def test_runtime_fixed_import_validation_preserves_success(self) -> None:
+        from scripts.pilot import candidate_runtime as runtime_module
+
+        runtime = self.root / "successful-runtime"
+        (runtime / "bin").mkdir(parents=True)
+        (runtime / "bin/python").write_bytes(b"python")
+        (runtime / "lib/python3.12/site-packages").mkdir(parents=True)
+        completed = subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
+        with mock.patch.object(
+            runtime_module.subprocess, "run", return_value=completed
+        ) as run:
+            runtime_module.validate_candidate_runtime(runtime)
+        self.assertEqual(len(runtime_module.CAD_RUNTIME_IMPORTS), run.call_count)
+        self.assertEqual(
+            [f"import {name}" for name in runtime_module.CAD_RUNTIME_IMPORTS],
+            [call.args[0][2] for call in run.call_args_list],
+        )
+        failed = subprocess.CompletedProcess([], 1, stdout=b"", stderr=b"host path")
+        with mock.patch.object(runtime_module.subprocess, "run", return_value=failed):
+            with self.assertRaisesRegex(
+                runtime_module.CandidateRuntimeError,
+                "^candidate_runtime_import_failed$",
+            ):
+                runtime_module.validate_candidate_runtime(
+                    runtime, required_imports=("custom_module",)
+                )
+
     def test_materialized_uv_runtime_view_filters_hostile_metadata_and_symlinks(self) -> None:
         from scripts.pilot import runner
         from scripts.pilot import candidate_runtime as runtime_module

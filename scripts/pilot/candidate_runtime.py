@@ -1890,27 +1890,34 @@ def validate_candidate_runtime(
     if not versions:
         raise CandidateRuntimeError("candidate_runtime_stdlib_unavailable")
     site = Path(runtime) / "lib" / versions[0] / "site-packages"
-    script = "import " + ", ".join(modules) if modules else "import os"
-    try:
-        completed = subprocess.run(
-            [os.fspath(python), "-c", script],
-            cwd=runtime,
-            env={
-                "PATH": "/runtime/bin",
-                "PYTHONHOME": os.fspath(runtime),
-                "PYTHONPATH": os.fspath(site),
-                "PYTHONNOUSERSITE": "1",
-                "PYTHONDONTWRITEBYTECODE": "1",
-                "LC_ALL": "C",
-            },
-            capture_output=True,
-            check=False,
-            timeout=120,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise CandidateRuntimeError("candidate_runtime_import_failed") from exc
-    if completed.returncode != 0:
-        raise CandidateRuntimeError("candidate_runtime_import_failed")
+    checks: tuple[tuple[str | None, str], ...]
+    if modules == CAD_RUNTIME_IMPORTS:
+        checks = tuple((module, f"import {module}") for module in modules)
+    else:
+        checks = ((None, "import " + ", ".join(modules) if modules else "import os"),)
+    environment = {
+        "PATH": "/runtime/bin",
+        "PYTHONHOME": os.fspath(runtime),
+        "PYTHONPATH": os.fspath(site),
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "LC_ALL": "C",
+    }
+    for module, script in checks:
+        try:
+            completed = subprocess.run(
+                [os.fspath(python), "-c", script],
+                cwd=runtime,
+                env=environment,
+                capture_output=True,
+                check=False,
+                timeout=120,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise CandidateRuntimeError("candidate_runtime_import_failed") from exc
+        if completed.returncode != 0:
+            suffix = f":{module}" if module is not None else ""
+            raise CandidateRuntimeError(f"candidate_runtime_import_failed{suffix}")
 
 
 __all__ = ["CandidateRuntimeError"]
