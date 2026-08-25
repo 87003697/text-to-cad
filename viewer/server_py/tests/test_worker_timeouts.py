@@ -102,26 +102,36 @@ class WorkerIdleWatchdogTests(unittest.TestCase):
 
     def test_worker_stderr_drain_keeps_activity_fresh(self):
         # The drainer is what feeds the watchdog: every narrated line must move the
-        # activity stamp forward.
+        # activity stamp forward. The producer is a real subprocess so the drain runs
+        # against the same kind of pipe it sees in production.
         worker = worker_client.CadWorker()
-        read_end, write_end = os.pipe()
+        proc = worker_client.subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                "import sys, time\n"
+                "time.sleep(0.1)\n"
+                "sys.stderr.write('phase: meshing\\n'); sys.stderr.flush()\n"
+                "time.sleep(5)\n",
+            ],
+            stdout=worker_client.subprocess.DEVNULL,
+            stderr=worker_client.subprocess.PIPE,
+            stdin=worker_client.subprocess.DEVNULL,
+            text=True,
+        )
         try:
             before = worker._last_worker_activity
-            read_stream = os.fdopen(read_end, "r")
-            worker._start_stderr_drain(read_stream)
-            os.write(write_end, b"phase: meshing\n")
-            deadline = time.monotonic() + 2
+            worker._start_stderr_drain(proc.stderr)
+            deadline = time.monotonic() + 3
             while worker._last_worker_activity == before and time.monotonic() < deadline:
                 time.sleep(0.01)
             self.assertGreater(worker._last_worker_activity, before)
         finally:
-            os.close(write_end)
-            # The drainer exits on EOF; give it a moment before closing the read end.
-            time.sleep(0.05)
-            try:
-                os.close(read_end)
-            except OSError:
-                pass
+            if proc.poll() is None:
+                proc.kill()
+            if proc.stderr:
+                proc.stderr.close()
+            proc.wait()
 
 
 class ColdProcessIdleWatchdogTests(unittest.TestCase):
