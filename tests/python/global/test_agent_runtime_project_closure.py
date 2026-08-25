@@ -630,6 +630,9 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
         epoch = copy.deepcopy(builds)
         epoch[0]["sourceDateEpoch"] = 1
         mutations.append((epoch, "record shape"))
+        source = copy.deepcopy(builds)
+        source[0]["source"]["files"][0]["sha256"] = "0" * 64
+        mutations.append((source, "file manifest path or digest"))
         wheel = copy.deepcopy(builds)
         wheel[0]["wheel"]["sha256"] = "sha256:" + "0" * 64
         mutations.append((wheel, "wheel identity"))
@@ -639,11 +642,15 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
         duplicate = copy.deepcopy(builds)
         duplicate = (duplicate[0], duplicate[0], duplicate[2])
         mutations.append((duplicate, "not reproducibly cross-bound"))
-        # The immutable build records predate ReferenceCapability. Bypass only
-        # that already-covered stale-source check so each mutation reaches the
-        # build invariant it claims to exercise.
+        # The immutable build records predate ReferenceCapability. Freeze only
+        # their historical file names; the real source-record validator still
+        # checks shape, file digests, and the manifest digest.
         with (
-            mock.patch.object(closure, "_validate_meshscope_source_record"),
+            mock.patch.object(
+                closure,
+                "_MESHSCOPE_SOURCE_FILES",
+                tuple(record["path"] for record in builds[0]["source"]["files"]),
+            ),
             mock.patch.object(
                 closure, "_MESHSCOPE_WHEEL_FILES", tuple(audit["files"])
             ),
@@ -730,11 +737,15 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
             )
             conformance_mutations.append((path, attacked, reason))
 
-        # Freeze only the two obsolete inventory checks. The build, audit, and
-        # conformance records otherwise pass their original validators, so the
-        # mutations below reach their named invariant.
+        # Freeze only the two obsolete file-name inventories. The real source
+        # validator and every other check remain active, so the mutations below
+        # reach their named invariant.
         with (
-            mock.patch.object(closure, "_validate_meshscope_source_record"),
+            mock.patch.object(
+                closure,
+                "_MESHSCOPE_SOURCE_FILES",
+                tuple(record["path"] for record in builds[0]["source"]["files"]),
+            ),
             mock.patch.object(
                 closure, "_MESHSCOPE_WHEEL_FILES", tuple(audit["files"])
             ),
