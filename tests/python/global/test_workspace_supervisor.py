@@ -2656,9 +2656,6 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 case.root / "candidate-runtime",
                 repo_root=repo_root,
             )
-            builder_bundle_lease = runner.materialize_canonical_build_bundle(
-                repo_root, case.root / "builder-bundle-cache"
-            )
             from scripts.pilot.step_zero_evidence import (
                 real_step_zero_evidence_provider,
             )
@@ -2688,7 +2685,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 geometry_entrypoint=runner.GEOMETRY_ENTRYPOINT,
                 tool_registry=registry,
                 candidate_runtime=candidate_runtime,
-                builder_bundle=builder_bundle_lease,
+                trusted_tools_root=repo_root,
                 step_zero_evidence_provider=counted_step_zero,
                 repair_evidence_provider=counted_repair,
             )

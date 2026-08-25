@@ -689,6 +689,83 @@ def run_installed_registered_build(
     }
 
 
+def run_installed_evidence_provider_probe(
+    installed_root: Path,
+    source_root: Path,
+    *,
+    python_executable: Path,
+    timeout_seconds: float = 180.0,
+) -> dict[str, Any]:
+    """Import and enter both real providers from the installed tool subset."""
+
+    env = sanitize_env_for_installed_run(
+        installed_root, source_root, python_executable=python_executable
+    )
+    probe = r'''
+import json
+import sys
+import tempfile
+from pathlib import Path
+
+installed = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(installed / "scripts/pilot"))
+from step_zero_evidence import StepZeroEvidenceError, StepZeroEvidenceRequest, real_step_zero_evidence_provider
+from repair_evidence import RepairEvidenceError, RepairEvidenceRequest, real_repair_evidence_provider
+
+with tempfile.TemporaryDirectory() as text:
+    root = Path(text)
+    for name in ("reference", "step-vox", "step-preview", "parent-vox", "parent-source",
+                 "candidate-source", "repair-vox", "repair-preview", "region", "changes"):
+        (root / name).mkdir()
+    failures = {}
+    try:
+        real_step_zero_evidence_provider(StepZeroEvidenceRequest(
+            root / "reference", root / "missing.glb", root / "step-vox",
+            root / "step-preview", {"name": "unused", "sha256": "0" * 64},
+        ))
+    except StepZeroEvidenceError as exc:
+        failures["step_zero"] = exc.classification
+    try:
+        real_repair_evidence_provider(RepairEvidenceRequest(
+            root / "reference", root / "missing.glb", root / "candidate-source",
+            root / "parent-vox", root / "parent-source", root / "repair-vox",
+            root / "repair-preview", root / "region", root / "changes", {},
+            {"name": "unused", "sha256": "0" * 64}, 0, 1, "1" * 64, "2" * 64,
+        ))
+    except RepairEvidenceError as exc:
+        failures["repair"] = exc.classification
+    if failures != {"step_zero": "measurement_failed", "repair": "measurement_failed"}:
+        raise SystemExit(f"unexpected provider probe result: {failures!r}")
+    import meshscope
+    import meshshot
+    print(json.dumps({
+        "failures": failures,
+        "meshscope": str(Path(meshscope.__file__).resolve()),
+        "meshshot": str(Path(meshshot.__file__).resolve()),
+    }, sort_keys=True))
+'''
+    with tempfile.TemporaryDirectory(prefix="installed-provider-probe-") as text:
+        result = _run_checked(
+            [str(python_executable), "-I", "-c", probe, str(installed_root)],
+            cwd=Path(text),
+            env=env,
+            label="installed evidence provider probe",
+            timeout_seconds=timeout_seconds,
+        )
+    value = json.loads(result.stdout.strip().splitlines()[-1])
+    for package, relative in (
+        ("meshscope", "skills/mesh-compare/scripts/packages/meshscope"),
+        ("meshshot", "skills/mesh-compare/scripts/packages/meshshot"),
+    ):
+        try:
+            Path(value[package]).resolve().relative_to(
+                (installed_root / relative).resolve()
+            )
+        except (KeyError, ValueError) as exc:
+            raise SmokeError(f"installed {package} resolved outside shipped tools") from exc
+    return value
+
+
 def _write_json_document(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -987,6 +1064,9 @@ def _install_verify(
             Path(python_temp) / "venv",
         )
         registered_probe = run_installed_registered_build(
+            installed_root, source_root, python_executable=isolated_python
+        )
+        registered_probe["evidence_providers"] = run_installed_evidence_provider_probe(
             installed_root, source_root, python_executable=isolated_python
         )
         registered_probe["python_environment"] = python_audit

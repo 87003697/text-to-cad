@@ -23,6 +23,7 @@ Browser Runtime remains the gate for a real production claim.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import importlib
 from pathlib import Path
 import sys
 from typing import Any, Callable, Mapping, Protocol
@@ -64,41 +65,35 @@ class StepZeroEvidenceProvider(Protocol):
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_MESHSCOPE_SRC = _REPO_ROOT / "packages/meshscope/src"
-_MESHSHOT_SRC = _REPO_ROOT / "packages/meshshot/src"
+_SHIPPED_PACKAGES = _REPO_ROOT / "skills/mesh-compare/scripts/packages"
+_MESHSCOPE_SRC = _SHIPPED_PACKAGES / "meshscope/src"
+_MESHSHOT_SRC = _SHIPPED_PACKAGES / "meshshot/src"
 
 
 def _ensure_shipped_package(package_root: Path, package_name: str) -> Path:
-    """Add a shipped package source root to :data:`sys.path` fail-closed.
+    """Import one package from its fixed vendored skill runtime."""
 
-    Resolution is explicit: first attempt an ordinary import (which
-    succeeds when the pilot is running from the installed layout that
-    already has the package on ``sys.path``), and otherwise verify that
-    the source-checkout layout exists at the exact repo-relative
-    location the pilot ships from.  A missing package raises
-    :class:`StepZeroEvidenceError` — the provider never silently falls
-    back to an arbitrary checkout path.
-    """
-
-    try:
-        __import__(package_name)
-        return package_root
-    except ImportError:
-        pass
     if not (package_root / package_name / "__init__.py").is_file():
         raise StepZeroEvidenceError(
             "provider_dependency_missing",
-            f"{package_name} package is not importable and its source root "
-            f"is missing at {package_root}",
+            f"{package_name} is missing from the shipped tool subset",
         )
     if str(package_root) not in sys.path:
         sys.path.insert(0, str(package_root))
     try:
-        __import__(package_name)
+        package = importlib.import_module(package_name)
     except ImportError as error:
         raise StepZeroEvidenceError(
             "provider_dependency_missing",
-            f"{package_name} source root exists but the module is not importable: {error}",
+            f"{package_name} is not importable from the shipped tool subset: {error}",
+        ) from error
+    origin = getattr(package, "__file__", None)
+    try:
+        Path(origin).resolve().relative_to(package_root.resolve())
+    except (TypeError, ValueError) as error:
+        raise StepZeroEvidenceError(
+            "provider_dependency_missing",
+            f"{package_name} resolved outside the shipped tool subset",
         ) from error
     return package_root
 

@@ -1,7 +1,7 @@
 """Tests for the trusted canonical-build execution path in WorkspaceSupervisor.
 
-These tests exercise the new capability-bundle execution: the fixed
-trusted argv against a mounted ``/builder`` bundle, the fresh
+These tests exercise trusted candidate execution: the fixed argv against the
+four-file-root shipped manifest and read-only ``/builder`` mounts, the fresh
 tool-owned candidate-relative output directory, the pre-run and
 post-run publication of ``candidate.glb``, and the failure hygiene
 that removes partial output and rejects source/output tampering.
@@ -24,9 +24,6 @@ import subprocess
 import tempfile
 import unittest
 
-from scripts.pilot.canonical_build_bundle import (
-    materialize_canonical_build_bundle,
-)
 from scripts.pilot.workspace_supervisor import (
     CANDIDATE_PUBLISHED_MEASUREMENT_NAME,
     SupervisorError,
@@ -119,15 +116,12 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
         self.workspace_root = self.root / "workspace"
         self.workspace_root.mkdir()
         self.workspace = _Workspace(self.workspace_root)
-        self.bundle_lease = materialize_canonical_build_bundle(
-            REPO_ROOT, self.root / "builder-bundle-cache"
-        )
         self.sup = WorkspaceSupervisor(
             self.workspace_root,
             candidate_root=self.root / "candidate",
             staging_dir=self.root / "staging",
             workspace_api=self.workspace,
-            builder_bundle=self.bundle_lease,
+            trusted_tools_root=REPO_ROOT,
         )
 
     def tearDown(self) -> None:
@@ -384,7 +378,7 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
             )
         self.assertEqual("budget_violation", raised.exception.classification)
 
-    def test_sandbox_argv_mounts_builder_bundle_read_only(self) -> None:
+    def test_sandbox_argv_mounts_only_fixed_builder_paths_read_only(self) -> None:
         from scripts.pilot import workspace_supervisor as supervisor_module
         from unittest import mock
 
@@ -398,13 +392,20 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
                 operation,
                 self.sup.candidate_root,
                 self.root / "fake-runtime",
-                builder_bundle=self.bundle_lease.path,
+                canonical_build_root=self.sup.canonical_build_root,
+                cadgen_runtime_root=self.sup.cadgen_runtime_root,
             )
-        # Builder is mounted read-only at /builder.
-        self.assertIn("--ro-bind", argv)
-        idx = argv.index(os.fspath(self.bundle_lease.path))
-        self.assertEqual("--ro-bind", argv[idx - 1])
-        self.assertEqual("/builder", argv[idx + 1])
+        canonical_index = argv.index(os.fspath(self.sup.canonical_build_root))
+        cadgen_index = argv.index(os.fspath(self.sup.cadgen_runtime_root))
+        self.assertEqual(
+            ["--ro-bind", os.fspath(self.sup.canonical_build_root), "/builder/canonical-build"],
+            argv[canonical_index - 1 : canonical_index + 2],
+        )
+        self.assertEqual(
+            ["--ro-bind", os.fspath(self.sup.cadgen_runtime_root), "/builder/packages/cadgen"],
+            argv[cadgen_index - 1 : cadgen_index + 2],
+        )
+        self.assertNotIn(os.fspath(REPO_ROOT), argv)
 
 
 if __name__ == "__main__":

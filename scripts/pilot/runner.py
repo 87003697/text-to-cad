@@ -120,21 +120,6 @@ except ModuleNotFoundError as exc:
         validate_candidate_runtime,
     )
 
-try:
-    from scripts.pilot.canonical_build_bundle import (
-        CanonicalBuildBundleError,
-        CanonicalBuildBundleLease,
-        materialize_canonical_build_bundle,
-    )
-except ModuleNotFoundError as exc:
-    if exc.name != "scripts":
-        raise
-    from canonical_build_bundle import (  # type: ignore[no-redef]
-        CanonicalBuildBundleError,
-        CanonicalBuildBundleLease,
-        materialize_canonical_build_bundle,
-    )
-
 sys.path.insert(
     0,
     os.fspath(
@@ -1948,7 +1933,6 @@ def run_pilot(
     agent_bridge: AgentSurfaceBridge | None = None
     candidate_runtime: Path | None = None
     candidate_runtime_lease: CandidateRuntimeLease | None = None
-    builder_bundle_lease: CanonicalBuildBundleLease | None = None
     lifetime_confirmed = True
     agent_socket: Path | None = None
     with SignalRelay() as relay:
@@ -1978,13 +1962,6 @@ def run_pilot(
                     candidate_runtime = candidate_runtime_lease.runtime
                 except CandidateRuntimeError as exc:
                     raise PilotError(str(exc)) from exc
-                builder_cache = REPO_ROOT / ".cache" / "mesh-to-cad-canonical-build-bundle"
-                try:
-                    builder_bundle_lease = materialize_canonical_build_bundle(
-                        REPO_ROOT, builder_cache
-                    )
-                except CanonicalBuildBundleError as exc:
-                    raise PilotError(str(exc)) from exc
                 agent_supervisor = WorkspaceSupervisor(
                     exp_dir,
                     bind_reference=True,
@@ -1993,7 +1970,7 @@ def run_pilot(
                     geometry_entrypoint=GEOMETRY_ENTRYPOINT,
                     tool_registry=tool_registry,
                     candidate_runtime=candidate_runtime,
-                    builder_bundle=builder_bundle_lease,
+                    trusted_tools_root=REPO_ROOT,
                     step_zero_evidence_provider=real_step_zero_evidence_provider,
                     repair_evidence_provider=real_repair_evidence_provider,
                 )

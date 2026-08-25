@@ -123,6 +123,12 @@ fi
 python3 "$TREE_ROOT/scripts/pilot/agent_source_projection.py" verify \
   --target "$TREE_ROOT/.claude/agent-source-projection"
 
+# The candidate sandbox and evidence providers use four fixed vendored roots.
+# Check their exact inventory after development symlinks have been materialized
+# and repo-root packages/ has been removed.
+python3 "$TREE_ROOT/scripts/pilot/trusted_tools.py" \
+  --repo-root "$TREE_ROOT" --check
+
 # Provider installers each treat symlinks differently and Codex silently drops
 # them (see scripts/github-workflows/check-builds.sh for the full explanation).
 # A symlink surviving into the publish tree ships a broken skill to every

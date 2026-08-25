@@ -31,20 +31,20 @@ from types import ModuleType
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
 try:
-    from scripts.pilot.canonical_build_bundle import (  # type: ignore[import-not-found]
-        BUILDER_TOOL_ENTRYPOINT,
-        CanonicalBuildBundleError,
-        CanonicalBuildBundleLease,
-        validate_canonical_build_bundle,
+    from scripts.pilot.trusted_tools import (  # type: ignore[import-not-found]
+        CADGEN_RUNTIME_RELATIVE,
+        CANONICAL_BUILD_RELATIVE,
+        TrustedToolsError,
+        validate_trusted_tools,
     )
 except ModuleNotFoundError as _exc:  # pragma: no cover - direct-execution fallback
     if _exc.name not in {"scripts", "scripts.pilot"}:
         raise
-    from canonical_build_bundle import (  # type: ignore[no-redef]
-        BUILDER_TOOL_ENTRYPOINT,
-        CanonicalBuildBundleError,
-        CanonicalBuildBundleLease,
-        validate_canonical_build_bundle,
+    from trusted_tools import (  # type: ignore[no-redef]
+        CADGEN_RUNTIME_RELATIVE,
+        CANONICAL_BUILD_RELATIVE,
+        TrustedToolsError,
+        validate_trusted_tools,
     )
 
 
@@ -72,6 +72,7 @@ _CANONICAL_BUILD_SCHEMA = "mesh-to-cad.build/1"
 _CANONICAL_RECIPE_SCHEMA = "mesh-to-cad.rebuild-recipe/1"
 _CANONICAL_ADAPTER_ID = "cad.canonical-build/1"
 _BUILDER_INTERNAL_PATH = PurePosixPath("/builder")
+_BUILDER_TOOL_ENTRYPOINT = PurePosixPath("canonical-build")
 _SOURCE_INTERNAL_ROOT = PurePosixPath("source")
 _SOURCE_MODULE_NAME = "model.py"
 MAX_DECLARED_SIDECARS = 32
@@ -569,7 +570,8 @@ def _candidate_sandbox_argv(
     operation: _CandidateOperation,
     candidate_root: Path,
     runtime_dir: Path,
-    builder_bundle: Path | None = None,
+    canonical_build_root: Path | None = None,
+    cadgen_runtime_root: Path | None = None,
 ) -> list[str]:
     """Run one registered operation in a minimal Linux candidate mount."""
 
@@ -605,8 +607,21 @@ def _candidate_sandbox_argv(
         "usr/lib64",
         "/lib64",
     ]
-    if builder_bundle is not None:
-        argv.extend(("--ro-bind", os.fspath(builder_bundle), str(_BUILDER_INTERNAL_PATH)))
+    if canonical_build_root is not None and cadgen_runtime_root is not None:
+        argv.extend(
+            (
+                "--dir",
+                str(_BUILDER_INTERNAL_PATH),
+                "--dir",
+                str(_BUILDER_INTERNAL_PATH / "packages"),
+                "--ro-bind",
+                os.fspath(canonical_build_root),
+                str(_BUILDER_INTERNAL_PATH / "canonical-build"),
+                "--ro-bind",
+                os.fspath(cadgen_runtime_root),
+                str(_BUILDER_INTERNAL_PATH / "packages/cadgen"),
+            )
+        )
     for path in _CANDIDATE_SYSTEM_MOUNTS:
         if Path(path).exists():
             argv.extend(("--ro-bind", path, path))
@@ -642,7 +657,7 @@ class WorkspaceSupervisor:
         geometry_entrypoint: Path | None = None,
         tool_registry: Path | None = None,
         candidate_runtime: Path | None = None,
-        builder_bundle: Path | CanonicalBuildBundleLease | None = None,
+        trusted_tools_root: Path | None = None,
         step_zero_evidence_provider: Callable[..., Any] | None = None,
         repair_evidence_provider: Callable[..., Any] | None = None,
     ) -> None:
@@ -720,34 +735,23 @@ class WorkspaceSupervisor:
                 except ValueError as exc:
                     raise SupervisorError("candidate_runtime_unavailable") from exc
                 self.candidate_runtime = runtime
-            self.builder_bundle: Path | None = None
-            self.builder_bundle_identity: str | None = None
-            if builder_bundle is not None:
-                if isinstance(builder_bundle, CanonicalBuildBundleLease):
-                    bundle_path = Path(builder_bundle.path)
-                    provided_identity: str | None = builder_bundle.identity
-                else:
-                    bundle_path = Path(builder_bundle)
-                    provided_identity = None
-                if bundle_path.is_symlink() or not bundle_path.is_dir():
-                    raise SupervisorError("builder_bundle_unavailable")
-                bundle_path = bundle_path.resolve()
+            self.canonical_build_root: Path | None = None
+            self.cadgen_runtime_root: Path | None = None
+            if trusted_tools_root is not None:
+                tool_root = Path(trusted_tools_root).resolve()
                 try:
-                    bundle_path.relative_to(self.workspace)
+                    validate_trusted_tools(tool_root)
+                except TrustedToolsError as exc:
+                    raise SupervisorError("trusted_tools_unavailable") from exc
+                canonical_build_root = (tool_root / CANONICAL_BUILD_RELATIVE).resolve()
+                cadgen_runtime_root = (tool_root / CADGEN_RUNTIME_RELATIVE).resolve()
+                try:
+                    canonical_build_root.relative_to(self.workspace)
+                    raise SupervisorError("trusted_tools_unavailable")
                 except ValueError:
                     pass
-                else:
-                    raise SupervisorError("builder_bundle_unavailable")
-                if bundle_path.stat().st_mode & 0o222:
-                    raise SupervisorError("builder_bundle_unavailable")
-                try:
-                    identity = validate_canonical_build_bundle(
-                        bundle_path, provided_identity
-                    )
-                except CanonicalBuildBundleError as exc:
-                    raise SupervisorError("builder_bundle_unavailable") from exc
-                self.builder_bundle = bundle_path
-                self.builder_bundle_identity = identity
+                self.canonical_build_root = canonical_build_root
+                self.cadgen_runtime_root = cadgen_runtime_root
             self._attempts: dict[int, _AttemptContext] = {}
 
             self.workspace_handle = self.registry.issue("workspace", self.workspace)
@@ -1274,8 +1278,8 @@ class WorkspaceSupervisor:
         fixed ``candidate.glb`` W1 consumes.
         """
 
-        if self.builder_bundle is None or self.builder_bundle_identity is None:
-            raise SupervisorError("builder_bundle_unavailable")
+        if self.canonical_build_root is None or self.cadgen_runtime_root is None:
+            raise SupervisorError("trusted_tools_unavailable")
         if self._command_runner is subprocess.run and self.candidate_runtime is None:
             raise SupervisorError("candidate_runtime_unavailable")
         work = context.candidate_root
@@ -1306,7 +1310,7 @@ class WorkspaceSupervisor:
 
         argv: list[str] = [
             "/runtime/bin/python",
-            str(_BUILDER_INTERNAL_PATH / BUILDER_TOOL_ENTRYPOINT),
+            str(_BUILDER_INTERNAL_PATH / _BUILDER_TOOL_ENTRYPOINT),
             "build",
             "--source",
             (_SOURCE_INTERNAL_ROOT / _SOURCE_MODULE_NAME).as_posix(),
@@ -1323,7 +1327,7 @@ class WorkspaceSupervisor:
 
         try:
             exit_code, stdout, stderr, command_document = self._invoke_operation(
-                operation, context, builder_bundle=self.builder_bundle
+                operation, context
             )
         except SupervisorError:
             self._discard_trusted_output(output_dir)
@@ -1354,7 +1358,6 @@ class WorkspaceSupervisor:
                 "stdout_sha256": stdout_digest,
                 "stderr_sha256": stderr_digest,
                 "adapter": _CANONICAL_ADAPTER_ID,
-                "builder_bundle_identity": self.builder_bundle_identity,
             },
             attempt_id=context.attempt_id,
         )
@@ -1553,8 +1556,6 @@ class WorkspaceSupervisor:
         self,
         operation: _CandidateOperation,
         context: _AttemptContext,
-        *,
-        builder_bundle: Path | None = None,
     ) -> tuple[int, bytes, bytes, Mapping[str, Any]]:
         """Execute one prepared operation and return (exit, stdout, stderr, doc).
 
@@ -1591,7 +1592,8 @@ class WorkspaceSupervisor:
                     operation,
                     context.candidate_root,
                     self.candidate_runtime,
-                    builder_bundle=builder_bundle,
+                    canonical_build_root=self.canonical_build_root,
+                    cadgen_runtime_root=self.cadgen_runtime_root,
                 )
             else:
                 command = list(operation.argv)
