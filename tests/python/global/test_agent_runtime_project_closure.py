@@ -382,6 +382,10 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                 ),
             )
             source = closure.meshscope_source_record(clean_repo)
+            self.assertIn(
+                "src/meshscope/reference_capability.py",
+                {record["path"] for record in source["files"]},
+            )
             wheel = root / "meshscope-0.1.0-cp312-cp312-linux_x86_64.whl"
             libraries = {
                 name: root / name
@@ -564,7 +568,7 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
             )
             self.assertTrue(result["nativeConformanceDigest"].startswith("sha256:"))
 
-    def test_meshscope_development_evidence_reassembles_and_rejects_mutation(self) -> None:
+    def test_meshscope_development_evidence_rejects_stale_source_closure(self) -> None:
         closure = _load_project_closure()
         root = (
             REPO_ROOT
@@ -585,14 +589,9 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
         local_admission = json.loads(
             (root / "local-development-admission.json").read_bytes()
         )
-        candidate = closure.assemble_meshscope_development_candidate(
-            builds, audit, conformance, local_admission
-        )
-        self.assertEqual(
-            closure.canonical_json_bytes(candidate) + b"\n",
-            (root / "candidate.json").read_bytes(),
-        )
-        conformance["providerExecution"]["dispatchCount"] = 1
+        # This durable Linux evidence predates ReferenceCapability. Exact
+        # closure must reject it rather than rewriting signed build facts on
+        # macOS to make the historical candidate appear current.
         with self.assertRaises(closure.ProjectClosureError):
             closure.assemble_meshscope_development_candidate(
                 builds, audit, conformance, local_admission
@@ -728,7 +727,7 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                     builds, audit, attacked, local_admission
                 )
 
-    def test_meshscope_candidate_closes_local_development_admission_without_formal_upgrade(self) -> None:
+    def test_meshscope_candidate_rejects_stale_local_development_admission(self) -> None:
         closure = _load_project_closure()
         root = REPO_ROOT / "models/agent-runtime/cup_cup_033/meshscope-development"
         builds = tuple(
@@ -740,19 +739,10 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
         local_admission = json.loads(
             (root / "local-development-admission.json").read_bytes()
         )
-        candidate = closure.assemble_meshscope_development_candidate(
-            builds, audit, conformance, local_admission
-        )
-        self.assertEqual(
-            candidate["localDevelopmentAdmission"],
-            {
-                "status": "qualified-local-candidate",
-                "formalAdmission": False,
-                "immutableMirrorVisible": False,
-                "digest": local_admission["localDevelopmentAdmissionDigest"],
-            },
-        )
-        self.assertFalse(candidate["admission"]["admitted"])
+        with self.assertRaises(closure.ProjectClosureError):
+            closure.assemble_meshscope_development_candidate(
+                builds, audit, conformance, local_admission
+            )
 
         for path, value in (
             ("sai004CandidateCommit", "0" * 40),

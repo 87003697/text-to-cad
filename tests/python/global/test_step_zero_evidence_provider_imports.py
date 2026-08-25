@@ -23,6 +23,24 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class StepZeroEvidenceImportTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._provider_modules = {
+            name: module
+            for name, module in sys.modules.items()
+            if name.split(".", 1)[0] in {"meshscope", "meshshot"}
+        }
+        self._sys_path = sys.path[:]
+        for name in self._provider_modules:
+            sys.modules.pop(name, None)
+        self.addCleanup(self._restore_provider_imports)
+
+    def _restore_provider_imports(self) -> None:
+        for name in tuple(sys.modules):
+            if name.split(".", 1)[0] in {"meshscope", "meshshot"}:
+                sys.modules.pop(name, None)
+        sys.modules.update(self._provider_modules)
+        sys.path[:] = self._sys_path
+
     def test_repo_root_resolves_to_repository_top(self) -> None:
         # The provider file lives at scripts/pilot/step_zero_evidence.py;
         # parents[2] must land on the repo root so that

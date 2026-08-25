@@ -19,6 +19,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "scripts/release/finalize-publish-tree.sh"
 PIN_SCRIPT = REPO_ROOT / "scripts/release/pin-cadgen-requirements.sh"
+PROJECTION_SCRIPT = REPO_ROOT / "scripts/pilot/agent_source_projection.py"
+TRUSTED_TOOLS_SCRIPT = REPO_ROOT / "scripts/pilot/trusted_tools.py"
 
 
 class FinalizePublishTreeTests(unittest.TestCase):
@@ -31,6 +33,13 @@ class FinalizePublishTreeTests(unittest.TestCase):
         (self.tree / "scripts/release").mkdir(parents=True)
         shutil.copy2(SCRIPT, self.tree / "scripts/release/finalize-publish-tree.sh")
         shutil.copy2(PIN_SCRIPT, self.tree / "scripts/release/pin-cadgen-requirements.sh")
+        (self.tree / "scripts/pilot").mkdir()
+        shutil.copy2(PROJECTION_SCRIPT, self.tree / "scripts/pilot/agent_source_projection.py")
+        shutil.copy2(TRUSTED_TOOLS_SCRIPT, self.tree / "scripts/pilot/trusted_tools.py")
+        shutil.copytree(
+            REPO_ROOT / ".claude/agent-source-projection",
+            self.tree / ".claude/agent-source-projection",
+        )
         os.chmod(self.tree / "scripts/release/finalize-publish-tree.sh", 0o755)
         os.chmod(self.tree / "scripts/release/pin-cadgen-requirements.sh", 0o755)
         (self.tree / "VERSION").write_text("9.9.9\n")
@@ -43,6 +52,26 @@ class FinalizePublishTreeTests(unittest.TestCase):
         (self.tree / "skills/cad/scripts/packages/cadgen").mkdir(parents=True)
         (self.tree / "skills/cad/scripts/packages/cadgen/pyproject.toml").write_text(
             "[project]\nname='cadgen'\nversion='9.9.9'\n"
+        )
+        for trusted_root in (
+            "skills/cad/scripts/canonical-build",
+            "skills/cad/scripts/packages/cadgen/src/cadgen",
+            "skills/mesh-compare/scripts/packages/meshscope/src/meshscope",
+            "skills/mesh-compare/scripts/packages/meshshot/src/meshshot",
+        ):
+            root = self.tree / trusted_root
+            root.mkdir(parents=True, exist_ok=True)
+            (root / "runtime.py").write_text("# fixture\n")
+        subprocess.run(
+            [
+                "python3",
+                str(self.tree / "scripts/pilot/trusted_tools.py"),
+                "--repo-root",
+                str(self.tree),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
         )
         (self.tree / "docs").mkdir()
         (self.tree / "packages").mkdir()

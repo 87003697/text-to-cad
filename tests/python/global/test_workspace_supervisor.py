@@ -2536,6 +2536,23 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         "real Canonical Reference preparation dependencies are unavailable",
     )
     def test_real_outer_prepare_initializes_fresh_workspace(self) -> None:
+        provider_modules = {
+            name: module
+            for name, module in sys.modules.items()
+            if name.split(".", 1)[0] in {"meshscope", "meshshot"}
+        }
+        original_sys_path = sys.path[:]
+        for name in provider_modules:
+            sys.modules.pop(name, None)
+
+        def restore_provider_imports() -> None:
+            for name in tuple(sys.modules):
+                if name.split(".", 1)[0] in {"meshscope", "meshshot"}:
+                    sys.modules.pop(name, None)
+            sys.modules.update(provider_modules)
+            sys.path[:] = original_sys_path
+
+        self.addCleanup(restore_provider_imports)
         from scripts.pilot import runner
 
         ply_lines = [
