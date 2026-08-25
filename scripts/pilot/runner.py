@@ -68,11 +68,28 @@ except ModuleNotFoundError as exc:
     )
 
 try:
-    from scripts.pilot.step_zero_evidence import real_step_zero_evidence_provider
+    from scripts.pilot.step_zero_evidence import (
+        _MESHSCOPE_SRC,
+        _MESHSHOT_SRC,
+        _ensure_shipped_package,
+        real_step_zero_evidence_provider,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
-    from step_zero_evidence import real_step_zero_evidence_provider
+    from step_zero_evidence import (  # type: ignore[no-redef]
+        _MESHSCOPE_SRC,
+        _MESHSHOT_SRC,
+        _ensure_shipped_package,
+        real_step_zero_evidence_provider,
+    )
+
+try:
+    from scripts.pilot.trusted_tools import TrustedToolsError, validate_trusted_tools
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from trusted_tools import TrustedToolsError, validate_trusted_tools  # type: ignore[no-redef]
 
 try:
     from scripts.pilot.repair_evidence import real_repair_evidence_provider
@@ -1314,18 +1331,18 @@ def prepare_and_initialize_workspace(exp_dir: Path, input_path: Path) -> Path:
         return exp_dir / "input" / "reference.ply"
     prepared = exp_dir.parent / f".agent-prepared-{os.getpid()}-{secrets.token_hex(8)}"
     try:
-        source_root = REPO_ROOT / "packages/meshscope/src"
-        if str(source_root) not in sys.path:
-            sys.path.insert(0, str(source_root))
+        try:
+            validate_trusted_tools(REPO_ROOT)
+        except TrustedToolsError as exc:
+            raise PilotError("trusted tools are unavailable") from exc
+        _ensure_shipped_package(_MESHSCOPE_SRC, "meshscope")
         from meshscope.voxblame import prepare_reference
+        _ensure_shipped_package(_MESHSHOT_SRC, "meshshot")
+        from meshshot import load_profile
 
         prepared_input = prepared / "input"
         result = prepare_reference(input_path, prepared_input)
-        profile_path = (
-            REPO_ROOT
-            / "packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json"
-        )
-        profile_sha256 = hashlib.sha256(profile_path.read_bytes()).hexdigest()
+        profile = load_profile()
         (prepared / "setup").mkdir(parents=True, exist_ok=False)
         (prepared / "setup/outer-preparation.json").write_text(
             json.dumps(
@@ -1351,8 +1368,8 @@ def prepare_and_initialize_workspace(exp_dir: Path, input_path: Path) -> Path:
                         "canonical_reference_sha256"
                     ],
                     "preview_profile": {
-                        "name": "cadena_residual_eight_view/1",
-                        "sha256": profile_sha256,
+                        "name": profile.profile["name"],
+                        "sha256": profile.sha256,
                     },
                 },
                 sort_keys=True,

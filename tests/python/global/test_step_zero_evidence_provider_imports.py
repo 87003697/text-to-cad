@@ -3,13 +3,10 @@
 The production provider vendors ``meshscope.voxblame`` and ``meshshot``
 via ``_ensure_shipped_package``. Two invariants matter here:
 
-* From a source checkout, ``_import_meshscope`` / ``_import_meshshot``
-  resolve to the shipped package roots under
-  ``packages/{meshscope,meshshot}/src``.
-* Resolution is fail-closed — if neither an existing import nor the
-  documented source-checkout layout can serve the module, the provider
-  raises :class:`StepZeroEvidenceError` with ``provider_dependency_missing``
-  rather than silently probing arbitrary paths.
+* ``_import_meshscope`` / ``_import_meshshot`` resolve to the fixed vendored
+  mesh-compare runtimes that survive publish-tree finalization.
+* Resolution is fail-closed when a package is missing or an ambient import
+  resolves outside those roots.
 """
 
 from __future__ import annotations
@@ -29,7 +26,7 @@ class StepZeroEvidenceImportTests(unittest.TestCase):
     def test_repo_root_resolves_to_repository_top(self) -> None:
         # The provider file lives at scripts/pilot/step_zero_evidence.py;
         # parents[2] must land on the repo root so that
-        # packages/{meshscope,meshshot}/src is the correct sibling.
+        # the fixed vendored skill runtime is the correct sibling.
         self.assertEqual(REPO_ROOT, step_zero_evidence._REPO_ROOT)
         self.assertTrue(
             (step_zero_evidence._MESHSCOPE_SRC / "meshscope/__init__.py").is_file()
@@ -43,12 +40,10 @@ class StepZeroEvidenceImportTests(unittest.TestCase):
         import meshscope  # noqa: WPS433 — imported after helper.
 
         module_root = Path(meshscope.__file__).resolve().parent
-        # A shipped meshscope package is one whose top-level directory
-        # contains the ``voxblame`` subpackage that the real provider
-        # calls into.  Whether that root came from an already-installed
-        # editable layout or from the source-checkout fallback, the
-        # provider must have obtained an actual meshscope package.
-        self.assertEqual("meshscope", module_root.name)
+        self.assertEqual(
+            step_zero_evidence._MESHSCOPE_SRC.resolve() / "meshscope",
+            module_root,
+        )
         self.assertTrue((module_root / "voxblame/__init__.py").is_file())
         self.assertTrue(callable(measure_step))
 
@@ -59,7 +54,10 @@ class StepZeroEvidenceImportTests(unittest.TestCase):
         import meshshot  # noqa: WPS433 — imported after helper.
 
         module_root = Path(meshshot.__file__).resolve().parent
-        self.assertEqual("meshshot", module_root.name)
+        self.assertEqual(
+            step_zero_evidence._MESHSHOT_SRC.resolve() / "meshshot",
+            module_root,
+        )
         self.assertTrue((module_root / "profile.py").is_file())
         self.assertTrue(callable(load_profile))
         self.assertTrue(callable(render_residual_preview))

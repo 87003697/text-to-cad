@@ -696,7 +696,7 @@ def run_installed_evidence_provider_probe(
     python_executable: Path,
     timeout_seconds: float = 180.0,
 ) -> dict[str, Any]:
-    """Import and enter both real providers from the installed tool subset."""
+    """Run valid Step 0/Repair evidence through the installed tool subset."""
 
     env = sanitize_env_for_installed_run(
         installed_root, source_root, python_executable=python_executable
@@ -705,41 +705,101 @@ def run_installed_evidence_provider_probe(
 import json
 import sys
 import tempfile
+from io import BytesIO
 from pathlib import Path
+
+import numpy as np
+import trimesh
+from PIL import Image
 
 installed = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(installed / "scripts/pilot"))
-from step_zero_evidence import StepZeroEvidenceError, StepZeroEvidenceRequest, real_step_zero_evidence_provider
-from repair_evidence import RepairEvidenceError, RepairEvidenceRequest, real_repair_evidence_provider
+from step_zero_evidence import (
+    _MESHSCOPE_SRC, _MESHSHOT_SRC, _ensure_shipped_package,
+    StepZeroEvidenceRequest, real_step_zero_evidence_provider,
+)
+from repair_evidence import RepairEvidenceRequest, real_repair_evidence_provider
+from workspace_supervisor import _load_reference_type
+
+_ensure_shipped_package(_MESHSCOPE_SRC, "meshscope")
+_ensure_shipped_package(_MESHSHOT_SRC, "meshshot")
+from meshscope.voxblame import prepare_reference
+from meshshot import RenderedPreview, load_profile
+
+profile = load_profile()
+
+def render_fixture(_reference, _candidate, *, variant="step", exterior_directions=()):
+    pixels = tuple(profile.profile["variants"][variant]["image_pixels"])
+    image = Image.new("RGB", pixels, (0, 0, 0))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    views = tuple({
+        **view,
+        "framing": {"projection": "orthographic" if view["kind"] == "axial_depth" else "perspective"},
+        "markers": ([{"direction": exterior_directions[0]}] if exterior_directions else []),
+    } for view in profile.profile["views"])
+    return RenderedPreview(encoded.getvalue(), variant, profile.sha256, views)
 
 with tempfile.TemporaryDirectory() as text:
     root = Path(text)
-    for name in ("reference", "step-vox", "step-preview", "parent-vox", "parent-source",
-                 "candidate-source", "repair-vox", "repair-preview", "region", "changes"):
-        (root / name).mkdir()
-    failures = {}
-    try:
-        real_step_zero_evidence_provider(StepZeroEvidenceRequest(
-            root / "reference", root / "missing.glb", root / "step-vox",
-            root / "step-preview", {"name": "unused", "sha256": "0" * 64},
-        ))
-    except StepZeroEvidenceError as exc:
-        failures["step_zero"] = exc.classification
-    try:
-        real_repair_evidence_provider(RepairEvidenceRequest(
-            root / "reference", root / "missing.glb", root / "candidate-source",
-            root / "parent-vox", root / "parent-source", root / "repair-vox",
-            root / "repair-preview", root / "region", root / "changes", {},
-            {"name": "unused", "sha256": "0" * 64}, 0, 1, "1" * 64, "2" * 64,
-        ))
-    except RepairEvidenceError as exc:
-        failures["repair"] = exc.classification
-    if failures != {"step_zero": "measurement_failed", "repair": "measurement_failed"}:
-        raise SystemExit(f"unexpected provider probe result: {failures!r}")
+    raw = root / "raw.ply"
+    reference_mesh = trimesh.Trimesh(
+        vertices=np.asarray([
+            [-0.5, -0.01, 0.0], [0.0, -0.01, 0.0], [-0.5, 0.01, 0.0],
+            [0.0, -0.01, 0.0], [0.5, -0.01, 0.0], [0.5, 0.01, 0.0],
+        ], dtype=np.float64),
+        faces=np.asarray([[0, 1, 2], [3, 4, 5]], dtype=np.int64),
+        process=False,
+    )
+    reference_mesh.export(raw)
+    reference = root / "reference"
+    prepare_reference(raw, reference)
+    canonical_ply = reference / "reference.ply"
+    capability = _load_reference_type()("installed-probe", canonical_ply)
+    observation = capability.handle({
+        "schema": "meshscope.reference-request/1", "reference_id": "installed-probe",
+        "method": "summary", "args": {},
+    })
+
+    partial = trimesh.load(canonical_ply, force="mesh", process=False)
+    partial.update_faces([0])
+    partial.remove_unreferenced_vertices()
+    step_candidate = root / "step-candidate.ply"
+    partial.export(step_candidate)
+    preview_identity = {"name": profile.profile["name"], "sha256": profile.sha256}
+    step_vox = root / "step/voxblame"
+    real_step_zero_evidence_provider(StepZeroEvidenceRequest(
+        reference, step_candidate, step_vox, root / "step-preview", preview_identity,
+    ), renderer=render_fixture)
+
+    summary = json.loads((step_vox / "steps/000000/summary.json").read_text())
+    target = summary["repair_targets"]["items"][0]
+    plan = {
+        "schema": "voxblame.repair-batch/1", "from_step": 0,
+        "selected_targets": [{"target_key": target["target_key"], "mask_sha256": target["mask"]["logical_sha256"]}],
+        "planned_edits": [{"edit_key": "repair-installed-probe", "target_keys": [target["target_key"]], "description": "Restore the omitted triangle."}],
+        "rationale": "Exercise installed Repair evidence.",
+        "preview_observation": "One missing region is visible.",
+    }
+    parent_source = root / "parent-source"
+    candidate_source = root / "candidate-source"
+    parent_source.mkdir()
+    candidate_source.mkdir()
+    (parent_source / "model.py").write_text("STEP = 0\n")
+    (candidate_source / "model.py").write_text("STEP = 1\n")
+    real_repair_evidence_provider(RepairEvidenceRequest(
+        reference, canonical_ply, candidate_source, step_vox, parent_source,
+        root / "repair/voxblame", root / "repair-preview", root / "region",
+        root / "changes", plan, preview_identity, 0, 1, "1" * 64, "2" * 64,
+    ), renderer=render_fixture)
+
     import meshscope
     import meshshot
     print(json.dumps({
-        "failures": failures,
+        "step_zero": (step_vox / "steps/000000/measurement.json").is_file(),
+        "repair": (root / "repair/voxblame/steps/000001/measurement.json").is_file(),
+        "reference_observation": observation["method"],
+        "profile_sha256": profile.sha256,
         "meshscope": str(Path(meshscope.__file__).resolve()),
         "meshshot": str(Path(meshshot.__file__).resolve()),
     }, sort_keys=True))

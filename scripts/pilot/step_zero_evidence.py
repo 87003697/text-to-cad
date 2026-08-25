@@ -165,6 +165,7 @@ def real_step_zero_evidence_provider(
             request.voxblame_output,
             step=0,
             compare_to=None,
+            backend="python",
         )
     except Exception as exc:
         raise StepZeroEvidenceError("measurement_failed", str(exc)) from exc

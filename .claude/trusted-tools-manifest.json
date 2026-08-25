@@ -411,11 +411,6 @@
       "size": 3461
     },
     {
-      "path": "packages/meshscope/src/meshscope/voxblame/_native.cpp",
-      "sha256": "1f3c24da7787d21cbe18e3666768f8c15858120679c207487f61d84fab8bb8bd",
-      "size": 8772
-    },
-    {
       "path": "packages/meshscope/src/meshscope/voxblame/canonical_artifacts.py",
       "sha256": "b06f8bd83ef749caa7ebbdd66c6ab96d682f47ffa13bfbac008d9e416b48280e",
       "size": 3735

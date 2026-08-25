@@ -47,6 +47,19 @@ except ModuleNotFoundError as _exc:  # pragma: no cover - direct-execution fallb
         validate_trusted_tools,
     )
 
+try:
+    from scripts.pilot.step_zero_evidence import (  # type: ignore[import-not-found]
+        _MESHSCOPE_SRC,
+        _ensure_shipped_package,
+    )
+except ModuleNotFoundError as _exc:  # pragma: no cover - direct-execution fallback
+    if _exc.name not in {"scripts", "scripts.pilot"}:
+        raise
+    from step_zero_evidence import (  # type: ignore[no-redef]
+        _MESHSCOPE_SRC,
+        _ensure_shipped_package,
+    )
+
 
 MAX_OPERATION_OUTPUT_BYTES = 64 * 1024
 MAX_OPERATION_TIMEOUT_SECONDS = 1800
@@ -380,9 +393,7 @@ def _load_workspace_api() -> ModuleType:
 
 
 def _load_reference_type() -> type[Any]:
-    source = Path(__file__).resolve().parents[2] / "packages/meshscope/src"
-    if str(source) not in sys.path:
-        sys.path.insert(0, str(source))
+    _ensure_shipped_package(_MESHSCOPE_SRC, "meshscope")
     from meshscope import ReferenceCapability
 
     return ReferenceCapability

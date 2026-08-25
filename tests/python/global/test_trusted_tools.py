@@ -48,9 +48,24 @@ class TrustedToolsTests(unittest.TestCase):
             (root / SOURCE_DIRS[0] / "runtime.py").write_text("value = 2\n")
             with self.assertRaises(TrustedToolsError):
                 validate_trusted_tools(root)
+            manifest.write_bytes(manifest_bytes(root))
             (root / SOURCE_DIRS[0] / "extra.py").write_text("extra = True\n")
             with self.assertRaises(TrustedToolsError):
                 validate_trusted_tools(root)
+
+    def test_platform_build_outputs_do_not_change_fixed_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as text:
+            root = Path(text)
+            for relative in SOURCE_DIRS:
+                directory = root / relative
+                directory.mkdir(parents=True)
+                (directory / "runtime.py").write_text("value = 1\n")
+            before = manifest_bytes(root)
+            meshscope = root / SOURCE_DIRS[2]
+            (meshscope / "_native.cpp").write_text("generated source\n")
+            (meshscope / "_native.cpython-312-darwin.so").write_bytes(b"native")
+            (meshscope / ".DS_Store").write_bytes(b"finder")
+            self.assertEqual(before, manifest_bytes(root))
 
 
 if __name__ == "__main__":

@@ -307,6 +307,7 @@ def real_repair_evidence_provider(
             request.voxblame_output,
             step=request.to_step,
             compare_to=request.from_step,
+            backend="python",
         )
     except Exception as exc:
         raise RepairEvidenceError("measurement_failed", str(exc)) from exc

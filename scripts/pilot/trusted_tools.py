@@ -34,6 +34,8 @@ _MAPPINGS = (
 )
 _SKIP_DIRS = {"__pycache__", "tests", "__tests__"}
 _SKIP_SUFFIXES = {".md", ".pyc", ".pyo"}
+_BUILD_SUFFIXES = {".c", ".cpp", ".dylib", ".h", ".o", ".pyd", ".so"}
+_IGNORED_NAMES = {".DS_Store"}
 
 
 class TrustedToolsError(RuntimeError):
@@ -74,6 +76,9 @@ def _entries(repo_root: Path) -> list[dict[str, Any]]:
                     raise TrustedToolsError(f"symlink in trusted tool source: {path}")
                 if (
                     path.suffix in _SKIP_SUFFIXES
+                    or path.suffix in _BUILD_SUFFIXES
+                    or filename.startswith("_native.")
+                    or filename in _IGNORED_NAMES
                     or filename.startswith("test_")
                     or filename.endswith("_test.py")
                     or filename.endswith("~")
