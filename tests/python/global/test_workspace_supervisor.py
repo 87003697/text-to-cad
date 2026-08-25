@@ -467,6 +467,53 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 workspace_api=self.workspace,
             )
 
+    def test_trusted_tools_use_exact_authority_not_stale_source_overlay(self) -> None:
+        from scripts.pilot import trusted_tools
+
+        authority = self.root / "publish-tree"
+        for relative in (
+            trusted_tools.CANONICAL_BUILD_RELATIVE,
+            trusted_tools.CADGEN_RUNTIME_RELATIVE / "src/cadgen",
+            trusted_tools.MESHSCOPE_RUNTIME_RELATIVE / "src/meshscope",
+            trusted_tools.MESHSHOT_RUNTIME_RELATIVE / "src/meshshot",
+        ):
+            runtime = authority / relative
+            runtime.mkdir(parents=True)
+            (runtime / "runtime.py").write_text("# trusted\n", encoding="utf-8")
+        manifest = authority / trusted_tools.MANIFEST_RELATIVE
+        manifest.parent.mkdir(parents=True)
+        manifest.write_bytes(trusted_tools.manifest_bytes(authority))
+
+        overlay = self.root / "persistent-source-overlay"
+        shutil.copytree(authority, overlay)
+        (overlay / trusted_tools.CANONICAL_BUILD_RELATIVE / "stale.py").write_text(
+            "stale = True\n", encoding="utf-8"
+        )
+
+        verified = WorkspaceSupervisor(
+            self.workspace_root,
+            candidate_root=self.root / "authority-candidate",
+            staging_dir=self.root / "authority-staging",
+            workspace_api=self.workspace,
+            trusted_tools_root=authority,
+        )
+        try:
+            self.assertEqual(
+                (authority / trusted_tools.CANONICAL_BUILD_RELATIVE).resolve(),
+                verified.canonical_build_root,
+            )
+        finally:
+            verified.close()
+
+        with self.assertRaisesRegex(SupervisorError, "trusted_tools_unavailable"):
+            WorkspaceSupervisor(
+                self.workspace_root,
+                candidate_root=self.root / "overlay-candidate",
+                staging_dir=self.root / "overlay-staging",
+                workspace_api=self.workspace,
+                trusted_tools_root=overlay,
+            )
+
     def test_candidate_copy_rejects_deterministic_swap_before_open(self) -> None:
         from scripts.pilot import workspace_supervisor as module
 
@@ -3212,6 +3259,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 case.root / "candidate-runtime",
                 repo_root=repo_root,
             )
+            trusted_tools_root = runner.resolve_deployed_authority(
+                Path(os.environ["HOME"])
+            ).publish_tree
             from scripts.pilot.step_zero_evidence import (
                 real_step_zero_evidence_provider,
             )
@@ -3241,7 +3291,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 geometry_entrypoint=runner.GEOMETRY_ENTRYPOINT,
                 tool_registry=registry,
                 candidate_runtime=candidate_runtime,
-                trusted_tools_root=repo_root,
+                trusted_tools_root=trusted_tools_root,
                 step_zero_evidence_provider=counted_step_zero,
                 repair_evidence_provider=counted_repair,
             )

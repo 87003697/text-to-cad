@@ -1962,7 +1962,14 @@ def run_pilot(
     agent_socket: Path | None = None
     with SignalRelay() as relay:
         try:
+            trusted_tools_root: Path | None = None
             if agent_surface:
+                host_home = environ.get("HOME")
+                if not host_home:
+                    raise PilotError("HOME must be set")
+                trusted_tools_root = resolve_deployed_authority(
+                    Path(host_home)
+                ).publish_tree
                 prepare_and_initialize_workspace(exp_dir, input_paths[0])
             sidecar = BrowserRuntimeJob.create(
                 exp_dir,
@@ -1995,7 +2002,7 @@ def run_pilot(
                     geometry_entrypoint=GEOMETRY_ENTRYPOINT,
                     tool_registry=tool_registry,
                     candidate_runtime=candidate_runtime,
-                    trusted_tools_root=REPO_ROOT,
+                    trusted_tools_root=trusted_tools_root,
                     step_zero_evidence_provider=real_step_zero_evidence_provider,
                     repair_evidence_provider=real_repair_evidence_provider,
                 )
