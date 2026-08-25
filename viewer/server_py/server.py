@@ -31,6 +31,7 @@ import argparse
 import os
 import posixpath
 import re
+import shutil
 import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -121,18 +122,6 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _send_bytes(self, status: int, data: bytes, content_type: str, *, disposition: str | None = None):
-        self.send_response(status)
-        if content_type:
-            self.send_header("content-type", content_type)
-        if disposition:
-            self.send_header("content-disposition", disposition)
-        self.send_header("cache-control", "no-store")
-        self.send_header("content-length", str(len(data)))
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(data)
-
     def _query(self):
         parts = urlsplit(self.path)
         q = parse_qs(parts.query)
@@ -193,22 +182,41 @@ class Handler(BaseHTTPRequestHandler):
         self.do_GET()
 
     # --- route bodies ---
+    def _stream_file(
+        self,
+        file_path: str,
+        content_type: str | None,
+        *,
+        status: int = 200,
+        disposition: str | None = None,
+    ) -> bool:
+        """Stream a file with no-store + content-length in 64 KiB chunks."""
+        if not os.path.isfile(file_path):
+            return False
+        try:
+            size = os.path.getsize(file_path)
+        except OSError:
+            return False
+        self.send_response(status)
+        if content_type:
+            self.send_header("content-type", content_type)
+        if disposition:
+            self.send_header("content-disposition", disposition)
+        self.send_header("cache-control", "no-store")
+        self.send_header("content-length", str(size))
+        self.end_headers()
+        if self.command != "HEAD":
+            try:
+                with open(file_path, "rb") as handle:
+                    shutil.copyfileobj(handle, self.wfile, length=64 * 1024)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        return True
+
     def _serve_static_file(self, file_path: str, content_type: str | None) -> bool:
         """Stream a file with no-store + content-length, NO etag/last-modified/range.
         Returns False (no response written) if the path is missing/not a regular file."""
-        if not os.path.isfile(file_path):
-            return False
-        with open(file_path, "rb") as handle:
-            data = handle.read()
-        self.send_response(200)
-        if content_type:
-            self.send_header("content-type", content_type)
-        self.send_header("cache-control", "no-store")
-        self.send_header("content-length", str(len(data)))
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(data)
-        return True
+        return self._stream_file(file_path, content_type)
 
     def _request_referer_file_ref(self):
         value = self.headers.get("referer") or self.headers.get("referrer") or ""
@@ -331,13 +339,9 @@ class Handler(BaseHTTPRequestHandler):
         if not candidate or not os.path.isfile(candidate):
             self._send_json(404, {"error": "Not found"})
             return
-        with open(candidate, "rb") as handle:
-            data = handle.read()
         content_type = _Ctx.backend.content_type_for_path(candidate) or "application/octet-stream"
-        disposition = None
-        if download:
-            disposition = enc.attachment_content_disposition(os.path.basename(candidate))
-        self._send_bytes(200, data, content_type, disposition=disposition)
+        disposition = enc.attachment_content_disposition(os.path.basename(candidate)) if download else None
+        self._stream_file(candidate, content_type, disposition=disposition)
 
     def _reveal_file(self, q):
         # POST /__cad/reveal?file=<entry>&dir=<root>: reveal the entry's file in the OS

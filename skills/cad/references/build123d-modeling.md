@@ -383,6 +383,32 @@ above the surface. Two independent modules shipped defects from this exact
 assumption. Default alignment IS centered; reserve `align=None` for when the
 raw datum is genuinely wanted.
 
+## `.located()` SETS the placement; `.moved()` composes with it
+
+`Shape.rotate()` returns a rotated copy. Placing that copy with
+`.located(Location(pos))` throws the rotation away: `located` assigns an
+ABSOLUTE location, so what lands at `pos` is the ORIGINAL orientation.
+`.moved()` is the one that composes.
+
+```python
+box = Solid.make_box(1, 1, 1)          # x[0,1]
+r   = box.rotate(Axis.Z, 90)           # x[-1,0]   rotation applied
+
+r.located(Location((5, 0, 0)))         # x[5,6]    rotation DISCARDED
+r.moved(Location((5, 0, 0)))           # x[4,5]    rotation kept
+box.located(Location((5, 0, 0), (0, 0, 90)))   # x[4,5]  one Location carrying both
+```
+
+Nothing raises, and the bounding box moves the distance you asked for, so the
+result looks placed. Verified on build123d 0.11.1.
+
+The failure mode is a sweep that reads as physics. Placing a part with
+`.rotate(...).located(...)` inside a loop over angles feeds `intersect()` the
+same unrotated shape every iteration, so a gear-mesh collision check returns an
+identical volume to 15 significant digits at every phase — a flat, plausible
+curve rather than an error. Reach for `.moved()` when a shape already carries a
+transform, or build one `Location(position, rotation)` and `.located()` that.
+
 ## Dense periodic spline profiles: kernel ops to avoid
 
 On faces bounded by one periodic `Spline` fit through hundreds of samples,
