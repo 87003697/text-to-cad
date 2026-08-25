@@ -1449,6 +1449,56 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             self.assertFalse((runtime / "lib/python3.12/encodings/ascii.pyc").exists())
             self.assertFalse((runtime / "lib/python3.12/encodings/__pycache__").exists())
 
+            original_pyc = codec_pyc.read_bytes()
+            original_copy = runtime_module._copy_file_stream
+            replaced = False
+
+            def replace_between_identity_and_copy(*args, **kwargs):
+                nonlocal replaced
+                relative = args[1]
+                if relative.as_posix() == "encodings/mac_roman.pyc" and not replaced:
+                    replaced = True
+                    codec_pyc.write_bytes(original_pyc + b"changed")
+                    try:
+                        return original_copy(*args, **kwargs)
+                    finally:
+                        codec_pyc.write_bytes(original_pyc)
+                return original_copy(*args, **kwargs)
+
+            with (
+                mock.patch.object(runtime_module, "_probe", return_value=probe),
+                mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=[]),
+                mock.patch.object(runtime_module, "validate_candidate_runtime"),
+                mock.patch.object(
+                    runtime_module,
+                    "_copy_file_stream",
+                    side_effect=replace_between_identity_and_copy,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    runtime_module.CandidateRuntimeError,
+                    "^candidate_runtime_distribution_drift$",
+                ):
+                    runner.materialize_candidate_runtime(
+                        venv, root / "race-cache", repo_root=repo
+                    )
+            with (
+                mock.patch.object(runtime_module, "_probe", return_value=probe),
+                mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=[]),
+                mock.patch.object(runtime_module, "validate_candidate_runtime"),
+            ):
+                restored = runner.materialize_candidate_runtime(
+                    venv, root / "race-cache", repo_root=repo
+                )
+                warm = runner.materialize_candidate_runtime(
+                    venv, root / "race-cache", repo_root=repo
+                )
+            self.assertEqual(restored.identity, warm.identity)
+            self.assertEqual(
+                original_pyc,
+                (warm / "lib/python3.12/encodings/mac_roman.pyc").read_bytes(),
+            )
+
     def test_runtime_cache_reuses_one_immutable_identity_and_serializes_builders(self) -> None:
         from concurrent.futures import ThreadPoolExecutor
         from scripts.pilot import candidate_runtime as runtime_module

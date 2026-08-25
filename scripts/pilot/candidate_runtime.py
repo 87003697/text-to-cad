@@ -1071,7 +1071,11 @@ def _bind_installed_record_bytes(
 
 
 def _cache_identity(
-    venv: Path, probe: RuntimeProbe, interpreter: Path, stdlib: Path
+    venv: Path,
+    probe: RuntimeProbe,
+    interpreter: Path,
+    stdlib: Path,
+    stdlib_facts: list[tuple[str, str]],
 ) -> str:
     cfg = _parse_cfg(venv / "pyvenv.cfg")
     normalized_cfg = {
@@ -1083,7 +1087,7 @@ def _cache_identity(
         "schema": _CACHE_SCHEMA,
         "platform": [platform.system(), platform.machine(), platform.python_implementation()],
         "python": [probe.version, probe.cache_tag],
-        "stdlib": _stdlib_identity(stdlib),
+        "stdlib": stdlib_facts,
         "stdlib_layout": _stdlib_relative(probe.version, stdlib).as_posix(),
         "cfg": normalized_cfg,
         "interpreter": _digest_small(interpreter),
@@ -1637,6 +1641,7 @@ def _build_runtime(
     interpreter: Path,
     stdlib: Path,
     site_roots: tuple[Path, ...],
+    stdlib_facts: list[tuple[str, str]],
     identity: str,
     repo_root: Path | None,
 ) -> tuple[str, str]:
@@ -1679,6 +1684,11 @@ def _build_runtime(
     ):
         forbid(source, system_path_is_safe=True)
     forbidden = tuple(dict.fromkeys(forbidden_values))
+    sourceless_pyc = {
+        PurePosixPath(path): FileRecord(path, None, digest)
+        for path, digest in stdlib_facts
+        if path.endswith(".pyc")
+    }
     copied: set[PurePosixPath] = set()
     for relative in _walk_tree(stdlib, include_sourceless_pyc=True):
         if relative in copied:
@@ -1691,6 +1701,7 @@ def _build_runtime(
             budget=budget,
             rewrite=rewrite if relative.name.startswith("_sysconfigdata") else (),
             forbidden=forbidden,
+            expected=sourceless_pyc.get(relative),
         )
     package_root = runtime_lib / "site-packages"
     allowed_roots = (venv, stdlib, *site_roots)
@@ -1873,7 +1884,8 @@ def materialize_candidate_runtime(
         if root and root.is_dir() and _under(root, (venv, stdlib))
     )
     probe = _bind_installed_record_bytes(probe, (venv, stdlib, *site_roots))
-    identity = _cache_identity(venv, probe, interpreter, stdlib)
+    stdlib_facts = _stdlib_identity(stdlib)
+    identity = _cache_identity(venv, probe, interpreter, stdlib, stdlib_facts)
     final = raw_cache / identity
     if final.is_symlink():
         raise CandidateRuntimeError("candidate_runtime_cache_corrupt")
@@ -1883,6 +1895,8 @@ def materialize_candidate_runtime(
     lease: CandidateRuntimeLease | None = None
     try:
         _cleanup_orphan_temps(raw_cache)
+        if _stdlib_identity(stdlib) != stdlib_facts:
+            raise CandidateRuntimeError("candidate_runtime_source_changed")
         if _is_complete(final, identity):
             lease = _create_runtime_lease(raw_cache, final, identity)
             _prune_cache(raw_cache, identity)
@@ -1898,6 +1912,7 @@ def materialize_candidate_runtime(
             interpreter,
             stdlib,
             site_roots,
+            stdlib_facts,
             identity,
             Path(repo_root).resolve() if repo_root is not None else None,
         )
