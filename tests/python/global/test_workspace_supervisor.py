@@ -3688,23 +3688,38 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 # Bounded W1-authenticated assessment claim: the Agent
                 # names no path, no argv, and no attempt identifier.
                 assessment = supervisor.candidate_root / "work" / "assessment.json"
+                assessment_document = {
+                    "schema": "mesh-to-cad.assessment/1",
+                    "from_step": step_zero_facts["step_ordinal"],
+                    "to_step": step_zero_facts["step_ordinal"] + 1,
+                    "preview_observation": (
+                        f"Inspected the {step_zero_facts['preview']['render_variant']} "
+                        "preview before repair submission."
+                    ),
+                    "summary": (
+                        f"Repair the rank-{repair_target['rank']} "
+                        f"{repair_target['kind']} residual and remeasure."
+                    ),
+                }
+                self.assertEqual(
+                    {
+                        "schema",
+                        "from_step",
+                        "to_step",
+                        "preview_observation",
+                        "summary",
+                    },
+                    set(assessment_document),
+                )
+                self.assertEqual(
+                    (0, 1),
+                    (
+                        assessment_document["from_step"],
+                        assessment_document["to_step"],
+                    ),
+                )
                 assessment.write_text(
-                    json.dumps(
-                        {
-                            "schema": "mesh-to-cad.agent-assessment/1",
-                            "parent_acceptance_state": step_zero_facts[
-                                "acceptance_state"
-                            ],
-                            "parent_repair_target_count": step_zero_facts[
-                                "repair_targets"
-                            ]["returned"],
-                            "rationale": (
-                                "Length under-target on the primary axis; "
-                                "restore to reference bounds."
-                            ),
-                        },
-                        sort_keys=True,
-                    )
+                    json.dumps(assessment_document, sort_keys=True)
                     + "\n",
                     encoding="utf-8",
                 )
