@@ -14,6 +14,7 @@ import os
 import shutil
 import tempfile
 import pathlib
+import random
 import socket
 import subprocess
 import sys
@@ -45,9 +46,19 @@ def _npm_command() -> list[str] | None:
 
 
 def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
+    # LOW range, deliberately not the kernel's ephemeral one: Windows NAT drivers
+    # reserve blocks of the ephemeral range, where a connect() to a CLOSED port can
+    # fail without a refusal -- which start_viewer's occupancy probe must treat as
+    # occupied. Ports down here behave on every platform.
+    for _attempt in range(20):
+        port = random.randint(20000, 39999)
+        with socket.socket() as sock:
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise AssertionError("no bindable port found in the low range")
 
 
 class PackagedViewerLayoutTests(unittest.TestCase):
