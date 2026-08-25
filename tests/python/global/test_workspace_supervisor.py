@@ -1302,12 +1302,20 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             site.mkdir(parents=True)
             (stdlib / "os.py").write_text("", encoding="utf-8")
             (stdlib / "encodings/__init__.py").write_text("", encoding="utf-8")
+            trusted_libdir = (root / "trusted/lib64").resolve()
+            (stdlib / "_sysconfigdata_test.py").write_text(
+                f"LIBDIR = {os.fspath(trusted_libdir)!r}\n",
+                encoding="utf-8",
+            )
+            libpython = trusted_libdir / "libpython3.12.so"
+            libpython.write_bytes(b"trusted libpython")
             interpreter = root / "trusted/bin/python3"
             interpreter.parent.mkdir(parents=True)
             interpreter.write_text(
                 "#!/bin/sh\n"
                 "test -f \"$PYTHONHOME/lib64/python3.12/encodings/__init__.py\" || "
                 "{ echo 'ModuleNotFoundError: encodings' >&2; exit 1; }\n"
+                "test -f \"$PYTHONHOME/lib64/libpython3.12.so\" || exit 1\n"
                 "exit 0\n",
                 encoding="utf-8",
             )
@@ -1324,11 +1332,13 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 interpreter=interpreter,
                 base_prefix=root / "trusted",
                 exec_prefix=root / "trusted",
-                libdir=root / "trusted/lib64",
+                libdir=trusted_libdir,
+                libpython=libpython,
             )
             with (
                 mock.patch.object(runtime_module, "_probe", return_value=probe),
                 mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=[]),
+                mock.patch.object(runtime_module, "_relocate_libpython"),
             ):
                 runtime = runner.materialize_candidate_runtime(
                     venv, root / "cache", repo_root=repo
@@ -1337,6 +1347,11 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 (runtime / "lib64/python3.12/encodings/__init__.py").is_file()
             )
             self.assertFalse((runtime / "lib/python3.12").exists())
+            self.assertTrue((runtime / "lib64/libpython3.12.so").is_file())
+            self.assertIn(
+                b"LIBDIR = '/runtime/lib64'",
+                (runtime / "lib64/python3.12/_sysconfigdata_test.py").read_bytes(),
+            )
             with self.assertRaisesRegex(
                 runtime_module.CandidateRuntimeError,
                 "^candidate_runtime_stdlib_layout$",

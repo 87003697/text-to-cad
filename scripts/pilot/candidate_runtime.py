@@ -1589,7 +1589,12 @@ def _rewrite_map(
         add(site, f"{runtime_path}/site-packages")
     add(probe.purelib, f"{runtime_path}/site-packages")
     add(probe.platlib, f"{runtime_path}/site-packages")
-    for source in (probe.base_prefix, probe.exec_prefix, probe.libdir, probe.interpreter.parent if probe.interpreter else None):
+    add(probe.libdir, f"/runtime/{runtime_stdlib.parts[0]}")
+    for source in (
+        probe.base_prefix,
+        probe.exec_prefix,
+        probe.interpreter.parent if probe.interpreter else None,
+    ):
         add(source, "/runtime")
     return tuple(
         (old.encode("utf-8"), new.encode("utf-8"))
