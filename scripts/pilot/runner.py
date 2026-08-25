@@ -5,18 +5,14 @@ from __future__ import annotations
 
 import argparse
 from collections import namedtuple
-import ctypes
-import errno
 import hashlib
 import json
 import math
 import os
-import platform
 import re
 import secrets
 import shutil
 import signal
-import socket
 import sqlite3
 import stat
 import subprocess
@@ -30,7 +26,7 @@ from typing import Callable, Mapping
 
 try:
     import fcntl
-except ImportError:  # pragma: no cover - Windows uses the exclusive-file fallback.
+except ImportError:  # pragma: no cover - unsupported publication platform.
     fcntl = None
 
 
@@ -173,7 +169,6 @@ MANIFEST_EXCLUDED_ROOTS = {".git"}
 MANIFEST_EXCLUDED_PREFIXES = {JOB_CODEX_HOME_REL, JOB_PUBLISH_TREE_REL}
 TERMINAL_LOCATOR_RELATIVE = "run/terminal-validation-locator.json"
 TERMINAL_PUBLISH_LOCK_SECONDS = 120.0
-MAX_TERMINAL_QUARANTINES = 32
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
 CAD_REBUILD_ENTRYPOINT = REPO_ROOT / "skills/cad/scripts/canonical-build/__main__.py"
 GEOMETRY_ENTRYPOINT = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare/__main__.py"
@@ -1470,511 +1465,36 @@ def validate_workspace_delivery(exp_dir: Path) -> dict[str, object]:
     return delivery
 
 
-def _terminal_path_is_safe(path: Path) -> bool:
-    """Reject symlinked components without resolving through an untrusted path."""
+def _acquire_terminal_publish_lock(exp_dir: Path) -> int:
+    """Serialize publication for one experiment on supported POSIX hosts."""
 
-    current = Path(path)
-    while True:
-        if current.is_symlink():
-            return False
-        if current.exists() or current.parent == current:
-            return True
-        current = current.parent
-
-
-def _terminal_regular(path: Path) -> bool:
-    try:
-        return _terminal_path_is_safe(path) and path.is_file() and path.stat().st_nlink == 1
-    except OSError:
-        return False
-
-
-def _terminal_boot_token() -> str | None:
-    try:
-        value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
-        return value or None
-    except (OSError, UnicodeError):
-        if platform.system() == "Darwin":
-            try:
-                result = subprocess.run(
-                    ["sysctl", "-n", "kern.boottime"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                    timeout=2,
-                )
-                value = result.stdout.strip()
-                return value or None
-            except (OSError, subprocess.SubprocessError):
-                return None
-    return None
-
-
-def _terminal_process_start_token(pid: int) -> str | None:
-    proc_stat = Path(f"/proc/{pid}/stat")
-    try:
-        if proc_stat.is_file():
-            value = proc_stat.read_text(encoding="ascii")
-            tail = value[value.rfind(")") + 2 :].split()
-            return tail[19] if len(tail) > 19 else None
-    except (OSError, UnicodeError, IndexError):
-        return None
-    if platform.system() == "Darwin":
-        try:
-            result = subprocess.run(
-                ["ps", "-o", "lstart=", "-p", str(pid)],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=2,
-            )
-            value = result.stdout.strip()
-            return value or None
-        except (OSError, subprocess.SubprocessError):
-            return None
-    return None
-
-
-def _terminal_owner_record() -> dict[str, object]:
-    pid = os.getpid()
-    return {
-        "pid": pid,
-        "host": socket.gethostname(),
-        "boot": _terminal_boot_token(),
-        "start": _terminal_process_start_token(pid),
-        "created_ns": time.time_ns(),
-    }
-
-
-def _terminal_owner_live(value: object) -> bool:
-    if not isinstance(value, dict):
-        return False
-    pid = value.get("pid")
-    if type(pid) is not int or pid <= 0:
-        return False
-    if value.get("host") != socket.gethostname():
-        return False
-    if value.get("boot") != _terminal_boot_token():
-        return False
-    try:
-        os.kill(pid, 0)
-    except PermissionError:
-        # Permission denied still proves that a same-host process exists;
-        # never steal its publication lock on that basis.
-        return True
-    except (ProcessLookupError, OSError):
-        return False
-    recorded_start = value.get("start")
-    current_start = _terminal_process_start_token(pid)
-    if recorded_start is None or current_start is None:
-        return True
-    return recorded_start == current_start
-
-
-def _terminal_read_owner(descriptor: int) -> object:
-    raw = _terminal_read_owner_bytes(descriptor)
-    if raw is None:
-        return None
-    try:
-        return json.loads(raw.decode("ascii"))
-    except (UnicodeError, json.JSONDecodeError):
-        return None
-
-
-def _terminal_read_owner_bytes(descriptor: int) -> bytes | None:
-    try:
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        return os.read(descriptor, 8192)
-    except OSError:
-        return None
-
-
-def _terminal_write_owner(descriptor: int) -> None:
-    encoded = (json.dumps(_terminal_owner_record(), sort_keys=True) + "\n").encode("ascii")
-    os.ftruncate(descriptor, 0)
-    os.lseek(descriptor, 0, os.SEEK_SET)
-    view = memoryview(encoded)
-    while view:
-        written = os.write(descriptor, view)
-        if written <= 0:
-            raise OSError("short terminal lock owner write")
-        view = view[written:]
-    os.fsync(descriptor)
-
-
-def _terminal_lock_identity(descriptor: int) -> tuple[int, int]:
-    value = os.fstat(descriptor)
-    return value.st_dev, value.st_ino
-
-
-def _terminal_atomic_rename_no_replace(source: Path, target: Path) -> None:
-    """Rename within one directory without replacing a preexisting pathname."""
-
-    if source.parent != target.parent:
-        raise OSError("terminal quarantine paths must share a directory")
-    if _terminal_is_windows():
-        _windows_move_file_ex(source, target)
-        return
-    source_bytes = os.fsencode(source)
-    target_bytes = os.fsencode(target)
-    at_fdcwd = -2 if platform.system() == "Darwin" else -100
-    if platform.system() == "Darwin":
-        try:
-            function = ctypes.CDLL(None, use_errno=True).renameatx_np
-        except AttributeError:
-            function = None
-        if function is not None:
-            function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-            function.restype = ctypes.c_int
-            if function(at_fdcwd, source_bytes, at_fdcwd, target_bytes, 0x00000004) == 0:
-                return
-            error = ctypes.get_errno()
-            if error == errno.EEXIST:
-                raise FileExistsError(target)
-            if error not in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
-                raise OSError(error, os.strerror(error))
-    try:
-        function = getattr(ctypes.CDLL(None, use_errno=True), "renameat2")
-    except AttributeError:
-        function = None
-    if function is not None:
-        function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-        function.restype = ctypes.c_int
-        if function(at_fdcwd, source_bytes, at_fdcwd, target_bytes, 1) == 0:
-            return
-        error = ctypes.get_errno()
-        if error == errno.EEXIST:
-            raise FileExistsError(target)
-        if error not in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
-            raise OSError(error, os.strerror(error))
-    raise OSError("atomic no-replace rename is unavailable")
-
-
-def _terminal_is_windows() -> bool:
-    return os.name == "nt" or platform.system() == "Windows"
-
-
-def _terminal_atomic_rename_available() -> bool:
-    if _terminal_is_windows():
-        kernel = getattr(getattr(ctypes, "windll", None), "kernel32", None)
-        try:
-            import msvcrt  # noqa: F401
-        except ImportError:
-            return False
-        return kernel is not None and hasattr(kernel, "MoveFileExW") and hasattr(
-            kernel, "FlushFileBuffers"
-        )
-    if platform.system() == "Darwin":
-        return hasattr(ctypes.CDLL(None), "renameatx_np")
-    return hasattr(ctypes.CDLL(None), "renameat2")
-
-
-def _windows_move_file_ex(source: Path, target: Path, native=None, last_error=None) -> None:
-    """MoveFileExW without REPLACE_EXISTING, with durable write-through."""
-
-    if native is None:
-        try:
-            native = ctypes.windll.kernel32.MoveFileExW
-        except AttributeError as exc:
-            raise OSError("Windows MoveFileExW is unavailable") from exc
-    native.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
-    native.restype = ctypes.c_int
-    # WRITE_THROUGH is supported by Windows; omitting REPLACE_EXISTING makes
-    # ERROR_ALREADY_EXISTS/ERROR_FILE_EXISTS a closed no-replace failure.
-    if native(os.fspath(source), os.fspath(target), 0x00000008):
-        return
-    if last_error is None:
-        last_error = getattr(ctypes, "get_last_error", lambda: 1)
-    error = int(last_error())
-    if error in {80, 183}:
-        raise FileExistsError(target)
-    raise OSError(error, f"MoveFileExW failed for {source} -> {target}")
-
-
-def _flush_terminal_file(descriptor: int) -> None:
-    """Flush file contents; Windows directory fsync is intentionally absent."""
-
-    if not _terminal_is_windows():
-        os.fsync(descriptor)
-        return
-    try:
-        import msvcrt
-        kernel = ctypes.windll.kernel32
-        handle = msvcrt.get_osfhandle(descriptor)
-        if handle == -1 or not kernel.FlushFileBuffers(ctypes.c_void_p(handle)):
-            raise OSError("FlushFileBuffers failed")
-    except (AttributeError, ImportError, OSError) as exc:
-        raise OSError("Windows file durability is unavailable") from exc
-
-
-def _terminal_quarantine_slot(path: Path) -> Path:
-    if sum(1 for _ in path.parent.glob(f".{path.name}.quarantine-*")) >= MAX_TERMINAL_QUARANTINES:
-        raise PilotError("terminal_quarantine_limit")
-    for _ in range(8):
-        slot = path.with_name(
-            f".{path.name}.quarantine-{os.getpid()}-{secrets.token_hex(8)}"
-        )
-        try:
-            os.lstat(slot)
-        except FileNotFoundError:
-            return slot
-    raise PilotError("terminal_quarantine_unavailable")
-
-
-def _terminal_quarantine_delete_exact(
-    path: Path,
-    identity: tuple[int, int],
-    expected: bytes | None,
-    validator: Callable[[bytes], bool] | None = None,
-) -> bool:
-    """Move an exact object to a validated retained tombstone."""
-
-    try:
-        slot = _terminal_quarantine_slot(path)
-        _terminal_atomic_rename_no_replace(path, slot)
-    except FileNotFoundError:
-        return False
-    except FileExistsError:
-        return False
-    except OSError:
-        return False
-    try:
-        moved, value = _terminal_file_identity_and_bytes(slot)
-        valid = moved == identity and (expected is None or value == expected)
-        if validator is not None:
-            valid = valid and validator(value)
-        if not valid:
-            try:
-                _terminal_atomic_rename_no_replace(slot, path)
-            except FileExistsError:
-                pass
-            return False
-        # The moved, validated object is now a durable tombstone.  Never
-        # unlink a quarantine pathname: a later trusted retry may restore it,
-        # and no mutable/public pathname is touched after validation.
-        try:
-            _fsync_terminal_parent(path.parent)
-        except OSError:
-            return False
-        return True
-    except (OSError, PilotError):
-        return False
-
-
-def _terminal_cleanup_lock_quarantines(lock_path: Path) -> None:
-    """Validate stale owner tombstones without racy garbage collection."""
-
-    slots = sorted(lock_path.parent.glob(f".{lock_path.name}.quarantine-*"))
-    if len(slots) > MAX_TERMINAL_QUARANTINES:
-        raise PilotError("terminal_quarantine_limit")
-    for slot in slots:
-        if slot.is_symlink():
-            raise PilotError("terminal_handoff_lock_conflict")
-        try:
-            _identity, owner_bytes = _terminal_file_identity_and_bytes(slot)
-            owner = json.loads(owner_bytes.decode("ascii"))
-        except (OSError, PilotError, UnicodeError, json.JSONDecodeError) as exc:
-            raise PilotError("terminal_handoff_lock_conflict") from exc
-        # Owner tombstones are deliberately retained regardless of whether
-        # their PID is still alive.  They are not live control pathnames and
-        # are never used to steal the persistent byte-range lock.
-
-
-class _WindowsByteRangeLock:
-    """Persistent control-file lock backed by the Windows CRT."""
-
-    def __init__(self) -> None:
-        try:
-            import msvcrt
-        except ImportError as exc:  # pragma: no cover - Windows only.
-            raise OSError("msvcrt byte-range locking is unavailable") from exc
-        self._msvcrt = msvcrt
-
-    def lock(self, descriptor: int) -> None:
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        try:
-            self._msvcrt.locking(descriptor, self._msvcrt.LK_NBLCK, 1)
-        except OSError as exc:
-            if getattr(exc, "winerror", None) in {33, 36, 158} or exc.errno in {
-                errno.EACCES,
-                errno.EAGAIN,
-                errno.EDEADLK,
-            }:
-                raise BlockingIOError from exc
-            raise
-
-    def unlock(self, descriptor: int) -> None:
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        self._msvcrt.locking(descriptor, self._msvcrt.LK_UNLCK, 1)
-
-
-def _windows_byte_range_lock() -> _WindowsByteRangeLock:
-    return _WindowsByteRangeLock()
-
-
-def _windows_control_path_safe(path: Path) -> bool:
-    if not _terminal_is_windows():
-        return True
-    if os.name != "nt":  # forced adapter tests on POSIX hosts
-        return not path.is_symlink()
-    current = path
-    while True:
-        if current.is_symlink():
-            return False
-        if current.exists():
-            try:
-                attributes = ctypes.windll.kernel32.GetFileAttributesW(os.fspath(current))
-            except AttributeError:  # pragma: no cover - injected adapter tests.
-                attributes = 0
-            if attributes != 0xFFFFFFFF and attributes & 0x00000400:
-                return False  # FILE_ATTRIBUTE_REPARSE_POINT
-        if current.parent == current:
-            return True
-        current = current.parent
-
-
-def _acquire_windows_publish_lock(
-    lock_path: Path,
-) -> tuple[Path, int, str, tuple[int, int] | None, bytes | None]:
-    if not _windows_control_path_safe(lock_path):
-        raise PilotError("terminal_handoff_lock_conflict")
-    adapter = _windows_byte_range_lock()
-    deadline = time.monotonic() + TERMINAL_PUBLISH_LOCK_SECONDS
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
-    while True:
-        try:
-            descriptor = os.open(lock_path, flags, 0o600)
-        except OSError as exc:
-            raise PilotError("terminal_handoff_lock_unavailable") from exc
-        try:
-            value = os.fstat(descriptor)
-            if not stat.S_ISREG(value.st_mode):
-                raise PilotError("terminal_handoff_lock_conflict")
-            if value.st_size < 1:
-                os.write(descriptor, b"\0")
-                _flush_terminal_file(descriptor)
-            adapter.lock(descriptor)
-            return lock_path, descriptor, "windows", (value.st_dev, value.st_ino), None
-        except BlockingIOError:
-            os.close(descriptor)
-            if time.monotonic() >= deadline:
-                raise PilotError("terminal_handoff_lock_timeout")
-            time.sleep(0.02)
-        except PilotError:
-            os.close(descriptor)
-            raise
-        except OSError as exc:
-            os.close(descriptor)
-            raise PilotError("terminal_handoff_lock_unavailable") from exc
-
-
-def _terminal_unlink_stale_lock(
-    lock_path: Path,
-    descriptor: int,
-    identity: tuple[int, int],
-) -> None:
-    owner_bytes = _terminal_read_owner_bytes(descriptor)
-    if owner_bytes is None:
-        raise PilotError("terminal_handoff_lock_conflict")
-    try:
-        owner = json.loads(owner_bytes.decode("ascii"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise PilotError("terminal_handoff_lock_conflict") from exc
-    if _terminal_owner_live(owner):
-        raise PilotError("terminal_handoff_lock_conflict")
-    if not _terminal_quarantine_delete_exact(
-        lock_path,
-        identity,
-        owner_bytes,
-        validator=lambda value: not _terminal_owner_live(
-            json.loads(value.decode("ascii"))
-        ),
-    ):
-        raise PilotError("terminal_handoff_lock_conflict")
-
-
-def _acquire_terminal_publish_lock(
-    exp_dir: Path,
-) -> tuple[Path, int, str, tuple[int, int] | None, bytes | None]:
-    """Acquire one experiment-specific no-follow lock for W5 publication."""
-
+    if fcntl is None:  # Kept explicit for type checkers and patched tests.
+        raise PilotError("terminal_publication_unavailable")
     root = exp_dir.parent / ".internal-terminal-validation"
-    if not _terminal_path_is_safe(root):
+    if root.is_symlink():
         raise PilotError("terminal_handoff_path_conflict")
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if not _terminal_path_is_safe(root) or not root.is_dir():
+    if root.is_symlink() or not root.is_dir():
         raise PilotError("terminal_handoff_path_conflict")
     lock_path = root / f".{exp_dir.name}.publish.lock"
-    if not _terminal_path_is_safe(lock_path):
-        raise PilotError("terminal_handoff_path_conflict")
-    if _terminal_is_windows():
-        return _acquire_windows_publish_lock(lock_path)
-    if fcntl is None:
-        deadline = time.monotonic() + TERMINAL_PUBLISH_LOCK_SECONDS
-        _terminal_cleanup_lock_quarantines(lock_path)
-        flags = (
-            os.O_RDWR
-            | os.O_CREAT
-            | os.O_EXCL
-            | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
-        )
-        while True:
-            try:
-                descriptor = os.open(lock_path, flags, 0o600)
-                identity = _terminal_lock_identity(descriptor)
-                try:
-                    _terminal_write_owner(descriptor)
-                    owner_bytes = _terminal_read_owner_bytes(descriptor)
-                    return (
-                        lock_path,
-                        descriptor,
-                        "owner",
-                        identity,
-                        owner_bytes,
-                    )
-                except Exception:
-                    try:
-                        _terminal_quarantine_delete_exact(lock_path, identity, None)
-                    finally:
-                        os.close(descriptor)
-                    raise
-            except FileExistsError:
-                if time.monotonic() >= deadline:
-                    raise PilotError("terminal_handoff_lock_timeout")
-                try:
-                    descriptor = os.open(
-                        lock_path,
-                        os.O_RDWR
-                        | getattr(os, "O_CLOEXEC", 0)
-                        | getattr(os, "O_NOFOLLOW", 0),
-                    )
-                except FileNotFoundError:
-                    continue
-                except OSError as exc:
-                    raise PilotError("terminal_handoff_lock_unavailable") from exc
-                identity = _terminal_lock_identity(descriptor)
-                try:
-                    owner = _terminal_read_owner(descriptor)
-                    if _terminal_owner_live(owner):
-                        time.sleep(0.02)
-                        continue
-                    _terminal_unlink_stale_lock(lock_path, descriptor, identity)
-                finally:
-                    os.close(descriptor)
-            except OSError as exc:
-                raise PilotError("terminal_handoff_lock_unavailable") from exc
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     try:
         descriptor = os.open(lock_path, flags, 0o600)
     except OSError as exc:
         raise PilotError("terminal_handoff_lock_unavailable") from exc
     deadline = time.monotonic() + TERMINAL_PUBLISH_LOCK_SECONDS
     try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise PilotError("terminal_handoff_lock_conflict")
         while True:
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return lock_path, descriptor, "fcntl", None, None
+                return descriptor
             except BlockingIOError:
                 if time.monotonic() >= deadline:
                     raise PilotError("terminal_handoff_lock_timeout")
@@ -1984,28 +1504,14 @@ def _acquire_terminal_publish_lock(
         raise
 
 
-def _release_terminal_publish_lock(
-    lock: tuple[Path, int, str, tuple[int, int] | None, bytes | None],
-) -> None:
-    path, descriptor, mode, identity, owner_bytes = lock
+def _release_terminal_publish_lock(descriptor: int) -> None:
     try:
-        if mode == "fcntl" and fcntl is not None:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-            except OSError:
-                pass
-        elif mode == "windows":
-            try:
-                _windows_byte_range_lock().unlock(descriptor)
-            except OSError:
-                pass
+        if fcntl is not None:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+    except OSError:
+        pass
     finally:
-        try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        if mode == "owner" and identity is not None:
-            _terminal_quarantine_delete_exact(path, identity, owner_bytes)
+        os.close(descriptor)
 
 
 def _read_terminal_json(path: Path) -> dict[str, object] | None:
@@ -2013,7 +1519,7 @@ def _read_terminal_json(path: Path) -> dict[str, object] | None:
         raise PilotError("terminal_handoff_path_conflict")
     if not path.exists():
         return None
-    if not _terminal_regular(path):
+    if not path.is_file():
         raise PilotError("terminal_handoff_path_conflict")
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -2024,38 +1530,7 @@ def _read_terminal_json(path: Path) -> dict[str, object] | None:
     return value
 
 
-def _terminal_payload_bytes(payload: Mapping[str, object]) -> bytes:
-    return (
-        json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-        + "\n"
-    ).encode("ascii")
-
-
-def _terminal_file_identity_and_bytes(path: Path) -> tuple[tuple[int, int], bytes]:
-    descriptor = os.open(
-        path,
-        os.O_RDONLY
-        | getattr(os, "O_CLOEXEC", 0)
-        | getattr(os, "O_NOFOLLOW", 0),
-    )
-    try:
-        value = os.fstat(descriptor)
-        if not stat.S_ISREG(value.st_mode):
-            raise PilotError("terminal_handoff_path_conflict")
-        chunks: list[bytes] = []
-        while True:
-            chunk = os.read(descriptor, 1024 * 1024)
-            if not chunk:
-                break
-            chunks.append(chunk)
-        return (value.st_dev, value.st_ino), b"".join(chunks)
-    finally:
-        os.close(descriptor)
-
-
 def _fsync_terminal_parent(path: Path) -> None:
-    if _terminal_is_windows():
-        return
     descriptor = os.open(
         path,
         os.O_RDONLY
@@ -2063,39 +1538,34 @@ def _fsync_terminal_parent(path: Path) -> None:
         | getattr(os, "O_NOFOLLOW", 0),
     )
     try:
-        _flush_terminal_file(descriptor)
+        os.fsync(descriptor)
     finally:
         os.close(descriptor)
-
-
-def _remove_exact_terminal_file(
-    path: Path,
-    identity: tuple[int, int],
-    expected: bytes,
-) -> bool:
-    """Quarantine and remove only our inode/payload."""
-
-    return _terminal_quarantine_delete_exact(path, identity, expected)
 
 
 def _write_terminal_handoff(
     path: Path,
     payload: Mapping[str, object],
-) -> tuple[int, int]:
+) -> None:
     """Publish a new handoff without replacing a file another publisher owns."""
 
     if path.exists() or path.is_symlink():
         raise PilotError("terminal_handoff_ownership_conflict")
-    if not _terminal_path_is_safe(path.parent):
-        raise PilotError("terminal_handoff_path_conflict")
-    encoded = _terminal_payload_bytes(payload)
+    encoded = (
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("ascii")
     temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{secrets.token_hex(6)}")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
     descriptor: int | None = None
     linked = False
-    published = False
-    temporary_identity: tuple[int, int] | None = None
-    target_identity: tuple[int, int] | None = None
+    complete = False
     try:
         descriptor = os.open(temporary, flags, 0o600)
         view = memoryview(encoded)
@@ -2104,21 +1574,14 @@ def _write_terminal_handoff(
             if written <= 0:
                 raise OSError("short terminal handoff write")
             view = view[written:]
-        temporary_identity = _terminal_lock_identity(descriptor)
-        _flush_terminal_file(descriptor)
+        os.fsync(descriptor)
         os.close(descriptor)
         descriptor = None
-        _, temporary_bytes = _terminal_file_identity_and_bytes(temporary)
-        if temporary_bytes != encoded:
-            raise PilotError("terminal_handoff_write_failed")
-        _terminal_atomic_rename_no_replace(temporary, path)
+        os.link(temporary, path, follow_symlinks=False)
         linked = True
-        target_identity, target_bytes = _terminal_file_identity_and_bytes(path)
-        if target_bytes != encoded:
-            raise PilotError("terminal_handoff_write_failed")
+        temporary.unlink()
         _fsync_terminal_parent(path.parent)
-        published = True
-        return target_identity
+        complete = True
     except PilotError:
         raise
     except OSError as exc:
@@ -2126,11 +1589,9 @@ def _write_terminal_handoff(
     finally:
         if descriptor is not None:
             os.close(descriptor)
-        if not published:
-            if linked and target_identity is not None:
-                _remove_exact_terminal_file(path, target_identity, encoded)
-            if temporary_identity is not None:
-                _remove_exact_terminal_file(temporary, temporary_identity, encoded)
+        temporary.unlink(missing_ok=True)
+        if linked and not complete and path.exists():
+            path.unlink()
 
 
 def _validated_handoff(
@@ -2163,13 +1624,6 @@ TERMINAL_HANDOFF_LAYOUT = "external-sibling-namespace/1"
 _TERMINAL_LOCATOR_FIELDS = frozenset({"schema", "handoff_layout"})
 
 
-def _closed_locator_payload() -> dict[str, object]:
-    return {
-        "schema": TERMINAL_LOCATOR_SCHEMA,
-        "handoff_layout": TERMINAL_HANDOFF_LAYOUT,
-    }
-
-
 def _validate_terminal_marker(locator: Mapping[str, object]) -> None:
     """Ignore locator identity/bundle but reject an incompatible marker."""
 
@@ -2182,45 +1636,11 @@ def _validate_terminal_marker(locator: Mapping[str, object]) -> None:
         raise PilotError("terminal_locator_conflict")
 
 
-def _recover_terminal_handoff_quarantines(
-    workspace_api: object,
-    exp_dir: Path,
-    handoff_target: Path,
-) -> None:
-    """Restore a valid orphan handoff only when the destination is absent."""
-
-    slots = sorted(
-        handoff_target.parent.glob(f".{handoff_target.name}.quarantine-*")
-    )
-    if len(slots) > MAX_TERMINAL_QUARANTINES:
-        raise PilotError("terminal_quarantine_limit")
-    for slot in slots:
-        if slot.is_symlink():
-            raise PilotError("terminal_handoff_path_conflict")
-        try:
-            handoff = _read_terminal_json(slot)
-            if handoff is None:
-                continue
-            _validated_handoff(workspace_api, exp_dir, handoff)
-        except PilotError:
-            # Unknown/invalid quarantines are retained, never deleted.
-            continue
-        if handoff_target.exists() or handoff_target.is_symlink():
-            continue
-        try:
-            _terminal_atomic_rename_no_replace(slot, handoff_target)
-            _fsync_terminal_parent(handoff_target.parent)
-        except FileExistsError:
-            continue
-        except OSError:
-            continue
-
-
 def persist_terminal_validation(exp_dir: Path) -> TerminalValidationLocator | None:
     """Compile and publish the W1/W5 pair after all Agent resources are closed."""
 
     exp_dir = Path(exp_dir).resolve()
-    if not _terminal_atomic_rename_available():
+    if os.name != "posix" or fcntl is None or not hasattr(os, "link"):
         raise PilotError("terminal_publication_unavailable")
     try:
         workspace_api = _load_workspace_api()
@@ -2231,44 +1651,35 @@ def persist_terminal_validation(exp_dir: Path) -> TerminalValidationLocator | No
     except Exception as exc:
         raise PilotError("workspace_not_initialized") from exc
 
-    lock: tuple[Path, int, str, tuple[int, int] | None, bytes | None] | None = None
+    lock: int | None = None
     handoff_target = exp_dir.parent / ".internal-terminal-validation" / exp_dir.name / "terminal-validation.json"
     locator_target = exp_dir / TERMINAL_LOCATOR_RELATIVE
     created_handoff = False
-    handoff_identity: tuple[int, int] | None = None
-    handoff_payload: Mapping[str, object] | None = None
 
     def remove_own_handoff() -> None:
-        if not created_handoff or handoff_payload is None:
+        if not created_handoff:
             return
         try:
-            if handoff_identity is not None:
-                _remove_exact_terminal_file(
-                    handoff_target,
-                    handoff_identity,
-                    _terminal_payload_bytes(handoff_payload),
-                )
-        except (OSError, PilotError):
-            # Never turn cleanup into permission to delete an unknown pair.
+            handoff_target.unlink(missing_ok=True)
+            _fsync_terminal_parent(handoff_target.parent)
+        except OSError:
             pass
 
     try:
         lock = _acquire_terminal_publish_lock(exp_dir)
         handoff_dir = handoff_target.parent
-        if not _terminal_path_is_safe(handoff_dir):
-            raise PilotError("terminal_handoff_path_conflict")
         handoff_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        if not _terminal_path_is_safe(handoff_dir):
+        if handoff_dir.is_symlink() or not handoff_dir.is_dir():
             raise PilotError("terminal_handoff_path_conflict")
-        _recover_terminal_handoff_quarantines(
-            workspace_api, exp_dir, handoff_target
-        )
         handoff = _read_terminal_json(handoff_target)
         reader = getattr(workspace_api, "read_terminal_locator", None)
         locator = reader(exp_dir) if reader is not None else _read_terminal_json(locator_target)
         if handoff is None and locator is not None:
             raise PilotError("terminal_locator_without_handoff")
-        locator_payload = _closed_locator_payload()
+        locator_payload = {
+            "schema": TERMINAL_LOCATOR_SCHEMA,
+            "handoff_layout": TERMINAL_HANDOFF_LAYOUT,
+        }
         if handoff is not None:
             identity, _bundle = _validated_handoff(workspace_api, exp_dir, handoff)
             if locator is not None:
@@ -2302,7 +1713,7 @@ def persist_terminal_validation(exp_dir: Path) -> TerminalValidationLocator | No
             "terminal_identity_sha256": identity,
             "bundle": bundle,
         }
-        handoff_identity = _write_terminal_handoff(handoff_target, handoff_payload)
+        _write_terminal_handoff(handoff_target, handoff_payload)
         created_handoff = True
         sidecar_path = workspace_api.write_terminal_locator(exp_dir, locator_payload)  # type: ignore[attr-defined]
         return TerminalValidationLocator(

@@ -705,12 +705,13 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         worker.join(timeout=2)
         self.assertEqual([True], result)
 
-    def test_runner_terminal_publisher_recovers_handoff_only_and_no_fcntl_lock(self) -> None:
+    def test_runner_terminal_publisher_recovers_handoff_without_recompiling(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
         from scripts.pilot import runner
 
         class TerminalAPI:
-            def __init__(self, workspace: Path) -> None:
-                self.workspace = workspace
+            def __init__(self) -> None:
                 self.compiles = 0
                 self.writes = 0
 
@@ -749,41 +750,84 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             workspace = root / "exp"
             workspace.mkdir()
             (workspace / "workspace.json").write_text("{}", encoding="utf-8")
-            api = TerminalAPI(workspace)
-            with mock.patch.object(runner, "_load_workspace_api", return_value=api), mock.patch.object(
-                runner, "fcntl", None
-            ):
+            api = TerminalAPI()
+            with mock.patch.object(runner, "_load_workspace_api", return_value=api):
                 first = runner.persist_terminal_validation(workspace)
             (workspace / "run/terminal-validation-locator.json").unlink()
-            with mock.patch.object(runner, "_load_workspace_api", return_value=api), mock.patch.object(
-                runner, "fcntl", None
-            ):
+            with mock.patch.object(runner, "_load_workspace_api", return_value=api):
                 recovered = runner.persist_terminal_validation(workspace)
             self.assertEqual(first, recovered)
             self.assertEqual(1, api.compiles)
             self.assertEqual(2, api.writes)
-            lock_path = (
-                workspace.parent
-                / ".internal-terminal-validation"
-                / ".exp.publish.lock"
-            )
-            lock_path.write_text(
+
+            locator_path = workspace / "run/terminal-validation-locator.json"
+            locator_path.write_text(
                 json.dumps(
                     {
-                        "pid": 99999999,
-                        "host": "dead-host",
-                        "boot": "dead-boot",
-                        "start": "dead-start",
-                        "created_ns": 0,
+                        "schema": runner.TERMINAL_LOCATOR_SCHEMA,
+                        "handoff_layout": runner.TERMINAL_HANDOFF_LAYOUT,
+                        "unexpected": True,
                     }
                 ),
                 encoding="utf-8",
             )
-            with mock.patch.object(runner, "_load_workspace_api", return_value=api), mock.patch.object(
-                runner, "fcntl", None
+            with mock.patch.object(runner, "_load_workspace_api", return_value=api):
+                with self.assertRaisesRegex(
+                    runner.PilotError, "terminal_locator_conflict"
+                ):
+                    runner.persist_terminal_validation(workspace)
+            self.assertEqual(1, api.compiles)
+
+            concurrent_workspace = root / "concurrent-exp"
+            concurrent_workspace.mkdir()
+            (concurrent_workspace / "workspace.json").write_text(
+                "{}", encoding="utf-8"
+            )
+            concurrent_api = TerminalAPI()
+            original_compile = concurrent_api.compile_terminal_validation
+
+            def slow_compile(workspace: Path) -> dict:
+                time.sleep(0.05)
+                return original_compile(workspace)
+
+            concurrent_api.compile_terminal_validation = slow_compile  # type: ignore[method-assign]
+            with mock.patch.object(
+                runner, "_load_workspace_api", return_value=concurrent_api
             ):
-                self.assertIsNotNone(runner.persist_terminal_validation(workspace))
-            self.assertFalse(lock_path.exists())
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    results = list(
+                        pool.map(
+                            runner.persist_terminal_validation,
+                            [concurrent_workspace, concurrent_workspace],
+                        )
+                    )
+            self.assertEqual(results[0], results[1])
+            self.assertEqual(1, concurrent_api.compiles)
+            self.assertEqual(1, concurrent_api.writes)
+
+    def test_terminal_publication_without_fcntl_fails_before_mutation(self) -> None:
+        from scripts.pilot import runner
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "exp"
+            workspace.mkdir()
+            marker = workspace / "workspace.json"
+            marker.write_text("{}", encoding="utf-8")
+            with (
+                mock.patch.object(runner, "fcntl", None),
+                mock.patch.object(
+                    runner,
+                    "_load_workspace_api",
+                    side_effect=AssertionError("Workspace API loaded"),
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    runner.PilotError, "terminal_publication_unavailable"
+                ):
+                    runner.persist_terminal_validation(workspace)
+            self.assertEqual([marker], list(workspace.iterdir()))
+            self.assertFalse((root / ".internal-terminal-validation").exists())
 
     def test_terminal_handoff_post_link_failure_removes_exact_payload(self) -> None:
         from scripts.pilot import runner
@@ -803,187 +847,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 with self.assertRaises(runner.PilotError):
                     runner._write_terminal_handoff(target, payload)
             self.assertFalse(target.exists())
-            self.assertTrue(
-                list(target.parent.glob(".terminal-validation.json.quarantine-*"))
-            )
-
-    def test_quarantine_swap_preserves_foreign_replacement_and_restore_collision(self) -> None:
-        from scripts.pilot import runner
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            victim = root / "terminal-validation.json"
-            victim.write_bytes(b"owned")
-            identity, _ = runner._terminal_file_identity_and_bytes(victim)
-            original_rename = runner._terminal_atomic_rename_no_replace
-
-            def swap_after_move(source: Path, target: Path) -> None:
-                original_rename(source, target)
-                if source == victim:
-                    victim.write_bytes(b"foreign")
-
-            with mock.patch.object(
-                runner, "_terminal_atomic_rename_no_replace", side_effect=swap_after_move
-            ):
-                self.assertTrue(
-                    runner._remove_exact_terminal_file(victim, identity, b"owned")
-                )
-            self.assertEqual(b"foreign", victim.read_bytes())
-
-            victim.write_bytes(b"owned")
-            identity, _ = runner._terminal_file_identity_and_bytes(victim)
-
-            def collide_on_restore(source: Path, target: Path) -> None:
-                original_rename(source, target)
-                if source == victim:
-                    victim.write_bytes(b"foreign")
-                    target.write_bytes(b"foreign-quarantine")
-
-            with mock.patch.object(
-                runner,
-                "_terminal_atomic_rename_no_replace",
-                side_effect=collide_on_restore,
-            ):
-                self.assertFalse(
-                    runner._remove_exact_terminal_file(victim, identity, b"owned")
-                )
-            self.assertEqual(b"foreign", victim.read_bytes())
-            self.assertTrue(list(root.glob(".terminal-validation.json.quarantine-*")))
-
-    def test_forced_windows_move_and_persistent_byte_lock_adapters(self) -> None:
-        from scripts.pilot import runner
-
-        calls: list[tuple[str, str, int]] = []
-
-        def native_move(source: str, target: str, flags: int) -> int:
-            calls.append((source, target, flags))
-            return 1
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            source = root / "source"
-            target = root / "target"
-            with mock.patch.object(runner, "_terminal_is_windows", return_value=True):
-                runner._windows_move_file_ex(source, target, native=native_move)
-            self.assertEqual(0x8, calls[0][2])
-            with self.assertRaises(FileExistsError):
-                runner._windows_move_file_ex(
-                    source,
-                    target,
-                    native=lambda *_args: 0,
-                    last_error=lambda: 183,
-                )
-            with self.assertRaises(OSError):
-                runner._windows_move_file_ex(
-                    source,
-                    target,
-                    native=lambda *_args: 0,
-                    last_error=lambda: 5,
-                )
-
-            class FakeByteLock:
-                held = False
-
-                def lock(self, _descriptor: int) -> None:
-                    if self.held:
-                        raise BlockingIOError
-                    self.held = True
-
-                def unlock(self, _descriptor: int) -> None:
-                    self.held = False
-
-            fake = FakeByteLock()
-            experiment = root / "exp"
-            experiment.mkdir()
-            with (
-                mock.patch.object(runner, "_terminal_is_windows", return_value=True),
-                mock.patch.object(runner, "_windows_byte_range_lock", return_value=fake),
-                mock.patch.object(runner, "_flush_terminal_file"),
-            ):
-                first = runner._acquire_terminal_publish_lock(experiment)
-                control = first[0]
-                runner._release_terminal_publish_lock(first)
-                second = runner._acquire_terminal_publish_lock(experiment)
-                runner._release_terminal_publish_lock(second)
-            self.assertTrue(control.is_file())
-
-    def test_forced_windows_terminal_publish_avoids_posix_directory_fsync(self) -> None:
-        from scripts.pilot import runner
-
-        workspace_root = Path(__file__).resolve().parents[3] / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
-        if str(workspace_root) not in sys.path:
-            sys.path.insert(0, str(workspace_root))
-        spec = importlib.util.spec_from_file_location(
-            "forced_windows_workspace_facade", workspace_root / "workspace.py"
-        )
-        self.assertIsNotNone(spec and spec.loader)
-        facade = importlib.util.module_from_spec(spec)
-        assert spec is not None and spec.loader is not None
-        sys.modules[spec.name] = facade
-        spec.loader.exec_module(facade)
-
-        class FakeByteLock:
-            def lock(self, _descriptor: int) -> None:
-                return None
-
-            def unlock(self, _descriptor: int) -> None:
-                return None
-
-        class TerminalAPI:
-            def __init__(self, workspace: Path) -> None:
-                self.workspace = workspace
-
-            def workspace_initialized(self, _workspace: Path) -> bool:
-                return True
-
-            def compile_terminal_validation(self, _workspace: Path) -> dict:
-                return {
-                    "bundle": {"schema": "synthetic-bundle/1", "result": {}, "manifest": {}},
-                    "terminal_identity_sha256": "a" * 64,
-                }
-
-            def verify_terminal_validation(self, _workspace: Path, _bundle: dict, identity: str) -> dict:
-                if identity != "a" * 64:
-                    raise ValueError("wrong identity")
-                return {}
-
-            def read_terminal_locator(self, workspace: Path) -> dict | None:
-                target = workspace / "run/terminal-validation-locator.json"
-                return json.loads(target.read_text()) if target.exists() else None
-
-            def write_terminal_locator(self, workspace: Path, payload: dict) -> str:
-                return facade.write_terminal_locator(workspace, payload)
-
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            workspace = root / "exp"
-            workspace.mkdir()
-            (workspace / "workspace.json").write_text("{}", encoding="utf-8")
-            api = TerminalAPI(workspace)
-            original_open = runner.os.open
-
-            def reject_directory_open(path, flags, *args, **kwargs):
-                if flags & getattr(os, "O_DIRECTORY", 0):
-                    raise AssertionError("POSIX directory fsync was attempted")
-                return original_open(path, flags, *args, **kwargs)
-
-            with (
-                mock.patch.object(runner, "_load_workspace_api", return_value=api),
-                mock.patch.object(runner, "_terminal_is_windows", return_value=True),
-                mock.patch.object(runner, "_terminal_atomic_rename_available", return_value=True),
-                mock.patch.object(runner, "_windows_move_file_ex", side_effect=lambda source, target: os.replace(source, target)),
-                mock.patch.object(runner, "_windows_byte_range_lock", return_value=FakeByteLock()),
-                mock.patch.object(runner, "_flush_terminal_file"),
-                mock.patch.object(facade, "_locator_is_windows", return_value=True),
-                mock.patch.object(facade, "_locator_atomic_rename_available", return_value=True),
-                mock.patch.object(facade, "_locator_windows_move_file_ex", side_effect=lambda source, target: os.replace(source, target)),
-                mock.patch.object(facade, "_locator_flush_file"),
-                mock.patch.object(runner.os, "open", side_effect=reject_directory_open),
-            ):
-                first = runner.persist_terminal_validation(workspace)
-                second = runner.persist_terminal_validation(workspace)
-            self.assertEqual(first, second)
-            self.assertTrue((workspace / "run/terminal-validation-locator.json").is_file())
+            self.assertFalse(list(target.parent.glob(".terminal-validation.json.tmp-*")))
 
     def test_terminal_locator_facade_rejects_bundle_or_identity_payloads(self) -> None:
         workspace_root = (
