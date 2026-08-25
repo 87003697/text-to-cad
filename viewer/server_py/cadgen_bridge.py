@@ -217,3 +217,4 @@ def run_cadgen_cold(module: str, args, repo_root: str, timeout: float | None = N
             except ValueError:
                 break
     message = ("".join(stderr_lines) or "".join(stdout_lines) or f"cadgen {module} exited with code {proc.returncode}").strip()
+    return {"ok": False, "exitCode": proc.returncode, "error": message}

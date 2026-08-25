@@ -159,6 +159,23 @@ class ColdProcessIdleWatchdogTests(unittest.TestCase):
         self.assertIn("silent", result.get("error", ""))
         self.assertLess(elapsed, 3, "a silent subprocess should die at the budget, not at its own end")
 
+    def test_a_cold_exit_without_a_json_line_still_returns_an_error_dict(self):
+        # Regression: the idle-watchdog rewrite dropped the function's terminal return,
+        # so every subprocess that exited without printing a JSON line (argparse usage
+        # errors are the routine case) returned None and crashed the caller.
+        tmp = self._module_dir(
+            'import sys\n\nsys.stderr.write("cold_probe: required argument missing: --step\\n")\n'
+            "sys.exit(2)\n"
+        )
+        os.environ["PYTHONPATH"] = tmp
+
+        result = cadgen_bridge.run_cadgen_cold("cold_probe", [], tmp)
+
+        self.assertIsNotNone(result, "a non-JSON exit must still return the error dict")
+        self.assertFalse(result.get("ok"))
+        self.assertEqual(result.get("exitCode"), 2)
+        self.assertIn("--step", result.get("error", ""))
+
     def test_the_cold_deadline_slides_while_the_subprocess_narrates(self):
         body = """
             import sys, time, json
