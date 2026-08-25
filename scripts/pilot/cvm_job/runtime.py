@@ -31,6 +31,7 @@ from .protocol import (
     requested_model,
     requested_plugin_mode,
     requested_reconstruction_spec,
+    requested_view_image,
     state_path,
     transition,
     utc_now,
@@ -199,12 +200,15 @@ def _pilot_record(
     *,
     model: str | None = None,
     plugin_mode: str = "direct",
+    view_image: bool = True,
     reconstruction_spec: bool = True,
     include_model: bool = True,
     token_slot_from_environment: bool = True,
 ) -> dict[str, Any]:
     if not isinstance(reconstruction_spec, bool):
         raise ProtocolError("reconstruction_spec must be a boolean")
+    if not isinstance(view_image, bool):
+        raise ProtocolError("view_image must be a boolean")
     raw_token_slot = (
         os.environ.get("VENUS_TOKEN_SLOT") if token_slot_from_environment else None
     )
@@ -251,6 +255,7 @@ def _pilot_record(
         # New provider-backed pilot records state the effective default
         # explicitly.  Provider-free records intentionally retain their
         # historical shape and do not participate in this option.
+        record["view_image"] = view_image
         record["reconstruction_spec"] = reconstruction_spec
     return record
 
@@ -326,6 +331,7 @@ def submit_pilot(
     *,
     model: str | None = None,
     plugin_mode: str = "direct",
+    view_image: bool = True,
     reconstruction_spec: bool = True,
     state_root: Path | None = None,
     detach: Callable[[str, Sequence[str], Path], int] = _detach,
@@ -342,6 +348,7 @@ def submit_pilot(
             root,
             model=model,
             plugin_mode=plugin_mode,
+            view_image=view_image,
             reconstruction_spec=reconstruction_spec,
         )
         publish_state(root, record)
@@ -368,6 +375,7 @@ def submit_pilot(
         "state": state["state"],
         "kind": "pilot",
         "model": requested_model(state),
+        "view_image": requested_view_image(state),
         "reconstruction_spec": requested_reconstruction_spec(state),
     }
 
@@ -556,9 +564,14 @@ def _supervise_pilot_locked(
         requested_plugin_mode(record),
     ]
     # The shell pilot is default-on, so every provider-backed record needs an
-    # explicit mode.  Historical records lack the field and
-    # requested_reconstruction_spec() intentionally resolves them to false.
+    # explicit mode.  Historical records lack either field and the requested_*
+    # helpers intentionally resolve them to false.
     if command is None:
+        pilot_command.append(
+            "--view-image"
+            if requested_view_image(record)
+            else "--no-view-image"
+        )
         pilot_command.append(
             "--reconstruction-spec"
             if requested_reconstruction_spec(record)

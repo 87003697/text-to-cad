@@ -18,11 +18,11 @@ Use these durable entrypoints for normal work:
 | Installed-plugin smoke (real Codex CLI, isolated CODEX_HOME) | `scripts/release/smoke-installed-plugin.sh` |
 | Install local skills into agents | `scripts/install/install-skills.sh --agent codex` |
 | Uninstall local skill links | `scripts/install/uninstall-skills.sh --agent codex` |
-| Run one Toys4K pilot | `scripts/pilot/toys4k-pilot.sh <object> <group> [exp] [direct\|e2e] [--reconstruction-spec\|--no-reconstruction-spec]` |
+| Run one Toys4K pilot | `scripts/pilot/toys4k-pilot.sh <object> <group> [exp] [direct\|e2e] [--view-image\|--no-view-image] [--reconstruction-spec\|--no-reconstruction-spec]` |
 | Run a Toys4K pilot batch | `scripts/pilot/toys4k-batch.sh <slug> <object>...` |
 | Push the current source overlay to CVM | `scripts/pilot/cvm-push.sh` |
 | Install/probe the exact Browser Runtime image | `scripts/pilot/cvm-browser-runtime.sh install|probe|status ...` |
-| Submit a detached CVM pilot | `scripts/pilot/cvm-submit.sh pilot <object> <group> [--model sol\|terra\|luna\|gpt-5.5] [--plugin-mode direct\|e2e] [--reconstruction-spec\|--no-reconstruction-spec]` |
+| Submit a detached CVM pilot | `scripts/pilot/cvm-submit.sh pilot <object> <group> [--model sol\|terra\|luna\|gpt-5.5] [--plugin-mode direct\|e2e] [--view-image\|--no-view-image] [--reconstruction-spec\|--no-reconstruction-spec]` |
 | Submit an offline installed-plugin discovery pilot | `scripts/pilot/cvm-submit.sh provider-free installed-plugin <group>` |
 | Monitor a CVM job | `scripts/pilot/cvm-monitor.sh --once|--wait <handle>` |
 | Pull terminal CVM outputs | `scripts/pilot/cvm-pull.sh --exp|--group ...` |
@@ -54,6 +54,17 @@ paid pilot must test natural-language discovery through the verified
 job-private installed plugin authority. `run/plugin-mode.txt` and job status
 record the request; the rollout and authority receipt are still required to
 prove which installed skill actually ran.
+
+Toys4K pilots enable the `view_image` treatment by default. Setup/initial
+modeling, Repair Hypothesis parent-child comparison, and final selection must
+use `view_image` for visual inspection alongside objective measurements. Use
+`--no-view-image` for a controlled image-tool-free run; the prompt explicitly
+forbids the call and the Codex CLI receives `--disable view_image`. The
+explicit `--view-image` flag is accepted as a treatment reaffirmation. The
+effective mode is persisted and exposed as `view_image` in provider-backed CVM
+job state; historical records missing the field resolve to false and are
+supervised explicitly. Provider-free installed-plugin discovery remains
+model-free and image-free.
 
 CVM pilots default to the public `gpt-5.5` model slug. An explicit `--model`
 overrides the `MODEL` environment variable; either can select `sol`, `terra`,

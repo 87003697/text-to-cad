@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] (default: gpt-5.5) [--plugin-mode direct|e2e] [--reconstruction-spec|--no-reconstruction-spec] (default: --reconstruction-spec) | provider-free installed-plugin <group>" >&2
+    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] (default: gpt-5.5) [--plugin-mode direct|e2e] [--view-image|--no-view-image] (default: --view-image) [--reconstruction-spec|--no-reconstruction-spec] (default: --reconstruction-spec) | provider-free installed-plugin <group>" >&2
     exit 2
 }
 
@@ -26,6 +26,8 @@ case "$mode" in
         token_slot=""
         model=""
         plugin_mode=""
+        view_image=1
+        view_image_flag_seen=0
         reconstruction_spec=1
         reconstruction_spec_flag_seen=0
         shift 3
@@ -41,6 +43,18 @@ case "$mode" in
                     [[ "$reconstruction_spec_flag_seen" == 0 ]] || usage
                     reconstruction_spec=0
                     reconstruction_spec_flag_seen=1
+                    shift
+                    ;;
+                --view-image)
+                    [[ "$view_image_flag_seen" == 0 ]] || usage
+                    view_image=1
+                    view_image_flag_seen=1
+                    shift
+                    ;;
+                --no-view-image)
+                    [[ "$view_image_flag_seen" == 0 ]] || usage
+                    view_image=0
+                    view_image_flag_seen=1
                     shift
                     ;;
                 --token-slot)
@@ -71,6 +85,11 @@ case "$mode" in
         submit_command="python3 -m scripts.pilot.cvm_job submit-pilot '$object_name' '$group' --plugin-mode '${plugin_mode:-direct}'"
         if [[ -n "$selected_model" ]]; then
             submit_command+=" --model '$selected_model'"
+        fi
+        if [[ "$view_image" == 1 ]]; then
+            submit_command+=" --view-image"
+        else
+            submit_command+=" --no-view-image"
         fi
         if [[ "$reconstruction_spec" == 1 ]]; then
             submit_command+=" --reconstruction-spec"

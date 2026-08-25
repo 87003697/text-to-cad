@@ -30,6 +30,7 @@ _RESERVED_UPDATE_FIELDS = frozenset(
         "exp",
         "model",
         "plugin_mode",
+        "view_image",
         "reconstruction_spec",
         "state",
         "submitted_at",
@@ -106,6 +107,7 @@ def _validate_common(state: dict[str, Any]) -> None:
     if state.get("exp") != parsed["exp"]:
         raise ProtocolError("exp does not match handle")
     requested_plugin_mode(state)
+    requested_view_image(state)
     requested_reconstruction_spec(state)
     if not state.get("provider_free"):
         requested_model(state)
@@ -117,6 +119,19 @@ def requested_plugin_mode(state: dict[str, Any]) -> str:
     value = state.get("plugin_mode", "direct")
     if not isinstance(value, str) or value not in {"direct", "e2e"}:
         raise ProtocolError(f"invalid plugin mode: {value!r}")
+    return value
+
+
+def requested_view_image(state: dict[str, Any]) -> bool:
+    """Return the requested view-image mode.
+
+    Records from before this field existed are historical controls because
+    those pilots were explicitly prohibited from calling ``view_image``.
+    """
+
+    value = state.get("view_image", False)
+    if not isinstance(value, bool):
+        raise ProtocolError(f"invalid view-image flag: {value!r}")
     return value
 
 
@@ -209,6 +224,19 @@ def publish_state(root: Path, state: dict[str, Any]) -> None:
     path = state_path(root, state.get("job"))
     if path.exists():
         previous = load_state(root, state["job"])
+        previous_has_view_image = "view_image" in previous
+        current_has_view_image = "view_image" in state
+        if previous_has_view_image != current_has_view_image:
+            raise ProtocolError(
+                f"view_image field presence is immutable: {state['job']}"
+            )
+        if (
+            previous_has_view_image
+            and previous["view_image"] != state["view_image"]
+        ):
+            raise ProtocolError(
+                f"view_image is immutable: {state['job']}"
+            )
         old = previous["state"]
         new = state["state"]
         if old in TERMINAL_STATES:
@@ -287,6 +315,7 @@ def public_state(state: dict[str, Any], stale_after: float) -> dict[str, Any]:
     if not state.get("provider_free"):
         result["model"] = requested_model(state)
         result["plugin_mode"] = requested_plugin_mode(state)
+        result["view_image"] = requested_view_image(state)
         result["reconstruction_spec"] = requested_reconstruction_spec(state)
     if state["state"] in TERMINAL_STATES:
         result.update(

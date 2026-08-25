@@ -10,7 +10,7 @@ description: >-
 Run exactly one local wrapper command:
 
 ```bash
-scripts/pilot/cvm-submit.sh pilot <object> <group> [--model sol|terra|luna|gpt-5.5] [--plugin-mode direct|e2e] [--reconstruction-spec|--no-reconstruction-spec]
+scripts/pilot/cvm-submit.sh pilot <object> <group> [--model sol|terra|luna|gpt-5.5] [--plugin-mode direct|e2e] [--view-image|--no-view-image] [--reconstruction-spec|--no-reconstruction-spec]
 ```
 
 `direct` is the default and preserves the benchmark path: it names
@@ -31,6 +31,17 @@ Both modes write `run/plugin-mode.txt` and expose `plugin_mode` through job
 status. Those fields prove the requested mode, not which skill Codex actually
 invoked. Confirm the rollout together with the bound plugin-authority receipt
 before claiming successful installed-plugin invocation.
+
+`view_image` is enabled by default as the treatment. The pilot prompt requires
+visual inspection during setup/initial modeling, Repair Hypothesis parent-child
+comparison, and final selection, and the Codex CLI leaves the tool enabled. Use
+`--no-view-image` for the control; its prompt says not to call `view_image` and
+the CLI invocation mechanically adds `--disable view_image`. The explicit
+`--view-image` flag is accepted as a treatment reaffirmation. The effective
+boolean is persisted as `view_image` in provider-backed job state and exposed
+by status. Historical records without the field are treated as controls and
+are supervised with an explicit `--no-view-image` flag. The provider-free
+installed-plugin check remains model-free and image-free.
 
 Reconstruction Spec is enabled by default for Toys4K pilots. The pilot prompt
 asks the model to create and maintain the mutable

@@ -90,6 +90,30 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(state["plugin_mode"], "e2e")
         self.assertEqual(protocol.public_state(state, 60)["plugin_mode"], "e2e")
 
+    def test_submit_records_view_image_by_default_and_supports_control(self) -> None:
+        treatment = runtime.submit_pilot(
+            "airplane",
+            self.group,
+            state_root=self.state_root,
+            detach=lambda *args: 1,
+        )
+        treatment_state = protocol.load_state(self.state_root, treatment["job"])
+        self.assertTrue(treatment_state["view_image"])
+        self.assertTrue(protocol.public_state(treatment_state, 60)["view_image"])
+        self.assertTrue(treatment["view_image"])
+
+        control = runtime.submit_pilot(
+            "airplane",
+            self.group,
+            view_image=False,
+            state_root=self.state_root,
+            detach=lambda *args: 1,
+        )
+        control_state = protocol.load_state(self.state_root, control["job"])
+        self.assertFalse(control_state["view_image"])
+        self.assertFalse(protocol.public_state(control_state, 60)["view_image"])
+        self.assertFalse(control["view_image"])
+
     def test_submit_defaults_to_gpt55_and_records_resolved_model(self) -> None:
         with mock.patch.dict(os.environ, {"MODEL": ""}):
             result = runtime.submit_pilot(
@@ -160,7 +184,8 @@ class CvmJobTests(unittest.TestCase):
         self.assertEqual(state["plugin_mode"], "e2e")
         self.assertEqual(captured["env"]["MODEL"], "sol")
         self.assertEqual(
-            captured["command"][-2:], ["e2e", "--reconstruction-spec"]
+            captured["command"][-3:],
+            ["e2e", "--view-image", "--reconstruction-spec"],
         )
 
     def test_submit_records_reconstruction_spec_by_default_and_supports_opt_out(
@@ -208,10 +233,28 @@ class CvmJobTests(unittest.TestCase):
         self.assertTrue(default.reconstruction_spec)
         self.assertTrue(on.reconstruction_spec)
         self.assertFalse(off.reconstruction_spec)
+        self.assertTrue(default.view_image)
+        self.assertTrue(
+            parser.parse_args(
+                ["submit-pilot", "airplane", self.group, "--view-image"]
+            ).view_image
+        )
+        self.assertFalse(
+            parser.parse_args(
+                ["submit-pilot", "airplane", self.group, "--no-view-image"]
+            ).view_image
+        )
         for flags in (
             ("--reconstruction-spec", "--reconstruction-spec"),
             ("--no-reconstruction-spec", "--no-reconstruction-spec"),
             ("--reconstruction-spec", "--no-reconstruction-spec"),
+        ):
+            with self.subTest(flags=flags), self.assertRaises(SystemExit):
+                parser.parse_args(["submit-pilot", "airplane", self.group, *flags])
+        for flags in (
+            ("--view-image", "--view-image"),
+            ("--no-view-image", "--no-view-image"),
+            ("--view-image", "--no-view-image"),
         ):
             with self.subTest(flags=flags), self.assertRaises(SystemExit):
                 parser.parse_args(["submit-pilot", "airplane", self.group, *flags])
@@ -245,8 +288,9 @@ class CvmJobTests(unittest.TestCase):
                 self.assertEqual(state["state"], "succeeded")
                 self.assertEqual(
                     captured["command"][-2:],
-                    [plugin_mode, "--reconstruction-spec"],
+                    ["--view-image", "--reconstruction-spec"],
                 )
+                self.assertEqual(captured["command"][4], plugin_mode)
 
     def test_reconstruction_spec_opt_out_reaches_direct_and_e2e_pilot_commands(
         self,
@@ -279,8 +323,42 @@ class CvmJobTests(unittest.TestCase):
                 self.assertEqual(state["state"], "succeeded")
                 self.assertEqual(
                     captured["command"][-2:],
-                    [plugin_mode, "--no-reconstruction-spec"],
+                    ["--view-image", "--no-reconstruction-spec"],
                 )
+                self.assertEqual(captured["command"][4], plugin_mode)
+
+    def test_view_image_control_reaches_direct_and_e2e_pilot_commands(self) -> None:
+        for plugin_mode in ("direct", "e2e"):
+            with self.subTest(plugin_mode=plugin_mode):
+                result = runtime.submit_pilot(
+                    "airplane",
+                    self.group,
+                    plugin_mode=plugin_mode,
+                    view_image=False,
+                    state_root=self.state_root,
+                    detach=lambda *args: 1,
+                )
+                handle = result["job"]
+                self.write_manifest(handle, 0)
+                captured: dict[str, object] = {}
+
+                def fake_run(root, job, command, **kwargs):
+                    captured["command"] = list(command)
+                    return 0, 4321
+
+                with mock.patch.object(
+                    runtime, "_run_with_heartbeat", side_effect=fake_run
+                ):
+                    state = runtime.supervise_pilot(
+                        handle, state_root=self.state_root
+                    )
+
+                self.assertEqual(state["state"], "succeeded")
+                self.assertEqual(
+                    captured["command"][-2:],
+                    ["--no-view-image", "--reconstruction-spec"],
+                )
+                self.assertEqual(captured["command"][4], plugin_mode)
 
     def test_historical_missing_reconstruction_spec_is_false_and_has_explicit_opt_out(
         self,
@@ -289,6 +367,7 @@ class CvmJobTests(unittest.TestCase):
         path = protocol.state_path(self.state_root, handle)
         state = json.loads(path.read_text(encoding="utf-8"))
         del state["reconstruction_spec"]
+        del state["view_image"]
         path.write_text(json.dumps(state), encoding="utf-8")
         pilot_root = self.repo_root / "scripts" / "pilot"
         pilot_root.mkdir(parents=True)
@@ -334,7 +413,8 @@ exec "$HISTORICAL_REAL_PILOT" "$@"
         self.assertEqual(result["state"], "succeeded")
         constructed_argv = argv_path.read_text(encoding="utf-8").splitlines()
         self.assertEqual(
-            constructed_argv[-2:], ["direct", "--no-reconstruction-spec"]
+            constructed_argv[-3:],
+            ["direct", "--no-view-image", "--no-reconstruction-spec"],
         )
         prompt = (
             self.repo_root
@@ -345,10 +425,16 @@ exec "$HISTORICAL_REAL_PILOT" "$@"
         ).read_text(encoding="utf-8")
         self.assertIn("Reconstruction Spec is disabled for this run", prompt)
         self.assertIn("Do not create, read, or update", prompt)
+        self.assertIn("view_image` is disabled", prompt)
+        self.assertIn("Do not", prompt)
         self.assertNotIn("Reconstruction Spec is enabled", prompt)
         self.assertNotIn("create and maintain", prompt)
         self.assertFalse(protocol.requested_reconstruction_spec(state))
         self.assertFalse(protocol.public_state(state, 60)["reconstruction_spec"])
+        self.assertFalse(protocol.requested_view_image(state))
+        self.assertFalse(protocol.public_state(state, 60)["view_image"])
+        final_state = protocol.load_state(self.state_root, handle)
+        self.assertNotIn("view_image", final_state)
 
     def test_submit_rejects_invalid_plugin_mode(self) -> None:
         with self.assertRaisesRegex(protocol.ProtocolError, "invalid plugin mode"):
@@ -375,6 +461,21 @@ exec "$HISTORICAL_REAL_PILOT" "$@"
                 ):
                     protocol.validate_state(state)
 
+    def test_protocol_rejects_invalid_persisted_view_image(self) -> None:
+        for invalid in ("true", 1, [], {}):
+            with self.subTest(invalid=invalid):
+                state = runtime._pilot_record(
+                    "airplane",
+                    self.group,
+                    "20260805-170000-airplane",
+                    self.state_root,
+                )
+                state["view_image"] = invalid
+                with self.assertRaisesRegex(
+                    protocol.ProtocolError, "invalid view-image flag"
+                ):
+                    protocol.validate_state(state)
+
     def test_plugin_mode_is_immutable_through_protocol_updates(self) -> None:
         handle = self.submit()
 
@@ -385,6 +486,49 @@ exec "$HISTORICAL_REAL_PILOT" "$@"
             with self.subTest(update=update.__name__):
                 with self.assertRaisesRegex(protocol.ProtocolError, "plugin_mode"):
                     update(self.state_root, handle, plugin_mode="e2e")
+
+    def test_view_image_is_immutable_through_protocol_updates(self) -> None:
+        handle = self.submit()
+
+        def transition_to_running(root, job, **updates):
+            return protocol.transition(root, job, "running", **updates)
+
+        for update in (protocol.heartbeat, transition_to_running):
+            with self.subTest(update=update.__name__):
+                with self.assertRaisesRegex(protocol.ProtocolError, "view_image"):
+                    update(self.state_root, handle, view_image=False)
+
+        state = protocol.load_state(self.state_root, handle)
+        state["view_image"] = False
+        with self.assertRaisesRegex(protocol.ProtocolError, "view_image"):
+            protocol.publish_state(self.state_root, state)
+
+        control = runtime.submit_pilot(
+            "airplane",
+            self.group,
+            view_image=False,
+            state_root=self.state_root,
+            detach=lambda *args: 1,
+        )
+        control_state = protocol.load_state(self.state_root, control["job"])
+        del control_state["view_image"]
+        with self.assertRaisesRegex(protocol.ProtocolError, "field presence"):
+            protocol.publish_state(self.state_root, control_state)
+
+    def test_historical_missing_view_image_stays_missing_through_transitions(self) -> None:
+        handle = self.submit()
+        path = protocol.state_path(self.state_root, handle)
+        state = json.loads(path.read_text(encoding="utf-8"))
+        del state["view_image"]
+        path.write_text(json.dumps(state), encoding="utf-8")
+
+        protocol.transition(self.state_root, handle, "running")
+        current = protocol.load_state(self.state_root, handle)
+        self.assertNotIn("view_image", current)
+        self.assertFalse(protocol.requested_view_image(current))
+        with self.assertRaisesRegex(protocol.ProtocolError, "field presence"):
+            current["view_image"] = False
+            protocol.publish_state(self.state_root, current)
 
     def test_pre_plugin_mode_state_defaults_to_direct(self) -> None:
         handle = self.submit()
@@ -406,8 +550,9 @@ exec "$HISTORICAL_REAL_PILOT" "$@"
 
         self.assertEqual(result["state"], "succeeded")
         self.assertEqual(
-            captured["command"][-2:], ["direct", "--reconstruction-spec"]
+            captured["command"][-2:], ["--view-image", "--reconstruction-spec"]
         )
+        self.assertEqual(captured["command"][4], "direct")
         self.assertEqual(protocol.public_state(state, 60)["plugin_mode"], "direct")
 
     def test_pre_model_state_keeps_legacy_sol_model(self) -> None:
@@ -558,6 +703,7 @@ exec "$HISTORICAL_REAL_PILOT" "$@"
                 self.group,
                 parsed["exp"],
                 "direct",
+                "--view-image",
                 "--reconstruction-spec",
             ],
         )
@@ -583,7 +729,8 @@ exec "$HISTORICAL_REAL_PILOT" "$@"
 
         self.assertEqual(state["state"], "succeeded")
         self.assertEqual(
-            captured["command"][-2:], ["e2e", "--reconstruction-spec"]
+            captured["command"][-3:],
+            ["e2e", "--view-image", "--reconstruction-spec"],
         )
 
     def test_heartbeat_updates_while_child_is_running(self) -> None:
@@ -1234,6 +1381,8 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
         self.assertIn("scripts.pilot.cvm_job submit-pilot", commands[0])
         self.assertIn("20260805-170000-audit", commands[0])
         self.assertNotIn("--model", commands[0])
+        self.assertIn("--view-image", commands[0])
+        self.assertNotIn("--no-view-image", commands[0])
         self.assertIn("--reconstruction-spec", commands[0])
         self.assertIn("ServerAliveInterval=30", commands[1])
         self.assertIn("scripts.pilot.cvm_job wait", commands[1])
@@ -1524,6 +1673,94 @@ printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
         command = command_log.read_text(encoding="utf-8")
         self.assertIn("--no-reconstruction-spec", command)
         self.assertNotIn("--reconstruction-spec", command)
+
+    def test_submit_view_image_default_and_explicit_modes_are_forwarded(self) -> None:
+        fake_bin = self.workspace / "view-image-bin"
+        fake_bin.mkdir()
+        command_log = self.workspace / "view-image-commands.log"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$CVM_WRAPPER_LOG"
+printf '%s\\n' '{"job":"group/exp","state":"submitted"}'
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_WRAPPER_LOG": os.fspath(command_log),
+        }
+        for extra, expected in (
+            ((), "--view-image"),
+            (("--view-image",), "--view-image"),
+            (("--no-view-image",), "--no-view-image"),
+            (("--no-view-image", "--no-reconstruction-spec"), "--no-view-image"),
+        ):
+            with self.subTest(extra=extra):
+                result = subprocess.run(
+                    [
+                        os.fspath(SUBMIT_SCRIPT),
+                        "pilot",
+                        "airplane",
+                        "20260805-170000-audit",
+                        *extra,
+                    ],
+                    env=env,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                command = command_log.read_text(encoding="utf-8").splitlines()[-1]
+                self.assertIn(expected, command)
+                if expected == "--view-image":
+                    self.assertNotIn("--no-view-image", command)
+                else:
+                    self.assertNotIn("--view-image", command)
+
+    def test_submit_rejects_duplicate_or_conflicting_view_image_flags_without_ssh(
+        self,
+    ) -> None:
+        fake_bin = self.workspace / "duplicate-view-image-bin"
+        fake_bin.mkdir()
+        marker = self.workspace / "duplicate-view-image-ssh-called"
+        self.write_executable(
+            fake_bin / "ssh",
+            """#!/usr/bin/env bash
+set -euo pipefail
+touch "$CVM_SSH_MARKER"
+exit 99
+""",
+        )
+        env = {
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "CVM_SSH_MARKER": os.fspath(marker),
+        }
+        for flags in (
+            ("--view-image", "--view-image"),
+            ("--no-view-image", "--no-view-image"),
+            ("--view-image", "--no-view-image"),
+        ):
+            with self.subTest(flags=flags):
+                result = subprocess.run(
+                    [
+                        os.fspath(SUBMIT_SCRIPT),
+                        "pilot",
+                        "airplane",
+                        "20260805-170000-audit",
+                        *flags,
+                    ],
+                    env=env,
+                    check=False,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertFalse(marker.exists())
 
     def test_submit_rejects_duplicate_or_conflicting_reconstruction_flags(
         self,

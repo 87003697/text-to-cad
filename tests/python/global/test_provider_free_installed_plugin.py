@@ -101,7 +101,9 @@ class ProviderFreeInstalledPluginTests(unittest.TestCase):
         self.assertTrue(state["provider_free"])
         self.assertIsNone(state["token_slot"])
         self.assertNotIn("model", state)
+        self.assertNotIn("view_image", state)
         self.assertNotIn("model", protocol.public_state(state, 60))
+        self.assertNotIn("view_image", protocol.public_state(state, 60))
         self.assertEqual(
             state["plugin_authority"],
             provider_free.authority_identity(self.fixture.receipt),

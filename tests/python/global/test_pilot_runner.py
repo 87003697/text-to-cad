@@ -1155,6 +1155,248 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                     )
                     self.assertEqual(result.returncode, 2)
 
+    def test_toys4k_view_image_treatment_control_and_reconstruction_coexist(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            pilot_root = repo / "scripts" / "pilot"
+            model_root = repo / "models" / "toys4k"
+            pilot_root.mkdir(parents=True)
+            model_root.mkdir(parents=True)
+            (model_root / "airplane.ply").write_text("ply\n", encoding="utf-8")
+            pilot = pilot_root / "toys4k-pilot.sh"
+            pilot.write_bytes((PILOT_ROOT / "toys4k-pilot.sh").read_bytes())
+            pilot.chmod(0o755)
+            (pilot_root / "runner.py").write_text(
+                """import json, os, pathlib, sys
+pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
+    "argv": sys.argv,
+}))
+""",
+                encoding="utf-8",
+            )
+
+            captures: dict[tuple[str, str], dict[str, object]] = {}
+            prompts: dict[tuple[str, str], str] = {}
+            for mode in ("direct", "e2e"):
+                for view_option, label in (
+                    (None, "default"),
+                    ("--view-image", "treatment"),
+                    ("--no-view-image", "control"),
+                ):
+                    with self.subTest(mode=mode, view_option=view_option):
+                        exp = f"exp-{mode}-{label}"
+                        capture = Path(temp) / f"{mode}-{label}.json"
+                        env = {
+                            **os.environ,
+                            "HOME": os.fspath(Path(temp) / "home"),
+                            "PILOT_CAPTURE": os.fspath(capture),
+                            "PYTHON_BIN": sys.executable,
+                            "CODEX_HOME": "/authority/job-private-codex-home",
+                        }
+                        args = [
+                            os.fspath(pilot),
+                            "airplane",
+                            "20260805-170000-audit",
+                            exp,
+                            mode,
+                        ]
+                        if view_option:
+                            args.append(view_option)
+                        args.append("--reconstruction-spec")
+                        result = subprocess.run(
+                            args,
+                            cwd=repo,
+                            env=env,
+                            check=False,
+                            capture_output=True,
+                            text=True,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        captures[(mode, label)] = json.loads(
+                            capture.read_text(encoding="utf-8")
+                        )
+                        workload = captures[(mode, label)]["argv"]
+                        assert isinstance(workload, list)
+                        prompt = (
+                            repo
+                            / "outputs"
+                            / "20260805-170000-audit"
+                            / exp
+                            / "run"
+                            / "prompt.txt"
+                        ).read_text(encoding="utf-8")
+                        prompts[(mode, label)] = prompt
+                        self.assertIn("Reconstruction Spec", prompt)
+                        if label == "control":
+                            self.assertIn("`view_image` is disabled", prompt)
+                            self.assertIn("do not call `view_image`", prompt)
+                            self.assertIn("--disable", workload)
+                            disable_indices = [
+                                index
+                                for index, value in enumerate(workload)
+                                if value == "--disable"
+                            ]
+                            self.assertIn(
+                                "view_image",
+                                [
+                                    workload[index + 1]
+                                    for index in disable_indices
+                                ],
+                            )
+                        else:
+                            self.assertIn("Use `view_image`", prompt)
+                            self.assertNotIn("`view_image` is disabled", prompt)
+                            for index, value in enumerate(workload):
+                                if value == "--disable":
+                                    self.assertNotEqual(
+                                        workload[index + 1], "view_image"
+                                    )
+
+            direct_default = captures[("direct", "default")]["argv"]
+            direct_control = captures[("direct", "control")]["argv"]
+            e2e_default = captures[("e2e", "default")]["argv"]
+            e2e_control = captures[("e2e", "control")]["argv"]
+            assert isinstance(direct_default, list)
+            assert isinstance(direct_control, list)
+            assert isinstance(e2e_default, list)
+            assert isinstance(e2e_control, list)
+
+            def pilot_workload(argv: list[object]) -> list[object]:
+                return argv[argv.index("--") + 1 :]
+
+            def workload_without_prompt(argv: list[object]) -> list[object]:
+                return pilot_workload(argv)[:-1]
+
+            def without_view_image_disable(values: list[object]) -> list[object]:
+                result: list[object] = []
+                index = 0
+                while index < len(values):
+                    if (
+                        values[index] == "--disable"
+                        and index + 1 < len(values)
+                        and values[index + 1] == "view_image"
+                    ):
+                        index += 2
+                        continue
+                    result.append(values[index])
+                    index += 1
+                return result
+
+            def common_prompt_parts(prompt: str) -> tuple[str, str]:
+                normalized = re.sub(
+                    r"outputs/20260805-170000-audit/exp-[^/\s]+",
+                    "outputs/GROUP/EXP",
+                    prompt,
+                )
+                before, after = normalized.split("View-image ", 1)
+                _, suffix = after.split("\n\nStay under", 1)
+                return before, suffix
+
+            self.assertEqual(
+                workload_without_prompt(direct_default),
+                without_view_image_disable(
+                    workload_without_prompt(direct_control)
+                ),
+            )
+            self.assertEqual(
+                workload_without_prompt(e2e_default),
+                without_view_image_disable(
+                    workload_without_prompt(e2e_control)
+                ),
+            )
+            for mode in ("direct", "e2e"):
+                self.assertEqual(
+                    common_prompt_parts(prompts[(mode, "default")]),
+                    common_prompt_parts(prompts[(mode, "treatment")]),
+                )
+                self.assertEqual(
+                    common_prompt_parts(prompts[(mode, "treatment")]),
+                    common_prompt_parts(prompts[(mode, "control")]),
+                )
+
+            off_spec_argv: dict[str, list[object]] = {}
+            off_spec_prompts: dict[str, str] = {}
+            for view_option, label in (
+                ("--view-image", "treatment"),
+                ("--no-view-image", "control"),
+            ):
+                exp = f"exp-direct-off-{label}"
+                capture = Path(temp) / f"direct-off-{label}.json"
+                result = subprocess.run(
+                    [
+                        os.fspath(pilot),
+                        "airplane",
+                        "20260805-170000-audit",
+                        exp,
+                        "direct",
+                        view_option,
+                        "--no-reconstruction-spec",
+                    ],
+                    cwd=repo,
+                    env={
+                        **os.environ,
+                        "HOME": os.fspath(Path(temp) / "home"),
+                        "PILOT_CAPTURE": os.fspath(capture),
+                        "PYTHON_BIN": sys.executable,
+                    },
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                captured = json.loads(capture.read_text(encoding="utf-8"))
+                workload = captured["argv"]
+                assert isinstance(workload, list)
+                off_spec_argv[label] = workload
+                prompt = (
+                    repo
+                    / "outputs"
+                    / "20260805-170000-audit"
+                    / exp
+                    / "run"
+                    / "prompt.txt"
+                ).read_text(encoding="utf-8")
+                off_spec_prompts[label] = prompt
+                self.assertIn("Reconstruction Spec is disabled", prompt)
+
+            self.assertEqual(
+                workload_without_prompt(off_spec_argv["treatment"]),
+                without_view_image_disable(
+                    workload_without_prompt(off_spec_argv["control"])
+                ),
+            )
+            self.assertEqual(
+                common_prompt_parts(off_spec_prompts["treatment"]),
+                common_prompt_parts(off_spec_prompts["control"]),
+            )
+
+            for flags in (
+                ("--view-image", "--view-image"),
+                ("--no-view-image", "--no-view-image"),
+                ("--view-image", "--no-view-image"),
+            ):
+                with self.subTest(flags=flags):
+                    result = subprocess.run(
+                        [
+                            os.fspath(pilot),
+                            "airplane",
+                            "20260805-170000-audit",
+                            "exp-conflicting-view-flags",
+                            "direct",
+                            *flags,
+                        ],
+                        cwd=repo,
+                        env={
+                            **os.environ,
+                            "HOME": os.fspath(Path(temp) / "home"),
+                            "PYTHON_BIN": sys.executable,
+                        },
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 2)
+
     def test_gateway_rejects_missing_url_before_codex(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             capture = Path(temp) / "argv"

@@ -38,6 +38,24 @@ class _UniqueReconstructionSpecAction(argparse.Action):
         setattr(namespace, self.dest, self.const)
 
 
+class _UniqueViewImageAction(argparse.Action):
+    """Set the view-image mode while rejecting repeated flags."""
+
+    _SEEN_ATTRIBUTE = "_view_image_flags_seen"
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: object,
+        option_string: str | None = None,
+    ) -> None:
+        if getattr(namespace, self._SEEN_ATTRIBUTE, False):
+            parser.error("view-image flags may not be repeated")
+        setattr(namespace, self._SEEN_ATTRIBUTE, True)
+        setattr(namespace, self.dest, self.const)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python3 -m scripts.pilot.cvm_job")
     parser.add_argument("--state-root", type=Path, default=None, help=argparse.SUPPRESS)
@@ -53,6 +71,25 @@ def _parser() -> argparse.ArgumentParser:
         help="model selector (default: gpt-5.5)",
     )
     pilot.add_argument("--plugin-mode", choices=("direct", "e2e"), default="direct")
+    view_image = pilot.add_mutually_exclusive_group()
+    view_image.add_argument(
+        "--view-image",
+        dest="view_image",
+        action=_UniqueViewImageAction,
+        const=True,
+        nargs=0,
+        default=True,
+        help="enable the view_image treatment (default)",
+    )
+    view_image.add_argument(
+        "--no-view-image",
+        dest="view_image",
+        action=_UniqueViewImageAction,
+        const=False,
+        nargs=0,
+        default=True,
+        help="disable the view_image tool for the control",
+    )
     reconstruction = pilot.add_mutually_exclusive_group()
     reconstruction.add_argument(
         "--reconstruction-spec",
@@ -112,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.group,
                 model=args.model,
                 plugin_mode=args.plugin_mode,
+                view_image=args.view_image,
                 reconstruction_spec=args.reconstruction_spec,
                 state_root=root,
             )

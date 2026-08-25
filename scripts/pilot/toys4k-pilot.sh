@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/pilot/toys4k-pilot.sh <object_name> <group> [exp_name] [direct|e2e] [--reconstruction-spec|--no-reconstruction-spec]
+# scripts/pilot/toys4k-pilot.sh <object_name> <group> [exp_name] [direct|e2e] [--view-image|--no-view-image] [--reconstruction-spec|--no-reconstruction-spec]
 # MODEL selects the Venus gateway variant; it defaults to the public gpt-5.5 slug.
 # Toys4K mesh-to-CAD benchmark pilot. Reads models/toys4k/<name>.ply,
 # writes outputs/<group>/<TS>-<name>/. Group format: YYYYMMDD-HHMMSS-<slug>.
@@ -20,7 +20,7 @@ if [[ -z "${VENUS_TOKEN:-}" && -f "$SECRETS_FILE" ]]; then
     source "$SECRETS_FILE"
 fi
 
-USAGE="Usage: toys4k-pilot.sh <object_name> <group> [exp_name] [direct|e2e] [--reconstruction-spec|--no-reconstruction-spec] (default: Reconstruction Spec on)"
+USAGE="Usage: toys4k-pilot.sh <object_name> <group> [exp_name] [direct|e2e] [--view-image|--no-view-image] [--reconstruction-spec|--no-reconstruction-spec] (defaults: view_image on, Reconstruction Spec on)"
 OBJ="${1:?$USAGE}"
 GROUP="${2:?$USAGE}"
 [[ "$GROUP" =~ ^[0-9]{8}-[0-9]{6}-[a-z0-9-]+$ ]] \
@@ -31,6 +31,8 @@ PLY="models/toys4k/${OBJ}.ply"
 
 EXP_NAME="$(date +%Y%m%d-%H%M%S)-${OBJ}"
 PLUGIN_MODE="direct"
+VIEW_IMAGE=1
+VIEW_IMAGE_FLAG_SEEN=0
 RECONSTRUCTION_SPEC=1
 RECONSTRUCTION_SPEC_FLAG_SEEN=0
 PILOT_ARGS=("${@:3}")
@@ -51,6 +53,18 @@ if (( ARG_INDEX < ${#PILOT_ARGS[@]} )) \
 fi
 while (( ARG_INDEX < ${#PILOT_ARGS[@]} )); do
     case "${PILOT_ARGS[$ARG_INDEX]}" in
+        --view-image)
+            [[ "$VIEW_IMAGE_FLAG_SEEN" == 0 ]] \
+                || { echo "Duplicate or conflicting view_image flag." >&2; exit 2; }
+            VIEW_IMAGE=1
+            VIEW_IMAGE_FLAG_SEEN=1
+            ;;
+        --no-view-image)
+            [[ "$VIEW_IMAGE_FLAG_SEEN" == 0 ]] \
+                || { echo "Duplicate or conflicting view_image flag." >&2; exit 2; }
+            VIEW_IMAGE=0
+            VIEW_IMAGE_FLAG_SEEN=1
+            ;;
         --reconstruction-spec)
             [[ "$RECONSTRUCTION_SPEC_FLAG_SEEN" == 0 ]] \
                 || { echo "Duplicate or conflicting reconstruction spec flag." >&2; exit 2; }
@@ -64,7 +78,7 @@ while (( ARG_INDEX < ${#PILOT_ARGS[@]} )); do
             RECONSTRUCTION_SPEC_FLAG_SEEN=1
             ;;
         *)
-            echo "Bad pilot option: '${PILOT_ARGS[$ARG_INDEX]}'. Expect --reconstruction-spec or --no-reconstruction-spec." >&2
+            echo "Bad pilot option: '${PILOT_ARGS[$ARG_INDEX]}'. Expect --view-image, --no-view-image, --reconstruction-spec, or --no-reconstruction-spec." >&2
             exit 2
             ;;
     esac
@@ -112,6 +126,26 @@ EOF
     )
 fi
 
+VIEW_IMAGE_INSTRUCTION=""
+if [[ "$VIEW_IMAGE" == 1 ]]; then
+    VIEW_IMAGE_INSTRUCTION=$(cat <<EOF
+View-image treatment is enabled for this pilot. Use \`view_image\` to inspect
+the generated setup/formal preview PNGs during setup/initial modeling, for
+each Repair Hypothesis parent-child comparison (parent/child comparison), and
+for final selection,
+alongside objective measurements. Do not disable or avoid the \`view_image\`
+tool.
+EOF
+    )
+else
+    VIEW_IMAGE_INSTRUCTION=$(cat <<EOF
+View-image control mode is active: \`view_image\` is disabled; do not call \`view_image\`.
+Use the formal preview JSON and objective measurements for
+decisions while keeping all other pilot behavior unchanged.
+EOF
+    )
+fi
+
 # Minimal orchestrator prompt — peer skills, references, and commit
 # conventions live in skills/mesh-to-cad/SKILL.md; duplicating them here
 # would drift.
@@ -142,10 +176,7 @@ success. Optional additional human review material belongs under
 ${EXP_DIR}/reviews/ and never substitutes for formal Measured Step or Final
 Delivery previews.
 ${RECONSTRUCTION_SPEC_INSTRUCTION}
-
-Use \`view_image\` to inspect key generated setup/formal preview PNGs for
-initial modeling, Repair Hypothesis parent/child comparison, and final
-selection, alongside objective measurements.
+${VIEW_IMAGE_INSTRUCTION}
 
 Stay under ${EXP_DIR}; do not modify skills/, packages/, or files outside.
 EOF
@@ -165,6 +196,9 @@ WORKLOAD=(
 )
 if [[ "$PLUGIN_MODE" == "direct" ]]; then
     WORKLOAD+=(--disable plugins)
+fi
+if [[ "$VIEW_IMAGE" == 0 ]]; then
+    WORKLOAD+=(--disable view_image)
 fi
 WORKLOAD+=(
     -s
