@@ -38,82 +38,57 @@ from pathlib import Path
 from typing import Iterable
 
 
-PROJECTION_SCHEMA = "text-to-cad.agent-source-projection/1"
-PROJECTION_VERSION = "1"
+PROJECTION_SCHEMA = "text-to-cad.agent-source-projection/2"
+PROJECTION_VERSION = "2"
 PROJECTION_ROOT_REL = ".claude/agent-source-projection"
 MANIFEST_NAME = "manifest.json"
 SKILLS_SUBDIR = "skills"
+CLIENT_SUBDIR = "agent-surface"
+CLIENT_PROJECTED_REL = "agent-surface/client.py"
 
 # Purpose-bound allowlist. Every entry is (source path relative to repo root,
-# projected path relative to the projection root). Any file outside this list
-# is a projection violation, and any file in this list that is missing at
+# projected path relative to the projection root). The source is a dedicated,
+# curated Agent-facing document or the fixed Agent Surface client script —
+# never a canonical trusted skill document — and any file outside this list
+# is a projection violation. A file in this list that is missing at
 # verify-time is a projection violation.
 ALLOWED_SOURCES: tuple[tuple[str, str], ...] = (
-    ("skills/mesh-to-cad/SKILL.md", "skills/mesh-to-cad/SKILL.md"),
     (
+        "skills/mesh-to-cad/agent-source/SKILL.md",
+        "skills/mesh-to-cad/SKILL.md",
+    ),
+    (
+        "skills/mesh-to-cad/agent-source/references/candidate-authoring.md",
+        "skills/mesh-to-cad/references/candidate-authoring.md",
+    ),
+    (
+        "scripts/pilot/agent_surface_client.py",
+        CLIENT_PROJECTED_REL,
+    ),
+)
+
+# Source paths that must never appear as the ``source`` half of an
+# ``ALLOWED_SOURCES`` entry. Everything in this set is either canonical
+# trusted skill documentation (which teaches Workspace CLI, authority
+# layout, storage, Git/LFS, terminal handoff, runner/supervisor internals,
+# raw reference paths, or arbitrary trusted commands) or a trusted runtime
+# script. If a future maintainer adds one of these to the allowlist by
+# mistake, ``compute_expected_entries`` refuses to build a manifest.
+FORBIDDEN_ORIGINAL_SOURCES: frozenset[str] = frozenset(
+    {
+        "skills/mesh-to-cad/SKILL.md",
         "skills/mesh-to-cad/references/output-schemas.md",
-        "skills/mesh-to-cad/references/output-schemas.md",
-    ),
-    (
         "skills/mesh-to-cad/references/reconstruction-spec.md",
-        "skills/mesh-to-cad/references/reconstruction-spec.md",
-    ),
-    (
         "skills/mesh-to-cad/references/workspace-contract.md",
-        "skills/mesh-to-cad/references/workspace-contract.md",
-    ),
-    ("skills/cad/SKILL.md", "skills/cad/SKILL.md"),
-    (
-        "skills/cad/references/build123d-modeling.md",
-        "skills/cad/references/build123d-modeling.md",
-    ),
-    (
-        "skills/cad/references/cad-brief.md",
-        "skills/cad/references/cad-brief.md",
-    ),
-    (
-        "skills/cad/references/inspection-and-validation.md",
-        "skills/cad/references/inspection-and-validation.md",
-    ),
-    (
-        "skills/cad/references/parameters.md",
-        "skills/cad/references/parameters.md",
-    ),
-    (
-        "skills/cad/references/positioning.md",
-        "skills/cad/references/positioning.md",
-    ),
-    (
-        "skills/cad/references/repair-loop.md",
-        "skills/cad/references/repair-loop.md",
-    ),
-    (
-        "skills/cad/references/snapshot-review.md",
-        "skills/cad/references/snapshot-review.md",
-    ),
-    (
-        "skills/cad/references/step-generation.md",
-        "skills/cad/references/step-generation.md",
-    ),
-    (
-        "skills/cad/references/supported-exports.md",
-        "skills/cad/references/supported-exports.md",
-    ),
-    ("skills/mesh-compare/SKILL.md", "skills/mesh-compare/SKILL.md"),
-    ("skills/mesh-inspect/SKILL.md", "skills/mesh-inspect/SKILL.md"),
-    (
-        "skills/mesh-inspect/references/mesh-analysis.md",
-        "skills/mesh-inspect/references/mesh-analysis.md",
-    ),
-    ("skills/cad-viewer/SKILL.md", "skills/cad-viewer/SKILL.md"),
-    (
-        "skills/cad-viewer/references/moveit2-server.md",
-        "skills/cad-viewer/references/moveit2-server.md",
-    ),
-    (
-        "skills/cad-viewer/references/viewer-features.md",
-        "skills/cad-viewer/references/viewer-features.md",
-    ),
+        "skills/mesh-compare/SKILL.md",
+        "skills/mesh-inspect/SKILL.md",
+        "skills/cad/SKILL.md",
+        "skills/cad-viewer/SKILL.md",
+        "scripts/pilot/runner.py",
+        "scripts/pilot/workspace_supervisor.py",
+        "scripts/pilot/workspace.py",
+        "scripts/pilot/workspace_core.py",
+    }
 )
 
 # Names that must never appear anywhere inside the projection tree. Guards
@@ -151,6 +126,51 @@ FORBIDDEN_PATH_COMPONENTS: frozenset[str] = frozenset(
         "cycles",
         "final",
     }
+)
+
+# Case-insensitive substrings that must not appear in any projected file's
+# bytes. This catches leaks of Workspace CLI usage, authority path layout,
+# terminal/handoff choreography, raw reference bytes, Git/LFS wording,
+# trusted runtime module names, review compilation, and known absolute
+# host authority paths — including a mistakenly re-added canonical skill
+# document that would evade the source-path allowlist because someone
+# projected it under a sanitized filename. Kept small on purpose: the
+# projection sources are dedicated Agent-facing documents plus the fixed
+# client script, none of which need any of these tokens. Agent-visible
+# sandbox mounts (``/candidate``, ``/agent-surface``, ``/workspace/repo``,
+# ``/run/mesh-to-cad-agent-surface.sock``) are not on this list.
+FORBIDDEN_CONTENT_TOKENS: tuple[str, ...] = (
+    "mesh-to-cad-workspace",
+    "workspace_core",
+    "--workspace",
+    "<EXP_DIR>",
+    "$EXP_DIR",
+    "input/reference.ply",
+    "input/original",
+    "reference.vbsvo",
+    "terminal-validation",
+    ".internal-terminal-validation",
+    "git lfs",
+    "runner.py",
+    "workspace_supervisor.py",
+    "workspace_supervisor",
+    "mesh-to-cad-review",
+    "voxblame",
+    "publish-step-zero",
+    "publish-cycle",
+    "record-attempt",
+    "begin-attempt",
+    "final/manifest.json",
+    "final/rebuild.json",
+    ".text-to-cad-codex",
+    "/opt/text-to-cad",
+    "/home/pilot/.codex",
+    "/home/pilot/.text-to-cad",
+    "/private/tmp/",
+    "final delivery",
+    "trusted-tool-registry",
+    "canonical-build",
+    "plugin-publish-tree",
 )
 
 
@@ -251,10 +271,26 @@ def _validate_projected_relative(relative: str) -> None:
     for part in parts:
         if part in FORBIDDEN_PATH_COMPONENTS or part in FORBIDDEN_BASENAMES:
             raise ProjectionError(f"projected path names forbidden token: {relative}")
-    if not parts or parts[0] != SKILLS_SUBDIR:
+    if parts[0] not in (SKILLS_SUBDIR, CLIENT_SUBDIR):
         raise ProjectionError(
-            f"projected path must live under {SKILLS_SUBDIR}/: {relative}"
+            f"projected path must live under {SKILLS_SUBDIR}/ or {CLIENT_SUBDIR}/: {relative}"
         )
+
+
+def _scan_content_for_forbidden(relative: str, body: bytes) -> None:
+    """Reject bytes that contain any FORBIDDEN_CONTENT_TOKENS substring.
+
+    The scan is case-insensitive on bytes, decoded via latin-1 so non-UTF-8
+    payloads still hit the guard.
+    """
+
+    haystack = body.decode("latin-1").lower()
+    for token in FORBIDDEN_CONTENT_TOKENS:
+        needle = token.lower()
+        if needle and needle in haystack:
+            raise ProjectionError(
+                f"projected file exposes forbidden token '{token}': {relative}"
+            )
 
 
 def compute_expected_entries(repo_root: Path) -> tuple[ProjectionEntry, ...]:
@@ -263,6 +299,10 @@ def compute_expected_entries(repo_root: Path) -> tuple[ProjectionEntry, ...]:
     entries: list[ProjectionEntry] = []
     seen: set[str] = set()
     for source_rel, projected_rel in ALLOWED_SOURCES:
+        if source_rel in FORBIDDEN_ORIGINAL_SOURCES:
+            raise ProjectionError(
+                f"projection source is a canonical trusted document: {source_rel}"
+            )
         _validate_projected_relative(projected_rel)
         if projected_rel in seen:
             raise ProjectionError(
@@ -278,6 +318,7 @@ def compute_expected_entries(repo_root: Path) -> tuple[ProjectionEntry, ...]:
             body = _open_regular_readonly(source_path)
         except ProjectionError:
             raise
+        _scan_content_for_forbidden(projected_rel, body)
         entries.append(
             ProjectionEntry(
                 path=projected_rel,
@@ -478,6 +519,7 @@ def verify(target: Path) -> ProjectionInventory:
             raise ProjectionError(
                 "projection file digest does not match manifest"
             )
+        _scan_content_for_forbidden(entry.path, body)
     canonical_expected = canonical_manifest_bytes(
         PROJECTION_SCHEMA, PROJECTION_VERSION, manifest_entries
     )
@@ -507,6 +549,12 @@ def projected_skills_root(target: Path) -> Path:
     """Return the ``skills/`` subdirectory of a materialized projection."""
 
     return Path(target) / SKILLS_SUBDIR
+
+
+def projected_agent_surface_client(target: Path) -> Path:
+    """Return the Agent Surface client script inside a materialized projection."""
+
+    return Path(target) / CLIENT_PROJECTED_REL
 
 
 def _cli(argv: list[str]) -> int:

@@ -1506,8 +1506,6 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                         {"HOME": os.fspath(home), "PATH": "/fake", "VENUS_TOKEN": "secret"},
                         agent_candidate_dir=candidate,
                         agent_surface_socket=socket_path,
-                        agent_surface_client=REPO_ROOT
-                        / "scripts/pilot/agent_surface_client.py",
                     )
             finally:
                 bridge_socket.close()
@@ -1583,6 +1581,24 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             for token in argv:
                 self.assertNotIn(".text-to-cad-codex/deployments", token)
                 self.assertNotIn(".plugin-publish-tree", token)
+            # The Agent Surface client is mounted from the projection root,
+            # not from the repository's scripts/pilot/ source path. Anything
+            # else means the runner is still exposing the trusted client
+            # source to the isolated Agent.
+            projected_client = agent_source_projection.projected_agent_surface_client(
+                projection_target
+            ).resolve()
+            self.assertIn(
+                [
+                    "--ro-bind",
+                    os.fspath(projected_client),
+                    "/agent-surface/client.py",
+                ],
+                triples,
+            )
+            repo_client = REPO_ROOT / "scripts/pilot/agent_surface_client.py"
+            self.assertNotIn(os.fspath(repo_client), argv)
+            self.assertNotIn(os.fspath(repo_client.resolve()), argv)
 
     def test_reference_port_returns_only_w2_projection(self) -> None:
         result = self.sup.observe_reference(

@@ -155,7 +155,6 @@ SANDBOX_GEOMETRY_ENTRYPOINT = (
     SANDBOX_REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare/__main__.py"
 )
 VIEWER_RUNTIME_DIR = REPO_ROOT / "skills/cad-viewer/scripts/viewer"
-AGENT_SURFACE_CLIENT = REPO_ROOT / "scripts/pilot/agent_surface_client.py"
 TRUSTED_TOOL_REGISTRY_NAME = "trusted-tool-registry.json"
 CAD_CANDIDATE_RUNTIME_IMPORTS = CAD_RUNTIME_IMPORTS
 SYSTEM_RO_PATHS = (
@@ -852,14 +851,15 @@ def build_bwrap_argv(
     browser_mcp_url: str | None = None,
     agent_candidate_dir: Path | None = None,
     agent_surface_socket: Path | None = None,
-    agent_surface_client: Path | None = None,
 ) -> list[str]:
     """Build a least-visibility bwrap argv without placing secrets in it.
 
     ``agent_candidate_dir`` selects the W4 candidate-only seam.  In that mode
-    the workload receives a fixed ``/candidate`` mount and no experiment,
-    input, or output bind.  The default remains the historical pilot mount
-    until the Agent Surface workflow is enabled by the outer runner.
+    the workload receives a fixed ``/candidate`` mount, the Agent Source
+    Projection at ``/workspace/repo/skills``, the projected Agent Surface
+    client at ``/agent-surface/client.py``, and no experiment, input, or
+    output bind.  The default remains the historical pilot mount until the
+    Agent Surface workflow is enabled by the outer runner.
     """
 
     repo_root = repo_root.resolve()
@@ -892,16 +892,14 @@ def build_bwrap_argv(
             pass
         else:
             raise PilotError("agent candidate directory must be outside EXP_DIR")
-        if agent_surface_socket is None or agent_surface_client is None:
+        if agent_surface_socket is None:
             raise PilotError("Agent Surface bridge is unavailable")
         if (
             not Path(agent_surface_socket).is_socket()
             or Path(agent_surface_socket).is_symlink()
-            or not Path(agent_surface_client).is_file()
-            or Path(agent_surface_client).is_symlink()
         ):
             raise PilotError("Agent Surface bridge is unavailable")
-    elif agent_surface_socket is not None or agent_surface_client is not None:
+    elif agent_surface_socket is not None:
         raise PilotError("Agent Surface requires candidate-only isolation")
     relative_exp = exp_dir.relative_to(repo_root)
     sandbox_exp = SANDBOX_REPO_ROOT / relative_exp
@@ -914,14 +912,21 @@ def build_bwrap_argv(
 
     if isolated_agent:
         # Candidate-only Agent Executions see only the Agent Source Projection
-        # under /workspace/repo/skills, the fixed Agent Surface client/socket,
-        # /candidate, and a minimal writable CODEX_HOME. No full installed
-        # plugin cache, publish tree, per-skill enumeration, or Workspace
-        # Authority path is bound into the sandbox.
+        # under /workspace/repo/skills, the fixed Agent Surface client (also
+        # sourced from the projection) at /agent-surface/client.py, the
+        # Agent Surface socket, /candidate, and a minimal writable CODEX_HOME.
+        # No full installed plugin cache, publish tree, per-skill
+        # enumeration, Workspace Authority path, or repository client source
+        # is bound into the sandbox.
         projection_root = prepare_agent_source_projection(repo_root)
         projection_skills = agent_source_projection.projected_skills_root(
             projection_root
         )
+        projected_client = agent_source_projection.projected_agent_surface_client(
+            projection_root
+        )
+        if not projected_client.is_file() or projected_client.is_symlink():
+            raise PilotError("Agent Surface client is unavailable")
         job_codex_home = prepare_isolated_job_codex_home(exp_dir)
         job_publish_tree = None
         skill_dirs: tuple[Path, ...] = ()
@@ -1042,7 +1047,7 @@ def build_bwrap_argv(
                 "--dir",
                 "/agent-surface",
                 "--ro-bind",
-                str(agent_surface_client),
+                str(projected_client),
                 "/agent-surface/client.py",
                 "--ro-bind",
                 str(agent_surface_socket),
@@ -1105,7 +1110,6 @@ def run_supervised(
     relay: SignalRelay | None = None,
     agent_candidate_dir: Path | None = None,
     agent_surface_socket: Path | None = None,
-    agent_surface_client: Path | None = None,
 ) -> int:
     """Run command behind mandatory tap and return a shell-compatible status."""
 
@@ -1125,7 +1129,6 @@ def run_supervised(
         sidecar.mcp_url if sidecar is not None else None,
         agent_candidate_dir,
         agent_surface_socket,
-        agent_surface_client,
     )
     if state is None:
         state = LifecycleState()
@@ -2589,7 +2592,6 @@ def run_pilot(
                     relay,
                     agent_supervisor.candidate_root if agent_supervisor else agent_candidate_dir,
                     agent_socket,
-                    AGENT_SURFACE_CLIENT if agent_supervisor else None,
                 )
         except (
             OSError,

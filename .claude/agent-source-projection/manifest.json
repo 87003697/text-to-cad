@@ -1,106 +1,21 @@
 {
   "entries": [
     {
-      "path": "skills/cad-viewer/SKILL.md",
-      "sha256": "7ce8f961f69cf9ca4bedf843382ca3d7710530c377500cb79d8703ae2282166a",
-      "size": 4848
-    },
-    {
-      "path": "skills/cad-viewer/references/moveit2-server.md",
-      "sha256": "cc821576d96916ba373b46fe98aaff1f8a89beafd80778057960f60c7c947743",
-      "size": 1247
-    },
-    {
-      "path": "skills/cad-viewer/references/viewer-features.md",
-      "sha256": "d35d6d014ea4e013ea6597453b7ced60b0dfe6e514ec6e3c85f5e91f2c13a725",
-      "size": 5105
-    },
-    {
-      "path": "skills/cad/SKILL.md",
-      "sha256": "baf745de08468d0649fbbc6fc9e8104da6777f7a88b7faee8fc1e9506fdef017",
-      "size": 15820
-    },
-    {
-      "path": "skills/cad/references/build123d-modeling.md",
-      "sha256": "a18d3ce6cf47a36c37b046220dfe250ce367cd8af6a8111bbede544da6bc0af6",
-      "size": 23024
-    },
-    {
-      "path": "skills/cad/references/cad-brief.md",
-      "sha256": "52dfaff3aff9dbbedf101c3c0d72943b071fb11ae5887c14f8655bd2e5170842",
-      "size": 6562
-    },
-    {
-      "path": "skills/cad/references/inspection-and-validation.md",
-      "sha256": "ae5c24baa3939ee32b405896cc1eafd80f82c5baea9adc6134a6614856c8232c",
-      "size": 11293
-    },
-    {
-      "path": "skills/cad/references/parameters.md",
-      "sha256": "daeadc03a111922eb1ae63d6cefe16d877fb047b7aa210deb7260d324834e6b4",
-      "size": 12187
-    },
-    {
-      "path": "skills/cad/references/positioning.md",
-      "sha256": "41942cfd0a60af4649d5bf39c5093630af1cde2e69f64ec4187d9ea07a0874a8",
-      "size": 14000
-    },
-    {
-      "path": "skills/cad/references/repair-loop.md",
-      "sha256": "ee403035b6ef687a994442f0266cb6eb835a69dbdfafbc45460ec3759c6c6d87",
-      "size": 7154
-    },
-    {
-      "path": "skills/cad/references/snapshot-review.md",
-      "sha256": "061fce2f474c475323e252cbb8eea8277f8eec53c4332638130159600401ab5e",
-      "size": 6652
-    },
-    {
-      "path": "skills/cad/references/step-generation.md",
-      "sha256": "75be99d81c78da212df3442c5662b00b43fb218aa42f5e13d5edfb5bc2a5cdd7",
-      "size": 9715
-    },
-    {
-      "path": "skills/cad/references/supported-exports.md",
-      "sha256": "0726e6bfb3bc2072de5fb346f559f3a6345509e932aa5ae7ff570f3ee2b96a3b",
-      "size": 3624
-    },
-    {
-      "path": "skills/mesh-compare/SKILL.md",
-      "sha256": "497ef265b50bf31d318bc75d485b49f7080cf4fab2a12adcffa7a2e7ba6b6b9e",
-      "size": 7244
-    },
-    {
-      "path": "skills/mesh-inspect/SKILL.md",
-      "sha256": "8c97aa38ab004f9115b21fb575320227057f5416f40b9bbbf64101e5d9d02da2",
-      "size": 3735
-    },
-    {
-      "path": "skills/mesh-inspect/references/mesh-analysis.md",
-      "sha256": "26542c8db979130d8c0173315fa5581bada92e64fcd225919c364f54ece909bf",
-      "size": 2394
+      "path": "agent-surface/client.py",
+      "sha256": "fce707ec8cdefb113814fc76f901e3a6375947aaaab5ea0af1d406ed89401939",
+      "size": 3957
     },
     {
       "path": "skills/mesh-to-cad/SKILL.md",
-      "sha256": "204aa9dcbb6967011d4e61d5d7df5c6d50f6a830d6c6c7fc4b4e22f3d421a2cc",
-      "size": 13074
+      "sha256": "6fdc256e83c82316bf5a81f7aba9457f0c513bd78b85da52cc8b5f5e9b95d7d4",
+      "size": 8493
     },
     {
-      "path": "skills/mesh-to-cad/references/output-schemas.md",
-      "sha256": "e933a5fea1567e3da0473bf76052451026e7eafba401119f09f598780679cdd3",
-      "size": 3768
-    },
-    {
-      "path": "skills/mesh-to-cad/references/reconstruction-spec.md",
-      "sha256": "a4fe46af0e020369ca0820ada127a00fd2ea386af5165c2d3b22ddac89ecedad",
-      "size": 3156
-    },
-    {
-      "path": "skills/mesh-to-cad/references/workspace-contract.md",
-      "sha256": "31584cc527cf2a90d4eb24dd90acee697a9187ab043f7925aa54669472e3faff",
-      "size": 17548
+      "path": "skills/mesh-to-cad/references/candidate-authoring.md",
+      "sha256": "3e8c859c7b86988e345bd9671340d590f62c1e22394082ff830ea5beefef2737",
+      "size": 3789
     }
   ],
-  "schema": "text-to-cad.agent-source-projection/1",
-  "version": "1"
+  "schema": "text-to-cad.agent-source-projection/2",
+  "version": "2"
 }

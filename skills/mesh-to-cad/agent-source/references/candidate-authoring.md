@@ -1,0 +1,109 @@
+# Candidate authoring reference
+
+Guidance for writing parametric candidate source under `/candidate/source/`.
+The supervisor runs the registered build and measurement tools on this
+source through the `run_candidate_tool` intent; you never invoke them
+yourself.
+
+## Entry module
+
+Put your entry module at `/candidate/source/model.py`. It exposes at
+least one top-level callable that returns a build123d `Compound`,
+`Part`, or `Assembly` and can be rebuilt from the same source with no
+external state.
+
+```python
+from build123d import BuildPart, Box, Cylinder, Mode
+from pathlib import Path
+
+
+def _width() -> float:
+    return float(Path("source/width.txt").read_text().strip())
+
+
+def build_part():
+    with BuildPart() as part:
+        Box(_width(), _width(), _width())
+        Cylinder(radius=_width() / 4, height=_width(), mode=Mode.SUBTRACT)
+    return part.part
+```
+
+## Sidecar parameter files
+
+Read every configurable dimension from a sidecar file next to the
+module, opened through a bundle-relative path:
+
+```python
+from pathlib import Path
+
+width = float(Path("source/width.txt").read_text().strip())
+```
+
+- Never resolve `..` above `source/`.
+- Never resolve absolute host paths; there are none you can use.
+- Keep sidecars small, ASCII, and one-value-per-line unless a bounded
+  JSON document is genuinely simpler.
+
+The same sidecars are passed by the supervisor as `input` handles to
+the registered build; the recipe reads them by the same bundle-relative
+path.
+
+## Coordinate contract
+
+Author directly in the coordinate frame the initial summary observation
+reports. Do not translate, rotate, or scale the candidate to align with
+the reference. Alignment is not part of authoring; the Canonical
+Reference is fixed and normalization is one supervisor-owned step
+outside your sandbox.
+
+## STEP-first exports
+
+Compose primitives with build123d until the candidate is one STEP-
+exportable solid or assembly. Downstream artifacts (GLB previews,
+measurements, region diffs) are produced by the registered tool; you do
+not author them.
+
+```python
+from build123d import export_step
+
+export_step(build_part(), "artifacts/model.step")
+```
+
+Give each `run_candidate_tool` invocation a **new empty** `artifacts/`
+directory. Do not overwrite the previous invocation's output.
+
+## Repair edits
+
+When you form a repair hypothesis, edit `/candidate/source/model.py`
+(and sidecars) in place before starting the child Attempt. Keep edits
+focused on the geometry the hypothesis names; unrelated churn dilutes
+the residual signal.
+
+- Prefer parametric edits over hard-coded numbers.
+- If a repair requires more than one primitive, keep the edits within
+  one coherent hypothesis; ask for a fresh Attempt for a different
+  hypothesis.
+- Rewrite comments and identifiers to match the new geometry; stale
+  names mislead future repair reasoning.
+
+## What not to author
+
+- No absolute host paths.
+- No filesystem access outside `/candidate`.
+- No network access; the sandbox network is closed to your process.
+- No calls to registered candidate tools (build, preview, measure,
+  diff) — these run only under `run_candidate_tool`.
+- No calls to publication, storage, review, or finalization; those are
+  supervisor-only intents.
+
+## Error hygiene
+
+If the candidate cannot be authored honestly as STEP-first parametric
+CAD (for example the reference summary implies an inherently freeform
+surface), stop and report `unsupported_domain` in your final
+selection. Do not fabricate an approximation and claim acceptance.
+
+If a build or measurement invocation returns a tool failure through
+`run_candidate_tool`, read the classification the supervisor returned
+and either author a targeted repair or stop with `no_feasible_repair`.
+Never re-request the same operation without changing `/candidate/source/`.
