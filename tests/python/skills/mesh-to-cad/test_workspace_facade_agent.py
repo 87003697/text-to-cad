@@ -1371,7 +1371,11 @@ class WorkspaceDecisionFactsTests(WorkspaceFacadeAgentTests):
         self.assertEqual("step-000000:target-0123456789abcdef", item["target_key"])
         self.assertEqual("c" * 64, item["mask_sha256"])
         try:
-            for field, invalid in (("target_key", "../secret"), ("mask", None)):
+            for field, invalid in (
+                ("target_key", "../secret"),
+                ("target_key", "step-000000:target-0123456789abcdef:extra"),
+                ("mask", None),
+            ):
                 with self.subTest(field=field):
                     corrupted = json.loads(valid)
                     target = corrupted["repair_targets"]["items"][0]

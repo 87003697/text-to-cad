@@ -241,7 +241,7 @@ DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/1"
 _DECISION_FACT_MAX_TARGETS = 8
 _ACCEPTANCE_STATE_VALUES = ("acceptance_satisfied", "unaccepted")
 _OBJECTIVE_FACT_KEYS = ("global_depth_8_zero", "out_of_frame_clear", "no_evidence_conflict")
-_TARGET_KEY = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}")
+_TARGET_KEY = re.compile(r"step-[0-9]{6}:target-[0-9a-f]{16}")
 
 
 def _rate(value: Any, path: str) -> float:

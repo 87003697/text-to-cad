@@ -564,6 +564,7 @@ class AgentSurfaceTests(unittest.TestCase):
             ("target_key", ""),
             ("target_key", "Step-000000:target-0123456789abcdef"),
             ("target_key", "step-000001:target-0123456789abcdef"),
+            ("target_key", "step-000000:target-0123456789abcdef:extra"),
             ("target_key", "a" * 129),
             ("mask_sha256", "A" * 64),
             ("mask_sha256", "0" * 63),
