@@ -965,7 +965,7 @@ class WorkspaceCliTests(unittest.TestCase):
             str(registry),
         ]
 
-    def test_tool_registry_requires_matching_absolute_entrypoint(self) -> None:
+    def test_tool_registry_requires_canonical_absolute_entrypoint(self) -> None:
         arguments = self.final_tool_arguments()
         registry = Path(arguments[-1])
         value = json.loads(registry.read_text(encoding="utf-8"))
@@ -985,6 +985,55 @@ class WorkspaceCliTests(unittest.TestCase):
                 geometry_entrypoint=MESH_COMPARE_ENTRYPOINT,
             )
         self.assertEqual("untrusted_tool", raised.exception.classification)
+
+    def test_tool_registry_rejects_wrong_host_entrypoint_bytes(self) -> None:
+        from scripts.pilot import runner
+
+        registry = runner.publish_tool_registry(self.root / "runner-authority")
+        wrong_rebuild = self.root / "wrong-rebuild.py"
+        wrong_rebuild.write_bytes(
+            runner.CAD_REBUILD_ENTRYPOINT.read_bytes() + b"\ntampered\n"
+        )
+
+        load_registry = self.cli.finalize_workspace.__globals__["_load_tool_registry"]
+        with self.assertRaises(self.cli.WorkspaceError) as raised:
+            load_registry(
+                registry,
+                rebuild_entrypoint=wrong_rebuild,
+                geometry_entrypoint=runner.GEOMETRY_ENTRYPOINT,
+            )
+        self.assertEqual("untrusted_tool", raised.exception.classification)
+        self.assertEqual(
+            "$.tool_registry.rebuild.entrypoint_sha256", raised.exception.path
+        )
+
+    def test_registered_tool_entrypoint_resolves_bwrap_namespace(self) -> None:
+        # This temporary tree stands in for bwrap's /workspace/repo mount.
+        arguments = self.final_tool_arguments()
+        registry = Path(arguments[-1])
+        value = json.loads(registry.read_text(encoding="utf-8"))
+        rebuild_entrypoint = self.root / (
+            "workspace/repo/skills/cad/scripts/canonical-build/__main__.py"
+        )
+        rebuild_entrypoint.parent.mkdir(parents=True)
+        rebuild_entrypoint.write_bytes(b"sandbox rebuild\n")
+        value["rebuild"]["entrypoint"] = str(rebuild_entrypoint)
+        value["rebuild"]["entrypoint_sha256"] = _sha(
+            rebuild_entrypoint.read_bytes()
+        )
+        value_without_identity = dict(value)
+        value_without_identity.pop("identity_sha256")
+        value["identity_sha256"] = _identity(
+            "mesh-to-cad.tool-registry/2", value_without_identity
+        )
+        _write_json(registry, value)
+
+        entrypoint = self.cli.finalize_workspace.__globals__[
+            "_registered_tool_entrypoint"
+        ]
+        self.assertEqual(
+            rebuild_entrypoint.resolve(), entrypoint(registry, "rebuild")
+        )
 
     def test_tool_registry_rejects_double_slash_entrypoint(self) -> None:
         arguments = self.final_tool_arguments()
@@ -1072,6 +1121,7 @@ class WorkspaceCliTests(unittest.TestCase):
         candidate: Path,
         candidate_mesh_relative: str,
         accepted: bool,
+        tool_arguments: list[str] | None = None,
     ) -> dict:
         status, _initialized, stderr = self.invoke(
             "init", "--workspace", str(self.workspace), "--prepared", str(prepared)
@@ -1129,6 +1179,11 @@ class WorkspaceCliTests(unittest.TestCase):
             str(self.preview("candidate-preview", candidate_sha)),
         )
         self.assertEqual(0, status, stderr)
+        final_tool_arguments = (
+            self.final_tool_arguments()
+            if tool_arguments is None
+            else tool_arguments
+        )
         with mock.patch.dict(
             self.cli.finalize_workspace.__globals__,
             {"_run_final_preview": self.write_provider_free_final_preview},
@@ -1141,7 +1196,7 @@ class WorkspaceCliTests(unittest.TestCase):
                 str(self.final_selection(accepted=accepted)),
                 "--notes",
                 str(self.final_notes()),
-                *self.final_tool_arguments(),
+                *final_tool_arguments,
             )
         self.assertEqual(0, status, stderr)
         self.assertIs(accepted, finalized["final"]["accepted"])
@@ -1519,6 +1574,39 @@ class WorkspaceCliTests(unittest.TestCase):
 
         self.assertNotIn("route", final)
         self.assertEqual("cycle_limit", final["stop_reason"])
+
+    def test_runner_registry_reaches_real_workspace_finalize(self) -> None:
+        from scripts.pilot import runner
+
+        registry = runner.publish_tool_registry(self.root / "runner-authority")
+        prepared, candidate = self.canonical_cad_flow()
+        final = self.execute_final_case(
+            prepared=prepared,
+            candidate=candidate,
+            candidate_mesh_relative="built/measurement.glb",
+            accepted=True,
+            tool_arguments=[
+                "--rebuild-entrypoint",
+                str(runner.CAD_REBUILD_ENTRYPOINT),
+                "--geometry-entrypoint",
+                str(runner.GEOMETRY_ENTRYPOINT),
+                "--tool-registry",
+                str(registry),
+            ],
+        )
+
+        self.assertTrue(final["accepted"])
+        published_registry = json.loads(
+            (self.workspace / "final/tool-registry.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            str(runner.SANDBOX_CAD_REBUILD_ENTRYPOINT),
+            published_registry["rebuild"]["entrypoint"],
+        )
+        self.assertEqual(
+            str(runner.SANDBOX_GEOMETRY_ENTRYPOINT),
+            published_registry["geometry"]["entrypoint"],
+        )
 
     def test_runner_accepts_and_reviewer_audits_real_synthetic_delivery(
         self,

@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -28,6 +29,23 @@ def _load_runner():
     return module
 
 
+def _load_workspace_core():
+    path = (
+        REPO_ROOT
+        / "skills"
+        / "mesh-to-cad"
+        / "scripts"
+        / "mesh-to-cad-workspace"
+        / "workspace_core.py"
+    )
+    spec = importlib.util.spec_from_file_location("tool_registry_workspace_core", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 class PrepareSandboxMcpConfigTests(unittest.TestCase):
 
     def test_runner_publishes_canonical_read_only_tool_registry(self):
@@ -41,17 +59,37 @@ class PrepareSandboxMcpConfigTests(unittest.TestCase):
             self.assertEqual(registry["rebuild"]["id"], "cad.canonical-build/1")
             self.assertEqual(
                 registry["rebuild"]["entrypoint"],
-                "/workspace/repo/skills/cad/scripts/canonical-build/__main__.py",
+                str(runner.SANDBOX_CAD_REBUILD_ENTRYPOINT),
             )
             self.assertEqual(registry["geometry"]["id"], "mesh-compare.voxblame/1")
             self.assertEqual(
                 registry["geometry"]["entrypoint"],
-                "/workspace/repo/skills/mesh-compare/scripts/mesh-compare/__main__.py",
+                str(runner.SANDBOX_GEOMETRY_ENTRYPOINT),
             )
             self.assertEqual(registry_path.stat().st_mode & 0o777, 0o444)
             self.assertEqual(
                 registry_path,
                 authority / runner.TRUSTED_TOOL_REGISTRY_NAME,
+            )
+
+    def test_runner_registry_sandbox_paths_pass_host_validation_by_digest(self):
+        runner = _load_runner()
+        workspace_core = _load_workspace_core()
+        with TemporaryDirectory() as tmp:
+            registry_path = runner.publish_tool_registry(Path(tmp) / "authority")
+
+            loaded = workspace_core._load_tool_registry(
+                registry_path,
+                rebuild_entrypoint=runner.CAD_REBUILD_ENTRYPOINT,
+                geometry_entrypoint=runner.GEOMETRY_ENTRYPOINT,
+            )
+            self.assertEqual(
+                str(runner.SANDBOX_CAD_REBUILD_ENTRYPOINT),
+                loaded["rebuild"]["entrypoint"],
+            )
+            self.assertEqual(
+                str(runner.SANDBOX_GEOMETRY_ENTRYPOINT),
+                loaded["geometry"]["entrypoint"],
             )
 
     def test_prepare_sandbox_without_mcp_url_omits_config(self):

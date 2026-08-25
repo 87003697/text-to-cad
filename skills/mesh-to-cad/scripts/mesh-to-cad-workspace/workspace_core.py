@@ -2157,16 +2157,6 @@ def _load_tool_registry(
         (rebuild, rebuild_entrypoint, "$.tool_registry.rebuild.entrypoint_sha256"),
         (geometry, geometry_entrypoint, "$.tool_registry.geometry.entrypoint_sha256"),
     ):
-        registered_path = entry.get("entrypoint")
-        if (
-            registered_path is not None
-            and Path(registered_path).resolve() != entrypoint.resolve()
-        ):
-            _fail(
-                "untrusted_tool",
-                "tool entrypoint path conflicts with registry",
-                field.replace("entrypoint_sha256", "entrypoint"),
-            )
         if _file_sha256(entrypoint) != entry["entrypoint_sha256"]:
             _fail("untrusted_tool", "tool entrypoint digest conflicts with registry", field)
     return registry
