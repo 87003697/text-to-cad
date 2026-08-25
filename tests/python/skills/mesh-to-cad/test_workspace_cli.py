@@ -408,7 +408,14 @@ class WorkspaceCliTests(unittest.TestCase):
         root = self.workspace / "work" / name
         (root / "source").mkdir(parents=True)
         (root / "artifacts").mkdir()
-        (root / "source/model.py").write_text("# synthetic source\n", encoding="utf-8")
+        # Include the candidate ``name`` in the synthetic source so
+        # distinct candidates carry distinct source bytes.  This lets
+        # Repair Cycle tests exercise the source-change delta the
+        # trusted Repair evidence provider derives from the parent
+        # selected candidate and the current candidate.
+        (root / "source/model.py").write_text(
+            f"# synthetic source for {name}\n", encoding="utf-8"
+        )
         (root / "artifacts/model.glb").write_bytes(mesh_bytes)
         return root, _sha(mesh_bytes)
 

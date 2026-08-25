@@ -174,6 +174,75 @@ def _write_step_preview(
     return root
 
 
+def _write_region_diff(
+    output: Path,
+    *,
+    plan: dict,
+    from_step: int,
+    to_step: int,
+    before_observable: str,
+    after_observable: str,
+) -> None:
+    plan_bytes = (
+        json.dumps(plan, indent=2, sort_keys=True, separators=(",", ": ")) + "\n"
+    ).encode("utf-8")
+    document = {
+        "schema": "voxblame.region-diff/1",
+        "coordinate_contract": "trellis2_canonical/1",
+        "max_depth": 8,
+        "from_step": from_step,
+        "to_step": to_step,
+        "repair_batch": {
+            "schema": "voxblame.repair-batch/1",
+            "plan_sha256": hashlib.sha256(
+                b"voxblame.repair-batch/1\0" + plan_bytes
+            ).hexdigest(),
+            "from_step": from_step,
+            "selected_targets": [],
+            "planned_edits": [],
+        },
+        "measurement_trajectory": {
+            "steps": [from_step, to_step],
+            "observable_geometry": {
+                "before_sha256": before_observable,
+                "after_sha256": after_observable,
+                "changed": before_observable != after_observable,
+            },
+        },
+    }
+    identity_bytes = (
+        json.dumps(document, indent=2, sort_keys=True, separators=(",", ": ")) + "\n"
+    ).encode("utf-8")
+    document["identity"] = {
+        "region_diff_sha256": hashlib.sha256(
+            b"voxblame.region-diff/1\0" + identity_bytes
+        ).hexdigest()
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(output, document)
+
+
+def _write_source_changes(
+    output: Path, *, from_step: int, to_step: int, path: str = "source/model.py"
+) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        output,
+        {
+            "schema": "mesh-to-cad.source-changes/1",
+            "from_step": from_step,
+            "to_step": to_step,
+            "files": [
+                {
+                    "path": path,
+                    "before_sha256": "c" * 64,
+                    "after_sha256": "d" * 64,
+                }
+            ],
+        },
+    )
+
+
 def _make_stub_provider(
     *, reference_sha: str, profile_sha: str, candidate_sha: str
 ):
@@ -199,21 +268,83 @@ def _make_stub_provider(
     return _stub
 
 
-class WorkspaceFacadeAgentTests(unittest.TestCase):
-    def test_step_and_cycle_ingestion_uses_one_real_facade_target_owner(self) -> None:
-        fixture = _load_fixture()
-        case = fixture.WorkspaceCliTests(
-            "test_init_and_step_zero_publish_cross_checked_immutable_state"
-        )
-        case.setUp()
-        self.addCleanup(case.temporary.cleanup)
-        facade = _load_facade()
+def _make_repair_stub(
+    *,
+    reference_sha: str,
+    profile_sha: str,
+    candidate_sha: str,
+    observable_sha: str,
+    before_observable: str,
+):
+    """Return a stub Repair evidence provider bound to test-known digests.
 
-        status, _payload, stderr = case.invoke(
+    The stub mirrors what the production ``RepairEvidenceProvider``
+    would do: hydrate the parent voxblame session/reference into the
+    stage's ``voxblame_output`` root, publish the new Measured Step
+    subtree (``summary.json`` + ``measurement.json``), publish the
+    formal step preview, and write a schema-valid Region Diff and
+    source-change delta for the current attempt's plan.
+    """
+
+    def _stub(request) -> None:
+        shutil.copy2(
+            request.parent_voxblame / "session.json",
+            request.voxblame_output / "session.json",
+        )
+        shutil.copy2(
+            request.parent_voxblame / "reference.vbsvo",
+            request.voxblame_output / "reference.vbsvo",
+        )
+        _write_step_measurement(
+            request.voxblame_output,
+            step=request.to_step,
+            compare_to=request.from_step,
+            reference_sha=reference_sha,
+            candidate_sha=candidate_sha,
+            observable_sha=observable_sha,
+            accepted=False,
+        )
+        # Provider-internal ``measurement.json`` is required at the
+        # stage layer so the shape-check catches truncation/symlinks;
+        # ``publish_cycle`` only reads ``summary.json`` from the
+        # promoted voxblame subtree.
+        (
+            request.voxblame_output
+            / "steps"
+            / f"{request.to_step:06d}"
+            / "measurement.json"
+        ).write_text("{}\n", encoding="utf-8")
+        _write_step_preview(
+            request.preview_output,
+            reference_sha=reference_sha,
+            profile_sha=profile_sha,
+            candidate_sha=candidate_sha,
+        )
+        _write_region_diff(
+            request.region_diff_output,
+            plan=dict(request.plan),
+            from_step=request.from_step,
+            to_step=request.to_step,
+            before_observable=before_observable,
+            after_observable=observable_sha,
+        )
+        _write_source_changes(
+            request.source_changes_output,
+            from_step=request.from_step,
+            to_step=request.to_step,
+        )
+
+    return _stub
+
+
+class WorkspaceFacadeAgentTests(unittest.TestCase):
+    def _publish_step_zero(self, case, facade):
+        """Publish one Step 0 through the trusted stub provider."""
+
+        case.invoke(
             "init", "--workspace", str(case.workspace), "--prepared", str(case.prepared_setup())
         )
-        self.assertEqual(0, status, stderr)
-        status, attempt, stderr = case.invoke(
+        case.invoke(
             "begin-attempt",
             "--workspace",
             str(case.workspace),
@@ -222,7 +353,6 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
             "--intended-step",
             "0",
         )
-        self.assertEqual(0, status, stderr)
         facade.run_attempt_command(
             case.workspace,
             attempt=1,
@@ -232,14 +362,9 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
         )
         candidate, candidate_sha = case.candidate("agent-step", b"agent step")
         source = case.root / "agent-step-source"
-        (source / "candidate").mkdir(parents=True)
-        shutil.copytree(candidate, source / "candidate", dirs_exist_ok=True)
-        shutil.copy2(
-            source / "candidate/artifacts/model.glb", source / "candidate.glb"
-        )
-        # Deliberately do NOT place measurement.json or preview/ in the
-        # source: A-A2 rejects candidate-authored Step 0 evidence.
-
+        source.mkdir(parents=True)
+        shutil.copytree(candidate / "source", source / "source")
+        shutil.copy2(candidate / "artifacts/model.glb", source / "candidate.glb")
         stub_provider = _make_stub_provider(
             reference_sha=case.reference_sha,
             profile_sha=case.profile_sha,
@@ -251,21 +376,24 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
             source=source,
             evidence_provider=stub_provider,
         )
-        self.assertEqual({"step": 0}, published)
-        self.assertTrue((case.workspace / "steps/000000").is_dir())
-        self.assertTrue((case.workspace / "voxblame/steps/000000/summary.json").is_file())
-        # W1 owns the stage lifecycle: no external or internal stage
-        # residue survives publication.  The external stage lives in
-        # the system temp root and is cleaned up in the finally block;
-        # the internal promotion stage was renamed onto voxblame/ and
-        # the empty parent removed.
-        workspace_residue = [
-            entry.name
-            for entry in case.workspace.iterdir()
-            if entry.name.startswith(".voxblame-promotion-")
-        ]
-        self.assertEqual([], workspace_residue)
+        return published, candidate_sha
 
+    def _prepare_repair_source(self, case, cycle_candidate):
+        """Build a cycle candidate source tree with only Agent-authored bytes."""
+
+        cycle_source = case.root / "agent-cycle-source"
+        cycle_source.mkdir(parents=True)
+        shutil.copytree(cycle_candidate / "source", cycle_source / "source")
+        shutil.copy2(
+            cycle_candidate / "artifacts/model.glb",
+            cycle_source / "candidate.glb",
+        )
+        return cycle_source
+
+    def _prepare_repair_cycle(self, case, facade, *, before_observable: str = "9" * 64):
+        """Publish Step 0 and stage a Repair Cycle attempt with a candidate tree."""
+
+        self._publish_step_zero(case, facade)
         plan = case.repair_plan("agent-cycle-plan", from_step=0)
         facade.begin_attempt(case.workspace, plan, intended_step=1, from_step=0)
         facade.run_attempt_command(
@@ -276,50 +404,309 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
             timeout_seconds=60,
         )
         cycle_candidate, cycle_sha = case.candidate("agent-cycle", b"agent cycle")
-        cycle_measurement = case.measurement(
-            step=1,
-            compare_to=0,
+        cycle_source = self._prepare_repair_source(case, cycle_candidate)
+        assessment = case.assessment("agent-cycle", from_step=0, to_step=1)
+        shutil.copy2(assessment, cycle_source / "assessment.json")
+        repair_stub = _make_repair_stub(
+            reference_sha=case.reference_sha,
+            profile_sha=case.profile_sha,
             candidate_sha=cycle_sha,
             observable_sha="b" * 64,
-            accepted=False,
+            before_observable=before_observable,
         )
-        cycle_preview = case.preview("agent-cycle-preview", cycle_sha)
-        diff = case.region_diff(
-            "agent-cycle-diff",
-            plan=plan,
-            from_step=0,
-            to_step=1,
-            before_observable="9" * 64,
-            after_observable="b" * 64,
+        return cycle_source, repair_stub
+
+    def test_step_and_cycle_ingestion_uses_one_real_facade_target_owner(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
         )
-        assessment = case.assessment("agent-cycle", from_step=0, to_step=1)
-        source_changes = case.source_changes("agent-cycle", from_step=0, to_step=1)
-        cycle_source = case.root / "agent-cycle-source"
-        (cycle_source / "candidate").mkdir(parents=True)
-        shutil.copytree(cycle_candidate, cycle_source / "candidate", dirs_exist_ok=True)
-        shutil.copy2(
-            cycle_source / "candidate/artifacts/model.glb", cycle_source / "candidate.glb"
-        )
-        (cycle_source / "measurement.json").write_bytes(cycle_measurement.read_bytes())
-        shutil.copytree(cycle_preview, cycle_source / "preview")
-        for path, name in (
-            (diff, "region-diff.json"),
-            (assessment, "assessment.json"),
-            (source_changes, "source-changes.json"),
-        ):
-            shutil.copy2(path, cycle_source / name)
-        cycle_measurement.unlink()
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+
+        cycle_source, repair_stub = self._prepare_repair_cycle(case, facade)
+        self.assertTrue((case.workspace / "steps/000000").is_dir())
+        self.assertTrue((case.workspace / "voxblame/steps/000000/summary.json").is_file())
 
         repaired = facade.publish_cycle_from_candidate(
             case.workspace,
             attempt=2,
             source=cycle_source,
+            evidence_provider=repair_stub,
         )
         self.assertEqual({"step": {"step": 1}, "cycle": 1}, repaired)
         self.assertTrue((case.workspace / "steps/000001").is_dir())
-        self.assertTrue((case.workspace / "voxblame/steps/000001/summary.json").is_file())
-        self.assertNotIn("work/", str(published))
-        self.assertNotIn("work/", str(repaired))
+        self.assertTrue((case.workspace / "cycles/000001").is_dir())
+        self.assertTrue(
+            (case.workspace / "voxblame/steps/000001/summary.json").is_file()
+        )
+        # W1 owns the stage lifecycle: no external or internal stage
+        # residue survives publication.
+        residue = [
+            entry.name
+            for entry in case.workspace.iterdir()
+            if entry.name.startswith(".voxblame-promotion-")
+        ]
+        self.assertEqual([], residue)
+
+    def test_cycle_rejects_candidate_authored_evidence(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+
+        cycle_source, repair_stub = self._prepare_repair_cycle(case, facade)
+        for forbidden in (
+            "measurement.json",
+            "preview",
+            "region-diff.json",
+            "source-changes.json",
+        ):
+            candidate_bytes_source = cycle_source
+            if forbidden == "preview":
+                (candidate_bytes_source / forbidden).mkdir()
+            else:
+                (candidate_bytes_source / forbidden).write_text("{}", encoding="utf-8")
+            with self.assertRaises(facade.WorkspaceError) as raised:
+                facade.publish_cycle_from_candidate(
+                    case.workspace,
+                    attempt=2,
+                    source=cycle_source,
+                    evidence_provider=repair_stub,
+                )
+            self.assertEqual(
+                "invalid_repair_candidate", raised.exception.classification
+            )
+            if forbidden == "preview":
+                shutil.rmtree(candidate_bytes_source / forbidden)
+            else:
+                (candidate_bytes_source / forbidden).unlink()
+        # Rejection never leaves partial Repair Cycle authority.
+        self.assertFalse((case.workspace / "steps/000001").exists())
+        self.assertFalse((case.workspace / "cycles/000001").exists())
+        self.assertFalse((case.workspace / "voxblame/steps/000001").exists())
+
+    def test_cycle_provider_request_paths_are_outside_workspace_authority(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+
+        cycle_source, _repair_stub = self._prepare_repair_cycle(case, facade)
+        workspace_root = case.workspace.resolve()
+
+        observed: dict = {}
+        cycle_sha = _sha(b"agent cycle")
+
+        def capturing_provider(request):
+            observed["paths"] = {}
+            for label, path in (
+                ("canonical_reference", request.canonical_reference),
+                ("candidate_mesh", request.candidate_mesh),
+                ("candidate_source", request.candidate_source),
+                ("parent_voxblame", request.parent_voxblame),
+                ("parent_source", request.parent_source),
+                ("voxblame_output", request.voxblame_output),
+                ("preview_output", request.preview_output),
+                ("region_diff_output", request.region_diff_output),
+                ("source_changes_output", request.source_changes_output),
+            ):
+                resolved = Path(path).resolve()
+                observed["paths"][label] = resolved
+                try:
+                    resolved.relative_to(workspace_root)
+                except ValueError:
+                    continue
+                raise AssertionError(
+                    f"provider {label} path is inside Workspace: {resolved}"
+                )
+            observed["candidate_bytes"] = request.candidate_mesh.read_bytes()
+            observed["candidate_source_files"] = sorted(
+                str(child.relative_to(request.candidate_source))
+                for child in request.candidate_source.rglob("*")
+                if child.is_file()
+            )
+            observed["parent_source_files"] = sorted(
+                str(child.relative_to(request.parent_source))
+                for child in request.parent_source.rglob("*")
+                if child.is_file()
+            )
+            observed["parent_voxblame_files"] = sorted(
+                str(child.relative_to(request.parent_voxblame))
+                for child in request.parent_voxblame.rglob("*")
+                if child.is_file()
+            )
+            _make_repair_stub(
+                reference_sha=case.reference_sha,
+                profile_sha=case.profile_sha,
+                candidate_sha=cycle_sha,
+                observable_sha="b" * 64,
+                before_observable="9" * 64,
+            )(request)
+
+        facade.publish_cycle_from_candidate(
+            case.workspace, attempt=2, source=cycle_source, evidence_provider=capturing_provider
+        )
+        # All nine request paths must be outside the Workspace tree.
+        for label, path in observed["paths"].items():
+            with self.assertRaises(ValueError, msg=f"{label} escaped Workspace"):
+                path.relative_to(workspace_root)
+        # The provider actually read real hydrated bytes.
+        self.assertTrue(observed["candidate_bytes"])
+        self.assertIn("model.py", observed["candidate_source_files"])
+        self.assertIn("model.py", observed["parent_source_files"])
+        self.assertIn("session.json", observed["parent_voxblame_files"])
+        self.assertIn("reference.vbsvo", observed["parent_voxblame_files"])
+
+    def test_cycle_provider_symlink_output_fails_closed(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+
+        cycle_source, base_stub = self._prepare_repair_cycle(case, facade)
+
+        def symlink_provider(request):
+            base_stub(request)
+            summary = (
+                request.voxblame_output
+                / "steps"
+                / f"{request.to_step:06d}"
+                / "summary.json"
+            )
+            replacement = summary.with_name("summary-real.json")
+            summary.rename(replacement)
+            summary.symlink_to(replacement)
+
+        with self.assertRaises(facade.WorkspaceError) as raised:
+            facade.publish_cycle_from_candidate(
+                case.workspace,
+                attempt=2,
+                source=cycle_source,
+                evidence_provider=symlink_provider,
+            )
+        self.assertIn(
+            raised.exception.classification,
+            {"invalid_repair_evidence", "invalid_workspace_path"},
+        )
+        self.assertFalse((case.workspace / "voxblame/steps/000001").exists())
+        self.assertFalse((case.workspace / "steps/000001").exists())
+
+    def test_cycle_provider_hardlink_output_fails_closed(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+
+        cycle_source, base_stub = self._prepare_repair_cycle(case, facade)
+
+        def hardlink_provider(request):
+            base_stub(request)
+            summary = (
+                request.voxblame_output
+                / "steps"
+                / f"{request.to_step:06d}"
+                / "summary.json"
+            )
+            twin = summary.with_name("twin.json")
+            os.link(summary, twin)
+
+        with self.assertRaises(facade.WorkspaceError) as raised:
+            facade.publish_cycle_from_candidate(
+                case.workspace,
+                attempt=2,
+                source=cycle_source,
+                evidence_provider=hardlink_provider,
+            )
+        self.assertIn(
+            raised.exception.classification,
+            {"invalid_repair_evidence", "invalid_workspace_path"},
+        )
+        self.assertFalse((case.workspace / "voxblame/steps/000001").exists())
+
+    def test_cycle_provider_oversized_output_fails_closed(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+
+        cycle_source, base_stub = self._prepare_repair_cycle(case, facade)
+
+        original = facade._MAX_REPAIR_STAGE_FILE_BYTES
+        facade._MAX_REPAIR_STAGE_FILE_BYTES = 32
+        self.addCleanup(setattr, facade, "_MAX_REPAIR_STAGE_FILE_BYTES", original)
+
+        with self.assertRaises(facade.WorkspaceError) as raised:
+            facade.publish_cycle_from_candidate(
+                case.workspace,
+                attempt=2,
+                source=cycle_source,
+                evidence_provider=base_stub,
+            )
+        self.assertEqual(
+            "invalid_repair_evidence", raised.exception.classification
+        )
+        self.assertFalse((case.workspace / "voxblame/steps/000001").exists())
+
+    def test_cycle_provider_failure_rolls_back_promotion(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+
+        cycle_source, base_stub = self._prepare_repair_cycle(case, facade)
+
+        def bad_source_changes_provider(request):
+            base_stub(request)
+            # Break the source-changes edge so ``publish_cycle`` fails
+            # after W1 has already promoted the voxblame step subtree.
+            _write_json(
+                request.source_changes_output,
+                {
+                    "schema": "mesh-to-cad.source-changes/1",
+                    "from_step": request.from_step + 100,
+                    "to_step": request.to_step,
+                    "files": [
+                        {
+                            "path": "source/model.py",
+                            "before_sha256": "c" * 64,
+                            "after_sha256": "d" * 64,
+                        }
+                    ],
+                },
+            )
+
+        with self.assertRaises(facade.WorkspaceError):
+            facade.publish_cycle_from_candidate(
+                case.workspace,
+                attempt=2,
+                source=cycle_source,
+                evidence_provider=bad_source_changes_provider,
+            )
+        # The promoted voxblame step was rolled back and no cycle or
+        # step authority landed on disk.
+        self.assertFalse((case.workspace / "steps/000001").exists())
+        self.assertFalse((case.workspace / "cycles/000001").exists())
+        self.assertFalse((case.workspace / "voxblame/steps/000001").exists())
 
     def test_step_zero_rejects_candidate_authored_evidence(self) -> None:
         fixture = _load_fixture()
@@ -351,11 +738,9 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
         )
         candidate, candidate_sha = case.candidate("agent-step", b"agent step")
         source = case.root / "agent-step-source"
-        (source / "candidate").mkdir(parents=True)
-        shutil.copytree(candidate, source / "candidate", dirs_exist_ok=True)
-        shutil.copy2(
-            source / "candidate/artifacts/model.glb", source / "candidate.glb"
-        )
+        source.mkdir(parents=True)
+        shutil.copytree(candidate / "source", source / "source")
+        shutil.copy2(candidate / "artifacts/model.glb", source / "candidate.glb")
         (source / "measurement.json").write_bytes(b"{}")
 
         stub_provider = _make_stub_provider(
@@ -399,11 +784,9 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
         )
         candidate, candidate_sha = case.candidate("agent-step", candidate_bytes)
         source = case.root / "agent-step-source"
-        (source / "candidate").mkdir(parents=True)
-        shutil.copytree(candidate, source / "candidate", dirs_exist_ok=True)
-        shutil.copy2(
-            source / "candidate/artifacts/model.glb", source / "candidate.glb"
-        )
+        source.mkdir(parents=True)
+        shutil.copytree(candidate / "source", source / "source")
+        shutil.copy2(candidate / "artifacts/model.glb", source / "candidate.glb")
         return facade, source, candidate_sha
 
     def test_provider_request_paths_are_outside_workspace_authority(self) -> None:

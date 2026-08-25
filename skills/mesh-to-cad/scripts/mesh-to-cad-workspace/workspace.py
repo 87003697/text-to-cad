@@ -165,20 +165,28 @@ def _ingest_candidate(
 # its root; the Agent never names or selects it.  For Step 0 the trusted
 # provider seam (``StepZeroEvidenceProvider``) alone produces measurement and
 # formal preview evidence — the candidate tree must NOT carry
-# ``measurement.json`` or ``preview/`` and W1 rejects submissions that do.
-# The remaining ``CANDIDATE_*_RELATIVE`` names are the temporary A-A1 repair
-# contract, kept unchanged until A-A3 replaces them with their own trusted
-# providers.
+# ``measurement.json`` or ``preview/``.  For a Repair Cycle the trusted
+# ``RepairEvidenceProvider`` alone produces canonical measurement, formal
+# preview, Region Diff, and source-change evidence — the candidate tree must
+# NOT carry ``measurement.json``, ``preview/``, ``region-diff.json``, or
+# ``source-changes.json``.  W1 rejects submissions that do.
+# ``assessment.json`` remains an Agent-authored semantic value (a preview
+# observation and a short summary) that W1 rebinds through
+# ``mesh-to-cad.assessment/1`` to the actual attempt and current target/batch;
+# it never overrides measured facts and cannot originate anywhere else.
 CANDIDATE_MESH_RELATIVE = "candidate.glb"
-_REJECTED_STEP_ZERO_CANDIDATE_NAMES = ("measurement.json", "preview")
-_REPAIR_CANDIDATE_MEASUREMENT_RELATIVE = "measurement.json"
-_REPAIR_CANDIDATE_PREVIEW_RELATIVE = "preview"
-CANDIDATE_REGION_DIFF_RELATIVE = "region-diff.json"
 CANDIDATE_ASSESSMENT_RELATIVE = "assessment.json"
-CANDIDATE_SOURCE_CHANGES_RELATIVE = "source-changes.json"
+_REJECTED_STEP_ZERO_CANDIDATE_NAMES = ("measurement.json", "preview")
+_REJECTED_REPAIR_CANDIDATE_NAMES = (
+    "measurement.json",
+    "preview",
+    "region-diff.json",
+    "source-changes.json",
+)
 
 
 _MAX_STEP_ZERO_STAGE_FILE_BYTES = 512 * 1024 * 1024
+_MAX_REPAIR_STAGE_FILE_BYTES = 512 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -211,6 +219,52 @@ class StepZeroEvidenceProvider(Protocol):
     def __call__(self, request: StepZeroEvidenceRequest) -> None: ...
 
 
+@dataclass(frozen=True)
+class RepairEvidenceRequest:
+    """Read-only inputs and W1-owned stage outputs for the Repair provider.
+
+    The provider must:
+      * Read only ``canonical_reference``, ``candidate_mesh``,
+        ``candidate_source``, ``parent_voxblame``, and ``parent_source``.
+      * Write only into ``voxblame_output``, ``preview_output``,
+        ``region_diff_output``, and ``source_changes_output``.
+      * Not interpret path locations relative to Workspace authority.
+
+    ``plan`` is the closed active-Attempt Repair Batch document;
+    ``preview_profile`` is the closed ``{name, sha256}`` identity value
+    the Workspace has already committed for the experiment;
+    ``from_step``/``to_step``/``parent_observable_sha256``/
+    ``parent_selected_summary_sha256`` are parent-binding facts already
+    committed by W1.
+    """
+
+    canonical_reference: Path
+    candidate_mesh: Path
+    candidate_source: Path
+    parent_voxblame: Path
+    parent_source: Path
+    voxblame_output: Path
+    preview_output: Path
+    region_diff_output: Path
+    source_changes_output: Path
+    plan: Mapping[str, Any]
+    preview_profile: Mapping[str, Any]
+    from_step: int
+    to_step: int
+    parent_observable_sha256: str
+    parent_selected_summary_sha256: str
+
+
+class RepairEvidenceProvider(Protocol):
+    """Small internal seam that produces trusted Repair Cycle evidence.
+
+    Runner-assembled and fixed; the Agent Surface never registers,
+    configures, or selects a provider.
+    """
+
+    def __call__(self, request: RepairEvidenceRequest) -> None: ...
+
+
 def _reject_candidate_authored_step_zero_evidence(source: Path) -> None:
     """Fail closed if the trusted candidate tree carries measurement/preview names."""
 
@@ -226,6 +280,26 @@ def _reject_candidate_authored_step_zero_evidence(source: Path) -> None:
         raise WorkspaceError(
             "invalid_step_zero_candidate",
             f"trusted candidate tree must not author {forbidden[0]} for Step 0",
+        )
+
+
+def _reject_candidate_authored_repair_evidence(source: Path) -> None:
+    """Fail closed if the trusted candidate tree carries repair evidence names."""
+
+    try:
+        entries = {entry.name for entry in source.iterdir()}
+    except OSError as error:
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "trusted candidate source is unavailable",
+        ) from error
+    forbidden = tuple(
+        name for name in _REJECTED_REPAIR_CANDIDATE_NAMES if name in entries
+    )
+    if forbidden:
+        raise WorkspaceError(
+            "invalid_repair_candidate",
+            f"trusted candidate tree must not author {forbidden[0]} for a Repair Cycle",
         )
 
 
@@ -451,6 +525,192 @@ def _rollback_step_zero_voxblame(workspace: Path) -> None:
         shutil.rmtree(voxblame, ignore_errors=True)
 
 
+def _open_repair_external_stage(workspace: Path) -> Path:
+    """Create a private Repair provider stage outside the Workspace tree.
+
+    The trusted Repair evidence provider receives only paths from within
+    this stage: it cannot observe or interpret any Workspace-relative
+    location.  The stage is a fresh directory created by :mod:`tempfile`
+    outside the Workspace root, contains ``inputs/`` (populated by W1
+    with descriptor-safe copies of the canonical reference, the current
+    candidate mesh and source subtree, the parent Measured Step's
+    voxblame subtree and the parent selected candidate source), and
+    ``outputs/`` (with ``voxblame/``, ``preview/``, ``region-diff.json``
+    slot and ``source-changes.json`` slot) the provider must fill.  W1
+    cleans the stage on every outcome.
+    """
+
+    workspace = Path(workspace).resolve()
+    stage = Path(
+        tempfile.mkdtemp(
+            prefix=f"voxblame-repair-{secrets.token_hex(6)}-",
+        )
+    ).resolve()
+    try:
+        stage.relative_to(workspace)
+    except ValueError:
+        pass
+    else:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "external provider stage resolved beneath Workspace authority",
+        )
+    (stage / "inputs").mkdir(mode=0o700)
+    (stage / "outputs").mkdir(mode=0o700)
+    (stage / "outputs/voxblame").mkdir(mode=0o700)
+    (stage / "outputs/preview").mkdir(mode=0o700)
+    return stage
+
+
+def _assert_repair_request_paths_outside(
+    request: "RepairEvidenceRequest", workspace: Path
+) -> None:
+    """Fail closed if any provider request path resolves inside the Workspace tree."""
+
+    workspace = Path(workspace).resolve()
+    labels = (
+        ("canonical_reference", request.canonical_reference),
+        ("candidate_mesh", request.candidate_mesh),
+        ("candidate_source", request.candidate_source),
+        ("parent_voxblame", request.parent_voxblame),
+        ("parent_source", request.parent_source),
+        ("voxblame_output", request.voxblame_output),
+        ("preview_output", request.preview_output),
+        ("region_diff_output", request.region_diff_output),
+        ("source_changes_output", request.source_changes_output),
+    )
+    for label, path in labels:
+        resolved = Path(path).resolve()
+        try:
+            resolved.relative_to(workspace)
+        except ValueError:
+            continue
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            f"provider request {label} resolves beneath Workspace authority",
+        )
+
+
+def _assert_repair_stage_regular_file(path: Path, label: str) -> None:
+    """Fail closed unless ``path`` is a bounded regular file suitable for promotion."""
+
+    if path.is_symlink():
+        raise WorkspaceError("invalid_repair_evidence", f"{label} is a symlink")
+    try:
+        metadata = path.stat()
+    except OSError as error:
+        raise WorkspaceError(
+            "invalid_repair_evidence",
+            f"{label} is unavailable",
+        ) from error
+    if not stat.S_ISREG(metadata.st_mode):
+        raise WorkspaceError(
+            "invalid_repair_evidence",
+            f"{label} is not a regular file",
+        )
+    if metadata.st_nlink != 1:
+        raise WorkspaceError(
+            "invalid_repair_evidence",
+            f"{label} has an unexpected link count",
+        )
+    if metadata.st_size > _MAX_REPAIR_STAGE_FILE_BYTES:
+        raise WorkspaceError(
+            "invalid_repair_evidence",
+            f"{label} exceeds the allowed size",
+        )
+
+
+def _validate_repair_stage(
+    voxblame_output: Path,
+    preview_output: Path,
+    region_diff_output: Path,
+    source_changes_output: Path,
+    *,
+    intended_step: int,
+) -> None:
+    """Verify the provider populated the expected file shapes.
+
+    Deep schema/identity validation is performed by
+    :func:`publish_cycle` through the shared closed-schema boundary
+    checks; W1's role here is to fail closed on missing files, wrong
+    types, symlink/hardlink shapes, or oversized artifacts before the
+    stage is promoted into any Workspace authority path.
+    """
+
+    step_root = voxblame_output / "steps" / f"{intended_step:06d}"
+    required_voxblame = (
+        voxblame_output / "session.json",
+        voxblame_output / "reference.vbsvo",
+        step_root / "summary.json",
+        step_root / "measurement.json",
+    )
+    for path in required_voxblame:
+        _assert_repair_stage_regular_file(path, f"voxblame stage {path.name}")
+    for name in ("preview.json", "preview.png"):
+        _assert_repair_stage_regular_file(preview_output / name, f"preview stage {name}")
+    _assert_repair_stage_regular_file(region_diff_output, "region-diff stage")
+    _assert_repair_stage_regular_file(source_changes_output, "source-changes stage")
+
+
+def _promote_repair_voxblame_step(
+    workspace: Path, internal_voxblame_step: Path, intended_step: int
+) -> Path:
+    """Atomically publish one voxblame step subtree into workspace authority.
+
+    Fails closed if the target already exists to preserve the
+    single-writer invariant.  Returns the promoted ``summary.json``
+    path suitable for :func:`publish_cycle`.
+    """
+
+    workspace = Path(workspace).resolve()
+    steps_root = workspace / "voxblame/steps"
+    steps_root.mkdir(parents=True, exist_ok=True)
+    if steps_root.is_symlink():
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "voxblame steps authority path is a symlink",
+        )
+    target = steps_root / f"{intended_step:06d}"
+    if target.is_symlink():
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "voxblame step authority path is a symlink",
+        )
+    if target.exists():
+        raise WorkspaceError(
+            "workspace_conflict",
+            "voxblame step authority path already exists before Repair Cycle publication",
+        )
+    try:
+        os.rename(internal_voxblame_step, target)
+    except OSError as error:
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "cannot atomically promote repair voxblame step",
+        ) from error
+    return target / "summary.json"
+
+
+def _rollback_repair_voxblame_step(workspace: Path, intended_step: int) -> None:
+    """Best-effort cleanup for a failed Repair Cycle publication.
+
+    Removes the ``voxblame/steps/{intended_step}`` bytes W1 promoted
+    from the stage before :func:`publish_cycle` completed its commit.
+    If a committed step already exists this is left untouched.
+    """
+
+    workspace = Path(workspace).resolve()
+    committed_step = workspace / "steps" / f"{intended_step:06d}"
+    if committed_step.exists():
+        return
+    step_root = workspace / "voxblame/steps" / f"{intended_step:06d}"
+    if step_root.is_symlink():
+        return
+    if step_root.is_dir():
+        shutil.rmtree(step_root, ignore_errors=True)
+
+
 def publish_step_zero_from_candidate(
     workspace: Path,
     *,
@@ -575,35 +835,195 @@ def publish_cycle_from_candidate(
     *,
     attempt: int,
     source: Path,
+    evidence_provider: RepairEvidenceProvider,
 ) -> dict[str, Any]:
-    """Ingest one trusted candidate tree and publish a Repair Cycle."""
+    """Ingest one trusted candidate tree, produce trusted evidence, publish a Repair Cycle.
+
+    W1 owns every mutation.  The trusted candidate tree carries only
+    its Agent-authored source, the fixed ``candidate.glb`` output, and
+    an Agent-authored ``assessment.json`` semantic value; W1 rejects
+    candidate-authored ``measurement.json``, ``preview/``,
+    ``region-diff.json`` or ``source-changes.json``.  W1 then opens an
+    opaque stage outside Workspace authority, invokes the fixed
+    :class:`RepairEvidenceProvider` supplied by the runner, and
+    validates the produced canonical measurement, formal preview,
+    Region Diff, and source-change evidence before atomically
+    promoting the voxblame step subtree into
+    ``voxblame/steps/{step}/`` and calling :func:`publish_cycle`.  The
+    stage is cleaned on every outcome and the promoted bytes are
+    rolled back on failure.
+    """
+
+    workspace = Path(workspace).resolve()
+    raw_source = Path(source)
+    if raw_source.is_symlink() or not raw_source.is_dir():
+        raise WorkspaceError(
+            "invalid_workspace_path", "trusted candidate source is unavailable"
+        )
+    source = raw_source.resolve()
+    _reject_candidate_authored_repair_evidence(source)
 
     _ingest_candidate(workspace, attempt, source)
-    workspace = Path(workspace).resolve()
-    active_root, active, _plan = _core._load_active_attempt(workspace, attempt)
+    active_root, active, plan = _core._load_active_attempt(workspace, attempt)
     authority = active_root / "candidate"
     intended_step = int(active["intended_step"])
-    measurement_source = _agent_source_file(
-        Path(source).resolve(), _REPAIR_CANDIDATE_MEASUREMENT_RELATIVE
-    )
-    measurement_target = workspace / "voxblame/steps" / f"{intended_step:06d}" / "summary.json"
-    _copy_agent_file(measurement_source, measurement_target)
-    try:
-        result = publish_cycle(
-            workspace,
-            attempt=attempt,
-            candidate=authority,
-            candidate_mesh=_agent_relative(authority, CANDIDATE_MESH_RELATIVE),
-            measurement=measurement_target,
-            preview=authority / _agent_relative(authority, _REPAIR_CANDIDATE_PREVIEW_RELATIVE),
-            region_diff=authority / _agent_relative(authority, CANDIDATE_REGION_DIFF_RELATIVE),
-            assessment=authority / _agent_relative(authority, CANDIDATE_ASSESSMENT_RELATIVE),
-            source_changes=authority
-            / _agent_relative(authority, CANDIDATE_SOURCE_CHANGES_RELATIVE),
+    from_step_value = active.get("from_step")
+    if not isinstance(from_step_value, int) or isinstance(from_step_value, bool):
+        raise WorkspaceError(
+            "invalid_attempt", "Repair Cycle attempt has no parent Measured Step"
         )
+    from_step = int(from_step_value)
+
+    workspace_document = _read_workspace_document(workspace)
+    preview_profile = workspace_document.get("preview_profile")
+    if not isinstance(preview_profile, Mapping):
+        raise WorkspaceError(
+            "corrupt_workspace",
+            "Workspace document is missing the preview profile",
+        )
+
+    parent_step_manifest = _read_authority_json(
+        workspace,
+        workspace / "steps" / f"{from_step:06d}" / "step.json",
+        f"$.steps[{from_step}]",
+    )
+    parent_observable_sha256 = parent_step_manifest.get("observable_sha256")
+    parent_preview_identity = parent_step_manifest.get("preview_identity_sha256")
+    if not isinstance(parent_observable_sha256, str) or not isinstance(
+        parent_preview_identity, str
+    ):
+        raise WorkspaceError(
+            "corrupt_workspace",
+            "parent Measured Step manifest is missing required identity facts",
+        )
+
+    parent_voxblame_authority = workspace / "voxblame"
+    parent_candidate_source_authority = (
+        workspace / "steps" / f"{from_step:06d}" / "candidate" / "source"
+    )
+
+    external_stage = _open_repair_external_stage(workspace)
+    internal_stage: Path | None = None
+    promoted = False
+    try:
+        # W1 owns descriptor-safe input hydration: only bytes copied
+        # from authority land in the external stage; the provider never
+        # sees any Workspace path.
+        candidate_mesh_authority = _agent_source_file(
+            authority, CANDIDATE_MESH_RELATIVE
+        )
+        external_candidate_mesh = external_stage / "inputs/candidate.glb"
+        _copy_agent_file(candidate_mesh_authority, external_candidate_mesh)
+        external_candidate_source = external_stage / "inputs/candidate-source"
+        _copy_agent_tree(authority / "source", external_candidate_source)
+        external_reference = external_stage / "inputs/reference"
+        _copy_agent_tree(workspace / "input", external_reference)
+        external_parent_voxblame = external_stage / "inputs/parent-voxblame"
+        _copy_agent_tree(parent_voxblame_authority, external_parent_voxblame)
+        external_parent_source = external_stage / "inputs/parent-source"
+        _copy_agent_tree(parent_candidate_source_authority, external_parent_source)
+        for readonly_root in (
+            external_reference,
+            external_parent_voxblame,
+            external_parent_source,
+            external_candidate_source,
+        ):
+            os.chmod(readonly_root, 0o500)
+        os.chmod(external_candidate_mesh, 0o400)
+
+        external_voxblame_output = external_stage / "outputs/voxblame"
+        external_preview_output = external_stage / "outputs/preview"
+        external_region_diff_output = external_stage / "outputs/region-diff.json"
+        external_source_changes_output = external_stage / "outputs/source-changes.json"
+
+        request = RepairEvidenceRequest(
+            canonical_reference=external_reference,
+            candidate_mesh=external_candidate_mesh,
+            candidate_source=external_candidate_source,
+            parent_voxblame=external_parent_voxblame,
+            parent_source=external_parent_source,
+            voxblame_output=external_voxblame_output,
+            preview_output=external_preview_output,
+            region_diff_output=external_region_diff_output,
+            source_changes_output=external_source_changes_output,
+            plan=dict(plan),
+            preview_profile={
+                "name": preview_profile.get("name"),
+                "sha256": preview_profile.get("sha256"),
+            },
+            from_step=from_step,
+            to_step=intended_step,
+            parent_observable_sha256=parent_observable_sha256,
+            parent_selected_summary_sha256=parent_preview_identity,
+        )
+        _assert_repair_request_paths_outside(request, workspace)
+        try:
+            evidence_provider(request)
+        except WorkspaceError:
+            raise
+        except Exception as error:
+            raise WorkspaceError(
+                "repair_evidence_failed",
+                f"trusted Repair evidence provider failed: {error.__class__.__name__}",
+            ) from error
+        _validate_repair_stage(
+            external_voxblame_output,
+            external_preview_output,
+            external_region_diff_output,
+            external_source_changes_output,
+            intended_step=intended_step,
+        )
+
+        # Descriptor-copy the validated external outputs into a private
+        # same-filesystem W1 stage.  The provider never learns this
+        # path; only after the copy succeeds is the voxblame step
+        # subtree renamed onto workspace/voxblame/steps/{step}/
+        # atomically.  Preview, Region Diff, and source-change bytes
+        # live in the internal stage during publication and are
+        # copied by ``publish_cycle`` into the cycle stage.
+        internal_stage = _open_step_zero_internal_promotion_stage(workspace)
+        internal_voxblame_step = internal_stage / "voxblame-step"
+        internal_preview = internal_stage / "preview"
+        internal_region_diff = internal_stage / "region-diff.json"
+        internal_source_changes = internal_stage / "source-changes.json"
+        _copy_agent_tree(
+            external_voxblame_output / "steps" / f"{intended_step:06d}",
+            internal_voxblame_step,
+        )
+        _copy_agent_tree(external_preview_output, internal_preview)
+        _copy_agent_file(external_region_diff_output, internal_region_diff)
+        _copy_agent_file(external_source_changes_output, internal_source_changes)
+
+        measurement_target = _promote_repair_voxblame_step(
+            workspace, internal_voxblame_step, intended_step
+        )
+        promoted = True
+        try:
+            result = publish_cycle(
+                workspace,
+                attempt=attempt,
+                candidate=authority,
+                candidate_mesh=_agent_relative(authority, CANDIDATE_MESH_RELATIVE),
+                measurement=measurement_target,
+                preview=internal_preview,
+                region_diff=internal_region_diff,
+                assessment=authority
+                / _agent_relative(authority, CANDIDATE_ASSESSMENT_RELATIVE),
+                source_changes=internal_source_changes,
+            )
+        except Exception:
+            _rollback_repair_voxblame_step(workspace, intended_step)
+            promoted = False
+            raise
     except Exception:
-        measurement_target.unlink(missing_ok=True)
+        if promoted:
+            _rollback_repair_voxblame_step(workspace, intended_step)
         raise
+    finally:
+        _remove_stage_tree(external_stage)
+        if internal_stage is not None:
+            _remove_stage_tree(internal_stage)
+
     step_value = result.get("step", 0)
     if isinstance(step_value, Mapping):
         step_value = step_value.get("step", 0)

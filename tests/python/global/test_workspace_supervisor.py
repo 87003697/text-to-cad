@@ -143,10 +143,17 @@ class _Workspace:
         return {"step": 0}
 
     def publish_cycle_from_candidate(
-        self, _workspace: Path, *, attempt: int, source: Path
+        self, _workspace: Path, *, attempt: int, source: Path, evidence_provider
     ) -> dict:
         self.completed_cycles += 1
-        self.published.append({"kind": "repair", "attempt": attempt, "source": source})
+        self.published.append(
+            {
+                "kind": "repair",
+                "attempt": attempt,
+                "source": source,
+                "provider": evidence_provider,
+            }
+        )
         return {"step": {"step": self.completed_cycles}, "cycle": self.completed_cycles}
 
     def finalization_staging_path(self, _workspace: Path) -> Path:
@@ -2192,6 +2199,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             from scripts.pilot.step_zero_evidence import (
                 real_step_zero_evidence_provider,
             )
+            from scripts.pilot.repair_evidence import (
+                real_repair_evidence_provider,
+            )
 
             supervisor = WorkspaceSupervisor(
                 case.workspace,
@@ -2203,6 +2213,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 tool_registry=registry,
                 candidate_runtime=candidate_runtime,
                 step_zero_evidence_provider=real_step_zero_evidence_provider,
+                repair_evidence_provider=real_repair_evidence_provider,
             )
             try:
                 contract = supervisor.agent_bootstrap_contract()

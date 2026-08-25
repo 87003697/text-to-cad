@@ -92,7 +92,12 @@ class WorkspaceAPI(Protocol):
     ) -> Mapping[str, Any]: ...
 
     def publish_cycle_from_candidate(
-        self, workspace: Path, *, attempt: int, source: Path
+        self,
+        workspace: Path,
+        *,
+        attempt: int,
+        source: Path,
+        evidence_provider: Callable[..., Any],
     ) -> Mapping[str, Any]: ...
 
     def finalize_agent_submission(
@@ -555,6 +560,7 @@ class WorkspaceSupervisor:
         tool_registry: Path | None = None,
         candidate_runtime: Path | None = None,
         step_zero_evidence_provider: Callable[..., Any] | None = None,
+        repair_evidence_provider: Callable[..., Any] | None = None,
     ) -> None:
         raw_workspace = Path(workspace)
         if raw_workspace.is_symlink():
@@ -603,6 +609,7 @@ class WorkspaceSupervisor:
             self._geometry_entrypoint = geometry_entrypoint
             self._tool_registry = tool_registry
             self._step_zero_evidence_provider = step_zero_evidence_provider
+            self._repair_evidence_provider = repair_evidence_provider
             self.candidate_runtime: Path | None = None
             if candidate_runtime is not None:
                 raw_runtime = Path(candidate_runtime)
@@ -1412,10 +1419,13 @@ class WorkspaceSupervisor:
                 evidence_provider=self._step_zero_evidence_provider,
             )
         elif submission.kind == "repair":
+            if self._repair_evidence_provider is None:
+                raise SupervisorError("repair_evidence_provider_missing")
             api_call = lambda: self.workspace_api.publish_cycle_from_candidate(
                 self.workspace,
                 attempt=submission.attempt_id,
                 source=submission.candidate_root,
+                evidence_provider=self._repair_evidence_provider,
             )
         else:
             raise SupervisorError("invalid_request")

@@ -79,6 +79,13 @@ except ModuleNotFoundError as exc:
     from step_zero_evidence import real_step_zero_evidence_provider
 
 try:
+    from scripts.pilot.repair_evidence import real_repair_evidence_provider
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from repair_evidence import real_repair_evidence_provider
+
+try:
     from scripts.pilot.agent_surface_bridge import (
         AgentSurfaceBridge,
         SOCKET_TARGET as AGENT_SURFACE_SOCKET_TARGET,
@@ -2553,6 +2560,7 @@ def run_pilot(
                     tool_registry=tool_registry,
                     candidate_runtime=candidate_runtime,
                     step_zero_evidence_provider=real_step_zero_evidence_provider,
+                    repair_evidence_provider=real_repair_evidence_provider,
                 )
                 write_agent_bootstrap(
                     agent_supervisor.candidate_root,
