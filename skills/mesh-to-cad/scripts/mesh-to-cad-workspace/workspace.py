@@ -340,9 +340,11 @@ def _open_step_zero_external_stage(workspace: Path) -> Path:
     location.  The stage is a fresh directory created by :mod:`tempfile`
     outside the Workspace root, contains ``inputs/`` (populated by W1
     with descriptor-safe copies of the canonical reference and the
-    candidate mesh), and ``outputs/voxblame/`` and ``outputs/preview/``
-    subdirectories the provider must fill.  W1 cleans the stage on every
-    outcome.
+    candidate mesh) and an ``outputs/`` parent.  Neither output leaf
+    exists before invocation: canonical measurement uses the absence of
+    ``outputs/voxblame`` to distinguish a fresh session from a resume,
+    and canonical preview publication atomically creates
+    ``outputs/preview``.  W1 cleans the stage on every outcome.
     """
 
     workspace = Path(workspace).resolve()
@@ -363,8 +365,6 @@ def _open_step_zero_external_stage(workspace: Path) -> Path:
         )
     (stage / "inputs").mkdir(mode=0o700)
     (stage / "outputs").mkdir(mode=0o700)
-    (stage / "outputs/voxblame").mkdir(mode=0o700)
-    (stage / "outputs/preview").mkdir(mode=0o700)
     return stage
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -788,6 +789,114 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
         shutil.copytree(candidate / "source", source / "source")
         shutil.copy2(candidate / "artifacts/model.glb", source / "candidate.glb")
         return facade, source, candidate_sha
+
+    def test_real_step_zero_provider_starts_a_fresh_session(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+
+        prepared, candidate = case.canonical_cad_flow(accepted=False)
+        status, _payload, stderr = case.invoke(
+            "init", "--workspace", str(case.workspace), "--prepared", str(prepared)
+        )
+        self.assertEqual(0, status, stderr)
+        case.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(case.workspace),
+            "--plan",
+            str(case.initial_plan()),
+            "--intended-step",
+            "0",
+        )
+        facade = _load_facade()
+        facade.run_attempt_command(
+            case.workspace,
+            attempt=1,
+            phase="candidate",
+            argv=[sys.executable, "-c", ""],
+            timeout_seconds=60,
+        )
+        source = case.root / "real-provider-source"
+        shutil.copytree(candidate / "source", source / "source")
+        shutil.copy2(candidate / "built/measurement.glb", source / "candidate.glb")
+
+        from PIL import Image
+        from scripts.pilot import step_zero_evidence
+
+        _MeshGeometry, load_profile, _render = step_zero_evidence._import_meshshot()
+        from meshshot import RenderedPreview
+
+        loaded = load_profile()
+
+        def renderer(_reference, _candidate, *, variant="step", exterior_directions=()):
+            pixels = tuple(loaded.profile["variants"][variant]["image_pixels"])
+            image = Image.new("RGB", pixels, (0, 0, 0))
+            encoded = BytesIO()
+            image.save(encoded, format="PNG")
+            marker = exterior_directions[0] if exterior_directions else None
+            views = tuple(
+                {
+                    **view,
+                    "framing": {
+                        "projection": (
+                            "orthographic"
+                            if view["kind"] == "axial_depth"
+                            else "perspective"
+                        )
+                    },
+                    "markers": ([{"direction": marker}] if marker is not None else []),
+                }
+                for view in loaded.profile["views"]
+            )
+            return RenderedPreview(
+                png_bytes=encoded.getvalue(),
+                variant=variant,
+                profile_sha256=loaded.sha256,
+                views=views,
+            )
+
+        observed_stage_paths: list[Path] = []
+
+        def real_provider(request):
+            observed_stage_paths.extend(
+                [request.voxblame_output, request.preview_output]
+            )
+            self.assertFalse(request.voxblame_output.exists())
+            self.assertFalse(request.preview_output.exists())
+
+            # The canonical provider treats an existing output root as a
+            # resume.  An incomplete pre-existing root must still fail;
+            # removing it must select the fresh-session path and succeed.
+            request.voxblame_output.mkdir()
+            with self.assertRaises(
+                step_zero_evidence.StepZeroEvidenceError
+            ) as raised:
+                step_zero_evidence.real_step_zero_evidence_provider(
+                    request, renderer=renderer
+                )
+            self.assertEqual("measurement_failed", raised.exception.classification)
+            request.voxblame_output.rmdir()
+            step_zero_evidence.real_step_zero_evidence_provider(
+                request, renderer=renderer
+            )
+
+        published = facade.publish_step_zero_from_candidate(
+            case.workspace,
+            attempt=1,
+            source=source,
+            evidence_provider=real_provider,
+        )
+
+        self.assertEqual({"step": 0}, published)
+        self.assertTrue(
+            (case.workspace / "voxblame/steps/000000/summary.json").is_file()
+        )
+        for path in observed_stage_paths:
+            self.assertFalse(path.exists(), f"stage residue survived: {path}")
 
     def test_provider_request_paths_are_outside_workspace_authority(self) -> None:
         fixture = _load_fixture()
