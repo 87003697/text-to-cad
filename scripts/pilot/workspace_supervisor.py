@@ -1497,7 +1497,16 @@ class WorkspaceSupervisor:
         if (
             not isinstance(manifest, dict)
             or manifest.get("schema") != _CANONICAL_BUILD_SCHEMA
-            or manifest.get("adapter") not in {_CANONICAL_ADAPTER_ID, None}
+        ):
+            raise SupervisorError("canonical_output_invalid")
+        adapter = manifest.get("adapter")
+        if (
+            not isinstance(adapter, dict)
+            or set(adapter) != {"id", "version"}
+            or type(adapter.get("id")) is not str
+            or adapter["id"] != _CANONICAL_ADAPTER_ID
+            or type(adapter.get("version")) is not int
+            or adapter["version"] != 1
         ):
             raise SupervisorError("canonical_output_invalid")
         if not isinstance(recipe, dict) or recipe.get("schema") != _CANONICAL_RECIPE_SCHEMA:

@@ -91,7 +91,7 @@ def _write_canonical_outputs(output_dir: Path, source_digests: dict[str, str]) -
     recipe_inputs = [{"path": path, "sha256": digest} for path, digest in source_digests.items()]
     recipe = {
         "schema": "mesh-to-cad.rebuild-recipe/1",
-        "adapter": "cad.canonical-build/1",
+        "executable": "cad.canonical-build/1",
         "inputs": recipe_inputs,
     }
     (output_dir / "rebuild.json").write_text(json.dumps(recipe) + "\n")
@@ -101,7 +101,7 @@ def _write_canonical_outputs(output_dir: Path, source_digests: dict[str, str]) -
         files.append({"path": name, "size": len(payload), "sha256": _sha256(payload)})
     manifest = {
         "schema": "mesh-to-cad.build/1",
-        "adapter": "cad.canonical-build/1",
+        "adapter": {"id": "cad.canonical-build/1", "version": 1},
         "primaryArtifact": "canonical.step",
         "measurementGlb": "measurement.glb",
         "files": files,
@@ -147,7 +147,9 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
             work,
         )
 
-    def _install_runner(self, produce_outputs: bool = True) -> dict:
+    def _install_runner(
+        self, produce_outputs: bool = True, *, manifest_adapter: object = None
+    ) -> dict:
         observed: dict = {}
 
         def runner(argv, **kwargs):
@@ -171,7 +173,15 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
                         cursor += 2
                         continue
                     cursor += 1
-                _write_canonical_outputs(cwd / output_relative, digests)
+                output_dir = cwd / output_relative
+                _write_canonical_outputs(output_dir, digests)
+                if manifest_adapter is not None:
+                    manifest_path = output_dir / "build.json"
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    manifest["adapter"] = manifest_adapter
+                    manifest_path.write_text(
+                        json.dumps(manifest) + "\n", encoding="utf-8"
+                    )
             return subprocess.CompletedProcess(argv, 0, b"", b"")
 
         self.sup._command_runner = runner
@@ -331,6 +341,31 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
                 self.sup.workspace_handle, attempt, candidate, bundle
             )
         self.assertEqual("canonical_output_invalid", raised.exception.classification)
+
+    def test_manifest_adapter_requires_closed_production_shape(self) -> None:
+        attempt, candidate, bundle, work = self._start()
+        adapters = (
+            {"id": "cad.canonical-build/1", "version": 1, "extra": True},
+            ["cad.canonical-build/1", 1],
+            {"name": "cad.canonical-build/1", "version": 1},
+            {"id": "cad.canonical-build/1", "version": 2},
+            {"id": 1, "version": 1},
+            {"id": "cad.canonical-build/1", "version": True},
+        )
+
+        for adapter in adapters:
+            with self.subTest(adapter=adapter):
+                self._install_runner(manifest_adapter=adapter)
+                with self.assertRaises(SupervisorError) as raised:
+                    self.sup.run_candidate_tool(
+                        self.sup.workspace_handle, attempt, candidate, bundle
+                    )
+                self.assertEqual(
+                    "canonical_output_invalid", raised.exception.classification
+                )
+                self.assertFalse(
+                    (work / CANDIDATE_PUBLISHED_MEASUREMENT_NAME).exists()
+                )
 
     def test_tool_nonzero_exit_removes_partial_output(self) -> None:
         attempt, candidate, bundle, work = self._start()
