@@ -13,19 +13,32 @@ the effective serialization of the previous per-request subprocess model, but wa
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
 import sys
 import threading
+import time
 
 from . import cadgen_bridge
 
 # viewer/ (dev) or the bundled runtime root — the dir that holds the `server_py`
 # package, so the worker resolves as `-m server_py.worker`.
 _SERVER_PY_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_DEFAULT_CADGEN_TIMEOUT_SECONDS = float(os.environ.get("VIEWER_CADGEN_TIMEOUT", "300"))
+# The worker is killed after this many seconds with NO response AND no output on its
+# stderr narration, not after so many seconds of work. Real builds run tens of seconds
+# to minutes and their first open pays the full cost, so a wall-clock cap either kills
+# healthy builds or is raised until it guards nothing. A HUNG worker (deadlocked pipe,
+# wedged native call) goes silent; a slow one keeps narrating phases on stderr
+# (worker.py redirects all build chatter there) and lives.
+_DEFAULT_CADGEN_IDLE_SECONDS = float(os.environ.get("VIEWER_CADGEN_IDLE_TIMEOUT", "300"))
 _DEFAULT_PING_TIMEOUT_SECONDS = float(os.environ.get("VIEWER_CAD_WORKER_PING_TIMEOUT", "10"))
+
+
+def _cadgen_idle_timeout() -> float | None:
+    """The idle budget for a cadgen request, or None when disabled (<= 0)."""
+    return _DEFAULT_CADGEN_IDLE_SECONDS if _DEFAULT_CADGEN_IDLE_SECONDS > 0 else None
 
 
 def _worker_enabled() -> bool:
@@ -58,6 +71,9 @@ class CadWorker:
         self._proc: subprocess.Popen | None = None
         self._next_id = 0
         self._invokes = 0
+        # Monotonic timestamp of the worker's last observed sign of life (stderr
+        # narration). The idle watchdog extends its deadline while this advances.
+        self._last_worker_activity = time.monotonic()
 
     # --- process lifecycle -------------------------------------------------------
     def _env_for(self, repo_root: str) -> dict:
@@ -77,7 +93,11 @@ class CadWorker:
 
     def _spawn(self, repo_root: str) -> None:
         self._reap()
-        stderr = None if str(os.environ.get("VIEWER_CAD_WORKER_STDERR")) == "1" else subprocess.DEVNULL
+        # stderr is always drained: worker.py routes ALL build narration (phase lines,
+        # progress chatter, C-level prints) there, so its traffic IS the liveness
+        # signal the idle watchdog watches. VIEWER_CAD_WORKER_STDERR=1 additionally
+        # tees what the worker says to this process's stderr for debugging.
+        tee = str(os.environ.get("VIEWER_CAD_WORKER_STDERR")) == "1"
         try:
             self._proc = subprocess.Popen(
                 [sys.executable, "-m", "server_py.worker"],
@@ -85,7 +105,7 @@ class CadWorker:
                 env=self._env_for(repo_root),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
-                stderr=stderr,
+                stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
             )
@@ -93,6 +113,34 @@ class CadWorker:
             self._proc = None
             raise _WorkerTransportError(f"could not spawn CAD worker: {exc}") from exc
         self._invokes = 0
+        self._start_stderr_drain(self._proc.stderr, tee=tee)
+
+    def _start_stderr_drain(self, stream, *, tee: bool = False) -> None:
+        """Keep the worker's stderr pipe drained, stamping every line as liveness.
+
+        Without a drain a chatty build fills the OS pipe buffer and the worker BLOCKS
+        mid-write -- a self-inflicted hang. The timestamp doubles as the idle watchdog's
+        activity source."""
+
+        def _drain() -> None:
+            try:
+                for line in iter(stream.readline, ""):
+                    self._last_worker_activity = time.monotonic()
+                    if tee:
+                        with contextlib.suppress(OSError, ValueError):
+                            sys.stderr.write(f"[cad-worker] {line}")
+                            sys.stderr.flush()
+            except (OSError, ValueError):
+                pass
+            finally:
+                with contextlib.suppress(OSError, ValueError):
+                    stream.close()
+
+        thread = threading.Thread(target=_drain, daemon=True, name="cad-worker-stderr")
+        thread.start()
+
+    def _touch_worker_activity(self) -> None:
+        self._last_worker_activity = time.monotonic()
 
     def _reap(self) -> None:
         proc, self._proc = self._proc, None
@@ -128,6 +176,13 @@ class CadWorker:
 
     # --- request/response --------------------------------------------------------
     def _read_line(self, proc: subprocess.Popen, timeout: float | None = None) -> str:
+        """Wait for one protocol frame, idleness-bounded.
+
+        ``timeout`` is a budget of WORKER SILENCE, not of wall clock: the deadline
+        slides forward every time the drainer observes stderr output, so a build
+        narrating its phases waits as long as it needs while a worker that has gone
+        fully quiet (deadlocked pipe, wedged native call with no narration) is
+        declared dead after one quiet budget."""
         if timeout is None or timeout <= 0:
             return proc.stdout.readline() if proc.stdout else ""
         line_box: list[str | None] = [None]
@@ -142,9 +197,17 @@ class CadWorker:
 
         reader_thread = threading.Thread(target=_reader, daemon=True)
         reader_thread.start()
-        reader_thread.join(timeout=timeout)
-        if reader_thread.is_alive():
-            raise _WorkerTransportError(f"worker request timed out after {timeout:.1f}s")
+        while True:
+            remaining = timeout - (time.monotonic() - self._last_worker_activity)
+            reader_thread.join(timeout=max(remaining, 0.01))
+            if not reader_thread.is_alive():
+                break
+            quiet_for = time.monotonic() - self._last_worker_activity
+            if quiet_for < timeout:
+                continue  # the worker is narrating; keep waiting
+            raise _WorkerTransportError(
+                f"worker went silent for {quiet_for:.1f}s (no response and no output)"
+            )
         if exc_box[0] is not None:
             raise _WorkerTransportError(f"worker stdout read failed: {exc_box[0]}") from exc_box[0]
         return line_box[0] or ""
@@ -158,6 +221,7 @@ class CadWorker:
         req_id = self._next_id
         frame = {"jsonrpc": "2.0", "id": req_id, "method": method, "params": params}
         try:
+            self._touch_worker_activity()
             proc.stdin.write(json.dumps(frame) + "\n")
             proc.stdin.flush()
         except (OSError, ValueError) as exc:
@@ -193,7 +257,7 @@ class CadWorker:
 
     def run_cadgen(self, module: str, args, repo_root: str, timeout: float | None = None) -> dict:
         if timeout is None:
-            timeout = _DEFAULT_CADGEN_TIMEOUT_SECONDS
+            timeout = _cadgen_idle_timeout()
         return self._request(
             repo_root, "invoke", {"module": module, "args": list(args), "repo_root": repo_root},
             timeout=timeout,
