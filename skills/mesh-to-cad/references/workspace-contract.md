@@ -36,11 +36,96 @@ generic W2 dictionary through.
 `start_attempt` has two exact argument variants: an initial plan with no parent
 field, or a repair plan with only a bounded `from_step`; the supervisor derives
 the intended step from that branch and parent.
+`start_attempt` returns one additional opaque
+`capability_bundle_handle`. It is bound only after the Workspace returns the
+actual Attempt and intended step. Reuse that bundle handle for candidate tool
+execution and the evidence handles in the submit intents; the Supervisor
+resolves its operation/artifact slots internally. Bootstrap contains only
+run-level capabilities and the fixed maximum budget, never predicted global
+Attempt IDs.
 
 The standalone adapters have no supervisor discovery fallback: without W4
 ports they return a closed `supervisor_unavailable` error. W4 owns the concrete
 ports and the process/filesystem wiring that binds these handles to Workspace,
 candidate execution, and the Restricted Reference Capability.
+
+For runner-level isolation checks, `scripts/pilot/runner.py run` accepts the
+trusted `--agent-candidate-dir <external-dir>` option. It is intentionally not
+an Agent argument; the outer runner validates that directory and binds it at
+`/candidate` while omitting experiment and input mounts.
+
+The production Toys4K launcher enables this seam and mounts the runner-owned
+Unix bridge at the fixed `/run/mesh-to-cad-agent-surface.sock` endpoint plus
+the fixed `/agent-surface/client.py` adapter. The Agent receives opaque
+capabilities in `/candidate/bootstrap.json`; that file contains no host path,
+raw mesh, Workspace identity, or terminal handoff location. The bridge serves
+both one-object CLI envelopes and the W3 MCP lifecycle over the same handler.
+Before starting the bridge, the outer runner uses the public Meshscope
+Canonical Reference preparation API and Workspace `init` CLI with the raw
+input kept exclusively on the trusted side. It then supplies the real CAD
+rebuild entrypoint, geometry entrypoint, and closed tool registry to the
+Supervisor; Final Delivery is not a test-only injected path.
+
+The trusted pilot runner supplies those ports through
+`scripts/pilot/workspace_supervisor.py`. Each run gets a fresh handle registry;
+handles are bound to the current run and Attempt, and one-shot candidate
+operation handles reject replay. Candidate commands are registered by the
+runner and execute with a fixed argv, candidate-only cwd, and a small
+environment allowlist. The Agent never supplies argv, a cwd, a Workspace
+path, or a reference path. When the runner selects the candidate-only bwrap
+seam, the workload sees only the fixed `/candidate` mount; the experiment,
+input mesh, output authority, and outer Git tree are not mounted there.
+On Linux, each registered candidate operation gets the same minimal mount
+boundary and network-denied process context; hosts without that primitive fail
+closed unless a test-injected executor is supplied.
+Candidate staging, authority-side measurement staging, finalization staging,
+terminal status, and the transfer sidecar location are obtained through public
+Workspace-facade operations. The facade owns candidate ingestion, finalization
+staging reset/cleanup, and sidecar placement; the Supervisor passes only a
+validated external candidate source and relative capability names and does
+not reconstruct `work/`, `final/`, or other authority paths. Candidate file
+copies are descriptor-bounded, no-follow, regular-file-only, single-link
+copies with stable metadata and a second digest check. A growing, swapped,
+hard-linked, or special-file source aborts and removes partial staging.
+
+Candidate execution receives a trusted content-addressed CAD runtime at the
+stable `/runtime` mount. The runner resolves the interpreter from the pinned
+uv/venv, admits only the fixed build123d/OCP distribution dependency closure
+and Python loader closure, and atomically reuses an immutable cache entry
+across pilots. It omits unrelated packages, `pyvenv.cfg`, editable `.pth`,
+`direct_url.json`, bytecode, and metadata that contains host or checkout
+paths. Sysconfig/prefix metadata and standalone libpython identities are
+rewritten to `/runtime` where relocation is provable. Candidate `PATH`,
+`PYTHONHOME`, cwd, argv, and output use only `/runtime` and `/candidate`
+names; an unsafe external interpreter, loader, or symlink escape fails closed
+before the Agent starts.
+Each immutable cache entry carries a canonical relative-path/size/digest
+manifest that is streamed and rechecked before reuse. Cache construction uses a
+PID/boot/process-start owner lock with bounded stale-owner recovery, and keeps
+only a small validated identity set. The runner holds an external live lease
+for the selected identity until the Agent bridge and candidate tools stop;
+retention never removes a live-leased or building entry.
+
+W2 is constructed behind the supervisor's opaque reference handle. Only its
+summary/components response projection crosses the Agent Surface. Raw or
+canonical PLY bytes, path names, and arbitrary geometry operations do not.
+
+After trusted Final Delivery succeeds, the outer runner asks the W1 facade to
+compile terminal validation once and writes the bundle plus expected identity
+to an atomic, locked handoff outside the Workspace tree. Exceptional rollback
+objects are retained as bounded, hidden quarantine tombstones rather than
+deleted through a racy pathname. The resulting
+`TerminalValidationLocator` is a runner/reviewer contract and is never part of
+an Agent response or Agent-visible environment. A valid existing handoff is
+reused on retry; an incomplete write is never published as success. The same
+closed bundle is also published as the explicit ignored transfer capsule
+`run/terminal-validation-locator.json`. CVM transfer preserves that one
+sidecar even when broad disposable `run/*` excludes are configured, so W5 can
+verify the expected identity after the external sibling handoff is no longer
+locally present.
+`select_and_finalize` itself only publishes Final Delivery; the outer runner
+publishes its final artifact manifest first and then performs the single W1
+compile/persist step.
 
 Invoke it with the active project Python:
 
@@ -186,7 +271,7 @@ identity and verifies closure, deterministic review/evaluation facts, and
 every listed Workspace byte without rerunning complete validation or using
 `.git`. Recomputed internal digests cannot pass against the original expected
 identity. Publication persistence, handoff storage, and retry after process
-death belong to the outer W4 runner. A hard crash may cause the supervisor to
+death belong to the outer W4 runner. A hard crash may cause the runner to
 compile again; exactly-once means one validator call per successful compilation
 only. Any content, schema, or identity mismatch fails closed with the normal
 Workspace JSON error shape.

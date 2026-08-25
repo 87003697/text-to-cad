@@ -17,8 +17,9 @@ import signal
 import shutil
 import subprocess
 import sys
+import threading
 import time
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 import uuid
 
 
@@ -52,6 +53,215 @@ FAILED_ATTEMPT_RESULTS = (
     "no_feasible_strategy",
 )
 
+class ExecutionScope:
+    """Per-run process cancellation scope with spawn/registration handshake."""
+
+    def __init__(self) -> None:
+        self._condition = threading.Condition()
+        self._active: dict[
+            subprocess.Popen[Any], tuple[Callable[[], None], Callable[[], None]]
+        ] = {}
+        self._pending = 0
+        self._next_spawn_token = 1
+        self._pending_tokens: dict[int, None] = {}
+        self._terminating_spawns: dict[int, None] = {}
+        self._cancelled = False
+
+    @property
+    def pending_spawns(self) -> int:
+        with self._condition:
+            return self._pending + len(self._terminating_spawns)
+
+    @property
+    def cancelled(self) -> bool:
+        with self._condition:
+            return self._cancelled
+
+    def begin_spawn(self) -> int | None:
+        """Reserve a spawn slot before entering the non-atomic Popen call."""
+
+        with self._condition:
+            if self._cancelled:
+                return None
+            token = self._next_spawn_token
+            self._next_spawn_token += 1
+            self._pending_tokens[token] = None
+            self._pending += 1
+            return token
+
+    def _take_spawn_token(self, token: int | None) -> int:
+        if token is None:
+            if len(self._pending_tokens) != 1:
+                raise RuntimeError("ExecutionScope spawn token is ambiguous")
+            token = next(iter(self._pending_tokens))
+        if token not in self._pending_tokens:
+            raise RuntimeError("ExecutionScope spawn token is unknown")
+        self._pending_tokens.pop(token)
+        if self._pending <= 0:
+            raise RuntimeError("ExecutionScope spawn accounting underflow")
+        self._pending -= 1
+        return token
+
+    def spawn_failed(self, token: int | None = None) -> None:
+        """Finish a reserved spawn whose process creation raised."""
+
+        with self._condition:
+            self._take_spawn_token(token)
+            self._condition.notify_all()
+
+    def register_spawn(
+        self,
+        process: subprocess.Popen[Any],
+        terminate: Callable[[], None],
+        force: Callable[[], None] | None = None,
+        token: int | None = None,
+    ) -> bool:
+        """Complete the reservation and register a newly-created process atomically."""
+
+        if force is None:
+            force = terminate
+        with self._condition:
+            token = self._take_spawn_token(token)
+            cancelled = self._cancelled
+            if not cancelled:
+                self._active[process] = (terminate, force)
+            else:
+                self._terminating_spawns[token] = None
+            self._condition.notify_all()
+        if cancelled:
+            # Cancellation may have taken its snapshot just before this
+            # process became visible.  Kill this exact process immediately;
+            # the caller performs the bounded pipe drain and final wait.
+            for callback in (terminate, force):
+                try:
+                    callback()
+                except OSError:
+                    pass
+            return False
+        return True
+
+    def spawn_terminated(self, token: int, *, confirmed: bool) -> None:
+        """Close a cancelled-spawn token after the spawning thread has drained it."""
+
+        with self._condition:
+            if token not in self._terminating_spawns:
+                raise RuntimeError("ExecutionScope terminating token is unknown")
+            if confirmed:
+                self._terminating_spawns.pop(token)
+                self._condition.notify_all()
+
+    def register(
+        self,
+        process: subprocess.Popen[Any],
+        terminate: Callable[[], None],
+        force: Callable[[], None] | None = None,
+    ) -> bool:
+        """Backward-compatible direct registration for test/injected callers."""
+
+        if force is None:
+            force = terminate
+        with self._condition:
+            cancelled = self._cancelled
+            if not cancelled:
+                self._active[process] = (terminate, force)
+        if cancelled:
+            for callback in (terminate, force):
+                try:
+                    callback()
+                except OSError:
+                    pass
+            return False
+        return True
+
+    def complete(self, process: subprocess.Popen[Any]) -> None:
+        with self._condition:
+            self._active.pop(process, None)
+            self._condition.notify_all()
+
+    def has_live_processes(self) -> bool:
+        with self._condition:
+            return (
+                self._pending > 0
+                or bool(self._terminating_spawns)
+                or any(_process_live(process) for process in self._active)
+            )
+
+    def cancel(self) -> bool:
+        """Cancel this scope, bounded across pending spawns and live process trees."""
+
+        with self._condition:
+            self._cancelled = True
+            deadline = time.monotonic() + COMMAND_TERMINATION_GRACE_SECONDS
+            while (
+                (self._pending or self._terminating_spawns)
+                and time.monotonic() < deadline
+            ):
+                self._condition.wait(timeout=min(0.05, deadline - time.monotonic()))
+            pending_unresolved = bool(self._pending or self._terminating_spawns)
+            active = tuple(self._active.items())
+        for _process, (terminate, _force) in active:
+            terminate()
+        if self._wait_until_quiet(
+            COMMAND_TERMINATION_GRACE_SECONDS,
+            require_no_pending=not pending_unresolved,
+        ) and not pending_unresolved:
+            return True
+        for _process, (_terminate, force) in active:
+            force()
+        return self._wait_until_quiet(
+            COMMAND_TERMINATION_GRACE_SECONDS,
+            require_no_pending=not pending_unresolved,
+        ) and not pending_unresolved
+
+    def _wait_until_quiet(
+        self,
+        seconds: float,
+        *,
+        require_no_pending: bool = True,
+    ) -> bool:
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            with self._condition:
+                for process in tuple(self._active):
+                    if not _process_live(process):
+                        self._active.pop(process, None)
+                quiet = (
+                    (not require_no_pending or not self._pending)
+                    and not self._terminating_spawns
+                    and not any(
+                        _process_live(process) for process in self._active
+                    )
+                )
+                if quiet:
+                    self._condition.notify_all()
+                    return True
+                self._condition.wait(timeout=0.05)
+        with self._condition:
+            for process in tuple(self._active):
+                if not _process_live(process):
+                    self._active.pop(process, None)
+            return (
+                (not require_no_pending or not self._pending)
+                and not self._terminating_spawns
+                and not any(_process_live(process) for process in self._active)
+            )
+
+
+def _process_live(process: subprocess.Popen[Any]) -> bool:
+    """Report descendants too, not merely the Popen parent."""
+
+    if process.poll() is None:
+        return True
+    if os.name != "posix":
+        return False
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
 
 def _signal_command_tree(process: subprocess.Popen[Any], signum: int) -> None:
     """Signal a bounded command and every descendant in its process group."""
@@ -72,6 +282,37 @@ def _command_tree_exists(process: subprocess.Popen[Any]) -> bool:
     return True
 
 
+def _bounded_process_wait(process: subprocess.Popen[Any], seconds: float) -> bool:
+    """Wait for one process without ever using an unbounded wait."""
+
+    deadline = time.monotonic() + seconds
+    while process.poll() is None and time.monotonic() < deadline:
+        try:
+            process.wait(timeout=min(0.05, max(0.001, deadline - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            continue
+    return process.poll() is not None
+
+
+def _terminate_unregistered_posix(process: subprocess.Popen[Any]) -> None:
+    """Close a cancellation race for a child not yet visible to the scope."""
+
+    _signal_command_tree(process, signal.SIGTERM)
+    deadline = time.monotonic() + COMMAND_TERMINATION_GRACE_SECONDS
+    while _process_live(process) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if _process_live(process):
+        _signal_command_tree(process, signal.SIGKILL)
+    if not _bounded_process_wait(process, COMMAND_TERMINATION_GRACE_SECONDS):
+        raise OSError("Workspace command termination did not complete")
+
+
+def cancel_active_commands(scope: ExecutionScope) -> bool:
+    """Cancel exactly one trusted run's command scope."""
+
+    return scope.cancel()
+
+
 def _run_bounded_command(
     argv: list[str],
     *,
@@ -79,6 +320,8 @@ def _run_bounded_command(
     timeout_seconds: int,
     text: bool = False,
     posix: bool | None = None,
+    environment: Mapping[str, str] | None = None,
+    scope: ExecutionScope | None = None,
 ) -> tuple[subprocess.CompletedProcess[Any], bool]:
     """Run argv under the Workspace deadline and cancel its complete process tree.
 
@@ -110,10 +353,20 @@ def _run_bounded_command(
         posix = os.name == "posix"
     if posix:
         return _run_bounded_command_posix(
-            argv, cwd=cwd, timeout_seconds=timeout_seconds, text=text
+            argv,
+            cwd=cwd,
+            timeout_seconds=timeout_seconds,
+            text=text,
+            environment=environment,
+            scope=scope,
         )
     return _run_bounded_command_windows(
-        argv, cwd=cwd, timeout_seconds=timeout_seconds, text=text
+        argv,
+        cwd=cwd,
+        timeout_seconds=timeout_seconds,
+        text=text,
+        environment=environment,
+        scope=scope,
     )
 
 
@@ -123,15 +376,42 @@ def _run_bounded_command_posix(
     cwd: Path,
     timeout_seconds: int,
     text: bool,
+    environment: Mapping[str, str] | None,
+    scope: ExecutionScope | None,
 ) -> tuple[subprocess.CompletedProcess[Any], bool]:
-    process = subprocess.Popen(
-        argv,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=text,
-        start_new_session=True,
-    )
+    spawn_token = scope.begin_spawn() if scope is not None else None
+    if scope is not None and spawn_token is None:
+        raise OSError("Workspace execution scope was cancelled")
+    try:
+        process = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=text,
+            start_new_session=True,
+            env=dict(environment) if environment is not None else None,
+        )
+    except Exception:
+        if scope is not None:
+            scope.spawn_failed(spawn_token)
+        raise
+    registered = False
+    terminate = lambda: _signal_command_tree(process, signal.SIGTERM)
+    force = lambda: _signal_command_tree(process, signal.SIGKILL)
+    if scope is not None:
+        registered = scope.register_spawn(
+            process, terminate, force, token=spawn_token
+        )
+        if not registered:
+            confirmed = False
+            try:
+                _terminate_unregistered_posix(process)
+                confirmed = not _process_live(process)
+            finally:
+                _release_pipe_readers(process)
+                scope.spawn_terminated(spawn_token, confirmed=confirmed)
+            raise OSError("Workspace execution scope was cancelled")
     try:
         stdout, stderr = process.communicate(timeout=timeout_seconds)
         return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr), False
@@ -155,9 +435,25 @@ def _run_bounded_command_posix(
             time.sleep(0.05)
         if _command_tree_exists(process):
             _signal_command_tree(process, signal.SIGKILL)
+            kill_deadline = time.monotonic() + COMMAND_TERMINATION_GRACE_SECONDS
+            while _process_live(process) and time.monotonic() < kill_deadline:
+                time.sleep(0.05)
         if stdout is None or stderr is None:
-            stdout, stderr = process.communicate()
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=COMMAND_TERMINATION_GRACE_SECONDS
+                )
+            except subprocess.TimeoutExpired:
+                _release_pipe_readers(process)
+                stdout, stderr = _empty_stdio(text)
+        if _process_live(process):
+            raise OSError("Workspace command termination did not complete")
         return subprocess.CompletedProcess(argv, 124, stdout, stderr), True
+    finally:
+        if scope is not None and registered:
+            if _process_live(process):
+                _terminate_unregistered_posix(process)
+            scope.complete(process)
 
 
 def _run_bounded_command_windows(
@@ -166,17 +462,44 @@ def _run_bounded_command_windows(
     cwd: Path,
     timeout_seconds: int,
     text: bool,
+    environment: Mapping[str, str] | None,
+    scope: ExecutionScope | None,
 ) -> tuple[subprocess.CompletedProcess[Any], bool]:
     # Create the job before launching the child. If the kernel refuses
     # to build a Job Object (kernel32 unavailable on the host, out of
     # handles, ACL denial), surface OSError to the caller -- the
     # Workspace maps that to exit code 127. Refuse to run rather than
     # spawn a child we cannot cancel.
-    tree = _WindowsProcessTree.create()
+    spawn_token = scope.begin_spawn() if scope is not None else None
+    if scope is not None and spawn_token is None:
+        raise OSError("Workspace execution scope was cancelled")
+    tree: _WindowsProcessTree | None = None
     try:
+        tree = _WindowsProcessTree.create()
         process = _spawn_windows_suspended_in_tree(
-            argv, cwd=cwd, text=text, tree=tree
+            argv,
+            cwd=cwd,
+            text=text,
+            tree=tree,
+            environment=environment,
         )
+        registered = False
+        if scope is not None and not scope.register_spawn(
+            process, tree.terminate, tree.terminate, token=spawn_token
+        ):
+            confirmed = False
+            try:
+                tree.terminate()
+                confirmed = _bounded_process_wait(
+                    process, COMMAND_TERMINATION_GRACE_SECONDS
+                )
+                if not confirmed:
+                    raise OSError("Workspace command termination did not complete")
+            finally:
+                scope.spawn_terminated(spawn_token, confirmed=confirmed)
+            raise OSError("Workspace execution scope was cancelled")
+        if scope is not None:
+            registered = True
         try:
             stdout, stderr = process.communicate(timeout=timeout_seconds)
             return subprocess.CompletedProcess(
@@ -204,7 +527,12 @@ def _run_bounded_command_windows(
         # call even on unexpected exceptions between assign, resume,
         # and terminate: the OS terminates every process in the job
         # when the final handle closes.
-        tree.close()
+        if tree is not None:
+            tree.close()
+        if "process" in locals() and scope is not None and registered:
+            scope.complete(process)
+        if scope is not None and "process" not in locals():
+            scope.spawn_failed(spawn_token)
 
 
 # ``CreateProcessW`` flag that starts the primary thread in the
@@ -220,6 +548,7 @@ def _spawn_windows_suspended_in_tree(
     cwd: Path,
     text: bool,
     tree: "_WindowsProcessTree",
+    environment: Mapping[str, str] | None = None,
     popen_factory: Any = subprocess.Popen,
 ) -> subprocess.Popen[Any]:
     """Race-free Windows spawn: suspend, assign, then resume.
@@ -261,6 +590,7 @@ def _spawn_windows_suspended_in_tree(
         stderr=subprocess.PIPE,
         text=text,
         creationflags=_WINDOWS_CREATE_SUSPENDED,
+        env=dict(environment) if environment is not None else None,
     )
     try:
         tree.assign(process)
@@ -964,10 +1294,16 @@ def _run_attempt_command(
     argv: list[str],
     timeout_seconds: int,
     canonical_output: Path | None,
+    cwd: Path | None = None,
+    environment: Mapping[str, str] | None = None,
+    scope: ExecutionScope | None = None,
 ) -> dict[str, Any]:
     """Run one bounded argv command without a shell and freeze its audit log."""
 
     workspace = workspace.resolve()
+    run_cwd = workspace if cwd is None else Path(cwd).resolve()
+    if run_cwd.is_symlink() or not run_cwd.is_dir():
+        _fail("invalid_command", "command working directory is unavailable")
     validate_workspace(workspace)
     active_root, _active, _plan = _load_active_attempt(workspace, attempt)
     _nonempty_string(phase, "$.phase")
@@ -997,8 +1333,10 @@ def _run_attempt_command(
     try:
         completed, timed_out = _run_bounded_command(
             argv,
-            cwd=workspace,
+            cwd=run_cwd,
             timeout_seconds=timeout_seconds,
+            environment=environment,
+            scope=scope,
         )
         exit_code = completed.returncode
         stdout = completed.stdout
@@ -1058,6 +1396,9 @@ def run_attempt_command(
     phase: str,
     argv: list[str],
     timeout_seconds: int,
+    cwd: Path | None = None,
+    environment: Mapping[str, str] | None = None,
+    scope: ExecutionScope | None = None,
 ) -> dict[str, Any]:
     return _run_attempt_command(
         workspace,
@@ -1066,6 +1407,9 @@ def run_attempt_command(
         argv=argv,
         timeout_seconds=timeout_seconds,
         canonical_output=None,
+        cwd=cwd,
+        environment=environment,
+        scope=scope,
     )
 
 
@@ -1078,6 +1422,7 @@ def run_canonical_build(
     output_dir: str,
     tool_registry: Path,
     timeout_seconds: int,
+    scope: ExecutionScope | None = None,
 ) -> dict[str, Any]:
     """Preflight and run the registered canonical builder for one Attempt."""
 
@@ -1113,6 +1458,7 @@ def run_canonical_build(
         argv=argv,
         timeout_seconds=timeout_seconds,
         canonical_output=output_path,
+        scope=scope,
     )
 
 
@@ -1409,6 +1755,8 @@ def finalize_workspace(
     rebuild_entrypoint: Path,
     geometry_entrypoint: Path,
     tool_registry: Path,
+    validate_after_publish: bool = True,
+    scope: ExecutionScope | None = None,
 ) -> dict[str, Any]:
     """Rebuild the Selected Step and atomically publish Final Delivery."""
 
@@ -1456,9 +1804,12 @@ def finalize_workspace(
         input_records = _copy_rebuild_inputs(candidate_root, rebuild_root, recipe)
         shutil.copy2(recipe_path, rebuild_root / "rebuild.json")
         recipe_sha256 = _file_sha256(rebuild_root / "rebuild.json")
+        rebuild_kwargs: dict[str, Any] = {"entrypoint": rebuild_entrypoint}
+        if scope is not None:
+            rebuild_kwargs["scope"] = scope
         build_root, rebuild_command = _run_registered_rebuild(
             rebuild_root,
-            entrypoint=rebuild_entrypoint,
+            **rebuild_kwargs,
         )
         rebuild_command["entrypoint_sha256"] = tool_registry_document["rebuild"][
             "entrypoint_sha256"
@@ -1487,22 +1838,24 @@ def finalize_workspace(
         shutil.copy2(tool_registry_path, package / "tool-registry.json")
         _write_json(package / "selection.json", selection_document)
 
-        _run_voxblame_verify(
-            workspace,
-            measurement_mesh,
-            selected_step=selected_step,
-            output=package / "verification.json",
-            entrypoint=geometry_entrypoint,
-        )
+        verify_kwargs: dict[str, Any] = {
+            "selected_step": selected_step,
+            "output": package / "verification.json",
+            "entrypoint": geometry_entrypoint,
+        }
+        if scope is not None:
+            verify_kwargs["scope"] = scope
+        _run_voxblame_verify(workspace, measurement_mesh, **verify_kwargs)
         preview_root = transaction / "preview"
-        _run_final_preview(
-            workspace,
-            measurement_mesh,
-            selected_step=selected_step,
-            selected_summary=selected_root / "measurement.json",
-            output=preview_root,
-            entrypoint=geometry_entrypoint,
-        )
+        preview_kwargs: dict[str, Any] = {
+            "selected_step": selected_step,
+            "selected_summary": selected_root / "measurement.json",
+            "output": preview_root,
+            "entrypoint": geometry_entrypoint,
+        }
+        if scope is not None:
+            preview_kwargs["scope"] = scope
+        _run_final_preview(workspace, measurement_mesh, **preview_kwargs)
         shutil.copy2(preview_root / "preview.png", package / "preview.png")
         shutil.copy2(preview_root / "preview.json", package / "preview.json")
 
@@ -1580,8 +1933,10 @@ def finalize_workspace(
         )
         final_committed = True
         shutil.rmtree(transaction)
-        validation = validate_workspace(workspace)
-        return {**manifest, "graph": validation.graph}
+        if validate_after_publish:
+            validation = validate_workspace(workspace)
+            graph = validation.graph
+        return {**manifest, "graph": graph}
     except Exception:
         if transaction.exists():
             shutil.rmtree(transaction, ignore_errors=True)
@@ -1897,7 +2252,10 @@ def _validate_tool_registry_document(value: Mapping[str, Any]) -> dict[str, Any]
 
 
 def _run_registered_rebuild(
-    rebuild_root: Path, *, entrypoint: Path
+    rebuild_root: Path,
+    *,
+    entrypoint: Path,
+    scope: ExecutionScope | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     argv = [
         sys.executable,
@@ -1913,6 +2271,7 @@ def _run_registered_rebuild(
         cwd=rebuild_root,
         text=True,
         timeout_seconds=MAX_COMMAND_SECONDS,
+        scope=scope,
     )
     if result.returncode != 0:
         detail = _compact_process_detail(result.stderr or result.stdout)
@@ -2015,6 +2374,7 @@ def _run_voxblame_verify(
     selected_step: int,
     output: Path,
     entrypoint: Path,
+    scope: ExecutionScope | None = None,
 ) -> None:
     argv = [
         sys.executable,
@@ -2035,6 +2395,7 @@ def _run_voxblame_verify(
         cwd=workspace,
         text=True,
         timeout_seconds=MAX_COMMAND_SECONDS,
+        scope=scope,
     )
     if result.returncode != 0 or not output.is_file():
         _fail("verification_mismatch", _compact_process_detail(result.stderr or result.stdout) or "rebuilt Observable Geometry does not match Selected Step")
@@ -2048,6 +2409,7 @@ def _run_final_preview(
     selected_summary: Path,
     output: Path,
     entrypoint: Path,
+    scope: ExecutionScope | None = None,
 ) -> None:
     argv = [
         sys.executable,
@@ -2074,6 +2436,7 @@ def _run_final_preview(
             cwd=workspace,
             text=True,
             timeout_seconds=MAX_COMMAND_SECONDS,
+            scope=scope,
         )
         if result.returncode == 0 and (output / "preview.json").is_file() and (output / "preview.png").is_file():
             return
@@ -2366,6 +2729,33 @@ def workspace_status(workspace: Path) -> dict[str, Any]:
     graph = _build_graph(workspace, validate_steps=True)
     recovery = _find_incomplete_transactions(workspace)
     steps = graph["steps"]
+    next_intended_step = graph["budget"]["completed_cycles"] + 1 if steps else 0
+    attempt_ids: set[int] = set()
+    tool_failures = 0
+    for item in graph["failed_attempts"]:
+        if item["intended_step"] == next_intended_step:
+            attempt_ids.add(item["attempt"])
+            if item["result"] == TOOL_FAILURE_RESULT:
+                tool_failures += 1
+    if next_intended_step in {item["step"] for item in steps}:
+        step_document = _read_json(
+            workspace / "steps" / f"{next_intended_step:06d}" / "step.json",
+            "$.status.current_step",
+        )
+        attempt_ids.update(step_document["attempt_ids"])
+    active_root = workspace / "work" / "attempts"
+    if active_root.is_dir():
+        for path in active_root.iterdir():
+            if path.is_symlink():
+                _fail("invalid_workspace_path", "active Attempt path is a symlink")
+            if not path.is_dir() or not path.name.isdigit():
+                continue
+            attempt_path = path / "attempt.json"
+            if not attempt_path.is_file():
+                continue
+            attempt_document = _read_json(attempt_path, "$.status.active_attempt")
+            if attempt_document.get("intended_step") == next_intended_step:
+                attempt_ids.add(attempt_document["attempt"])
     return {
         "schema": "mesh-to-cad.workspace-status/1",
         "workspace_id": document["workspace_id"],
@@ -2373,11 +2763,14 @@ def workspace_status(workspace: Path) -> dict[str, Any]:
         "head_steps": list(graph["heads"]),
         "completed_cycles": graph["budget"]["completed_cycles"],
         "remaining_cycles": graph["budget"]["remaining_cycles"],
-        "next_intended_step": (
-            graph["budget"]["completed_cycles"] + 1 if steps else 0
-        ),
+        "next_intended_step": next_intended_step,
         "total_attempts": graph["budget"]["total_attempts"],
         "tool_failures": graph["budget"]["tool_failures"],
+        "current_step_attempts": len(attempt_ids),
+        "remaining_attempts": max(0, MAX_ATTEMPTS_PER_STEP - len(attempt_ids)),
+        "current_step_tool_failures": tool_failures,
+        "remaining_tool_failures": max(0, MAX_TOOL_FAILURES_PER_STEP - tool_failures),
+        "final_delivery_present": graph["final_delivery"] is not None,
         "accepted_steps": graph["accepted_steps"],
         "recovery": recovery,
     }

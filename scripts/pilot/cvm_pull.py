@@ -37,6 +37,8 @@ DISPOSABLE_RUNTIME_EXCLUDES = (
     ".git/lfs/*",
     "*/.git/lfs/*",
 )
+TERMINAL_LOCATOR_RELATIVE = "run/terminal-validation-locator.json"
+INTERNAL_TERMINAL_DIR = ".internal-terminal-validation"
 
 
 class PullError(RuntimeError):
@@ -250,7 +252,17 @@ class CvmPull:
 
     @staticmethod
     def _validated_lines(raw: str) -> tuple[str, ...]:
-        values = tuple(sorted(line for line in raw.splitlines() if line))
+        values = tuple(
+            sorted(
+                line
+                for line in raw.splitlines()
+                if line
+                and not (
+                    len(line.split("/")) == 2
+                    and line.split("/", 1)[1] == INTERNAL_TERMINAL_DIR
+                )
+            )
+        )
         unsafe = [value for value in values if not is_safe_exp(value)]
         if unsafe:
             raise PullError(f"Unsafe CVM exp path: {unsafe[0]}", 7)
@@ -265,12 +277,14 @@ class CvmPull:
             command = (
                 f"find ~/text-to-cad/outputs/{self.request.group}/ "
                 "-mindepth 1 -maxdepth 1 -type d "
+                "! -name '.internal-terminal-validation' "
                 f"-printf '{self.request.group}/%f\\n' 2>/dev/null"
             )
         else:
             command = (
                 "find ~/text-to-cad/outputs/ -mindepth 2 -maxdepth 2 "
-                '-type d -printf "%P\\n" 2>/dev/null'
+                "-type d ! -name '.internal-terminal-validation' "
+                '-printf "%P\\n" 2>/dev/null'
             )
         result = self.runner.remote(command, check=False)
         if result.returncode != 0:
@@ -445,6 +459,10 @@ print(json.dumps({
         )
         if exclude_args:
             command = f"{command} {exclude_args}"
+        # The locator carries the W1 terminal bundle when the external handoff
+        # is not part of the transferred sibling tree.  Keep this one ignored
+        # run-sidecar even if a local .cvmignore.pull contains run/*.
+        command = f"{command} --include {TERMINAL_LOCATOR_RELATIVE}"
         status = self.runner.remote_tee(command, self.log_path)
         if status not in {0, 2}:
             raise PullError(f"aws s3 cp fatal (exit={status}) — aborting", status)
@@ -480,7 +498,10 @@ for directory, _dirnames, filenames in os.walk(root, followlinks=False):
         if not stat.S_ISREG(path.lstat().st_mode):
             continue
         relative = path.relative_to(root).as_posix()
-        if any(fnmatch.fnmatch(relative, pattern) for pattern in patterns):
+        if (
+            relative != "run/terminal-validation-locator.json"
+            and any(fnmatch.fnmatch(relative, pattern) for pattern in patterns)
+        ):
             continue
         files.append(relative)
 print(json.dumps(sorted(files)))
@@ -536,8 +557,9 @@ while True:
         if not isinstance(key, str) or not key.startswith(prefix):
             continue
         relative = key[len(prefix):]
-        if not relative or any(
-            fnmatch.fnmatch(relative, pattern) for pattern in patterns
+        if not relative or (
+            relative != "run/terminal-validation-locator.json"
+            and any(fnmatch.fnmatch(relative, pattern) for pattern in patterns)
         ):
             continue
         files.append(relative)
@@ -599,8 +621,13 @@ print(json.dumps(sorted(files)))
     def _cleanup_exp(self, exp: str) -> None:
         if not is_safe_exp(exp):
             raise PullError(f"Refusing unsafe cleanup target: {exp}", 7)
+        group, child = exp.split("/", 1)
+        external_handoff = (
+            f"~/text-to-cad/outputs/{group}/.internal-terminal-validation/{child}"
+        )
         result = self.runner.remote(
-            f"rm -rf -- ~/text-to-cad/outputs/{exp}",
+            "rm -rf -- "
+            f"~/text-to-cad/outputs/{exp} {external_handoff}",
             check=False,
         )
         if result.returncode != 0:

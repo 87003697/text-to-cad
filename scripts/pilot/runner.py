@@ -4,11 +4,16 @@
 from __future__ import annotations
 
 import argparse
+from collections import namedtuple
+import ctypes
+import errno
 import hashlib
 import json
 import math
 import os
+import platform
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -24,6 +29,20 @@ from types import FrameType
 from typing import Callable, Mapping
 
 try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows uses the exclusive-file fallback.
+    fcntl = None
+
+
+TerminalValidationLocator = namedtuple(
+    "TerminalValidationLocator", "bundle_path expected_identity sidecar_path"
+)
+
+PILOT_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(PILOT_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(PILOT_SCRIPT_DIR))
+
+try:
     from scripts.pilot.venus_retry_proxy import RetryProxy
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
@@ -36,6 +55,53 @@ except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
     import plugin_deployment  # type: ignore[no-redef]
+
+try:
+    from scripts.pilot.workspace_supervisor import (
+        SupervisorError,
+        WorkspaceSupervisor,
+        _load_workspace_api,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from workspace_supervisor import (
+        SupervisorError,
+        WorkspaceSupervisor,
+        _load_workspace_api,
+    )
+
+try:
+    from scripts.pilot.agent_surface_bridge import (
+        AgentSurfaceBridge,
+        SOCKET_TARGET as AGENT_SURFACE_SOCKET_TARGET,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from agent_surface_bridge import (
+        AgentSurfaceBridge,
+        SOCKET_TARGET as AGENT_SURFACE_SOCKET_TARGET,
+    )
+
+try:
+    from scripts.pilot.candidate_runtime import (
+        CAD_RUNTIME_IMPORTS,
+        CandidateRuntimeLease,
+        CandidateRuntimeError,
+        materialize_candidate_runtime,
+        validate_candidate_runtime,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from candidate_runtime import (  # type: ignore[no-redef]
+        CAD_RUNTIME_IMPORTS,
+        CandidateRuntimeLease,
+        CandidateRuntimeError,
+        materialize_candidate_runtime,
+        validate_candidate_runtime,
+    )
 
 sys.path.insert(
     0,
@@ -69,6 +135,9 @@ JOB_PUBLISH_TREE_REL = "run/.plugin-publish-tree"
 ARTIFACT_CONTRACT_STATUS = 4
 MANIFEST_EXCLUDED_ROOTS = {".git"}
 MANIFEST_EXCLUDED_PREFIXES = {JOB_CODEX_HOME_REL, JOB_PUBLISH_TREE_REL}
+TERMINAL_LOCATOR_RELATIVE = "run/terminal-validation-locator.json"
+TERMINAL_PUBLISH_LOCK_SECONDS = 120.0
+MAX_TERMINAL_QUARANTINES = 32
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
 CAD_REBUILD_ENTRYPOINT = REPO_ROOT / "skills/cad/scripts/canonical-build/__main__.py"
 GEOMETRY_ENTRYPOINT = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare/__main__.py"
@@ -79,7 +148,9 @@ SANDBOX_GEOMETRY_ENTRYPOINT = (
     SANDBOX_REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare/__main__.py"
 )
 VIEWER_RUNTIME_DIR = REPO_ROOT / "skills/cad-viewer/scripts/viewer"
+AGENT_SURFACE_CLIENT = REPO_ROOT / "scripts/pilot/agent_surface_client.py"
 TRUSTED_TOOL_REGISTRY_NAME = "trusted-tool-registry.json"
+CAD_CANDIDATE_RUNTIME_IMPORTS = CAD_RUNTIME_IMPORTS
 SYSTEM_RO_PATHS = (
     Path("/usr"),
     Path("/etc/alternatives"),
@@ -677,8 +748,14 @@ def existing_system_paths() -> list[Path]:
 def build_sandbox_environment(
     environ: Mapping[str, str],
     tap_url: str,
+    *,
+    isolated_agent: bool = False,
 ) -> dict[str, str]:
-    """Return the explicit child environment allowlist for Codex."""
+    """Return the explicit child environment allowlist for Codex.
+
+    Provider credentials stay in the host-side tap/retry processes; the
+    Agent child receives no bearer token or other secret environment value.
+    """
 
     child_env = {
         name: environ[name]
@@ -692,12 +769,12 @@ def build_sandbox_environment(
             "GIT_TERMINAL_PROMPT": "0",
             "HOME": str(SANDBOX_HOME),
             "PATH": (
-                f"{SANDBOX_REPO_ROOT}/.venv/bin:"
                 "/usr/local/bin:/usr/bin:/bin"
+                if isolated_agent
+                else f"{SANDBOX_REPO_ROOT}/.venv/bin:/usr/local/bin:/usr/bin:/bin"
             ),
             "PYTHONDONTWRITEBYTECODE": "1",
             "UV_CACHE_DIR": "/tmp/uv-cache",
-            "VENUS_TOKEN": environ.get("VENUS_TOKEN", ""),
             "XDG_CACHE_HOME": "/tmp/cache",
         }
     )
@@ -713,8 +790,17 @@ def build_bwrap_argv(
     environ: Mapping[str, str],
     browser_capability_dir: Path | None = None,
     browser_mcp_url: str | None = None,
+    agent_candidate_dir: Path | None = None,
+    agent_surface_socket: Path | None = None,
+    agent_surface_client: Path | None = None,
 ) -> list[str]:
-    """Build a least-visibility bwrap argv without placing secrets in it."""
+    """Build a least-visibility bwrap argv without placing secrets in it.
+
+    ``agent_candidate_dir`` selects the W4 candidate-only seam.  In that mode
+    the workload receives a fixed ``/candidate`` mount and no experiment,
+    input, or output bind.  The default remains the historical pilot mount
+    until the Agent Surface workflow is enabled by the outer runner.
+    """
 
     repo_root = repo_root.resolve()
     if not environ.get("VENUS_TOKEN"):
@@ -732,6 +818,31 @@ def build_bwrap_argv(
 
     exp_dir = validate_exp_dir(repo_root, exp_dir)
     inputs = validate_input_paths(repo_root, input_paths)
+    isolated_agent = agent_candidate_dir is not None
+    if isolated_agent:
+        raw_candidate_dir = Path(agent_candidate_dir)
+        if raw_candidate_dir.is_symlink():
+            raise PilotError("agent candidate directory is unavailable")
+        agent_candidate_dir = raw_candidate_dir.resolve()
+        if not agent_candidate_dir.is_dir():
+            raise PilotError("agent candidate directory is unavailable")
+        try:
+            agent_candidate_dir.relative_to(exp_dir)
+        except ValueError:
+            pass
+        else:
+            raise PilotError("agent candidate directory must be outside EXP_DIR")
+        if agent_surface_socket is None or agent_surface_client is None:
+            raise PilotError("Agent Surface bridge is unavailable")
+        if (
+            not Path(agent_surface_socket).is_socket()
+            or Path(agent_surface_socket).is_symlink()
+            or not Path(agent_surface_client).is_file()
+            or Path(agent_surface_client).is_symlink()
+        ):
+            raise PilotError("Agent Surface bridge is unavailable")
+    elif agent_surface_socket is not None or agent_surface_client is not None:
+        raise PilotError("Agent Surface requires candidate-only isolation")
     receipt = resolve_deployed_authority(host_home)
     relative_exp = exp_dir.relative_to(repo_root)
     sandbox_exp = SANDBOX_REPO_ROOT / relative_exp
@@ -760,7 +871,9 @@ def build_bwrap_argv(
                 "browser runtime capability directory must be inside the experiment"
             ) from exc
         sandbox_browser_capability_dir = (
-            sandbox_exp / browser_capability_relative
+            Path(SANDBOX_MOUNT_ROOT)
+            if isolated_agent
+            else sandbox_exp / browser_capability_relative
         )
     argv = [
         bwrap,
@@ -783,8 +896,6 @@ def build_bwrap_argv(
         str(SANDBOX_REPO_ROOT / "models"),
         "--dir",
         str(SANDBOX_REPO_ROOT / "outputs"),
-        "--dir",
-        str(sandbox_exp.parent),
         "--dir",
         str(SANDBOX_REPO_ROOT / "gateway"),
         "--dir",
@@ -810,14 +921,8 @@ def build_bwrap_argv(
         "usr/lib64",
         "/lib64",
         "--ro-bind",
-        str(venv),
-        str(SANDBOX_REPO_ROOT / ".venv"),
-        "--ro-bind",
         str(gateway),
         str(SANDBOX_REPO_ROOT / "gateway" / gateway.name),
-        "--bind",
-        str(exp_dir),
-        str(sandbox_exp),
         "--bind",
         str(job_codex_home),
         str(SANDBOX_CODEX_HOME),
@@ -825,19 +930,55 @@ def build_bwrap_argv(
         str(job_publish_tree),
         str(SANDBOX_PUBLISH_TREE),
     ]
+    if not isolated_agent:
+        argv.extend(("--dir", str(sandbox_exp.parent)))
+    if not isolated_agent:
+        argv.extend(
+            (
+                "--ro-bind",
+                str(venv),
+                str(SANDBOX_REPO_ROOT / ".venv"),
+            )
+        )
     for path in existing_system_paths():
         argv.extend(["--ro-bind", str(path), str(path)])
-    for input_path in inputs:
-        relative_input = input_path.relative_to(repo_root)
+    if isolated_agent:
         argv.extend(
             [
                 "--dir",
-                str((SANDBOX_REPO_ROOT / relative_input).parent),
+                "/candidate",
+                "--bind",
+                str(agent_candidate_dir),
+                "/candidate",
+                "--dir",
+                "/agent-surface",
                 "--ro-bind",
-                str(input_path),
-                str(SANDBOX_REPO_ROOT / relative_input),
+                str(agent_surface_client),
+                "/agent-surface/client.py",
+                "--ro-bind",
+                str(agent_surface_socket),
+                AGENT_SURFACE_SOCKET_TARGET,
             ]
         )
+    else:
+        argv.extend(
+            [
+                "--bind",
+                str(exp_dir),
+                str(sandbox_exp),
+            ]
+        )
+        for input_path in inputs:
+            relative_input = input_path.relative_to(repo_root)
+            argv.extend(
+                [
+                    "--dir",
+                    str((SANDBOX_REPO_ROOT / relative_input).parent),
+                    "--ro-bind",
+                    str(input_path),
+                    str(SANDBOX_REPO_ROOT / relative_input),
+                ]
+            )
     for skill_dir in skill_dirs:
         argv.extend(
             [
@@ -847,16 +988,9 @@ def build_bwrap_argv(
             ]
         )
     if browser_capability_dir is not None:
-        argv.extend(
-            [
-                "--ro-bind",
-                str(browser_capability_dir),
-                str(sandbox_browser_capability_dir),
-                "--ro-bind",
-                str(browser_capability_dir),
-                SANDBOX_MOUNT_ROOT,
-            ]
-        )
+        argv.extend(["--ro-bind", str(browser_capability_dir), str(sandbox_browser_capability_dir)])
+        if not isolated_agent:
+            argv.extend(["--ro-bind", str(browser_capability_dir), SANDBOX_MOUNT_ROOT])
     argv.extend(
         [
             "--remount-ro",
@@ -880,6 +1014,9 @@ def run_supervised(
     state: LifecycleState | None = None,
     sidecar: BrowserRuntimeJob | None = None,
     relay: SignalRelay | None = None,
+    agent_candidate_dir: Path | None = None,
+    agent_surface_socket: Path | None = None,
+    agent_surface_client: Path | None = None,
 ) -> int:
     """Run command behind mandatory tap and return a shell-compatible status."""
 
@@ -897,6 +1034,9 @@ def run_supervised(
         environ,
         sidecar.capability_dir if sidecar is not None else None,
         sidecar.mcp_url if sidecar is not None else None,
+        agent_candidate_dir,
+        agent_surface_socket,
+        agent_surface_client,
     )
     if state is None:
         state = LifecycleState()
@@ -929,6 +1069,7 @@ def run_supervised(
                     child_env = build_sandbox_environment(
                         environ,
                         tap_url,
+                        isolated_agent=agent_candidate_dir is not None,
                     )
                     workload = subprocess.Popen(
                         bwrap_argv,
@@ -1043,6 +1184,108 @@ def prepare_exp(exp_dir: Path) -> None:
         )
 
 
+def _workspace_status_available(exp_dir: Path) -> bool:
+    """Ask the public Workspace CLI whether an initialized authority exists."""
+
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(WORKSPACE_HELPER),
+                "status",
+                "--workspace",
+                str(exp_dir),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PilotError("cannot inspect Workspace initialization") from exc
+    return completed.returncode == 0
+
+
+def prepare_and_initialize_workspace(exp_dir: Path, input_path: Path) -> Path:
+    """Prepare Canonical Reference and initialize a fresh Workspace outside Agent view."""
+
+    if _workspace_status_available(exp_dir):
+        return exp_dir / "input" / "reference.ply"
+    prepared = exp_dir.parent / f".agent-prepared-{os.getpid()}-{secrets.token_hex(8)}"
+    try:
+        source_root = REPO_ROOT / "packages/meshscope/src"
+        if str(source_root) not in sys.path:
+            sys.path.insert(0, str(source_root))
+        from meshscope.voxblame import prepare_reference
+
+        prepared_input = prepared / "input"
+        result = prepare_reference(input_path, prepared_input)
+        profile_path = (
+            REPO_ROOT
+            / "packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json"
+        )
+        profile_sha256 = hashlib.sha256(profile_path.read_bytes()).hexdigest()
+        (prepared / "setup").mkdir(parents=True, exist_ok=False)
+        (prepared / "setup/outer-preparation.json").write_text(
+            json.dumps(
+                {
+                    "schema": "mesh-to-cad.outer-preparation/1",
+                    "canonical_reference_sha256": result.manifest[
+                        "canonical_reference_sha256"
+                    ],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (prepared / "experiment.json").write_text(
+            json.dumps(
+                {
+                    "schema": "mesh-to-cad.experiment/1",
+                    "workspace_id": f"pilot-{exp_dir.name}",
+                    "coordinate_contract": "trellis2_canonical/1",
+                    "canonical_reference_sha256": result.manifest[
+                        "canonical_reference_sha256"
+                    ],
+                    "preview_profile": {
+                        "name": "cadena_residual_eight_view/1",
+                        "sha256": profile_sha256,
+                    },
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(WORKSPACE_HELPER),
+                "init",
+                "--workspace",
+                str(exp_dir),
+                "--prepared",
+                str(prepared),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if completed.returncode != 0:
+            raise PilotError("trusted Workspace initialization failed")
+        return exp_dir / "input" / "reference.ply"
+    except PilotError:
+        raise
+    except Exception as exc:
+        raise PilotError("trusted Canonical Reference preparation failed") from exc
+    finally:
+        shutil.rmtree(prepared, ignore_errors=True)
+
+
 def compact_exp_history(exp_dir: Path) -> None:
     """Pack successful pilot commits before cvm-pull preserves the Git authority."""
 
@@ -1057,6 +1300,16 @@ def compact_exp_history(exp_dir: Path) -> None:
 
 def validate_workspace_delivery(exp_dir: Path) -> dict[str, object]:
     """Validate canonical Workspace authority and return its Final Delivery."""
+
+    try:
+        workspace_api = _load_workspace_api()
+        if workspace_api.workspace_initialized(exp_dir):
+            # Terminal validation owns the only complete validator call. The
+            # runner's preflight here only distinguishes the public Workspace
+            # protocol from legacy/non-Workspace output.
+            return {"workspace_initialized": True}
+    except Exception:
+        pass
 
     try:
         completed = subprocess.run(
@@ -1096,6 +1349,883 @@ def validate_workspace_delivery(exp_dir: Path) -> dict[str, object]:
     return delivery
 
 
+def _terminal_path_is_safe(path: Path) -> bool:
+    """Reject symlinked components without resolving through an untrusted path."""
+
+    current = Path(path)
+    while True:
+        if current.is_symlink():
+            return False
+        if current.exists() or current.parent == current:
+            return True
+        current = current.parent
+
+
+def _terminal_regular(path: Path) -> bool:
+    try:
+        return _terminal_path_is_safe(path) and path.is_file() and path.stat().st_nlink == 1
+    except OSError:
+        return False
+
+
+def _terminal_boot_token() -> str | None:
+    try:
+        value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+        return value or None
+    except (OSError, UnicodeError):
+        if platform.system() == "Darwin":
+            try:
+                result = subprocess.run(
+                    ["sysctl", "-n", "kern.boottime"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=2,
+                )
+                value = result.stdout.strip()
+                return value or None
+            except (OSError, subprocess.SubprocessError):
+                return None
+    return None
+
+
+def _terminal_process_start_token(pid: int) -> str | None:
+    proc_stat = Path(f"/proc/{pid}/stat")
+    try:
+        if proc_stat.is_file():
+            value = proc_stat.read_text(encoding="ascii")
+            tail = value[value.rfind(")") + 2 :].split()
+            return tail[19] if len(tail) > 19 else None
+    except (OSError, UnicodeError, IndexError):
+        return None
+    if platform.system() == "Darwin":
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "lstart=", "-p", str(pid)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=2,
+            )
+            value = result.stdout.strip()
+            return value or None
+        except (OSError, subprocess.SubprocessError):
+            return None
+    return None
+
+
+def _terminal_owner_record() -> dict[str, object]:
+    pid = os.getpid()
+    return {
+        "pid": pid,
+        "host": socket.gethostname(),
+        "boot": _terminal_boot_token(),
+        "start": _terminal_process_start_token(pid),
+        "created_ns": time.time_ns(),
+    }
+
+
+def _terminal_owner_live(value: object) -> bool:
+    if not isinstance(value, dict):
+        return False
+    pid = value.get("pid")
+    if type(pid) is not int or pid <= 0:
+        return False
+    if value.get("host") != socket.gethostname():
+        return False
+    if value.get("boot") != _terminal_boot_token():
+        return False
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        # Permission denied still proves that a same-host process exists;
+        # never steal its publication lock on that basis.
+        return True
+    except (ProcessLookupError, OSError):
+        return False
+    recorded_start = value.get("start")
+    current_start = _terminal_process_start_token(pid)
+    if recorded_start is None or current_start is None:
+        return True
+    return recorded_start == current_start
+
+
+def _terminal_read_owner(descriptor: int) -> object:
+    raw = _terminal_read_owner_bytes(descriptor)
+    if raw is None:
+        return None
+    try:
+        return json.loads(raw.decode("ascii"))
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+
+
+def _terminal_read_owner_bytes(descriptor: int) -> bytes | None:
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return os.read(descriptor, 8192)
+    except OSError:
+        return None
+
+
+def _terminal_write_owner(descriptor: int) -> None:
+    encoded = (json.dumps(_terminal_owner_record(), sort_keys=True) + "\n").encode("ascii")
+    os.ftruncate(descriptor, 0)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    view = memoryview(encoded)
+    while view:
+        written = os.write(descriptor, view)
+        if written <= 0:
+            raise OSError("short terminal lock owner write")
+        view = view[written:]
+    os.fsync(descriptor)
+
+
+def _terminal_lock_identity(descriptor: int) -> tuple[int, int]:
+    value = os.fstat(descriptor)
+    return value.st_dev, value.st_ino
+
+
+def _terminal_atomic_rename_no_replace(source: Path, target: Path) -> None:
+    """Rename within one directory without replacing a preexisting pathname."""
+
+    if source.parent != target.parent:
+        raise OSError("terminal quarantine paths must share a directory")
+    if _terminal_is_windows():
+        _windows_move_file_ex(source, target)
+        return
+    source_bytes = os.fsencode(source)
+    target_bytes = os.fsencode(target)
+    at_fdcwd = -2 if platform.system() == "Darwin" else -100
+    if platform.system() == "Darwin":
+        try:
+            function = ctypes.CDLL(None, use_errno=True).renameatx_np
+        except AttributeError:
+            function = None
+        if function is not None:
+            function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+            function.restype = ctypes.c_int
+            if function(at_fdcwd, source_bytes, at_fdcwd, target_bytes, 0x00000004) == 0:
+                return
+            error = ctypes.get_errno()
+            if error == errno.EEXIST:
+                raise FileExistsError(target)
+            if error not in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
+                raise OSError(error, os.strerror(error))
+    try:
+        function = getattr(ctypes.CDLL(None, use_errno=True), "renameat2")
+    except AttributeError:
+        function = None
+    if function is not None:
+        function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        function.restype = ctypes.c_int
+        if function(at_fdcwd, source_bytes, at_fdcwd, target_bytes, 1) == 0:
+            return
+        error = ctypes.get_errno()
+        if error == errno.EEXIST:
+            raise FileExistsError(target)
+        if error not in {errno.ENOSYS, errno.EINVAL, errno.ENOTSUP}:
+            raise OSError(error, os.strerror(error))
+    raise OSError("atomic no-replace rename is unavailable")
+
+
+def _terminal_is_windows() -> bool:
+    return os.name == "nt" or platform.system() == "Windows"
+
+
+def _terminal_atomic_rename_available() -> bool:
+    if _terminal_is_windows():
+        kernel = getattr(getattr(ctypes, "windll", None), "kernel32", None)
+        try:
+            import msvcrt  # noqa: F401
+        except ImportError:
+            return False
+        return kernel is not None and hasattr(kernel, "MoveFileExW") and hasattr(
+            kernel, "FlushFileBuffers"
+        )
+    if platform.system() == "Darwin":
+        return hasattr(ctypes.CDLL(None), "renameatx_np")
+    return hasattr(ctypes.CDLL(None), "renameat2")
+
+
+def _windows_move_file_ex(source: Path, target: Path, native=None, last_error=None) -> None:
+    """MoveFileExW without REPLACE_EXISTING, with durable write-through."""
+
+    if native is None:
+        try:
+            native = ctypes.windll.kernel32.MoveFileExW
+        except AttributeError as exc:
+            raise OSError("Windows MoveFileExW is unavailable") from exc
+    native.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+    native.restype = ctypes.c_int
+    # WRITE_THROUGH is supported by Windows; omitting REPLACE_EXISTING makes
+    # ERROR_ALREADY_EXISTS/ERROR_FILE_EXISTS a closed no-replace failure.
+    if native(os.fspath(source), os.fspath(target), 0x00000008):
+        return
+    if last_error is None:
+        last_error = getattr(ctypes, "get_last_error", lambda: 1)
+    error = int(last_error())
+    if error in {80, 183}:
+        raise FileExistsError(target)
+    raise OSError(error, f"MoveFileExW failed for {source} -> {target}")
+
+
+def _flush_terminal_file(descriptor: int) -> None:
+    """Flush file contents; Windows directory fsync is intentionally absent."""
+
+    if not _terminal_is_windows():
+        os.fsync(descriptor)
+        return
+    try:
+        import msvcrt
+        kernel = ctypes.windll.kernel32
+        handle = msvcrt.get_osfhandle(descriptor)
+        if handle == -1 or not kernel.FlushFileBuffers(ctypes.c_void_p(handle)):
+            raise OSError("FlushFileBuffers failed")
+    except (AttributeError, ImportError, OSError) as exc:
+        raise OSError("Windows file durability is unavailable") from exc
+
+
+def _terminal_quarantine_slot(path: Path) -> Path:
+    if sum(1 for _ in path.parent.glob(f".{path.name}.quarantine-*")) >= MAX_TERMINAL_QUARANTINES:
+        raise PilotError("terminal_quarantine_limit")
+    for _ in range(8):
+        slot = path.with_name(
+            f".{path.name}.quarantine-{os.getpid()}-{secrets.token_hex(8)}"
+        )
+        try:
+            os.lstat(slot)
+        except FileNotFoundError:
+            return slot
+    raise PilotError("terminal_quarantine_unavailable")
+
+
+def _terminal_quarantine_delete_exact(
+    path: Path,
+    identity: tuple[int, int],
+    expected: bytes | None,
+    validator: Callable[[bytes], bool] | None = None,
+) -> bool:
+    """Move an exact object to a validated retained tombstone."""
+
+    try:
+        slot = _terminal_quarantine_slot(path)
+        _terminal_atomic_rename_no_replace(path, slot)
+    except FileNotFoundError:
+        return False
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+    try:
+        moved, value = _terminal_file_identity_and_bytes(slot)
+        valid = moved == identity and (expected is None or value == expected)
+        if validator is not None:
+            valid = valid and validator(value)
+        if not valid:
+            try:
+                _terminal_atomic_rename_no_replace(slot, path)
+            except FileExistsError:
+                pass
+            return False
+        # The moved, validated object is now a durable tombstone.  Never
+        # unlink a quarantine pathname: a later trusted retry may restore it,
+        # and no mutable/public pathname is touched after validation.
+        try:
+            _fsync_terminal_parent(path.parent)
+        except OSError:
+            return False
+        return True
+    except (OSError, PilotError):
+        return False
+
+
+def _terminal_cleanup_lock_quarantines(lock_path: Path) -> None:
+    """Validate stale owner tombstones without racy garbage collection."""
+
+    slots = sorted(lock_path.parent.glob(f".{lock_path.name}.quarantine-*"))
+    if len(slots) > MAX_TERMINAL_QUARANTINES:
+        raise PilotError("terminal_quarantine_limit")
+    for slot in slots:
+        if slot.is_symlink():
+            raise PilotError("terminal_handoff_lock_conflict")
+        try:
+            _identity, owner_bytes = _terminal_file_identity_and_bytes(slot)
+            owner = json.loads(owner_bytes.decode("ascii"))
+        except (OSError, PilotError, UnicodeError, json.JSONDecodeError) as exc:
+            raise PilotError("terminal_handoff_lock_conflict") from exc
+        # Owner tombstones are deliberately retained regardless of whether
+        # their PID is still alive.  They are not live control pathnames and
+        # are never used to steal the persistent byte-range lock.
+
+
+class _WindowsByteRangeLock:
+    """Persistent control-file lock backed by the Windows CRT."""
+
+    def __init__(self) -> None:
+        try:
+            import msvcrt
+        except ImportError as exc:  # pragma: no cover - Windows only.
+            raise OSError("msvcrt byte-range locking is unavailable") from exc
+        self._msvcrt = msvcrt
+
+    def lock(self, descriptor: int) -> None:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        try:
+            self._msvcrt.locking(descriptor, self._msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) in {33, 36, 158} or exc.errno in {
+                errno.EACCES,
+                errno.EAGAIN,
+                errno.EDEADLK,
+            }:
+                raise BlockingIOError from exc
+            raise
+
+    def unlock(self, descriptor: int) -> None:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        self._msvcrt.locking(descriptor, self._msvcrt.LK_UNLCK, 1)
+
+
+def _windows_byte_range_lock() -> _WindowsByteRangeLock:
+    return _WindowsByteRangeLock()
+
+
+def _windows_control_path_safe(path: Path) -> bool:
+    if not _terminal_is_windows():
+        return True
+    if os.name != "nt":  # forced adapter tests on POSIX hosts
+        return not path.is_symlink()
+    current = path
+    while True:
+        if current.is_symlink():
+            return False
+        if current.exists():
+            try:
+                attributes = ctypes.windll.kernel32.GetFileAttributesW(os.fspath(current))
+            except AttributeError:  # pragma: no cover - injected adapter tests.
+                attributes = 0
+            if attributes != 0xFFFFFFFF and attributes & 0x00000400:
+                return False  # FILE_ATTRIBUTE_REPARSE_POINT
+        if current.parent == current:
+            return True
+        current = current.parent
+
+
+def _acquire_windows_publish_lock(
+    lock_path: Path,
+) -> tuple[Path, int, str, tuple[int, int] | None, bytes | None]:
+    if not _windows_control_path_safe(lock_path):
+        raise PilotError("terminal_handoff_lock_conflict")
+    adapter = _windows_byte_range_lock()
+    deadline = time.monotonic() + TERMINAL_PUBLISH_LOCK_SECONDS
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+    while True:
+        try:
+            descriptor = os.open(lock_path, flags, 0o600)
+        except OSError as exc:
+            raise PilotError("terminal_handoff_lock_unavailable") from exc
+        try:
+            value = os.fstat(descriptor)
+            if not stat.S_ISREG(value.st_mode):
+                raise PilotError("terminal_handoff_lock_conflict")
+            if value.st_size < 1:
+                os.write(descriptor, b"\0")
+                _flush_terminal_file(descriptor)
+            adapter.lock(descriptor)
+            return lock_path, descriptor, "windows", (value.st_dev, value.st_ino), None
+        except BlockingIOError:
+            os.close(descriptor)
+            if time.monotonic() >= deadline:
+                raise PilotError("terminal_handoff_lock_timeout")
+            time.sleep(0.02)
+        except PilotError:
+            os.close(descriptor)
+            raise
+        except OSError as exc:
+            os.close(descriptor)
+            raise PilotError("terminal_handoff_lock_unavailable") from exc
+
+
+def _terminal_unlink_stale_lock(
+    lock_path: Path,
+    descriptor: int,
+    identity: tuple[int, int],
+) -> None:
+    owner_bytes = _terminal_read_owner_bytes(descriptor)
+    if owner_bytes is None:
+        raise PilotError("terminal_handoff_lock_conflict")
+    try:
+        owner = json.loads(owner_bytes.decode("ascii"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise PilotError("terminal_handoff_lock_conflict") from exc
+    if _terminal_owner_live(owner):
+        raise PilotError("terminal_handoff_lock_conflict")
+    if not _terminal_quarantine_delete_exact(
+        lock_path,
+        identity,
+        owner_bytes,
+        validator=lambda value: not _terminal_owner_live(
+            json.loads(value.decode("ascii"))
+        ),
+    ):
+        raise PilotError("terminal_handoff_lock_conflict")
+
+
+def _acquire_terminal_publish_lock(
+    exp_dir: Path,
+) -> tuple[Path, int, str, tuple[int, int] | None, bytes | None]:
+    """Acquire one experiment-specific no-follow lock for W5 publication."""
+
+    root = exp_dir.parent / ".internal-terminal-validation"
+    if not _terminal_path_is_safe(root):
+        raise PilotError("terminal_handoff_path_conflict")
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not _terminal_path_is_safe(root) or not root.is_dir():
+        raise PilotError("terminal_handoff_path_conflict")
+    lock_path = root / f".{exp_dir.name}.publish.lock"
+    if not _terminal_path_is_safe(lock_path):
+        raise PilotError("terminal_handoff_path_conflict")
+    if _terminal_is_windows():
+        return _acquire_windows_publish_lock(lock_path)
+    if fcntl is None:
+        deadline = time.monotonic() + TERMINAL_PUBLISH_LOCK_SECONDS
+        _terminal_cleanup_lock_quarantines(lock_path)
+        flags = (
+            os.O_RDWR
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        while True:
+            try:
+                descriptor = os.open(lock_path, flags, 0o600)
+                identity = _terminal_lock_identity(descriptor)
+                try:
+                    _terminal_write_owner(descriptor)
+                    owner_bytes = _terminal_read_owner_bytes(descriptor)
+                    return (
+                        lock_path,
+                        descriptor,
+                        "owner",
+                        identity,
+                        owner_bytes,
+                    )
+                except Exception:
+                    try:
+                        _terminal_quarantine_delete_exact(lock_path, identity, None)
+                    finally:
+                        os.close(descriptor)
+                    raise
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise PilotError("terminal_handoff_lock_timeout")
+                try:
+                    descriptor = os.open(
+                        lock_path,
+                        os.O_RDWR
+                        | getattr(os, "O_CLOEXEC", 0)
+                        | getattr(os, "O_NOFOLLOW", 0),
+                    )
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:
+                    raise PilotError("terminal_handoff_lock_unavailable") from exc
+                identity = _terminal_lock_identity(descriptor)
+                try:
+                    owner = _terminal_read_owner(descriptor)
+                    if _terminal_owner_live(owner):
+                        time.sleep(0.02)
+                        continue
+                    _terminal_unlink_stale_lock(lock_path, descriptor, identity)
+                finally:
+                    os.close(descriptor)
+            except OSError as exc:
+                raise PilotError("terminal_handoff_lock_unavailable") from exc
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise PilotError("terminal_handoff_lock_unavailable") from exc
+    deadline = time.monotonic() + TERMINAL_PUBLISH_LOCK_SECONDS
+    try:
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return lock_path, descriptor, "fcntl", None, None
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise PilotError("terminal_handoff_lock_timeout")
+                time.sleep(0.02)
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _release_terminal_publish_lock(
+    lock: tuple[Path, int, str, tuple[int, int] | None, bytes | None],
+) -> None:
+    path, descriptor, mode, identity, owner_bytes = lock
+    try:
+        if mode == "fcntl" and fcntl is not None:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except OSError:
+                pass
+        elif mode == "windows":
+            try:
+                _windows_byte_range_lock().unlock(descriptor)
+            except OSError:
+                pass
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        if mode == "owner" and identity is not None:
+            _terminal_quarantine_delete_exact(path, identity, owner_bytes)
+
+
+def _read_terminal_json(path: Path) -> dict[str, object] | None:
+    if path.is_symlink():
+        raise PilotError("terminal_handoff_path_conflict")
+    if not path.exists():
+        return None
+    if not _terminal_regular(path):
+        raise PilotError("terminal_handoff_path_conflict")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PilotError("terminal_handoff_invalid") from exc
+    if not isinstance(value, dict):
+        raise PilotError("terminal_handoff_invalid")
+    return value
+
+
+def _terminal_payload_bytes(payload: Mapping[str, object]) -> bytes:
+    return (
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("ascii")
+
+
+def _terminal_file_identity_and_bytes(path: Path) -> tuple[tuple[int, int], bytes]:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        value = os.fstat(descriptor)
+        if not stat.S_ISREG(value.st_mode):
+            raise PilotError("terminal_handoff_path_conflict")
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return (value.st_dev, value.st_ino), b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _fsync_terminal_parent(path: Path) -> None:
+    if _terminal_is_windows():
+        return
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        _flush_terminal_file(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _remove_exact_terminal_file(
+    path: Path,
+    identity: tuple[int, int],
+    expected: bytes,
+) -> bool:
+    """Quarantine and remove only our inode/payload."""
+
+    return _terminal_quarantine_delete_exact(path, identity, expected)
+
+
+def _write_terminal_handoff(
+    path: Path,
+    payload: Mapping[str, object],
+) -> tuple[int, int]:
+    """Publish a new handoff without replacing a file another publisher owns."""
+
+    if path.exists() or path.is_symlink():
+        raise PilotError("terminal_handoff_ownership_conflict")
+    if not _terminal_path_is_safe(path.parent):
+        raise PilotError("terminal_handoff_path_conflict")
+    encoded = _terminal_payload_bytes(payload)
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{secrets.token_hex(6)}")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    linked = False
+    published = False
+    temporary_identity: tuple[int, int] | None = None
+    target_identity: tuple[int, int] | None = None
+    try:
+        descriptor = os.open(temporary, flags, 0o600)
+        view = memoryview(encoded)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short terminal handoff write")
+            view = view[written:]
+        temporary_identity = _terminal_lock_identity(descriptor)
+        _flush_terminal_file(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        _, temporary_bytes = _terminal_file_identity_and_bytes(temporary)
+        if temporary_bytes != encoded:
+            raise PilotError("terminal_handoff_write_failed")
+        _terminal_atomic_rename_no_replace(temporary, path)
+        linked = True
+        target_identity, target_bytes = _terminal_file_identity_and_bytes(path)
+        if target_bytes != encoded:
+            raise PilotError("terminal_handoff_write_failed")
+        _fsync_terminal_parent(path.parent)
+        published = True
+        return target_identity
+    except PilotError:
+        raise
+    except OSError as exc:
+        raise PilotError("terminal_handoff_write_failed") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if not published:
+            if linked and target_identity is not None:
+                _remove_exact_terminal_file(path, target_identity, encoded)
+            if temporary_identity is not None:
+                _remove_exact_terminal_file(temporary, temporary_identity, encoded)
+
+
+def _validated_handoff(
+    workspace_api: object,
+    exp_dir: Path,
+    handoff: Mapping[str, object],
+) -> tuple[str, Mapping[str, object]]:
+    if set(handoff) != {"schema", "terminal_identity_sha256", "bundle"}:
+        raise PilotError("terminal_handoff_invalid")
+    if handoff.get("schema") != "mesh-to-cad.terminal-validation-handoff/1":
+        raise PilotError("terminal_handoff_invalid")
+    identity = handoff.get("terminal_identity_sha256")
+    bundle = handoff.get("bundle")
+    if (
+        type(identity) is not str
+        or len(identity) != 64
+        or any(char not in "0123456789abcdef" for char in identity)
+        or not isinstance(bundle, Mapping)
+    ):
+        raise PilotError("terminal_handoff_invalid")
+    try:
+        workspace_api.verify_terminal_validation(exp_dir, bundle, identity)  # type: ignore[attr-defined]
+    except Exception as exc:
+        raise PilotError("terminal_handoff_invalid") from exc
+    return identity, bundle
+
+
+def _terminal_pair(
+    workspace_api: object,
+    exp_dir: Path,
+    handoff_target: Path,
+    handoff: Mapping[str, object],
+    locator: Mapping[str, object],
+) -> TerminalValidationLocator:
+    identity, bundle = _validated_handoff(
+        workspace_api, exp_dir, handoff
+    )
+    if set(locator) != {"schema", "expected_identity", "bundle"}:
+        raise PilotError("terminal_locator_conflict")
+    if (
+        locator.get("schema") != "mesh-to-cad.terminal-validation-locator/1"
+        or locator.get("expected_identity") != identity
+        or locator.get("bundle") != bundle
+    ):
+        raise PilotError("terminal_locator_conflict")
+    return TerminalValidationLocator(
+        bundle_path=handoff_target,
+        expected_identity=identity,
+        sidecar_path=TERMINAL_LOCATOR_RELATIVE,
+    )
+
+
+def _recover_terminal_handoff_quarantines(
+    workspace_api: object,
+    exp_dir: Path,
+    handoff_target: Path,
+) -> None:
+    """Restore a valid orphan handoff only when the destination is absent."""
+
+    slots = sorted(
+        handoff_target.parent.glob(f".{handoff_target.name}.quarantine-*")
+    )
+    if len(slots) > MAX_TERMINAL_QUARANTINES:
+        raise PilotError("terminal_quarantine_limit")
+    for slot in slots:
+        if slot.is_symlink():
+            raise PilotError("terminal_handoff_path_conflict")
+        try:
+            handoff = _read_terminal_json(slot)
+            if handoff is None:
+                continue
+            _validated_handoff(workspace_api, exp_dir, handoff)
+        except PilotError:
+            # Unknown/invalid quarantines are retained, never deleted.
+            continue
+        if handoff_target.exists() or handoff_target.is_symlink():
+            continue
+        try:
+            _terminal_atomic_rename_no_replace(slot, handoff_target)
+            _fsync_terminal_parent(handoff_target.parent)
+        except FileExistsError:
+            continue
+        except OSError:
+            continue
+
+
+def persist_terminal_validation(exp_dir: Path) -> TerminalValidationLocator | None:
+    """Compile and publish the W1/W5 pair after all Agent resources are closed."""
+
+    exp_dir = Path(exp_dir).resolve()
+    if not _terminal_atomic_rename_available():
+        raise PilotError("terminal_publication_unavailable")
+    try:
+        workspace_api = _load_workspace_api()
+        if workspace_api.workspace_initialized(exp_dir) is not True:  # type: ignore[attr-defined]
+            raise PilotError("workspace_not_initialized")
+    except PilotError:
+        raise
+    except Exception as exc:
+        raise PilotError("workspace_not_initialized") from exc
+
+    lock: tuple[Path, int, str, tuple[int, int] | None, bytes | None] | None = None
+    handoff_target = exp_dir.parent / ".internal-terminal-validation" / exp_dir.name / "terminal-validation.json"
+    locator_target = exp_dir / TERMINAL_LOCATOR_RELATIVE
+    created_handoff = False
+    handoff_identity: tuple[int, int] | None = None
+    handoff_payload: Mapping[str, object] | None = None
+
+    def remove_own_handoff() -> None:
+        if not created_handoff or handoff_payload is None:
+            return
+        try:
+            if handoff_identity is not None:
+                _remove_exact_terminal_file(
+                    handoff_target,
+                    handoff_identity,
+                    _terminal_payload_bytes(handoff_payload),
+                )
+        except (OSError, PilotError):
+            # Never turn cleanup into permission to delete an unknown pair.
+            pass
+
+    try:
+        lock = _acquire_terminal_publish_lock(exp_dir)
+        handoff_dir = handoff_target.parent
+        if not _terminal_path_is_safe(handoff_dir):
+            raise PilotError("terminal_handoff_path_conflict")
+        handoff_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not _terminal_path_is_safe(handoff_dir):
+            raise PilotError("terminal_handoff_path_conflict")
+        _recover_terminal_handoff_quarantines(
+            workspace_api, exp_dir, handoff_target
+        )
+        handoff = _read_terminal_json(handoff_target)
+        reader = getattr(workspace_api, "read_terminal_locator", None)
+        locator = reader(exp_dir) if reader is not None else _read_terminal_json(locator_target)
+        if handoff is None and locator is not None:
+            raise PilotError("terminal_locator_without_handoff")
+        if handoff is not None:
+            identity, bundle = _validated_handoff(workspace_api, exp_dir, handoff)
+            if locator is None:
+                locator_payload = {
+                    "schema": "mesh-to-cad.terminal-validation-locator/1",
+                    "expected_identity": identity,
+                    "bundle": bundle,
+                }
+                sidecar_path = workspace_api.write_terminal_locator(  # type: ignore[attr-defined]
+                    exp_dir, locator_payload
+                )
+                return TerminalValidationLocator(
+                    bundle_path=handoff_target,
+                    expected_identity=identity,
+                    sidecar_path=sidecar_path,
+                )
+            return _terminal_pair(workspace_api, exp_dir, handoff_target, handoff, locator)
+
+        compiled = workspace_api.compile_terminal_validation(exp_dir)  # type: ignore[attr-defined]
+        if not isinstance(compiled, Mapping):
+            raise PilotError("terminal_handoff_invalid")
+        bundle = compiled.get("bundle")
+        identity = compiled.get("terminal_identity_sha256")
+        if (
+            not isinstance(bundle, Mapping)
+            or type(identity) is not str
+            or len(identity) != 64
+            or any(char not in "0123456789abcdef" for char in identity)
+        ):
+            raise PilotError("terminal_handoff_invalid")
+        workspace_api.verify_terminal_validation(exp_dir, bundle, identity)  # type: ignore[attr-defined]
+        handoff_payload = {
+            "schema": "mesh-to-cad.terminal-validation-handoff/1",
+            "terminal_identity_sha256": identity,
+            "bundle": bundle,
+        }
+        handoff_identity = _write_terminal_handoff(handoff_target, handoff_payload)
+        created_handoff = True
+        locator_payload = {
+            "schema": "mesh-to-cad.terminal-validation-locator/1",
+            "expected_identity": identity,
+            "bundle": bundle,
+        }
+        sidecar_path = workspace_api.write_terminal_locator(exp_dir, locator_payload)  # type: ignore[attr-defined]
+        return TerminalValidationLocator(
+            bundle_path=handoff_target,
+            expected_identity=identity,
+            sidecar_path=sidecar_path,
+        )
+    except PilotError:
+        remove_own_handoff()
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        remove_own_handoff()
+        raise PilotError("cannot persist terminal Workspace validation") from exc
+    finally:
+        if lock is not None:
+            _release_terminal_publish_lock(lock)
+
+
+def write_agent_bootstrap(candidate_dir: Path, contract: Mapping[str, object]) -> Path:
+    """Publish opaque Agent capabilities at the fixed candidate mount."""
+
+    target = Path(candidate_dir) / "bootstrap.json"
+    temporary = target.with_name(f".{target.name}.tmp-{os.getpid()}")
+    try:
+        temporary.write_text(
+            json.dumps(contract, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(target)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise PilotError("cannot publish Agent bootstrap") from exc
+    return target
+
+
 def write_artifact_manifest(
     exp_dir: Path,
     workload_status: int,
@@ -1116,7 +2246,11 @@ def write_artifact_manifest(
                     for prefix in MANIFEST_EXCLUDED_PREFIXES
                 )
                 or relative.as_posix()
-                in {"artifact_manifest.json", ".artifact_manifest.json.tmp"}
+                in {
+                    "artifact_manifest.json",
+                    ".artifact_manifest.json.tmp",
+                    TERMINAL_LOCATOR_RELATIVE,
+                }
                 or not path.is_file()
             ):
                 continue
@@ -1177,6 +2311,7 @@ def finalize_pilot(
     environ: Mapping[str, str],
     *,
     require_rollout: bool = True,
+    agent_surface: bool = False,
 ) -> int:
     """Collect the unique rollout, apply cleanup policy, and choose final status."""
 
@@ -1220,7 +2355,7 @@ def finalize_pilot(
         return final_status
 
     final_status = workload_status
-    if workload_status == 0:
+    if workload_status == 0 and not agent_surface:
         try:
             validate_workspace_delivery(exp_dir)
         except PilotError as exc:
@@ -1228,9 +2363,6 @@ def finalize_pilot(
             final_status = ARTIFACT_CONTRACT_STATUS
     if final_status == 0:
         compact_exp_history(exp_dir)
-    if not publish_artifact_manifest(exp_dir, workload_status, final_status):
-        if workload_status == 0:
-            final_status = ARTIFACT_CONTRACT_STATUS
 
     if final_status == 0 and not environ.get("KEEP_STATE"):
         try:
@@ -1242,19 +2374,7 @@ def finalize_pilot(
                 f"sandbox cleanup incomplete at {upper}",
                 file=sys.stderr,
             )
-            if not publish_artifact_manifest(
-                exp_dir,
-                workload_status,
-                final_status,
-            ):
-                try:
-                    (exp_dir / "artifact_manifest.json").unlink(missing_ok=True)
-                except OSError as unlink_exc:
-                    print(
-                        f"warning: cannot remove stale manifest: {unlink_exc}",
-                        file=sys.stderr,
-                    )
-    else:
+    elif final_status == 0:
         print(
             f"sandbox preserved at {upper} (exit={final_status})",
             file=sys.stderr,
@@ -1263,6 +2383,23 @@ def finalize_pilot(
             f"clean when done: {Path(__file__)} clean {str(exp_dir)!r}",
             file=sys.stderr,
         )
+
+    if not publish_artifact_manifest(exp_dir, workload_status, final_status):
+        if workload_status == 0:
+            final_status = ARTIFACT_CONTRACT_STATUS
+
+    if final_status == 0:
+        try:
+            # The artifact manifest is a later Workspace-root write, so W1
+            # must compile only after it is published.  No authority file is
+            # written after this handoff succeeds.
+            persist_terminal_validation(exp_dir)
+        except PilotError as exc:
+            if str(exc) == "workspace_not_initialized":
+                return final_status
+            print(f"pilot-runner: {exc}", file=sys.stderr)
+            final_status = ARTIFACT_CONTRACT_STATUS
+            publish_artifact_manifest(exp_dir, workload_status, final_status)
     return final_status
 
 
@@ -1273,6 +2410,8 @@ def run_pilot(
     input_paths: list[Path],
     command: list[str],
     environ: Mapping[str, str],
+    agent_candidate_dir: Path | None = None,
+    agent_surface: bool = False,
 ) -> int:
     """Prepare, supervise, and finalize one complete pilot transaction."""
 
@@ -1281,15 +2420,63 @@ def run_pilot(
     state = LifecycleState()
     workload_status = 1
     sidecar: BrowserRuntimeJob | None = None
+    agent_supervisor: WorkspaceSupervisor | None = None
+    agent_bridge: AgentSurfaceBridge | None = None
+    candidate_runtime: Path | None = None
+    candidate_runtime_lease: CandidateRuntimeLease | None = None
+    lifetime_confirmed = True
+    agent_socket: Path | None = None
+    agent_reference_path: Path | None = None
     with SignalRelay() as relay:
         try:
+            if agent_surface:
+                agent_reference_path = prepare_and_initialize_workspace(
+                    exp_dir, input_paths[0]
+                )
             sidecar = BrowserRuntimeJob.create(
                 exp_dir,
                 image_lock_path=HOST_IMAGE_LOCK_PATH,
                 viewer_runtime_dir=VIEWER_RUNTIME_DIR,
             )
             sidecar.start()
-            publish_tool_registry(sidecar.capability_dir)
+            tool_registry = publish_tool_registry(sidecar.capability_dir)
+            if agent_surface:
+                candidate_root = agent_candidate_dir or (
+                    exp_dir.parent
+                    / f".agent-candidate-{exp_dir.name}-{os.getpid()}-{secrets.token_hex(6)}"
+                )
+                source_runtime = REPO_ROOT / ".venv"
+                runtime_cache = REPO_ROOT / ".cache" / "mesh-to-cad-agent-runtime"
+                try:
+                    candidate_runtime_lease = materialize_candidate_runtime(
+                        source_runtime,
+                        runtime_cache,
+                        repo_root=REPO_ROOT,
+                    )
+                    candidate_runtime = candidate_runtime_lease.runtime
+                except CandidateRuntimeError as exc:
+                    raise PilotError(str(exc)) from exc
+                agent_supervisor = WorkspaceSupervisor(
+                    exp_dir,
+                    reference_path=Path(
+                        environ.get(
+                            "AGENT_REFERENCE_PATH",
+                            os.fspath(agent_reference_path),
+                        )
+                    ),
+                    candidate_root=candidate_root,
+                    rebuild_entrypoint=CAD_REBUILD_ENTRYPOINT,
+                    geometry_entrypoint=GEOMETRY_ENTRYPOINT,
+                    tool_registry=tool_registry,
+                    candidate_runtime=candidate_runtime,
+                )
+                write_agent_bootstrap(
+                    agent_supervisor.candidate_root,
+                    agent_supervisor.agent_bootstrap_contract(),
+                )
+                agent_socket = exp_dir.parent / (
+                    f".agent-surface-{exp_dir.name}-{os.getpid()}-{secrets.token_hex(6)}.sock"
+                )
             if relay.cancelled:
                 workload_status = 128 + (relay.signum or signal.SIGTERM)
             else:
@@ -1298,6 +2485,16 @@ def run_pilot(
                 workload_status = 128 + (relay.signum or signal.SIGTERM)
             else:
                 sidecar.preflight_mcp()
+            if relay.cancelled:
+                workload_status = 128 + (relay.signum or signal.SIGTERM)
+            elif agent_supervisor is not None and agent_socket is not None:
+                try:
+                    agent_bridge = AgentSurfaceBridge(
+                        agent_supervisor.agent_surface(), agent_socket
+                    )
+                    agent_bridge.start()
+                except (OSError, RuntimeError) as exc:
+                    raise PilotError("cannot start Agent Surface bridge") from exc
             if relay.cancelled:
                 workload_status = 128 + (relay.signum or signal.SIGTERM)
             else:
@@ -1309,8 +2506,17 @@ def run_pilot(
                     state,
                     sidecar,
                     relay,
+                    agent_supervisor.candidate_root if agent_supervisor else agent_candidate_dir,
+                    agent_socket,
+                    AGENT_SURFACE_CLIENT if agent_supervisor else None,
                 )
-        except (OSError, PilotError, TapError, subprocess.SubprocessError) as exc:
+        except (
+            OSError,
+            PilotError,
+            SupervisorError,
+            TapError,
+            subprocess.SubprocessError,
+        ) as exc:
             print(f"pilot-runner: {exc}", file=sys.stderr)
             workload_status = (
                 128 + (relay.signum or signal.SIGTERM)
@@ -1325,6 +2531,41 @@ def run_pilot(
                 else 1
             )
         finally:
+            if agent_bridge is not None:
+                try:
+                    agent_bridge.stop()
+                except (OSError, RuntimeError) as exc:
+                    print(
+                        f"pilot-runner: Agent Surface cleanup failed: {exc}",
+                        file=sys.stderr,
+                    )
+                    lifetime_confirmed = False
+                    if not relay.cancelled:
+                        workload_status = workload_status or 1
+            if agent_supervisor is not None and lifetime_confirmed:
+                try:
+                    agent_supervisor.close()
+                    if not agent_supervisor.cancellation_confirmed:
+                        raise SupervisorError("cancellation_incomplete")
+                except SupervisorError as exc:
+                    print(
+                        "pilot-runner: Agent candidate cleanup failed",
+                        file=sys.stderr,
+                    )
+                    lifetime_confirmed = False
+                    if not relay.cancelled:
+                        workload_status = workload_status or 1
+            if candidate_runtime_lease is not None and lifetime_confirmed:
+                try:
+                    candidate_runtime_lease.release()
+                except (OSError, RuntimeError) as exc:
+                    print(
+                        f"pilot-runner: candidate runtime lease cleanup failed: {exc}",
+                        file=sys.stderr,
+                    )
+                    lifetime_confirmed = False
+                    if not relay.cancelled:
+                        workload_status = workload_status or 1
             if sidecar is not None:
                 try:
                     sidecar.stop()
@@ -1335,11 +2576,17 @@ def run_pilot(
                     )
                     if not relay.cancelled:
                         workload_status = workload_status or 1
+            # A failed Agent bridge/supervisor/runtime lifetime confirmation
+            # must prevent terminal publication even when the pilot was
+            # interrupted at the same time.
+            if not lifetime_confirmed:
+                workload_status = workload_status or 1
     return finalize_pilot(
         exp_dir,
         workload_status,
         environ,
         require_rollout=state.workload_started,
+        agent_surface=agent_surface,
     )
 
 
@@ -1352,6 +2599,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="action", required=True)
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--input", action="append", type=Path, required=True)
+    run_parser.add_argument(
+        "--agent-candidate-dir",
+        type=Path,
+        help="bind only this external candidate tree into the Agent sandbox",
+    )
+    run_parser.add_argument(
+        "--agent-surface",
+        action="store_true",
+        help="host the opaque Agent Surface over the candidate-only bridge",
+    )
     run_parser.add_argument("exp_dir", type=Path)
     run_parser.add_argument("command", nargs=argparse.REMAINDER)
     clean_parser = subparsers.add_parser("clean")
@@ -1379,6 +2636,8 @@ def main(argv: list[str] | None = None) -> int:
             args.input,
             args.command,
             dict(os.environ),
+            args.agent_candidate_dir,
+            args.agent_surface,
         )
     except PilotError as exc:
         print(f"pilot-runner: {exc}", file=sys.stderr)

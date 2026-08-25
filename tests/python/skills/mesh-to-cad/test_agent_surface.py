@@ -77,7 +77,7 @@ class FakePorts:
                 "permitted_next_intents": self._next(),
             }
         if name == "start_attempt":
-            return {"state": "started", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1", "permitted_next_intents": self._next()}
+            return {"state": "started", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1", "capability_bundle_handle": "capability:1", "permitted_next_intents": self._next()}
         if name == "run_candidate_tool":
             return {"state": "completed", "candidate_handle": "candidate:1", "result_handle": "result:1", "permitted_next_intents": self._next()}
         if name == "submit_step_zero":

@@ -89,6 +89,8 @@ class SupervisorPorts(Protocol):
         observation: Mapping[str, Any],
     ) -> Mapping[str, Any]: ...
 
+    def cancel(self) -> None: ...
+
 
 class AgentSurfaceError(ValueError):
     """Stable error whose fields contain no host exception or path details."""
@@ -412,7 +414,7 @@ def _validate_workspace_status_result(value: Any, path: str) -> dict[str, Any]:
 
 
 def _validate_start_attempt_result(value: Any, path: str) -> dict[str, Any]:
-    return _result_fields(value, (("state", "state"), ("attempt_handle", "handle"), ("candidate_handle", "handle"), ("permitted_next_intents", "next")), path, "start_attempt")
+    return _result_fields(value, (("state", "state"), ("attempt_handle", "handle"), ("candidate_handle", "handle"), ("capability_bundle_handle", "handle"), ("permitted_next_intents", "next")), path, "start_attempt")
 
 
 def _validate_run_candidate_result(value: Any, path: str) -> dict[str, Any]:
@@ -571,6 +573,15 @@ class AgentSurface:
 
     def __init__(self, ports: SupervisorPorts | None):
         self._ports = ports
+
+    def cancel(self) -> None:
+        """Cancel trusted work before the transport is torn down."""
+
+        if self._ports is None:
+            return
+        callback = getattr(self._ports, "cancel", None)
+        if callback is not None:
+            callback()
 
     def handle(self, request: Mapping[str, Any]) -> dict[str, Any]:
         encoded_request = _canonical_json(

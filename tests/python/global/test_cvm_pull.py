@@ -242,6 +242,44 @@ class PullPlanTests(unittest.TestCase):
             any(command[:2] == ("rclone", "lsf") for command in runner.local)
         )
 
+    def test_group_discovery_excludes_internal_terminal_directory_at_find(self) -> None:
+        runner = FakeRunner()
+        runner.respond(
+            "find ~/text-to-cad/outputs/group/",
+            stdout="group/.internal-terminal-validation\ngroup/exp\n",
+        )
+        workflow = cvm_pull.CvmPull(
+            cvm_pull.PullRequest(None, "group", cvm_pull.PostmortemPolicy.DEFAULT),
+            runner,
+        )
+        cvm_exps, _s3_exps = workflow.discover_candidates()
+        self.assertEqual(("group/exp",), cvm_exps)
+        find_command = next(
+            command
+            for command in runner.remote_commands
+            if command.startswith("find ~/text-to-cad/outputs/group/")
+        )
+        self.assertIn("! -name '.internal-terminal-validation'", find_command)
+
+    def test_unscoped_discovery_excludes_internal_terminal_directory_at_find(self) -> None:
+        runner = FakeRunner()
+        runner.respond(
+            "find ~/text-to-cad/outputs/",
+            stdout="group/.internal-terminal-validation\ngroup/exp\nother/exp2\n",
+        )
+        workflow = cvm_pull.CvmPull(
+            cvm_pull.PullRequest(None, None, cvm_pull.PostmortemPolicy.DEFAULT),
+            runner,
+        )
+        cvm_exps, _s3_exps = workflow.discover_candidates()
+        self.assertEqual(("group/exp", "other/exp2"), cvm_exps)
+        find_command = next(
+            command
+            for command in runner.remote_commands
+            if command.startswith("find ~/text-to-cad/outputs/")
+        )
+        self.assertIn("! -name '.internal-terminal-validation'", find_command)
+
     def test_publish_orders_upload_verify_cleanup_and_fails_closed(self) -> None:
         runner = FakeRunner()
         workflow = self.workflow(runner)
@@ -555,6 +593,27 @@ class PullPlanTests(unittest.TestCase):
         workflow._upload_exp("group/exp")
         self.assertIn("--no-follow-symlinks", runner.remote_commands[-1])
 
+    def test_terminal_locator_sidecar_is_forced_through_transfer_filters(self) -> None:
+        runner = FakeRunner()
+        workflow = self.workflow(runner)
+        workflow.excludes = ("run/*",)
+        self.assertEqual(
+            cvm_pull.TERMINAL_LOCATOR_RELATIVE,
+            "run/terminal-validation-locator.json",
+        )
+        workflow._upload_exp("group/exp")
+        command = runner.remote_commands[-1]
+        self.assertIn("--exclude 'run/*'", command)
+        self.assertIn("--include run/terminal-validation-locator.json", command)
+        runner.respond(
+            "path.relative_to(root).as_posix()",
+            stdout=json.dumps(["run/terminal-validation-locator.json"]),
+        )
+        self.assertEqual(
+            ("run/terminal-validation-locator.json",),
+            workflow._list_local_files("group/exp"),
+        )
+
     def test_s3_listing_filters_relative_keys_with_the_same_excludes(self) -> None:
         runner = FakeRunner()
         runner.respond(
@@ -622,8 +681,21 @@ class PullPlanTests(unittest.TestCase):
         workflow._cleanup_exp("group/exp")
         self.assertEqual(
             runner.remote_commands[-1],
-            "rm -rf -- ~/text-to-cad/outputs/group/exp",
+            "rm -rf -- ~/text-to-cad/outputs/group/exp "
+            "~/text-to-cad/outputs/group/.internal-terminal-validation/exp",
         )
+
+    def test_cleanup_removes_only_matching_external_handoff_for_reused_exp_name(self) -> None:
+        runner = FakeRunner()
+        workflow = self.workflow(runner)
+        workflow._cleanup_exp("group/reused")
+        self.assertEqual(
+            runner.remote_commands[-1],
+            "rm -rf -- ~/text-to-cad/outputs/group/reused "
+            "~/text-to-cad/outputs/group/.internal-terminal-validation/reused",
+        )
+        with self.assertRaisesRegex(cvm_pull.PullError, "unsafe cleanup"):
+            workflow._cleanup_exp("group/reused/extra")
 
     def test_expose_refreshes_parent_group_exp_before_visibility(self) -> None:
         runner = FakeRunner()

@@ -1,0 +1,1504 @@
+"""Trusted runner boundary for the Mesh-to-CAD Agent Surface.
+
+The Agent Surface deliberately has no knowledge of Workspace or reference
+paths.  This module is the small trusted adapter supplied by the outer pilot
+runner.  It owns the opaque-handle registry, executes registered candidate
+operations in a private candidate tree, and keeps terminal validation out of
+the Agent-visible result contract.
+
+The adapter is dependency-injected so the isolation and lifecycle contract can
+be tested without a CAD install.  In production the default dependencies are
+the W1 Workspace facade and the W2 Reference Capability.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path, PurePosixPath
+import secrets
+import shutil
+import signal
+import stat
+import subprocess
+import sys
+import threading
+import time
+from types import ModuleType
+from typing import Any, Callable, Mapping, Protocol, Sequence
+
+
+MAX_OPERATION_OUTPUT_BYTES = 64 * 1024
+MAX_OPERATION_TIMEOUT_SECONDS = 1800
+MAX_CANDIDATE_FILE_BYTES = 512 * 1024 * 1024
+MAX_ATTEMPT_STEP = 5
+MAX_ATTEMPTS_PER_STEP = 3
+MAX_CYCLES = 5
+_HANDLE_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+_SAFE_ENV_KEYS = frozenset(
+    {
+        "LANG",
+        "LC_ALL",
+        "TZ",
+        "PATH",
+        "HOME",
+        "TMPDIR",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONHOME",
+        "PYTHONNOUSERSITE",
+    }
+)
+_CANDIDATE_SYSTEM_MOUNTS = (
+    "/usr",
+    "/etc/ca-certificates",
+    "/etc/group",
+    "/etc/hosts",
+    "/etc/ld.so.cache",
+    "/etc/ld.so.conf",
+    "/etc/ld.so.conf.d",
+    "/etc/localtime",
+    "/etc/nsswitch.conf",
+    "/etc/passwd",
+    "/etc/resolv.conf",
+    "/etc/ssl",
+)
+
+
+class SupervisorError(RuntimeError):
+    """A trusted-side lifecycle failure with a closed public classification."""
+
+    def __init__(self, classification: str):
+        self.classification = classification
+        super().__init__(classification)
+
+
+class WorkspaceAPI(Protocol):
+    """Subset of the W1 facade used by the concrete supervisor."""
+
+    def workspace_status(self, workspace: Path) -> Mapping[str, Any]: ...
+
+    def workspace_initialized(self, workspace: Path) -> bool: ...
+
+    def publish_step_zero_from_agent(self, workspace: Path, **kwargs: Any) -> Mapping[str, Any]: ...
+
+    def publish_cycle_from_agent(self, workspace: Path, **kwargs: Any) -> Mapping[str, Any]: ...
+
+    def finalize_agent_submission(
+        self, workspace: Path, *, scope: Any | None = None, **kwargs: Any
+    ) -> Mapping[str, Any]: ...
+
+    def run_attempt_command(
+        self,
+        workspace: Path,
+        *,
+        attempt: int,
+        phase: str,
+        argv: list[str],
+        timeout_seconds: int,
+        cwd: Path | None = None,
+        environment: Mapping[str, str] | None = None,
+        scope: Any | None = None,
+    ) -> Mapping[str, Any]: ...
+
+    def cancel_active_commands(self, scope: Any) -> bool: ...
+
+    def begin_attempt(
+        self,
+        workspace: Path,
+        plan: Path,
+        *,
+        intended_step: int,
+        from_step: int | None,
+    ) -> Mapping[str, Any]: ...
+
+    def publish_step_zero(self, workspace: Path, **kwargs: Any) -> Mapping[str, Any]: ...
+
+    def publish_cycle(self, workspace: Path, **kwargs: Any) -> Mapping[str, Any]: ...
+
+    def finalize_workspace(self, workspace: Path, **kwargs: Any) -> Mapping[str, Any]: ...
+
+class ReferenceAPI(Protocol):
+    """W2 Reference Capability's one closed operation."""
+
+    def handle(self, request: dict[str, Any]) -> Mapping[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class _HandleRecord:
+    kind: str
+    value: Any
+    attempt_id: int | None
+    reusable: bool
+    consumed: bool = False
+
+
+class OpaqueHandleRegistry:
+    """Run-private capability registry with explicit scope and replay denial."""
+
+    def __init__(self) -> None:
+        self._records: dict[str, _HandleRecord] = {}
+
+    def issue(
+        self,
+        kind: str,
+        value: Any,
+        *,
+        attempt_id: int | None = None,
+        reusable: bool = True,
+    ) -> str:
+        """Issue a fresh opaque handle; the handle contains no authority data."""
+
+        while True:
+            token = "h:" + "".join(secrets.choice(_HANDLE_ALPHABET) for _ in range(32))
+            if token not in self._records:
+                break
+        self._records[token] = _HandleRecord(kind, value, attempt_id, reusable)
+        return token
+
+    def resolve(
+        self,
+        handle: str,
+        kind: str,
+        *,
+        attempt_id: int | None = None,
+        consume: bool = False,
+    ) -> Any:
+        """Resolve one handle and reject wrong kind, scope, or replay."""
+
+        record = self._records.get(handle)
+        if record is None or record.kind != kind:
+            raise SupervisorError("invalid_handle")
+        if attempt_id is not None:
+            if record.attempt_id is not None and record.attempt_id != attempt_id:
+                raise SupervisorError("stale_handle")
+            if record.attempt_id is None and kind not in {"workspace", "reference"}:
+                # A trusted operation may be registered before an Attempt is
+                # opened; the first use binds it to that Attempt.  It can
+                # never subsequently cross into another Attempt.
+                record = _HandleRecord(
+                    record.kind,
+                    record.value,
+                    attempt_id,
+                    record.reusable,
+                    record.consumed,
+                )
+                self._records[handle] = record
+        if record.consumed:
+            raise SupervisorError("replayed_handle")
+        if consume:
+            if record.reusable:
+                self._records[handle] = _HandleRecord(
+                    record.kind,
+                    record.value,
+                    record.attempt_id,
+                    record.reusable,
+                    True,
+                )
+            else:
+                self._records.pop(handle, None)
+        return record.value
+
+    def revoke_attempt(self, attempt_id: int) -> None:
+        """Invalidate all non-public capabilities from one completed Attempt."""
+
+        for handle, record in list(self._records.items()):
+            if record.attempt_id == attempt_id and record.kind not in {
+                "workspace",
+                "reference",
+            }:
+                self._records.pop(handle, None)
+
+    def bind(self, handle: str, value: Any) -> None:
+        """Bind a freshly issued handle to a value without exposing the record map."""
+
+        record = self._records.get(handle)
+        if record is None:
+            raise SupervisorError("invalid_handle")
+        self._records[handle] = _HandleRecord(
+            record.kind, value, record.attempt_id, record.reusable, record.consumed
+        )
+
+
+@dataclass(frozen=True)
+class _CandidateOperation:
+    argv: tuple[str, ...]
+    timeout_seconds: int
+    environment: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class _AttemptContext:
+    attempt_id: int
+    intended_step: int
+    candidate_root: Path
+    attempt_handle: str
+    candidate_handle: str
+
+
+@dataclass
+class _AttemptCapabilities:
+    """Attempt-scoped opaque lookup bundle issued after Workspace opens it."""
+
+    attempt_id: int
+    intended_step: int
+    operation_handles: tuple[str, ...]
+    artifact_handles: dict[str, str]
+    next_operation: int = 0
+
+
+def _load_workspace_api() -> ModuleType:
+    helper = (
+        Path(__file__).resolve().parents[2]
+        / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
+    )
+    if str(helper) not in sys.path:
+        sys.path.insert(0, str(helper))
+    module_name = "_mesh_to_cad_workspace_for_pilot"
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        return loaded
+    spec = importlib.util.spec_from_file_location(module_name, helper / "workspace.py")
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Workspace facade is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_reference_type() -> type[Any]:
+    source = Path(__file__).resolve().parents[2] / "packages/meshscope/src"
+    if str(source) not in sys.path:
+        sys.path.insert(0, str(source))
+    from meshscope import ReferenceCapability
+
+    return ReferenceCapability
+
+
+def _load_agent_surface_type() -> type[Any]:
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "skills/mesh-to-cad/scripts/mesh-to-cad-agent-surface/handler.py"
+    )
+    module_name = "mesh_to_cad_agent_surface_handler"
+    loaded = sys.modules.get(module_name)
+    if loaded is None:
+        spec = importlib.util.spec_from_file_location(module_name, source)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Agent Surface handler is unavailable")
+        loaded = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = loaded
+        sys.modules["handler"] = loaded
+        spec.loader.exec_module(loaded)
+    else:
+        sys.modules["handler"] = loaded
+    return loaded.AgentSurface
+
+
+def _sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _safe_relative(root: Path, value: Path) -> Path:
+    """Resolve one candidate path without following a symlink component."""
+
+    root = root.resolve()
+    candidate = value if value.is_absolute() else root / value
+    try:
+        relative = candidate.relative_to(root)
+    except ValueError as exc:
+        raise SupervisorError("candidate_path_escape") from exc
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise SupervisorError("candidate_path_escape")
+    current = root
+    for part in relative.parts:
+        current = current / part
+        try:
+            if current.is_symlink():
+                raise SupervisorError("candidate_symlink_denied")
+        except OSError as exc:
+            raise SupervisorError("candidate_path_unavailable") from exc
+    return relative
+
+
+def _open_nofollow(
+    path: Path,
+    *,
+    directory: bool = False,
+    dir_fd: int | None = None,
+) -> int:
+    flags = os.O_RDONLY
+    if directory:
+        flags |= getattr(os, "O_DIRECTORY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        return os.open(path, flags, dir_fd=dir_fd)
+    except OSError as exc:
+        raise SupervisorError("candidate_path_unavailable") from exc
+
+
+def _copy_descriptor(source_fd: int, target: Path) -> None:
+    """Copy one descriptor-bounded regular file and verify stable metadata."""
+
+    target_created = False
+    try:
+        before = os.fstat(source_fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size > MAX_CANDIDATE_FILE_BYTES
+        ):
+            raise SupervisorError("candidate_file_invalid")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target_fd = os.open(
+            target,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+        target_created = True
+        try:
+            copied = 0
+            first_digest = hashlib.sha256()
+            while True:
+                remaining = before.st_size - copied
+                if remaining < 0:
+                    raise SupervisorError("candidate_file_invalid")
+                chunk = os.read(source_fd, min(1024 * 1024, remaining)) if remaining else b""
+                if not chunk:
+                    break
+                if len(chunk) > remaining:
+                    raise SupervisorError("candidate_file_invalid")
+                copied += len(chunk)
+                if copied > MAX_CANDIDATE_FILE_BYTES:
+                    raise SupervisorError("candidate_file_invalid")
+                first_digest.update(chunk)
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(target_fd, view)
+                    if written <= 0:
+                        raise OSError("short candidate copy")
+                    view = view[written:]
+            after = os.fstat(source_fd)
+            os.lseek(source_fd, 0, os.SEEK_SET)
+            second_digest = hashlib.sha256()
+            reread = 0
+            while True:
+                remaining = before.st_size - reread
+                if remaining < 0:
+                    raise SupervisorError("candidate_file_invalid")
+                chunk = os.read(source_fd, min(1024 * 1024, remaining)) if remaining else b""
+                if not chunk:
+                    break
+                if len(chunk) > remaining:
+                    raise SupervisorError("candidate_file_invalid")
+                second_digest.update(chunk)
+                reread += len(chunk)
+            stable = os.fstat(source_fd)
+            if (
+                before.st_dev != after.st_dev
+                or before.st_ino != after.st_ino
+                or before.st_nlink != after.st_nlink
+                or before.st_size != after.st_size
+                or before.st_mode != after.st_mode
+                or before.st_mtime_ns != after.st_mtime_ns
+                or before.st_ctime_ns != after.st_ctime_ns
+                or after.st_dev != stable.st_dev
+                or after.st_ino != stable.st_ino
+                or after.st_nlink != stable.st_nlink
+                or after.st_size != stable.st_size
+                or after.st_mode != stable.st_mode
+                or after.st_mtime_ns != stable.st_mtime_ns
+                or after.st_ctime_ns != stable.st_ctime_ns
+                or copied != before.st_size
+                or reread != before.st_size
+                or first_digest.digest() != second_digest.digest()
+            ):
+                raise SupervisorError("candidate_changed_during_copy")
+            target_stat = os.fstat(target_fd)
+            if target_stat.st_size != copied:
+                raise SupervisorError("candidate_copy_failed")
+            os.fsync(target_fd)
+        finally:
+            os.close(target_fd)
+    except SupervisorError:
+        if target_created:
+            target.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        if target_created:
+            target.unlink(missing_ok=True)
+        raise SupervisorError("candidate_copy_failed") from exc
+
+
+def _copy_candidate_file(source: Path, target: Path) -> None:
+    """Open a candidate file once with no-follow semantics before copying."""
+
+    descriptor = _open_nofollow(source)
+    try:
+        _copy_descriptor(descriptor, target)
+    finally:
+        os.close(descriptor)
+
+
+def _bounded_process_detail(value: bytes) -> tuple[str, str]:
+    digest = _sha256_bytes(value)
+    if len(value) > MAX_OPERATION_OUTPUT_BYTES:
+        value = value[:MAX_OPERATION_OUTPUT_BYTES]
+    return digest, value.decode("utf-8", errors="replace")
+
+
+def _candidate_sandbox_argv(
+    operation: _CandidateOperation,
+    candidate_root: Path,
+    runtime_dir: Path,
+) -> list[str]:
+    """Run one registered operation in a minimal Linux candidate mount."""
+
+    bwrap = shutil.which("bwrap")
+    if not bwrap:
+        raise SupervisorError("candidate_sandbox_unavailable")
+    argv = [
+        bwrap,
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--unshare-net",
+        "--cap-drop",
+        "ALL",
+        "--dev",
+        "/dev",
+        "--proc",
+        "/proc",
+        "--tmpfs",
+        "/tmp",
+        "--dir",
+        "/candidate",
+        "--ro-bind",
+        os.fspath(runtime_dir),
+        "/runtime",
+        "--symlink",
+        "usr/bin",
+        "/bin",
+        "--symlink",
+        "usr/lib",
+        "/lib",
+        "--symlink",
+        "usr/lib64",
+        "/lib64",
+    ]
+    for path in _CANDIDATE_SYSTEM_MOUNTS:
+        if Path(path).exists():
+            argv.extend(("--ro-bind", path, path))
+    argv.extend(
+        (
+            "--bind",
+            os.fspath(candidate_root),
+            "/candidate",
+            "--chdir",
+            "/candidate",
+            "--die-with-parent",
+            "--",
+            *operation.argv,
+        )
+    )
+    return argv
+
+
+class WorkspaceSupervisor:
+    """Concrete W3 port implementation owned by the trusted pilot runner."""
+
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        reference_path: Path | None = None,
+        candidate_root: Path | None = None,
+        staging_dir: Path | None = None,
+        workspace_api: WorkspaceAPI | None = None,
+        reference_factory: Callable[[str, Path], ReferenceAPI] | None = None,
+        command_runner: Callable[..., subprocess.CompletedProcess[bytes]] | None = None,
+        rebuild_entrypoint: Path | None = None,
+        geometry_entrypoint: Path | None = None,
+        tool_registry: Path | None = None,
+        candidate_runtime: Path | None = None,
+    ) -> None:
+        raw_workspace = Path(workspace)
+        if raw_workspace.is_symlink():
+            raise SupervisorError("invalid_workspace")
+        self.workspace = raw_workspace.resolve()
+        if not self.workspace.is_dir():
+            raise SupervisorError("invalid_workspace")
+        self.registry = OpaqueHandleRegistry()
+        self._cancel_event = threading.Event()
+        self._active_calls = 0
+        self._active_calls_condition = threading.Condition()
+        self._active_processes: set[subprocess.Popen[Any]] = set()
+        self._active_processes_lock = threading.Lock()
+        self._cancellation_confirmed = False
+        self._closed = False
+        run_token = "".join(secrets.choice(_HANDLE_ALPHABET) for _ in range(24))
+        self.candidate_root = self._external_root(
+            candidate_root or self.workspace.parent / f".agent-candidate-{run_token}"
+        )
+        self.staging_dir = self._external_root(
+            staging_dir or self.workspace.parent / f".agent-staging-{run_token}"
+        )
+        self._staging_root = self.staging_dir / ".supervisor-staging"
+        try:
+            self.candidate_root.mkdir(parents=True, exist_ok=False, mode=0o700)
+            self.staging_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if self.staging_dir.is_symlink() or not self.staging_dir.is_dir():
+                raise OSError("Agent staging directory is not a directory")
+            self.staging_dir.chmod(0o700)
+            if self._staging_root.is_symlink():
+                raise OSError("terminal staging directory is a symlink")
+            if self._staging_root.exists():
+                shutil.rmtree(self._staging_root)
+            self._staging_root.mkdir(parents=False, exist_ok=False, mode=0o700)
+        except OSError as exc:
+            raise SupervisorError("supervisor_storage_unavailable") from exc
+
+        try:
+            if workspace_api is None:
+                workspace_api = _load_workspace_api()  # type: ignore[assignment]
+            self.workspace_api = workspace_api
+            scope_factory = getattr(workspace_api, "ExecutionScope", None)
+            self._execution_scope = scope_factory() if scope_factory is not None else None
+            self._command_runner = command_runner or subprocess.run
+            self._rebuild_entrypoint = rebuild_entrypoint
+            self._geometry_entrypoint = geometry_entrypoint
+            self._tool_registry = tool_registry
+            self.candidate_runtime: Path | None = None
+            if candidate_runtime is not None:
+                raw_runtime = Path(candidate_runtime)
+                if raw_runtime.is_symlink() or not raw_runtime.is_dir():
+                    raise SupervisorError("candidate_runtime_unavailable")
+                runtime = raw_runtime.resolve()
+                try:
+                    runtime.relative_to(self.workspace)
+                except ValueError:
+                    pass
+                else:
+                    raise SupervisorError("candidate_runtime_unavailable")
+                if runtime.stat().st_mode & 0o222:
+                    raise SupervisorError("candidate_runtime_unavailable")
+                python_path = runtime / "bin/python"
+                if not python_path.exists() or python_path.is_dir():
+                    raise SupervisorError("candidate_runtime_unavailable")
+                try:
+                    resolved_python = python_path.resolve()
+                    try:
+                        resolved_python.relative_to(runtime)
+                    except ValueError:
+                        resolved_python.relative_to(Path("/usr"))
+                except ValueError as exc:
+                    raise SupervisorError("candidate_runtime_unavailable") from exc
+                self.candidate_runtime = runtime
+            self._attempts: dict[int, _AttemptContext] = {}
+
+            self.workspace_handle = self.registry.issue("workspace", self.workspace)
+            self.reference_handle: str | None = None
+            self._reference: ReferenceAPI | None = None
+            if reference_path is not None:
+                raw_path = Path(reference_path)
+                if raw_path.is_symlink():
+                    raise SupervisorError("invalid_reference")
+                path = raw_path.resolve()
+                if not path.is_file():
+                    raise SupervisorError("invalid_reference")
+                self.reference_handle = self.registry.issue("reference", path)
+                factory = reference_factory or _load_reference_type()
+                try:
+                    # W2's response id is the Agent-visible opaque reference handle.
+                    self._reference = factory(self.reference_handle, path)
+                except Exception as exc:
+                    raise SupervisorError("invalid_reference") from exc
+        except Exception:
+            self._discard_private_storage()
+            raise
+
+    def _external_root(self, value: Path) -> Path:
+        raw = Path(value)
+        if raw.is_symlink():
+            raise SupervisorError("supervisor_storage_symlink")
+        root = raw.resolve()
+        try:
+            root.relative_to(self.workspace)
+        except ValueError:
+            return root
+        raise SupervisorError("supervisor_storage_must_be_external")
+
+    def close(self) -> None:
+        """Cancel work, confirm termination, then remove private candidate bytes."""
+
+        if self._closed:
+            return
+        self.cancel()
+        self._discard_private_storage()
+        self._closed = True
+
+    @property
+    def cancellation_confirmed(self) -> bool:
+        """Whether all active Agent work has terminated."""
+
+        return self._cancellation_confirmed
+
+    def cancel(self) -> None:
+        """Cancel active Workspace commands and wait for handler calls to drain."""
+
+        self._cancel_event.set()
+        self._cancel_owned_processes()
+        callback = getattr(self.workspace_api, "cancel_active_commands", None)
+        if callback is not None:
+            try:
+                cancelled = (
+                    callback(self._execution_scope)
+                    if self._execution_scope is not None
+                    else callback()
+                )
+                if cancelled is False:
+                    raise SupervisorError("cancellation_incomplete")
+            except SupervisorError:
+                raise
+            except Exception as exc:
+                raise SupervisorError("cancellation_incomplete") from exc
+        deadline = time.monotonic() + 5.0
+        with self._active_calls_condition:
+            while self._active_calls and time.monotonic() < deadline:
+                self._active_calls_condition.wait(timeout=0.05)
+            if self._active_calls:
+                raise SupervisorError("cancellation_incomplete")
+        if (
+            self._execution_scope is not None
+            and self._execution_scope.has_live_processes()
+        ):
+            raise SupervisorError("cancellation_incomplete")
+        self._cancellation_confirmed = True
+
+    def _cancel_owned_processes(self) -> None:
+        with self._active_processes_lock:
+            processes = tuple(self._active_processes)
+        for process in processes:
+            if process.poll() is None and os.name == "posix":
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    raise SupervisorError("cancellation_incomplete")
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and any(process.poll() is None for process in processes):
+            time.sleep(0.05)
+        for process in processes:
+            if process.poll() is None:
+                if os.name == "posix":
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError:
+                        raise SupervisorError("cancellation_incomplete")
+                else:
+                    process.kill()
+        for process in processes:
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired as exc:
+                raise SupervisorError("cancellation_incomplete") from exc
+
+    def _discard_private_storage(self) -> None:
+        """Best-effort cleanup for startup or workload failure."""
+
+        try:
+            if self.candidate_root.exists() or self.candidate_root.is_symlink():
+                if self.candidate_root.is_symlink():
+                    self.candidate_root.unlink()
+                else:
+                    shutil.rmtree(self.candidate_root)
+            if self._staging_root.exists() or self._staging_root.is_symlink():
+                if self._staging_root.is_symlink():
+                    self._staging_root.unlink()
+                else:
+                    shutil.rmtree(self._staging_root)
+        except OSError as exc:
+            raise SupervisorError("supervisor_cleanup_failed") from exc
+
+    def bootstrap_handles(self) -> dict[str, str]:
+        """Return only opaque bootstrap capabilities to the outer adapter."""
+
+        result = {"workspace_handle": self.workspace_handle}
+        if self.reference_handle is not None:
+            result["reference_handle"] = self.reference_handle
+        return result
+
+    def agent_bootstrap_contract(self) -> dict[str, Any]:
+        """Publish only run-level capabilities before the first Attempt exists."""
+
+        plan = self.register_plan(self.candidate_root / "plan.json")
+        attempts_per_step = int(
+            getattr(self.workspace_api, "MAX_ATTEMPTS_PER_STEP", MAX_ATTEMPTS_PER_STEP)
+        )
+        repair_cycles = int(
+            getattr(self.workspace_api, "MAX_REPAIR_CYCLES", MAX_CYCLES)
+        )
+        if attempts_per_step <= 0 or repair_cycles < 0:
+            raise SupervisorError("workspace_contract_violation")
+        return {
+            "schema": "mesh-to-cad.agent-bootstrap/1",
+            "workspace_handle": self.workspace_handle,
+            "reference_handle": self.reference_handle,
+            "plan_handle": plan,
+            "attempt_budget": {
+                "attempts_per_step": attempts_per_step,
+                "repair_steps": repair_cycles,
+                "maximum_attempts": attempts_per_step * (repair_cycles + 1),
+            },
+            "selection_handle": self.register_selection(
+                self.candidate_root / "selection.json"
+            ),
+            "notes_handle": self.register_notes(self.candidate_root / "notes.md"),
+        }
+
+    def agent_surface(self) -> Any:
+        """Build the W3 shared handler over this supervisor's seven ports."""
+
+        return _load_agent_surface_type()(self)
+
+    def register_candidate_path(
+        self,
+        path: Path,
+        *,
+        kind: str = "candidate_file",
+        attempt_handle: str | None = None,
+        attempt_id: int | None = None,
+        reusable: bool = True,
+    ) -> str:
+        """Register a trusted candidate path without exposing it to the Agent."""
+
+        if attempt_id is not None and (
+            type(attempt_id) is not int or attempt_id < 1
+        ):
+            raise SupervisorError("invalid_attempt")
+        if attempt_handle is not None:
+            context = self.registry.resolve(attempt_handle, "attempt")
+            if attempt_id is not None and attempt_id != context.attempt_id:
+                raise SupervisorError("stale_handle")
+            attempt_id = context.attempt_id
+        relative = _safe_relative(self.candidate_root, Path(path))
+        candidate = self.candidate_root / relative
+        if candidate.is_symlink():
+            raise SupervisorError("candidate_symlink_denied")
+        return self.registry.issue(
+            kind,
+            candidate,
+            attempt_id=attempt_id,
+            reusable=reusable,
+        )
+
+    def register_plan(
+        self,
+        path: Path,
+        *,
+        attempt_handle: str | None = None,
+    ) -> str:
+        """Register an Agent-authored plan in the candidate-only tree."""
+
+        return self.register_candidate_path(path, kind="plan", attempt_handle=attempt_handle)
+
+    def register_selection(self, path: Path) -> str:
+        """Register one Agent-authored final selection document."""
+
+        return self.register_candidate_path(path, kind="selection")
+
+    def register_notes(self, path: Path) -> str:
+        """Register one Agent-authored final notes document."""
+
+        return self.register_candidate_path(path, kind="notes")
+
+    def register_operation(
+        self,
+        argv: Sequence[str],
+        *,
+        timeout_seconds: int = 1800,
+        environment: Mapping[str, str] | None = None,
+        attempt_handle: str | None = None,
+        attempt_id: int | None = None,
+    ) -> str:
+        """Register one fixed candidate operation and issue a one-shot handle."""
+
+        if not argv or any(type(item) is not str or not item or "\0" in item for item in argv):
+            raise SupervisorError("invalid_operation")
+        if not 1 <= timeout_seconds <= MAX_OPERATION_TIMEOUT_SECONDS:
+            raise SupervisorError("invalid_operation")
+        for item in argv[1:]:
+            normalized = item.replace("\\", "/").lower()
+            if Path(item).is_absolute() or ".." in PurePosixPath(normalized).parts:
+                raise SupervisorError("invalid_operation")
+        variables = dict(environment or {})
+        if set(variables) - _SAFE_ENV_KEYS:
+            raise SupervisorError("invalid_operation")
+        if any("\0" in key or "\0" in value for key, value in variables.items()):
+            raise SupervisorError("invalid_operation")
+        if "PATH" in variables and variables["PATH"] != "/runtime/bin":
+            raise SupervisorError("invalid_operation")
+        if "PYTHONHOME" in variables and variables["PYTHONHOME"] != "/runtime":
+            raise SupervisorError("invalid_operation")
+        if "PYTHONNOUSERSITE" in variables and variables["PYTHONNOUSERSITE"] != "1":
+            raise SupervisorError("invalid_operation")
+        if set(variables) & {"HOME", "TMPDIR"}:
+            raise SupervisorError("invalid_operation")
+        if attempt_id is not None and (
+            type(attempt_id) is not int or attempt_id < 1
+        ):
+            raise SupervisorError("invalid_attempt")
+        if attempt_handle is not None:
+            context = self.registry.resolve(attempt_handle, "attempt")
+            if attempt_id is not None and attempt_id != context.attempt_id:
+                raise SupervisorError("stale_handle")
+            attempt_id = context.attempt_id
+        operation = _CandidateOperation(
+            tuple(argv), timeout_seconds, tuple(sorted(variables.items()))
+        )
+        handle = self.registry.issue(
+            "operation",
+            operation,
+            attempt_id=attempt_id,
+            reusable=False,
+        )
+        return handle
+
+    def _workspace(self, handle: str) -> Path:
+        return self.registry.resolve(handle, "workspace")
+
+    def _attempt(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+    ) -> _AttemptContext:
+        self._workspace(workspace_handle)
+        context = self.registry.resolve(attempt_handle, "attempt")
+        candidate = self.registry.resolve(
+            candidate_handle, "candidate", attempt_id=context.attempt_id
+        )
+        if candidate != context.candidate_root:
+            raise SupervisorError("stale_handle")
+        if self._attempts.get(context.attempt_id) != context:
+            raise SupervisorError("stale_handle")
+        return context
+
+    @staticmethod
+    def _status_state(status: Mapping[str, Any]) -> str:
+        if status.get("final_delivery_present") is True or status.get("final_delivery") is not None:
+            return "terminal"
+        if status.get("head_steps"):
+            return "preterminal"
+        return "ready"
+
+    def workspace_status(self, workspace_handle: str) -> Mapping[str, Any]:
+        workspace = self._workspace(workspace_handle)
+        try:
+            status = self.workspace_api.workspace_status(workspace)
+        except Exception as exc:
+            raise SupervisorError("workspace_unavailable") from exc
+        completed = int(status.get("completed_cycles", 0))
+        total_attempts = int(status.get("total_attempts", 0))
+        failures = int(status.get("tool_failures", 0))
+        if completed < 0 or completed > MAX_CYCLES or total_attempts < 0 or failures < 0:
+            raise SupervisorError("workspace_contract_violation")
+        state = self._status_state(status)
+        remaining_attempts = status.get("remaining_attempts", MAX_ATTEMPTS_PER_STEP)
+        remaining_tool_failures = status.get("remaining_tool_failures")
+        if remaining_tool_failures is None:
+            remaining_tool_failures = max(0, 2 - failures)
+        if (
+            type(remaining_attempts) is not int
+            or remaining_attempts < 0
+            or type(remaining_tool_failures) is not int
+            or remaining_tool_failures < 0
+        ):
+            raise SupervisorError("workspace_contract_violation")
+        next_intents = ["workspace_status"]
+        if state != "terminal":
+            next_intents.append("observe_reference")
+            next_intents.append("start_attempt")
+            if state == "preterminal":
+                next_intents.append("select_and_finalize")
+        return {
+            "state": state,
+            "workspace_identity": workspace_handle,
+            "budgets": {
+                "remaining_cycles": max(0, MAX_CYCLES - completed),
+                "remaining_attempts": remaining_attempts,
+                "remaining_tool_failures": remaining_tool_failures,
+            },
+            "permitted_next_intents": next_intents,
+        }
+
+    def start_attempt(
+        self,
+        workspace_handle: str,
+        plan_handle: str,
+        from_step: int | None,
+    ) -> Mapping[str, Any]:
+        workspace = self._workspace(workspace_handle)
+        plan = self.registry.resolve(plan_handle, "plan")
+        _safe_relative(self.candidate_root, plan)
+        if from_step is not None and (
+            type(from_step) is not int or not 0 <= from_step < MAX_ATTEMPT_STEP
+        ):
+            raise SupervisorError("invalid_request")
+        staged_plan = self._staging_root / f"plan-{secrets.token_hex(12)}.json"
+        try:
+            _copy_candidate_file(plan, staged_plan)
+            status = self.workspace_api.workspace_status(workspace)
+            raw_intended_step = status.get("next_intended_step", 0)
+            if (
+                type(raw_intended_step) is not int
+                or raw_intended_step < 0
+                or raw_intended_step > MAX_ATTEMPT_STEP
+            ):
+                raise SupervisorError("workspace_contract_violation")
+            intended_step = raw_intended_step
+            if from_step is None and intended_step != 0:
+                raise SupervisorError("parent_mismatch")
+            if from_step is not None and intended_step == 0:
+                raise SupervisorError("parent_mismatch")
+            if from_step is not None and from_step >= intended_step:
+                raise SupervisorError("stale_handle")
+            document = self.workspace_api.begin_attempt(
+                workspace,
+                staged_plan,
+                intended_step=intended_step,
+                from_step=from_step,
+            )
+            attempt_id = int(document["attempt"])
+        except SupervisorError:
+            raise
+        except Exception as exc:
+            raise SupervisorError("attempt_rejected") from exc
+        finally:
+            staged_plan.unlink(missing_ok=True)
+        candidate = self.candidate_root / f"attempt-{attempt_id:06d}"
+        try:
+            candidate.mkdir(parents=True, exist_ok=False, mode=0o700)
+        except OSError as exc:
+            raise SupervisorError("candidate_unavailable") from exc
+        attempt_handle = self.registry.issue("attempt", None, attempt_id=attempt_id)
+        candidate_handle = self.registry.issue(
+            "candidate", candidate, attempt_id=attempt_id
+        )
+        context = _AttemptContext(
+            attempt_id,
+            intended_step,
+            candidate,
+            attempt_handle,
+            candidate_handle,
+        )
+        self.registry.bind(attempt_handle, context)
+        self._attempts[attempt_id] = context
+        capability_bundle_handle = self._issue_attempt_capabilities(context)
+        return {
+            "state": "started",
+            "attempt_handle": attempt_handle,
+            "candidate_handle": candidate_handle,
+            "capability_bundle_handle": capability_bundle_handle,
+            "permitted_next_intents": [
+                "run_candidate_tool",
+                "submit_step_zero" if intended_step == 0 else "submit_repair",
+                "workspace_status",
+            ],
+        }
+
+    def _issue_attempt_capabilities(self, context: _AttemptContext) -> str:
+        """Bind fresh operation/artifact slots to the actual returned Attempt."""
+
+        operation_handles = tuple(
+            self.register_operation(
+                ["/runtime/bin/python", "source/model.py"],
+                attempt_id=context.attempt_id,
+            )
+            for _ in range(8)
+        )
+        root = context.candidate_root
+        artifact_handles = {
+            name: self.register_candidate_path(
+                root / relative,
+                kind="candidate_file",
+                attempt_id=context.attempt_id,
+            )
+            for name, relative in {
+                "candidate_mesh_handle": "candidate.glb",
+                "measurement_handle": (
+                    f"measurement/steps/{context.intended_step:06d}/measurement.json"
+                ),
+                "preview_handle": "preview",
+                "region_diff_handle": "region-diff.json",
+                "assessment_handle": "assessment.json",
+                "source_changes_handle": "source-changes.json",
+            }.items()
+        }
+        bundle = _AttemptCapabilities(
+            context.attempt_id,
+            context.intended_step,
+            operation_handles,
+            artifact_handles,
+        )
+        return self.registry.issue(
+            "attempt_capabilities",
+            bundle,
+            attempt_id=context.attempt_id,
+        )
+
+    def _begin_active_call(self) -> None:
+        with self._active_calls_condition:
+            if self._cancel_event.is_set() or self._closed:
+                raise SupervisorError("supervisor_cancelled")
+            self._active_calls += 1
+
+    def _end_active_call(self) -> None:
+        with self._active_calls_condition:
+            self._active_calls -= 1
+            self._active_calls_condition.notify_all()
+
+    def run_candidate_tool(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+        operation_handle: str,
+    ) -> Mapping[str, Any]:
+        """Run one candidate operation while participating in cancellation."""
+
+        self._begin_active_call()
+        try:
+            return self._run_candidate_tool(
+                workspace_handle,
+                attempt_handle,
+                candidate_handle,
+                operation_handle,
+            )
+        finally:
+            self._end_active_call()
+
+    def _run_candidate_tool(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+        operation_handle: str,
+    ) -> Mapping[str, Any]:
+        context = self._attempt(workspace_handle, attempt_handle, candidate_handle)
+        operation = self._resolve_operation_capability(operation_handle, context)
+        if not isinstance(operation, _CandidateOperation):
+            raise SupervisorError("invalid_operation")
+        env = {
+            "PATH": "/runtime/bin",
+            "HOME": "/candidate/.home",
+            "TMPDIR": "/candidate/.tmp",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONHOME": "/runtime",
+            "PYTHONNOUSERSITE": "1",
+        }
+        env.update(dict(operation.environment))
+        # Registered values may not smuggle an authority or host environment.
+        for key, value in env.items():
+            if key not in _SAFE_ENV_KEYS or "\0" in value:
+                raise SupervisorError("invalid_operation")
+            if key == "PATH" and value != "/runtime/bin":
+                raise SupervisorError("invalid_operation")
+            if key == "PYTHONHOME" and value != "/runtime":
+                raise SupervisorError("invalid_operation")
+            if key == "PYTHONNOUSERSITE" and value != "1":
+                raise SupervisorError("invalid_operation")
+        try:
+            (context.candidate_root / ".home").mkdir(exist_ok=True)
+            (context.candidate_root / ".tmp").mkdir(exist_ok=True)
+            if self._command_runner is subprocess.run:
+                if self.candidate_runtime is None:
+                    raise SupervisorError("candidate_runtime_unavailable")
+                command = _candidate_sandbox_argv(
+                    operation, context.candidate_root, self.candidate_runtime
+                )
+            else:
+                command = list(operation.argv)
+            if self._command_runner is subprocess.run:
+                command_kwargs: dict[str, Any] = {
+                    "attempt": context.attempt_id,
+                    "phase": "candidate",
+                    "argv": command,
+                    "timeout_seconds": operation.timeout_seconds,
+                    "cwd": context.candidate_root,
+                    "environment": env,
+                }
+                if self._execution_scope is not None:
+                    command_kwargs["scope"] = self._execution_scope
+                command_document = self.workspace_api.run_attempt_command(
+                    self.workspace,
+                    **command_kwargs,
+                )
+                exit_code = int(command_document["exit_code"])
+                stdout = b""
+                stderr = b""
+            else:
+                completed = self._command_runner(
+                    command,
+                    cwd=context.candidate_root,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=operation.timeout_seconds,
+                    check=False,
+                    start_new_session=(os.name == "posix"),
+                )
+                if isinstance(completed, subprocess.Popen):
+                    process = completed
+                    with self._active_processes_lock:
+                        self._active_processes.add(process)
+                    try:
+                        try:
+                            process_stdout, process_stderr = process.communicate(
+                                timeout=operation.timeout_seconds
+                            )
+                            completed = subprocess.CompletedProcess(
+                                command,
+                                process.returncode,
+                                process_stdout,
+                                process_stderr,
+                            )
+                        except subprocess.TimeoutExpired as exc:
+                            if os.name == "posix":
+                                os.killpg(process.pid, signal.SIGTERM)
+                            else:
+                                process.terminate()
+                            try:
+                                process_stdout, process_stderr = process.communicate(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                if os.name == "posix":
+                                    os.killpg(process.pid, signal.SIGKILL)
+                                else:
+                                    process.kill()
+                                try:
+                                    process_stdout, process_stderr = process.communicate(
+                                        timeout=2
+                                    )
+                                except subprocess.TimeoutExpired:
+                                    for stream in (process.stdout, process.stderr):
+                                        if stream is not None:
+                                            stream.close()
+                                    process_stdout, process_stderr = b"", b""
+                            completed = subprocess.CompletedProcess(
+                                command,
+                                124,
+                                process_stdout if process_stdout is not None else exc.output,
+                                process_stderr if process_stderr is not None else exc.stderr,
+                            )
+                    finally:
+                        with self._active_processes_lock:
+                            self._active_processes.discard(process)
+                command_document = {"command": None}
+                stdout = completed.stdout if isinstance(completed.stdout, bytes) else b""
+                stderr = completed.stderr if isinstance(completed.stderr, bytes) else b""
+                exit_code = int(completed.returncode)
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.output if isinstance(exc.output, bytes) else b""
+            stderr = exc.stderr if isinstance(exc.stderr, bytes) else b""
+            exit_code = 124
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise SupervisorError("candidate_execution_failed") from exc
+        stdout_digest, _ = _bounded_process_detail(stdout)
+        stderr_digest, _ = _bounded_process_detail(stderr)
+        result_handle = self.registry.issue(
+            "result",
+            {
+                "exit_code": exit_code,
+                "command": command_document.get("command"),
+                "stdout_sha256": stdout_digest,
+                "stderr_sha256": stderr_digest,
+            },
+            attempt_id=context.attempt_id,
+        )
+        return {
+            "state": "completed" if exit_code == 0 else "failed",
+            "candidate_handle": context.candidate_handle,
+            "result_handle": result_handle,
+            "permitted_next_intents": [
+                "run_candidate_tool",
+                "submit_step_zero"
+                if context.intended_step == 0
+                else "submit_repair",
+                "workspace_status",
+            ],
+        }
+
+    def _resolve_operation_capability(
+        self, handle: str, context: _AttemptContext
+    ) -> _CandidateOperation:
+        try:
+            bundle = self.registry.resolve(
+                handle, "attempt_capabilities", attempt_id=context.attempt_id
+            )
+        except SupervisorError:
+            operation = self.registry.resolve(
+                handle, "operation", attempt_id=context.attempt_id, consume=True
+            )
+            if not isinstance(operation, _CandidateOperation):
+                raise SupervisorError("invalid_operation")
+            return operation
+        if not isinstance(bundle, _AttemptCapabilities):
+            raise SupervisorError("invalid_handle")
+        if bundle.next_operation >= len(bundle.operation_handles):
+            raise SupervisorError("budget_violation")
+        operation_handle = bundle.operation_handles[bundle.next_operation]
+        bundle.next_operation += 1
+        operation = self.registry.resolve(
+            operation_handle,
+            "operation",
+            attempt_id=context.attempt_id,
+            consume=True,
+        )
+        if not isinstance(operation, _CandidateOperation):
+            raise SupervisorError("invalid_operation")
+        return operation
+
+    def _candidate_path(
+        self,
+        handle: str,
+        kind: str,
+        context: _AttemptContext,
+    ) -> Path:
+        path = self.registry.resolve(handle, kind, attempt_id=context.attempt_id)
+        _safe_relative(context.candidate_root, path)
+        if path.is_symlink() or not path.exists():
+            raise SupervisorError("candidate_path_unavailable")
+        return path
+
+    def _capability_path(
+        self,
+        handle: str,
+        role: str,
+        context: _AttemptContext,
+    ) -> Path:
+        try:
+            bundle = self.registry.resolve(
+                handle, "attempt_capabilities", attempt_id=context.attempt_id
+            )
+        except SupervisorError:
+            return self._candidate_path(handle, "candidate_file", context)
+        if not isinstance(bundle, _AttemptCapabilities):
+            raise SupervisorError("invalid_handle")
+        artifact_handle = bundle.artifact_handles.get(role)
+        if artifact_handle is None:
+            raise SupervisorError("invalid_handle")
+        return self._candidate_path(artifact_handle, "candidate_file", context)
+
+    def submit_step_zero(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+        candidate_mesh_handle: str,
+        measurement_handle: str,
+        preview_handle: str,
+    ) -> Mapping[str, Any]:
+        context = self._attempt(workspace_handle, attempt_handle, candidate_handle)
+        candidate_mesh = self._capability_path(
+            candidate_mesh_handle, "candidate_mesh_handle", context
+        )
+        measurement = self._capability_path(
+            measurement_handle, "measurement_handle", context
+        )
+        preview = self._capability_path(preview_handle, "preview_handle", context)
+        try:
+            published = self.workspace_api.publish_step_zero_from_agent(
+                self.workspace,
+                attempt=context.attempt_id,
+                source=context.candidate_root,
+                candidate_mesh=candidate_mesh.relative_to(context.candidate_root).as_posix(),
+                measurement=measurement.relative_to(context.candidate_root).as_posix(),
+                preview=preview.relative_to(context.candidate_root).as_posix(),
+            )
+            step_number = int(published.get("step", 0))
+        except Exception as exc:
+            raise SupervisorError("step_publication_failed") from exc
+        step_handle = self.registry.issue("step", step_number)
+        self.registry.revoke_attempt(context.attempt_id)
+        self._attempts.pop(context.attempt_id, None)
+        return {
+            "state": "published",
+            "step_handle": step_handle,
+            "permitted_next_intents": ["start_attempt", "select_and_finalize", "workspace_status"],
+        }
+
+    def submit_repair(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+        candidate_mesh_handle: str,
+        measurement_handle: str,
+        preview_handle: str,
+        region_diff_handle: str,
+        assessment_handle: str,
+        source_changes_handle: str,
+    ) -> Mapping[str, Any]:
+        context = self._attempt(workspace_handle, attempt_handle, candidate_handle)
+        paths = {
+            key: self._capability_path(handle, f"{key}_handle", context)
+            for key, handle in {
+                "candidate_mesh": candidate_mesh_handle,
+                "measurement": measurement_handle,
+                "preview": preview_handle,
+                "region_diff": region_diff_handle,
+                "assessment": assessment_handle,
+                "source_changes": source_changes_handle,
+            }.items()
+        }
+        try:
+            published = self.workspace_api.publish_cycle_from_agent(
+                self.workspace,
+                attempt=context.attempt_id,
+                source=context.candidate_root,
+                candidate_mesh=paths["candidate_mesh"]
+                .relative_to(context.candidate_root)
+                .as_posix(),
+                measurement=paths["measurement"]
+                .relative_to(context.candidate_root)
+                .as_posix(),
+                preview=paths["preview"].relative_to(context.candidate_root).as_posix(),
+                region_diff=paths["region_diff"].relative_to(context.candidate_root).as_posix(),
+                assessment=paths["assessment"].relative_to(context.candidate_root).as_posix(),
+                source_changes=paths["source_changes"]
+                .relative_to(context.candidate_root)
+                .as_posix(),
+            )
+            step_value = published.get("step", 0)
+            if isinstance(step_value, Mapping):
+                step_value = step_value.get("step", 0)
+            cycle_value = published.get("cycle", step_value)
+            if isinstance(cycle_value, Mapping):
+                cycle_value = cycle_value.get("cycle", step_value)
+            step_number = int(step_value)
+            cycle_number = int(cycle_value)
+        except Exception as exc:
+            raise SupervisorError("cycle_publication_failed") from exc
+        step_handle = self.registry.issue("step", step_number)
+        cycle_handle = self.registry.issue("cycle", cycle_number)
+        self.registry.revoke_attempt(context.attempt_id)
+        self._attempts.pop(context.attempt_id, None)
+        return {
+            "state": "published",
+            "step_handle": step_handle,
+            "cycle_handle": cycle_handle,
+            "permitted_next_intents": ["start_attempt", "select_and_finalize", "workspace_status"],
+        }
+
+    def select_and_finalize(
+        self,
+        workspace_handle: str,
+        selection_handle: str,
+        notes_handle: str,
+    ) -> Mapping[str, Any]:
+        """Finalize through the same drainable call scope as tool execution."""
+
+        self._begin_active_call()
+        try:
+            return self._select_and_finalize(
+                workspace_handle,
+                selection_handle,
+                notes_handle,
+            )
+        finally:
+            self._end_active_call()
+
+    def _select_and_finalize(
+        self,
+        workspace_handle: str,
+        selection_handle: str,
+        notes_handle: str,
+    ) -> Mapping[str, Any]:
+        self._workspace(workspace_handle)
+        selection = self.registry.resolve(selection_handle, "selection")
+        notes = self.registry.resolve(notes_handle, "notes")
+        _safe_relative(self.candidate_root, selection)
+        _safe_relative(self.candidate_root, notes)
+        if (
+            self._rebuild_entrypoint is None
+            or self._geometry_entrypoint is None
+            or self._tool_registry is None
+        ):
+            raise SupervisorError("finalization_unavailable")
+        try:
+            finalized = self.workspace_api.finalize_agent_submission(
+                self.workspace,
+                source=self.candidate_root,
+                selection=selection.relative_to(self.candidate_root).as_posix(),
+                notes=notes.relative_to(self.candidate_root).as_posix(),
+                rebuild_entrypoint=self._rebuild_entrypoint,
+                geometry_entrypoint=self._geometry_entrypoint,
+                tool_registry=self._tool_registry,
+                scope=self._execution_scope,
+            )
+        except SupervisorError:
+            raise
+        except Exception as exc:
+            raise SupervisorError("finalization_failed") from exc
+        final_handle = self.registry.issue("final", finalized, reusable=False)
+        return {
+            "state": "finalized",
+            "final_delivery_handle": final_handle,
+            "permitted_next_intents": ["workspace_status"],
+        }
+
+    def observe_reference(
+        self,
+        reference_handle: str,
+        observation: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        if self._reference is None or self.reference_handle is None:
+            raise SupervisorError("reference_unavailable")
+        self.registry.resolve(reference_handle, "reference")
+        if type(observation) is not dict or set(observation) != {"method", "args"}:
+            raise SupervisorError("invalid_reference_request")
+        method = observation.get("method")
+        if method not in {"summary", "components"}:
+            raise SupervisorError("unsupported_reference_operation")
+        args = observation.get("args")
+        if type(args) is not dict or set(args) - {"limit"}:
+            raise SupervisorError("invalid_reference_request")
+        if method == "summary" and args:
+            raise SupervisorError("invalid_reference_request")
+        if method == "components" and (
+            "limit" in args
+            and (type(args["limit"]) is not int or not 1 <= args["limit"] <= 32)
+        ):
+            raise SupervisorError("invalid_reference_request")
+        request = {
+            "schema": "meshscope.reference-request/1",
+            "reference_id": reference_handle,
+            "method": method,
+            "args": dict(args),
+        }
+        try:
+            result = self._reference.handle(request)
+        except Exception as exc:
+            raise SupervisorError("reference_observation_failed") from exc
+        if not isinstance(result, Mapping) or result.get("reference_id") != reference_handle:
+            raise SupervisorError("reference_contract_violation")
+        return result
+
+__all__ = [
+    "OpaqueHandleRegistry",
+    "SupervisorError",
+    "WorkspaceSupervisor",
+]
