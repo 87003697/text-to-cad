@@ -8,7 +8,7 @@ content-addressed, atomically published, and reused by later pilots.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import os
@@ -40,6 +40,8 @@ class FileRecord:
     path: str
     size: int | None
     sha256: str | None
+    installed_size: int | None = None
+    installed_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -461,7 +463,17 @@ def _copy_file_stream(
             or budget.used + before.st_size > _MAX_RUNTIME_TREE_BYTES
         ):
             raise CandidateRuntimeError("candidate_runtime_file_limit")
-        if expected is not None and expected.size is not None and before.st_size != expected.size:
+        expected_size = (
+            expected.installed_size
+            if expected is not None and expected.installed_size is not None
+            else expected.size if expected is not None else None
+        )
+        expected_sha256 = (
+            expected.installed_sha256
+            if expected is not None and expected.installed_sha256 is not None
+            else expected.sha256 if expected is not None else None
+        )
+        if expected_size is not None and before.st_size != expected_size:
             raise CandidateRuntimeError("candidate_runtime_distribution_drift")
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
         target_fd = os.open(
@@ -534,7 +546,7 @@ def _copy_file_stream(
             or first_digest.digest() != second_digest.digest()
         ):
             raise CandidateRuntimeError("candidate_runtime_source_changed")
-        if expected is not None and expected.sha256 and first_digest.hexdigest() != expected.sha256:
+        if expected_sha256 and first_digest.hexdigest() != expected_sha256:
             raise CandidateRuntimeError("candidate_runtime_distribution_drift")
         target_size = os.fstat(target_fd).st_size
         if target_size > _MAX_RUNTIME_FILE_BYTES:
@@ -950,6 +962,65 @@ def _stdlib_identity(stdlib: Path) -> list[tuple[str, str]]:
     return facts
 
 
+def _bind_installed_record_bytes(
+    probe: RuntimeProbe, allowed_roots: tuple[Path, ...]
+) -> RuntimeProbe:
+    """Bind stable post-install files whose size no longer matches RECORD."""
+
+    distributions: list[DistributionRecord] = []
+    for distribution in probe.distributions:
+        location = distribution.location.resolve()
+        if not _under(location, allowed_roots):
+            raise CandidateRuntimeError("candidate_runtime_distribution_escape")
+        records: list[FileRecord] = []
+        for record in distribution.file_records:
+            relative = _normalize_relative(record.path)
+            if (
+                relative is None
+                or record.size is None
+                or relative.suffix.lower() not in {".so", ".dylib", ".dll", ".pyd"}
+            ):
+                records.append(record)
+                continue
+            descriptor = _open_relative(location, relative)
+            try:
+                before = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(before.st_mode)
+                    or before.st_nlink != 1
+                    or before.st_size > _MAX_RUNTIME_FILE_BYTES
+                ):
+                    raise CandidateRuntimeError("candidate_runtime_distribution_drift")
+                if before.st_size == record.size:
+                    records.append(record)
+                    continue
+                digest = hashlib.sha256()
+                copied = 0
+                while copied < before.st_size:
+                    chunk = os.read(descriptor, min(_COPY_CHUNK, before.st_size - copied))
+                    if not chunk or len(chunk) > before.st_size - copied:
+                        raise CandidateRuntimeError("candidate_runtime_source_changed")
+                    digest.update(chunk)
+                    copied += len(chunk)
+                after = os.fstat(descriptor)
+                if (
+                    copied != before.st_size
+                    or _metadata_tuple(before) != _metadata_tuple(after)
+                ):
+                    raise CandidateRuntimeError("candidate_runtime_source_changed")
+                records.append(
+                    replace(
+                        record,
+                        installed_size=before.st_size,
+                        installed_sha256=digest.hexdigest(),
+                    )
+                )
+            finally:
+                os.close(descriptor)
+        distributions.append(replace(distribution, file_records=tuple(records)))
+    return replace(probe, distributions=tuple(distributions))
+
+
 def _cache_identity(venv: Path, probe: RuntimeProbe, interpreter: Path) -> str:
     cfg = _parse_cfg(venv / "pyvenv.cfg")
     normalized_cfg = {
@@ -966,7 +1037,17 @@ def _cache_identity(venv: Path, probe: RuntimeProbe, interpreter: Path) -> str:
         "interpreter": _digest_small(interpreter),
         "libpython": _digest_small(probe.libpython) if probe.libpython and probe.libpython.is_file() else None,
         "distributions": [
-            [item.name.lower(), item.version, item.record_sha256, len(item.files)]
+            [
+                item.name.lower(),
+                item.version,
+                item.record_sha256,
+                len(item.files),
+                [
+                    [record.path, record.installed_size, record.installed_sha256]
+                    for record in item.file_records
+                    if record.installed_sha256 is not None
+                ],
+            ]
             for item in probe.distributions
         ],
     }
@@ -1726,6 +1807,7 @@ def materialize_candidate_runtime(
         for root in (probe.purelib, probe.platlib)
         if root and root.is_dir() and _under(root, (venv, stdlib))
     )
+    probe = _bind_installed_record_bytes(probe, (venv, stdlib, *site_roots))
     identity = _cache_identity(venv, probe, interpreter)
     final = raw_cache / identity
     if final.is_symlink():

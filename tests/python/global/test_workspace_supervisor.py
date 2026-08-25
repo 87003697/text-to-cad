@@ -1099,7 +1099,11 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                         site,
                         ("cad.py",),
                         "a" * 64,
-                        (runtime_module.FileRecord("cad.py", 10, "0" * 64),),
+                        (
+                            runtime_module.FileRecord(
+                                "cad.py", len(b"CAD = True\n"), "0" * 64
+                            ),
+                        ),
                     ),
                 ),
             )
@@ -1308,7 +1312,123 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 )
             self.assertEqual([results[0], results[0]], results)
             self.assertEqual(first_calls, calls - before_concurrent)
-            self.assertFalse(any(path.name.startswith(".") and ".tmp-" in path.name for path in concurrent_cache.iterdir()))
+            self.assertFalse(
+                any(
+                    path.name.startswith(".") and ".tmp-" in path.name
+                    for path in concurrent_cache.iterdir()
+                )
+            )
+
+    def test_runtime_binds_stable_post_install_native_bytes(self) -> None:
+        from scripts.pilot import candidate_runtime as runtime_module
+        from scripts.pilot import runner
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            venv = repo / ".venv"
+            stdlib = root / "external/lib/python3.12"
+            site = venv / "lib/python3.12/site-packages"
+            (venv / "bin").mkdir(parents=True)
+            stdlib.mkdir(parents=True)
+            site.mkdir(parents=True)
+            (stdlib / "os.py").write_text("", encoding="utf-8")
+            interpreter = root / "external/bin/python3"
+            interpreter.parent.mkdir(parents=True)
+            interpreter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            interpreter.chmod(0o755)
+            (venv / "bin/python").symlink_to(interpreter)
+            (venv / "pyvenv.cfg").write_text("version = 3.12.1\n", encoding="utf-8")
+            native = site / "cad_native.so"
+            installed = b"stable stripped native bytes"
+            wheel = b"larger unstripped wheel native bytes"
+            native.write_bytes(installed)
+            probe = runtime_module.RuntimeProbe(
+                "3.12",
+                stdlib,
+                stdlib,
+                site,
+                site,
+                None,
+                distributions=(
+                    runtime_module.DistributionRecord(
+                        "cad-native",
+                        "1",
+                        site,
+                        ("cad_native.so",),
+                        "c" * 64,
+                        (
+                            runtime_module.FileRecord(
+                                "cad_native.so",
+                                len(wheel),
+                                hashlib.sha256(wheel).hexdigest(),
+                            ),
+                        ),
+                    ),
+                ),
+            )
+            patches = (
+                mock.patch.object(runtime_module, "_probe", return_value=probe),
+                mock.patch.object(runtime_module, "validate_candidate_runtime"),
+                mock.patch.object(runtime_module, "_relocate_native"),
+                mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=[]),
+            )
+            with patches[0], patches[1], patches[2], patches[3]:
+                first = runner.materialize_candidate_runtime(
+                    venv, root / "cache", repo_root=repo
+                )
+            copied = first / "lib/python3.12/site-packages/cad_native.so"
+            self.assertEqual(installed, copied.read_bytes())
+
+            changed = b"stable stripped native bytes v2"
+            native.write_bytes(changed)
+            with (
+                mock.patch.object(runtime_module, "_probe", return_value=probe),
+                mock.patch.object(runtime_module, "validate_candidate_runtime"),
+                mock.patch.object(runtime_module, "_relocate_native"),
+                mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=[]),
+            ):
+                second = runner.materialize_candidate_runtime(
+                    venv, root / "cache", repo_root=repo
+                )
+            self.assertNotEqual(first.identity, second.identity)
+            self.assertNotEqual(
+                json.loads((first / runtime_module._MARKER_NAME).read_text())["manifest_sha256"],
+                json.loads((second / runtime_module._MARKER_NAME).read_text())["manifest_sha256"],
+            )
+            self.assertEqual(
+                changed,
+                (second / "lib/python3.12/site-packages/cad_native.so").read_bytes(),
+            )
+
+            original_copy = runtime_module._copy_file_stream
+            mutated = False
+
+            def mutate_after_inventory(*args, **kwargs):
+                nonlocal mutated
+                relative = args[1]
+                if relative.as_posix() == "cad_native.so" and not mutated:
+                    mutated = True
+                    native.write_bytes(b"concurrent installed mutation")
+                return original_copy(*args, **kwargs)
+
+            native.write_bytes(installed)
+            with (
+                mock.patch.object(runtime_module, "_probe", return_value=probe),
+                mock.patch.object(runtime_module, "validate_candidate_runtime"),
+                mock.patch.object(runtime_module, "_relocate_native"),
+                mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=[]),
+                mock.patch.object(
+                    runtime_module, "_copy_file_stream", side_effect=mutate_after_inventory
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    runtime_module.CandidateRuntimeError,
+                    "candidate_runtime_(distribution_drift|source_changed)",
+                ):
+                    runner.materialize_candidate_runtime(
+                        venv, root / "concurrent-cache", repo_root=repo
+                    )
 
     def test_runtime_lock_reclaims_dead_reboot_and_pid_reuse_owners_but_not_live_owner(self) -> None:
         from scripts.pilot import candidate_runtime as runtime_module
