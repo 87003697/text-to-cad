@@ -149,16 +149,16 @@ The trusted association, established during outer Workspace preparation and init
 _Avoid_: Reference path option, environment override, Agent-selected reference, foreign identity claim
 
 **Trusted Candidate Execution**:
-The choreography of Agent Intents through which the runner develops, measures, previews, and diffs one candidate under Workspace Authority. All build, measurement, preview, and diff evidence flows through this intent choreography; no separate Agent build or Agent-measure operation exists outside it.
-_Avoid_: Agent build command, Agent-owned measurement, side-channel preview
+The choreography of Agent Intents through which fixed, release-shipped tools develop, measure, preview, and diff one candidate under Workspace Authority. All evidence flows through this choreography; its packaging is not a runtime cache, lease, or separate domain object.
+_Avoid_: Agent build command, Agent-owned measurement, side-channel preview, runtime tool bundle
 
 **Terminal Validation Handoff**:
-The runner-owned, one-way transfer of a Terminal Validation Result to a downstream consumer over its own trust lineage. It is independent of Workspace Authority and does not use signatures, KMS, or a receipt framework to establish trust.
-_Avoid_: Signed evidence bundle, KMS-brokered receipt, review authority publication
+The runner-owned, one-way transfer of a Terminal Validation Result and expected identity to a downstream consumer over its own trust lineage. Its storage is invisible to the Agent and uses the host's supported lock and atomic-file primitives; unsupported hosts fail before publication. It is independent of Workspace Authority and does not introduce a general transaction or receipt framework.
+_Avoid_: Signed evidence bundle, KMS-brokered receipt, review authority publication, cross-platform transaction framework
 
 **Agent Source Projection**:
-The explicit, Agent-only subset of installed skill source materialized by bundle and release for one Agent Execution. The runner never mounts a complete installed skill tree; only the projected subset is visible to the Agent.
-_Avoid_: Full skill mount, workspace source bind, installed plugin tree
+The five-file, Agent-only subset of installed skill source materialized by bundle and release with an exact manifest. The runner verifies and mounts that subset; it does not regenerate it or mount a complete installed skill tree.
+_Avoid_: Full skill mount, workspace source bind, installed plugin tree, runtime projection builder
 
 ## Browser Runtime Language
 

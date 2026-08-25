@@ -72,7 +72,17 @@ crash may cause another compilation; exactly-once means one validator call per
 successful compilation. W4/W5 carries the bundle and identity to transfer and
 review. This is an identity handoff, not a generalized receipt framework.
 
-The transfer path verifies the content manifest while moving files. Review verifies and consumes the retained result; it does not run the complete Workspace validator or reconstruct the graph. Review verdicts and evaluation scores remain Consumer Verdicts outside Workspace Authority.
+The transfer path verifies every retained file's size and SHA-256 before it
+removes the source copy. Review verifies and consumes the retained result; it
+does not run the complete Workspace validator or reconstruct the graph. Review
+verdicts and evaluation scores remain Consumer Verdicts outside Workspace
+Authority.
+
+The handoff implementation stays small. The runner-owned handoff directory is
+not visible to the Agent, so publication needs one host lock, one atomic
+no-replace file publication, one locator, and crash reconciliation for that
+pair. Platforms without those primitives fail before compilation or mutation.
+Windows publication is not required.
 
 ## Compatibility and migration
 
@@ -85,7 +95,10 @@ The transfer path verifies the content manifest while moving files. Review verif
 
 ## Acceptance criteria
 
-1. A synthetic reconstruction completes through the Agent Surface and publishes a valid Final Delivery through the retained Workspace implementation.
+1. On Linux, one `bwrap` vertical slice completes Step 0, one Repair Cycle,
+   finalization, terminal compilation, and review through the Agent Surface and
+   publishes a valid Final Delivery through the retained Workspace
+   implementation.
 2. An adversarial simulated Agent cannot resolve or copy raw PLY, canonical PLY, captured originals, `reference.vbsvo`, Workspace Authority roots, or the outer Git repository.
 3. Fixed Reference Observations remain usable from the isolated Agent execution.
 4. Pilot terminal handling invokes the complete Workspace validator exactly once and produces a valid Terminal Validation Result plus exact content manifest.
@@ -101,17 +114,24 @@ The transfer path verifies the content manifest while moving files. Review verif
 - A new evaluation or scoring system.
 - Arbitrary geometry queries or a general mesh SDK.
 - Broad decomposition of `workspace_core.py` before stable responsibilities emerge.
-- CVM push/pull, paid pilot, S3 publication, production deployment, or cleanup of historical outputs.
+- General CVM/S3 synchronization, paid pilots, production deployment, or
+  cleanup of historical outputs. The existing terminal-handoff transfer path
+  is in scope only far enough to verify exact bytes before deleting its source.
 
-## Blockers-first implementation tickets
+## Remaining blockers-first implementation tickets
 
-| Ticket | Owned seam and principal paths | Depends on | Exit evidence |
+The original W1–W5 behavior is represented by the current branch. The
+remaining work corrects and reduces that implementation; it must not add a
+second framework around it.
+
+| Ticket | Change | Depends on | Exit evidence |
 |---|---|---|---|
-| W1 — Workspace facade and terminal result | Workspace helper internals and CLI under `skills/mesh-to-cad/scripts/mesh-to-cad-workspace/`; focused Workspace tests | None | Existing mutations pass through one facade; Terminal Validation Result and manifest validate; existing Workspace tests pass. |
-| W2 — Restricted Reference Capability | Reference-observation implementation in `packages/meshscope`; focused capability tests | Accepted observation contract | Fixed observations are deterministic and bounded; raw/export/arbitrary-query requests fail closed. |
-| W3 — Agent Surface handler and adapters | New Agent Surface handler plus thin CLI/MCP adapters in the Mesh-to-CAD skill runtime | W1 interface and W2 contract | Shared handler drives the existing workflow; adapters contain no authority logic; closed errors and bounded state are tested. |
-| W4 — Runner execution isolation | `scripts/pilot/runner.py`, pilot launcher, and focused runner/integration tests | W2 and W3 | Simulated Agent sees only candidate work and capability endpoints; adversarial path probes fail; synthetic workflow completes. |
-| W5 — Review and evaluation-fact cutover | Mesh-to-CAD review compiler and focused pilot-review tests | W1 | Review consumes Terminal Validation Result, does not invoke full validation or rebuild the graph, and retains current output semantics. |
-| W6 — Integration and deletion gate | Runner/review duplicates, bundle scripts, shipped plugin checks | W4 and W5 | Duplicated consumer interpretation is removed; focused suites, symlink check, bundle check, installed-plugin smoke, and independent review pass. |
+| R1 — Reduce terminal publication | Keep external identity handoff and pair recovery; remove unsupported-platform publication and machinery that defends a runner-owned directory from an Agent that cannot see it. | None | Concurrent/retry tests pass; unsupported platforms fail before mutation. |
+| R2 — Ship trusted tools once | Bundle one fixed read-only tool subset containing canonical build and its required CAD/evidence packages; remove per-pilot build-bundle cache and lease. | None | Finalized publish-tree and installed-plugin provider execution pass without source-checkout fallback. |
+| R3 — Reduce Agent projection | Keep the five fixed Agent files and exact manifest; move source/content lint to bundle time and keep only exact runtime verification. | None | Bundle freshness, exact inventory, digest, and no-symlink tests pass. |
+| R4 — Verify transferred bytes | Compare transferred experiment bytes with the terminal content manifest before cleanup; reject missing, changed, and extra files. | None | Corrupt and stale destinations retain the CVM source; an exact transfer cleans it. |
+| R5 — Authority-boundary review | Inspect remaining runner/review callers and remove only proven direct Workspace Authority interpretation or mutation. | R1, R2, R3, R4 | Independent review finds no remaining bypass; no speculative interface is added. |
+| R6 — Integration gate | Run the production-shaped lifecycle and shipped-surface gates. | R5 | Linux `bwrap` vertical slice, full regression, bundle, symlink, installed-plugin smoke, and independent review pass. |
 
-W1 and W2 may be implemented in separate worktrees from the same verified `develop` base. W3 follows their frozen interfaces. W4 and W5 own disjoint primary files and may proceed independently after their prerequisites. W6 is serialized and performs the only cross-cutting deletion and shipped-surface gate.
+R1–R4 are implemented serially. R5 is a review-and-delete ticket, not a
+pre-authorized deepening project. R6 makes no architecture changes.

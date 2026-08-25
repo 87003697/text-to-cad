@@ -24,18 +24,30 @@ The first implementation concentrates existing behavior behind one interface and
 
 The following architecture decisions are recorded as part of this ADR without changing the earlier Decision or Consequences text.
 
-1. Landing proceeds in three serialized phases in this order: correctness, deepening, and deletion/integration. Later phases may not begin until earlier ones have landed.
+1. Landing remains serialized. Correctness work may replace or delete an
+   overbuilt mechanism; it does not have to preserve accidental complexity
+   until a later cleanup phase. Deepening is performed only for a proven
+   remaining Authority bypass, followed by deletion/integration.
 
-2. [[Trusted Candidate Execution]] absorbs build, measurement, preview, and diff. No separate Agent build, Agent measure, Agent preview, or Agent diff operation is introduced.
+2. [[Trusted Candidate Execution]] absorbs build, measurement, preview, and
+   diff. Its fixed tools are shipped once as a read-only release subset. No
+   separate Agent build, Agent measure, Agent preview, Agent diff, per-pilot
+   tool cache, or tool lease is introduced.
 
 3. [[Terminal Validation Handoff]] remains runner-owned and travels on its own independent trust lineage. No signatures, KMS integration, or receipt framework is introduced to authenticate the bundle.
 
-4. Bundle and release materialize an explicit [[Agent Source Projection]]. The runner does not mount a complete installed skill tree; the Agent sees only the projected subset.
+4. Bundle and release materialize an explicit five-file [[Agent Source
+   Projection]] with an exact manifest. The runner verifies that installed
+   projection; it does not rebuild it or mount a complete installed skill
+   tree.
 
 5. The terminal compiler emits a consumer-ready [[Workspace View]]. Full-audit and default review share that compiler. [[Consumer Verdict]] remains outside Workspace Authority.
 
 6. MCP transports share one session module, and Reference Observation policy and identity have one contract source, so that transport variation cannot diverge from a single behavioral contract.
 
-7. Linux `bwrap` is the formal isolation gate. macOS development execution and injected Windows fail-closed tests remain supported.
+7. Linux `bwrap` is the formal isolation and publication gate. macOS may run
+   provider-free development tests. Unsupported publication platforms,
+   including Windows, fail before compilation or filesystem mutation; no
+   production-only compatibility framework is required for them.
 
 8. Correctness Phase D binds the production Reference Capability to exactly the Workspace [[Canonical Reference]] via a Workspace-derived [[Reference Binding]] proven before the Agent Surface starts. Ambient `AGENT_REFERENCE_PATH` overrides are removed from production; test-only injection uses the pre-existing internal dependency seam.
