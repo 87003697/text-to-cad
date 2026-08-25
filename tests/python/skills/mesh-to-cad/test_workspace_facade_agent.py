@@ -1169,8 +1169,6 @@ class WorkspaceDecisionFactsTests(WorkspaceFacadeAgentTests):
         "candidate.glb",
         "measurement.json",
         "voxblame.summary",
-        "target_key",
-        "mask_sha256",
         "logical_sha256",
         "observable_sha256",
         "canonical_reference_sha256",
@@ -1252,6 +1250,8 @@ class WorkspaceDecisionFactsTests(WorkspaceFacadeAgentTests):
             for item in targets["items"]:
                 self.assertEqual(
                     {
+                        "target_key",
+                        "mask_sha256",
                         "rank",
                         "kind",
                         "missing_surface_count",
@@ -1261,6 +1261,8 @@ class WorkspaceDecisionFactsTests(WorkspaceFacadeAgentTests):
                     set(item),
                 )
                 self.assertIn(item["kind"], {"interior", "exterior"})
+                self.assertTrue(item["target_key"].startswith("step-000000:"))
+                self.assertRegex(item["mask_sha256"], r"^[0-9a-f]{64}$")
 
     def test_repair_decision_facts_expose_parent_change_comparison(self) -> None:
         fixture = _load_fixture()
@@ -1327,6 +1329,59 @@ class WorkspaceDecisionFactsTests(WorkspaceFacadeAgentTests):
         try:
             with self.assertRaises(facade.WorkspaceError):
                 facade.read_current_step_decision_facts(case.workspace, step=0)
+        finally:
+            measurement_path.write_bytes(original)
+
+    def test_decision_facts_reject_invalid_target_selection_identity(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+        self._publish_step_zero(case, facade)
+
+        measurement_path = case.workspace / "voxblame/steps/000000/summary.json"
+        original = measurement_path.read_bytes()
+        measurement = json.loads(original)
+        measurement["repair_targets"] = {
+            "total": 1,
+            "returned": 1,
+            "remaining": 0,
+            "items": [
+                {
+                    "target_key": "step-000000:target-0123456789abcdef",
+                    "mask": {"logical_sha256": "c" * 64},
+                    "display_rank": 0,
+                    "kind": "interior",
+                    "error_profile": {
+                        "missing_surface_count": 1,
+                        "excess_surface_count": 0,
+                        "surface_error_count": 1,
+                    },
+                }
+            ],
+        }
+        valid = json.dumps(measurement).encode()
+        measurement_path.write_bytes(valid)
+        item = facade.read_current_step_decision_facts(case.workspace, step=0)[
+            "repair_targets"
+        ]["items"][0]
+        self.assertEqual("step-000000:target-0123456789abcdef", item["target_key"])
+        self.assertEqual("c" * 64, item["mask_sha256"])
+        try:
+            for field, invalid in (("target_key", "../secret"), ("mask", None)):
+                with self.subTest(field=field):
+                    corrupted = json.loads(valid)
+                    target = corrupted["repair_targets"]["items"][0]
+                    if field == "mask":
+                        target["mask"]["logical_sha256"] = "A" * 64
+                    else:
+                        target[field] = invalid
+                    measurement_path.write_text(json.dumps(corrupted), encoding="utf-8")
+                    with self.assertRaises(facade.WorkspaceError):
+                        facade.read_current_step_decision_facts(case.workspace, step=0)
         finally:
             measurement_path.write_bytes(original)
 

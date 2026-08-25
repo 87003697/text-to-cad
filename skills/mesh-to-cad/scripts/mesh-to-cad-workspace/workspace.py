@@ -14,6 +14,7 @@ import ctypes
 import errno
 import os
 import platform
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import secrets
@@ -1143,6 +1144,7 @@ DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/1"
 _MAX_DECISION_FACT_TARGETS = 8
 _MAX_DEPTH = 8
 _OBJECTIVE_FACT_KEYS = ("global_depth_8_zero", "out_of_frame_clear", "no_evidence_conflict")
+_TARGET_KEY = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}")
 
 
 def _decision_facts_fail(detail: str) -> None:
@@ -1178,7 +1180,7 @@ def _fact_sha256(value: Any, detail: str) -> str:
     return value
 
 
-def _project_repair_targets(value: Any) -> Any:
+def _project_repair_targets(value: Any, *, step: int) -> Any:
     if not isinstance(value, Mapping):
         _decision_facts_fail("decision-facts repair targets are malformed")
     total = _fact_int(value.get("total"), "decision-facts repair target total is malformed")
@@ -1195,6 +1197,16 @@ def _project_repair_targets(value: Any) -> Any:
     for index, item in enumerate(items):
         if not isinstance(item, Mapping):
             _decision_facts_fail("decision-facts repair target item is malformed")
+        target_key = item.get("target_key")
+        if (
+            type(target_key) is not str
+            or _TARGET_KEY.fullmatch(target_key) is None
+            or not target_key.startswith(f"step-{step:06d}:")
+        ):
+            _decision_facts_fail("decision-facts repair target identity is malformed")
+        mask = item.get("mask")
+        if not isinstance(mask, Mapping):
+            _decision_facts_fail("decision-facts repair target mask is malformed")
         display_rank = item.get("display_rank")
         rank = _fact_int(display_rank, "decision-facts repair target rank is malformed")
         kind = item.get("kind")
@@ -1205,6 +1217,11 @@ def _project_repair_targets(value: Any) -> Any:
             _decision_facts_fail("decision-facts repair target error profile is malformed")
         projected_items.append(
             {
+                "target_key": target_key,
+                "mask_sha256": _fact_sha256(
+                    mask.get("logical_sha256"),
+                    "decision-facts repair target mask identity is malformed",
+                ),
                 "rank": rank,
                 "kind": kind,
                 "missing_surface_count": _fact_int(
@@ -1318,7 +1335,7 @@ def read_current_step_decision_facts(
     )
     residual_summary = _project_residual_summary(measurement_document)
     targets_source = measurement_document.get("repair_targets")
-    projected_targets = _project_repair_targets(targets_source)
+    projected_targets = _project_repair_targets(targets_source, step=step)
     change_from_parent: dict[str, Any] | None
     if parent_ordinal is None:
         change_from_parent = None

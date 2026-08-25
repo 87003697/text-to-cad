@@ -212,16 +212,25 @@ carries one closed **decision facts** object under the
       "out_of_frame_clear": true,
       "no_evidence_conflict": true
     },
-    "depth_8_error_count": 42,
-    "depth_8_error_rate": 0.017
+    "depth_8_missing_surface_count": 42,
+    "depth_8_excess_surface_count": 0,
+    "depth_8_surface_error_count": 42,
+    "depth_8_surface_error_rate": 0.017
   },
   "repair_targets": {
     "returned": 3,
     "total": 3,
+    "remaining": 0,
     "items": [
-      { "rank": 0, "kind": "excess", "error_profile": { "count": 20 } },
-      { "rank": 1, "kind": "missing", "error_profile": { "count": 12 } },
-      { "rank": 2, "kind": "excess", "error_profile": { "count": 10 } }
+      {
+        "target_key": "step-000001:target-0123456789abcdef",
+        "mask_sha256": "<sha256>",
+        "rank": 0,
+        "kind": "interior",
+        "missing_surface_count": 20,
+        "excess_surface_count": 0,
+        "surface_error_count": 20
+      }
     ]
   },
   "preview": {
@@ -245,13 +254,16 @@ Fields and bounds:
   three objective facts are true, else `unaccepted`.
 - `residual_summary.objective_facts` — the exact three booleans that
   gate acceptance.
-- `residual_summary.depth_8_error_count` / `depth_8_error_rate` —
-  a bounded scalar summary of the deepest residual bucket
+- `residual_summary.depth_8_*_surface_count` /
+  `depth_8_surface_error_rate` — bounded scalar summaries of the
+  deepest residual bucket
   (rate is in `[0, 1]`; NaN or infinite values fail closed).
 - `repair_targets` — `null` when acceptance is satisfied, otherwise a
   page of up to eight items ranked by residual weight. Each item
-  carries an opaque `rank`, a semantic `kind`, and a bounded numeric
-  `error_profile`.
+  carries the exact `target_key` and `mask_sha256` pair required by a
+  `voxblame.repair-batch/1`, plus its rank, semantic kind, and bounded
+  residual counts. Copy the pair unchanged into `selected_targets`;
+  neither value is a path or raw mask content.
 - `preview.identity_sha256` — the formal identity digest of the
   Measured Step's preview render; you may cite it in your assessment
   but cannot dereference it.
@@ -266,8 +278,9 @@ Rules for using decision facts:
   authored content.
 - Base your next repair hypothesis on them: `residual_summary` tells
   you which objective fact fails and how large the depth-8 bucket is;
-  `repair_targets` names the top-ranked residual regions by kind
-  without revealing internal identifiers.
+  `repair_targets` names the top-ranked residual regions by kind and
+  supplies only the stable selection identities needed by the repair
+  plan.
 - If `change_from_parent.no_observable_geometry_change` is true after
   a repair, your source edit did not move observable geometry — stop
   and reconsider before spending another attempt.
@@ -290,8 +303,10 @@ The bounded loop the supervisor enforces is:
    candidate. Each call returns fresh handles.
 4. Use `submit_step_zero` to submit the measured initial step. The
    supervisor retires that Attempt and resets `/candidate/work`.
-5. Loop: form a repair hypothesis. Start the next Attempt with an
-   explicit parent step handle; the supervisor reseeds
+5. Loop: form a repair hypothesis and replace `/candidate/plan.json`
+   with a `voxblame.repair-batch/1` that selects exact
+   `{target_key, mask_sha256}` pairs from the parent's decision facts.
+   Start the next Attempt with an explicit parent step handle; the supervisor reseeds
    `/candidate/work/source/` with the parent's source. Edit it,
    run the registered tools for the child, then `submit_repair`.
    Stop when residuals establish acceptance, when no further coherent

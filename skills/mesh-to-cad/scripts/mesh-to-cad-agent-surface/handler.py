@@ -241,6 +241,7 @@ DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/1"
 _DECISION_FACT_MAX_TARGETS = 8
 _ACCEPTANCE_STATE_VALUES = ("acceptance_satisfied", "unaccepted")
 _OBJECTIVE_FACT_KEYS = ("global_depth_8_zero", "out_of_frame_clear", "no_evidence_conflict")
+_TARGET_KEY = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}")
 
 
 def _rate(value: Any, path: str) -> float:
@@ -285,7 +286,9 @@ def _residual_summary_result(value: Any, path: str) -> dict[str, Any]:
     }
 
 
-def _repair_target_items(value: Any, path: str, expected: int) -> list[dict[str, Any]]:
+def _repair_target_items(
+    value: Any, path: str, expected: int, *, step: int
+) -> list[dict[str, Any]]:
     if type(value) is not list or len(value) != expected:
         _fail("supervisor_contract_violation", path)
     if expected > _DECISION_FACT_MAX_TARGETS:
@@ -295,6 +298,8 @@ def _repair_target_items(value: Any, path: str, expected: int) -> list[dict[str,
         item = _closed(
             item,
             (
+                "target_key",
+                "mask_sha256",
                 "rank",
                 "kind",
                 "missing_surface_count",
@@ -303,8 +308,24 @@ def _repair_target_items(value: Any, path: str, expected: int) -> list[dict[str,
             ),
             f"{path}[{index}]",
         )
+        target_key = item["target_key"]
+        if (
+            type(target_key) is not str
+            or _TARGET_KEY.fullmatch(target_key) is None
+            or not target_key.startswith(f"step-{step:06d}:")
+        ):
+            _fail("supervisor_contract_violation", f"{path}[{index}].target_key")
+        mask_sha256 = item["mask_sha256"]
+        if (
+            type(mask_sha256) is not str
+            or len(mask_sha256) != 64
+            or any(character not in "0123456789abcdef" for character in mask_sha256)
+        ):
+            _fail("supervisor_contract_violation", f"{path}[{index}].mask_sha256")
         items.append(
             {
+                "target_key": target_key,
+                "mask_sha256": mask_sha256,
                 "rank": _integer(item["rank"], f"{path}[{index}].rank"),
                 "kind": _enum(
                     item["kind"], ("interior", "exterior"), f"{path}[{index}].kind"
@@ -325,7 +346,9 @@ def _repair_target_items(value: Any, path: str, expected: int) -> list[dict[str,
     return items
 
 
-def _repair_targets_result(value: Any, path: str) -> dict[str, Any] | None:
+def _repair_targets_result(
+    value: Any, path: str, *, step: int
+) -> dict[str, Any] | None:
     if value is None:
         return None
     value = _closed(value, ("total", "returned", "remaining", "items"), path)
@@ -336,7 +359,9 @@ def _repair_targets_result(value: Any, path: str) -> dict[str, Any] | None:
         "total": _integer(value["total"], f"{path}.total"),
         "returned": returned,
         "remaining": _integer(value["remaining"], f"{path}.remaining"),
-        "items": _repair_target_items(value["items"], f"{path}.items", returned),
+        "items": _repair_target_items(
+            value["items"], f"{path}.items", returned, step=step
+        ),
     }
 
 
@@ -414,7 +439,7 @@ def _decision_facts_result(value: Any, path: str) -> dict[str, Any]:
             value["residual_summary"], f"{path}.residual_summary"
         ),
         "repair_targets": _repair_targets_result(
-            value["repair_targets"], f"{path}.repair_targets"
+            value["repair_targets"], f"{path}.repair_targets", step=step_ordinal
         ),
         "preview": _preview_identity_result(value["preview"], f"{path}.preview"),
         "change_from_parent": change,

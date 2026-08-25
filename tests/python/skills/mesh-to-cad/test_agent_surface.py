@@ -67,6 +67,8 @@ def _decision_facts_fixture(*, step_ordinal: int) -> dict:
                 "remaining": 0,
                 "items": [
                     {
+                        "target_key": "step-000000:target-0123456789abcdef",
+                        "mask_sha256": "c" * 64,
                         "rank": 0,
                         "kind": "interior",
                         "missing_surface_count": 1,
@@ -535,6 +537,43 @@ class AgentSurfaceTests(unittest.TestCase):
                 self.ports.result = {"state": "ready"}
                 self.assert_error(
                     lambda request=request: self.surface.handle(request),
+                    "supervisor_contract_violation",
+                )
+        self.ports.result = None
+
+    def test_decision_fact_target_selection_identities_are_closed(self) -> None:
+        request = _request(
+            "submit_step_zero",
+            {
+                "workspace_handle": "ws:1",
+                "attempt_handle": "attempt:1",
+                "candidate_handle": "candidate:1",
+            },
+        )
+        result = self.ports._default_result(
+            "submit_step_zero", "ws:1", "attempt:1", "candidate:1"
+        )
+        self.ports.result = result
+        item = self.surface.handle(request)["result"]["decision_facts"][
+            "repair_targets"
+        ]["items"][0]
+        self.assertEqual("step-000000:target-0123456789abcdef", item["target_key"])
+        self.assertEqual("c" * 64, item["mask_sha256"])
+
+        for field, invalid in (
+            ("target_key", ""),
+            ("target_key", "Step-000000:target-0123456789abcdef"),
+            ("target_key", "step-000001:target-0123456789abcdef"),
+            ("target_key", "a" * 129),
+            ("mask_sha256", "A" * 64),
+            ("mask_sha256", "0" * 63),
+        ):
+            with self.subTest(field=field, invalid=invalid):
+                mutated = json.loads(json.dumps(result))
+                mutated["decision_facts"]["repair_targets"]["items"][0][field] = invalid
+                self.ports.result = mutated
+                self.assert_error(
+                    lambda: self.surface.handle(request),
                     "supervisor_contract_violation",
                 )
         self.ports.result = None

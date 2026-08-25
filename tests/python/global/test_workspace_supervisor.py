@@ -118,6 +118,8 @@ def _decision_facts_stub(step: int) -> dict:
                 "remaining": 0,
                 "items": [
                     {
+                        "target_key": "step-000000:target-0123456789abcdef",
+                        "mask_sha256": "c" * 64,
                         "rank": 0,
                         "kind": "interior",
                         "missing_surface_count": 2,
@@ -125,6 +127,8 @@ def _decision_facts_stub(step: int) -> dict:
                         "surface_error_count": 2,
                     },
                     {
+                        "target_key": "step-000000:target-fedcba9876543210",
+                        "mask_sha256": "d" * 64,
                         "rank": 1,
                         "kind": "exterior",
                         "missing_surface_count": 0,
@@ -2538,8 +2542,6 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             "voxblame",
             "measurement.json",
             "attempt-000001",
-            "target_key",
-            "mask_sha256",
             "observable_sha256",
             "work/attempts",
         ):
@@ -3616,6 +3618,36 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     check=False,
                 )
                 self.assertNotEqual(0, replay.returncode)
+
+                repair_target = step_zero_facts["repair_targets"]["items"][0]
+                (supervisor.candidate_root / "plan.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "voxblame.repair-batch/1",
+                            "from_step": 0,
+                            "selected_targets": [
+                                {
+                                    "target_key": repair_target["target_key"],
+                                    "mask_sha256": repair_target["mask_sha256"],
+                                }
+                            ],
+                            "planned_edits": [
+                                {
+                                    "edit_key": "restore-reference-length",
+                                    "target_keys": [repair_target["target_key"]],
+                                    "description": "Restore the under-target primary-axis length.",
+                                }
+                            ],
+                            "rationale": "Repair the highest-ranked measured residual.",
+                            "preview_observation": (
+                                "The parent preview is short on its primary axis."
+                            ),
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
 
                 started_two = call(
                     "start_attempt",
