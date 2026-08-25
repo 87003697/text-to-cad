@@ -1509,15 +1509,37 @@ def _build_runtime(
     runtime_lib.mkdir(parents=True, mode=0o755)
     budget = _CopyBudget()
     rewrite = _rewrite_map(venv, probe, stdlib, site_roots)
-    # A system prefix is a valid runtime string (for example in stdlib data
-    # files), not evidence that the source checkout leaked.  More specific
-    # source paths remain forbidden, while sysconfig files still rewrite every
-    # entry in ``rewrite`` below.
-    forbidden_values = [
-        old for old, _new in rewrite if old.rstrip(b"/") not in {b"", b"/usr"}
-    ]
-    if repo_root is not None:
-        forbidden_values.append(os.fspath(repo_root).encode("utf-8"))
+    forbidden_values: list[bytes] = []
+
+    def forbid(source: Path | None, *, system_path_is_safe: bool = False) -> None:
+        if source is None:
+            return
+        for candidate in (source, source.resolve()):
+            value = os.fsencode(candidate).rstrip(b"/")
+            if not value:
+                continue
+            if system_path_is_safe and (value == b"/usr" or value.startswith(b"/usr/")):
+                continue
+            forbidden_values.append(value)
+
+    # These are private source roots.  Standard /usr paths are valid runtime
+    # literals; generated sysconfig files still rewrite them through `rewrite`.
+    forbid(venv)
+    forbid(repo_root)
+    for source in (
+        stdlib,
+        *site_roots,
+        probe.stdlib,
+        probe.platstdlib,
+        probe.dynload,
+        probe.purelib,
+        probe.platlib,
+        probe.base_prefix,
+        probe.exec_prefix,
+        probe.libdir,
+        probe.interpreter.parent if probe.interpreter else None,
+    ):
+        forbid(source, system_path_is_safe=True)
     forbidden = tuple(dict.fromkeys(forbidden_values))
     copied: set[PurePosixPath] = set()
     for relative in _walk_tree(stdlib):

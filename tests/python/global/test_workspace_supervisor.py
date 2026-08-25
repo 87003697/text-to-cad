@@ -984,6 +984,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             (stdlib / "os.py").write_text(
                 "name = 'safe'\nsystem_prefix = '/usr'\n", encoding="utf-8"
             )
+            (stdlib / "Makefile").write_text(
+                "LIBDIR=/usr/lib64\nINCLUDEDIR=/usr/include\n", encoding="utf-8"
+            )
             (stdlib / "_sysconfigdata_test.py").write_text(
                 f"STDLIB = {str(stdlib)!r}\n", encoding="utf-8"
             )
@@ -1022,6 +1025,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 interpreter=fake_python,
                 base_prefix=Path("/usr"),
                 exec_prefix=Path("/usr"),
+                libdir=Path("/usr/lib64"),
                 distributions=(
                     runtime_module.DistributionRecord(
                         "cad",
@@ -1051,6 +1055,10 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             self.assertIn(
                 b"system_prefix = '/usr'",
                 (runtime / "lib/python3.12/os.py").read_bytes(),
+            )
+            self.assertEqual(
+                b"LIBDIR=/usr/lib64\nINCLUDEDIR=/usr/include\n",
+                (runtime / "lib/python3.12/Makefile").read_bytes(),
             )
             for path in runtime.rglob("*"):
                 self.assertFalse(path.is_symlink())
