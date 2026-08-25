@@ -83,7 +83,12 @@ class WorkspaceAPI(Protocol):
     def workspace_initialized(self, workspace: Path) -> bool: ...
 
     def publish_step_zero_from_candidate(
-        self, workspace: Path, *, attempt: int, source: Path
+        self,
+        workspace: Path,
+        *,
+        attempt: int,
+        source: Path,
+        evidence_provider: Callable[..., Any],
     ) -> Mapping[str, Any]: ...
 
     def publish_cycle_from_candidate(
@@ -549,6 +554,7 @@ class WorkspaceSupervisor:
         geometry_entrypoint: Path | None = None,
         tool_registry: Path | None = None,
         candidate_runtime: Path | None = None,
+        step_zero_evidence_provider: Callable[..., Any] | None = None,
     ) -> None:
         raw_workspace = Path(workspace)
         if raw_workspace.is_symlink():
@@ -596,6 +602,7 @@ class WorkspaceSupervisor:
             self._rebuild_entrypoint = rebuild_entrypoint
             self._geometry_entrypoint = geometry_entrypoint
             self._tool_registry = tool_registry
+            self._step_zero_evidence_provider = step_zero_evidence_provider
             self.candidate_runtime: Path | None = None
             if candidate_runtime is not None:
                 raw_runtime = Path(candidate_runtime)
@@ -1396,17 +1403,24 @@ class WorkspaceSupervisor:
         """
 
         if submission.kind == "step_zero":
-            api = self.workspace_api.publish_step_zero_from_candidate
+            if self._step_zero_evidence_provider is None:
+                raise SupervisorError("step_zero_evidence_provider_missing")
+            api_call = lambda: self.workspace_api.publish_step_zero_from_candidate(
+                self.workspace,
+                attempt=submission.attempt_id,
+                source=submission.candidate_root,
+                evidence_provider=self._step_zero_evidence_provider,
+            )
         elif submission.kind == "repair":
-            api = self.workspace_api.publish_cycle_from_candidate
-        else:
-            raise SupervisorError("invalid_request")
-        try:
-            document = api(
+            api_call = lambda: self.workspace_api.publish_cycle_from_candidate(
                 self.workspace,
                 attempt=submission.attempt_id,
                 source=submission.candidate_root,
             )
+        else:
+            raise SupervisorError("invalid_request")
+        try:
+            document = api_call()
         except Exception as exc:
             classification = (
                 "step_publication_failed"

@@ -18,7 +18,8 @@ from pathlib import Path, PurePosixPath
 import shutil
 import secrets
 import stat
-from typing import Any, Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping, Protocol
 
 import workspace_core as _core
 
@@ -159,18 +160,196 @@ def _ingest_candidate(
         raise
 
 
-# A-A1 internal producer boundary: fixed relative filenames the trusted
-# candidate tree must expose under the ingested candidate source directory.
-# These names are NOT Agent-visible; the Agent never selects an evidence
-# handle.  Trusted producers own these paths — A-A1 uses candidate-emitted
-# files as a temporary internal producer contract; the next correctness
-# landing (A-A2) replaces them with trusted mesh/preview/diff providers.
+# The trusted candidate tree must expose the fixed producer filename below at
+# its root; the Agent never names or selects it.  For Step 0 the trusted
+# provider seam (``StepZeroEvidenceProvider``) alone produces measurement and
+# formal preview evidence — the candidate tree must NOT carry
+# ``measurement.json`` or ``preview/`` and W1 rejects submissions that do.
+# The remaining ``CANDIDATE_*_RELATIVE`` names are the temporary A-A1 repair
+# contract, kept unchanged until A-A3 replaces them with their own trusted
+# providers.
 CANDIDATE_MESH_RELATIVE = "candidate.glb"
-CANDIDATE_MEASUREMENT_RELATIVE = "measurement.json"
-CANDIDATE_PREVIEW_RELATIVE = "preview"
+_REJECTED_STEP_ZERO_CANDIDATE_NAMES = ("measurement.json", "preview")
+_REPAIR_CANDIDATE_MEASUREMENT_RELATIVE = "measurement.json"
+_REPAIR_CANDIDATE_PREVIEW_RELATIVE = "preview"
 CANDIDATE_REGION_DIFF_RELATIVE = "region-diff.json"
 CANDIDATE_ASSESSMENT_RELATIVE = "assessment.json"
 CANDIDATE_SOURCE_CHANGES_RELATIVE = "source-changes.json"
+
+
+_MAX_STEP_ZERO_STAGE_FILE_BYTES = 512 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class StepZeroEvidenceRequest:
+    """Read-only inputs and W1-owned stage outputs for the Step 0 provider.
+
+    The provider must:
+      * Read only ``canonical_reference`` and ``candidate_mesh``.
+      * Write only into ``voxblame_output`` and ``preview_output``.
+      * Not interpret path locations relative to Workspace authority.
+
+    ``preview_profile`` is the closed ``{name, sha256}`` identity the
+    Workspace has already committed for the experiment.
+    """
+
+    canonical_reference: Path
+    candidate_mesh: Path
+    voxblame_output: Path
+    preview_output: Path
+    preview_profile: Mapping[str, Any]
+
+
+class StepZeroEvidenceProvider(Protocol):
+    """Small internal seam that produces trusted Step 0 evidence bytes.
+
+    Runner-assembled and fixed; the Agent Surface never registers,
+    configures, or selects a provider.
+    """
+
+    def __call__(self, request: StepZeroEvidenceRequest) -> None: ...
+
+
+def _reject_candidate_authored_step_zero_evidence(source: Path) -> None:
+    """Fail closed if the trusted candidate tree carries measurement/preview names."""
+
+    try:
+        entries = {entry.name for entry in source.iterdir()}
+    except OSError as error:
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "trusted candidate source is unavailable",
+        ) from error
+    forbidden = tuple(name for name in _REJECTED_STEP_ZERO_CANDIDATE_NAMES if name in entries)
+    if forbidden:
+        raise WorkspaceError(
+            "invalid_step_zero_candidate",
+            f"trusted candidate tree must not author {forbidden[0]} for Step 0",
+        )
+
+
+def _open_step_zero_stage(workspace: Path) -> Path:
+    """Create one opaque W1-owned Step 0 evidence stage outside authority."""
+
+    workspace = Path(workspace).resolve()
+    work = workspace / "work"
+    if work.is_symlink():
+        _fail("invalid_workspace_path", "Workspace work area is a symlink", "$.work")
+    try:
+        work.mkdir(exist_ok=True, mode=0o700)
+    except OSError as error:
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "Workspace work area is unavailable",
+        ) from error
+    stage = work / f".step-zero-stage-{secrets.token_hex(12)}"
+    if stage.is_symlink():
+        _fail("invalid_workspace_path", "step zero stage is a symlink", "$.work")
+    try:
+        stage.mkdir(parents=False, exist_ok=False, mode=0o700)
+    except OSError as error:
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "step zero stage is unavailable",
+        ) from error
+    return stage
+
+
+def _assert_stage_regular_file(path: Path, label: str) -> None:
+    if path.is_symlink():
+        raise WorkspaceError("invalid_step_zero_evidence", f"{label} is a symlink")
+    try:
+        metadata = path.stat()
+    except OSError as error:
+        raise WorkspaceError(
+            "invalid_step_zero_evidence",
+            f"{label} is unavailable",
+        ) from error
+    if not stat.S_ISREG(metadata.st_mode):
+        raise WorkspaceError(
+            "invalid_step_zero_evidence",
+            f"{label} is not a regular file",
+        )
+    if metadata.st_nlink != 1:
+        raise WorkspaceError(
+            "invalid_step_zero_evidence",
+            f"{label} has an unexpected link count",
+        )
+    if metadata.st_size > _MAX_STEP_ZERO_STAGE_FILE_BYTES:
+        raise WorkspaceError(
+            "invalid_step_zero_evidence",
+            f"{label} exceeds the allowed size",
+        )
+
+
+def _validate_step_zero_stage(voxblame_output: Path, preview_output: Path) -> None:
+    """Verify the provider populated the expected file shapes.
+
+    Deep schema/identity validation is performed by
+    :func:`publish_step_zero` through the shared closed-schema boundary
+    checks; W1's role here is to fail closed on missing files, wrong
+    types, symlink/hardlink shapes, or oversized artifacts before the
+    stage is promoted into any Workspace authority path.
+    """
+
+    required_voxblame = (
+        voxblame_output / "session.json",
+        voxblame_output / "reference.vbsvo",
+        voxblame_output / "steps/000000/summary.json",
+    )
+    for path in required_voxblame:
+        _assert_stage_regular_file(path, f"voxblame stage {path.name}")
+    for name in ("preview.json", "preview.png"):
+        _assert_stage_regular_file(preview_output / name, f"preview stage {name}")
+
+
+def _promote_step_zero_voxblame(workspace: Path, stage_voxblame: Path) -> Path:
+    """Move the provider-produced voxblame layout into Workspace authority.
+
+    Fails closed if the target already exists to preserve the single-writer
+    invariant.  Returns the promoted ``summary.json`` path suitable for
+    :func:`publish_step_zero`.
+    """
+
+    workspace = Path(workspace).resolve()
+    target = workspace / "voxblame"
+    if target.is_symlink():
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "voxblame authority path is a symlink",
+        )
+    if target.exists():
+        raise WorkspaceError(
+            "workspace_conflict",
+            "voxblame authority path already exists before Step 0 publication",
+        )
+    try:
+        os.rename(stage_voxblame, target)
+    except OSError as error:
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "cannot atomically promote step zero voxblame stage",
+        ) from error
+    return target / "steps/000000/summary.json"
+
+
+def _rollback_step_zero_voxblame(workspace: Path) -> None:
+    """Best-effort cleanup for a failed Step 0 publication.
+
+    Removes any Workspace-owned ``voxblame/`` bytes W1 promoted from the
+    stage before :func:`publish_step_zero` completed its commit.  If a
+    committed step already exists this is left untouched.
+    """
+
+    workspace = Path(workspace).resolve()
+    committed_step_zero = workspace / "steps/000000"
+    if committed_step_zero.exists():
+        return
+    voxblame = workspace / "voxblame"
+    if voxblame.is_symlink():
+        return
+    if voxblame.is_dir():
+        shutil.rmtree(voxblame, ignore_errors=True)
 
 
 def publish_step_zero_from_candidate(
@@ -178,35 +357,91 @@ def publish_step_zero_from_candidate(
     *,
     attempt: int,
     source: Path,
+    evidence_provider: StepZeroEvidenceProvider,
 ) -> dict[str, Any]:
-    """Ingest one trusted candidate tree and publish Step 0.
+    """Ingest one trusted candidate tree, produce trusted evidence, publish Step 0.
 
-    The candidate tree must expose the fixed producer filenames above at its
-    root; the Agent never names or selects them.  Measurement bytes flow into
-    the Workspace-owned voxblame step directory before authority mutation.
+    W1 owns every mutation.  The trusted candidate tree carries only its
+    Agent-authored source and the fixed ``candidate.glb`` output; W1
+    rejects candidate-authored ``measurement.json`` or ``preview/``.  W1
+    then opens an opaque stage outside Workspace authority, invokes the
+    fixed :class:`StepZeroEvidenceProvider` supplied by the runner, and
+    validates the produced canonical measurement and formal preview
+    bytes before atomically promoting the measurement bytes into
+    ``voxblame/`` and calling :func:`publish_step_zero`.  The stage is
+    cleaned on every outcome and the promoted bytes are rolled back on
+    failure.
     """
 
+    workspace = Path(workspace).resolve()
+    raw_source = Path(source)
+    if raw_source.is_symlink() or not raw_source.is_dir():
+        raise WorkspaceError("invalid_workspace_path", "trusted candidate source is unavailable")
+    source = raw_source.resolve()
+    _reject_candidate_authored_step_zero_evidence(source)
+
     _ingest_candidate(workspace, attempt, source)
-    authority = _core._load_active_attempt(Path(workspace).resolve(), attempt)[0] / "candidate"
-    measurement_source = _agent_source_file(
-        Path(source).resolve(), CANDIDATE_MEASUREMENT_RELATIVE
-    )
-    measurement_target = (
-        Path(workspace).resolve() / "voxblame/steps/000000/summary.json"
-    )
-    _copy_agent_file(measurement_source, measurement_target)
-    try:
-        result = publish_step_zero(
-            workspace,
-            attempt=attempt,
-            candidate=authority,
-            candidate_mesh=_agent_relative(authority, CANDIDATE_MESH_RELATIVE),
-            measurement=measurement_target,
-            preview=authority / _agent_relative(authority, CANDIDATE_PREVIEW_RELATIVE),
+    authority = _core._load_active_attempt(workspace, attempt)[0] / "candidate"
+    workspace_document = _read_workspace_document(workspace)
+    preview_profile = workspace_document.get("preview_profile")
+    if not isinstance(preview_profile, Mapping):
+        raise WorkspaceError(
+            "corrupt_workspace",
+            "Workspace document is missing the preview profile",
         )
+
+    stage = _open_step_zero_stage(workspace)
+    promoted = False
+    try:
+        candidate_mesh_source = _agent_source_file(authority, CANDIDATE_MESH_RELATIVE)
+        stage_candidate_mesh = stage / "candidate.glb"
+        _copy_agent_file(candidate_mesh_source, stage_candidate_mesh)
+        voxblame_output = stage / "voxblame-stage"
+        preview_output = stage / "preview-stage"
+        voxblame_output.mkdir(mode=0o700)
+        preview_output.mkdir(mode=0o700)
+        request = StepZeroEvidenceRequest(
+            canonical_reference=(workspace / "input").resolve(),
+            candidate_mesh=stage_candidate_mesh,
+            voxblame_output=voxblame_output,
+            preview_output=preview_output,
+            preview_profile={
+                "name": preview_profile.get("name"),
+                "sha256": preview_profile.get("sha256"),
+            },
+        )
+        try:
+            evidence_provider(request)
+        except WorkspaceError:
+            raise
+        except Exception as error:
+            raise WorkspaceError(
+                "step_zero_evidence_failed",
+                f"trusted Step 0 evidence provider failed: {error.__class__.__name__}",
+            ) from error
+        _validate_step_zero_stage(voxblame_output, preview_output)
+        measurement_target = _promote_step_zero_voxblame(workspace, voxblame_output)
+        promoted = True
+        try:
+            result = publish_step_zero(
+                workspace,
+                attempt=attempt,
+                candidate=authority,
+                candidate_mesh=_agent_relative(authority, CANDIDATE_MESH_RELATIVE),
+                measurement=measurement_target,
+                preview=preview_output,
+            )
+        except Exception:
+            _rollback_step_zero_voxblame(workspace)
+            promoted = False
+            raise
     except Exception:
-        measurement_target.unlink(missing_ok=True)
+        if promoted:
+            _rollback_step_zero_voxblame(workspace)
         raise
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
     step_value = result.get("step", 0)
     if isinstance(step_value, Mapping):
         step_value = step_value.get("step", 0)
@@ -227,7 +462,7 @@ def publish_cycle_from_candidate(
     authority = active_root / "candidate"
     intended_step = int(active["intended_step"])
     measurement_source = _agent_source_file(
-        Path(source).resolve(), CANDIDATE_MEASUREMENT_RELATIVE
+        Path(source).resolve(), _REPAIR_CANDIDATE_MEASUREMENT_RELATIVE
     )
     measurement_target = workspace / "voxblame/steps" / f"{intended_step:06d}" / "summary.json"
     _copy_agent_file(measurement_source, measurement_target)
@@ -238,7 +473,7 @@ def publish_cycle_from_candidate(
             candidate=authority,
             candidate_mesh=_agent_relative(authority, CANDIDATE_MESH_RELATIVE),
             measurement=measurement_target,
-            preview=authority / _agent_relative(authority, CANDIDATE_PREVIEW_RELATIVE),
+            preview=authority / _agent_relative(authority, _REPAIR_CANDIDATE_PREVIEW_RELATIVE),
             region_diff=authority / _agent_relative(authority, CANDIDATE_REGION_DIFF_RELATIVE),
             assessment=authority / _agent_relative(authority, CANDIDATE_ASSESSMENT_RELATIVE),
             source_changes=authority
@@ -1479,6 +1714,8 @@ __all__ = [
     "MAX_ATTEMPTS_PER_STEP",
     "MAX_REPAIR_CYCLES",
     "MAX_TOOL_FAILURES_PER_STEP",
+    "StepZeroEvidenceProvider",
+    "StepZeroEvidenceRequest",
     "TERMINAL_BUNDLE_SCHEMA",
     "TERMINAL_IDENTITY_SCHEMA",
     "TERMINAL_VALIDATION_SCHEMA",

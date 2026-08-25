@@ -125,9 +125,21 @@ class _Workspace:
         return target
 
     def publish_step_zero_from_candidate(
-        self, _workspace: Path, *, attempt: int, source: Path
+        self,
+        _workspace: Path,
+        *,
+        attempt: int,
+        source: Path,
+        evidence_provider,
     ) -> dict:
-        self.published.append({"kind": "step_zero", "attempt": attempt, "source": source})
+        self.published.append(
+            {
+                "kind": "step_zero",
+                "attempt": attempt,
+                "source": source,
+                "provider": evidence_provider,
+            }
+        )
         return {"step": 0}
 
     def publish_cycle_from_candidate(
@@ -206,6 +218,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             rebuild_entrypoint=self.root / "rebuild",
             geometry_entrypoint=self.root / "geometry",
             tool_registry=self.root / "registry",
+            step_zero_evidence_provider=lambda request: None,
         )
 
     def tearDown(self) -> None:
@@ -810,6 +823,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         self.assertIsNotNone(spec and spec.loader)
         facade = importlib.util.module_from_spec(spec)
         assert spec is not None and spec.loader is not None
+        sys.modules[spec.name] = facade
         spec.loader.exec_module(facade)
 
         class FakeByteLock:
@@ -887,6 +901,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         )
         assert spec is not None and spec.loader is not None
         facade = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = facade
         spec.loader.exec_module(facade)
 
         with tempfile.TemporaryDirectory() as temporary:
@@ -1693,11 +1708,19 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             )["state"],
         )
         # W1 facade owns publication and receives only the trusted candidate
-        # tree; the supervisor never forwarded Agent-named evidence handles.
+        # tree plus the fixed Step 0 evidence provider; the supervisor never
+        # forwarded Agent-named evidence handles.
+        self.assertEqual(1, len(self.workspace.published))
+        published = self.workspace.published[0]
         self.assertEqual(
-            [{"kind": "step_zero", "attempt": 1, "source": self.sup.candidate_root / "attempt-000001"}],
-            self.workspace.published,
+            {
+                "kind": "step_zero",
+                "attempt": 1,
+                "source": self.sup.candidate_root / "attempt-000001",
+            },
+            {k: v for k, v in published.items() if k != "provider"},
         )
+        self.assertTrue(callable(published["provider"]))
         selection = self.sup.candidate_root / "selection.json"
         evidence = self.sup.candidate_root / "evidence.txt"
         evidence.write_text("evidence", encoding="utf-8")
@@ -2166,6 +2189,10 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 case.root / "candidate-runtime",
                 repo_root=runner.REPO_ROOT,
             )
+            from scripts.pilot.step_zero_evidence import (
+                real_step_zero_evidence_provider,
+            )
+
             supervisor = WorkspaceSupervisor(
                 case.workspace,
                 bind_reference=True,
@@ -2175,6 +2202,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 geometry_entrypoint=runner.GEOMETRY_ENTRYPOINT,
                 tool_registry=registry,
                 candidate_runtime=candidate_runtime,
+                step_zero_evidence_provider=real_step_zero_evidence_provider,
             )
             try:
                 contract = supervisor.agent_bootstrap_contract()
@@ -2189,45 +2217,10 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 attempt = supervisor.candidate_root / "attempt-000001"
                 shutil.copytree(source_candidate, attempt, dirs_exist_ok=True)
                 shutil.copy2(attempt / "built/measurement.glb", attempt / "candidate.glb")
-                measurement = attempt / "measurement"
-                preview = attempt / "preview"
-                mesh_compare = fixture_module.MESH_COMPARE_PATH
-                for command in (
-                    [
-                        sys.executable,
-                        str(mesh_compare),
-                        "voxblame-measure",
-                        str(attempt / "candidate.glb"),
-                        "--reference",
-                        str(case.workspace / "input"),
-                        "--output",
-                        str(measurement),
-                        "--step",
-                        "0",
-                    ],
-                    [
-                        sys.executable,
-                        str(mesh_compare),
-                        "voxblame-preview",
-                        str(attempt / "candidate.glb"),
-                        "--reference",
-                        str(case.workspace / "input"),
-                        "--experiment",
-                        str(case.workspace / "experiment.json"),
-                        "--output",
-                        str(preview),
-                        "--variant",
-                        "step",
-                    ],
-                ):
-                    completed = subprocess.run(
-                        command,
-                        cwd=fixture_module.REPO_ROOT,
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                    )
-                    self.assertEqual(0, completed.returncode, completed.stderr)
+                # The trusted Step 0 evidence provider (assembled above) is
+                # the sole source of canonical measurement and preview
+                # bytes; no candidate-authored measurement.json/preview
+                # subtree may accompany the candidate.
                 tool_result = supervisor.run_candidate_tool(
                     supervisor.workspace_handle,
                     started["attempt_handle"],
