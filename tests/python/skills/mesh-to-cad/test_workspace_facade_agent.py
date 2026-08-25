@@ -79,17 +79,20 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
         source = case.root / "agent-step-source"
         (source / "candidate").mkdir(parents=True)
         shutil.copytree(candidate, source / "candidate", dirs_exist_ok=True)
+        # A-A1 internal producer boundary: the trusted candidate tree exposes
+        # the fixed filenames the W1 facade discovers.  A real trusted
+        # provider will replace these fixture copies in A-A2.
+        shutil.copy2(
+            source / "candidate/artifacts/model.glb", source / "candidate.glb"
+        )
         (source / "measurement.json").write_bytes(measurement.read_bytes())
         shutil.copytree(preview, source / "preview")
         measurement.unlink()
 
-        published = facade.publish_step_zero_from_agent(
+        published = facade.publish_step_zero_from_candidate(
             case.workspace,
             attempt=1,
             source=source,
-            candidate_mesh="candidate/artifacts/model.glb",
-            measurement="measurement.json",
-            preview="preview",
         )
         self.assertEqual({"step": 0}, published)
         self.assertTrue((case.workspace / "steps/000000").is_dir())
@@ -126,6 +129,9 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
         cycle_source = case.root / "agent-cycle-source"
         (cycle_source / "candidate").mkdir(parents=True)
         shutil.copytree(cycle_candidate, cycle_source / "candidate", dirs_exist_ok=True)
+        shutil.copy2(
+            cycle_source / "candidate/artifacts/model.glb", cycle_source / "candidate.glb"
+        )
         (cycle_source / "measurement.json").write_bytes(cycle_measurement.read_bytes())
         shutil.copytree(cycle_preview, cycle_source / "preview")
         for path, name in (
@@ -136,16 +142,10 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
             shutil.copy2(path, cycle_source / name)
         cycle_measurement.unlink()
 
-        repaired = facade.publish_cycle_from_agent(
+        repaired = facade.publish_cycle_from_candidate(
             case.workspace,
             attempt=2,
             source=cycle_source,
-            candidate_mesh="candidate/artifacts/model.glb",
-            measurement="measurement.json",
-            preview="preview",
-            region_diff="region-diff.json",
-            assessment="assessment.json",
-            source_changes="source-changes.json",
         )
         self.assertEqual({"step": {"step": 1}, "cycle": 1}, repaired)
         self.assertTrue((case.workspace / "steps/000001").is_dir())

@@ -159,20 +159,38 @@ def _ingest_candidate(
         raise
 
 
-def publish_step_zero_from_agent(
+# A-A1 internal producer boundary: fixed relative filenames the trusted
+# candidate tree must expose under the ingested candidate source directory.
+# These names are NOT Agent-visible; the Agent never selects an evidence
+# handle.  Trusted producers own these paths — A-A1 uses candidate-emitted
+# files as a temporary internal producer contract; the next correctness
+# landing (A-A2) replaces them with trusted mesh/preview/diff providers.
+CANDIDATE_MESH_RELATIVE = "candidate.glb"
+CANDIDATE_MEASUREMENT_RELATIVE = "measurement.json"
+CANDIDATE_PREVIEW_RELATIVE = "preview"
+CANDIDATE_REGION_DIFF_RELATIVE = "region-diff.json"
+CANDIDATE_ASSESSMENT_RELATIVE = "assessment.json"
+CANDIDATE_SOURCE_CHANGES_RELATIVE = "source-changes.json"
+
+
+def publish_step_zero_from_candidate(
     workspace: Path,
     *,
     attempt: int,
     source: Path,
-    candidate_mesh: str,
-    measurement: str,
-    preview: str,
 ) -> dict[str, Any]:
-    """Ingest one external candidate and publish Step 0 through Workspace authority."""
+    """Ingest one trusted candidate tree and publish Step 0.
+
+    The candidate tree must expose the fixed producer filenames above at its
+    root; the Agent never names or selects them.  Measurement bytes flow into
+    the Workspace-owned voxblame step directory before authority mutation.
+    """
 
     _ingest_candidate(workspace, attempt, source)
     authority = _core._load_active_attempt(Path(workspace).resolve(), attempt)[0] / "candidate"
-    measurement_source = _agent_source_file(Path(source).resolve(), measurement)
+    measurement_source = _agent_source_file(
+        Path(source).resolve(), CANDIDATE_MEASUREMENT_RELATIVE
+    )
     measurement_target = (
         Path(workspace).resolve() / "voxblame/steps/000000/summary.json"
     )
@@ -182,9 +200,9 @@ def publish_step_zero_from_agent(
             workspace,
             attempt=attempt,
             candidate=authority,
-            candidate_mesh=_agent_relative(authority, candidate_mesh),
+            candidate_mesh=_agent_relative(authority, CANDIDATE_MESH_RELATIVE),
             measurement=measurement_target,
-            preview=authority / _agent_relative(authority, preview),
+            preview=authority / _agent_relative(authority, CANDIDATE_PREVIEW_RELATIVE),
         )
     except Exception:
         measurement_target.unlink(missing_ok=True)
@@ -195,26 +213,22 @@ def publish_step_zero_from_agent(
     return {"step": int(step_value)}
 
 
-def publish_cycle_from_agent(
+def publish_cycle_from_candidate(
     workspace: Path,
     *,
     attempt: int,
     source: Path,
-    candidate_mesh: str,
-    measurement: str,
-    preview: str,
-    region_diff: str,
-    assessment: str,
-    source_changes: str,
 ) -> dict[str, Any]:
-    """Ingest one external candidate and publish a Repair Cycle through Workspace authority."""
+    """Ingest one trusted candidate tree and publish a Repair Cycle."""
 
     _ingest_candidate(workspace, attempt, source)
     workspace = Path(workspace).resolve()
     active_root, active, _plan = _core._load_active_attempt(workspace, attempt)
     authority = active_root / "candidate"
     intended_step = int(active["intended_step"])
-    measurement_source = _agent_source_file(Path(source).resolve(), measurement)
+    measurement_source = _agent_source_file(
+        Path(source).resolve(), CANDIDATE_MEASUREMENT_RELATIVE
+    )
     measurement_target = workspace / "voxblame/steps" / f"{intended_step:06d}" / "summary.json"
     _copy_agent_file(measurement_source, measurement_target)
     try:
@@ -222,12 +236,13 @@ def publish_cycle_from_agent(
             workspace,
             attempt=attempt,
             candidate=authority,
-            candidate_mesh=_agent_relative(authority, candidate_mesh),
+            candidate_mesh=_agent_relative(authority, CANDIDATE_MESH_RELATIVE),
             measurement=measurement_target,
-            preview=authority / _agent_relative(authority, preview),
-            region_diff=authority / _agent_relative(authority, region_diff),
-            assessment=authority / _agent_relative(authority, assessment),
-            source_changes=authority / _agent_relative(authority, source_changes),
+            preview=authority / _agent_relative(authority, CANDIDATE_PREVIEW_RELATIVE),
+            region_diff=authority / _agent_relative(authority, CANDIDATE_REGION_DIFF_RELATIVE),
+            assessment=authority / _agent_relative(authority, CANDIDATE_ASSESSMENT_RELATIVE),
+            source_changes=authority
+            / _agent_relative(authority, CANDIDATE_SOURCE_CHANGES_RELATIVE),
         )
     except Exception:
         measurement_target.unlink(missing_ok=True)
@@ -1477,9 +1492,9 @@ __all__ = [
     "finalize_agent_submission",
     "initialize_workspace",
     "publish_cycle",
-    "publish_cycle_from_agent",
+    "publish_cycle_from_candidate",
     "publish_step_zero",
-    "publish_step_zero_from_agent",
+    "publish_step_zero_from_candidate",
     "read_canonical_reference_binding",
     "read_terminal_locator",
     "record_attempt",

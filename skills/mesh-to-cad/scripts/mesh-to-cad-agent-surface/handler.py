@@ -58,9 +58,6 @@ class SupervisorPorts(Protocol):
         workspace_handle: str,
         attempt_handle: str,
         candidate_handle: str,
-        candidate_mesh_handle: str,
-        measurement_handle: str,
-        preview_handle: str,
     ) -> Mapping[str, Any]: ...
 
     def submit_repair(
@@ -68,12 +65,6 @@ class SupervisorPorts(Protocol):
         workspace_handle: str,
         attempt_handle: str,
         candidate_handle: str,
-        candidate_mesh_handle: str,
-        measurement_handle: str,
-        preview_handle: str,
-        region_diff_handle: str,
-        assessment_handle: str,
-        source_changes_handle: str,
     ) -> Mapping[str, Any]: ...
 
     def select_and_finalize(
@@ -446,8 +437,8 @@ _OPERATION_SPECS = (
     _OperationSpec("run_candidate_tool", ((
         _FieldSpec("workspace_handle", "handle"), _FieldSpec("attempt_handle", "handle"), _FieldSpec("candidate_handle", "handle"), _FieldSpec("operation_handle", "handle"),
     ),), _validate_run_candidate_result, "Run one supervisor-registered candidate operation."),
-    _OperationSpec("submit_step_zero", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle", "candidate_mesh_handle", "measurement_handle", "preview_handle")),), _validate_step_zero_result, "Submit one measured Step 0 through the supervisor."),
-    _OperationSpec("submit_repair", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle", "candidate_mesh_handle", "measurement_handle", "preview_handle", "region_diff_handle", "assessment_handle", "source_changes_handle")),), _validate_repair_result, "Submit one measured Repair Cycle through the supervisor."),
+    _OperationSpec("submit_step_zero", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle")),), _validate_step_zero_result, "Submit one measured Step 0 through the supervisor."),
+    _OperationSpec("submit_repair", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle")),), _validate_repair_result, "Submit one measured Repair Cycle through the supervisor."),
     _OperationSpec("select_and_finalize", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "selection_handle", "notes_handle")),), _validate_finalize_result, "Select and request supervisor-owned Final Delivery."),
     _OperationSpec("observe_reference", ((
         _FieldSpec("reference_handle", "handle"), _FieldSpec("observation", "observation_request"),

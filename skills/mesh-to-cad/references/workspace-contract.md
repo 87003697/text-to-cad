@@ -39,10 +39,20 @@ the intended step from that branch and parent.
 `start_attempt` returns one additional opaque
 `capability_bundle_handle`. It is bound only after the Workspace returns the
 actual Attempt and intended step. Reuse that bundle handle for candidate tool
-execution and the evidence handles in the submit intents; the Supervisor
-resolves its operation/artifact slots internally. Bootstrap contains only
-run-level capabilities and the fixed maximum budget, never predicted global
-Attempt IDs.
+execution; the Supervisor resolves its operation slots internally. Bootstrap
+contains only run-level capabilities and the fixed maximum budget, never
+predicted global Attempt IDs.
+
+`submit_step_zero` and `submit_repair` accept only the opaque workspace,
+attempt, and candidate handles; the Agent never selects an evidence handle,
+path, or filename. The W1 facade owns evidence discovery under the trusted
+candidate tree through its `_from_candidate` operations, using a fixed
+internal producer filename set. That filename set is a temporary internal
+producer boundary between the trusted candidate tree and the W1 facade — it
+is not an Agent contract and is not described as trusted production
+evidence. Real trusted measurement/preview/diff providers are the next
+required correctness landing (A-A2); until then, candidate-authored evidence
+must be treated as an internal fixture, not production authority.
 
 The standalone adapters have no supervisor discovery fallback: without W4
 ports they return a closed `supervisor_unavailable` error. W4 owns the concrete

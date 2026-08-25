@@ -124,13 +124,17 @@ class _Workspace:
         copy_tree(target)
         return target
 
-    def publish_step_zero_from_agent(self, _workspace: Path, **kwargs) -> dict:
-        self.published.append(kwargs)
+    def publish_step_zero_from_candidate(
+        self, _workspace: Path, *, attempt: int, source: Path
+    ) -> dict:
+        self.published.append({"kind": "step_zero", "attempt": attempt, "source": source})
         return {"step": 0}
 
-    def publish_cycle_from_agent(self, _workspace: Path, **kwargs) -> dict:
+    def publish_cycle_from_candidate(
+        self, _workspace: Path, *, attempt: int, source: Path
+    ) -> dict:
         self.completed_cycles += 1
-        self.published.append(kwargs)
+        self.published.append({"kind": "repair", "attempt": attempt, "source": source})
         return {"step": {"step": self.completed_cycles}, "cycle": self.completed_cycles}
 
     def finalization_staging_path(self, _workspace: Path) -> Path:
@@ -276,7 +280,10 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         source = inspect.getsource(WorkspaceSupervisor)
         for literal in ("work/attempts", "agent-finalization", "final/manifest.json"):
             self.assertNotIn(literal, source)
-        self.assertIn("publish_step_zero_from_agent", source)
+        self.assertIn("publish_step_zero_from_candidate", source)
+        self.assertIn("publish_cycle_from_candidate", source)
+        self.assertNotIn("publish_step_zero_from_agent", source)
+        self.assertNotIn("publish_cycle_from_agent", source)
         self.assertIn("finalize_agent_submission", source)
 
     def test_bootstrap_preallocates_three_attempts_for_all_six_steps(self) -> None:
@@ -1679,22 +1686,18 @@ class WorkspaceSupervisorTests(unittest.TestCase):
 
     def test_synthetic_intent_lifecycle_crosses_one_concrete_boundary(self) -> None:
         attempt, candidate = self._start()
-        candidate_root = self.sup.candidate_root / "attempt-000001"
-        (candidate_root / "mesh.glb").write_bytes(b"candidate")
-        (candidate_root / "measurement.json").write_bytes(b"candidate")
-        (candidate_root / "preview").mkdir()
-        mesh = self.sup.register_candidate_path(
-            candidate_root / "mesh.glb", attempt_handle=attempt
+        self.assertEqual(
+            "published",
+            self.sup.submit_step_zero(
+                self.sup.workspace_handle, attempt, candidate
+            )["state"],
         )
-        measurement = self.sup.register_candidate_path(
-            candidate_root / "measurement.json", attempt_handle=attempt
+        # W1 facade owns publication and receives only the trusted candidate
+        # tree; the supervisor never forwarded Agent-named evidence handles.
+        self.assertEqual(
+            [{"kind": "step_zero", "attempt": 1, "source": self.sup.candidate_root / "attempt-000001"}],
+            self.workspace.published,
         )
-        preview = self.sup.register_candidate_path(
-            candidate_root / "preview", attempt_handle=attempt
-        )
-        self.assertEqual("published", self.sup.submit_step_zero(
-            self.sup.workspace_handle, attempt, candidate, mesh, measurement, preview
-        )["state"])
         selection = self.sup.candidate_root / "selection.json"
         evidence = self.sup.candidate_root / "evidence.txt"
         evidence.write_text("evidence", encoding="utf-8")
@@ -1712,6 +1715,35 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         )
         self.assertEqual("finalized", final["state"])
         self.assertEqual(1, self.workspace.finalize_calls)
+
+    def test_submit_intents_reject_stale_or_cross_attempt_handles(self) -> None:
+        first_attempt, first_candidate = self._start()
+        second_attempt, second_candidate = self._start()
+        with self.assertRaises(SupervisorError):
+            # Candidate handle from Attempt 2 does not match Attempt 1.
+            self.sup.submit_step_zero(
+                self.sup.workspace_handle, first_attempt, second_candidate
+            )
+        with self.assertRaises(SupervisorError):
+            self.sup.submit_step_zero(
+                self.sup.workspace_handle, second_attempt, first_candidate
+            )
+        # Publication + retire the second Attempt; its handles must now be
+        # rejected by both submit intents rather than replayed.
+        self.assertEqual(
+            "published",
+            self.sup.submit_step_zero(
+                self.sup.workspace_handle, second_attempt, second_candidate
+            )["state"],
+        )
+        with self.assertRaises(SupervisorError):
+            self.sup.submit_step_zero(
+                self.sup.workspace_handle, second_attempt, second_candidate
+            )
+        with self.assertRaises(SupervisorError):
+            self.sup.submit_repair(
+                self.sup.workspace_handle, second_attempt, second_candidate
+            )
 
     def test_w3_handler_can_dispatch_concrete_ports_without_authority_imports(self) -> None:
         surface = self.sup.agent_surface()
@@ -2207,9 +2239,6 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     supervisor.workspace_handle,
                     started["attempt_handle"],
                     started["candidate_handle"],
-                    started["capability_bundle_handle"],
-                    started["capability_bundle_handle"],
-                    started["capability_bundle_handle"],
                 )
                 self.assertEqual("published", published["state"])
                 step = json.loads(

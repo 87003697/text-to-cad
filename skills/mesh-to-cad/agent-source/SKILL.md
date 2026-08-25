@@ -46,11 +46,12 @@ a closed result plus the list of intents permitted next.
   candidate operation (canonical build, preview, measurement, diff) on
   the current Attempt's candidate. You never invoke these tools yourself.
 - `submit_step_zero` — submit the measured initial step through the
-  supervisor using the candidate, candidate mesh, measurement, and
-  preview handles the earlier operations returned.
+  supervisor using only the workspace, attempt, and candidate handles.
+  The supervisor owns the trusted candidate tree and its evidence; you
+  never name or select evidence handles.
 - `submit_repair` — submit one measured repair cycle through the
-  supervisor with candidate, candidate mesh, measurement, preview,
-  region diff, assessment, and source-change handles.
+  supervisor using only the workspace, attempt, and candidate handles.
+  The supervisor discovers evidence from the trusted candidate tree.
 - `select_and_finalize` — request the supervisor's final result from an
   authored selection handle and notes handle.
 - `observe_reference` — request one bounded, structured observation of

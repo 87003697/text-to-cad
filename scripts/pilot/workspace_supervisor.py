@@ -82,9 +82,13 @@ class WorkspaceAPI(Protocol):
 
     def workspace_initialized(self, workspace: Path) -> bool: ...
 
-    def publish_step_zero_from_agent(self, workspace: Path, **kwargs: Any) -> Mapping[str, Any]: ...
+    def publish_step_zero_from_candidate(
+        self, workspace: Path, *, attempt: int, source: Path
+    ) -> Mapping[str, Any]: ...
 
-    def publish_cycle_from_agent(self, workspace: Path, **kwargs: Any) -> Mapping[str, Any]: ...
+    def publish_cycle_from_candidate(
+        self, workspace: Path, *, attempt: int, source: Path
+    ) -> Mapping[str, Any]: ...
 
     def finalize_agent_submission(
         self, workspace: Path, *, scope: Any | None = None, **kwargs: Any
@@ -245,8 +249,23 @@ class _AttemptCapabilities:
     attempt_id: int
     intended_step: int
     operation_handles: tuple[str, ...]
-    artifact_handles: dict[str, str]
     next_operation: int = 0
+
+
+@dataclass(frozen=True)
+class CandidateSubmission:
+    """Closed candidate submission binding for the W1 facade.
+
+    A ``CandidateSubmission`` names one Attempt-scoped candidate tree the
+    W1 facade must consume through its ``_from_candidate`` operations.
+    The Agent never sees or constructs this value; the supervisor derives
+    it from validated opaque handles and the intended step branch.
+    """
+
+    attempt_id: int
+    intended_step: int
+    kind: str
+    candidate_root: Path
 
 
 def _load_workspace_api() -> ModuleType:
@@ -1061,7 +1080,13 @@ class WorkspaceSupervisor:
         }
 
     def _issue_attempt_capabilities(self, context: _AttemptContext) -> str:
-        """Bind fresh operation/artifact slots to the actual returned Attempt."""
+        """Bind fresh operation slots to the actual returned Attempt.
+
+        Only run-level operation slots are allocated here.  Evidence
+        selection is not an Agent-visible capability in the seven-intent
+        surface; the W1 facade discovers candidate-authored evidence from
+        the trusted candidate tree during ``_from_candidate`` publication.
+        """
 
         operation_handles = tuple(
             self.register_operation(
@@ -1070,29 +1095,10 @@ class WorkspaceSupervisor:
             )
             for _ in range(8)
         )
-        root = context.candidate_root
-        artifact_handles = {
-            name: self.register_candidate_path(
-                root / relative,
-                kind="candidate_file",
-                attempt_id=context.attempt_id,
-            )
-            for name, relative in {
-                "candidate_mesh_handle": "candidate.glb",
-                "measurement_handle": (
-                    f"measurement/steps/{context.intended_step:06d}/measurement.json"
-                ),
-                "preview_handle": "preview",
-                "region_diff_handle": "region-diff.json",
-                "assessment_handle": "assessment.json",
-                "source_changes_handle": "source-changes.json",
-            }.items()
-        }
         bundle = _AttemptCapabilities(
             context.attempt_id,
             context.intended_step,
             operation_handles,
-            artifact_handles,
         )
         return self.registry.issue(
             "attempt_capabilities",
@@ -1324,57 +1330,19 @@ class WorkspaceSupervisor:
             raise SupervisorError("candidate_path_unavailable")
         return path
 
-    def _capability_path(
-        self,
-        handle: str,
-        role: str,
-        context: _AttemptContext,
-    ) -> Path:
-        try:
-            bundle = self.registry.resolve(
-                handle, "attempt_capabilities", attempt_id=context.attempt_id
-            )
-        except SupervisorError:
-            return self._candidate_path(handle, "candidate_file", context)
-        if not isinstance(bundle, _AttemptCapabilities):
-            raise SupervisorError("invalid_handle")
-        artifact_handle = bundle.artifact_handles.get(role)
-        if artifact_handle is None:
-            raise SupervisorError("invalid_handle")
-        return self._candidate_path(artifact_handle, "candidate_file", context)
-
     def submit_step_zero(
         self,
         workspace_handle: str,
         attempt_handle: str,
         candidate_handle: str,
-        candidate_mesh_handle: str,
-        measurement_handle: str,
-        preview_handle: str,
     ) -> Mapping[str, Any]:
-        context = self._attempt(workspace_handle, attempt_handle, candidate_handle)
-        candidate_mesh = self._capability_path(
-            candidate_mesh_handle, "candidate_mesh_handle", context
+        submission = self._prepare_submission(
+            workspace_handle, attempt_handle, candidate_handle, kind="step_zero"
         )
-        measurement = self._capability_path(
-            measurement_handle, "measurement_handle", context
-        )
-        preview = self._capability_path(preview_handle, "preview_handle", context)
-        try:
-            published = self.workspace_api.publish_step_zero_from_agent(
-                self.workspace,
-                attempt=context.attempt_id,
-                source=context.candidate_root,
-                candidate_mesh=candidate_mesh.relative_to(context.candidate_root).as_posix(),
-                measurement=measurement.relative_to(context.candidate_root).as_posix(),
-                preview=preview.relative_to(context.candidate_root).as_posix(),
-            )
-            step_number = int(published.get("step", 0))
-        except Exception as exc:
-            raise SupervisorError("step_publication_failed") from exc
+        published = self._publish_submission(submission)
+        step_number = int(published["step"])
         step_handle = self.registry.issue("step", step_number)
-        self.registry.revoke_attempt(context.attempt_id)
-        self._attempts.pop(context.attempt_id, None)
+        self._retire_attempt(submission.attempt_id)
         return {
             "state": "published",
             "step_handle": step_handle,
@@ -1386,63 +1354,80 @@ class WorkspaceSupervisor:
         workspace_handle: str,
         attempt_handle: str,
         candidate_handle: str,
-        candidate_mesh_handle: str,
-        measurement_handle: str,
-        preview_handle: str,
-        region_diff_handle: str,
-        assessment_handle: str,
-        source_changes_handle: str,
     ) -> Mapping[str, Any]:
-        context = self._attempt(workspace_handle, attempt_handle, candidate_handle)
-        paths = {
-            key: self._capability_path(handle, f"{key}_handle", context)
-            for key, handle in {
-                "candidate_mesh": candidate_mesh_handle,
-                "measurement": measurement_handle,
-                "preview": preview_handle,
-                "region_diff": region_diff_handle,
-                "assessment": assessment_handle,
-                "source_changes": source_changes_handle,
-            }.items()
-        }
-        try:
-            published = self.workspace_api.publish_cycle_from_agent(
-                self.workspace,
-                attempt=context.attempt_id,
-                source=context.candidate_root,
-                candidate_mesh=paths["candidate_mesh"]
-                .relative_to(context.candidate_root)
-                .as_posix(),
-                measurement=paths["measurement"]
-                .relative_to(context.candidate_root)
-                .as_posix(),
-                preview=paths["preview"].relative_to(context.candidate_root).as_posix(),
-                region_diff=paths["region_diff"].relative_to(context.candidate_root).as_posix(),
-                assessment=paths["assessment"].relative_to(context.candidate_root).as_posix(),
-                source_changes=paths["source_changes"]
-                .relative_to(context.candidate_root)
-                .as_posix(),
-            )
-            step_value = published.get("step", 0)
-            if isinstance(step_value, Mapping):
-                step_value = step_value.get("step", 0)
-            cycle_value = published.get("cycle", step_value)
-            if isinstance(cycle_value, Mapping):
-                cycle_value = cycle_value.get("cycle", step_value)
-            step_number = int(step_value)
-            cycle_number = int(cycle_value)
-        except Exception as exc:
-            raise SupervisorError("cycle_publication_failed") from exc
-        step_handle = self.registry.issue("step", step_number)
-        cycle_handle = self.registry.issue("cycle", cycle_number)
-        self.registry.revoke_attempt(context.attempt_id)
-        self._attempts.pop(context.attempt_id, None)
+        submission = self._prepare_submission(
+            workspace_handle, attempt_handle, candidate_handle, kind="repair"
+        )
+        published = self._publish_submission(submission)
+        step_handle = self.registry.issue("step", int(published["step"]))
+        cycle_handle = self.registry.issue("cycle", int(published["cycle"]))
+        self._retire_attempt(submission.attempt_id)
         return {
             "state": "published",
             "step_handle": step_handle,
             "cycle_handle": cycle_handle,
             "permitted_next_intents": ["start_attempt", "select_and_finalize", "workspace_status"],
         }
+
+    def _prepare_submission(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+        *,
+        kind: str,
+    ) -> CandidateSubmission:
+        context = self._attempt(workspace_handle, attempt_handle, candidate_handle)
+        return CandidateSubmission(
+            attempt_id=context.attempt_id,
+            intended_step=context.intended_step,
+            kind=kind,
+            candidate_root=context.candidate_root,
+        )
+
+    def _publish_submission(
+        self, submission: CandidateSubmission
+    ) -> Mapping[str, int]:
+        """Delegate one candidate submission to the W1 facade.
+
+        The W1 facade owns candidate ingestion and authority mutation, and
+        discovers evidence from the trusted candidate tree using its fixed
+        internal producer filenames.  The Agent never named a path.
+        """
+
+        if submission.kind == "step_zero":
+            api = self.workspace_api.publish_step_zero_from_candidate
+        elif submission.kind == "repair":
+            api = self.workspace_api.publish_cycle_from_candidate
+        else:
+            raise SupervisorError("invalid_request")
+        try:
+            document = api(
+                self.workspace,
+                attempt=submission.attempt_id,
+                source=submission.candidate_root,
+            )
+        except Exception as exc:
+            classification = (
+                "step_publication_failed"
+                if submission.kind == "step_zero"
+                else "cycle_publication_failed"
+            )
+            raise SupervisorError(classification) from exc
+        step_value = document.get("step", 0)
+        if isinstance(step_value, Mapping):
+            step_value = step_value.get("step", 0)
+        result = {"step": int(step_value)}
+        if submission.kind == "repair":
+            cycle_value = document.get("cycle", step_value)
+            if isinstance(cycle_value, Mapping):
+                cycle_value = cycle_value.get("cycle", step_value)
+            result["cycle"] = int(cycle_value)
+        return result
+
+    def _retire_attempt(self, attempt_id: int) -> None:
+        self.registry.revoke_attempt(attempt_id)
+        self._attempts.pop(attempt_id, None)
 
     def select_and_finalize(
         self,
@@ -1539,6 +1524,7 @@ class WorkspaceSupervisor:
         return result
 
 __all__ = [
+    "CandidateSubmission",
     "OpaqueHandleRegistry",
     "SupervisorError",
     "WorkspaceSupervisor",

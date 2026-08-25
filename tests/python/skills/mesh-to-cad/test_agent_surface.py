@@ -156,18 +156,12 @@ class FakePorts:
         workspace_handle,
         attempt_handle,
         candidate_handle,
-        candidate_mesh_handle,
-        measurement_handle,
-        preview_handle,
     ):
         return self._call(
             "submit_step_zero",
             workspace_handle,
             attempt_handle,
             candidate_handle,
-            candidate_mesh_handle,
-            measurement_handle,
-            preview_handle,
         )
 
     def submit_repair(
@@ -175,24 +169,12 @@ class FakePorts:
         workspace_handle,
         attempt_handle,
         candidate_handle,
-        candidate_mesh_handle,
-        measurement_handle,
-        preview_handle,
-        region_diff_handle,
-        assessment_handle,
-        source_changes_handle,
     ):
         return self._call(
             "submit_repair",
             workspace_handle,
             attempt_handle,
             candidate_handle,
-            candidate_mesh_handle,
-            measurement_handle,
-            preview_handle,
-            region_diff_handle,
-            assessment_handle,
-            source_changes_handle,
         )
 
     def select_and_finalize(self, workspace_handle, selection_handle, notes_handle):
@@ -223,12 +205,6 @@ class AgentSurfaceTests(unittest.TestCase):
             "attempt_handle": "attempt:1",
             "candidate_handle": "candidate:1",
             "operation_handle": "operation:build",
-            "candidate_mesh_handle": "mesh:1",
-            "measurement_handle": "measurement:1",
-            "preview_handle": "preview:1",
-            "region_diff_handle": "diff:1",
-            "assessment_handle": "assessment:1",
-            "source_changes_handle": "changes:1",
             "selection_handle": "selection:1",
             "notes_handle": "notes:1",
             "reference_handle": "reference:1",
@@ -258,15 +234,12 @@ class AgentSurfaceTests(unittest.TestCase):
                 "submit_step_zero",
                 {key: handles[key] for key in (
                     "workspace_handle", "attempt_handle", "candidate_handle",
-                    "candidate_mesh_handle", "measurement_handle", "preview_handle",
                 )},
             ),
             _request(
                 "submit_repair",
                 {key: handles[key] for key in (
                     "workspace_handle", "attempt_handle", "candidate_handle",
-                    "candidate_mesh_handle", "measurement_handle", "preview_handle",
-                    "region_diff_handle", "assessment_handle", "source_changes_handle",
                 )},
             ),
             _request(
@@ -445,15 +418,12 @@ class AgentSurfaceTests(unittest.TestCase):
             _request("workspace_status", {"workspace_handle": "ws:1"}),
             _request("start_attempt", {"workspace_handle": "ws:1", "plan_handle": "plan:1"}),
             _request("run_candidate_tool", {"workspace_handle": "ws:1", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1", "operation_handle": "operation:1"}),
-            _request("submit_step_zero", {key: value for key, value in {
+            _request("submit_step_zero", {
                 "workspace_handle": "ws:1", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1",
-                "candidate_mesh_handle": "mesh:1", "measurement_handle": "measurement:1", "preview_handle": "preview:1",
-            }.items()}),
-            _request("submit_repair", {key: value for key, value in {
+            }),
+            _request("submit_repair", {
                 "workspace_handle": "ws:1", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1",
-                "candidate_mesh_handle": "mesh:1", "measurement_handle": "measurement:1", "preview_handle": "preview:1",
-                "region_diff_handle": "diff:1", "assessment_handle": "assessment:1", "source_changes_handle": "changes:1",
-            }.items()}),
+            }),
             _request("select_and_finalize", {"workspace_handle": "ws:1", "selection_handle": "selection:1", "notes_handle": "notes:1"}),
             _request("observe_reference", {"reference_handle": "reference:1", "observation": {"method": "summary", "args": {}}}),
         ]
@@ -473,8 +443,8 @@ class AgentSurfaceTests(unittest.TestCase):
             ("workspace_status", {"workspace_handle": "ws:1"}, ("workspace_status", "ws:1"), "permitted_next_intents"),
             ("start_attempt", {"workspace_handle": "ws:1", "plan_handle": "plan:1"}, ("start_attempt", "ws:1", "plan:1", None), "state"),
             ("run_candidate_tool", {"workspace_handle": "ws:1", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1", "operation_handle": "operation:1"}, ("run_candidate_tool", "ws:1", "attempt:1", "candidate:1", "operation:1"), "candidate_handle"),
-            ("submit_step_zero", {key: value for key, value in {"workspace_handle": "ws:1", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1", "candidate_mesh_handle": "mesh:1", "measurement_handle": "measurement:1", "preview_handle": "preview:1"}.items()}, ("submit_step_zero", "ws:1", "attempt:1", "candidate:1", "mesh:1", "measurement:1", "preview:1"), "state"),
-            ("submit_repair", {key: value for key, value in {"workspace_handle": "ws:1", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1", "candidate_mesh_handle": "mesh:1", "measurement_handle": "measurement:1", "preview_handle": "preview:1", "region_diff_handle": "diff:1", "assessment_handle": "assessment:1", "source_changes_handle": "changes:1"}.items()}, ("submit_repair", "ws:1", "attempt:1", "candidate:1", "mesh:1", "measurement:1", "preview:1", "diff:1", "assessment:1", "changes:1"), "cycle_handle"),
+            ("submit_step_zero", {"workspace_handle": "ws:1", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1"}, ("submit_step_zero", "ws:1", "attempt:1", "candidate:1"), "state"),
+            ("submit_repair", {"workspace_handle": "ws:1", "attempt_handle": "attempt:1", "candidate_handle": "candidate:1"}, ("submit_repair", "ws:1", "attempt:1", "candidate:1"), "cycle_handle"),
             ("select_and_finalize", {"workspace_handle": "ws:1", "selection_handle": "selection:1", "notes_handle": "notes:1"}, ("select_and_finalize", "ws:1", "selection:1", "notes:1"), "final_delivery_handle"),
             ("observe_reference", {"reference_handle": "reference:1", "observation": {"method": "summary", "args": {}}}, ("observe_reference", "reference:1", {"method": "summary", "args": {}}), "reference_id"),
         ]
@@ -498,6 +468,54 @@ class AgentSurfaceTests(unittest.TestCase):
                     "supervisor_contract_violation",
                 )
         self.ports.result = None
+
+    def test_submit_intents_reject_agent_selected_evidence_handles(self) -> None:
+        """The Agent cannot name evidence handles or paths on the submit seam."""
+
+        submit_step_zero_narrow = {
+            "workspace_handle": "ws:1",
+            "attempt_handle": "attempt:1",
+            "candidate_handle": "candidate:1",
+        }
+        submit_repair_narrow = dict(submit_step_zero_narrow)
+        forbidden_extras = (
+            "candidate_mesh_handle",
+            "measurement_handle",
+            "preview_handle",
+            "region_diff_handle",
+            "assessment_handle",
+            "source_changes_handle",
+            "path",
+            "candidate_mesh",
+        )
+        for extra in forbidden_extras:
+            with self.subTest(extra=extra):
+                for intent, narrow in (
+                    ("submit_step_zero", submit_step_zero_narrow),
+                    ("submit_repair", submit_repair_narrow),
+                ):
+                    wide = dict(narrow)
+                    wide[extra] = "handle:1"
+                    self.assert_error(
+                        lambda intent=intent, wide=wide: self.surface.handle(
+                            _request(intent, wide)
+                        ),
+                        "invalid_request",
+                    )
+        self.assertEqual([], self.ports.calls)
+
+    def test_submit_intent_schemas_expose_only_three_handles(self) -> None:
+        """Tool descriptors publish the narrow (workspace, attempt, candidate) shape."""
+
+        descriptors = {item["name"]: item for item in tool_descriptors()}
+        for intent in ("submit_step_zero", "submit_repair"):
+            with self.subTest(intent=intent):
+                schema = descriptors[intent]["inputSchema"]
+                self.assertFalse(schema.get("additionalProperties"))
+                self.assertEqual(
+                    {"workspace_handle", "attempt_handle", "candidate_handle"},
+                    set(schema["properties"]),
+                )
 
     def test_w2_response_is_bound_to_reference_method_and_component_limit(self) -> None:
         request = _request(
