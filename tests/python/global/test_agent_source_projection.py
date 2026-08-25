@@ -63,6 +63,25 @@ class AgentSourceProjectionTests(unittest.TestCase):
             with self.assertRaises(projection.ProjectionError):
                 projection.verify(target)
 
+    def test_verify_rejects_noninteger_manifest_size(self) -> None:
+        for invalid in (3957.0, True):
+            with self.subTest(size=invalid), tempfile.TemporaryDirectory() as temporary:
+                _, target = self._bundle(temporary)
+                manifest_path = target / projection.MANIFEST_NAME
+                manifest = json.loads(manifest_path.read_text())
+                manifest["entries"][0]["size"] = invalid
+                manifest_path.write_text(
+                    json.dumps(
+                        manifest,
+                        indent=2,
+                        sort_keys=True,
+                        separators=(",", ": "),
+                    )
+                    + "\n"
+                )
+                with self.assertRaises(projection.ProjectionError):
+                    projection.verify(target)
+
     @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO requires POSIX")
     def test_verify_rejects_fifo_manifest_without_blocking(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

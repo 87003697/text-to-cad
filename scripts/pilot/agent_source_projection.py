@@ -184,9 +184,22 @@ def verify(target: Path) -> ProjectionInventory:
     manifest_body = _read_regular(target / MANIFEST_NAME, label="projection manifest")
     try:
         value = json.loads(manifest_body)
-        entries = tuple(ProjectionEntry(**item) for item in value["entries"])
+        raw_entries = value["entries"]
     except (KeyError, TypeError, json.JSONDecodeError) as exc:
         raise ProjectionError("projection manifest is malformed") from exc
+    if not isinstance(raw_entries, list):
+        raise ProjectionError("projection manifest is malformed")
+    for item in raw_entries:
+        if not isinstance(item, dict) or set(item) != {"path", "sha256", "size"}:
+            raise ProjectionError("projection manifest is malformed")
+        if (
+            type(item["path"]) is not str
+            or type(item["sha256"]) is not str
+            or type(item["size"]) is not int
+            or item["size"] < 0
+        ):
+            raise ProjectionError("projection manifest is malformed")
+    entries = tuple(ProjectionEntry(**item) for item in raw_entries)
     if value.get("schema") != PROJECTION_SCHEMA or value.get("version") != PROJECTION_VERSION:
         raise ProjectionError("projection manifest schema or version is unknown")
     if tuple(entry.path for entry in entries) != PROJECTED_PATHS:
