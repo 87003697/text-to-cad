@@ -92,6 +92,10 @@ class PackagedViewerStartSmokeTests(unittest.TestCase):
         # The shim intentionally serves the CALLER's cwd as the default directory;
         # point it at a throwaway dir so the smoke never depends on where pytest/unittest ran.
         env["INIT_CWD"] = str(pathlib.Path(tempfile.gettempdir()))
+        # This smoke boots the SERVE surface, not the CAD build toolchain: skip the
+        # cadgen-runtime probe the launcher otherwise runs (the same escape hatch
+        # test_server_startup uses), so the suite passes wherever node exists.
+        env["VIEWER_CAD_BACKEND_VALIDATED"] = "1"
         popen_kwargs = {}
         if sys.platform == "win32":
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -119,7 +123,14 @@ class PackagedViewerStartSmokeTests(unittest.TestCase):
         last_error = ""
         while time.monotonic() < deadline:
             if proc.poll() is not None:
-                self.fail("the viewer exited before serving; run npm --prefix viewer install/build")
+                try:
+                    output, _ = proc.communicate(timeout=5)
+                except (OSError, subprocess.TimeoutExpired):
+                    output = ""
+                self.fail(
+                    "the viewer exited before serving "
+                    f"(code {proc.returncode}): {output[-2000:]}"
+                )
             try:
                 with urllib.request.urlopen(url, timeout=5) as response:
                     payload = json.loads(response.read().decode("utf-8"))
