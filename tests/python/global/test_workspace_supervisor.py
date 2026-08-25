@@ -1956,6 +1956,111 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         self.assertFalse(surface.worker.is_alive())
         client.close()
 
+    def test_bridge_stop_during_active_build_confirms_cancellation_before_lease_release(
+        self,
+    ) -> None:
+        # Runner shuts down in the order bridge.stop → supervisor.close →
+        # candidate_runtime_lease.release; bridge.stop must drive
+        # supervisor.cancel to completion before the follower can proceed.
+        from scripts.pilot.agent_surface_bridge import AgentSurfaceBridge
+
+        attempt, candidate = self._start()
+        operation = self.sup.register_operation(
+            [sys.executable, "-c", "import time\ntime.sleep(60)\n"],
+            attempt_handle=attempt,
+        )
+        popens: list[subprocess.Popen] = []
+        started_process = threading.Event()
+
+        def slow_runner(argv, **kwargs):
+            process = subprocess.Popen(
+                argv,
+                cwd=kwargs.get("cwd"),
+                env=kwargs.get("env"),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=kwargs.get("start_new_session", False),
+            )
+            popens.append(process)
+            started_process.set()
+            return process
+
+        self.sup._command_runner = slow_runner
+        socket_path = self.root / "active-build.sock"
+        bridge = AgentSurfaceBridge(self.sup.agent_surface(), socket_path)
+        bridge.start()
+        try:
+            builder_error: list[BaseException | None] = [None]
+
+            def build() -> None:
+                try:
+                    self.sup.run_candidate_tool(
+                        self.sup.workspace_handle,
+                        attempt,
+                        candidate,
+                        operation,
+                    )
+                except BaseException as exc:  # noqa: BLE001
+                    builder_error[0] = exc
+
+            builder = threading.Thread(target=build, daemon=True)
+            builder.start()
+            self.assertTrue(started_process.wait(5))
+            deadline = time.monotonic() + 2.0
+            while (
+                time.monotonic() < deadline
+                and self.sup._active_calls != 1
+            ):
+                time.sleep(0.02)
+            self.assertEqual(1, self.sup._active_calls)
+            self.assertFalse(self.sup.cancellation_confirmed)
+            bridge.stop()
+        finally:
+            for process in popens:
+                if process.poll() is None:
+                    process.kill()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+        # bridge.stop returned only after supervisor.cancel drained the
+        # active tool call; the follower lease-release step therefore
+        # observes cancellation as truthfully confirmed.
+        self.assertTrue(self.sup.cancellation_confirmed)
+        self.assertEqual(0, self.sup._active_calls)
+        builder.join(timeout=5)
+        self.assertFalse(builder.is_alive())
+        self.assertEqual(1, len(popens))
+        self.assertIsNotNone(popens[0].poll())
+
+    def test_review_workspace_rejects_workspace_without_terminal_handoff(
+        self,
+    ) -> None:
+        # The runner path publishes the terminal validation handoff only
+        # after finalize_workspace succeeds and artifact_manifest is
+        # written; a workspace that reached finalize without the runner
+        # ever persisting the handoff must fail-closed in review rather
+        # than silently mint a bundle.
+        review_helper_path = (
+            Path(__file__).resolve().parents[3]
+            / "skills/mesh-to-cad/scripts/mesh-to-cad-review/__main__.py"
+        )
+        review_spec = importlib.util.spec_from_file_location(
+            "_pilot_review_for_test_adversarial", review_helper_path
+        )
+        assert review_spec is not None and review_spec.loader is not None
+        review_module = importlib.util.module_from_spec(review_spec)
+        sys.modules["_pilot_review_for_test_adversarial"] = review_module
+        review_spec.loader.exec_module(review_module)
+        workspace = self.root / "un-persisted-workspace"
+        workspace.mkdir()
+        (workspace / "run").mkdir()
+        # No locator marker at run/terminal-validation-locator.json and no
+        # sibling .internal-terminal-validation handoff either.
+        with self.assertRaises(review_module.ReviewError):
+            review_module.review_workspace(workspace)
+
     def test_runner_child_environment_does_not_forward_provider_secret(self) -> None:
         from scripts.pilot import runner
 
@@ -2164,20 +2269,28 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         and (Path(__file__).resolve().parents[3] / ".venv/bin/python").exists(),
         "real CAD, mesh, and candidate sandbox dependencies are unavailable",
     )
-    def test_real_production_supervisor_reaches_terminal_and_compiles_once(self) -> None:
+    def test_real_bridge_mediated_seven_intent_lifecycle_reaches_terminal_and_review(self) -> None:
         from scripts.pilot import runner
+        from scripts.pilot.agent_surface_bridge import AgentSurfaceBridge
 
-        cli_path = (
-            Path(__file__).resolve().parents[3]
-            / "tests/python/skills/mesh-to-cad/test_workspace_cli.py"
+        repo_root = Path(__file__).resolve().parents[3]
+        cli_path = repo_root / "tests/python/skills/mesh-to-cad/test_workspace_cli.py"
+        client_path = repo_root / "scripts/pilot/agent_surface_client.py"
+        review_helper_path = (
+            repo_root / "skills/mesh-to-cad/scripts/mesh-to-cad-review/__main__.py"
         )
-        spec = importlib.util.spec_from_file_location("real_workspace_cli_fixture", cli_path)
+        spec = importlib.util.spec_from_file_location(
+            "real_workspace_cli_fixture", cli_path
+        )
         self.assertIsNotNone(spec and spec.loader)
         fixture_module = importlib.util.module_from_spec(spec)
         assert spec is not None and spec.loader is not None
         spec.loader.exec_module(fixture_module)
-        case = fixture_module.WorkspaceCliTests("test_real_production_supervisor")
+        case = fixture_module.WorkspaceCliTests(
+            "test_real_bridge_mediated_seven_intent_lifecycle"
+        )
         case.setUp()
+        supervisor: WorkspaceSupervisor | None = None
         try:
             prepared, source_candidate = case.canonical_cad_flow()
             status, _payload, stderr = case.invoke(
@@ -2192,9 +2305,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             authority.mkdir()
             registry = runner.publish_tool_registry(authority)
             candidate_runtime = runner.materialize_candidate_runtime(
-                runner.REPO_ROOT / ".venv",
+                repo_root / ".venv",
                 case.root / "candidate-runtime",
-                repo_root=runner.REPO_ROOT,
+                repo_root=repo_root,
             )
             from scripts.pilot.step_zero_evidence import (
                 real_step_zero_evidence_provider,
@@ -2202,6 +2315,19 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             from scripts.pilot.repair_evidence import (
                 real_repair_evidence_provider,
             )
+
+            step_zero_calls = 0
+            repair_calls = 0
+
+            def counted_step_zero(request):
+                nonlocal step_zero_calls
+                step_zero_calls += 1
+                return real_step_zero_evidence_provider(request)
+
+            def counted_repair(request):
+                nonlocal repair_calls
+                repair_calls += 1
+                return real_repair_evidence_provider(request)
 
             supervisor = WorkspaceSupervisor(
                 case.workspace,
@@ -2212,39 +2338,123 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 geometry_entrypoint=runner.GEOMETRY_ENTRYPOINT,
                 tool_registry=registry,
                 candidate_runtime=candidate_runtime,
-                step_zero_evidence_provider=real_step_zero_evidence_provider,
-                repair_evidence_provider=real_repair_evidence_provider,
+                step_zero_evidence_provider=counted_step_zero,
+                repair_evidence_provider=counted_repair,
             )
+            socket_path = case.root / "agent-surface.sock"
+            bridge = AgentSurfaceBridge(supervisor.agent_surface(), socket_path)
+
+            intents_seen: list[str] = []
+            response_bodies: list[str] = []
+
+            def call(intent: str, args: dict) -> dict:
+                request = {
+                    "schema": "mesh-to-cad.agent-intent/1",
+                    "intent": intent,
+                    "args": args,
+                }
+                outcome = subprocess.run(
+                    [sys.executable, os.fspath(client_path)],
+                    input=json.dumps(request),
+                    text=True,
+                    capture_output=True,
+                    env={
+                        **os.environ,
+                        "MESH_TO_CAD_AGENT_SURFACE_SOCKET": os.fspath(socket_path),
+                    },
+                    check=False,
+                )
+                self.assertEqual(0, outcome.returncode, outcome.stderr)
+                payload = json.loads(outcome.stdout)
+                self.assertTrue(payload["ok"], payload)
+                intents_seen.append(intent)
+                response_bodies.append(outcome.stdout)
+                return payload["response"]["result"]
+
+            bridge.start()
             try:
                 contract = supervisor.agent_bootstrap_contract()
                 shutil.copy2(
                     case.initial_plan(), supervisor.candidate_root / "plan.json"
                 )
-                started = supervisor.start_attempt(
-                    supervisor.workspace_handle,
-                    contract["plan_handle"],
-                    None,
+
+                status_result = call(
+                    "workspace_status",
+                    {"workspace_handle": supervisor.workspace_handle},
                 )
-                attempt = supervisor.candidate_root / "attempt-000001"
-                shutil.copytree(source_candidate, attempt, dirs_exist_ok=True)
-                shutil.copy2(attempt / "built/measurement.glb", attempt / "candidate.glb")
+                self.assertEqual("ready", status_result["state"])
+
+                observed = call(
+                    "observe_reference",
+                    {
+                        "reference_handle": supervisor.reference_handle,
+                        "observation": {"method": "summary", "args": {}},
+                    },
+                )
+                self.assertEqual("summary", observed["observation"]["method"])
+
+                started_one = call(
+                    "start_attempt",
+                    {
+                        "workspace_handle": supervisor.workspace_handle,
+                        "plan_handle": contract["plan_handle"],
+                    },
+                )
+                attempt_one = supervisor.candidate_root / "attempt-000001"
+                shutil.copytree(source_candidate, attempt_one, dirs_exist_ok=True)
+                shutil.copy2(
+                    attempt_one / "built/measurement.glb",
+                    attempt_one / "candidate.glb",
+                )
                 # The trusted Step 0 evidence provider (assembled above) is
                 # the sole source of canonical measurement and preview
                 # bytes; no candidate-authored measurement.json/preview
                 # subtree may accompany the candidate.
-                tool_result = supervisor.run_candidate_tool(
-                    supervisor.workspace_handle,
-                    started["attempt_handle"],
-                    started["candidate_handle"],
-                    started["capability_bundle_handle"],
+
+                tool_result = call(
+                    "run_candidate_tool",
+                    {
+                        "workspace_handle": supervisor.workspace_handle,
+                        "attempt_handle": started_one["attempt_handle"],
+                        "candidate_handle": started_one["candidate_handle"],
+                        "operation_handle": started_one[
+                            "capability_bundle_handle"
+                        ],
+                    },
                 )
                 self.assertEqual("completed", tool_result["state"])
-                published = supervisor.submit_step_zero(
-                    supervisor.workspace_handle,
-                    started["attempt_handle"],
-                    started["candidate_handle"],
+
+                published = call(
+                    "submit_step_zero",
+                    {
+                        "workspace_handle": supervisor.workspace_handle,
+                        "attempt_handle": started_one["attempt_handle"],
+                        "candidate_handle": started_one["candidate_handle"],
+                    },
                 )
                 self.assertEqual("published", published["state"])
+
+                # A second Attempt issues fresh handles that share no bytes
+                # with Attempt 1; the older handle set is retired.
+                started_two = call(
+                    "start_attempt",
+                    {
+                        "workspace_handle": supervisor.workspace_handle,
+                        "plan_handle": contract["plan_handle"],
+                    },
+                )
+                self.assertNotEqual(
+                    started_one["attempt_handle"], started_two["attempt_handle"]
+                )
+                self.assertNotEqual(
+                    started_one["candidate_handle"],
+                    started_two["candidate_handle"],
+                )
+                self.assertNotEqual(
+                    started_one["capability_bundle_handle"],
+                    started_two["capability_bundle_handle"],
+                )
+
                 step = json.loads(
                     (case.workspace / "steps/000000/step.json").read_text()
                 )
@@ -2306,38 +2516,124 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     + "\n",
                     encoding="utf-8",
                 )
-                final = supervisor.select_and_finalize(
-                    supervisor.workspace_handle,
-                    supervisor.register_selection(selection),
-                    supervisor.register_notes(notes),
+                selection_handle = supervisor.register_selection(selection)
+                notes_handle = supervisor.register_notes(notes)
+
+                final = call(
+                    "select_and_finalize",
+                    {
+                        "workspace_handle": supervisor.workspace_handle,
+                        "selection_handle": selection_handle,
+                        "notes_handle": notes_handle,
+                    },
                 )
                 self.assertEqual("finalized", final["state"])
-                runner.write_artifact_manifest(case.workspace, 0, 0)
-                workspace_module = importlib.import_module(
-                    "_mesh_to_cad_workspace_for_pilot"
-                )
-                calls = 0
-                original_compile = workspace_module.compile_terminal_validation
-
-                def counted_compile(workspace):
-                    nonlocal calls
-                    calls += 1
-                    return original_compile(workspace)
-
-                with mock.patch.object(
-                    workspace_module,
-                    "compile_terminal_validation",
-                    side_effect=counted_compile,
-                ):
-                    locator = runner.persist_terminal_validation(case.workspace)
-                self.assertEqual(1, calls)
-                self.assertTrue(
-                    locator is not None
-                    and (case.workspace / locator.sidecar_path).is_file()
-                )
             finally:
-                supervisor.close()
+                bridge.stop()
+            # bridge.stop → surface.cancel → supervisor.cancel drained all
+            # active calls before returning; the lease-release follower in
+            # runner.finalize can only observe a confirmed cancellation.
+            self.assertTrue(supervisor.cancellation_confirmed)
+
+            # Runner-owned terminal handoff: exactly one complete
+            # validate_workspace inside compile_terminal_validation.
+            runner.write_artifact_manifest(case.workspace, 0, 0)
+            pilot_workspace = importlib.import_module(
+                "_mesh_to_cad_workspace_for_pilot"
+            )
+            compile_original = pilot_workspace.compile_terminal_validation
+            compile_calls = 0
+
+            def counted_compile(workspace):
+                nonlocal compile_calls
+                compile_calls += 1
+                return compile_original(workspace)
+
+            with mock.patch.object(
+                pilot_workspace,
+                "compile_terminal_validation",
+                side_effect=counted_compile,
+            ):
+                locator = runner.persist_terminal_validation(case.workspace)
+            self.assertEqual(1, compile_calls)
+            self.assertTrue(
+                locator is not None
+                and (case.workspace / locator.sidecar_path).is_file()
+            )
+
+            # Review path authenticates the same bundle exactly once
+            # through the sibling W1 verifier module (a distinct sys.modules
+            # cache entry from the pilot-side loader above).
+            review_spec = importlib.util.spec_from_file_location(
+                "_pilot_review_for_test", review_helper_path
+            )
+            assert review_spec is not None and review_spec.loader is not None
+            review_module = importlib.util.module_from_spec(review_spec)
+            sys.modules["_pilot_review_for_test"] = review_module
+            review_spec.loader.exec_module(review_module)
+            loaded_verifier = review_module._load_workspace_verifier(None)
+            verify_original = loaded_verifier.verify_terminal_validation
+            verify_calls = 0
+
+            def counted_verify(workspace, bundle, identity):
+                nonlocal verify_calls
+                verify_calls += 1
+                return verify_original(workspace, bundle, identity)
+
+            with mock.patch.object(
+                loaded_verifier,
+                "verify_terminal_validation",
+                side_effect=counted_verify,
+            ):
+                code, review = review_module.review_workspace(case.workspace)
+            self.assertEqual(0, code)
+            self.assertEqual(1, verify_calls)
+            self.assertEqual(
+                "valid", review["workspace_validation"]["classification"]
+            )
+
+            # Trusted providers were the sole source of canonical Step 0
+            # evidence and were driven exactly once from the bridge intent.
+            self.assertEqual(1, step_zero_calls)
+            # Repair was not submitted (canonical fixture lands accepted on
+            # Step 0); the repair provider must not have been invoked.
+            self.assertEqual(0, repair_calls)
+
+            # Exactly seven distinct intents crossed the Agent Surface,
+            # with start_attempt exercised twice for the two Attempts and
+            # the three submit handles (workspace/attempt/candidate) used
+            # by submit_step_zero.
+            self.assertEqual(
+                [
+                    "workspace_status",
+                    "observe_reference",
+                    "start_attempt",
+                    "run_candidate_tool",
+                    "submit_step_zero",
+                    "start_attempt",
+                    "select_and_finalize",
+                ],
+                intents_seen,
+            )
+
+            # No host, Workspace, raw-reference, or provider argv strings
+            # leaked into responses returned across the Unix socket.
+            forbidden = (
+                os.fspath(case.workspace),
+                os.fspath(case.root),
+                os.fspath(repo_root / ".venv"),
+                "/runtime/bin/python",
+                "source/model.py",
+                "steps/000000",
+                "attempt-000001",
+                "attempt-000002",
+            )
+            for body in response_bodies:
+                for literal in forbidden:
+                    self.assertNotIn(literal, body)
         finally:
+            if supervisor is not None:
+                supervisor.close()
             case.temporary.cleanup()
 
     def test_production_launcher_uses_opaque_prompt_and_agent_bridge(self) -> None:
