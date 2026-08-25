@@ -30,6 +30,23 @@ import time
 from types import ModuleType
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
+try:
+    from scripts.pilot.canonical_build_bundle import (  # type: ignore[import-not-found]
+        BUILDER_TOOL_ENTRYPOINT,
+        CanonicalBuildBundleError,
+        CanonicalBuildBundleLease,
+        validate_canonical_build_bundle,
+    )
+except ModuleNotFoundError as _exc:  # pragma: no cover - direct-execution fallback
+    if _exc.name not in {"scripts", "scripts.pilot"}:
+        raise
+    from canonical_build_bundle import (  # type: ignore[no-redef]
+        BUILDER_TOOL_ENTRYPOINT,
+        CanonicalBuildBundleError,
+        CanonicalBuildBundleLease,
+        validate_canonical_build_bundle,
+    )
+
 
 MAX_OPERATION_OUTPUT_BYTES = 64 * 1024
 MAX_OPERATION_TIMEOUT_SECONDS = 1800
@@ -37,6 +54,28 @@ MAX_CANDIDATE_FILE_BYTES = 512 * 1024 * 1024
 MAX_ATTEMPT_STEP = 5
 MAX_ATTEMPTS_PER_STEP = 3
 MAX_CYCLES = 5
+MAX_CANONICAL_BUILD_TIMEOUT_SECONDS = 1800
+MAX_CANONICAL_BUILD_ATTEMPTS = 8
+CANDIDATE_PUBLISHED_MEASUREMENT_NAME = "candidate.glb"
+_TRUSTED_OUTPUT_PREFIX = ".trusted-out-"
+_CANONICAL_OUTPUT_FILES = (
+    "canonical.step",
+    "measurement.glb",
+    "profile.json",
+    "build.json",
+    "rebuild.json",
+)
+_CANONICAL_MEASUREMENT_NAME = "measurement.glb"
+_CANONICAL_MANIFEST_NAME = "build.json"
+_CANONICAL_RECIPE_NAME = "rebuild.json"
+_CANONICAL_BUILD_SCHEMA = "mesh-to-cad.build/1"
+_CANONICAL_RECIPE_SCHEMA = "mesh-to-cad.rebuild-recipe/1"
+_CANONICAL_ADAPTER_ID = "cad.canonical-build/1"
+_BUILDER_INTERNAL_PATH = PurePosixPath("/builder")
+_SOURCE_INTERNAL_ROOT = PurePosixPath("source")
+_SOURCE_MODULE_NAME = "model.py"
+MAX_DECLARED_SIDECARS = 32
+MAX_SIDECAR_BYTES = 512 * 1024
 # The Agent-visible current work subtree.  The outer Agent sandbox mounts
 # the supervisor's candidate root at ``/candidate`` and the Agent authors
 # under ``/candidate/work``; the nested candidate-tool bwrap binds this
@@ -261,6 +300,19 @@ class _CandidateOperation:
 
 
 @dataclass(frozen=True)
+class _CanonicalBuildRequest:
+    """Trusted request to run one canonical-build invocation for the Attempt.
+
+    The request carries no argv, entrypoint, environment, tool source, or
+    output-directory selection; those are all fixed by the supervisor
+    itself when the request is executed.  The Attempt id is the only
+    piece of scope, and it never leaves the trusted boundary.
+    """
+
+    attempt_id: int
+
+
+@dataclass(frozen=True)
 class _AttemptContext:
     attempt_id: int
     intended_step: int
@@ -271,12 +323,19 @@ class _AttemptContext:
 
 @dataclass
 class _AttemptCapabilities:
-    """Attempt-scoped opaque lookup bundle issued after Workspace opens it."""
+    """Attempt-scoped single-use canonical-build bundle with a spend budget.
+
+    The Agent never gets an argv or environment; it gets one opaque bundle
+    handle and a per-Attempt budget the supervisor decrements each time
+    ``run_candidate_tool`` accepts the bundle.  The budget preserves the
+    prior contract of a small bounded number of tool invocations per
+    Attempt without preallocating identical, replaceable operation
+    handles that would each still need argv material to be resolvable.
+    """
 
     attempt_id: int
     intended_step: int
-    operation_handles: tuple[str, ...]
-    next_operation: int = 0
+    remaining_invocations: int
 
 
 @dataclass(frozen=True)
@@ -506,6 +565,7 @@ def _candidate_sandbox_argv(
     operation: _CandidateOperation,
     candidate_root: Path,
     runtime_dir: Path,
+    builder_bundle: Path | None = None,
 ) -> list[str]:
     """Run one registered operation in a minimal Linux candidate mount."""
 
@@ -541,6 +601,8 @@ def _candidate_sandbox_argv(
         "usr/lib64",
         "/lib64",
     ]
+    if builder_bundle is not None:
+        argv.extend(("--ro-bind", os.fspath(builder_bundle), str(_BUILDER_INTERNAL_PATH)))
     for path in _CANDIDATE_SYSTEM_MOUNTS:
         if Path(path).exists():
             argv.extend(("--ro-bind", path, path))
@@ -576,6 +638,7 @@ class WorkspaceSupervisor:
         geometry_entrypoint: Path | None = None,
         tool_registry: Path | None = None,
         candidate_runtime: Path | None = None,
+        builder_bundle: Path | CanonicalBuildBundleLease | None = None,
         step_zero_evidence_provider: Callable[..., Any] | None = None,
         repair_evidence_provider: Callable[..., Any] | None = None,
     ) -> None:
@@ -653,6 +716,34 @@ class WorkspaceSupervisor:
                 except ValueError as exc:
                     raise SupervisorError("candidate_runtime_unavailable") from exc
                 self.candidate_runtime = runtime
+            self.builder_bundle: Path | None = None
+            self.builder_bundle_identity: str | None = None
+            if builder_bundle is not None:
+                if isinstance(builder_bundle, CanonicalBuildBundleLease):
+                    bundle_path = Path(builder_bundle.path)
+                    provided_identity: str | None = builder_bundle.identity
+                else:
+                    bundle_path = Path(builder_bundle)
+                    provided_identity = None
+                if bundle_path.is_symlink() or not bundle_path.is_dir():
+                    raise SupervisorError("builder_bundle_unavailable")
+                bundle_path = bundle_path.resolve()
+                try:
+                    bundle_path.relative_to(self.workspace)
+                except ValueError:
+                    pass
+                else:
+                    raise SupervisorError("builder_bundle_unavailable")
+                if bundle_path.stat().st_mode & 0o222:
+                    raise SupervisorError("builder_bundle_unavailable")
+                try:
+                    identity = validate_canonical_build_bundle(
+                        bundle_path, provided_identity
+                    )
+                except CanonicalBuildBundleError as exc:
+                    raise SupervisorError("builder_bundle_unavailable") from exc
+                self.builder_bundle = bundle_path
+                self.builder_bundle_identity = identity
             self._attempts: dict[int, _AttemptContext] = {}
 
             self.workspace_handle = self.registry.issue("workspace", self.workspace)
@@ -1126,25 +1217,21 @@ class WorkspaceSupervisor:
         }
 
     def _issue_attempt_capabilities(self, context: _AttemptContext) -> str:
-        """Bind fresh operation slots to the actual returned Attempt.
+        """Bind one single-use canonical-build bundle to the actual Attempt.
 
-        Only run-level operation slots are allocated here.  Evidence
-        selection is not an Agent-visible capability in the seven-intent
-        surface; the W1 facade discovers candidate-authored evidence from
-        the trusted candidate tree during ``_from_candidate`` publication.
+        The bundle is issued regardless of whether a builder bundle has
+        been mounted; if it has not, the trusted canonical-build path
+        fails closed on the first invocation.  Only run-level capability
+        is allocated here.  Evidence selection is not an Agent-visible
+        capability in the seven-intent surface; the W1 facade discovers
+        candidate-authored evidence from the trusted candidate tree
+        during ``_from_candidate`` publication.
         """
 
-        operation_handles = tuple(
-            self.register_operation(
-                ["/runtime/bin/python", "source/model.py"],
-                attempt_id=context.attempt_id,
-            )
-            for _ in range(8)
-        )
         bundle = _AttemptCapabilities(
             context.attempt_id,
             context.intended_step,
-            operation_handles,
+            MAX_CANONICAL_BUILD_ATTEMPTS,
         )
         return self.registry.issue(
             "attempt_capabilities",
@@ -1162,6 +1249,429 @@ class WorkspaceSupervisor:
         with self._active_calls_condition:
             self._active_calls -= 1
             self._active_calls_condition.notify_all()
+
+    def _execute_canonical_build(
+        self,
+        context: _AttemptContext,
+        request: _CanonicalBuildRequest,
+    ) -> Mapping[str, Any]:
+        """Run one trusted canonical-build invocation for the current Attempt.
+
+        The invocation targets the fixed candidate-relative work tree the
+        Agent has authored under.  The tool's argv, entrypoint, output
+        directory, and environment are all supervisor-owned; the Agent
+        cannot influence them.  On success the trusted supervisor
+        atomically publishes the tool-produced measurement.glb to the
+        fixed ``candidate.glb`` W1 consumes.
+        """
+
+        if self.builder_bundle is None or self.builder_bundle_identity is None:
+            raise SupervisorError("builder_bundle_unavailable")
+        if self._command_runner is subprocess.run and self.candidate_runtime is None:
+            raise SupervisorError("candidate_runtime_unavailable")
+        work = context.candidate_root
+        candidate_glb = work / CANDIDATE_PUBLISHED_MEASUREMENT_NAME
+        if candidate_glb.is_symlink() or candidate_glb.exists():
+            raise SupervisorError("candidate_glb_preexisting")
+
+        source_root = work / str(_SOURCE_INTERNAL_ROOT)
+        source_module = source_root / _SOURCE_MODULE_NAME
+        if source_root.is_symlink() or not source_root.is_dir():
+            raise SupervisorError("candidate_source_missing")
+        if source_module.is_symlink() or not source_module.is_file():
+            raise SupervisorError("candidate_source_missing")
+        sidecars = self._collect_declared_sidecars(source_root)
+        source_digests = self._snapshot_source_digests(source_root, sidecars)
+
+        output_token = "".join(
+            secrets.choice(_HANDLE_ALPHABET) for _ in range(20)
+        )
+        output_relative = f"{_TRUSTED_OUTPUT_PREFIX}{output_token}"
+        output_dir = work / output_relative
+        if output_dir.exists() or output_dir.is_symlink():
+            raise SupervisorError("candidate_execution_failed")
+        try:
+            output_dir.mkdir(parents=False, exist_ok=False, mode=0o700)
+        except OSError as exc:
+            raise SupervisorError("candidate_execution_failed") from exc
+
+        argv: list[str] = [
+            "/runtime/bin/python",
+            str(_BUILDER_INTERNAL_PATH / BUILDER_TOOL_ENTRYPOINT),
+            "build",
+            "--source",
+            (_SOURCE_INTERNAL_ROOT / _SOURCE_MODULE_NAME).as_posix(),
+            "--output-dir",
+            output_relative,
+        ]
+        for sidecar_relative in sidecars:
+            argv.extend(("--input", sidecar_relative))
+        operation = _CandidateOperation(
+            tuple(argv),
+            MAX_CANONICAL_BUILD_TIMEOUT_SECONDS,
+            (),
+        )
+
+        try:
+            exit_code, stdout, stderr, command_document = self._invoke_operation(
+                operation, context, builder_bundle=self.builder_bundle
+            )
+        except SupervisorError:
+            self._discard_trusted_output(output_dir)
+            raise
+        stdout_digest, _ = _bounded_process_detail(stdout)
+        stderr_digest, _ = _bounded_process_detail(stderr)
+        try:
+            if exit_code != 0:
+                raise SupervisorError("candidate_tool_failed")
+            self._reverify_source_digests(source_root, sidecars, source_digests)
+            self._validate_canonical_output(output_dir, sidecars, source_digests)
+            self._publish_candidate_glb(output_dir, candidate_glb)
+        except SupervisorError:
+            self._discard_trusted_output(output_dir)
+            try:
+                if candidate_glb.is_symlink():
+                    candidate_glb.unlink()
+                elif candidate_glb.exists():
+                    candidate_glb.unlink()
+            except OSError:
+                pass
+            raise
+        result_handle = self.registry.issue(
+            "result",
+            {
+                "exit_code": exit_code,
+                "command": command_document.get("command"),
+                "stdout_sha256": stdout_digest,
+                "stderr_sha256": stderr_digest,
+                "adapter": _CANONICAL_ADAPTER_ID,
+                "builder_bundle_identity": self.builder_bundle_identity,
+            },
+            attempt_id=context.attempt_id,
+        )
+        return {
+            "state": "completed",
+            "candidate_handle": context.candidate_handle,
+            "result_handle": result_handle,
+            "permitted_next_intents": [
+                "run_candidate_tool",
+                "submit_step_zero"
+                if context.intended_step == 0
+                else "submit_repair",
+                "workspace_status",
+            ],
+        }
+
+    def _collect_declared_sidecars(self, source_root: Path) -> tuple[str, ...]:
+        """Enumerate regular sidecar files under source/ other than model.py."""
+
+        sidecars: list[str] = []
+        for parent, dirnames, filenames in os.walk(source_root, followlinks=False):
+            parent_path = Path(parent)
+            dirnames.sort()
+            dirnames[:] = [
+                name
+                for name in dirnames
+                if not (parent_path / name).is_symlink()
+            ]
+            for name in sorted(filenames):
+                path = parent_path / name
+                if path.is_symlink():
+                    raise SupervisorError("candidate_source_invalid")
+                if path == source_root / _SOURCE_MODULE_NAME:
+                    continue
+                relative = (
+                    PurePosixPath(_SOURCE_INTERNAL_ROOT.as_posix())
+                    / path.relative_to(source_root).as_posix()
+                ).as_posix()
+                sidecars.append(relative)
+                if len(sidecars) > MAX_DECLARED_SIDECARS:
+                    raise SupervisorError("candidate_source_invalid")
+                info = path.stat()
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise SupervisorError("candidate_source_invalid")
+                if info.st_size > MAX_SIDECAR_BYTES:
+                    raise SupervisorError("candidate_source_invalid")
+        return tuple(sidecars)
+
+    def _snapshot_source_digests(
+        self, source_root: Path, sidecars: tuple[str, ...]
+    ) -> dict[str, str]:
+        digests: dict[str, str] = {}
+        module_relative = (
+            _SOURCE_INTERNAL_ROOT / _SOURCE_MODULE_NAME
+        ).as_posix()
+        digests[module_relative] = _sha256_bytes(
+            (source_root / _SOURCE_MODULE_NAME).read_bytes()
+        )
+        for relative in sidecars:
+            interior = PurePosixPath(relative).relative_to(_SOURCE_INTERNAL_ROOT.as_posix())
+            path = source_root / interior.as_posix()
+            digests[relative] = _sha256_bytes(path.read_bytes())
+        return digests
+
+    def _reverify_source_digests(
+        self,
+        source_root: Path,
+        sidecars: tuple[str, ...],
+        digests: Mapping[str, str],
+    ) -> None:
+        module_relative = (
+            _SOURCE_INTERNAL_ROOT / _SOURCE_MODULE_NAME
+        ).as_posix()
+        module_path = source_root / _SOURCE_MODULE_NAME
+        if module_path.is_symlink() or not module_path.is_file():
+            raise SupervisorError("candidate_source_mutated")
+        actual = _sha256_bytes(module_path.read_bytes())
+        if actual != digests.get(module_relative):
+            raise SupervisorError("candidate_source_mutated")
+        for relative in sidecars:
+            interior = PurePosixPath(relative).relative_to(_SOURCE_INTERNAL_ROOT.as_posix())
+            path = source_root / interior.as_posix()
+            if path.is_symlink() or not path.is_file():
+                raise SupervisorError("candidate_source_mutated")
+            if _sha256_bytes(path.read_bytes()) != digests.get(relative):
+                raise SupervisorError("candidate_source_mutated")
+
+    def _validate_canonical_output(
+        self,
+        output_dir: Path,
+        sidecars: tuple[str, ...],
+        source_digests: Mapping[str, str],
+    ) -> None:
+        if output_dir.is_symlink() or not output_dir.is_dir():
+            raise SupervisorError("canonical_output_invalid")
+        expected = set(_CANONICAL_OUTPUT_FILES)
+        observed: dict[str, tuple[int, str]] = {}
+        for path in sorted(output_dir.rglob("*"), key=lambda item: item.as_posix()):
+            relative = path.relative_to(output_dir).as_posix()
+            if path.is_symlink():
+                raise SupervisorError("canonical_output_invalid")
+            if path.is_dir():
+                raise SupervisorError("canonical_output_invalid")
+            if relative not in expected:
+                raise SupervisorError("canonical_output_invalid")
+            info = path.stat()
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                raise SupervisorError("canonical_output_invalid")
+            if info.st_size > MAX_CANDIDATE_FILE_BYTES:
+                raise SupervisorError("canonical_output_invalid")
+            body = path.read_bytes()
+            if len(body) != info.st_size:
+                raise SupervisorError("canonical_output_invalid")
+            observed[relative] = (len(body), _sha256_bytes(body))
+        if set(observed) != expected:
+            raise SupervisorError("canonical_output_invalid")
+        try:
+            manifest = json.loads(
+                (output_dir / _CANONICAL_MANIFEST_NAME).read_text(encoding="utf-8")
+            )
+            recipe = json.loads(
+                (output_dir / _CANONICAL_RECIPE_NAME).read_text(encoding="utf-8")
+            )
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SupervisorError("canonical_output_invalid") from exc
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("schema") != _CANONICAL_BUILD_SCHEMA
+            or manifest.get("adapter") not in {_CANONICAL_ADAPTER_ID, None}
+        ):
+            raise SupervisorError("canonical_output_invalid")
+        if not isinstance(recipe, dict) or recipe.get("schema") != _CANONICAL_RECIPE_SCHEMA:
+            raise SupervisorError("canonical_output_invalid")
+        files = manifest.get("files")
+        if not isinstance(files, list) or not files:
+            raise SupervisorError("canonical_output_invalid")
+        expected_by_path = {}
+        for entry in files:
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("path"), str)
+                or not isinstance(entry.get("sha256"), str)
+            ):
+                raise SupervisorError("canonical_output_invalid")
+            expected_by_path[entry["path"]] = entry["sha256"]
+        for name in _CANONICAL_OUTPUT_FILES:
+            if name == _CANONICAL_MANIFEST_NAME:
+                continue
+            declared = expected_by_path.get(name)
+            if declared is None or declared != observed[name][1]:
+                raise SupervisorError("canonical_output_invalid")
+        recipe_inputs = recipe.get("inputs")
+        if not isinstance(recipe_inputs, list) or not recipe_inputs:
+            raise SupervisorError("canonical_output_invalid")
+        source_relative = (
+            _SOURCE_INTERNAL_ROOT / _SOURCE_MODULE_NAME
+        ).as_posix()
+        declared_paths: list[str] = []
+        for entry in recipe_inputs:
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("path"), str)
+                or not isinstance(entry.get("sha256"), str)
+            ):
+                raise SupervisorError("canonical_output_invalid")
+            declared_paths.append(entry["path"])
+            if entry["path"] == source_relative:
+                if entry["sha256"] != source_digests.get(source_relative):
+                    raise SupervisorError("canonical_output_invalid")
+        if source_relative not in declared_paths:
+            raise SupervisorError("canonical_output_invalid")
+        for relative in sidecars:
+            if relative not in declared_paths:
+                raise SupervisorError("canonical_output_invalid")
+
+    def _publish_candidate_glb(self, output_dir: Path, candidate_glb: Path) -> None:
+        source = output_dir / _CANONICAL_MEASUREMENT_NAME
+        if source.is_symlink() or not source.is_file():
+            raise SupervisorError("canonical_output_invalid")
+        source_fd = _open_nofollow(source)
+        try:
+            _copy_descriptor(source_fd, candidate_glb)
+        finally:
+            os.close(source_fd)
+
+    def _discard_trusted_output(self, output_dir: Path) -> None:
+        try:
+            if output_dir.is_symlink():
+                output_dir.unlink()
+            elif output_dir.exists():
+                shutil.rmtree(output_dir)
+        except OSError:
+            pass
+
+    def _invoke_operation(
+        self,
+        operation: _CandidateOperation,
+        context: _AttemptContext,
+        *,
+        builder_bundle: Path | None = None,
+    ) -> tuple[int, bytes, bytes, Mapping[str, Any]]:
+        """Execute one prepared operation and return (exit, stdout, stderr, doc).
+
+        Encapsulates the sandbox/injected-runner split so ``run_candidate_tool``
+        and ``_execute_canonical_build`` share the same lifecycle and
+        cancel semantics without duplicating the launcher body.
+        """
+
+        env = {
+            "PATH": "/runtime/bin",
+            "HOME": "/candidate/.home",
+            "TMPDIR": "/candidate/.tmp",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONHOME": "/runtime",
+            "PYTHONNOUSERSITE": "1",
+        }
+        env.update(dict(operation.environment))
+        for key, value in env.items():
+            if key not in _SAFE_ENV_KEYS or "\0" in value:
+                raise SupervisorError("invalid_operation")
+            if key == "PATH" and value != "/runtime/bin":
+                raise SupervisorError("invalid_operation")
+            if key == "PYTHONHOME" and value != "/runtime":
+                raise SupervisorError("invalid_operation")
+            if key == "PYTHONNOUSERSITE" and value != "1":
+                raise SupervisorError("invalid_operation")
+        try:
+            (context.candidate_root / ".home").mkdir(exist_ok=True)
+            (context.candidate_root / ".tmp").mkdir(exist_ok=True)
+            if self._command_runner is subprocess.run:
+                if self.candidate_runtime is None:
+                    raise SupervisorError("candidate_runtime_unavailable")
+                command = _candidate_sandbox_argv(
+                    operation,
+                    context.candidate_root,
+                    self.candidate_runtime,
+                    builder_bundle=builder_bundle,
+                )
+            else:
+                command = list(operation.argv)
+            if self._command_runner is subprocess.run:
+                command_kwargs: dict[str, Any] = {
+                    "attempt": context.attempt_id,
+                    "phase": "candidate",
+                    "argv": command,
+                    "timeout_seconds": operation.timeout_seconds,
+                    "cwd": context.candidate_root,
+                    "environment": env,
+                }
+                if self._execution_scope is not None:
+                    command_kwargs["scope"] = self._execution_scope
+                command_document = self.workspace_api.run_attempt_command(
+                    self.workspace,
+                    **command_kwargs,
+                )
+                return (
+                    int(command_document["exit_code"]),
+                    b"",
+                    b"",
+                    command_document,
+                )
+            completed = self._command_runner(
+                command,
+                cwd=context.candidate_root,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=operation.timeout_seconds,
+                check=False,
+                start_new_session=(os.name == "posix"),
+            )
+            if isinstance(completed, subprocess.Popen):
+                process = completed
+                with self._active_processes_lock:
+                    self._active_processes.add(process)
+                try:
+                    try:
+                        process_stdout, process_stderr = process.communicate(
+                            timeout=operation.timeout_seconds
+                        )
+                        completed = subprocess.CompletedProcess(
+                            command,
+                            process.returncode,
+                            process_stdout,
+                            process_stderr,
+                        )
+                    except subprocess.TimeoutExpired as exc:
+                        if os.name == "posix":
+                            os.killpg(process.pid, signal.SIGTERM)
+                        else:
+                            process.terminate()
+                        try:
+                            process_stdout, process_stderr = process.communicate(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            if os.name == "posix":
+                                os.killpg(process.pid, signal.SIGKILL)
+                            else:
+                                process.kill()
+                            try:
+                                process_stdout, process_stderr = process.communicate(
+                                    timeout=2
+                                )
+                            except subprocess.TimeoutExpired:
+                                for stream in (process.stdout, process.stderr):
+                                    if stream is not None:
+                                        stream.close()
+                                process_stdout, process_stderr = b"", b""
+                        completed = subprocess.CompletedProcess(
+                            command,
+                            124,
+                            process_stdout if process_stdout is not None else exc.output,
+                            process_stderr if process_stderr is not None else exc.stderr,
+                        )
+                finally:
+                    with self._active_processes_lock:
+                        self._active_processes.discard(process)
+            stdout = completed.stdout if isinstance(completed.stdout, bytes) else b""
+            stderr = completed.stderr if isinstance(completed.stderr, bytes) else b""
+            return int(completed.returncode), stdout, stderr, {"command": None}
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.output if isinstance(exc.output, bytes) else b""
+            stderr = exc.stderr if isinstance(exc.stderr, bytes) else b""
+            return 124, stdout, stderr, {"command": None}
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise SupervisorError("candidate_execution_failed") from exc
 
     def run_candidate_tool(
         self,
@@ -1191,124 +1701,15 @@ class WorkspaceSupervisor:
         operation_handle: str,
     ) -> Mapping[str, Any]:
         context = self._attempt(workspace_handle, attempt_handle, candidate_handle)
-        operation = self._resolve_operation_capability(operation_handle, context)
+        resolved = self._resolve_operation_capability(operation_handle, context)
+        if isinstance(resolved, _CanonicalBuildRequest):
+            return self._execute_canonical_build(context, resolved)
+        operation = resolved
         if not isinstance(operation, _CandidateOperation):
             raise SupervisorError("invalid_operation")
-        env = {
-            "PATH": "/runtime/bin",
-            "HOME": "/candidate/.home",
-            "TMPDIR": "/candidate/.tmp",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONHOME": "/runtime",
-            "PYTHONNOUSERSITE": "1",
-        }
-        env.update(dict(operation.environment))
-        # Registered values may not smuggle an authority or host environment.
-        for key, value in env.items():
-            if key not in _SAFE_ENV_KEYS or "\0" in value:
-                raise SupervisorError("invalid_operation")
-            if key == "PATH" and value != "/runtime/bin":
-                raise SupervisorError("invalid_operation")
-            if key == "PYTHONHOME" and value != "/runtime":
-                raise SupervisorError("invalid_operation")
-            if key == "PYTHONNOUSERSITE" and value != "1":
-                raise SupervisorError("invalid_operation")
-        try:
-            (context.candidate_root / ".home").mkdir(exist_ok=True)
-            (context.candidate_root / ".tmp").mkdir(exist_ok=True)
-            if self._command_runner is subprocess.run:
-                if self.candidate_runtime is None:
-                    raise SupervisorError("candidate_runtime_unavailable")
-                command = _candidate_sandbox_argv(
-                    operation, context.candidate_root, self.candidate_runtime
-                )
-            else:
-                command = list(operation.argv)
-            if self._command_runner is subprocess.run:
-                command_kwargs: dict[str, Any] = {
-                    "attempt": context.attempt_id,
-                    "phase": "candidate",
-                    "argv": command,
-                    "timeout_seconds": operation.timeout_seconds,
-                    "cwd": context.candidate_root,
-                    "environment": env,
-                }
-                if self._execution_scope is not None:
-                    command_kwargs["scope"] = self._execution_scope
-                command_document = self.workspace_api.run_attempt_command(
-                    self.workspace,
-                    **command_kwargs,
-                )
-                exit_code = int(command_document["exit_code"])
-                stdout = b""
-                stderr = b""
-            else:
-                completed = self._command_runner(
-                    command,
-                    cwd=context.candidate_root,
-                    env=env,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=operation.timeout_seconds,
-                    check=False,
-                    start_new_session=(os.name == "posix"),
-                )
-                if isinstance(completed, subprocess.Popen):
-                    process = completed
-                    with self._active_processes_lock:
-                        self._active_processes.add(process)
-                    try:
-                        try:
-                            process_stdout, process_stderr = process.communicate(
-                                timeout=operation.timeout_seconds
-                            )
-                            completed = subprocess.CompletedProcess(
-                                command,
-                                process.returncode,
-                                process_stdout,
-                                process_stderr,
-                            )
-                        except subprocess.TimeoutExpired as exc:
-                            if os.name == "posix":
-                                os.killpg(process.pid, signal.SIGTERM)
-                            else:
-                                process.terminate()
-                            try:
-                                process_stdout, process_stderr = process.communicate(timeout=2)
-                            except subprocess.TimeoutExpired:
-                                if os.name == "posix":
-                                    os.killpg(process.pid, signal.SIGKILL)
-                                else:
-                                    process.kill()
-                                try:
-                                    process_stdout, process_stderr = process.communicate(
-                                        timeout=2
-                                    )
-                                except subprocess.TimeoutExpired:
-                                    for stream in (process.stdout, process.stderr):
-                                        if stream is not None:
-                                            stream.close()
-                                    process_stdout, process_stderr = b"", b""
-                            completed = subprocess.CompletedProcess(
-                                command,
-                                124,
-                                process_stdout if process_stdout is not None else exc.output,
-                                process_stderr if process_stderr is not None else exc.stderr,
-                            )
-                    finally:
-                        with self._active_processes_lock:
-                            self._active_processes.discard(process)
-                command_document = {"command": None}
-                stdout = completed.stdout if isinstance(completed.stdout, bytes) else b""
-                stderr = completed.stderr if isinstance(completed.stderr, bytes) else b""
-                exit_code = int(completed.returncode)
-        except subprocess.TimeoutExpired as exc:
-            stdout = exc.output if isinstance(exc.output, bytes) else b""
-            stderr = exc.stderr if isinstance(exc.stderr, bytes) else b""
-            exit_code = 124
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise SupervisorError("candidate_execution_failed") from exc
+        exit_code, stdout, stderr, command_document = self._invoke_operation(
+            operation, context
+        )
         stdout_digest, _ = _bounded_process_detail(stdout)
         stderr_digest, _ = _bounded_process_detail(stderr)
         result_handle = self.registry.issue(
@@ -1336,7 +1737,7 @@ class WorkspaceSupervisor:
 
     def _resolve_operation_capability(
         self, handle: str, context: _AttemptContext
-    ) -> _CandidateOperation:
+    ) -> _CandidateOperation | "_CanonicalBuildRequest":
         try:
             bundle = self.registry.resolve(
                 handle, "attempt_capabilities", attempt_id=context.attempt_id
@@ -1350,19 +1751,10 @@ class WorkspaceSupervisor:
             return operation
         if not isinstance(bundle, _AttemptCapabilities):
             raise SupervisorError("invalid_handle")
-        if bundle.next_operation >= len(bundle.operation_handles):
+        if bundle.remaining_invocations <= 0:
             raise SupervisorError("budget_violation")
-        operation_handle = bundle.operation_handles[bundle.next_operation]
-        bundle.next_operation += 1
-        operation = self.registry.resolve(
-            operation_handle,
-            "operation",
-            attempt_id=context.attempt_id,
-            consume=True,
-        )
-        if not isinstance(operation, _CandidateOperation):
-            raise SupervisorError("invalid_operation")
-        return operation
+        bundle.remaining_invocations -= 1
+        return _CanonicalBuildRequest(attempt_id=context.attempt_id)
 
     def _candidate_path(
         self,

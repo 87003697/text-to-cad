@@ -126,16 +126,16 @@ looks like:
   notes.md           # supervisor-owned control file (do not delete)
   work/              # current Attempt's authoring space
     source/
-      model.py       # your entry module
+      model.py       # your entry module (defines gen_step())
       width.txt      # example sidecar parameter file
-    artifacts/       # new empty directory the tool writes into
     assessment.json  # your assessment for this Attempt
 ```
 
 Rules:
 
-- Write parametric Python that produces STEP first. All other exports
-  are downstream of STEP.
+- Author only under `work/source/`. Define one no-argument function
+  named `gen_step()` in `work/source/model.py` that returns a
+  build123d shape, `Compound`, `Part`, or `Assembly` for STEP export.
 - Read every sidecar parameter through a work-relative path, for
   example `Path("source/width.txt")`. Never resolve absolute host
   paths; there is no useful absolute path to read.
@@ -147,10 +147,12 @@ Rules:
   for you. Never open, list, or infer the existence of any sibling
   under `/candidate` (there are no Attempt-identified subdirectories
   to enumerate; any that appear must be ignored).
-- Give every `run_candidate_tool` invocation a **new empty**
-  `work/artifacts/` directory. Never reuse one Attempt's artifacts as
-  another's input.
-- Keep the recipe work-relative. It must rebuild from `source/` alone.
+- Do not write, name, or otherwise touch `work/candidate.glb` or any
+  export artifact — the supervisor owns them. Running
+  `run_candidate_tool` when a candidate-authored `candidate.glb`
+  already exists is rejected.
+- The recipe the trusted tool produces is work-relative. It rebuilds
+  from `source/` alone; do not attempt to run exports yourself.
 - The supervisor resets `/candidate/work` between Attempts. If the
   Attempt is a repair, the supervisor seeds `work/source/` from the
   parent Measured Step before the Attempt begins; edit it in place.

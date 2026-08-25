@@ -7,10 +7,12 @@ yourself.
 
 ## Entry module
 
-Put your entry module at `/candidate/work/source/model.py`. It exposes at
-least one top-level callable that returns a build123d `Compound`,
-`Part`, or `Assembly` and can be rebuilt from the same source with no
-external state.
+Put your entry module at `/candidate/work/source/model.py`. It must
+define one top-level, no-argument function named `gen_step()` that
+returns a build123d shape, `Compound`, `Part`, or `Assembly` and can
+be rebuilt from the same source with no external state. The trusted
+tool discovers `gen_step()` by name; other function names, decorators,
+or arguments cause the invocation to fail closed.
 
 ```python
 from build123d import BuildPart, Box, Cylinder, Mode
@@ -21,7 +23,7 @@ def _width() -> float:
     return float(Path("source/width.txt").read_text().strip())
 
 
-def build_part():
+def gen_step():
     with BuildPart() as part:
         Box(_width(), _width(), _width())
         Cylinder(radius=_width() / 4, height=_width(), mode=Mode.SUBTRACT)
@@ -56,21 +58,14 @@ the reference. Alignment is not part of authoring; the Canonical
 Reference is fixed and normalization is one supervisor-owned step
 outside your sandbox.
 
-## STEP-first exports
+## STEP-first shape return
 
-Compose primitives with build123d until the candidate is one STEP-
-exportable solid or assembly. Downstream artifacts (GLB previews,
-measurements, region diffs) are produced by the registered tool; you do
-not author them.
-
-```python
-from build123d import export_step
-
-export_step(build_part(), "artifacts/model.step")
-```
-
-Give each `run_candidate_tool` invocation a **new empty** `artifacts/`
-directory. Do not overwrite the previous invocation's output.
+Compose primitives with build123d until `gen_step()` returns one
+STEP-exportable solid or assembly. The trusted registered tool
+performs the STEP export, the GLB measurement export, and the recipe
+manifest; you never call `export_step`, write files under `work/`
+outside `source/`, or touch `candidate.glb`. Doing so causes
+`run_candidate_tool` to fail closed.
 
 ## Repair edits
 

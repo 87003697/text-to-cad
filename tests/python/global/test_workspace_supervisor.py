@@ -2477,6 +2477,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 case.root / "candidate-runtime",
                 repo_root=repo_root,
             )
+            builder_bundle_lease = runner.materialize_canonical_build_bundle(
+                repo_root, case.root / "builder-bundle-cache"
+            )
             from scripts.pilot.step_zero_evidence import (
                 real_step_zero_evidence_provider,
             )
@@ -2506,6 +2509,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 geometry_entrypoint=runner.GEOMETRY_ENTRYPOINT,
                 tool_registry=registry,
                 candidate_runtime=candidate_runtime,
+                builder_bundle=builder_bundle_lease,
                 step_zero_evidence_provider=counted_step_zero,
                 repair_evidence_provider=counted_repair,
             )
@@ -2569,10 +2573,15 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     },
                 )
                 attempt_one = supervisor.candidate_root / "work"
-                shutil.copytree(source_candidate, attempt_one, dirs_exist_ok=True)
-                shutil.copy2(
-                    attempt_one / "built/measurement.glb",
-                    attempt_one / "candidate.glb",
+                # Copy only the Agent-authorable source subtree; the
+                # trusted canonical-build tool now owns every artifact
+                # under work/ that is not under source/, including the
+                # published candidate.glb.  Pre-existing candidate-authored
+                # bytes at that fixed path are rejected.
+                shutil.copytree(
+                    source_candidate / "source",
+                    attempt_one / "source",
+                    dirs_exist_ok=True,
                 )
                 # The trusted Step 0 evidence provider (assembled above) is
                 # the sole source of canonical measurement and preview
