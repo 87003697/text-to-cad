@@ -79,6 +79,27 @@ class PackagedViewerLayoutTests(unittest.TestCase):
         self.assertIn("./scripts/viewer/packages/cadgen", requirements)
 
 
+class ViewerExitedError(AssertionError):
+    """The packaged start command exited before serving; carries its output."""
+
+    def __init__(self, output: str) -> None:
+        super().__init__(
+            f"the viewer exited before serving (code shown in output): {output[-2000:]}"
+        )
+        self.output = output
+
+
+def _drain(proc: subprocess.Popen) -> str:
+    try:
+        output, _ = proc.communicate(timeout=5)
+        return output or ""
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+@unittest.skipUnless(_node_available(), "node is not available")
+
+
 @unittest.skipUnless(
     _node_available() and _npm_command() is not None,
     "node/npm are not available",
@@ -87,7 +108,26 @@ class PackagedViewerStartSmokeTests(unittest.TestCase):
     """Live: `npm run start` boots the backend and answers /__cad/server."""
 
     def test_start_command_boots_the_backend_on_the_requested_port(self):
-        port = _free_port()
+        # Ephemeral-port probes can be re-grabbed between our close() and the
+        # viewer's bind (observed on Windows), so a port reported busy is RETIRED,
+        # not failed -- up to a few candidates.
+        last_failure = ""
+        for _attempt in range(4):
+            port = _free_port()
+            proc = self._spawn_viewer(port)
+            try:
+                self._assert_server_ready(proc, port)
+                return
+            except ViewerExitedError as exc:
+                if "already in use" not in exc.output:
+                    raise
+                last_failure = exc.output
+            finally:
+                self._stop_tree(proc)
+                proc.wait(timeout=30)
+        self.fail(f"every candidate port was already in use: {last_failure}")
+
+    def _spawn_viewer(self, port: int) -> subprocess.Popen:
         env = dict(os.environ)
         # The shim intentionally serves the CALLER's cwd as the default directory;
         # point it at a throwaway dir so the smoke never depends on where pytest/unittest ran.
@@ -101,7 +141,7 @@ class PackagedViewerStartSmokeTests(unittest.TestCase):
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
             popen_kwargs["start_new_session"] = True
-        proc = subprocess.Popen(
+        return subprocess.Popen(
             [*_npm_command(), "--prefix", str(VIEWER_APP), "run", "start", "--",
              "--host", "127.0.0.1", "--port", str(port)],
             stdout=subprocess.PIPE,
@@ -110,12 +150,6 @@ class PackagedViewerStartSmokeTests(unittest.TestCase):
             env=env,
             **popen_kwargs,
         )
-        try:
-            self._assert_server_ready(proc, port)
-        finally:
-            self._stop_tree(proc)
-        # The shim forwards the launcher's exit code; a clean terminate is fine either way.
-        proc.wait(timeout=30)
 
     def _assert_server_ready(self, proc: subprocess.Popen, port: int) -> None:
         url = f"http://127.0.0.1:{port}/__cad/server"
@@ -123,14 +157,7 @@ class PackagedViewerStartSmokeTests(unittest.TestCase):
         last_error = ""
         while time.monotonic() < deadline:
             if proc.poll() is not None:
-                try:
-                    output, _ = proc.communicate(timeout=5)
-                except (OSError, subprocess.TimeoutExpired):
-                    output = ""
-                self.fail(
-                    "the viewer exited before serving "
-                    f"(code {proc.returncode}): {output[-2000:]}"
-                )
+                raise ViewerExitedError(self._drain(proc))
             try:
                 with urllib.request.urlopen(url, timeout=5) as response:
                     payload = json.loads(response.read().decode("utf-8"))
