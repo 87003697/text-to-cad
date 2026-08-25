@@ -210,9 +210,9 @@ class FakePorts:
     def workspace_status(self, workspace_handle):
         return self._call("workspace_status", workspace_handle)
 
-    def start_attempt(self, workspace_handle, plan_handle, from_step):
+    def start_attempt(self, workspace_handle, plan_handle, parent_step_handle):
         return self._call(
-            "start_attempt", workspace_handle, plan_handle, from_step
+            "start_attempt", workspace_handle, plan_handle, parent_step_handle
         )
 
     def run_candidate_tool(
@@ -417,13 +417,30 @@ class AgentSurfaceTests(unittest.TestCase):
         )
         self.assertEqual(
             "started",
-            self.surface.handle(_request("start_attempt", {**initial, "from_step": 0}))[
-                "result"
-            ]["state"],
+            self.surface.handle(
+                _request(
+                    "start_attempt",
+                    {**initial, "parent_step_handle": "step:0"},
+                )
+            )["result"]["state"],
         )
         self.assert_error(
-            lambda: self.surface.handle(_request("start_attempt", {**initial, "from_step": 5})),
-            "budget_violation",
+            lambda: self.surface.handle(
+                _request(
+                    "start_attempt",
+                    {**initial, "parent_step_handle": "../not-a-handle"},
+                )
+            ),
+            "invalid_handle",
+        )
+        self.assert_error(
+            lambda: self.surface.handle(
+                _request(
+                    "start_attempt",
+                    {**initial, "parent_step_handle": 5},
+                )
+            ),
+            "invalid_handle",
         )
         self.assert_error(
             lambda: self.surface.handle(
@@ -487,8 +504,12 @@ class AgentSurfaceTests(unittest.TestCase):
         start_schema = next(item for item in descriptors if item["name"] == "start_attempt")["inputSchema"]
         self.assertEqual("object", start_schema["type"])
         self.assertEqual(2, len(start_schema["oneOf"]))
-        self.assertNotIn("from_step", start_schema["oneOf"][0]["properties"])
-        self.assertEqual(4, start_schema["oneOf"][1]["properties"]["from_step"]["maximum"])
+        self.assertNotIn("parent_step_handle", start_schema["oneOf"][0]["properties"])
+        self.assertNotIn("from_step", start_schema["oneOf"][1]["properties"])
+        self.assertEqual(
+            "string",
+            start_schema["oneOf"][1]["properties"]["parent_step_handle"]["type"],
+        )
         observe_schema = next(item for item in descriptors if item["name"] == "observe_reference")["inputSchema"]
         self.assertEqual(
             ["summary", "components"],

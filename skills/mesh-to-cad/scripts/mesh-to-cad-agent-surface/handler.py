@@ -42,7 +42,7 @@ class SupervisorPorts(Protocol):
         self,
         workspace_handle: str,
         plan_handle: str,
-        from_step: int | None,
+        parent_step_handle: str | None,
     ) -> Mapping[str, Any]: ...
 
     def run_candidate_tool(
@@ -619,7 +619,7 @@ _OPERATION_SPECS = (
     _OperationSpec("workspace_status", ((_FieldSpec("workspace_handle", "handle"),),), _validate_workspace_status_result, "Read purpose-bound workflow state."),
     _OperationSpec("start_attempt", (
         (_FieldSpec("workspace_handle", "handle"), _FieldSpec("plan_handle", "handle")),
-        (_FieldSpec("workspace_handle", "handle"), _FieldSpec("plan_handle", "handle"), _FieldSpec("from_step", "parent_step")),
+        (_FieldSpec("workspace_handle", "handle"), _FieldSpec("plan_handle", "handle"), _FieldSpec("parent_step_handle", "handle")),
     ), _validate_start_attempt_result, "Start one supervisor-owned bounded Attempt."),
     _OperationSpec("run_candidate_tool", ((
         _FieldSpec("workspace_handle", "handle"), _FieldSpec("attempt_handle", "handle"), _FieldSpec("candidate_handle", "handle"), _FieldSpec("operation_handle", "handle"),
@@ -691,8 +691,6 @@ def _validate_args(spec: _OperationSpec, args: dict[str, Any]) -> None:
         path = f"$.args.{field.name}"
         if field.kind == "handle":
             _handle(args[field.name], path)
-        elif field.kind == "parent_step":
-            _step(args[field.name], path, maximum=MAX_PARENT_STEP)
         elif field.kind == "observation_request":
             _validate_observation_request(args[field.name], path)
 
@@ -700,8 +698,6 @@ def _validate_args(spec: _OperationSpec, args: dict[str, Any]) -> None:
 def _field_schema(kind: str) -> dict[str, Any]:
     if kind == "handle":
         return {"type": "string", "pattern": _HANDLE_PATTERN}
-    if kind == "parent_step":
-        return {"type": "integer", "minimum": 0, "maximum": MAX_PARENT_STEP}
     if kind == "observation_request":
         empty = {"type": "object", "additionalProperties": False, "properties": {}}
         components = {"type": "object", "additionalProperties": False, "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": MAX_COMPONENT_LIMIT}}, "required": []}
@@ -789,7 +785,7 @@ class AgentSurface:
                 result = self._ports.start_attempt(
                     args["workspace_handle"],
                     args["plan_handle"],
-                    args.get("from_step"),
+                    args.get("parent_step_handle"),
                 )
             elif intent == "run_candidate_tool":
                 result = self._ports.run_candidate_tool(

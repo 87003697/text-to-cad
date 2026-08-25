@@ -1994,7 +1994,10 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         plan = self.sup.candidate_root / "repair-plan.json"
         plan.write_text("{}", encoding="utf-8")
         plan_handle = self.sup.register_plan(plan)
-        started = self.sup.start_attempt(self.sup.workspace_handle, plan_handle, 1)
+        parent_handle = self.sup.registry.issue("step", 1)
+        started = self.sup.start_attempt(
+            self.sup.workspace_handle, plan_handle, parent_handle
+        )
         repair = self.sup.submit_repair(
             self.sup.workspace_handle,
             started["attempt_handle"],
@@ -2195,8 +2198,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         plan = self.sup.candidate_root / "repair-plan.json"
         plan.write_text("{}", encoding="utf-8")
         plan_handle = self.sup.register_plan(plan)
+        parent_handle = self.sup.registry.issue("step", 0)
         started = self.sup.start_attempt(
-            self.sup.workspace_handle, plan_handle, 0
+            self.sup.workspace_handle, plan_handle, parent_handle
         )
         self.assertEqual(1, len(seed_calls))
         self.assertEqual(0, seed_calls[0]["from_step"])
@@ -2226,8 +2230,11 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         plan = self.sup.candidate_root / "repair-plan.json"
         plan.write_text("{}", encoding="utf-8")
         plan_handle = self.sup.register_plan(plan)
+        parent_handle = self.sup.registry.issue("step", 0)
         with self.assertRaises(SupervisorError):
-            self.sup.start_attempt(self.sup.workspace_handle, plan_handle, 0)
+            self.sup.start_attempt(
+                self.sup.workspace_handle, plan_handle, parent_handle
+            )
         self.assertFalse((self.sup.candidate_root / "work").exists())
         # No active attempt remains; the next start_attempt may proceed.
         self.assertEqual({}, self.sup._attempts)
@@ -2734,7 +2741,15 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         and (Path(__file__).resolve().parents[3] / ".venv/bin/python").exists(),
         "real CAD, mesh, and candidate sandbox dependencies are unavailable",
     )
-    def test_real_bridge_mediated_seven_intent_lifecycle_reaches_terminal_and_review(self) -> None:
+    def test_real_bridge_mediated_nine_call_lifecycle_repair_finalize_review(
+        self,
+    ) -> None:
+        # Genuine Step 0 (unaccepted) → Repair (accepted) → honest
+        # Finalization → Terminal → Review vertical slice.  Every intent
+        # crosses the Agent Surface bridge over the Unix socket; the two
+        # trusted canonical builders are the sole source of measurement
+        # bytes for both Attempts; the second start_attempt is opened
+        # from an opaque parent step handle returned by submit_step_zero.
         from scripts.pilot import runner
         from scripts.pilot.agent_surface_bridge import AgentSurfaceBridge
 
@@ -2752,12 +2767,15 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         assert spec is not None and spec.loader is not None
         spec.loader.exec_module(fixture_module)
         case = fixture_module.WorkspaceCliTests(
-            "test_real_bridge_mediated_seven_intent_lifecycle"
+            "test_real_bridge_mediated_nine_call_lifecycle"
         )
         case.setUp()
         supervisor: WorkspaceSupervisor | None = None
         try:
-            prepared, source_candidate = case.canonical_cad_flow()
+            # Reference is Box(1.0, 0.01, 0.01); the returned source
+            # candidate carries Box(0.8, …) — Step 0 measurement will not
+            # match the reference, forcing an authentic Repair Cycle.
+            prepared, source_candidate = case.canonical_cad_flow(accepted=False)
             status, _payload, stderr = case.invoke(
                 "init",
                 "--workspace",
@@ -2810,6 +2828,16 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 step_zero_evidence_provider=counted_step_zero,
                 repair_evidence_provider=counted_repair,
             )
+            builder_run_count = 0
+            original_execute = supervisor._execute_canonical_build
+
+            def counted_execute(context, request):
+                nonlocal builder_run_count
+                builder_run_count += 1
+                return original_execute(context, request)
+
+            supervisor._execute_canonical_build = counted_execute  # type: ignore[assignment]
+
             socket_path = case.root / "agent-surface.sock"
             bridge = AgentSurfaceBridge(supervisor.agent_surface(), socket_path)
 
@@ -2840,6 +2868,21 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 response_bodies.append(outcome.stdout)
                 return payload["response"]["result"]
 
+            def rewrite_box_length(source_root: Path, length: float) -> None:
+                model = source_root / "model.py"
+                text = model.read_text(encoding="utf-8")
+                # The fixture module emits exactly one Box literal.  The
+                # simulated Agent edits the length to steer the next
+                # trusted build toward matching the canonical reference.
+                model.write_text(
+                    re.sub(
+                        r"Box\([0-9.]+, 0\.01, 0\.01",
+                        f"Box({length}, 0.01, 0.01",
+                        text,
+                    ),
+                    encoding="utf-8",
+                )
+
             bridge.start()
             try:
                 contract = supervisor.agent_bootstrap_contract()
@@ -2869,23 +2912,15 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                         "plan_handle": contract["plan_handle"],
                     },
                 )
-                attempt_one = supervisor.candidate_root / "work"
-                # Copy only the Agent-authorable source subtree; the
-                # trusted canonical-build tool now owns every artifact
-                # under work/ that is not under source/, including the
-                # published candidate.glb.  Pre-existing candidate-authored
-                # bytes at that fixed path are rejected.
+                self.assertEqual("started", started_one["state"])
+                attempt_one_work = supervisor.candidate_root / "work"
                 shutil.copytree(
                     source_candidate / "source",
-                    attempt_one / "source",
+                    attempt_one_work / "source",
                     dirs_exist_ok=True,
                 )
-                # The trusted Step 0 evidence provider (assembled above) is
-                # the sole source of canonical measurement and preview
-                # bytes; no candidate-authored measurement.json/preview
-                # subtree may accompany the candidate.
 
-                tool_result = call(
+                tool_result_one = call(
                     "run_candidate_tool",
                     {
                         "workspace_handle": supervisor.workspace_handle,
@@ -2896,9 +2931,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                         ],
                     },
                 )
-                self.assertEqual("completed", tool_result["state"])
+                self.assertEqual("completed", tool_result_one["state"])
 
-                published = call(
+                published_zero = call(
                     "submit_step_zero",
                     {
                         "workspace_handle": supervisor.workspace_handle,
@@ -2906,17 +2941,50 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                         "candidate_handle": started_one["candidate_handle"],
                     },
                 )
-                self.assertEqual("published", published["state"])
+                self.assertEqual("published", published_zero["state"])
+                # Step 0 is intentionally unaccepted; a Repair Cycle is
+                # the only path forward.
+                step_zero_facts = published_zero["decision_facts"]
+                self.assertFalse(step_zero_facts["accepted"])
+                self.assertEqual("unaccepted", step_zero_facts["acceptance_state"])
 
-                # A second Attempt issues fresh handles that share no bytes
-                # with Attempt 1; the older handle set is retired.
+                # Attempt 1 handles are retired: replay must fail closed.
+                replay = subprocess.run(
+                    [sys.executable, os.fspath(client_path)],
+                    input=json.dumps(
+                        {
+                            "schema": "mesh-to-cad.agent-intent/1",
+                            "intent": "submit_step_zero",
+                            "args": {
+                                "workspace_handle": supervisor.workspace_handle,
+                                "attempt_handle": started_one["attempt_handle"],
+                                "candidate_handle": started_one[
+                                    "candidate_handle"
+                                ],
+                            },
+                        }
+                    ),
+                    text=True,
+                    capture_output=True,
+                    env={
+                        **os.environ,
+                        "MESH_TO_CAD_AGENT_SURFACE_SOCKET": os.fspath(
+                            socket_path
+                        ),
+                    },
+                    check=False,
+                )
+                self.assertNotEqual(0, replay.returncode)
+
                 started_two = call(
                     "start_attempt",
                     {
                         "workspace_handle": supervisor.workspace_handle,
                         "plan_handle": contract["plan_handle"],
+                        "parent_step_handle": published_zero["step_handle"],
                     },
                 )
+                self.assertEqual("started", started_two["state"])
                 self.assertNotEqual(
                     started_one["attempt_handle"], started_two["attempt_handle"]
                 )
@@ -2929,26 +2997,114 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     started_two["capability_bundle_handle"],
                 )
 
-                step = json.loads(
-                    (case.workspace / "steps/000000/step.json").read_text()
+                # W1 seeded the fixed /candidate/work with the parent
+                # source (Box(0.8)); the simulated Agent authors a fix
+                # using only public decision-facts to justify the edit.
+                seeded_source_root = supervisor.candidate_root / "work" / "source"
+                self.assertTrue((seeded_source_root / "model.py").is_file())
+                self.assertIn(
+                    "Box(0.8",
+                    (seeded_source_root / "model.py").read_text(
+                        encoding="utf-8"
+                    ),
                 )
+                rewrite_box_length(seeded_source_root, 1.0)
+
+                # Bounded W1-authenticated assessment claim: the Agent
+                # names no path, no argv, and no attempt identifier.
+                assessment = supervisor.candidate_root / "work" / "assessment.json"
+                assessment.write_text(
+                    json.dumps(
+                        {
+                            "schema": "mesh-to-cad.agent-assessment/1",
+                            "parent_acceptance_state": step_zero_facts[
+                                "acceptance_state"
+                            ],
+                            "parent_repair_target_count": step_zero_facts[
+                                "repair_targets"
+                            ]["returned"],
+                            "rationale": (
+                                "Length under-target on the primary axis; "
+                                "restore to reference bounds."
+                            ),
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+
+                tool_result_two = call(
+                    "run_candidate_tool",
+                    {
+                        "workspace_handle": supervisor.workspace_handle,
+                        "attempt_handle": started_two["attempt_handle"],
+                        "candidate_handle": started_two["candidate_handle"],
+                        "operation_handle": started_two[
+                            "capability_bundle_handle"
+                        ],
+                    },
+                )
+                self.assertEqual("completed", tool_result_two["state"])
+
+                published_repair = call(
+                    "submit_repair",
+                    {
+                        "workspace_handle": supervisor.workspace_handle,
+                        "attempt_handle": started_two["attempt_handle"],
+                        "candidate_handle": started_two["candidate_handle"],
+                    },
+                )
+                self.assertEqual("published", published_repair["state"])
+                repair_facts = published_repair["decision_facts"]
+                self.assertTrue(repair_facts["accepted"])
+                self.assertEqual(
+                    "acceptance_satisfied", repair_facts["acceptance_state"]
+                )
+
+                # Attempt 2 handles are retired after submit_repair.
+                stale_repair = subprocess.run(
+                    [sys.executable, os.fspath(client_path)],
+                    input=json.dumps(
+                        {
+                            "schema": "mesh-to-cad.agent-intent/1",
+                            "intent": "submit_repair",
+                            "args": {
+                                "workspace_handle": supervisor.workspace_handle,
+                                "attempt_handle": started_two[
+                                    "attempt_handle"
+                                ],
+                                "candidate_handle": started_two[
+                                    "candidate_handle"
+                                ],
+                            },
+                        }
+                    ),
+                    text=True,
+                    capture_output=True,
+                    env={
+                        **os.environ,
+                        "MESH_TO_CAD_AGENT_SURFACE_SOCKET": os.fspath(
+                            socket_path
+                        ),
+                    },
+                    check=False,
+                )
+                self.assertNotEqual(0, stale_repair.returncode)
+
                 selection = supervisor.candidate_root / "selection.json"
                 selection.write_text(
                     json.dumps(
                         {
                             "schema": "mesh-to-cad.agent-selection-claim/1",
                             "preview_observation": (
-                                "The final preview was inspected."
+                                "The repair preview matches the reference silhouette."
                             ),
-                            "stop_reason": (
-                                "acceptance_satisfied"
-                                if step["accepted"]
-                                else "cycle_limit"
-                            ),
+                            "stop_reason": "acceptance_satisfied",
                             "conflict": False,
                             "conflict_details": None,
                             "rationale": (
-                                "Sole selectable head after Step 0 publication."
+                                "Repair Cycle satisfied acceptance."
                             ),
                         },
                         sort_keys=True,
@@ -2979,7 +3135,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     "select_and_finalize",
                     {
                         "workspace_handle": supervisor.workspace_handle,
-                        "step_handle": published["step_handle"],
+                        "step_handle": published_repair["step_handle"],
                         "selection_handle": selection_handle,
                         "notes_handle": notes_handle,
                     },
@@ -2987,9 +3143,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 self.assertEqual("finalized", final["state"])
             finally:
                 bridge.stop()
-            # bridge.stop → surface.cancel → supervisor.cancel drained all
-            # active calls before returning; the lease-release follower in
-            # runner.finalize can only observe a confirmed cancellation.
+            # bridge.stop → surface.cancel → supervisor.cancel drained
+            # all active calls before returning; the lease-release
+            # follower can only observe a confirmed cancellation.
             self.assertTrue(supervisor.cancellation_confirmed)
 
             # Runner-owned terminal handoff: exactly one complete
@@ -3019,8 +3175,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             )
 
             # Review path authenticates the same bundle exactly once
-            # through the sibling W1 verifier module (a distinct sys.modules
-            # cache entry from the pilot-side loader above).
+            # through the sibling W1 verifier module.
             review_spec = importlib.util.spec_from_file_location(
                 "_pilot_review_for_test", review_helper_path
             )
@@ -3049,17 +3204,15 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 "valid", review["workspace_validation"]["classification"]
             )
 
-            # Trusted providers were the sole source of canonical Step 0
-            # evidence and were driven exactly once from the bridge intent.
+            # Trusted providers were the sole source of Step 0 and
+            # Repair evidence, driven exactly once each from the bridge.
             self.assertEqual(1, step_zero_calls)
-            # Repair was not submitted (canonical fixture lands accepted on
-            # Step 0); the repair provider must not have been invoked.
-            self.assertEqual(0, repair_calls)
+            self.assertEqual(1, repair_calls)
+            # Two trusted canonical builds — one per Attempt.
+            self.assertEqual(2, builder_run_count)
 
-            # Exactly seven distinct intents crossed the Agent Surface,
-            # with start_attempt exercised twice for the two Attempts and
-            # the three submit handles (workspace/attempt/candidate) used
-            # by submit_step_zero.
+            # Exactly nine intent calls across seven distinct names;
+            # start_attempt and run_candidate_tool each fire twice.
             self.assertEqual(
                 [
                     "workspace_status",
@@ -3068,10 +3221,13 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     "run_candidate_tool",
                     "submit_step_zero",
                     "start_attempt",
+                    "run_candidate_tool",
+                    "submit_repair",
                     "select_and_finalize",
                 ],
                 intents_seen,
             )
+            self.assertEqual(7, len(set(intents_seen)))
 
             # No host, Workspace, raw-reference, or provider argv strings
             # leaked into responses returned across the Unix socket.
@@ -3082,6 +3238,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 "/runtime/bin/python",
                 "source/model.py",
                 "steps/000000",
+                "steps/000001",
                 "attempt-000001",
                 "attempt-000002",
             )

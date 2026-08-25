@@ -34,8 +34,11 @@ The `observe_reference` port projects W2's summary/components result into that
 closed projection before it reaches the Agent; the W3 handler does not pass a
 generic W2 dictionary through.
 `start_attempt` has two exact argument variants: an initial plan with no parent
-field, or a repair plan with only a bounded `from_step`; the supervisor derives
-the intended step from that branch and parent.
+field, or a repair plan with only an opaque `parent_step_handle` returned by a
+previously published Measured Step; the supervisor resolves that handle to a
+W1 step ordinal internally and derives the intended step from that branch and
+parent. Numeric parent ordinals and cross-run or wrong-kind handles fail
+closed at the Agent Surface boundary before any Workspace call.
 `start_attempt` returns one additional opaque
 `capability_bundle_handle`. It is bound only after the Workspace returns the
 actual Attempt and intended step. Reuse that bundle handle for candidate tool

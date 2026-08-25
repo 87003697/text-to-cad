@@ -1134,15 +1134,20 @@ class WorkspaceSupervisor:
         self,
         workspace_handle: str,
         plan_handle: str,
-        from_step: int | None,
+        parent_step_handle: str | None,
     ) -> Mapping[str, Any]:
         workspace = self._workspace(workspace_handle)
         plan = self.registry.resolve(plan_handle, "plan")
         _safe_relative(self.candidate_root, plan)
-        if from_step is not None and (
-            type(from_step) is not int or not 0 <= from_step < MAX_ATTEMPT_STEP
-        ):
-            raise SupervisorError("invalid_request")
+        if parent_step_handle is None:
+            from_step: int | None = None
+        else:
+            if type(parent_step_handle) is not str:
+                raise SupervisorError("invalid_request")
+            resolved = self.registry.resolve(parent_step_handle, "step")
+            if type(resolved) is not int or not 0 <= resolved < MAX_ATTEMPT_STEP:
+                raise SupervisorError("invalid_handle")
+            from_step = resolved
         if self._attempts:
             raise SupervisorError("attempt_already_active")
         staged_plan = self._staging_root / f"plan-{secrets.token_hex(12)}.json"
