@@ -2426,13 +2426,10 @@ def run_pilot(
     candidate_runtime_lease: CandidateRuntimeLease | None = None
     lifetime_confirmed = True
     agent_socket: Path | None = None
-    agent_reference_path: Path | None = None
     with SignalRelay() as relay:
         try:
             if agent_surface:
-                agent_reference_path = prepare_and_initialize_workspace(
-                    exp_dir, input_paths[0]
-                )
+                prepare_and_initialize_workspace(exp_dir, input_paths[0])
             sidecar = BrowserRuntimeJob.create(
                 exp_dir,
                 image_lock_path=HOST_IMAGE_LOCK_PATH,
@@ -2458,12 +2455,7 @@ def run_pilot(
                     raise PilotError(str(exc)) from exc
                 agent_supervisor = WorkspaceSupervisor(
                     exp_dir,
-                    reference_path=Path(
-                        environ.get(
-                            "AGENT_REFERENCE_PATH",
-                            os.fspath(agent_reference_path),
-                        )
-                    ),
+                    bind_reference=True,
                     candidate_root=candidate_root,
                     rebuild_entrypoint=CAD_REBUILD_ENTRYPOINT,
                     geometry_entrypoint=GEOMETRY_ENTRYPOINT,

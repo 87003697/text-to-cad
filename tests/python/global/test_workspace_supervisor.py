@@ -72,8 +72,11 @@ class _Reference:
 
 
 class _Workspace:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, reference_path: Path | None = None) -> None:
         self.root = root.resolve()
+        self.reference_path = (
+            reference_path.resolve() if reference_path is not None else None
+        )
         self.completed_cycles = 0
         self.total_attempts = 0
         self.tool_failures = 0
@@ -82,6 +85,16 @@ class _Workspace:
         self.final_delivery_present = False
         self.finalize_calls = 0
         self.published: list[dict] = []
+
+    def read_canonical_reference_binding(self, _workspace: Path) -> dict:
+        if self.reference_path is None:
+            raise AssertionError("reference binding requested without a bound reference")
+        digest = hashlib.sha256(self.reference_path.read_bytes()).hexdigest()
+        return {
+            "path": self.reference_path,
+            "reference_ply_sha256": digest,
+            "canonical_reference_sha256": "a" * 64,
+        }
 
     def workspace_status(self, _workspace: Path) -> dict:
         return {
@@ -171,11 +184,17 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.workspace_root = self.root / "workspace"
         self.workspace_root.mkdir()
-        self.workspace = _Workspace(self.workspace_root)
-        (self.root / "reference.ply").write_bytes(b"not parsed by injected reference")
+        (self.workspace_root / "input").mkdir()
+        (self.workspace_root / "input/reference.ply").write_bytes(
+            b"not parsed by injected reference"
+        )
+        self.workspace = _Workspace(
+            self.workspace_root,
+            reference_path=self.workspace_root / "input/reference.ply",
+        )
         self.sup = WorkspaceSupervisor(
             self.workspace_root,
-            reference_path=self.root / "reference.ply",
+            bind_reference=True,
             candidate_root=self.root / "candidate-a",
             staging_dir=self.root / "staging",
             workspace_api=self.workspace,
@@ -1971,7 +1990,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             )
             supervisor = WorkspaceSupervisor(
                 case.workspace,
-                reference_path=case.workspace / "input/reference.ply",
+                bind_reference=True,
                 candidate_root=case.root / "agent-candidate",
                 staging_dir=case.root / "staging",
                 rebuild_entrypoint=runner.CAD_REBUILD_ENTRYPOINT,

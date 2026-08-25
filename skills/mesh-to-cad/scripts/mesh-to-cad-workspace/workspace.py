@@ -61,6 +61,72 @@ def workspace_initialized(workspace: Path) -> bool:
     return True
 
 
+def read_canonical_reference_binding(workspace: Path) -> dict[str, Any]:
+    """Return the trusted Reference Binding for one initialized Workspace.
+
+    The binding names one absolute Canonical Reference path together with the
+    two published digests that identify it — the reference PLY content digest
+    and the canonical-reference identity that the Workspace document commits
+    to.  Callers use this to bind a Reference Capability without accepting an
+    ambient path or an external identity claim.
+    """
+
+    workspace = Path(workspace).resolve()
+    workspace_document = _read_workspace_document(workspace)
+    canonical_reference_sha256 = workspace_document["canonical_reference_sha256"]
+    input_manifest = _read_authority_json(
+        workspace, workspace / "input/input.json", "$.input.input.json"
+    )
+    if input_manifest.get("canonical_reference_sha256") != canonical_reference_sha256:
+        _fail(
+            "identity_conflict",
+            "input manifest disagrees with Workspace Canonical Reference identity",
+            "$.input.input.json.canonical_reference_sha256",
+        )
+    reference_ply = input_manifest.get("reference_ply")
+    if not isinstance(reference_ply, Mapping):
+        _fail(
+            "invalid_workspace_path",
+            "input manifest has no reference PLY record",
+            "$.input.input.json.reference_ply",
+        )
+    ply_relative = reference_ply.get("path")
+    ply_sha256 = reference_ply.get("sha256")
+    if ply_relative != "reference.ply":
+        _fail(
+            "invalid_workspace_path",
+            "Canonical Reference must be published at the fixed workspace path",
+            "$.input.input.json.reference_ply.path",
+        )
+    _sha256(ply_sha256, "$.input.input.json.reference_ply.sha256")
+    reference_path = workspace / "input" / "reference.ply"
+    _safe_relative(workspace, reference_path)
+    if reference_path.is_symlink() or not reference_path.is_file():
+        _fail(
+            "invalid_workspace_path",
+            "Canonical Reference is not a regular file",
+            "$.input.reference.ply",
+        )
+    digest = hashlib.sha256()
+    with reference_path.open("rb") as stream:
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    if digest.hexdigest() != ply_sha256:
+        _fail(
+            "identity_conflict",
+            "Canonical Reference bytes do not match the published digest",
+            "$.input.reference.ply",
+        )
+    return {
+        "path": reference_path,
+        "reference_ply_sha256": ply_sha256,
+        "canonical_reference_sha256": canonical_reference_sha256,
+    }
+
+
 def _candidate_staging_path(workspace: Path, attempt: int) -> Path:
     """Return the active Attempt's ignored candidate staging directory."""
 
@@ -1380,6 +1446,7 @@ __all__ = [
     "publish_cycle_from_agent",
     "publish_step_zero",
     "publish_step_zero_from_agent",
+    "read_canonical_reference_binding",
     "read_terminal_locator",
     "record_attempt",
     "recover_workspace",

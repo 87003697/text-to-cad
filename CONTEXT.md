@@ -144,6 +144,22 @@ _Avoid_: Raw mesh, Workspace inspection, arbitrary geometry query
 The reusable result of the required complete Workspace validation after pilot execution reaches a terminal state.
 _Avoid_: Final Delivery, review verdict, repeated review validation
 
+**Reference Binding**:
+The trusted association, established during outer Workspace preparation and initialization, between a Reference Capability instance and the single Canonical Reference committed by one Workspace. It names one absolute Canonical Reference location and the published content and identity digests that describe it. It is derived from Workspace state, never chosen by the Agent, never overridden by ambient environment, and proven before the Agent Surface starts.
+_Avoid_: Reference path option, environment override, Agent-selected reference, foreign identity claim
+
+**Trusted Candidate Execution**:
+The choreography of Agent Intents through which the runner develops, measures, previews, and diffs one candidate under Workspace Authority. All build, measurement, preview, and diff evidence flows through this intent choreography; no separate Agent build or Agent-measure operation exists outside it.
+_Avoid_: Agent build command, Agent-owned measurement, side-channel preview
+
+**Terminal Validation Handoff**:
+The runner-owned, one-way transfer of a Terminal Validation Result to a downstream consumer over its own trust lineage. It is independent of Workspace Authority and does not use signatures, KMS, or a receipt framework to establish trust.
+_Avoid_: Signed evidence bundle, KMS-brokered receipt, review authority publication
+
+**Agent Source Projection**:
+The explicit, Agent-only subset of installed skill source materialized by bundle and release for one Agent Execution. The runner never mounts a complete installed skill tree; only the projected subset is visible to the Agent.
+_Avoid_: Full skill mount, workspace source bind, installed plugin tree
+
 ## Browser Runtime Language
 
 **Local Rendering Browser**:

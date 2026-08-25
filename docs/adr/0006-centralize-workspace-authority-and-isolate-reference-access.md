@@ -19,3 +19,23 @@ Development occurs in isolated worktrees and lands serially into `develop` after
 ## Consequences
 
 The first implementation concentrates existing behavior behind one interface and deletes duplicated Workspace interpretation from runner and review. Existing `workspace_core.py`, atomic staging, recovery, Git/LFS publication, and full validation remain internal until migration or profiling justifies extraction. Reference isolation must be enforced by the outer process and filesystem capability seam; read-only mounts and source scans are insufficient. Review verdicts and evaluation policy remain outside Workspace Authority. New generalized receipt chains, event storage, database state, arbitrary geometry-query frameworks, CVM or paid pilots, S3 publication, production deployment, and historical-output cleanup are out of scope for the first vertical slice.
+
+## Accepted Addendum — 2026-08-25
+
+The following architecture decisions are recorded as part of this ADR without changing the earlier Decision or Consequences text.
+
+1. Landing proceeds in three serialized phases in this order: correctness, deepening, and deletion/integration. Later phases may not begin until earlier ones have landed.
+
+2. [[Trusted Candidate Execution]] absorbs build, measurement, preview, and diff. No separate Agent build, Agent measure, Agent preview, or Agent diff operation is introduced.
+
+3. [[Terminal Validation Handoff]] remains runner-owned and travels on its own independent trust lineage. No signatures, KMS integration, or receipt framework is introduced to authenticate the bundle.
+
+4. Bundle and release materialize an explicit [[Agent Source Projection]]. The runner does not mount a complete installed skill tree; the Agent sees only the projected subset.
+
+5. The terminal compiler emits a consumer-ready [[Workspace View]]. Full-audit and default review share that compiler. [[Consumer Verdict]] remains outside Workspace Authority.
+
+6. MCP transports share one session module, and Reference Observation policy and identity have one contract source, so that transport variation cannot diverge from a single behavioral contract.
+
+7. Linux `bwrap` is the formal isolation gate. macOS development execution and injected Windows fail-closed tests remain supported.
+
+8. Correctness Phase D binds the production Reference Capability to exactly the Workspace [[Canonical Reference]] via a Workspace-derived [[Reference Binding]] proven before the Agent Surface starts. Ambient `AGENT_REFERENCE_PATH` overrides are removed from production; test-only injection uses the pre-existing internal dependency seam.

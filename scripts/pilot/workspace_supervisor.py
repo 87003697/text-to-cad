@@ -520,7 +520,7 @@ class WorkspaceSupervisor:
         self,
         workspace: Path,
         *,
-        reference_path: Path | None = None,
+        bind_reference: bool = False,
         candidate_root: Path | None = None,
         staging_dir: Path | None = None,
         workspace_api: WorkspaceAPI | None = None,
@@ -608,13 +608,9 @@ class WorkspaceSupervisor:
             self.workspace_handle = self.registry.issue("workspace", self.workspace)
             self.reference_handle: str | None = None
             self._reference: ReferenceAPI | None = None
-            if reference_path is not None:
-                raw_path = Path(reference_path)
-                if raw_path.is_symlink():
-                    raise SupervisorError("invalid_reference")
-                path = raw_path.resolve()
-                if not path.is_file():
-                    raise SupervisorError("invalid_reference")
+            if bind_reference:
+                binding = self._bind_workspace_canonical_reference()
+                path = binding["path"]
                 self.reference_handle = self.registry.issue("reference", path)
                 factory = reference_factory or _load_reference_type()
                 try:
@@ -625,6 +621,51 @@ class WorkspaceSupervisor:
         except Exception:
             self._discard_private_storage()
             raise
+
+    def _bind_workspace_canonical_reference(self) -> Mapping[str, Any]:
+        """Ask the trusted Workspace facade for the Canonical Reference binding.
+
+        The facade proves that the on-disk Canonical Reference matches the
+        Workspace's committed identity before returning.  Callers therefore
+        cannot inject a reference path or claim a foreign identity; the
+        Workspace state established during outer preparation is the only
+        source of truth for both location and identity.
+        """
+
+        reader = getattr(self.workspace_api, "read_canonical_reference_binding", None)
+        if reader is None:
+            raise SupervisorError("invalid_reference")
+        try:
+            binding = reader(self.workspace)
+        except Exception as exc:
+            raise SupervisorError("invalid_reference") from exc
+        if not isinstance(binding, Mapping):
+            raise SupervisorError("invalid_reference")
+        raw_path = binding.get("path")
+        ply_sha256 = binding.get("reference_ply_sha256")
+        canonical_sha256 = binding.get("canonical_reference_sha256")
+        if (
+            raw_path is None
+            or not isinstance(ply_sha256, str)
+            or not isinstance(canonical_sha256, str)
+        ):
+            raise SupervisorError("invalid_reference")
+        try:
+            path = Path(raw_path)
+        except TypeError as exc:
+            raise SupervisorError("invalid_reference") from exc
+        if path.is_symlink() or not path.is_file():
+            raise SupervisorError("invalid_reference")
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(self.workspace)
+        except ValueError as exc:
+            raise SupervisorError("invalid_reference") from exc
+        return {
+            "path": resolved,
+            "reference_ply_sha256": ply_sha256,
+            "canonical_reference_sha256": canonical_sha256,
+        }
 
     def _external_root(self, value: Path) -> Path:
         raw = Path(value)
