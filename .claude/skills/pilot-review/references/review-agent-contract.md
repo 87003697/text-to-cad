@@ -88,8 +88,8 @@ Allowed production runtime verdicts:
 - `fail`
 - `not_auditable`
 
-The compiler preserves `runner_completion` and `workspace_protocol` from
-deterministic evidence. The draft cannot override them.
+The compiler preserves `workspace_protocol` from the verified Terminal
+Validation Result. The draft cannot override it.
 
 ## Protocol assessments
 

@@ -1671,7 +1671,6 @@ class WorkspaceCliTests(unittest.TestCase):
         review = json.loads(
             (self.workspace / "run/review/review.json").read_text(encoding="utf-8")
         )
-        self.assertEqual("pass", review["verdicts"]["runner_completion"])
         self.assertEqual("pass", review["verdicts"]["workspace_protocol"])
         self.assertEqual("accepted", review["verdicts"]["reconstruction_quality"])
         self.assertIn(

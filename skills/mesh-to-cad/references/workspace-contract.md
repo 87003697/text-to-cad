@@ -179,9 +179,9 @@ forged to carry an embedded bundle plus matching identity cannot
 self-authenticate. The consumer uses W1's closed graph, `review_graph`,
 review facts, and evaluation facts as its structural input. Reviewer-owned
 default `prepare`/`review` outputs live under `run/review/`, excluded from the
-W1 inventory. The old full Workspace validator/graph reconstruction is an
-explicit `--full-audit` diagnostic route only; missing or legacy handoff data
-fails closed on the default path.
+W1 inventory. Review never reruns the full Workspace validator or scans raw
+attempt, step, cycle, command, or Final Delivery records. Missing or legacy
+handoff data fails closed.
 
 Invoke it with the active project Python:
 

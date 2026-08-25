@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
 """Read-only pilot review compiler.
 
-The default path consumes the runner-owned external
-``.internal-terminal-validation/<exp>/terminal-validation.json`` handoff and
-verifies it once with W1. The Workspace-local
-``run/terminal-validation-locator.json`` is only a minimal discovery marker;
-its content is never used to authenticate the bundle. The legacy full
-Workspace validator remains only behind ``--full-audit`` (or an explicit
-helper Python file) for operator diagnostics.
+Review consumes the runner-owned external Terminal Validation handoff and
+verifies it once with W1. It never interprets Workspace Authority directly.
 """
 
 from __future__ import annotations
@@ -18,17 +13,12 @@ import importlib.util
 import json
 import os
 from pathlib import Path
-import signal
 import stat
-import subprocess
 import sys
 import tempfile
 from typing import Any
 
 
-DEFAULT_WORKSPACE_HELPER = "mesh-to-cad-workspace"
-DEFAULT_VALIDATION_TIMEOUT_SECONDS = 1800
-MAX_VALIDATION_TIMEOUT_SECONDS = 1800
 TERMINAL_LOCATOR_SCHEMA = "mesh-to-cad.terminal-validation-locator/2"
 TERMINAL_HANDOFF_LAYOUT = "external-sibling-namespace/1"
 TERMINAL_LOCATOR_RELATIVE = "run/terminal-validation-locator.json"
@@ -113,16 +103,6 @@ PROTOCOL_CHECKS = (
 
 class ReviewError(RuntimeError):
     """The review could not read its declared evidence."""
-
-
-class ValidatorTimeoutError(ReviewError):
-    """The Workspace validator exceeded the configured review budget."""
-
-    def __init__(self, timeout_seconds: int):
-        super().__init__(
-            f"Workspace validator exceeded {timeout_seconds} seconds"
-        )
-        self.timeout_seconds = timeout_seconds
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -381,457 +361,6 @@ def _terminal_bundle(
     ):
         raise ReviewError("verified terminal bundle omitted current facts")
     return bundle, result, identity
-
-
-def _validate(
-    workspace: Path,
-    helper: str | Path | None,
-    timeout_seconds: int,
-) -> tuple[int, dict[str, Any]]:
-    helper_text = str(helper)
-    helper_path = Path(helper_text).expanduser()
-    if helper_path.exists() and (helper_path.is_dir() or helper_path.suffix == ".py"):
-        command = [sys.executable, str(helper_path)]
-    else:
-        command = [helper_text]
-    argv = [
-        *command,
-        "validate",
-        "--workspace",
-        str(workspace),
-    ]
-    try:
-        process = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=os.name == "posix",
-        )
-        try:
-            stdout, stderr = process.communicate(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGTERM)
-            else:
-                process.terminate()
-            try:
-                process.communicate(timeout=2)
-            except subprocess.TimeoutExpired:
-                if os.name == "posix":
-                    os.killpg(process.pid, signal.SIGKILL)
-                else:
-                    process.kill()
-                process.communicate()
-            raise ValidatorTimeoutError(timeout_seconds)
-    except ValidatorTimeoutError:
-        raise
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ReviewError(f"Workspace validator failed to run: {exc}") from exc
-    try:
-        payload = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        detail = stderr.strip()
-        suffix = f": {detail}" if detail else ""
-        raise ReviewError(
-            f"Workspace validator returned invalid JSON{suffix}"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise ReviewError("Workspace validator returned a non-object")
-    return process.returncode, payload
-
-
-def _runner_verdict(workspace: Path) -> tuple[str, list[dict[str, str]]]:
-    path = workspace / "artifact_manifest.json"
-    if not path.is_file():
-        return "not_auditable", [
-            {
-                "classification": "observability-gap",
-                "detail": "artifact_manifest.json is missing",
-                "evidence": "artifact_manifest.json",
-            }
-        ]
-    try:
-        manifest = _read_json(path)
-    except ReviewError as exc:
-        return "not_auditable", [
-            {
-                "classification": "observability-gap",
-                "detail": str(exc),
-                "evidence": "artifact_manifest.json",
-            }
-        ]
-    return ("pass" if manifest.get("final_status") == 0 else "fail"), []
-
-
-def _invalid_workspace_review(
-    workspace: Path,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    error = payload.get("error")
-    if not isinstance(error, dict):
-        error = {}
-    classification = str(error.get("classification") or "invalid_workspace")
-    runner, issues = _runner_verdict(workspace)
-    issues.append(
-        {
-            "classification": "contract-gap",
-            "detail": str(error.get("detail") or "Workspace validation failed"),
-            "evidence": str(error.get("path") or "$"),
-        }
-    )
-    return {
-        "verdicts": {
-            "runner_completion": runner,
-            "workspace_protocol": classification,
-            "reconstruction_quality": "not_auditable",
-            "production_runtime_integration": "not_auditable",
-        },
-        "contract_provenance": {
-            "workspace": "workspace.json",
-            "runner": "artifact_manifest.json",
-        },
-        "workspace_validation": {
-            "valid": False,
-            "classification": classification,
-            "path": str(error.get("path") or "$"),
-            "detail": str(error.get("detail") or "Workspace validation failed"),
-        },
-        "graph": {"nodes": [], "edges": []},
-        "issues": issues,
-        "unresolved": [],
-        "evidence_gaps": ["canonical Workspace graph unavailable"],
-    }
-
-
-def _node(
-    nodes: list[dict[str, Any]],
-    node_id: str,
-    node_type: str,
-    evidence: str,
-    **facts: Any,
-) -> None:
-    nodes.append({"id": node_id, "type": node_type, "evidence": evidence, **facts})
-
-
-def _edge(
-    edges: list[dict[str, str]],
-    source: str,
-    target: str,
-    edge_type: str,
-) -> None:
-    edges.append({"from": source, "to": target, "type": edge_type})
-
-
-def _canonical_graph(
-    workspace: Path,
-    graph: dict[str, Any],
-) -> dict[str, list[dict[str, Any]]]:
-    nodes: list[dict[str, Any]] = []
-    edges: list[dict[str, str]] = []
-    _node(
-        nodes,
-        "canonical-reference",
-        "canonical_reference",
-        "input/input.json",
-    )
-    _node(nodes, "workspace", "workspace", "workspace.json")
-    _edge(edges, "canonical-reference", "workspace", "reference_initializes_workspace")
-
-    steps = graph.get("steps") if isinstance(graph.get("steps"), list) else []
-    for step in steps:
-        number = int(step["step"])
-        step_id = f"step:{number}"
-        preview_id = f"preview:{number}"
-        measurement_id = f"measurement:{number}"
-        _node(
-            nodes,
-            step_id,
-            "measured_step",
-            f"steps/{number:06d}/step.json",
-            accepted=bool(step.get("accepted")),
-            parent_step=step.get("parent_step"),
-        )
-        _node(
-            nodes,
-            preview_id,
-            "formal_preview",
-            str(step.get("preview") or f"steps/{number:06d}/preview/preview.json"),
-        )
-        _node(
-            nodes,
-            measurement_id,
-            "measurement",
-            str(step.get("measurement") or f"steps/{number:06d}/measurement.json"),
-        )
-        parent = step.get("parent_step")
-        if number == 0:
-            _edge(edges, "workspace", step_id, "workspace_publishes_initial_step")
-        else:
-            _edge(
-                edges,
-                f"step:{parent}",
-                step_id,
-                "measured_step_descends_from",
-            )
-
-        cycle_number = step.get("cycle")
-        attempt_path = (
-            workspace / "steps/000000/attempt.json"
-            if number == 0
-            else workspace
-            / "cycles"
-            / f"{int(cycle_number if cycle_number is not None else number):06d}"
-            / "attempt.json"
-        )
-        attempt = _read_json(attempt_path)
-        attempt_number = int(attempt["attempt"])
-        attempt_id = f"attempt:{attempt_number}"
-        _node(
-            nodes,
-            attempt_id,
-            "attempt",
-            attempt_path.relative_to(workspace).as_posix(),
-            result=attempt.get("result"),
-            intended_step=attempt.get("intended_step"),
-        )
-        _edge(
-            edges,
-            "workspace" if parent is None else f"step:{parent}",
-            attempt_id,
-            "attempt_branches_from_step",
-        )
-        _edge(edges, attempt_id, preview_id, "attempt_produces_preview")
-        _edge(edges, preview_id, measurement_id, "preview_has_measurement")
-        _edge(edges, measurement_id, step_id, "measurement_publishes_step")
-
-    failed_attempts = (
-        graph.get("failed_attempts")
-        if isinstance(graph.get("failed_attempts"), list)
-        else []
-    )
-    for attempt in failed_attempts:
-        attempt_number = int(attempt["attempt"])
-        attempt_id = f"attempt:{attempt_number}"
-        if not any(node["id"] == attempt_id for node in nodes):
-            _node(
-                nodes,
-                attempt_id,
-                "attempt",
-                f"attempts/{attempt_number:06d}/attempt.json",
-                result=attempt.get("result"),
-                classification=attempt.get("classification"),
-            )
-        parent = attempt.get("from_step")
-        _edge(
-            edges,
-            "workspace" if parent is None else f"step:{parent}",
-            attempt_id,
-            "attempt_branches_from_step",
-        )
-
-    cycles = graph.get("cycles") if isinstance(graph.get("cycles"), list) else []
-    for cycle in cycles:
-        number = int(cycle["cycle"])
-        root = workspace / "cycles" / f"{number:06d}"
-        plan = _read_json(root / "plan.json")
-        source_changes = _read_json(root / "source_changes.json")
-        region_diff = _read_json(root / "diff.json")
-        assessment = _read_json(root / "assessment.json")
-        cycle_id = f"cycle:{number}"
-        batch_id = f"repair-batch:{number}"
-        source_id = f"source-change:{number}"
-        diff_id = f"region-diff:{number}"
-        assessment_id = f"assessment:{number}"
-        _node(
-            nodes,
-            cycle_id,
-            "repair_cycle",
-            f"cycles/{number:06d}/cycle.json",
-            from_step=cycle.get("from_step"),
-            to_step=cycle.get("to_step"),
-        )
-        _node(
-            nodes,
-            batch_id,
-            "repair_batch",
-            f"cycles/{number:06d}/plan.json",
-            rationale=plan.get("rationale"),
-        )
-        _node(
-            nodes,
-            source_id,
-            "source_change",
-            f"cycles/{number:06d}/source_changes.json",
-            files=source_changes.get("files", []),
-        )
-        _node(
-            nodes,
-            diff_id,
-            "region_diff",
-            f"cycles/{number:06d}/diff.json",
-            identity=region_diff.get("identity"),
-        )
-        _node(
-            nodes,
-            assessment_id,
-            "agent_assessment",
-            f"cycles/{number:06d}/assessment.json",
-            summary=assessment.get("summary"),
-        )
-        for target in plan.get("selected_targets", []):
-            target_key = str(target.get("target_key"))
-            target_id = f"repair-target:{number}:{target_key}"
-            _node(
-                nodes,
-                target_id,
-                "repair_target",
-                f"cycles/{number:06d}/plan.json",
-                target_key=target_key,
-                mask_sha256=target.get("mask_sha256"),
-            )
-            _edge(
-                edges,
-                f"step:{cycle['from_step']}",
-                target_id,
-                "step_exposes_target",
-            )
-            _edge(edges, target_id, batch_id, "target_selected_by_batch")
-        edit_ids: list[str] = []
-        for edit in plan.get("planned_edits", []):
-            edit_key = str(edit.get("edit_key"))
-            edit_id = f"planned-edit:{number}:{edit_key}"
-            edit_ids.append(edit_id)
-            _node(
-                nodes,
-                edit_id,
-                "planned_edit",
-                f"cycles/{number:06d}/plan.json",
-                edit_key=edit_key,
-                target_keys=edit.get("target_keys", []),
-                description=edit.get("description"),
-            )
-            _edge(edges, batch_id, edit_id, "batch_contains_edit")
-            _edge(edges, edit_id, source_id, "edit_has_source_change")
-        if not edit_ids:
-            _edge(edges, batch_id, source_id, "batch_has_source_change")
-        _edge(edges, source_id, diff_id, "source_change_measured_by_diff")
-        _edge(edges, diff_id, assessment_id, "diff_assessed_by_agent")
-        _edge(edges, assessment_id, cycle_id, "assessment_publishes_cycle")
-        _edge(edges, cycle_id, f"step:{cycle['to_step']}", "cycle_publishes_step")
-        attempt_ids = cycle.get("attempt_ids", [])
-        if attempt_ids:
-            successful_attempt = attempt_ids[-1]
-            if any(node["id"] == f"attempt:{successful_attempt}" for node in nodes):
-                _edge(
-                    edges,
-                    f"attempt:{successful_attempt}",
-                    cycle_id,
-                    "attempt_contributes_to_cycle",
-                )
-
-    delivery = graph.get("final_delivery")
-    if isinstance(delivery, dict):
-        selection = _read_json(workspace / "final/selection.json")
-        manifest_path = str(delivery.get("manifest") or "final/manifest.json")
-        manifest = _read_json(workspace / manifest_path)
-        _node(
-            nodes,
-            "selection",
-            "selection",
-            "final/selection.json",
-            selected_step=selection.get("selected_step"),
-            considered_steps=selection.get("considered_steps", []),
-        )
-        _node(
-            nodes,
-            "rebuild",
-            "rebuild",
-            "final/rebuild.json",
-            identity=manifest.get("rebuild_sha256"),
-            execution=manifest.get("rebuild_execution"),
-        )
-        _node(
-            nodes,
-            "verification",
-            "verification",
-            "final/verification.json",
-            identity=manifest.get("verification_sha256"),
-            verification_identity=manifest.get(
-                "verification_identity_sha256"
-            ),
-        )
-        _node(
-            nodes,
-            "final-delivery",
-            "final_delivery",
-            manifest_path,
-            selected_step=delivery.get("selected_step"),
-            accepted=delivery.get("accepted"),
-            identity_sha256=delivery.get("identity_sha256"),
-        )
-        for step in selection.get("considered_steps", []):
-            _edge(
-                edges,
-                f"step:{step}",
-                "selection",
-                "step_considered_for_selection",
-            )
-        _edge(edges, "selection", "rebuild", "selection_triggers_rebuild")
-        _edge(
-            edges,
-            "rebuild",
-            "verification",
-            "rebuild_verified_independently",
-        )
-        _edge(
-            edges,
-            "verification",
-            "final-delivery",
-            "verification_supports_delivery",
-        )
-    return {"nodes": nodes, "edges": edges}
-
-
-def _canonical_review(
-    workspace: Path,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    graph = payload.get("graph")
-    if not isinstance(graph, dict):
-        raise ReviewError("valid Workspace response omitted its graph")
-    delivery = graph.get("final_delivery")
-    runner, issues = _runner_verdict(workspace)
-    accepted = bool(delivery.get("accepted")) if isinstance(delivery, dict) else False
-    return {
-        "verdicts": {
-            "runner_completion": runner,
-            "workspace_protocol": "pass",
-            "reconstruction_quality": (
-                "accepted" if accepted else "delivered_with_residual"
-            ),
-            "production_runtime_integration": "not_auditable",
-        },
-        "contract_provenance": {
-            "workspace": "workspace.json",
-            "canonical_reference": "input/input.json",
-            "graph_index": "step_index.json",
-            "runner": "artifact_manifest.json",
-            "telemetry": "run/",
-        },
-        "workspace_validation": {
-            "valid": True,
-            "classification": "valid",
-            "recovery": payload.get("recovery", []),
-        },
-        "graph": _canonical_graph(workspace, graph),
-        "issues": issues,
-        "unresolved": [],
-        "evidence_gaps": [
-            "production runtime integration requires shipped snapshot, invoked "
-            "installed-skill, bundle, parity, and isolation gate evidence"
-        ],
-    }
 
 
 def _bundle_graph_view(
@@ -1164,11 +693,9 @@ def _bundle_review(workspace: Path, helper: str | Path | None) -> dict[str, Any]
     _bundle, result, identity = _terminal_bundle(workspace, helper)
     graph = result["graph"]
     delivery = graph.get("final_delivery")
-    runner, issues = _runner_verdict(workspace)
     accepted = bool(delivery.get("accepted")) if isinstance(delivery, dict) else False
     return {
         "verdicts": {
-            "runner_completion": runner,
             "workspace_protocol": "pass",
             "reconstruction_quality": "accepted" if accepted else "delivered_with_residual",
             "production_runtime_integration": "not_auditable",
@@ -1178,7 +705,6 @@ def _bundle_review(workspace: Path, helper: str | Path | None) -> dict[str, Any]
             "terminal_handoff": (
                 f"../{TERMINAL_HANDOFF_NAMESPACE}/<exp>/{TERMINAL_HANDOFF_FILENAME}"
             ),
-            "runner": "artifact_manifest.json",
         },
         "workspace_validation": {
             "valid": True,
@@ -1189,7 +715,7 @@ def _bundle_review(workspace: Path, helper: str | Path | None) -> dict[str, Any]
         "graph": _bundle_graph_view(graph, result.get("review_graph")),
         "review_facts": result["review_facts"],
         "evaluation_facts": result["evaluation_facts"],
-        "issues": issues,
+        "issues": [],
         "unresolved": [],
         "evidence_gaps": [
             "production runtime integration requires shipped snapshot, invoked installed-skill, bundle, parity, and isolation gate evidence"
@@ -1200,30 +726,13 @@ def _bundle_review(workspace: Path, helper: str | Path | None) -> dict[str, Any]
 def review_workspace(
     workspace: Path,
     helper: str | Path | None = None,
-    validation_timeout_seconds: int = DEFAULT_VALIDATION_TIMEOUT_SECONDS,
-    *,
-    full_audit: bool = False,
 ) -> tuple[int, dict[str, Any]]:
-    """Review one experiment from W4 evidence, or use the explicit audit seam."""
+    """Review one experiment from its verified Terminal Validation handoff."""
 
     if Path(workspace).is_symlink():
         raise ReviewError("review workspace must not be a symlink")
     workspace = workspace.resolve()
-    if not full_audit:
-        try:
-            return 0, _bundle_review(workspace, helper)
-        except ReviewError:
-            raise
-    status, payload = _validate(
-        workspace,
-        helper,
-        validation_timeout_seconds,
-    )
-    if status != 0 or payload.get("ok") is not True:
-        review = _invalid_workspace_review(workspace, payload)
-        classification = review["workspace_validation"]["classification"]
-        return (2 if classification == "unsupported_legacy_workspace" else 1), review
-    return 0, _canonical_review(workspace, payload)
+    return 0, _bundle_review(workspace, helper)
 
 
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
@@ -1335,15 +844,12 @@ def _group_records(
 
 
 def _is_experiment(path: Path) -> bool:
-    file_markers = any(
-        (path / name).is_file()
-        for name in ("workspace.json", "experiment.json", "artifact_manifest.json")
-    )
-    directory_markers = any(
-        (path / name).is_dir()
-        for name in ("run", "input", "attempts", "steps", "cycles", "final")
-    )
-    return file_markers or directory_markers
+    return (
+        path.parent
+        / TERMINAL_HANDOFF_NAMESPACE
+        / path.name
+        / TERMINAL_HANDOFF_FILENAME
+    ).is_file()
 
 
 def _discover_target(target: Path) -> tuple[Path | None, list[Path]]:
@@ -1354,17 +860,15 @@ def _discover_target(target: Path) -> tuple[Path | None, list[Path]]:
         return None, [target]
     if not target.is_dir():
         raise ReviewError(f"review target is not a directory: {target}")
-    # Canonical output groups define every non-snapshot child directory as an
-    # experiment. Do not require success markers here: a runner can fail before
-    # workspace.json or artifact_manifest.json is published and that failure
-    # still needs an explicit review record.
+    namespace = target / TERMINAL_HANDOFF_NAMESPACE
+    if namespace.is_symlink() or not namespace.is_dir():
+        raise ReviewError(f"group has no terminal handoff namespace: {target}")
     experiments: list[Path] = []
-    for child in target.iterdir():
-        if child.name in {"_snapshot", ".internal-terminal-validation"}:
-            continue
-        if child.is_symlink():
+    for handoff in namespace.iterdir():
+        child = target / handoff.name
+        if handoff.is_symlink() or child.is_symlink():
             raise ReviewError(f"review target contains a symlink: {child}")
-        if child.is_dir():
+        if handoff.is_dir() and child.is_dir():
             experiments.append(child.resolve())
     experiments.sort()
     if not experiments:
@@ -1437,132 +941,6 @@ def _review_paths(
     return root, destinations
 
 
-def _read_bounded_text(path: Path, limit: int = 4096) -> str:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    if len(text) <= limit:
-        return text
-    half = limit // 2
-    return text[:half] + "\n...[truncated by Evidence Compiler]...\n" + text[-half:]
-
-
-def _command_records(workspace: Path) -> list[dict[str, Any]]:
-    paths: set[Path] = set()
-    for pattern in (
-        "attempts/*/commands/*/command.json",
-        "steps/*/commands/*/command.json",
-        "cycles/*/commands/*/command.json",
-    ):
-        paths.update(workspace.glob(pattern))
-    records: list[dict[str, Any]] = []
-    for path in sorted(paths):
-        command = _read_json(path)
-        stderr = command.get("stderr")
-        stderr_path: Path | None = None
-        if isinstance(stderr, dict) and isinstance(stderr.get("path"), str):
-            declared = Path(stderr["path"])
-            command_scope = path.parents[2].resolve()
-            if declared.is_absolute():
-                raise ReviewError(
-                    f"command stderr path must be relative: {path}"
-                )
-            candidate = (command_scope / declared).resolve()
-            try:
-                candidate.relative_to(command_scope)
-            except ValueError as exc:
-                raise ReviewError(
-                    f"command stderr path escapes its command scope: {path}"
-                ) from exc
-            if candidate.is_file():
-                stderr_path = candidate
-        records.append(
-            {
-                "evidence": path.relative_to(workspace).as_posix(),
-                "phase": command.get("phase"),
-                "argv": command.get("argv", []),
-                "duration_ms": command.get("duration_ms"),
-                "exit_code": command.get("exit_code"),
-                "timed_out": command.get("timed_out"),
-                "stderr": (
-                    {
-                        "path": stderr_path.relative_to(workspace).as_posix(),
-                        "preview": _read_bounded_text(stderr_path),
-                    }
-                    if stderr_path is not None
-                    else None
-                ),
-            }
-        )
-    return records
-
-
-def _artifact_summary(workspace: Path) -> dict[str, Any]:
-    path = workspace / "artifact_manifest.json"
-    if not path.is_file():
-        return {"path": "artifact_manifest.json", "present": False}
-    manifest = _read_json(path)
-    return {
-        "path": "artifact_manifest.json",
-        "present": True,
-        "final_status": manifest.get("final_status"),
-        "workload_status": manifest.get("workload_status"),
-    }
-
-
-def _execution_evidence(
-    workspace: Path,
-) -> tuple[dict[str, Any], list[str]]:
-    """Compile execution evidence while containing malformed sub-records."""
-
-    errors: list[str] = []
-    try:
-        artifact = _artifact_summary(workspace)
-    except ReviewError as exc:
-        errors.append(str(exc))
-        artifact = {
-            "path": "artifact_manifest.json",
-            "present": (workspace / "artifact_manifest.json").is_file(),
-            "error": str(exc),
-        }
-    try:
-        commands = _command_records(workspace)
-    except ReviewError as exc:
-        errors.append(str(exc))
-        commands = []
-    return (
-        {
-            "artifact_manifest": artifact,
-            "files": _presence_index(workspace),
-            "commands": commands,
-            "rollout": (
-                {"path": "run/rollout.jsonl"}
-                if (workspace / "run/rollout.jsonl").is_file()
-                else None
-            ),
-        },
-        errors,
-    )
-
-
-def _presence_index(workspace: Path) -> dict[str, bool]:
-    return {
-        path: (workspace / path).is_file()
-        for path in (
-            "workspace.json",
-            "experiment.json",
-            "input/input.json",
-            "step_index.json",
-            "notes.md",
-            "final/manifest.json",
-            "run/rollout.jsonl",
-            "run/stderr.log",
-            "run/traces.sqlite3",
-        )
-    }
-
-
 def _snapshot_head(group: Path | None, workspace: Path) -> str | None:
     root = group if group is not None else workspace.parent
     path = root / "_snapshot/HEAD.sha"
@@ -1575,101 +953,14 @@ def _snapshot_head(group: Path | None, workspace: Path) -> str | None:
     return value or None
 
 
-def _timeout_review(workspace: Path, timeout_seconds: int) -> dict[str, Any]:
-    runner, issues = _runner_verdict(workspace)
-    issues.append(
-        {
-            "classification": "observability-gap",
-            "detail": (
-                "Workspace authority was not classified because its validator "
-                f"exceeded the {timeout_seconds}-second review budget"
-            ),
-            "evidence": "workspace.json",
-        }
-    )
-    return {
-        "verdicts": {
-            "runner_completion": runner,
-            "workspace_protocol": "not_auditable",
-            "reconstruction_quality": "not_auditable",
-            "production_runtime_integration": "not_auditable",
-        },
-        "contract_provenance": {
-            "workspace": "workspace.json",
-            "runner": "artifact_manifest.json",
-        },
-        "workspace_validation": {
-            "valid": None,
-            "classification": "validator_timeout",
-            "timeout_seconds": timeout_seconds,
-        },
-        "graph": {"nodes": [], "edges": []},
-        "issues": issues,
-        "unresolved": ["Workspace validation did not reach a terminal result"],
-        "evidence_gaps": ["canonical Workspace graph unavailable"],
-    }
-
-
-def _compiler_error_review(workspace: Path, detail: str) -> dict[str, Any]:
-    runner, issues = _runner_verdict(workspace)
-    issues.append(
-        {
-            "classification": "observability-gap",
-            "detail": f"Evidence Compiler could not classify Workspace authority: {detail}",
-            "evidence": "workspace.json",
-        }
-    )
-    return {
-        "verdicts": {
-            "runner_completion": runner,
-            "workspace_protocol": "not_auditable",
-            "reconstruction_quality": "not_auditable",
-            "production_runtime_integration": "not_auditable",
-        },
-        "contract_provenance": {
-            "workspace": "workspace.json",
-            "runner": "artifact_manifest.json",
-        },
-        "workspace_validation": {
-            "valid": None,
-            "classification": "compiler_failure",
-            "detail": detail,
-        },
-        "graph": {"nodes": [], "edges": []},
-        "issues": issues,
-        "unresolved": ["Workspace validation did not produce readable evidence"],
-        "evidence_gaps": ["canonical Workspace graph unavailable"],
-    }
-
-
 def _prepare_experiment(
     workspace: Path,
     group: Path | None,
     review_destination: Path,
     helper: str | Path | None,
-    timeout_seconds: int,
-    full_audit: bool,
     bundle_mode: bool,
 ) -> tuple[int, dict[str, Any]]:
-    try:
-        status, baseline = review_workspace(
-            workspace,
-            helper,
-            validation_timeout_seconds=timeout_seconds,
-            full_audit=full_audit,
-        )
-    except ValidatorTimeoutError:
-        status = 1
-        baseline = _timeout_review(workspace, timeout_seconds)
-    except ReviewError as exc:
-        status = 1
-        baseline = _compiler_error_review(workspace, str(exc))
-    execution, execution_errors = _execution_evidence(workspace)
-    if execution_errors:
-        status = 1
-        detail = "; ".join(execution_errors)
-        baseline = _compiler_error_review(workspace, detail)
-        execution["compiler_errors"] = execution_errors
+    status, baseline = review_workspace(workspace, helper)
     evidence = _seal_compiler_output({
         "schema": "pilot-review.evidence/2",
         "experiment": workspace.name,
@@ -1688,7 +979,6 @@ def _prepare_experiment(
             "scope": "workspace-root" if not bundle_mode else "run/review"
         },
         "baseline": baseline,
-        "execution": execution,
     })
     _atomic_write_json(review_destination / "review-input.json", evidence)
     return status, evidence
@@ -1696,21 +986,13 @@ def _prepare_experiment(
 
 def prepare_target(
     target: Path,
-    helper: str | Path | None,
-    timeout_seconds: int,
+    helper: str | Path | None = None,
     review_root: Path | None = None,
-    *,
-    full_audit: bool = False,
 ) -> tuple[int, dict[str, Any]]:
     """Compile deterministic review evidence for one experiment or a group."""
 
-    if timeout_seconds <= 0 or timeout_seconds > MAX_VALIDATION_TIMEOUT_SECONDS:
-        raise ReviewError(
-            "validation timeout must be between 1 and "
-            f"{MAX_VALIDATION_TIMEOUT_SECONDS} seconds"
-        )
     group, experiments = _discover_target(target)
-    bundle_mode = review_root is None and not full_audit
+    bundle_mode = review_root is None
     output_root, destinations = _review_paths(
         group, experiments, review_root, bundle_mode=bundle_mode
     )
@@ -1722,8 +1004,6 @@ def prepare_target(
             group,
             destinations[workspace],
             helper,
-            timeout_seconds,
-            full_audit,
             bundle_mode,
         )
         status = max(status, experiment_status)
@@ -1802,8 +1082,8 @@ def _default_bundle_review_mode(
         }
         if not evidence_paths or scopes != {"workspace-root"}:
             raise ReviewError(
-                "legacy review input is unscoped; rerun prepare with --full-audit "
-                "or use the default run/review bundle"
+                "legacy review input is unscoped; rerun prepare to use the "
+                "default run/review bundle"
             )
         return False
     return True
@@ -2134,14 +1414,13 @@ def _group_markdown(
         "",
         "## Experiment verdicts",
         "",
-        "| Experiment | Runner | Workspace | Reconstruction | Production runtime |",
-        "|---|---|---|---|---|",
+        "| Experiment | Workspace | Reconstruction | Production runtime |",
+        "|---|---|---|---|",
     ]
     for workspace, review in reviews:
         verdicts = review["verdicts"]
         lines.append(
-            f"| {workspace.name} | {verdicts['runner_completion']} | "
-            f"{verdicts['workspace_protocol']} | "
+            f"| {workspace.name} | {verdicts['workspace_protocol']} | "
             f"{verdicts['reconstruction_quality']} | "
             f"{verdicts['production_runtime_integration']} |"
         )
@@ -2272,17 +1551,7 @@ def _legacy_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workspace-helper",
         default=None,
-        help="legacy Workspace helper; supplying it opts into the full audit path",
-    )
-    parser.add_argument(
-        "--full-audit",
-        action="store_true",
-        help="explicitly run the legacy full Workspace validator audit",
-    )
-    parser.add_argument(
-        "--validation-timeout-seconds",
-        type=int,
-        default=DEFAULT_VALIDATION_TIMEOUT_SECONDS,
+        help="W1 Workspace facade used to verify the Terminal Validation handoff",
     )
     return parser
 
@@ -2298,22 +1567,12 @@ def _workflow_parser() -> argparse.ArgumentParser:
     prepare.add_argument(
         "--workspace-helper",
         default=None,
-        help="legacy Workspace helper; supplying it opts into the full audit path",
-    )
-    prepare.add_argument(
-        "--full-audit",
-        action="store_true",
-        help="explicitly run the legacy full Workspace validator audit",
+        help="W1 Workspace facade used to verify the Terminal Validation handoff",
     )
     prepare.add_argument(
         "--review-root",
         type=Path,
         help="write review artifacts outside the immutable evidence target",
-    )
-    prepare.add_argument(
-        "--validation-timeout-seconds",
-        type=int,
-        default=DEFAULT_VALIDATION_TIMEOUT_SECONDS,
     )
     publish = subparsers.add_parser(
         "publish",
@@ -2336,14 +1595,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "prepare":
                 status, summary = prepare_target(
                     args.target,
-                    args.workspace_helper or DEFAULT_WORKSPACE_HELPER,
-                    args.validation_timeout_seconds,
+                    args.workspace_helper,
                     args.review_root,
-                    full_audit=args.full_audit
-                    or (
-                        args.workspace_helper is not None
-                        and Path(args.workspace_helper).expanduser().is_file()
-                    ),
                 )
                 print(
                     json.dumps(
@@ -2379,32 +1632,10 @@ def main(argv: list[str] | None = None) -> int:
 
     args = _legacy_parser().parse_args(raw)
     try:
-        if (
-            args.validation_timeout_seconds <= 0
-            or args.validation_timeout_seconds > MAX_VALIDATION_TIMEOUT_SECONDS
-        ):
-            raise ReviewError(
-                "validation timeout must be between 1 and "
-                f"{MAX_VALIDATION_TIMEOUT_SECONDS} seconds"
-            )
-        full_audit = args.full_audit or (
-            args.workspace_helper is not None
-            and Path(args.workspace_helper).expanduser().is_file()
-        )
         workspace = args.workspace.resolve()
-        status, review = review_workspace(
-            workspace,
-            args.workspace_helper or DEFAULT_WORKSPACE_HELPER,
-            args.validation_timeout_seconds,
-            full_audit=full_audit,
-        )
-        if full_audit:
-            destination = workspace
-        else:
-            _, destinations = _review_paths(
-                None, [workspace], None, bundle_mode=True
-            )
-            destination = destinations[workspace]
+        status, review = review_workspace(workspace, args.workspace_helper)
+        _, destinations = _review_paths(None, [workspace], None, bundle_mode=True)
+        destination = destinations[workspace]
         _publish(destination, review)
     except (OSError, ReviewError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}))
