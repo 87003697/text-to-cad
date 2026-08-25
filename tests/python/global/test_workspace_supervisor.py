@@ -2630,7 +2630,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         assert spec is not None and spec.loader is not None
         spec.loader.exec_module(fixture_module)
         case = fixture_module.WorkspaceCliTests(
-            "test_real_bridge_mediated_nine_call_lifecycle"
+            "test_run_command_defaults_to_thirty_minute_workspace_budget"
         )
         case.setUp()
         supervisor: WorkspaceSupervisor | None = None
