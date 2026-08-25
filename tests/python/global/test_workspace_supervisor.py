@@ -24,6 +24,20 @@ from scripts.pilot.workspace_supervisor import (
     SupervisorError,
     WorkspaceSupervisor,
 )
+
+
+TEST_AUTHORITY_HOME_ENV = "TEXT_TO_CAD_TEST_AUTHORITY_HOME"
+
+
+def _resolve_test_authority(runner):
+    """Resolve the explicitly injected nine-call authority, when present."""
+
+    injected_home = os.environ.get(TEST_AUTHORITY_HOME_ENV)
+    if injected_home is None:
+        return None
+    return runner.resolve_deployed_authority(Path(injected_home)).publish_tree
+
+
 class _Reference:
     def __init__(self, reference_id: str, _path: Path) -> None:
         self.reference_id = reference_id
@@ -513,6 +527,54 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 workspace_api=self.workspace,
                 trusted_tools_root=overlay,
             )
+
+    def test_nine_call_injected_authority_ignores_process_home(self) -> None:
+        from scripts.pilot import runner
+        from tests.python.support.authority_fixtures import build_authority
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            authority_home = root / "authority-home"
+            fixture = build_authority(authority_home, dedupe_token="nine-call-env")
+            process_home = root / "process-home"
+            process_home.mkdir()
+            with mock.patch.dict(
+                os.environ,
+                {
+                    TEST_AUTHORITY_HOME_ENV: os.fspath(authority_home),
+                    "HOME": os.fspath(process_home),
+                },
+            ):
+                trusted_tools_root = _resolve_test_authority(runner)
+
+            self.assertEqual(fixture.publish_tree, trusted_tools_root)
+            self.assertFalse(
+                (
+                    process_home
+                    / ".text-to-cad-codex"
+                    / "deployments"
+                    / "current.json"
+                ).exists()
+            )
+
+    def test_nine_call_invalid_injected_authority_fails_closed(self) -> None:
+        from scripts.pilot import runner
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            process_home = root / "process-home"
+            process_home.mkdir()
+            with mock.patch.dict(
+                os.environ,
+                {
+                    TEST_AUTHORITY_HOME_ENV: os.fspath(root / "missing-authority"),
+                    "HOME": os.fspath(process_home),
+                },
+            ):
+                with self.assertRaisesRegex(
+                    runner.PilotError, "no valid plugin-authority"
+                ):
+                    _resolve_test_authority(runner)
 
     def test_candidate_copy_rejects_deterministic_swap_before_open(self) -> None:
         from scripts.pilot import workspace_supervisor as module
@@ -3256,35 +3318,6 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             authority = case.root / "trusted-tools"
             authority.mkdir()
             registry = runner.publish_tool_registry(authority)
-            authority_home = case.root / "authority-home"
-            authority_home.mkdir()
-            authority_stage = case.root / "authority-stage"
-            authority_stage.mkdir()
-            authority_workflow = cvm_push.CvmPush(
-                cvm_push.CommandRunner(),
-                repo_root=repo_root,
-                environ={**os.environ, "TMPDIR": os.fspath(case.root)},
-                agent=True,
-            )
-            authority_workflow.source = authority_workflow.inspect_source()
-            authority_inputs = authority_workflow.resolve_build_inputs()
-            authority_workflow.copy_source_to_stage(authority_stage)
-            authority_workflow.copy_build_inputs(authority_stage, authority_inputs)
-            authority_workflow.materialize_skill_symlinks(authority_stage)
-            authority_workflow.bundle_stage(authority_stage)
-            authority_workflow.validate_stage(authority_stage)
-            authority_attestation = authority_workflow.attest_stage(authority_stage)
-            authority_transfer_tree = authority_workflow.prepare_transfer_tree(
-                authority_stage
-            )
-            cvm_install_plugin.publish(
-                authority_transfer_tree,
-                authority_home,
-                provenance=authority_workflow._build_push_provenance(
-                    authority_attestation
-                ),
-                codex_executable="codex",
-            )
             process_home = case.root / "process-home-without-authority"
             process_home.mkdir()
             self.assertFalse(
@@ -3295,17 +3328,62 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     / "current.json"
                 ).exists()
             )
+            injected_authority_home = os.environ.get(TEST_AUTHORITY_HOME_ENV)
+            if injected_authority_home is None:
+                authority_home = case.root / "authority-home"
+                authority_home.mkdir()
+                authority_stage = case.root / "authority-stage"
+                authority_stage.mkdir()
+                authority_workflow = cvm_push.CvmPush(
+                    cvm_push.CommandRunner(),
+                    repo_root=repo_root,
+                    environ={**os.environ, "TMPDIR": os.fspath(case.root)},
+                    agent=True,
+                )
+                authority_workflow.source = authority_workflow.inspect_source()
+                authority_inputs = authority_workflow.resolve_build_inputs()
+                authority_workflow.copy_source_to_stage(authority_stage)
+                authority_workflow.copy_build_inputs(
+                    authority_stage, authority_inputs
+                )
+                authority_workflow.materialize_skill_symlinks(authority_stage)
+                authority_workflow.bundle_stage(authority_stage)
+                authority_workflow.validate_stage(authority_stage)
+                authority_attestation = authority_workflow.attest_stage(
+                    authority_stage
+                )
+                authority_transfer_tree = authority_workflow.prepare_transfer_tree(
+                    authority_stage
+                )
+                cvm_install_plugin.publish(
+                    authority_transfer_tree,
+                    authority_home,
+                    provenance=authority_workflow._build_push_provenance(
+                        authority_attestation
+                    ),
+                    codex_executable="codex",
+                )
+                with mock.patch.dict(os.environ, {"HOME": os.fspath(process_home)}):
+                    trusted_tools_root = runner.resolve_deployed_authority(
+                        authority_home
+                    ).publish_tree
+                self.assertTrue(trusted_tools_root.is_relative_to(case.root))
+            else:
+                authority_home = Path(injected_authority_home)
+                with mock.patch.dict(os.environ, {"HOME": os.fspath(process_home)}):
+                    trusted_tools_root = _resolve_test_authority(runner)
+                self.assertIsNotNone(trusted_tools_root)
+                assert trusted_tools_root is not None
+                self.assertTrue(
+                    trusted_tools_root.is_relative_to(
+                        authority_home.expanduser().resolve()
+                    )
+                )
             candidate_runtime = runner.materialize_candidate_runtime(
                 repo_root / ".venv",
                 case.root / "candidate-runtime",
                 repo_root=repo_root,
             )
-            with mock.patch.dict(os.environ, {"HOME": os.fspath(process_home)}):
-                trusted_tools_receipt = runner.resolve_deployed_authority(
-                    authority_home
-                )
-            trusted_tools_root = trusted_tools_receipt.publish_tree
-            self.assertTrue(trusted_tools_root.is_relative_to(case.root))
             from scripts.pilot.step_zero_evidence import (
                 real_step_zero_evidence_provider,
             )
