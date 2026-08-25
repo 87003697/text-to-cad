@@ -191,7 +191,7 @@ class WorkspaceFacadeTerminalTests(unittest.TestCase):
         )
         self.assertEqual(self.facade.TERMINAL_BUNDLE_SCHEMA, bundle["schema"])
         self.assertEqual(
-            {"schema", "workspace_id", "workspace_identity_sha256", "validator_version", "graph", "recovery", "review_facts", "evaluation_facts", "content_manifest_sha256", "identity_sha256"},
+            {"schema", "workspace_id", "workspace_identity_sha256", "validator_version", "graph", "review_graph", "recovery", "review_facts", "evaluation_facts", "content_manifest_sha256", "identity_sha256"},
             set(bundle["result"]),
         )
         self.assertEqual(

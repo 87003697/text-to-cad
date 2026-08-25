@@ -7,6 +7,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -277,6 +278,233 @@ class PilotReviewTests(unittest.TestCase):
             "evidence_gaps": ["bundle parity is not published"],
             "fix_playbook": ["Publish bundle parity evidence."],
         }
+
+    def terminal_bundle(self) -> tuple[dict, dict]:
+        payload = self.canonical_experiment()
+        (self.exp / "run").mkdir()
+        result = {
+            "schema": "mesh-to-cad.terminal-validation/1",
+            "workspace_id": "synthetic",
+            "workspace_identity_sha256": "1" * 64,
+            "validator_version": "mesh-to-cad.workspace-validator/1",
+            "graph": payload["graph"],
+            "recovery": [],
+            "review_facts": {
+                "step_count": 2,
+                "cycle_count": 1,
+                "failed_attempt_count": 1,
+                "accepted_steps": [1],
+                "heads": [1],
+                "budget": payload["graph"]["budget"],
+                "final_delivery": payload["graph"]["final_delivery"],
+                "step_outcomes": [],
+            },
+            "evaluation_facts": {
+                "accepted_step_count": 1,
+                "has_accepted_step": True,
+                "final_delivery_present": True,
+                "final_delivery_accepted": True,
+                "objective_facts": [],
+            },
+            "content_manifest_sha256": "2" * 64,
+            "identity_sha256": "3" * 64,
+        }
+        result["review_graph"] = {
+            "schema": "mesh-to-cad.review-graph/1",
+            "steps": [
+                {**payload["graph"]["steps"][0], "attempt_ids": [0]},
+                {**payload["graph"]["steps"][1], "attempt_ids": [1, 2]},
+            ],
+            "attempts": [
+                {
+                    "attempt": {
+                        "attempt": 0,
+                        "intended_step": 0,
+                        "result": "measured_step_published",
+                    },
+                    "path": "steps/000000/attempt.json",
+                },
+                {
+                    "attempt": payload["graph"]["failed_attempts"][0],
+                    "path": "attempts/000001/attempt.json",
+                },
+                {
+                    "attempt": {
+                        "attempt": 2,
+                        "intended_step": 1,
+                        "result": "repair_cycle_published",
+                    },
+                    "path": "cycles/000001/attempt.json",
+                },
+            ],
+            "failed_attempts": payload["graph"]["failed_attempts"],
+            "cycles": [
+                {
+                    **payload["graph"]["cycles"][0],
+                    "plan": json.loads(
+                        (self.exp / "cycles/000001/plan.json").read_text(encoding="utf-8")
+                    ),
+                    "source_changes": json.loads(
+                        (self.exp / "cycles/000001/source_changes.json").read_text(
+                            encoding="utf-8"
+                        )
+                    ),
+                    "diff_document": json.loads(
+                        (self.exp / "cycles/000001/diff.json").read_text(encoding="utf-8")
+                    ),
+                    "assessment": json.loads(
+                        (self.exp / "cycles/000001/assessment.json").read_text(
+                            encoding="utf-8"
+                        )
+                    ),
+                }
+            ],
+            "final": {
+                name: json.loads(
+                    (self.exp / "final" / f"{name}.json").read_text(encoding="utf-8")
+                )
+                for name in ("selection", "manifest", "rebuild", "verification")
+            },
+        }
+        bundle = {
+            "schema": "mesh-to-cad.terminal-validation-bundle/1",
+            "result": result,
+            "manifest": {"schema": "mesh-to-cad.content-manifest/1", "files": []},
+        }
+        # The locator's identity is an opaque W4 value; this test deliberately
+        # leaves its authentication to the mocked W1 verifier.
+        identity = "a" * 64
+        write_json(
+            self.exp / "run/terminal-validation-locator.json",
+            {
+                "schema": "mesh-to-cad.terminal-validation-locator/1",
+                "expected_identity": identity,
+                "bundle": bundle,
+            },
+        )
+        return bundle, result
+
+    def test_default_review_consumes_verified_locator_bundle_once(self) -> None:
+        bundle, result = self.terminal_bundle()
+        verifier = mock.Mock()
+        verifier.verify_terminal_validation.return_value = result
+        with (
+            mock.patch.object(self.reviewer, "_load_workspace_verifier", return_value=verifier),
+            mock.patch.object(self.reviewer, "_validate", side_effect=AssertionError("full validator")),
+            mock.patch.object(self.reviewer, "_canonical_graph", side_effect=AssertionError("graph rebuild")),
+            mock.patch.object(self.reviewer.hashlib, "sha256", side_effect=AssertionError("review hashed bundle")),
+        ):
+            status, review = self.reviewer.review_workspace(self.exp)
+        self.assertEqual(0, status)
+        verifier.verify_terminal_validation.assert_called_once_with(
+            self.exp.resolve(), bundle, json.loads(
+                (self.exp / "run/terminal-validation-locator.json").read_text(
+                    encoding="utf-8"
+                )
+            )["expected_identity"]
+        )
+        self.assertEqual(result["evaluation_facts"], review["evaluation_facts"])
+        self.assertTrue(review["graph"]["nodes"])
+        node_types = {node["type"] for node in review["graph"]["nodes"]}
+        self.assertTrue(
+            {
+                "attempt",
+                "formal_preview",
+                "repair_target",
+                "planned_edit",
+                "selection",
+                "rebuild",
+                "verification",
+                "final_delivery",
+            }.issubset(node_types)
+        )
+        edge_types = {edge["type"] for edge in review["graph"]["edges"]}
+        self.assertTrue(
+            {
+                "attempt_produces_preview",
+                "step_considered_for_selection",
+                "selection_triggers_rebuild",
+                "rebuild_verified_independently",
+                "verification_supports_delivery",
+            }.issubset(edge_types)
+        )
+        legacy_graph = self.reviewer._canonical_graph(self.exp, bundle["result"]["graph"])
+        self.assertEqual(
+            {
+                (node["id"], node["type"])
+                for node in legacy_graph["nodes"]
+            },
+            {
+                (node["id"], node["type"])
+                for node in review["graph"]["nodes"]
+            },
+        )
+        self.assertEqual(
+            {
+                (edge["from"], edge["to"], edge["type"])
+                for edge in legacy_graph["edges"]
+            },
+            {
+                (edge["from"], edge["to"], edge["type"])
+                for edge in review["graph"]["edges"]
+            },
+        )
+
+    def test_default_review_rejects_tampered_or_symlinked_locator(self) -> None:
+        _bundle, _result = self.terminal_bundle()
+        locator = self.exp / "run/terminal-validation-locator.json"
+        value = json.loads(locator.read_text(encoding="utf-8"))
+        value["expected_identity"] = "b" * 64
+        write_json(locator, value)
+        verifier = mock.Mock()
+        with mock.patch.object(self.reviewer, "_load_workspace_verifier", return_value=verifier):
+            with self.assertRaises(self.reviewer.ReviewError):
+                self.reviewer.review_workspace(self.exp)
+        verifier.verify_terminal_validation.assert_called_once_with(
+            self.exp.resolve(), _bundle, "b" * 64
+        )
+
+        outside = self.root / "outside.json"
+        outside.write_text("{}", encoding="utf-8")
+        locator.unlink()
+        locator.symlink_to(outside)
+        with self.assertRaises(self.reviewer.ReviewError):
+            self.reviewer.review_workspace(self.exp)
+
+        locator.unlink()
+        run = self.exp / "run"
+        run.rmdir()
+        run.symlink_to(self.root, target_is_directory=True)
+        with self.assertRaises(self.reviewer.ReviewError):
+            self.reviewer.review_workspace(self.exp)
+
+    def test_default_prepare_reuses_run_review_without_mutating_authority(self) -> None:
+        _bundle, result = self.terminal_bundle()
+        verifier = mock.Mock()
+        verifier.verify_terminal_validation.return_value = result
+
+        def authority_bytes() -> dict[str, bytes]:
+            return {
+                path.relative_to(self.exp).as_posix(): path.read_bytes()
+                for path in self.exp.rglob("*")
+                if path.is_file() and not path.is_relative_to(self.exp / "run")
+            }
+
+        before = authority_bytes()
+        with mock.patch.object(self.reviewer, "_load_workspace_verifier", return_value=verifier):
+            first_status, first = self.reviewer.prepare_target(
+                self.exp, None, self.reviewer.DEFAULT_VALIDATION_TIMEOUT_SECONDS
+            )
+            second_status, second = self.reviewer.prepare_target(
+                self.exp, None, self.reviewer.DEFAULT_VALIDATION_TIMEOUT_SECONDS
+            )
+        self.assertEqual(0, first_status)
+        self.assertEqual(0, second_status)
+        self.assertEqual(first["review_root"], second["review_root"])
+        self.assertTrue((self.exp / "run/review/review-input.json").is_file())
+        self.assertFalse((self.exp / "review-input.json").exists())
+        self.assertEqual(before, authority_bytes())
+        self.assertEqual(2, verifier.verify_terminal_validation.call_count)
 
     def test_reviewer_reconstructs_canonical_repair_and_delivery_chain(self) -> None:
         helper = self.helper(self.canonical_experiment())

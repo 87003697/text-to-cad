@@ -1629,13 +1629,13 @@ class WorkspaceCliTests(unittest.TestCase):
         )
 
         self.assertEqual(0, runner_status)
-        self.assertEqual(0, reviewed.returncode, reviewed.stderr)
+        self.assertEqual(0, reviewed.returncode, reviewed.stdout + reviewed.stderr)
         self.assertFalse((self.workspace / "reviews").exists())
         self.assertTrue((self.workspace / "run/rollout.jsonl").is_file())
         self.assertTrue((self.workspace / "run/traces.sqlite3").is_file())
         self.assertTrue((self.workspace / "run/trace.html").is_file())
         review = json.loads(
-            (self.workspace / "review.json").read_text(encoding="utf-8")
+            (self.workspace / "run/review/review.json").read_text(encoding="utf-8")
         )
         self.assertEqual("pass", review["verdicts"]["runner_completion"])
         self.assertEqual("pass", review["verdicts"]["workspace_protocol"])

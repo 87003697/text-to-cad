@@ -127,6 +127,18 @@ locally present.
 publishes its final artifact manifest first and then performs the single W1
 compile/persist step.
 
+The default pilot-review/evaluate consumer reads the fixed
+`run/terminal-validation-locator.json` through the Workspace/run directory
+descriptors. The locator carries the transported terminal bundle, while the
+opaque expected identity is passed directly to W1
+`verify_terminal_validation` exactly once; W1 is the only bundle identity
+authenticator. The consumer uses W1's closed graph, `review_graph`, review
+facts, and evaluation facts as its structural input. Reviewer-owned default
+`prepare`/`review` outputs live under `run/review/`, excluded from the W1
+inventory. The old full Workspace validator/graph reconstruction is an
+explicit `--full-audit` diagnostic route only; missing or legacy handoff data
+fails closed on the default path.
+
 Invoke it with the active project Python:
 
     python skills/mesh-to-cad/scripts/mesh-to-cad-workspace init ...

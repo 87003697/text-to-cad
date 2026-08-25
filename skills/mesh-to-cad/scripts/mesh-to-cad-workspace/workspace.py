@@ -545,6 +545,7 @@ _TERMINAL_FIELDS = {
     "workspace_identity_sha256",
     "validator_version",
     "graph",
+    "review_graph",
     "recovery",
     "review_facts",
     "evaluation_facts",
@@ -892,6 +893,7 @@ def _build_result(
         "workspace_identity_sha256": _workspace_identity(workspace_document),
         "validator_version": VALIDATOR_VERSION,
         "graph": validation.graph,
+        "review_graph": _build_review_graph(workspace, validation.graph),
         "recovery": list(validation.recovery),
         "review_facts": _review_facts(validation.graph),
         "evaluation_facts": _evaluation_facts(workspace, validation.graph),
@@ -899,6 +901,100 @@ def _build_result(
     }
     result["identity_sha256"] = _identity(TERMINAL_VALIDATION_SCHEMA, result)
     return result
+
+
+def _build_review_graph(
+    workspace: Path,
+    graph: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Freeze the extra closed facts needed by review at W1 compile time."""
+
+    steps: list[dict[str, Any]] = []
+    attempts: list[dict[str, Any]] = []
+    recorded_attempts: set[int] = set()
+    for item in graph["steps"]:
+        step_number = int(item["step"])
+        step_path = workspace / "steps" / f"{step_number:06d}" / "step.json"
+        step_document = _core._read_json(step_path, "$.review_graph.step")
+        attempt_ids = list(step_document.get("attempt_ids", []))
+        steps.append({**dict(item), "attempt_ids": attempt_ids})
+        for attempt_number in attempt_ids:
+            if not isinstance(attempt_number, int) or attempt_number in recorded_attempts:
+                continue
+            candidates = [
+                workspace / "attempts" / f"{attempt_number:06d}" / "attempt.json",
+                workspace / "steps" / f"{step_number:06d}" / "attempt.json",
+                workspace / "cycles" / f"{step_number:06d}" / "attempt.json",
+            ]
+            attempt_path = next((path for path in candidates if path.is_file()), None)
+            if attempt_path is None:
+                raise _core.WorkspaceError(
+                    "corrupt_workspace",
+                    "review graph references a missing Attempt",
+                    "$.review_graph.attempts",
+                )
+            attempts.append(
+                {
+                    "attempt": _core._read_json(attempt_path, "$.review_graph.attempt"),
+                    "path": attempt_path.relative_to(workspace).as_posix(),
+                }
+            )
+            recorded_attempts.add(attempt_number)
+    for item in graph["failed_attempts"]:
+        attempt_number = item.get("attempt")
+        if not isinstance(attempt_number, int) or attempt_number in recorded_attempts:
+            continue
+        attempt_path = workspace / "attempts" / f"{attempt_number:06d}" / "attempt.json"
+        if attempt_path.is_file():
+            attempts.append(
+                {
+                    "attempt": _core._read_json(attempt_path, "$.review_graph.attempt"),
+                    "path": attempt_path.relative_to(workspace).as_posix(),
+                }
+            )
+            recorded_attempts.add(attempt_number)
+    cycles: list[dict[str, Any]] = []
+    for item in graph["cycles"]:
+        number = int(item["cycle"])
+        root = workspace / "cycles" / f"{number:06d}"
+        cycles.append(
+            {
+                **dict(item),
+                "plan": _core._read_json(root / "plan.json", "$.review_graph.plan"),
+                "source_changes": _core._read_json(
+                    root / "source_changes.json", "$.review_graph.source_changes"
+                ),
+                "diff_document": _core._read_json(
+                    root / "diff.json", "$.review_graph.diff"
+                ),
+                "assessment": _core._read_json(
+                    root / "assessment.json", "$.review_graph.assessment"
+                ),
+            }
+        )
+    delivery = graph.get("final_delivery")
+    final: dict[str, Any] | None = None
+    if isinstance(delivery, Mapping):
+        def optional_final(name: str) -> dict[str, Any] | None:
+            path = workspace / "final" / f"{name}.json"
+            if not path.is_file():
+                return None
+            return _core._read_json(path, f"$.review_graph.{name}")
+
+        final = {
+            "selection": optional_final("selection"),
+            "manifest": optional_final("manifest"),
+            "rebuild": optional_final("rebuild"),
+            "verification": optional_final("verification"),
+        }
+    return {
+        "schema": "mesh-to-cad.review-graph/1",
+        "steps": steps,
+        "attempts": attempts,
+        "failed_attempts": list(graph["failed_attempts"]),
+        "cycles": cycles,
+        "final": final,
+    }
 
 
 def _require_terminal_state(graph: Mapping[str, Any]) -> None:
@@ -1077,6 +1173,9 @@ def _validate_result(
     if not isinstance(graph, dict) or graph.get("schema") != _core.INDEX_SCHEMA:
         _fail("invalid_contract", "graph schema is unsupported", "$.terminal_validation.graph")
     _validate_graph_shape(graph)
+    review_graph = result["review_graph"]
+    if not isinstance(review_graph, dict) or review_graph.get("schema") != "mesh-to-cad.review-graph/1":
+        _fail("invalid_contract", "review graph schema is unsupported", "$.terminal_validation.review_graph")
     if not isinstance(result["recovery"], list):
         _fail("invalid_contract", "recovery must be an array", "$.terminal_validation.recovery")
     _validate_review_facts(result["review_facts"])
@@ -1084,10 +1183,13 @@ def _validate_result(
     try:
         expected_review = _review_facts(graph)
         expected_evaluation = _evaluation_facts(workspace, graph)
+        expected_review_graph = _build_review_graph(workspace, graph)
     except (KeyError, TypeError, ValueError):
         _fail("invalid_contract", "graph facts are structurally incomplete", "$.terminal_validation.graph")
     if result["review_facts"] != expected_review:
         _fail("corrupt_workspace", "review facts are not deterministic", "$.terminal_validation.review_facts")
+    if review_graph != expected_review_graph:
+        _fail("corrupt_workspace", "review graph is not deterministic", "$.terminal_validation.review_graph")
     if result["evaluation_facts"] != expected_evaluation:
         _fail("corrupt_workspace", "evaluation facts are not deterministic", "$.terminal_validation.evaluation_facts")
     _sha256(result["content_manifest_sha256"], "$.terminal_validation.content_manifest_sha256")
