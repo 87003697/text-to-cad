@@ -1509,7 +1509,13 @@ def _build_runtime(
     runtime_lib.mkdir(parents=True, mode=0o755)
     budget = _CopyBudget()
     rewrite = _rewrite_map(venv, probe, stdlib, site_roots)
-    forbidden_values = [old for old, _new in rewrite]
+    # A system prefix is a valid runtime string (for example in stdlib data
+    # files), not evidence that the source checkout leaked.  More specific
+    # source paths remain forbidden, while sysconfig files still rewrite every
+    # entry in ``rewrite`` below.
+    forbidden_values = [
+        old for old, _new in rewrite if old.rstrip(b"/") not in {b"", b"/usr"}
+    ]
     if repo_root is not None:
         forbidden_values.append(os.fspath(repo_root).encode("utf-8"))
     forbidden = tuple(dict.fromkeys(forbidden_values))

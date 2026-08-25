@@ -981,7 +981,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             stdlib.mkdir(parents=True)
             external_bin.mkdir(parents=True)
             site.mkdir(parents=True)
-            (stdlib / "os.py").write_text("name = 'safe'\n", encoding="utf-8")
+            (stdlib / "os.py").write_text(
+                "name = 'safe'\nsystem_prefix = '/usr'\n", encoding="utf-8"
+            )
             (stdlib / "_sysconfigdata_test.py").write_text(
                 f"STDLIB = {str(stdlib)!r}\n", encoding="utf-8"
             )
@@ -1017,6 +1019,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 site,
                 site,
                 stdlib / "lib-dynload",
+                interpreter=fake_python,
+                base_prefix=Path("/usr"),
+                exec_prefix=Path("/usr"),
                 distributions=(
                     runtime_module.DistributionRecord(
                         "cad",
@@ -1043,11 +1048,35 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             self.assertFalse((runtime / "pyvenv.cfg").exists())
             self.assertFalse((runtime / "lib/python3.12/site-packages/direct_url.json").exists())
             self.assertFalse((runtime / "lib/python3.12/site-packages/editable.pth").exists())
+            self.assertIn(
+                b"system_prefix = '/usr'",
+                (runtime / "lib/python3.12/os.py").read_bytes(),
+            )
             for path in runtime.rglob("*"):
                 self.assertFalse(path.is_symlink())
                 if path.is_file():
                     self.assertNotIn(os.fsencode(repo), path.read_bytes())
                     self.assertNotIn(os.fsencode(venv), path.read_bytes())
+
+            for label, leaked_path in (("repo", repo), ("venv", venv)):
+                with self.subTest(leaked_path=label):
+                    (stdlib / "os.py").write_text(
+                        f"leaked = {os.fspath(leaked_path.resolve())!r}\n",
+                        encoding="utf-8",
+                    )
+                    with mock.patch.object(runtime_module, "_probe", return_value=probe):
+                        with self.assertRaisesRegex(
+                            runner.CandidateRuntimeError,
+                            "candidate_runtime_host_path_leak",
+                        ):
+                            runner.materialize_candidate_runtime(
+                                venv,
+                                root / f"candidate-runtime-{label}-leak",
+                                repo_root=repo,
+                            )
+            (stdlib / "os.py").write_text(
+                "name = 'safe'\nsystem_prefix = '/usr'\n", encoding="utf-8"
+            )
             drift_probe = runtime_module.RuntimeProbe(
                 probe.version,
                 probe.stdlib,
