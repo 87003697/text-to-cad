@@ -1689,11 +1689,17 @@ def _build_runtime(
         for path, digest in stdlib_facts
         if path.endswith(".pyc")
     }
+    encountered_pyc: set[PurePosixPath] = set()
     copied: set[PurePosixPath] = set()
     for relative in _walk_tree(stdlib, include_sourceless_pyc=True):
         if relative in copied:
             continue
         copied.add(relative)
+        expected = sourceless_pyc.get(relative)
+        if relative.suffix.lower() == ".pyc":
+            if expected is None:
+                raise CandidateRuntimeError("candidate_runtime_source_changed")
+            encountered_pyc.add(relative)
         _copy_file_stream(
             stdlib,
             relative,
@@ -1701,8 +1707,10 @@ def _build_runtime(
             budget=budget,
             rewrite=rewrite if relative.name.startswith("_sysconfigdata") else (),
             forbidden=forbidden,
-            expected=sourceless_pyc.get(relative),
+            expected=expected,
         )
+    if encountered_pyc != set(sourceless_pyc):
+        raise CandidateRuntimeError("candidate_runtime_source_changed")
     package_root = runtime_lib / "site-packages"
     allowed_roots = (venv, stdlib, *site_roots)
     native_files: list[Path] = []

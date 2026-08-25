@@ -1499,6 +1499,72 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 (warm / "lib/python3.12/encodings/mac_roman.pyc").read_bytes(),
             )
 
+            original_walk = runtime_module._walk_tree
+            for mode in ("delete", "add"):
+                with self.subTest(membership_race=mode):
+                    walk_calls = 0
+                    added = stdlib / "encodings/unexpected_codec.pyc"
+
+                    def mutate_membership_before_build(*args, **kwargs):
+                        nonlocal walk_calls
+                        walk_calls += 1
+                        mutate = walk_calls == 3
+                        if mutate and mode == "delete":
+                            codec_pyc.unlink()
+                        elif mutate:
+                            added.write_bytes(original_pyc)
+                        try:
+                            yield from original_walk(*args, **kwargs)
+                        finally:
+                            if mutate and mode == "delete":
+                                codec_pyc.write_bytes(original_pyc)
+                            added.unlink(missing_ok=True)
+
+                    membership_cache = root / f"{mode}-membership-cache"
+                    with (
+                        mock.patch.object(runtime_module, "_probe", return_value=probe),
+                        mock.patch.object(
+                            runtime_module, "_parse_tool_dependencies", return_value=[]
+                        ),
+                        mock.patch.object(runtime_module, "validate_candidate_runtime"),
+                        mock.patch.object(
+                            runtime_module,
+                            "_walk_tree",
+                            side_effect=mutate_membership_before_build,
+                        ),
+                    ):
+                        with self.assertRaisesRegex(
+                            runtime_module.CandidateRuntimeError,
+                            "^candidate_runtime_source_changed$",
+                        ):
+                            runner.materialize_candidate_runtime(
+                                venv, membership_cache, repo_root=repo
+                            )
+                    self.assertFalse(
+                        any(
+                            path.is_dir() and re.fullmatch(r"[0-9a-f]{64}", path.name)
+                            for path in membership_cache.iterdir()
+                        )
+                    )
+                    with (
+                        mock.patch.object(runtime_module, "_probe", return_value=probe),
+                        mock.patch.object(
+                            runtime_module, "_parse_tool_dependencies", return_value=[]
+                        ),
+                        mock.patch.object(runtime_module, "validate_candidate_runtime"),
+                    ):
+                        restored = runner.materialize_candidate_runtime(
+                            venv, membership_cache, repo_root=repo
+                        )
+                        warm = runner.materialize_candidate_runtime(
+                            venv, membership_cache, repo_root=repo
+                        )
+                    self.assertEqual(restored.identity, warm.identity)
+                    self.assertEqual(
+                        original_pyc,
+                        (warm / "lib/python3.12/encodings/mac_roman.pyc").read_bytes(),
+                    )
+
     def test_runtime_cache_reuses_one_immutable_identity_and_serializes_builders(self) -> None:
         from concurrent.futures import ThreadPoolExecutor
         from scripts.pilot import candidate_runtime as runtime_module
