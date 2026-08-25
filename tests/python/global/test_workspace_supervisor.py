@@ -3456,6 +3456,8 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             def counted_repair(request):
                 nonlocal repair_calls
                 repair_calls += 1
+                self.assertTrue(request.voxblame_output.is_dir())
+                self.assertFalse(request.preview_output.exists())
                 return real_repair_evidence_provider(request, renderer=renderer)
 
             supervisor = WorkspaceSupervisor(
