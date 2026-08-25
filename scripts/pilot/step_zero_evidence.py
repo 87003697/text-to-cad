@@ -139,9 +139,8 @@ def real_step_zero_evidence_provider(
          ``validate_preview_identity`` build the closed preview scene and
          identity bound to the Workspace's committed preview profile.
       3. ``meshshot.render_residual_preview`` renders the eight-view PNG
-         through the Browser Runtime.  A ``renderer`` override is
-         accepted only for the macOS test seam; the production runner
-         never supplies one.
+         through the Browser Runtime.  A ``renderer`` override supports
+         tests; the production runner never supplies one.
       4. ``meshscope.voxblame.publish_preview`` writes ``preview.json``
          and ``preview.png`` into the caller-supplied ``preview_output``
          directory.

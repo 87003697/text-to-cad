@@ -3390,6 +3390,58 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             from scripts.pilot.repair_evidence import (
                 real_repair_evidence_provider,
             )
+            from io import BytesIO
+
+            from PIL import Image
+
+            from scripts.pilot import step_zero_evidence
+
+            _MeshGeometry, load_profile, _render = (
+                step_zero_evidence._import_meshshot()
+            )
+            from meshshot import RenderedPreview
+
+            loaded_profile = load_profile()
+            renderer_calls = 0
+
+            def renderer(
+                _reference,
+                _candidate,
+                *,
+                variant="step",
+                exterior_directions=(),
+            ):
+                nonlocal renderer_calls
+                renderer_calls += 1
+                pixels = tuple(
+                    loaded_profile.profile["variants"][variant]["image_pixels"]
+                )
+                image = Image.new("RGB", pixels, (0, 0, 0))
+                encoded = BytesIO()
+                image.save(encoded, format="PNG")
+                marker = exterior_directions[0] if exterior_directions else None
+                views = tuple(
+                    {
+                        **view,
+                        "framing": {
+                            "projection": (
+                                "orthographic"
+                                if view["kind"] == "axial_depth"
+                                else "perspective"
+                            )
+                        },
+                        "markers": (
+                            [{"direction": marker}] if marker is not None else []
+                        ),
+                    }
+                    for view in loaded_profile.profile["views"]
+                )
+                return RenderedPreview(
+                    png_bytes=encoded.getvalue(),
+                    variant=variant,
+                    profile_sha256=loaded_profile.sha256,
+                    views=views,
+                )
 
             step_zero_calls = 0
             repair_calls = 0
@@ -3397,12 +3449,12 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             def counted_step_zero(request):
                 nonlocal step_zero_calls
                 step_zero_calls += 1
-                return real_step_zero_evidence_provider(request)
+                return real_step_zero_evidence_provider(request, renderer=renderer)
 
             def counted_repair(request):
                 nonlocal repair_calls
                 repair_calls += 1
-                return real_repair_evidence_provider(request)
+                return real_repair_evidence_provider(request, renderer=renderer)
 
             supervisor = WorkspaceSupervisor(
                 case.workspace,
@@ -3797,6 +3849,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             # Repair evidence, driven exactly once each from the bridge.
             self.assertEqual(1, step_zero_calls)
             self.assertEqual(1, repair_calls)
+            self.assertEqual(2, renderer_calls)
             # Two trusted canonical builds — one per Attempt.
             self.assertEqual(2, builder_run_count)
 
