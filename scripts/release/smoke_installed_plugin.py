@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 import shutil
+import importlib.util
 import stat
 import subprocess
 import sys
@@ -33,6 +34,30 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+
+def _load_agent_source_projection(source_root: Path | None = None):
+    """Load ``agent_source_projection`` from either an installed tree or source.
+
+    The smoke inspects both the developer checkout (to run the CLI) and the
+    installed plugin cache (to verify the projection shipped intact). Loading
+    by path lets the same module cover both without polluting ``sys.path``.
+    """
+
+    if "agent_source_projection" in sys.modules:
+        return sys.modules["agent_source_projection"]
+    if source_root is None:
+        source_root = Path(__file__).resolve().parents[2]
+    module_path = source_root / "scripts" / "pilot" / "agent_source_projection.py"
+    spec = importlib.util.spec_from_file_location(
+        "agent_source_projection", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load agent_source_projection module")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 # The nine skill runtime paths that develop tracks as symlinks and that a raw
@@ -207,6 +232,35 @@ def _format_manifest_diff(
             if len(values) > 20:
                 lines.append(f"    ... ({len(values) - 20} more)")
     return "\n".join(lines)
+
+
+def assert_agent_source_projection(root: Path) -> dict[str, str]:
+    """Assert the Agent Source Projection is installed intact under root.
+
+    Runs the projection module's ``verify`` against the installed cache so a
+    release cannot ship a torn, tampered, or extra-populated projection. The
+    developer-checkout copy of the module is used to interpret the installed
+    tree's manifest without polluting ``sys.path``.
+    """
+
+    module = _load_agent_source_projection()
+    projection_root = root / module.PROJECTION_ROOT_REL
+    if not projection_root.is_dir() or projection_root.is_symlink():
+        raise SmokeError(
+            "Agent Source Projection is missing from installed tree"
+        )
+    try:
+        inventory = module.verify(projection_root)
+    except module.ProjectionError as exc:
+        raise SmokeError(
+            f"Agent Source Projection failed verification: {exc}"
+        ) from exc
+    return {
+        "schema": inventory.schema,
+        "version": inventory.version,
+        "digest": inventory.digest,
+        "entry_count": str(len(inventory.entries)),
+    }
 
 
 def assert_critical_runtimes(root: Path) -> list[dict[str, str]]:
@@ -816,6 +870,7 @@ def build_receipt(
     installed_root: Path,
     installed_manifest: Manifest,
     critical_runtimes: Sequence[Mapping[str, str]],
+    agent_source_projection: Mapping[str, Any],
     registered_build_probe: Mapping[str, Any],
     argv: Sequence[str],
     codex_home: Path,
@@ -852,8 +907,10 @@ def build_receipt(
             "source_checkout_hidden_from_installed_run": True,
             "isolated_python_sys_path_source_free": True,
             "registered_build_completed": True,
+            "agent_source_projection_present": True,
         },
         "critical_runtimes": [dict(item) for item in critical_runtimes],
+        "agent_source_projection": dict(agent_source_projection),
         "registered_build_probe": dict(registered_build_probe),
         "argv": list(argv),
         "success": True,
@@ -922,6 +979,7 @@ def _install_verify(
     installed_manifest = compute_manifest(installed_root)
     assert_manifests_equal(prepared_manifest, installed_manifest)
     critical_runtimes = assert_critical_runtimes(installed_root)
+    agent_source_projection_inventory = assert_agent_source_projection(installed_root)
     with tempfile.TemporaryDirectory(prefix="installed-plugin-probe-python-") as python_temp:
         isolated_python, python_audit = prepare_isolated_probe_python(
             python_executable,
@@ -942,6 +1000,7 @@ def _install_verify(
         installed_root=installed_root,
         installed_manifest=installed_manifest,
         critical_runtimes=critical_runtimes,
+        agent_source_projection=agent_source_projection_inventory,
         registered_build_probe=registered_probe,
         argv=argv,
         codex_home=codex_home,

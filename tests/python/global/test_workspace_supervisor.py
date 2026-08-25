@@ -1451,8 +1451,8 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 self.assertEqual(0, cad.returncode, cad.stderr)
 
     def test_runner_candidate_mount_hides_authority_and_binds_fixed_bridge(self) -> None:
-        from scripts.pilot import runner
-        from tests.python.support.authority_fixtures import build_authority
+        from scripts.pilot import agent_source_projection, runner
+        from tests.python.support.paths import REPO_ROOT
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "repo"
@@ -1466,7 +1466,18 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 path.mkdir(parents=True, exist_ok=True)
             input_path.write_bytes(b"ply\n")
             gateway.write_text("#!/bin/sh\n", encoding="utf-8")
-            fixture = build_authority(home, dedupe_token="w4-isolated")
+            # Copy the projection's canonical skill sources from the real
+            # repo so the runner's live-source verification succeeds without
+            # binding host-wide state.
+            for source_rel, _ in agent_source_projection.ALLOWED_SOURCES:
+                source_path = REPO_ROOT / source_rel
+                destination = root / source_rel
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(source_path.read_bytes())
+            projection_target = (
+                root / agent_source_projection.PROJECTION_ROOT_REL
+            )
+            agent_source_projection.materialize(root, projection_target)
             socket_path = Path(temporary) / "bridge.sock"
             bridge_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             bridge_socket.bind(os.fspath(socket_path))
@@ -1495,28 +1506,83 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                         {"HOME": os.fspath(home), "PATH": "/fake", "VENUS_TOKEN": "secret"},
                         agent_candidate_dir=candidate,
                         agent_surface_socket=socket_path,
-                        agent_surface_client=Path(__file__).resolve().parents[3]
+                        agent_surface_client=REPO_ROOT
                         / "scripts/pilot/agent_surface_client.py",
                     )
             finally:
                 bridge_socket.close()
                 socket_path.unlink(missing_ok=True)
+            triples = [argv[i : i + 3] for i in range(len(argv) - 2)]
             self.assertNotIn(os.fspath(exp.resolve()), argv)
             self.assertNotIn(os.fspath(input_path.resolve()), argv)
             self.assertNotIn(
                 ["--ro-bind", os.fspath(venv.resolve()), "/workspace/repo/.venv"],
-                [argv[i : i + 3] for i in range(len(argv) - 2)],
+                triples,
             )
             self.assertIn(
                 ["--bind", os.fspath(candidate.resolve()), "/candidate"],
-                [argv[i : i + 3] for i in range(len(argv) - 2)],
+                triples,
             )
             self.assertIn("/agent-surface/client.py", argv)
             self.assertIn("/run/mesh-to-cad-agent-surface.sock", argv)
             self.assertNotIn(
                 ["--ro-bind", "/etc", "/etc"],
-                [argv[i : i + 3] for i in range(len(argv) - 2)],
+                triples,
             )
+            # The Agent Source Projection is the ONLY skill source visible to
+            # the Agent, mounted read-only at the stable sandbox path
+            # /workspace/repo/skills. The full installed plugin cache, publish
+            # tree, and per-skill enumeration MUST not appear in argv.
+            projected_skills = agent_source_projection.projected_skills_root(
+                projection_target
+            ).resolve()
+            self.assertIn(
+                [
+                    "--ro-bind",
+                    os.fspath(projected_skills),
+                    "/workspace/repo/skills",
+                ],
+                triples,
+            )
+            self.assertNotIn(
+                os.fspath(runner.SANDBOX_PUBLISH_TREE),
+                {triple[2] for triple in triples if len(triple) == 3},
+            )
+            for skill_id in (
+                "mesh-to-cad",
+                "cad",
+                "mesh-compare",
+                "mesh-inspect",
+                "cad-viewer",
+            ):
+                per_skill_target = f"/workspace/repo/skills/{skill_id}"
+                # No per-skill --ro-bind should exist beyond the single
+                # projection bind at /workspace/repo/skills.
+                for triple in triples:
+                    if (
+                        len(triple) == 3
+                        and triple[0] == "--ro-bind"
+                        and triple[2] == per_skill_target
+                    ):
+                        raise AssertionError(
+                            f"per-skill mount leaked into isolated argv: {triple}"
+                        )
+            # The candidate CODEX_HOME is a fresh writable directory carrying
+            # only a minimal config.toml, not the full authority codex home.
+            job_codex_home = (exp / "run" / ".codex-home").resolve()
+            self.assertIn(
+                ["--bind", os.fspath(job_codex_home), "/home/pilot/.codex"],
+                triples,
+            )
+            codex_home_children = sorted(
+                child.name for child in job_codex_home.iterdir()
+            )
+            self.assertEqual(codex_home_children, ["config.toml"])
+            # Absolute Workspace Authority / plugin publish tree host paths
+            # must never appear in argv.
+            for token in argv:
+                self.assertNotIn(".text-to-cad-codex/deployments", token)
+                self.assertNotIn(".plugin-publish-tree", token)
 
     def test_reference_port_returns_only_w2_projection(self) -> None:
         result = self.sup.observe_reference(

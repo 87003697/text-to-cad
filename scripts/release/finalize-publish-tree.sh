@@ -113,6 +113,16 @@ fi
 "$TREE_ROOT/scripts/release/pin-cadgen-requirements.sh"
 "$TREE_ROOT/scripts/release/pin-cadgen-requirements.sh" --check
 
+# The Agent Source Projection is bundled at develop time; assert its presence
+# and verify its embedded manifest before publishing. Fail loud here so a
+# release cannot ship an isolated Agent Execution without its projection.
+if [ ! -f "$TREE_ROOT/scripts/pilot/agent_source_projection.py" ]; then
+  echo "Publish tree is missing scripts/pilot/agent_source_projection.py." >&2
+  exit 1
+fi
+python3 "$TREE_ROOT/scripts/pilot/agent_source_projection.py" verify \
+  --target "$TREE_ROOT/.claude/agent-source-projection"
+
 # Provider installers each treat symlinks differently and Codex silently drops
 # them (see scripts/github-workflows/check-builds.sh for the full explanation).
 # A symlink surviving into the publish tree ships a broken skill to every

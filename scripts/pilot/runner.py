@@ -85,6 +85,13 @@ except ModuleNotFoundError as exc:
     )
 
 try:
+    from scripts.pilot import agent_source_projection
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    import agent_source_projection  # type: ignore[no-redef]
+
+try:
     from scripts.pilot.candidate_runtime import (
         CAD_RUNTIME_IMPORTS,
         CandidateRuntimeLease,
@@ -664,6 +671,59 @@ def prepare_job_publish_tree(
         raise PilotError(f"cannot prepare job publish tree: {exc}") from exc
 
 
+def prepare_isolated_job_codex_home(exp_dir: Path) -> Path:
+    """Materialize a minimal writable CODEX_HOME for a candidate-only Agent.
+
+    A candidate-only Agent runs Codex with ``--disable plugins``; provider
+    config is injected via the gateway's ``-c`` flags. The Codex CLI still
+    requires a writable ``CODEX_HOME`` (for rollouts, sessions, and the
+    conversation log), so we allocate an empty per-job directory with a
+    minimal ``config.toml``. No plugin authority, marketplace, or installed
+    skill cache is materialized here — the Agent Source Projection is the
+    only skill source visible to this Agent Execution.
+    """
+
+    target = exp_dir / JOB_CODEX_HOME_REL
+    try:
+        if target.is_symlink():
+            target.unlink()
+        elif target.exists():
+            shutil.rmtree(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.mkdir(mode=0o700)
+        config_path = target / plugin_deployment.CONFIG_TOML_NAME
+        config_path.write_text(
+            "# Candidate-only Agent Execution CODEX_HOME.\n"
+            "# The gateway supplies provider config via -c flags; no\n"
+            "# marketplaces or plugins are registered here.\n",
+            encoding="utf-8",
+        )
+        config_path.chmod(0o600)
+    except OSError as exc:
+        raise PilotError(f"cannot prepare candidate CODEX_HOME: {exc}") from exc
+    return target
+
+
+def prepare_agent_source_projection(repo_root: Path) -> Path:
+    """Return the verified Agent Source Projection root under ``repo_root``.
+
+    The projection is materialized offline by ``scripts/bundle/bundle.sh``.
+    The runner never regenerates it; it only verifies the checked-in tree
+    matches the canonical manifest embedded in the projection and the source
+    used to build it. Any drift fails closed here so an isolated Agent
+    Execution cannot start against a stale, torn, or tampered projection.
+    """
+
+    target = Path(repo_root) / agent_source_projection.PROJECTION_ROOT_REL
+    try:
+        agent_source_projection.verify_matches_source(repo_root, target)
+    except agent_source_projection.ProjectionError as exc:
+        raise PilotError(
+            f"agent source projection is unavailable: {exc}"
+        ) from exc
+    return target
+
+
 def validate_exp_dir(repo_root: Path, exp_dir: Path) -> Path:
     """Require a resolved experiment child below the checkout outputs directory."""
 
@@ -843,7 +903,6 @@ def build_bwrap_argv(
             raise PilotError("Agent Surface bridge is unavailable")
     elif agent_surface_socket is not None or agent_surface_client is not None:
         raise PilotError("Agent Surface requires candidate-only isolation")
-    receipt = resolve_deployed_authority(host_home)
     relative_exp = exp_dir.relative_to(repo_root)
     sandbox_exp = SANDBOX_REPO_ROOT / relative_exp
     gateway = repo_root / "gateway" / "codex-tap-gpt56"
@@ -852,14 +911,36 @@ def build_bwrap_argv(
     venv = repo_root / ".venv"
     if not venv.is_dir():
         raise PilotError(f"pilot runtime not found: {venv}")
-    job_codex_home = prepare_job_codex_home(
-        exp_dir, receipt, browser_mcp_url=browser_mcp_url
-    )
-    job_publish_tree = prepare_job_publish_tree(exp_dir, receipt)
-    installed_relative = Path(receipt.installed_path).relative_to(receipt.codex_home)
-    skill_dirs = plugin_deployment.skill_directories_under_installed(
-        job_codex_home / installed_relative
-    )
+
+    if isolated_agent:
+        # Candidate-only Agent Executions see only the Agent Source Projection
+        # under /workspace/repo/skills, the fixed Agent Surface client/socket,
+        # /candidate, and a minimal writable CODEX_HOME. No full installed
+        # plugin cache, publish tree, per-skill enumeration, or Workspace
+        # Authority path is bound into the sandbox.
+        projection_root = prepare_agent_source_projection(repo_root)
+        projection_skills = agent_source_projection.projected_skills_root(
+            projection_root
+        )
+        job_codex_home = prepare_isolated_job_codex_home(exp_dir)
+        job_publish_tree = None
+        skill_dirs: tuple[Path, ...] = ()
+    else:
+        receipt = resolve_deployed_authority(host_home)
+        job_codex_home = prepare_job_codex_home(
+            exp_dir, receipt, browser_mcp_url=browser_mcp_url
+        )
+        job_publish_tree = prepare_job_publish_tree(exp_dir, receipt)
+        installed_relative = Path(receipt.installed_path).relative_to(
+            receipt.codex_home
+        )
+        skill_dirs = tuple(
+            plugin_deployment.skill_directories_under_installed(
+                job_codex_home / installed_relative
+            )
+        )
+        projection_skills = None
+
     if browser_capability_dir is not None:
         browser_capability_dir = browser_capability_dir.resolve()
         if not browser_capability_dir.is_dir():
@@ -926,10 +1007,15 @@ def build_bwrap_argv(
         "--bind",
         str(job_codex_home),
         str(SANDBOX_CODEX_HOME),
-        "--ro-bind",
-        str(job_publish_tree),
-        str(SANDBOX_PUBLISH_TREE),
     ]
+    if job_publish_tree is not None:
+        argv.extend(
+            [
+                "--ro-bind",
+                str(job_publish_tree),
+                str(SANDBOX_PUBLISH_TREE),
+            ]
+        )
     if not isolated_agent:
         argv.extend(("--dir", str(sandbox_exp.parent)))
     if not isolated_agent:
@@ -945,6 +1031,9 @@ def build_bwrap_argv(
     if isolated_agent:
         argv.extend(
             [
+                "--ro-bind",
+                str(projection_skills),
+                str(SANDBOX_REPO_ROOT / "skills"),
                 "--dir",
                 "/candidate",
                 "--bind",
@@ -979,14 +1068,14 @@ def build_bwrap_argv(
                     str(SANDBOX_REPO_ROOT / relative_input),
                 ]
             )
-    for skill_dir in skill_dirs:
-        argv.extend(
-            [
-                "--ro-bind",
-                str(skill_dir),
-                str(SANDBOX_REPO_ROOT / "skills" / skill_dir.name),
-            ]
-        )
+        for skill_dir in skill_dirs:
+            argv.extend(
+                [
+                    "--ro-bind",
+                    str(skill_dir),
+                    str(SANDBOX_REPO_ROOT / "skills" / skill_dir.name),
+                ]
+            )
     if browser_capability_dir is not None:
         argv.extend(["--ro-bind", str(browser_capability_dir), str(sandbox_browser_capability_dir)])
         if not isolated_agent:
