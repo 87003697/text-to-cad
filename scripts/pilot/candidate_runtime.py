@@ -704,7 +704,9 @@ def _skip_member(relative: PurePosixPath) -> bool:
     )
 
 
-def _walk_tree(root: Path) -> Iterable[PurePosixPath]:
+def _walk_tree(
+    root: Path, *, include_sourceless_pyc: bool = False
+) -> Iterable[PurePosixPath]:
     """Yield regular members through descriptor-backed no-follow traversal."""
 
     root_fd = _open_dir(root)
@@ -718,7 +720,27 @@ def _walk_tree(root: Path) -> Iterable[PurePosixPath]:
             for entry in sorted(entries, key=lambda item: item.name):
                 child = relative / entry.name
                 if _skip_member(child):
-                    continue
+                    sourceless_pyc = False
+                    if (
+                        include_sourceless_pyc
+                        and child.suffix.lower() == ".pyc"
+                        and "__pycache__" not in child.parts
+                        and child.stem.isidentifier()
+                    ):
+                        try:
+                            os.stat(
+                                child.with_suffix(".py").name,
+                                dir_fd=directory_fd,
+                                follow_symlinks=False,
+                            )
+                        except FileNotFoundError:
+                            sourceless_pyc = True
+                        except OSError as exc:
+                            raise CandidateRuntimeError(
+                                "candidate_runtime_source_unavailable"
+                            ) from exc
+                    if not sourceless_pyc:
+                        continue
                 if entry.is_symlink():
                     if entry.name == "site-packages" or entry.suffix.lower() in _STATIC_LINK_SUFFIXES:
                         continue
@@ -958,6 +980,11 @@ def _stdlib_identity(stdlib: Path) -> list[tuple[str, str]]:
     facts: list[tuple[str, str]] = []
     candidates = [stdlib / "os.py", stdlib / "importlib/__init__.py"]
     candidates.extend(sorted(stdlib.glob("_sysconfigdata*.py")))
+    candidates.extend(
+        stdlib / relative
+        for relative in _walk_tree(stdlib, include_sourceless_pyc=True)
+        if relative.suffix.lower() == ".pyc"
+    )
     for path in candidates:
         if path.is_file() and not path.is_symlink():
             facts.append((path.relative_to(stdlib).as_posix(), _digest_small(path)))
@@ -1653,7 +1680,7 @@ def _build_runtime(
         forbid(source, system_path_is_safe=True)
     forbidden = tuple(dict.fromkeys(forbidden_values))
     copied: set[PurePosixPath] = set()
-    for relative in _walk_tree(stdlib):
+    for relative in _walk_tree(stdlib, include_sourceless_pyc=True):
         if relative in copied:
             continue
         copied.add(relative)

@@ -1360,6 +1360,95 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     "3.12", root / "trusted/python3.12"
                 )
 
+    def test_runtime_keeps_only_sourceless_stdlib_bytecode(self) -> None:
+        import py_compile
+        import sysconfig
+
+        from scripts.pilot import candidate_runtime as runtime_module
+        from scripts.pilot import runner
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            venv = repo / ".venv"
+            trusted = root / "trusted"
+            stdlib = trusted / "lib/python3.12"
+            site = venv / "lib/python3.12/site-packages"
+            (venv / "bin").mkdir(parents=True)
+            site.mkdir(parents=True)
+            shutil.copytree(Path(sysconfig.get_path("stdlib")) / "encodings", stdlib / "encodings")
+            (stdlib / "os.py").write_text("", encoding="utf-8")
+            codec_source = stdlib / "encodings/mac_roman.py"
+            codec_pyc = codec_source.with_suffix(".pyc")
+            py_compile.compile(
+                os.fspath(codec_source),
+                cfile=os.fspath(codec_pyc),
+                dfile="/usr/lib/python3.12/encodings/mac_roman.py",
+                doraise=True,
+            )
+            codec_source.unlink()
+            cached_with_source = stdlib / "encodings/ascii.pyc"
+            py_compile.compile(
+                os.fspath(stdlib / "encodings/ascii.py"),
+                cfile=os.fspath(cached_with_source),
+                doraise=True,
+            )
+            cache_dir = stdlib / "encodings/__pycache__"
+            cache_dir.mkdir(exist_ok=True)
+            tagged_cache = cache_dir / f"utf_8.{sys.implementation.cache_tag}.pyc"
+            py_compile.compile(
+                os.fspath(stdlib / "encodings/utf_8.py"),
+                cfile=os.fspath(tagged_cache),
+                doraise=True,
+            )
+            interpreter = trusted / "bin/python3"
+            interpreter.parent.mkdir(parents=True)
+            interpreter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            interpreter.chmod(0o755)
+            (venv / "bin/python").symlink_to(interpreter)
+            (venv / "pyvenv.cfg").write_text("version = 3.12.1\n", encoding="utf-8")
+            probe = runtime_module.RuntimeProbe(
+                "3.12",
+                stdlib,
+                stdlib,
+                site,
+                site,
+                stdlib / "lib-dynload",
+                interpreter=interpreter,
+                cache_tag=sys.implementation.cache_tag,
+            )
+
+            def lookup(home: Path) -> subprocess.CompletedProcess:
+                return subprocess.run(
+                    [sys.executable, "-S", "-c", "import codecs; codecs.lookup('mac-roman')"],
+                    env={
+                        "PATH": "/usr/bin:/bin",
+                        "PYTHONHOME": os.fspath(home),
+                        "PYTHONNOUSERSITE": "1",
+                        "LC_ALL": "C",
+                    },
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                    timeout=30,
+                )
+
+            source_lookup = lookup(trusted)
+            self.assertEqual(0, source_lookup.returncode, source_lookup.stderr)
+            with (
+                mock.patch.object(runtime_module, "_probe", return_value=probe),
+                mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=[]),
+                mock.patch.object(runtime_module, "validate_candidate_runtime"),
+            ):
+                runtime = runner.materialize_candidate_runtime(
+                    venv, root / "cache", repo_root=repo
+                )
+            runtime_lookup = lookup(runtime)
+            self.assertEqual(0, runtime_lookup.returncode, runtime_lookup.stderr)
+            self.assertTrue((runtime / "lib/python3.12/encodings/mac_roman.pyc").is_file())
+            self.assertFalse((runtime / "lib/python3.12/encodings/ascii.pyc").exists())
+            self.assertFalse((runtime / "lib/python3.12/encodings/__pycache__").exists())
+
     def test_runtime_cache_reuses_one_immutable_identity_and_serializes_builders(self) -> None:
         from concurrent.futures import ThreadPoolExecutor
         from scripts.pilot import candidate_runtime as runtime_module
