@@ -189,6 +189,91 @@ you would change in the candidate source, and what geometric fact
 would refute the hypothesis. The residual facts the supervisor returns
 inform your reasoning; they never prescribe an edit.
 
+## Decision facts
+
+Every successful `submit_step_zero` and `submit_repair` response
+carries one closed **decision facts** object under the
+`decision_facts` field:
+
+```json
+{
+  "schema": "mesh-to-cad.decision-facts/1",
+  "step_ordinal": 1,
+  "parent_step_ordinal": 0,
+  "accepted": false,
+  "acceptance_state": "unaccepted",
+  "residual_summary": {
+    "objective_facts": {
+      "global_depth_8_zero": false,
+      "out_of_frame_clear": true,
+      "no_evidence_conflict": true
+    },
+    "depth_8_error_count": 42,
+    "depth_8_error_rate": 0.017
+  },
+  "repair_targets": {
+    "returned": 3,
+    "total": 3,
+    "items": [
+      { "rank": 0, "kind": "excess", "error_profile": { "count": 20 } },
+      { "rank": 1, "kind": "missing", "error_profile": { "count": 12 } },
+      { "rank": 2, "kind": "excess", "error_profile": { "count": 10 } }
+    ]
+  },
+  "preview": {
+    "identity_sha256": "…",
+    "render_variant": "step"
+  },
+  "change_from_parent": {
+    "no_observable_geometry_change": false,
+    "parent_accepted": false
+  }
+}
+```
+
+Fields and bounds:
+
+- `step_ordinal` — non-negative integer identifying the just-published
+  step.
+- `parent_step_ordinal` — non-negative integer for repairs, `null`
+  for Step 0.
+- `accepted` and `acceptance_state` — `acceptance_satisfied` iff all
+  three objective facts are true, else `unaccepted`.
+- `residual_summary.objective_facts` — the exact three booleans that
+  gate acceptance.
+- `residual_summary.depth_8_error_count` / `depth_8_error_rate` —
+  a bounded scalar summary of the deepest residual bucket
+  (rate is in `[0, 1]`; NaN or infinite values fail closed).
+- `repair_targets` — `null` when acceptance is satisfied, otherwise a
+  page of up to eight items ranked by residual weight. Each item
+  carries an opaque `rank`, a semantic `kind`, and a bounded numeric
+  `error_profile`.
+- `preview.identity_sha256` — the formal identity digest of the
+  Measured Step's preview render; you may cite it in your assessment
+  but cannot dereference it.
+- `change_from_parent` — repair-only; reports whether the
+  Measured Step observably changed vs. its parent and whether the
+  parent was itself accepted.
+
+Rules for using decision facts:
+
+- Treat them as read-only. They are the only measured facts you may
+  cite; you never override them, and you never derive acceptance from
+  authored content.
+- Base your next repair hypothesis on them: `residual_summary` tells
+  you which objective fact fails and how large the depth-8 bucket is;
+  `repair_targets` names the top-ranked residual regions by kind
+  without revealing internal identifiers.
+- If `change_from_parent.no_observable_geometry_change` is true after
+  a repair, your source edit did not move observable geometry — stop
+  and reconsider before spending another attempt.
+- If `acceptance_state` is `acceptance_satisfied`, do not start
+  another repair; proceed to `select_and_finalize`.
+- The decision-facts response is capped alongside the rest of the
+  intent envelope; there is no larger view. Unknown fields, extra
+  keys, or non-finite numbers are closed errors on our side, not on
+  yours.
+
 ## Bounded loop shape
 
 The bounded loop the supervisor enforces is:
@@ -236,3 +321,5 @@ identifiers.
 
 - `references/candidate-authoring.md` — patterns for writing STEP-first
   parametric candidate source under `/candidate/work/source/`.
+- `references/assessment.md` — how to author
+  `/candidate/work/assessment.json` from returned decision facts.

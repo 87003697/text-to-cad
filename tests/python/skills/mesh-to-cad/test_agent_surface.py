@@ -40,6 +40,70 @@ def _request(intent: str, args: dict) -> dict:
     return {"schema": REQUEST_SCHEMA, "intent": intent, "args": args}
 
 
+def _decision_facts_fixture(*, step_ordinal: int) -> dict:
+    """Closed decision-facts fixture for supervisor stubs in this test suite."""
+
+    if step_ordinal == 0:
+        return {
+            "schema": "mesh-to-cad.decision-facts/1",
+            "step_ordinal": 0,
+            "parent_step_ordinal": None,
+            "accepted": False,
+            "acceptance_state": "unaccepted",
+            "residual_summary": {
+                "objective_facts": {
+                    "global_depth_8_zero": False,
+                    "out_of_frame_clear": True,
+                    "no_evidence_conflict": True,
+                },
+                "depth_8_missing_surface_count": 1,
+                "depth_8_excess_surface_count": 0,
+                "depth_8_surface_error_count": 1,
+                "depth_8_surface_error_rate": 0.5,
+            },
+            "repair_targets": {
+                "total": 1,
+                "returned": 1,
+                "remaining": 0,
+                "items": [
+                    {
+                        "rank": 0,
+                        "kind": "interior",
+                        "missing_surface_count": 1,
+                        "excess_surface_count": 0,
+                        "surface_error_count": 1,
+                    }
+                ],
+            },
+            "preview": {"identity_sha256": "a" * 64, "render_variant": "step"},
+            "change_from_parent": None,
+        }
+    return {
+        "schema": "mesh-to-cad.decision-facts/1",
+        "step_ordinal": step_ordinal,
+        "parent_step_ordinal": step_ordinal - 1,
+        "accepted": True,
+        "acceptance_state": "acceptance_satisfied",
+        "residual_summary": {
+            "objective_facts": {
+                "global_depth_8_zero": True,
+                "out_of_frame_clear": True,
+                "no_evidence_conflict": True,
+            },
+            "depth_8_missing_surface_count": 0,
+            "depth_8_excess_surface_count": 0,
+            "depth_8_surface_error_count": 0,
+            "depth_8_surface_error_rate": 0.0,
+        },
+        "repair_targets": None,
+        "preview": {"identity_sha256": "b" * 64, "render_variant": "step"},
+        "change_from_parent": {
+            "no_observable_geometry_change": False,
+            "parent_accepted": False,
+        },
+    }
+
+
 def _initialize_request(request_id: int = 1) -> dict:
     return {
         "jsonrpc": "2.0",
@@ -81,9 +145,20 @@ class FakePorts:
         if name == "run_candidate_tool":
             return {"state": "completed", "candidate_handle": "candidate:1", "result_handle": "result:1", "permitted_next_intents": self._next()}
         if name == "submit_step_zero":
-            return {"state": "published", "step_handle": "step:0", "permitted_next_intents": self._next()}
+            return {
+                "state": "published",
+                "step_handle": "step:0",
+                "decision_facts": _decision_facts_fixture(step_ordinal=0),
+                "permitted_next_intents": self._next(),
+            }
         if name == "submit_repair":
-            return {"state": "published", "step_handle": "step:1", "cycle_handle": "cycle:1", "permitted_next_intents": self._next()}
+            return {
+                "state": "published",
+                "step_handle": "step:1",
+                "cycle_handle": "cycle:1",
+                "decision_facts": _decision_facts_fixture(step_ordinal=1),
+                "permitted_next_intents": self._next(),
+            }
         if name == "select_and_finalize":
             return {"state": "finalized", "final_delivery_handle": "final:1", "permitted_next_intents": self._next()}
         observation = args[1]

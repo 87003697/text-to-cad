@@ -1139,6 +1139,222 @@ def seed_repair_source_from_parent_step(
         raise
 
 
+DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/1"
+_MAX_DECISION_FACT_TARGETS = 8
+_MAX_DEPTH = 8
+_OBJECTIVE_FACT_KEYS = ("global_depth_8_zero", "out_of_frame_clear", "no_evidence_conflict")
+
+
+def _decision_facts_fail(detail: str) -> None:
+    _fail("corrupt_workspace", detail)
+
+
+def _fact_int(value: Any, detail: str) -> int:
+    if type(value) is not int or isinstance(value, bool) or value < 0:
+        _decision_facts_fail(detail)
+    return value
+
+
+def _fact_bool(value: Any, detail: str) -> bool:
+    if type(value) is not bool:
+        _decision_facts_fail(detail)
+    return value
+
+
+def _fact_rate(value: Any, detail: str) -> float:
+    if type(value) is bool or type(value) not in {int, float}:
+        _decision_facts_fail(detail)
+    number = float(value)
+    if number != number or number in {float("inf"), float("-inf")}:
+        _decision_facts_fail(detail)
+    if number < 0.0 or number > 1.0:
+        _decision_facts_fail(detail)
+    return number
+
+
+def _fact_sha256(value: Any, detail: str) -> str:
+    if type(value) is not str or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+        _decision_facts_fail(detail)
+    return value
+
+
+def _project_repair_targets(value: Any) -> Any:
+    if not isinstance(value, Mapping):
+        _decision_facts_fail("decision-facts repair targets are malformed")
+    total = _fact_int(value.get("total"), "decision-facts repair target total is malformed")
+    returned = _fact_int(value.get("returned"), "decision-facts repair target returned is malformed")
+    remaining = _fact_int(value.get("remaining"), "decision-facts repair target remaining is malformed")
+    if returned > _MAX_DECISION_FACT_TARGETS:
+        _decision_facts_fail("decision-facts repair target page exceeds bound")
+    items = value.get("items")
+    if not isinstance(items, list) or len(items) != returned:
+        _decision_facts_fail("decision-facts repair target items are malformed")
+    if total == 0 and returned == 0 and remaining == 0:
+        return None
+    projected_items: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, Mapping):
+            _decision_facts_fail("decision-facts repair target item is malformed")
+        display_rank = item.get("display_rank")
+        rank = _fact_int(display_rank, "decision-facts repair target rank is malformed")
+        kind = item.get("kind")
+        if kind not in ("interior", "exterior"):
+            _decision_facts_fail("decision-facts repair target kind is malformed")
+        profile = item.get("error_profile")
+        if not isinstance(profile, Mapping):
+            _decision_facts_fail("decision-facts repair target error profile is malformed")
+        projected_items.append(
+            {
+                "rank": rank,
+                "kind": kind,
+                "missing_surface_count": _fact_int(
+                    profile.get("missing_surface_count"),
+                    "decision-facts missing surface count is malformed",
+                ),
+                "excess_surface_count": _fact_int(
+                    profile.get("excess_surface_count"),
+                    "decision-facts excess surface count is malformed",
+                ),
+                "surface_error_count": _fact_int(
+                    profile.get("surface_error_count"),
+                    "decision-facts surface error count is malformed",
+                ),
+            }
+        )
+    return {
+        "total": total,
+        "returned": returned,
+        "remaining": remaining,
+        "items": projected_items,
+    }
+
+
+def _project_residual_summary(measurement: Mapping[str, Any]) -> dict[str, Any]:
+    facts = measurement.get("objective_facts")
+    if not isinstance(facts, Mapping) or set(facts) != set(_OBJECTIVE_FACT_KEYS):
+        _decision_facts_fail("decision-facts objective_facts are malformed")
+    errors = measurement.get("errors_by_depth")
+    if not isinstance(errors, list) or len(errors) != _MAX_DEPTH:
+        _decision_facts_fail("decision-facts errors_by_depth is malformed")
+    depth_eight = errors[_MAX_DEPTH - 1]
+    if not isinstance(depth_eight, Mapping):
+        _decision_facts_fail("decision-facts depth-8 entry is malformed")
+    return {
+        "objective_facts": {
+            key: _fact_bool(facts[key], f"decision-facts objective_facts.{key} is malformed")
+            for key in _OBJECTIVE_FACT_KEYS
+        },
+        "depth_8_missing_surface_count": _fact_int(
+            depth_eight.get("missing_surface_count"),
+            "decision-facts depth-8 missing count is malformed",
+        ),
+        "depth_8_excess_surface_count": _fact_int(
+            depth_eight.get("excess_surface_count"),
+            "decision-facts depth-8 excess count is malformed",
+        ),
+        "depth_8_surface_error_count": _fact_int(
+            depth_eight.get("surface_error_count"),
+            "decision-facts depth-8 error count is malformed",
+        ),
+        "depth_8_surface_error_rate": _fact_rate(
+            depth_eight.get("surface_error_rate"),
+            "decision-facts depth-8 error rate is malformed",
+        ),
+    }
+
+
+def read_current_step_decision_facts(
+    workspace: Path, *, step: int
+) -> dict[str, Any]:
+    """Return closed W1-authenticated decision facts for one Measured Step.
+
+    The projection is built from the committed step manifest, its bound
+    measurement document, and — for repair steps — the parent step
+    manifest.  Every value is a bounded semantic scalar or a small
+    bounded list; the projection never returns Workspace-relative paths,
+    Workspace attempt identifiers, provider argv, raw geometry digests
+    that enable path probing, or a full measurement/graph document.
+
+    Fails closed with :class:`WorkspaceError` when a required key is
+    missing, a number is non-finite, a boolean/enumeration slot is
+    corrupt, or the repair-target page exceeds the fixed bound.
+    """
+
+    workspace = Path(workspace).resolve()
+    if type(step) is not int or isinstance(step, bool) or step < 0 or step > MAX_REPAIR_CYCLES:
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "decision facts requested for an out-of-range step ordinal",
+        )
+    step_document = _read_authority_json(
+        workspace,
+        workspace / "steps" / f"{step:06d}" / "step.json",
+        f"$.steps[{step}]",
+    )
+    if step_document.get("step") != step:
+        _decision_facts_fail("step manifest ordinal conflicts with request")
+    accepted = _fact_bool(step_document.get("accepted"), "step manifest accepted is malformed")
+    preview_identity = _fact_sha256(
+        step_document.get("preview_identity_sha256"),
+        "step manifest preview identity is malformed",
+    )
+    parent_step_value = step_document.get("parent_step")
+    parent_ordinal: int | None
+    if parent_step_value is None:
+        parent_ordinal = None
+    else:
+        parent_ordinal = _fact_int(
+            parent_step_value, "step manifest parent ordinal is malformed"
+        )
+    measurement_relative = step_document.get("measurement_path")
+    if not isinstance(measurement_relative, str) or not measurement_relative.startswith(
+        f"voxblame/steps/{step:06d}/"
+    ):
+        _decision_facts_fail("step manifest measurement binding is malformed")
+    measurement_document = _read_authority_json(
+        workspace,
+        workspace / measurement_relative,
+        f"$.steps[{step}].measurement",
+    )
+    residual_summary = _project_residual_summary(measurement_document)
+    targets_source = measurement_document.get("repair_targets")
+    projected_targets = _project_repair_targets(targets_source)
+    change_from_parent: dict[str, Any] | None
+    if parent_ordinal is None:
+        change_from_parent = None
+    else:
+        no_change = _fact_bool(
+            step_document.get("no_observable_geometry_change"),
+            "step manifest no-op fact is malformed",
+        )
+        parent_document = _read_authority_json(
+            workspace,
+            workspace / "steps" / f"{parent_ordinal:06d}" / "step.json",
+            f"$.steps[{parent_ordinal}]",
+        )
+        parent_accepted = _fact_bool(
+            parent_document.get("accepted"), "parent step accepted is malformed"
+        )
+        change_from_parent = {
+            "no_observable_geometry_change": no_change,
+            "parent_accepted": parent_accepted,
+        }
+    return {
+        "schema": DECISION_FACTS_SCHEMA,
+        "step_ordinal": step,
+        "parent_step_ordinal": parent_ordinal,
+        "accepted": accepted,
+        "acceptance_state": "acceptance_satisfied" if accepted else "unaccepted",
+        "residual_summary": residual_summary,
+        "repair_targets": projected_targets,
+        "preview": {
+            "identity_sha256": preview_identity,
+            "render_variant": "step",
+        },
+        "change_from_parent": change_from_parent,
+    }
+
+
 def _finalization_staging_path(workspace: Path) -> Path:
     """Return the ignored Workspace staging area for Agent finalization."""
 
@@ -2356,6 +2572,7 @@ def _fail(classification: str, detail: str, path: str = "$") -> None:
 
 __all__ = [
     "CONTENT_MANIFEST_SCHEMA",
+    "DECISION_FACTS_SCHEMA",
     "DEFAULT_COMMAND_SECONDS",
     "ExecutionScope",
     "FAILED_ATTEMPT_RESULTS",
@@ -2381,6 +2598,7 @@ __all__ = [
     "publish_step_zero",
     "publish_step_zero_from_candidate",
     "read_canonical_reference_binding",
+    "read_current_step_decision_facts",
     "read_terminal_locator",
     "record_attempt",
     "recover_workspace",

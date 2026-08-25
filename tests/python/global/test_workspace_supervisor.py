@@ -71,6 +71,83 @@ class _Reference:
         }
 
 
+def _decision_facts_stub(step: int) -> dict:
+    """Closed W1-authenticated decision-facts stub for the injected workspace API.
+
+    The stub mirrors the projection shape but never contains a path,
+    provider argv, or authority attempt identifier.  Step 0 has no
+    parent and no repair-target page.  A repair step exposes bounded
+    target facts plus the parent-change comparison.
+    """
+
+    if step == 0:
+        return {
+            "schema": "mesh-to-cad.decision-facts/1",
+            "step_ordinal": 0,
+            "parent_step_ordinal": None,
+            "accepted": False,
+            "acceptance_state": "unaccepted",
+            "residual_summary": {
+                "objective_facts": {
+                    "global_depth_8_zero": False,
+                    "out_of_frame_clear": True,
+                    "no_evidence_conflict": True,
+                },
+                "depth_8_missing_surface_count": 2,
+                "depth_8_excess_surface_count": 1,
+                "depth_8_surface_error_count": 3,
+                "depth_8_surface_error_rate": 0.125,
+            },
+            "repair_targets": {
+                "total": 2,
+                "returned": 2,
+                "remaining": 0,
+                "items": [
+                    {
+                        "rank": 0,
+                        "kind": "interior",
+                        "missing_surface_count": 2,
+                        "excess_surface_count": 0,
+                        "surface_error_count": 2,
+                    },
+                    {
+                        "rank": 1,
+                        "kind": "exterior",
+                        "missing_surface_count": 0,
+                        "excess_surface_count": 1,
+                        "surface_error_count": 1,
+                    },
+                ],
+            },
+            "preview": {"identity_sha256": "a" * 64, "render_variant": "step"},
+            "change_from_parent": None,
+        }
+    return {
+        "schema": "mesh-to-cad.decision-facts/1",
+        "step_ordinal": step,
+        "parent_step_ordinal": step - 1,
+        "accepted": True,
+        "acceptance_state": "acceptance_satisfied",
+        "residual_summary": {
+            "objective_facts": {
+                "global_depth_8_zero": True,
+                "out_of_frame_clear": True,
+                "no_evidence_conflict": True,
+            },
+            "depth_8_missing_surface_count": 0,
+            "depth_8_excess_surface_count": 0,
+            "depth_8_surface_error_count": 0,
+            "depth_8_surface_error_rate": 0.0,
+        },
+        "repair_targets": None,
+        "preview": {"identity_sha256": "b" * 64, "render_variant": "step"},
+        "change_from_parent": {
+            "no_observable_geometry_change": False,
+            "parent_accepted": False,
+        },
+    }
+
+
 class _Workspace:
     def __init__(self, root: Path, reference_path: Path | None = None) -> None:
         self.root = root.resolve()
@@ -155,6 +232,11 @@ class _Workspace:
             }
         )
         return {"step": {"step": self.completed_cycles}, "cycle": self.completed_cycles}
+
+    def read_current_step_decision_facts(
+        self, _workspace: Path, *, step: int
+    ) -> dict:
+        return _decision_facts_stub(step)
 
     def finalization_staging_path(self, _workspace: Path) -> Path:
         target = self.root / "work" / "agent-finalization"
@@ -1751,6 +1833,94 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         )
         self.assertEqual("finalized", final["state"])
         self.assertEqual(1, self.workspace.finalize_calls)
+
+    def test_submit_intents_return_closed_w1_decision_facts(self) -> None:
+        # submit_step_zero returns the bounded decision facts the W1 facade
+        # published for the newly written Measured Step.  The supervisor
+        # does not parse authority documents itself.
+        attempt, candidate = self._start()
+        step_zero = self.sup.submit_step_zero(
+            self.sup.workspace_handle, attempt, candidate
+        )
+        self.assertIn("decision_facts", step_zero)
+        facts = step_zero["decision_facts"]
+        self.assertEqual("mesh-to-cad.decision-facts/1", facts["schema"])
+        self.assertEqual(0, facts["step_ordinal"])
+        self.assertIsNone(facts["parent_step_ordinal"])
+        self.assertIsNone(facts["change_from_parent"])
+        self.assertEqual("unaccepted", facts["acceptance_state"])
+        self.assertFalse(facts["accepted"])
+        self.assertIsInstance(facts["repair_targets"], dict)
+        self.assertLessEqual(facts["repair_targets"]["returned"], 8)
+        self.assertEqual({"identity_sha256", "render_variant"}, set(facts["preview"]))
+
+        # Simulate one already-committed cycle so the mock's synthetic
+        # next-step counter advances into repair territory, then run one
+        # submit_repair and verify the parent-change comparison lands on
+        # the Agent-visible response.
+        def seeder(_workspace, *, attempt, from_step, destination):
+            (destination / "source").mkdir()
+
+        self.workspace.seed_repair_source_from_parent_step = seeder  # type: ignore[assignment]
+        self.workspace.completed_cycles = 1
+        self.sup._repair_evidence_provider = lambda request: None  # type: ignore[attr-defined]
+        plan = self.sup.candidate_root / "repair-plan.json"
+        plan.write_text("{}", encoding="utf-8")
+        plan_handle = self.sup.register_plan(plan)
+        started = self.sup.start_attempt(self.sup.workspace_handle, plan_handle, 1)
+        repair = self.sup.submit_repair(
+            self.sup.workspace_handle,
+            started["attempt_handle"],
+            started["candidate_handle"],
+        )
+        self.assertIn("decision_facts", repair)
+        repair_facts = repair["decision_facts"]
+        self.assertGreater(repair_facts["step_ordinal"], 0)
+        self.assertEqual(
+            repair_facts["step_ordinal"] - 1, repair_facts["parent_step_ordinal"]
+        )
+        self.assertEqual("acceptance_satisfied", repair_facts["acceptance_state"])
+        self.assertTrue(repair_facts["accepted"])
+        self.assertIsNone(repair_facts["repair_targets"])
+        change = repair_facts["change_from_parent"]
+        self.assertEqual(
+            {"no_observable_geometry_change", "parent_accepted"}, set(change)
+        )
+
+        # No workspace-relative or authority-attempt tokens leak through.
+        serialized = json.dumps({"step_zero": step_zero, "repair": repair})
+        for literal in (
+            os.fspath(self.workspace_root),
+            os.fspath(self.root),
+            "steps/000000",
+            "voxblame",
+            "measurement.json",
+            "attempt-000001",
+            "target_key",
+            "mask_sha256",
+            "observable_sha256",
+            "work/attempts",
+        ):
+            self.assertNotIn(literal, serialized)
+
+    def test_submit_intents_fail_closed_on_broken_decision_facts_projection(
+        self,
+    ) -> None:
+        # If W1 raises inside the projection, the supervisor surfaces one
+        # closed classification and does not silently drop decision facts.
+        attempt, candidate = self._start()
+
+        def broken(_workspace, *, step):
+            raise RuntimeError("projection collapsed")
+
+        self.workspace.read_current_step_decision_facts = broken  # type: ignore[assignment]
+        with self.assertRaises(SupervisorError) as raised:
+            self.sup.submit_step_zero(
+                self.sup.workspace_handle, attempt, candidate
+            )
+        self.assertEqual(
+            "decision_facts_unavailable", raised.exception.classification
+        )
 
     def test_submit_intents_reject_stale_or_cross_attempt_handles(self) -> None:
         # start_attempt refuses a concurrent second Attempt: the current

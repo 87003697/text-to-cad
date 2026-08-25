@@ -236,6 +236,190 @@ def _next_result(value: Any, path: str) -> list[str]:
     return list(value)
 
 
+DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/1"
+_DECISION_FACT_MAX_TARGETS = 8
+_ACCEPTANCE_STATE_VALUES = ("acceptance_satisfied", "unaccepted")
+_OBJECTIVE_FACT_KEYS = ("global_depth_8_zero", "out_of_frame_clear", "no_evidence_conflict")
+
+
+def _rate(value: Any, path: str) -> float:
+    number = _number(value, path)
+    if number < 0 or number > 1:
+        _fail("supervisor_contract_violation", path)
+    return float(number)
+
+
+def _residual_summary_result(value: Any, path: str) -> dict[str, Any]:
+    value = _closed(
+        value,
+        (
+            "objective_facts",
+            "depth_8_missing_surface_count",
+            "depth_8_excess_surface_count",
+            "depth_8_surface_error_count",
+            "depth_8_surface_error_rate",
+        ),
+        path,
+    )
+    objective = _closed(
+        value["objective_facts"], _OBJECTIVE_FACT_KEYS, f"{path}.objective_facts"
+    )
+    return {
+        "objective_facts": {
+            key: _bool(objective[key], f"{path}.objective_facts.{key}")
+            for key in _OBJECTIVE_FACT_KEYS
+        },
+        "depth_8_missing_surface_count": _integer(
+            value["depth_8_missing_surface_count"], f"{path}.depth_8_missing_surface_count"
+        ),
+        "depth_8_excess_surface_count": _integer(
+            value["depth_8_excess_surface_count"], f"{path}.depth_8_excess_surface_count"
+        ),
+        "depth_8_surface_error_count": _integer(
+            value["depth_8_surface_error_count"], f"{path}.depth_8_surface_error_count"
+        ),
+        "depth_8_surface_error_rate": _rate(
+            value["depth_8_surface_error_rate"], f"{path}.depth_8_surface_error_rate"
+        ),
+    }
+
+
+def _repair_target_items(value: Any, path: str, expected: int) -> list[dict[str, Any]]:
+    if type(value) is not list or len(value) != expected:
+        _fail("supervisor_contract_violation", path)
+    if expected > _DECISION_FACT_MAX_TARGETS:
+        _fail("supervisor_contract_violation", path)
+    items = []
+    for index, item in enumerate(value):
+        item = _closed(
+            item,
+            (
+                "rank",
+                "kind",
+                "missing_surface_count",
+                "excess_surface_count",
+                "surface_error_count",
+            ),
+            f"{path}[{index}]",
+        )
+        items.append(
+            {
+                "rank": _integer(item["rank"], f"{path}[{index}].rank"),
+                "kind": _enum(
+                    item["kind"], ("interior", "exterior"), f"{path}[{index}].kind"
+                ),
+                "missing_surface_count": _integer(
+                    item["missing_surface_count"],
+                    f"{path}[{index}].missing_surface_count",
+                ),
+                "excess_surface_count": _integer(
+                    item["excess_surface_count"],
+                    f"{path}[{index}].excess_surface_count",
+                ),
+                "surface_error_count": _integer(
+                    item["surface_error_count"], f"{path}[{index}].surface_error_count"
+                ),
+            }
+        )
+    return items
+
+
+def _repair_targets_result(value: Any, path: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    value = _closed(value, ("total", "returned", "remaining", "items"), path)
+    returned = _integer(
+        value["returned"], f"{path}.returned", maximum=_DECISION_FACT_MAX_TARGETS
+    )
+    return {
+        "total": _integer(value["total"], f"{path}.total"),
+        "returned": returned,
+        "remaining": _integer(value["remaining"], f"{path}.remaining"),
+        "items": _repair_target_items(value["items"], f"{path}.items", returned),
+    }
+
+
+def _preview_identity_result(value: Any, path: str) -> dict[str, Any]:
+    value = _closed(value, ("identity_sha256", "render_variant"), path)
+    identity = value["identity_sha256"]
+    if type(identity) is not str or len(identity) != 64 or any(
+        c not in "0123456789abcdef" for c in identity
+    ):
+        _fail("supervisor_contract_violation", f"{path}.identity_sha256")
+    return {
+        "identity_sha256": identity,
+        "render_variant": _enum(value["render_variant"], ("step",), f"{path}.render_variant"),
+    }
+
+
+def _change_from_parent_result(value: Any, path: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    value = _closed(value, ("no_observable_geometry_change", "parent_accepted"), path)
+    return {
+        "no_observable_geometry_change": _bool(
+            value["no_observable_geometry_change"],
+            f"{path}.no_observable_geometry_change",
+        ),
+        "parent_accepted": _bool(value["parent_accepted"], f"{path}.parent_accepted"),
+    }
+
+
+def _decision_facts_result(value: Any, path: str) -> dict[str, Any]:
+    value = _closed(
+        value,
+        (
+            "schema",
+            "step_ordinal",
+            "parent_step_ordinal",
+            "accepted",
+            "acceptance_state",
+            "residual_summary",
+            "repair_targets",
+            "preview",
+            "change_from_parent",
+        ),
+        path,
+    )
+    if value["schema"] != DECISION_FACTS_SCHEMA:
+        _fail("supervisor_contract_violation", f"{path}.schema")
+    step_ordinal = _integer(
+        value["step_ordinal"], f"{path}.step_ordinal", maximum=MAX_REPAIR_STEP
+    )
+    parent_value = value["parent_step_ordinal"]
+    parent_ordinal = (
+        None
+        if parent_value is None
+        else _integer(parent_value, f"{path}.parent_step_ordinal", maximum=MAX_PARENT_STEP)
+    )
+    accepted = _bool(value["accepted"], f"{path}.accepted")
+    acceptance_state = _enum(
+        value["acceptance_state"], _ACCEPTANCE_STATE_VALUES, f"{path}.acceptance_state"
+    )
+    if (accepted and acceptance_state != "acceptance_satisfied") or (
+        not accepted and acceptance_state != "unaccepted"
+    ):
+        _fail("supervisor_contract_violation", f"{path}.acceptance_state")
+    change = _change_from_parent_result(value["change_from_parent"], f"{path}.change_from_parent")
+    if (parent_ordinal is None) is not (change is None):
+        _fail("supervisor_contract_violation", f"{path}.change_from_parent")
+    return {
+        "schema": DECISION_FACTS_SCHEMA,
+        "step_ordinal": step_ordinal,
+        "parent_step_ordinal": parent_ordinal,
+        "accepted": accepted,
+        "acceptance_state": acceptance_state,
+        "residual_summary": _residual_summary_result(
+            value["residual_summary"], f"{path}.residual_summary"
+        ),
+        "repair_targets": _repair_targets_result(
+            value["repair_targets"], f"{path}.repair_targets"
+        ),
+        "preview": _preview_identity_result(value["preview"], f"{path}.preview"),
+        "change_from_parent": change,
+    }
+
+
 def _pca_axes(value: Any, path: str) -> list[list[int | float]] | None:
     if value is None:
         return None
@@ -390,6 +574,8 @@ def _result_fields(
             result[name] = _next_result(value[name], item_path)
         elif kind == "observation":
             result[name] = _observation_result(value[name], item_path)
+        elif kind == "decision_facts":
+            result[name] = _decision_facts_result(value[name], item_path)
         else:
             _fail("supervisor_contract_violation", item_path)
     return result
@@ -413,11 +599,11 @@ def _validate_run_candidate_result(value: Any, path: str) -> dict[str, Any]:
 
 
 def _validate_step_zero_result(value: Any, path: str) -> dict[str, Any]:
-    return _result_fields(value, (("state", "state"), ("step_handle", "handle"), ("permitted_next_intents", "next")), path, "submit_step_zero")
+    return _result_fields(value, (("state", "state"), ("step_handle", "handle"), ("decision_facts", "decision_facts"), ("permitted_next_intents", "next")), path, "submit_step_zero")
 
 
 def _validate_repair_result(value: Any, path: str) -> dict[str, Any]:
-    return _result_fields(value, (("state", "state"), ("step_handle", "handle"), ("cycle_handle", "handle"), ("permitted_next_intents", "next")), path, "submit_repair")
+    return _result_fields(value, (("state", "state"), ("step_handle", "handle"), ("cycle_handle", "handle"), ("decision_facts", "decision_facts"), ("permitted_next_intents", "next")), path, "submit_repair")
 
 
 def _validate_finalize_result(value: Any, path: str) -> dict[str, Any]:
@@ -652,6 +838,7 @@ class AgentSurface:
 __all__ = [
     "AgentSurface",
     "AgentSurfaceError",
+    "DECISION_FACTS_SCHEMA",
     "ERROR_SCHEMA",
     "INTENTS",
     "REQUEST_SCHEMA",

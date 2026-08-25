@@ -1042,5 +1042,185 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
         self.assertFalse((case.workspace / "voxblame").exists())
 
 
+class WorkspaceDecisionFactsTests(WorkspaceFacadeAgentTests):
+    """Focused coverage for the closed W1 decision-facts projection.
+
+    The projection reuses the same real-facade fixtures used by the
+    Step 0 and Repair Cycle ingestion tests so no mock evidence bypasses
+    the trusted measurement / preview / step manifest bindings that a
+    real Workspace commits to.
+    """
+
+    _FORBIDDEN_TOKENS = (
+        "voxblame",
+        "steps/000000",
+        "steps/000001",
+        "work/attempts",
+        "attempt-",
+        "candidate.glb",
+        "measurement.json",
+        "voxblame.summary",
+        "target_key",
+        "mask_sha256",
+        "logical_sha256",
+        "observable_sha256",
+        "canonical_reference_sha256",
+    )
+
+    def _assert_closed_decision_facts(self, facts, *, step_ordinal, parent, accepted):
+        self.assertEqual("mesh-to-cad.decision-facts/1", facts["schema"])
+        self.assertEqual(step_ordinal, facts["step_ordinal"])
+        self.assertEqual(parent, facts["parent_step_ordinal"])
+        self.assertEqual(accepted, facts["accepted"])
+        self.assertEqual(
+            "acceptance_satisfied" if accepted else "unaccepted",
+            facts["acceptance_state"],
+        )
+        # Every top-level key is closed to the fixed public schema.
+        self.assertEqual(
+            {
+                "schema",
+                "step_ordinal",
+                "parent_step_ordinal",
+                "accepted",
+                "acceptance_state",
+                "residual_summary",
+                "repair_targets",
+                "preview",
+                "change_from_parent",
+            },
+            set(facts),
+        )
+        summary = facts["residual_summary"]
+        self.assertEqual(
+            {
+                "objective_facts",
+                "depth_8_missing_surface_count",
+                "depth_8_excess_surface_count",
+                "depth_8_surface_error_count",
+                "depth_8_surface_error_rate",
+            },
+            set(summary),
+        )
+        self.assertEqual(
+            {"global_depth_8_zero", "out_of_frame_clear", "no_evidence_conflict"},
+            set(summary["objective_facts"]),
+        )
+        self.assertEqual({"identity_sha256", "render_variant"}, set(facts["preview"]))
+        self.assertEqual("step", facts["preview"]["render_variant"])
+        # The serialized document must not leak Workspace-relative or
+        # authority-attempt tokens back to the Agent surface.
+        serialized = json.dumps(facts, sort_keys=True)
+        for token in self._FORBIDDEN_TOKENS:
+            self.assertNotIn(token, serialized)
+
+    def test_step_zero_decision_facts_expose_unaccepted_state_and_targets(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+        self._publish_step_zero(case, facade)
+
+        facts = facade.read_current_step_decision_facts(case.workspace, step=0)
+        self._assert_closed_decision_facts(
+            facts, step_ordinal=0, parent=None, accepted=False
+        )
+        # Step 0 has no parent — the parent-change comparison is absent.
+        self.assertIsNone(facts["change_from_parent"])
+        # Unaccepted Step 0 has depth-8 residuals; the fixture may or
+        # may not emit a repair-target page, but if present it obeys the
+        # closed bounded shape.
+        summary = facts["residual_summary"]
+        self.assertFalse(summary["objective_facts"]["global_depth_8_zero"])
+        self.assertGreaterEqual(summary["depth_8_surface_error_count"], 1)
+        targets = facts["repair_targets"]
+        if targets is not None:
+            self.assertLessEqual(targets["returned"], 8)
+            self.assertEqual(targets["returned"], len(targets["items"]))
+            for item in targets["items"]:
+                self.assertEqual(
+                    {
+                        "rank",
+                        "kind",
+                        "missing_surface_count",
+                        "excess_surface_count",
+                        "surface_error_count",
+                    },
+                    set(item),
+                )
+                self.assertIn(item["kind"], {"interior", "exterior"})
+
+    def test_repair_decision_facts_expose_parent_change_comparison(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+        cycle_source, repair_stub = self._prepare_repair_cycle(case, facade)
+        facade.publish_cycle_from_candidate(
+            case.workspace,
+            attempt=2,
+            source=cycle_source,
+            evidence_provider=repair_stub,
+        )
+
+        facts = facade.read_current_step_decision_facts(case.workspace, step=1)
+        self._assert_closed_decision_facts(
+            facts,
+            step_ordinal=1,
+            parent=0,
+            accepted=facts["accepted"],
+        )
+        change = facts["change_from_parent"]
+        self.assertEqual(
+            {"no_observable_geometry_change", "parent_accepted"}, set(change)
+        )
+        self.assertIsInstance(change["no_observable_geometry_change"], bool)
+        self.assertIsInstance(change["parent_accepted"], bool)
+
+    def test_decision_facts_reject_out_of_range_step(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+        self._publish_step_zero(case, facade)
+
+        with self.assertRaises(facade.WorkspaceError):
+            facade.read_current_step_decision_facts(case.workspace, step=-1)
+        with self.assertRaises(facade.WorkspaceError):
+            facade.read_current_step_decision_facts(case.workspace, step=6)
+        with self.assertRaises(facade.WorkspaceError):
+            facade.read_current_step_decision_facts(case.workspace, step=True)  # type: ignore[arg-type]
+
+    def test_decision_facts_fail_closed_on_corrupt_measurement(self) -> None:
+        fixture = _load_fixture()
+        case = fixture.WorkspaceCliTests(
+            "test_init_and_step_zero_publish_cross_checked_immutable_state"
+        )
+        case.setUp()
+        self.addCleanup(case.temporary.cleanup)
+        facade = _load_facade()
+        self._publish_step_zero(case, facade)
+
+        measurement_path = case.workspace / "voxblame/steps/000000/summary.json"
+        original = measurement_path.read_bytes()
+        corrupted = json.loads(original)
+        corrupted["errors_by_depth"][7]["surface_error_rate"] = float("inf")
+        measurement_path.write_text(json.dumps(corrupted), encoding="utf-8")
+        try:
+            with self.assertRaises(facade.WorkspaceError):
+                facade.read_current_step_decision_facts(case.workspace, step=0)
+        finally:
+            measurement_path.write_bytes(original)
+
+
 if __name__ == "__main__":
     unittest.main()

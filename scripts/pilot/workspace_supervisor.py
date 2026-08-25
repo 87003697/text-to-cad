@@ -147,6 +147,10 @@ class WorkspaceAPI(Protocol):
         evidence_provider: Callable[..., Any],
     ) -> Mapping[str, Any]: ...
 
+    def read_current_step_decision_facts(
+        self, workspace: Path, *, step: int
+    ) -> Mapping[str, Any]: ...
+
     def finalize_agent_submission(
         self, workspace: Path, *, scope: Any | None = None, **kwargs: Any
     ) -> Mapping[str, Any]: ...
@@ -1780,10 +1784,12 @@ class WorkspaceSupervisor:
         published = self._publish_submission(submission)
         step_number = int(published["step"])
         step_handle = self.registry.issue("step", step_number)
+        decision_facts = self._read_decision_facts(step_number)
         self._retire_attempt(submission.attempt_id)
         return {
             "state": "published",
             "step_handle": step_handle,
+            "decision_facts": decision_facts,
             "permitted_next_intents": ["start_attempt", "select_and_finalize", "workspace_status"],
         }
 
@@ -1797,15 +1803,39 @@ class WorkspaceSupervisor:
             workspace_handle, attempt_handle, candidate_handle, kind="repair"
         )
         published = self._publish_submission(submission)
-        step_handle = self.registry.issue("step", int(published["step"]))
+        step_number = int(published["step"])
+        step_handle = self.registry.issue("step", step_number)
         cycle_handle = self.registry.issue("cycle", int(published["cycle"]))
+        decision_facts = self._read_decision_facts(step_number)
         self._retire_attempt(submission.attempt_id)
         return {
             "state": "published",
             "step_handle": step_handle,
             "cycle_handle": cycle_handle,
+            "decision_facts": decision_facts,
             "permitted_next_intents": ["start_attempt", "select_and_finalize", "workspace_status"],
         }
+
+    def _read_decision_facts(self, step_number: int) -> Mapping[str, Any]:
+        """Fetch bounded W1-authenticated decision facts for one Measured Step.
+
+        The supervisor never parses any Workspace authority subtree,
+        measurement document, preview asset, or review graph itself.
+        The W1 facade owns the projection and returns semantic scalars
+        only.  A malformed projection fails closed so the Agent Surface
+        handler sees a supervisor error rather than an oversized or
+        ill-typed decision-facts document.
+        """
+
+        try:
+            facts = self.workspace_api.read_current_step_decision_facts(
+                self.workspace, step=step_number
+            )
+        except Exception as exc:
+            raise SupervisorError("decision_facts_unavailable") from exc
+        if not isinstance(facts, Mapping):
+            raise SupervisorError("decision_facts_unavailable")
+        return facts
 
     def _prepare_submission(
         self,
