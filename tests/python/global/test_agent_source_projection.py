@@ -62,6 +62,16 @@ class AgentSourceProjectionTests(unittest.TestCase):
             os.symlink(original.name, path)
             with self.assertRaises(projection.ProjectionError):
                 projection.verify(target)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO requires POSIX")
+    def test_verify_rejects_fifo_manifest_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            _, target = self._bundle(temporary)
+            manifest = target / projection.MANIFEST_NAME
+            manifest.unlink()
+            os.mkfifo(manifest)
+            with self.assertRaises(projection.ProjectionError):
+                projection.verify(target)
         with tempfile.TemporaryDirectory() as temporary:
             _, target = self._bundle(temporary)
             manifest_path = target / projection.MANIFEST_NAME

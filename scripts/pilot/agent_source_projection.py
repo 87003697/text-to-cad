@@ -94,7 +94,12 @@ def _manifest_bytes(entries: tuple[ProjectionEntry, ...]) -> bytes:
 
 def _read_regular(path: Path, *, label: str) -> bytes:
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+        )
     except OSError as exc:
         if exc.errno == errno.ELOOP:
             raise ProjectionError(f"{label} must not be a symlink") from exc
