@@ -18,7 +18,7 @@ choreography behind the intent seam.
 
 - Reason about geometry from Reference Observations and residual evidence
   that the supervisor returns to you.
-- Author and edit candidate CAD source under `/candidate` as ordinary
+- Author and edit candidate CAD source under `/candidate/work` as ordinary
   parametric Python that produces STEP.
 - Ask for one supervisor-owned operation at a time through the intent
   seam.
@@ -115,33 +115,45 @@ grants.
 
 ## Candidate source authoring
 
-You author under `/candidate` and only under `/candidate`. The tree
+You author under `/candidate/work` — the fixed current-attempt subtree
+the supervisor exposes for the Attempt you just started. The tree
 looks like:
 
 ```text
 /candidate/
-  source/
-    model.py         # your entry module
-    width.txt        # example sidecar parameter file
-  artifacts/         # new empty directory the tool writes into
+  plan.json          # supervisor-owned control file (do not delete)
+  selection.json     # supervisor-owned control file (do not delete)
+  notes.md           # supervisor-owned control file (do not delete)
+  work/              # current Attempt's authoring space
+    source/
+      model.py       # your entry module
+      width.txt      # example sidecar parameter file
+    artifacts/       # new empty directory the tool writes into
+    assessment.json  # your assessment for this Attempt
 ```
 
 Rules:
 
 - Write parametric Python that produces STEP first. All other exports
   are downstream of STEP.
-- Read every sidecar parameter through a bundle-relative path, for
+- Read every sidecar parameter through a work-relative path, for
   example `Path("source/width.txt")`. Never resolve absolute host
   paths; there is no useful absolute path to read.
-- Do not import from anywhere outside `/candidate/source/`, standard
-  library, or the geometry libraries the runtime provides (build123d,
-  cadquery, numpy, etc.).
-- Do not read, mutate, or reference anything outside `/candidate`.
+- Do not import from anywhere outside `/candidate/work/source/`,
+  standard library, or the geometry libraries the runtime provides
+  (build123d, cadquery, numpy, etc.).
+- Do not read, mutate, or reference anything under `/candidate` other
+  than `/candidate/work` and the control files the supervisor named
+  for you. Never open, list, or infer the existence of any sibling
+  under `/candidate` (there are no Attempt-identified subdirectories
+  to enumerate; any that appear must be ignored).
 - Give every `run_candidate_tool` invocation a **new empty**
-  `artifacts/` directory. Never reuse one Attempt's artifacts as
+  `work/artifacts/` directory. Never reuse one Attempt's artifacts as
   another's input.
-- Keep the recipe candidate-relative. It must rebuild from `source/`
-  alone.
+- Keep the recipe work-relative. It must rebuild from `source/` alone.
+- The supervisor resets `/candidate/work` between Attempts. If the
+  Attempt is a repair, the supervisor seeds `work/source/` from the
+  parent Measured Step before the Attempt begins; edit it in place.
 
 ## Reconstruction reasoning
 
@@ -180,16 +192,20 @@ inform your reasoning; they never prescribe an edit.
 The bounded loop the supervisor enforces is:
 
 1. `workspace_status` to read the initial permitted intents and budgets.
-2. Author an initial plan under `/candidate/source/` and encode it as
-   the plan handle the supervisor accepts. Use `start_attempt`.
+2. Author an initial plan at `/candidate/plan.json` and pass it to
+   `start_attempt`. Then write your Step 0 source under
+   `/candidate/work/source/`.
 3. Use `run_candidate_tool` to build, preview, and measure the
    candidate. Each call returns fresh handles.
-4. Use `submit_step_zero` to submit the measured initial step.
-5. Loop: form a repair hypothesis, edit `/candidate/source/`, run the
-   registered tools for the child, then `submit_repair` with an
-   explicit parent step handle. Stop when residuals establish
-   acceptance, when no further coherent repair is plausible, or when
-   the supervisor reports `budget_exhausted`.
+4. Use `submit_step_zero` to submit the measured initial step. The
+   supervisor retires that Attempt and resets `/candidate/work`.
+5. Loop: form a repair hypothesis. Start the next Attempt with an
+   explicit parent step handle; the supervisor reseeds
+   `/candidate/work/source/` with the parent's source. Edit it,
+   run the registered tools for the child, then `submit_repair`.
+   Stop when residuals establish acceptance, when no further coherent
+   repair is plausible, or when the supervisor reports
+   `budget_exhausted`.
 6. `select_and_finalize` with the strongest plausible step handle and
    authored notes.
 
@@ -217,4 +233,4 @@ identifiers.
 ## Progressive references
 
 - `references/candidate-authoring.md` — patterns for writing STEP-first
-  parametric candidate source under `/candidate/source/`.
+  parametric candidate source under `/candidate/work/source/`.

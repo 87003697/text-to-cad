@@ -37,6 +37,14 @@ MAX_CANDIDATE_FILE_BYTES = 512 * 1024 * 1024
 MAX_ATTEMPT_STEP = 5
 MAX_ATTEMPTS_PER_STEP = 3
 MAX_CYCLES = 5
+# The Agent-visible current work subtree.  The outer Agent sandbox mounts
+# the supervisor's candidate root at ``/candidate`` and the Agent authors
+# under ``/candidate/work``; the nested candidate-tool bwrap binds this
+# same host subtree to ``/candidate`` so the fixed operation argv remains
+# candidate-relative.  The name is intentionally opaque: no Attempt
+# identifier is encoded so a stale or forged Attempt-named sibling cannot
+# pose as the current work tree.
+_CURRENT_WORK_SUBDIR = "work"
 _HANDLE_ALPHABET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 _SAFE_ENV_KEYS = frozenset(
     {
@@ -127,6 +135,15 @@ class WorkspaceAPI(Protocol):
         intended_step: int,
         from_step: int | None,
     ) -> Mapping[str, Any]: ...
+
+    def seed_repair_source_from_parent_step(
+        self,
+        workspace: Path,
+        *,
+        attempt: int,
+        from_step: int,
+        destination: Path,
+    ) -> None: ...
 
     def publish_step_zero(self, workspace: Path, **kwargs: Any) -> Mapping[str, Any]: ...
 
@@ -1031,6 +1048,8 @@ class WorkspaceSupervisor:
             type(from_step) is not int or not 0 <= from_step < MAX_ATTEMPT_STEP
         ):
             raise SupervisorError("invalid_request")
+        if self._attempts:
+            raise SupervisorError("attempt_already_active")
         staged_plan = self._staging_root / f"plan-{secrets.token_hex(12)}.json"
         try:
             _copy_candidate_file(plan, staged_plan)
@@ -1062,11 +1081,24 @@ class WorkspaceSupervisor:
             raise SupervisorError("attempt_rejected") from exc
         finally:
             staged_plan.unlink(missing_ok=True)
-        candidate = self.candidate_root / f"attempt-{attempt_id:06d}"
-        try:
-            candidate.mkdir(parents=True, exist_ok=False, mode=0o700)
-        except OSError as exc:
-            raise SupervisorError("candidate_unavailable") from exc
+        candidate = self._reset_current_work_tree()
+        if from_step is not None:
+            seeder = getattr(
+                self.workspace_api, "seed_repair_source_from_parent_step", None
+            )
+            if seeder is None:
+                self._discard_current_work_tree()
+                raise SupervisorError("workspace_contract_violation")
+            try:
+                seeder(
+                    workspace,
+                    attempt=attempt_id,
+                    from_step=from_step,
+                    destination=candidate,
+                )
+            except Exception as exc:
+                self._discard_current_work_tree()
+                raise SupervisorError("repair_source_seed_failed") from exc
         attempt_handle = self.registry.issue("attempt", None, attempt_id=attempt_id)
         candidate_handle = self.registry.issue(
             "candidate", candidate, attempt_id=attempt_id
@@ -1452,6 +1484,41 @@ class WorkspaceSupervisor:
     def _retire_attempt(self, attempt_id: int) -> None:
         self.registry.revoke_attempt(attempt_id)
         self._attempts.pop(attempt_id, None)
+        self._discard_current_work_tree()
+
+    def _current_work_tree(self) -> Path:
+        return self.candidate_root / _CURRENT_WORK_SUBDIR
+
+    def _reset_current_work_tree(self) -> Path:
+        """Securely reset the fixed current work subtree before an Attempt.
+
+        The path is fixed at ``<candidate_root>/work`` so the Agent surface
+        never sees or parses an Attempt identifier.  Any prior contents —
+        including a forged Attempt-named sibling that a stale handle
+        might attempt to reference — are irrelevant: this call clears
+        ``work/`` and creates it fresh, no-follow, mode 0o700.
+        """
+
+        candidate = self._current_work_tree()
+        try:
+            if candidate.is_symlink():
+                candidate.unlink()
+            elif candidate.exists():
+                shutil.rmtree(candidate)
+            candidate.mkdir(parents=False, exist_ok=False, mode=0o700)
+        except OSError as exc:
+            raise SupervisorError("candidate_unavailable") from exc
+        return candidate
+
+    def _discard_current_work_tree(self) -> None:
+        candidate = self._current_work_tree()
+        try:
+            if candidate.is_symlink():
+                candidate.unlink()
+            elif candidate.exists():
+                shutil.rmtree(candidate)
+        except OSError:
+            pass
 
     def select_and_finalize(
         self,

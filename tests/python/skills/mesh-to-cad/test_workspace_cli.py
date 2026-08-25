@@ -24,6 +24,10 @@ CLI_PATH = (
     REPO_ROOT
     / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace/cli.py"
 )
+WORKSPACE_HELPER_PATH = (
+    REPO_ROOT
+    / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace/workspace.py"
+)
 MESH_COMPARE_PATH = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare"
 CAD_BUILD_PATH = REPO_ROOT / "skills/cad/scripts/canonical-build"
 MESH_COMPARE_ENTRYPOINT = MESH_COMPARE_PATH / "cli.py"
@@ -44,6 +48,29 @@ def _load_cli():
         raise RuntimeError("cannot load Workspace CLI")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def _load_workspace_helper():
+    module_name = "mesh_to_cad_workspace_helper"
+    cached = sys.modules.get(module_name)
+    if cached is not None:
+        return cached
+    helper_dir = str(WORKSPACE_HELPER_PATH.parent)
+    if helper_dir not in sys.path:
+        sys.path.insert(0, helper_dir)
+    spec = importlib.util.spec_from_file_location(
+        module_name, WORKSPACE_HELPER_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load Workspace helper")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(module_name, None)
+        raise
     return module
 
 
@@ -2793,6 +2820,178 @@ time.sleep(60)
         )
         self.assertEqual(0, status, stderr)
         self.assertTrue(valid["valid"])
+
+    def _seed_prepared_repair(self) -> tuple[object, int]:
+        """Set up Step 0 published + one active repair Attempt bound to it."""
+
+        self.publish_initial_flow()
+        plan = self.repair_plan("seed-plan", from_step=0)
+        status, attempt, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(plan),
+            "--intended-step",
+            "1",
+            "--from-step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+        helper = _load_workspace_helper()
+        return helper, attempt["attempt"]["attempt"]
+
+    def test_seed_rejects_unknown_parent_step_index(self) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        destination = self.root / "ext-work-unknown"
+        destination.mkdir()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.seed_repair_source_from_parent_step(
+                self.workspace,
+                attempt=attempt_id,
+                from_step=99,
+                destination=destination,
+            )
+        self.assertEqual("invalid_attempt", ctx.exception.classification)
+        self.assertFalse((destination / "source").exists())
+
+    def test_seed_rejects_from_step_mismatch_against_active_attempt(self) -> None:
+        # A second published cycle so a step index other than the parent
+        # actually exists and yet still fails the parent-binding check.
+        self.publish_initial_flow()
+        self.publish_one_cycle()
+        plan = self.repair_plan("seed-plan-mismatch", from_step=1)
+        status, attempt, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(plan),
+            "--intended-step",
+            "2",
+            "--from-step",
+            "1",
+        )
+        self.assertEqual(0, status, stderr)
+        helper = _load_workspace_helper()
+        destination = self.root / "ext-work-mismatch"
+        destination.mkdir()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.seed_repair_source_from_parent_step(
+                self.workspace,
+                attempt=attempt["attempt"]["attempt"],
+                from_step=0,
+                destination=destination,
+            )
+        self.assertEqual("invalid_attempt", ctx.exception.classification)
+        self.assertFalse((destination / "source").exists())
+
+    def test_seed_rejects_destination_that_is_a_symlink(self) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        real = self.root / "real-empty"
+        real.mkdir()
+        destination = self.root / "ext-work-symlink"
+        os.symlink(real, destination)
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.seed_repair_source_from_parent_step(
+                self.workspace,
+                attempt=attempt_id,
+                from_step=0,
+                destination=destination,
+            )
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self.assertFalse((real / "source").exists())
+
+    def test_seed_rejects_destination_that_is_not_empty(self) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        destination = self.root / "ext-work-nonempty"
+        destination.mkdir()
+        (destination / "stowaway.txt").write_text("stow\n", encoding="utf-8")
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.seed_repair_source_from_parent_step(
+                self.workspace,
+                attempt=attempt_id,
+                from_step=0,
+                destination=destination,
+            )
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self.assertFalse((destination / "source").exists())
+        self.assertTrue((destination / "stowaway.txt").exists())
+
+    def test_seed_rejects_destination_inside_the_workspace(self) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        destination = self.workspace / "work" / "internal-seed"
+        destination.mkdir(parents=True)
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.seed_repair_source_from_parent_step(
+                self.workspace,
+                attempt=attempt_id,
+                from_step=0,
+                destination=destination,
+            )
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self.assertFalse((destination / "source").exists())
+
+    def test_seed_rejects_parent_authority_source_that_is_a_symlink(self) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        authority_source = (
+            self.workspace / "steps" / "000000" / "candidate" / "source"
+        )
+        replacement = self.workspace / "steps" / "000000" / "candidate" / "source.real"
+        shutil.move(str(authority_source), str(replacement))
+        os.symlink(replacement, authority_source)
+        destination = self.root / "ext-work-authority-symlink"
+        destination.mkdir()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.seed_repair_source_from_parent_step(
+                self.workspace,
+                attempt=attempt_id,
+                from_step=0,
+                destination=destination,
+            )
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self.assertFalse((destination / "source").exists())
+
+    def test_seed_happy_path_copies_committed_parent_source_into_empty_destination(
+        self,
+    ) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        destination = self.root / "ext-work-happy"
+        destination.mkdir()
+        helper.seed_repair_source_from_parent_step(
+            self.workspace,
+            attempt=attempt_id,
+            from_step=0,
+            destination=destination,
+        )
+        seeded = destination / "source" / "model.py"
+        self.assertTrue(seeded.is_file())
+        expected = (
+            self.workspace / "steps" / "000000" / "candidate" / "source" / "model.py"
+        ).read_bytes()
+        self.assertEqual(expected, seeded.read_bytes())
+
+    def test_seed_rollback_leaves_no_partial_work_tree_when_copy_fails(self) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        destination = self.root / "ext-work-rollback"
+        destination.mkdir()
+        with mock.patch.object(
+            helper,
+            "_copy_agent_tree",
+            side_effect=helper.WorkspaceError(
+                "invalid_workspace_path", "simulated descriptor-safe failure"
+            ),
+        ):
+            with self.assertRaises(helper.WorkspaceError):
+                helper.seed_repair_source_from_parent_step(
+                    self.workspace,
+                    attempt=attempt_id,
+                    from_step=0,
+                    destination=destination,
+                )
+        self.assertFalse((destination / "source").exists())
+        with os.scandir(destination) as entries:
+            self.assertEqual([], list(entries))
 
     def test_voxblame_placement_is_checked_before_step_authority_rename(self) -> None:
         status, _payload, stderr = self.invoke(

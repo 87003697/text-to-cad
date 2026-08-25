@@ -85,6 +85,24 @@ environment allowlist. The Agent never supplies argv, a cwd, a Workspace
 path, or a reference path. When the runner selects the candidate-only bwrap
 seam, the workload sees only the fixed `/candidate` mount; the experiment,
 input mesh, output authority, and outer Git tree are not mounted there.
+The outer Agent sandbox mounts the supervisor's external candidate root at
+`/candidate`; the fixed current-attempt subtree is `/candidate/work`, and
+the nested candidate-tool bwrap binds that host subtree to `/candidate` so
+the registered operation argv stays candidate-relative
+(`source/model.py`). No Attempt identifier is encoded in any Agent-visible
+path. `start_attempt` securely resets `/candidate/work` before binding the
+opaque candidate handle to it; a submit retires the Attempt, revokes all
+attempt-scoped handles, and clears `/candidate/work`. Supervisor-owned
+plan, selection, and notes control files live at `/candidate/*.json`
+outside `/candidate/work` so that the reset never destroys them. Stale
+cross-attempt candidate handles and any forged `attempt-000001` sibling
+under `/candidate` are ignored: only the fixed `/candidate/work` binding
+carries authority. For a Repair Attempt (`from_step != null`), after
+`begin_attempt` returns, W1's `seed_repair_source_from_parent_step`
+operation descriptor-safely copies the parent Measured Step's committed
+candidate `source/` bytes into the fresh `/candidate/work/source/`; the
+supervisor supplies only the external empty work tree destination and
+never reads, forwards, or interprets a `steps/…` authority path.
 On Linux, each registered candidate operation gets the same minimal mount
 boundary and network-denied process context; hosts without that primitive fail
 closed unless a test-injected executor is supplied.

@@ -275,7 +275,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             self.sup.run_candidate_tool(
                 self.sup.workspace_handle, attempt, candidate, operation
             )
-        self.assertEqual(self.sup.candidate_root / "attempt-000001", observed["cwd"])
+        self.assertEqual(self.sup.candidate_root / "work", observed["cwd"])
         self.assertNotIn("VENUS_TOKEN", observed["env"])
         self.assertEqual(["/bin/echo", "candidate-only"], observed["args"])
 
@@ -298,10 +298,17 @@ class WorkspaceSupervisorTests(unittest.TestCase):
 
     def test_supervisor_source_contains_no_workspace_internal_path_policy(self) -> None:
         source = inspect.getsource(WorkspaceSupervisor)
-        for literal in ("work/attempts", "agent-finalization", "final/manifest.json"):
+        for literal in (
+            "work/attempts",
+            "agent-finalization",
+            "final/manifest.json",
+            "steps/",
+            "attempt-",
+        ):
             self.assertNotIn(literal, source)
         self.assertIn("publish_step_zero_from_candidate", source)
         self.assertIn("publish_cycle_from_candidate", source)
+        self.assertIn("seed_repair_source_from_parent_step", source)
         self.assertNotIn("publish_step_zero_from_agent", source)
         self.assertNotIn("publish_cycle_from_agent", source)
         self.assertIn("finalize_agent_submission", source)
@@ -326,42 +333,41 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         plan = self.sup.candidate_root / "dynamic-plan.json"
         plan.write_text("{}", encoding="utf-8")
         plan_handle = self.sup.register_plan(plan)
-        starts = []
-        for _ in range(18):
-            starts.append(
-                self.sup.start_attempt(
-                    self.sup.workspace_handle, plan_handle, None
+        # Serially exhaust the Attempt budget through the fixed
+        # /candidate/work subtree.  Each start_attempt requires the
+        # prior Attempt to be retired first, matching the
+        # single-active-attempt contract the fixed work tree enforces.
+        # Verify the seventh and eighteenth bundles bind to their actual
+        # returned Attempt identifier at the moment the Attempt is live
+        # before retirement invalidates the capability.
+        for index in range(18):
+            started = self.sup.start_attempt(
+                self.sup.workspace_handle, plan_handle, None
+            )
+            attempt_id = index + 1
+            bundle = started["capability_bundle_handle"]
+            self.assertIsNotNone(
+                self.sup.registry.resolve(
+                    bundle, "attempt_capabilities", attempt_id=attempt_id
                 )
             )
-        self.assertEqual(18, len(starts))
-        bundle_seven = starts[6]["capability_bundle_handle"]
-        bundle_eighteen = starts[17]["capability_bundle_handle"]
-        self.sup._command_runner = lambda argv, **kwargs: __import__(
-            "subprocess"
-        ).CompletedProcess(argv, 0, b"", b"")
-        self.assertEqual(
-            "completed",
-            self.sup.run_candidate_tool(
+            with self.assertRaises(SupervisorError):
+                self.sup.registry.resolve(
+                    bundle,
+                    "attempt_capabilities",
+                    attempt_id=attempt_id + 1,
+                )
+            self.sup.submit_step_zero(
                 self.sup.workspace_handle,
-                starts[6]["attempt_handle"],
-                starts[6]["candidate_handle"],
-                bundle_seven,
-            )["state"],
-        )
-        with self.assertRaises(SupervisorError):
-            self.sup.run_candidate_tool(
-                self.sup.workspace_handle,
-                starts[7]["attempt_handle"],
-                starts[7]["candidate_handle"],
-                bundle_seven,
+                started["attempt_handle"],
+                started["candidate_handle"],
             )
-        self.assertIsNotNone(
-            self.sup.registry.resolve(
-                bundle_eighteen,
-                "attempt_capabilities",
-                attempt_id=18,
-            )
-        )
+            # Retirement revokes the bundle so a stale handle from a
+            # completed Attempt cannot cross into the next Attempt.
+            with self.assertRaises(SupervisorError):
+                self.sup.registry.resolve(
+                    bundle, "attempt_capabilities", attempt_id=attempt_id
+                )
 
     def test_traversal_and_symlink_candidate_paths_fail_closed(self) -> None:
         with self.assertRaises(SupervisorError):
@@ -1723,7 +1729,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             {
                 "kind": "step_zero",
                 "attempt": 1,
-                "source": self.sup.candidate_root / "attempt-000001",
+                "source": self.sup.candidate_root / "work",
             },
             {k: v for k, v in published.items() if k != "provider"},
         )
@@ -1747,19 +1753,32 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         self.assertEqual(1, self.workspace.finalize_calls)
 
     def test_submit_intents_reject_stale_or_cross_attempt_handles(self) -> None:
+        # start_attempt refuses a concurrent second Attempt: the current
+        # work subtree is fixed, so a live Attempt must be submitted and
+        # retired before another can open.
         first_attempt, first_candidate = self._start()
-        second_attempt, second_candidate = self._start()
         with self.assertRaises(SupervisorError):
-            # Candidate handle from Attempt 2 does not match Attempt 1.
+            self._start()
+        # Publish Attempt 1; its handles are retired and its bytes are
+        # cleared before Attempt 2's fresh work tree is created.
+        self.assertEqual(
+            "published",
             self.sup.submit_step_zero(
-                self.sup.workspace_handle, first_attempt, second_candidate
-            )
+                self.sup.workspace_handle, first_attempt, first_candidate
+            )["state"],
+        )
+        second_attempt, second_candidate = self._start()
+        # Stale Attempt 1 candidate handle cannot cross into Attempt 2,
+        # even though the fixed work subtree path is now Attempt 2's.
         with self.assertRaises(SupervisorError):
             self.sup.submit_step_zero(
                 self.sup.workspace_handle, second_attempt, first_candidate
             )
-        # Publication + retire the second Attempt; its handles must now be
-        # rejected by both submit intents rather than replayed.
+        with self.assertRaises(SupervisorError):
+            self.sup.submit_step_zero(
+                self.sup.workspace_handle, first_attempt, second_candidate
+            )
+        # Publish Attempt 2 and verify its retired handles are also rejected.
         self.assertEqual(
             "published",
             self.sup.submit_step_zero(
@@ -1774,6 +1793,155 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             self.sup.submit_repair(
                 self.sup.workspace_handle, second_attempt, second_candidate
             )
+
+    def test_current_work_tree_is_fixed_and_agent_visible_without_attempt_id(self) -> None:
+        # start_attempt binds the candidate handle to the fixed
+        # <candidate_root>/work subtree.  The nested candidate-tool
+        # sandbox binds that same host path to /candidate, so the
+        # registered argv stays candidate-relative and the Agent never
+        # sees an Attempt-identified directory name.
+        attempt, candidate = self._start()
+        work = self.sup.candidate_root / "work"
+        self.assertTrue(work.is_dir())
+        bound_candidate = self.sup.registry.resolve(
+            candidate, "candidate", attempt_id=1
+        )
+        self.assertEqual(work, bound_candidate)
+        # Agent authors under work/source/model.py — the fixed relative
+        # argv resolves under the bound work tree.
+        (work / "source").mkdir()
+        (work / "source" / "model.py").write_text("pass\n", encoding="utf-8")
+        operation = self.sup.register_operation(
+            ["/runtime/bin/python", "source/model.py"], attempt_handle=attempt
+        )
+        observed: dict = {}
+
+        def run(argv, **kwargs):
+            observed["args"] = argv
+            observed["cwd"] = kwargs.get("cwd")
+            return subprocess.CompletedProcess(argv, 0, b"", b"")
+
+        self.sup._command_runner = run
+        self.sup.run_candidate_tool(
+            self.sup.workspace_handle, attempt, candidate, operation
+        )
+        self.assertEqual(work, observed["cwd"])
+        self.assertEqual(["/runtime/bin/python", "source/model.py"], observed["args"])
+
+    def test_second_attempt_receives_fresh_work_tree_free_of_prior_bytes(self) -> None:
+        # Attempt 1 writes into /candidate/work; after submit the tree
+        # is retired.  Attempt 2 must start with a fresh empty work
+        # tree — the prior Attempt's bytes must not leak across the
+        # single fixed subtree.
+        first_attempt, first_candidate = self._start()
+        work = self.sup.candidate_root / "work"
+        (work / "source").mkdir()
+        (work / "source" / "model.py").write_text(
+            "prior = 1\n", encoding="utf-8"
+        )
+        (work / "artifacts").mkdir()
+        (work / "artifacts" / "stale.step").write_text(
+            "stale", encoding="utf-8"
+        )
+        self.sup.submit_step_zero(
+            self.sup.workspace_handle, first_attempt, first_candidate
+        )
+        self.assertFalse(work.exists())
+        second_attempt, second_candidate = self._start()
+        self.assertTrue(work.is_dir())
+        self.assertEqual([], list(work.iterdir()))
+        # The retired candidate handle from Attempt 1 must not resolve.
+        with self.assertRaises(SupervisorError):
+            self.sup.registry.resolve(
+                first_candidate, "candidate", attempt_id=1
+            )
+
+    def test_forged_attempt_named_sibling_does_not_pose_as_current_work(self) -> None:
+        # A stale or malicious directory next to /candidate/work must not
+        # influence the current Attempt: the supervisor only binds the
+        # fixed work path.
+        sibling = self.sup.candidate_root / "attempt-000001"
+        sibling.mkdir()
+        (sibling / "model.py").write_text("attacker", encoding="utf-8")
+        attempt, candidate = self._start()
+        bound = self.sup.registry.resolve(candidate, "candidate", attempt_id=1)
+        self.assertEqual(self.sup.candidate_root / "work", bound)
+        self.assertNotEqual(sibling.resolve(), bound.resolve())
+        # The sibling still exists on disk but plays no role in the Attempt.
+        self.assertTrue(sibling.exists())
+        self.assertEqual(
+            "attacker",
+            (sibling / "model.py").read_text(encoding="utf-8"),
+        )
+
+    def test_repair_start_attempt_invokes_w1_seed_with_fresh_external_work(self) -> None:
+        # For from_step != None the supervisor calls the W1 facade's
+        # seed operation with only the attempt id, from_step, and the
+        # fresh external work tree destination.  The supervisor never
+        # reads, forwards, or interprets a ``steps/…`` authority path.
+        self.workspace.completed_cycles = 1
+        seed_calls: list[dict] = []
+
+        def seeder(_workspace, *, attempt, from_step, destination):
+            self.assertIsInstance(destination, Path)
+            self.assertEqual(self.sup.candidate_root / "work", destination)
+            self.assertEqual([], list(destination.iterdir()))
+            seed_calls.append(
+                {"attempt": attempt, "from_step": from_step, "destination": destination}
+            )
+            (destination / "source").mkdir()
+            (destination / "source" / "model.py").write_text(
+                "seeded = True\n", encoding="utf-8"
+            )
+
+        self.workspace.seed_repair_source_from_parent_step = seeder
+        plan = self.sup.candidate_root / "repair-plan.json"
+        plan.write_text("{}", encoding="utf-8")
+        plan_handle = self.sup.register_plan(plan)
+        started = self.sup.start_attempt(
+            self.sup.workspace_handle, plan_handle, 0
+        )
+        self.assertEqual(1, len(seed_calls))
+        self.assertEqual(0, seed_calls[0]["from_step"])
+        self.assertEqual(1, seed_calls[0]["attempt"])
+        work = self.sup.candidate_root / "work"
+        self.assertTrue((work / "source" / "model.py").is_file())
+        # Supervisor never passes authority ``steps/…`` paths to the
+        # workspace API for the seed operation.
+        for entry in seed_calls:
+            for value in entry.values():
+                text = os.fspath(value) if isinstance(value, Path) else str(value)
+                self.assertNotIn("steps/", text)
+
+    def test_repair_seed_failure_leaves_no_partial_work_tree(self) -> None:
+        # A W1 seed failure aborts the Attempt, clears the work tree,
+        # and never binds a candidate handle.
+        self.workspace.completed_cycles = 1
+
+        def failing_seeder(_workspace, *, attempt, from_step, destination):
+            (destination / "half").mkdir()
+            (destination / "half" / "bytes.txt").write_text(
+                "partial", encoding="utf-8"
+            )
+            raise RuntimeError("simulated seed failure")
+
+        self.workspace.seed_repair_source_from_parent_step = failing_seeder
+        plan = self.sup.candidate_root / "repair-plan.json"
+        plan.write_text("{}", encoding="utf-8")
+        plan_handle = self.sup.register_plan(plan)
+        with self.assertRaises(SupervisorError):
+            self.sup.start_attempt(self.sup.workspace_handle, plan_handle, 0)
+        self.assertFalse((self.sup.candidate_root / "work").exists())
+        # No active attempt remains; the next start_attempt may proceed.
+        self.assertEqual({}, self.sup._attempts)
+
+    def test_start_attempt_rejects_concurrent_active_attempt(self) -> None:
+        # There is exactly one current-attempt subtree.  A second
+        # start_attempt while an Attempt is already active must fail
+        # closed rather than silently reset the live work tree.
+        self._start()
+        with self.assertRaises(SupervisorError):
+            self._start()
 
     def test_w3_handler_can_dispatch_concrete_ports_without_authority_imports(self) -> None:
         surface = self.sup.agent_surface()
@@ -2400,7 +2568,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                         "plan_handle": contract["plan_handle"],
                     },
                 )
-                attempt_one = supervisor.candidate_root / "attempt-000001"
+                attempt_one = supervisor.candidate_root / "work"
                 shutil.copytree(source_candidate, attempt_one, dirs_exist_ok=True)
                 shutil.copy2(
                     attempt_one / "built/measurement.glb",

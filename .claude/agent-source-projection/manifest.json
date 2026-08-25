@@ -7,13 +7,13 @@
     },
     {
       "path": "skills/mesh-to-cad/SKILL.md",
-      "sha256": "f91e6b3362368ed070dbabc36b09ee1561d7504b91ec7e3556de5f392b808957",
-      "size": 8577
+      "sha256": "bcd4f123c5bb60cfb23c7bff19386e778e16344af3f4de8560d616b544477109",
+      "size": 9616
     },
     {
       "path": "skills/mesh-to-cad/references/candidate-authoring.md",
-      "sha256": "3e8c859c7b86988e345bd9671340d590f62c1e22394082ff830ea5beefef2737",
-      "size": 3789
+      "sha256": "cc2f453a9f815835845d54fb107afbbfd4bcc62a3f2ec08daf39c74602736134",
+      "size": 3943
     }
   ],
   "schema": "text-to-cad.agent-source-projection/2",

@@ -1033,6 +1033,112 @@ def publish_cycle_from_candidate(
     return {"step": {"step": int(step_value)}, "cycle": int(cycle_value)}
 
 
+def seed_repair_source_from_parent_step(
+    workspace: Path,
+    *,
+    attempt: int,
+    from_step: int,
+    destination: Path,
+) -> None:
+    """Descriptor-safely seed one external empty work tree with parent Step source.
+
+    The supervisor gives W1 an already-created, empty, external work tree
+    ``destination`` and the ``attempt``/``from_step`` pair that names the
+    parent Measured Step in the active Attempt document.  W1 verifies the
+    parent binding against the active Attempt, opens the parent Measured
+    Step's committed ``candidate/source/`` subtree internally, and copies
+    its bytes through the descriptor-safe :func:`_copy_agent_tree` guard
+    into ``destination/source/``.  The supervisor never learns, forwards,
+    or names an authority path.  A symlink, hardlink, FIFO, oversized, or
+    growing source aborts; a partial ``destination/source/`` is removed
+    on failure so the fresh work tree stays empty for retry.
+    """
+
+    workspace = Path(workspace).resolve()
+    if type(attempt) is not int or attempt < 1:
+        raise WorkspaceError(
+            "invalid_attempt", "attempt identifier is invalid"
+        )
+    if type(from_step) is not int or from_step < 0:
+        raise WorkspaceError(
+            "invalid_attempt", "from_step is not a valid parent Step index"
+        )
+
+    raw_destination = Path(destination)
+    if raw_destination.is_symlink():
+        raise WorkspaceError(
+            "invalid_workspace_path", "seed destination is a symlink"
+        )
+    if not raw_destination.is_dir():
+        raise WorkspaceError(
+            "invalid_workspace_path", "seed destination is not a directory"
+        )
+    destination = raw_destination.resolve()
+    try:
+        destination.relative_to(workspace)
+    except ValueError:
+        pass
+    else:
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "seed destination resolves beneath Workspace authority",
+        )
+    with os.scandir(destination) as entries:
+        for _ in entries:
+            raise WorkspaceError(
+                "invalid_workspace_path", "seed destination is not empty"
+            )
+
+    active_root, active, _plan = _core._load_active_attempt(workspace, attempt)
+    active_from_step = active.get("from_step")
+    if not isinstance(active_from_step, int) or isinstance(active_from_step, bool):
+        raise WorkspaceError(
+            "invalid_attempt",
+            "active Attempt has no parent Measured Step",
+        )
+    if active_from_step != from_step:
+        raise WorkspaceError(
+            "invalid_attempt",
+            "from_step disagrees with the active Attempt parent binding",
+        )
+    intended_step = active.get("intended_step")
+    if not isinstance(intended_step, int) or intended_step <= from_step:
+        raise WorkspaceError(
+            "invalid_attempt",
+            "active Attempt intended step is not greater than from_step",
+        )
+
+    # Reading the parent step manifest through the authority-JSON guard
+    # ensures the Step is committed and rejects a forged directory that
+    # lacks a valid manifest.
+    _read_authority_json(
+        workspace,
+        workspace / "steps" / f"{from_step:06d}" / "step.json",
+        f"$.steps[{from_step}]",
+    )
+    authority_source = workspace / "steps" / f"{from_step:06d}" / "candidate" / "source"
+    if authority_source.is_symlink():
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "parent Step source authority is a symlink",
+        )
+    if not authority_source.is_dir():
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "parent Step source authority is unavailable",
+        )
+
+    seeded = destination / "source"
+    try:
+        _copy_agent_tree(authority_source, seeded)
+    except Exception:
+        if seeded.exists() and not seeded.is_symlink():
+            shutil.rmtree(seeded, ignore_errors=True)
+        elif seeded.is_symlink():
+            seeded.unlink()
+        raise
+
+
 def _finalization_staging_path(workspace: Path) -> Path:
     """Return the ignored Workspace staging area for Agent finalization."""
 
@@ -2281,6 +2387,7 @@ __all__ = [
     "rebuild_index",
     "run_attempt_command",
     "run_canonical_build",
+    "seed_repair_source_from_parent_step",
     "validate_workspace",
     "verify_terminal_validation",
     "write_terminal_locator",

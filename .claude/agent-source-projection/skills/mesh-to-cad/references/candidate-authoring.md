@@ -1,13 +1,13 @@
 # Candidate authoring reference
 
-Guidance for writing parametric candidate source under `/candidate/source/`.
+Guidance for writing parametric candidate source under `/candidate/work/source/`.
 The supervisor runs the registered build and measurement tools on this
 source through the `run_candidate_tool` intent; you never invoke them
 yourself.
 
 ## Entry module
 
-Put your entry module at `/candidate/source/model.py`. It exposes at
+Put your entry module at `/candidate/work/source/model.py`. It exposes at
 least one top-level callable that returns a build123d `Compound`,
 `Part`, or `Assembly` and can be rebuilt from the same source with no
 external state.
@@ -74,7 +74,7 @@ directory. Do not overwrite the previous invocation's output.
 
 ## Repair edits
 
-When you form a repair hypothesis, edit `/candidate/source/model.py`
+When you form a repair hypothesis, edit `/candidate/work/source/model.py`
 (and sidecars) in place before starting the child Attempt. Keep edits
 focused on the geometry the hypothesis names; unrelated churn dilutes
 the residual signal.
@@ -89,7 +89,9 @@ the residual signal.
 ## What not to author
 
 - No absolute host paths.
-- No filesystem access outside `/candidate`.
+- No filesystem access outside `/candidate/work` other than the fixed
+  supervisor-owned control files (`plan.json`, `selection.json`,
+  `notes.md`) named at `/candidate/*.json`.
 - No network access; the sandbox network is closed to your process.
 - No calls to registered candidate tools (build, preview, measure,
   diff) — these run only under `run_candidate_tool`.
@@ -106,4 +108,4 @@ selection. Do not fabricate an approximation and claim acceptance.
 If a build or measurement invocation returns a tool failure through
 `run_candidate_tool`, read the classification the supervisor returned
 and either author a targeted repair or stop with `no_feasible_repair`.
-Never re-request the same operation without changing `/candidate/source/`.
+Never re-request the same operation without changing `/candidate/work/source/`.
