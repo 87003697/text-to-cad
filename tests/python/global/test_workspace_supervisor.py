@@ -3251,17 +3251,61 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 str(prepared),
             )
             self.assertEqual(0, status, stderr)
+            from scripts.pilot import cvm_install_plugin, cvm_push
+
             authority = case.root / "trusted-tools"
             authority.mkdir()
             registry = runner.publish_tool_registry(authority)
+            authority_home = case.root / "authority-home"
+            authority_home.mkdir()
+            authority_stage = case.root / "authority-stage"
+            authority_stage.mkdir()
+            authority_workflow = cvm_push.CvmPush(
+                cvm_push.CommandRunner(),
+                repo_root=repo_root,
+                environ={**os.environ, "TMPDIR": os.fspath(case.root)},
+                agent=True,
+            )
+            authority_workflow.source = authority_workflow.inspect_source()
+            authority_inputs = authority_workflow.resolve_build_inputs()
+            authority_workflow.copy_source_to_stage(authority_stage)
+            authority_workflow.copy_build_inputs(authority_stage, authority_inputs)
+            authority_workflow.materialize_skill_symlinks(authority_stage)
+            authority_workflow.bundle_stage(authority_stage)
+            authority_workflow.validate_stage(authority_stage)
+            authority_attestation = authority_workflow.attest_stage(authority_stage)
+            authority_transfer_tree = authority_workflow.prepare_transfer_tree(
+                authority_stage
+            )
+            cvm_install_plugin.publish(
+                authority_transfer_tree,
+                authority_home,
+                provenance=authority_workflow._build_push_provenance(
+                    authority_attestation
+                ),
+                codex_executable="codex",
+            )
+            process_home = case.root / "process-home-without-authority"
+            process_home.mkdir()
+            self.assertFalse(
+                (
+                    process_home
+                    / ".text-to-cad-codex"
+                    / "deployments"
+                    / "current.json"
+                ).exists()
+            )
             candidate_runtime = runner.materialize_candidate_runtime(
                 repo_root / ".venv",
                 case.root / "candidate-runtime",
                 repo_root=repo_root,
             )
-            trusted_tools_root = runner.resolve_deployed_authority(
-                Path(os.environ["HOME"])
-            ).publish_tree
+            with mock.patch.dict(os.environ, {"HOME": os.fspath(process_home)}):
+                trusted_tools_receipt = runner.resolve_deployed_authority(
+                    authority_home
+                )
+            trusted_tools_root = trusted_tools_receipt.publish_tree
+            self.assertTrue(trusted_tools_root.is_relative_to(case.root))
             from scripts.pilot.step_zero_evidence import (
                 real_step_zero_evidence_provider,
             )
