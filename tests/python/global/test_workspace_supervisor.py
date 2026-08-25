@@ -1022,6 +1022,55 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     runtime, required_imports=("custom_module",)
                 )
 
+    def test_runtime_fixed_imports_share_deadline_and_timeout_is_generic(self) -> None:
+        from scripts.pilot import candidate_runtime as runtime_module
+
+        runtime = self.root / "deadline-runtime"
+        (runtime / "bin").mkdir(parents=True)
+        (runtime / "bin/python").write_bytes(b"python")
+        (runtime / "lib/python3.12/site-packages").mkdir(parents=True)
+        completed = subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")
+        with (
+            mock.patch.object(
+                runtime_module.time, "monotonic", side_effect=(100, 110, 150, 219)
+            ),
+            mock.patch.object(
+                runtime_module.subprocess, "run", return_value=completed
+            ) as run,
+        ):
+            runtime_module.validate_candidate_runtime(runtime)
+        self.assertEqual([110, 70, 1], [call.kwargs["timeout"] for call in run.call_args_list])
+
+        secret = "/home/build-user/private/python"
+        failures = (
+            subprocess.TimeoutExpired(
+                cmd=[secret], timeout=119, stderr=f"loader: {secret}".encode()
+            ),
+            OSError(f"cannot execute {secret}"),
+        )
+        for failure in failures:
+            with (
+                self.subTest(failure=type(failure).__name__),
+                mock.patch.object(runtime_module.time, "monotonic", side_effect=(0, 1)),
+                mock.patch.object(runtime_module.subprocess, "run", side_effect=failure),
+            ):
+                with self.assertRaises(runtime_module.CandidateRuntimeError) as caught:
+                    runtime_module.validate_candidate_runtime(runtime)
+                self.assertEqual("candidate_runtime_import_failed", str(caught.exception))
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertNotIn(secret, str(caught.exception))
+
+        with (
+            mock.patch.object(runtime_module.time, "monotonic", side_effect=(0, 121)),
+            mock.patch.object(runtime_module.subprocess, "run") as run,
+        ):
+            with self.assertRaisesRegex(
+                runtime_module.CandidateRuntimeError,
+                "^candidate_runtime_import_failed$",
+            ):
+                runtime_module.validate_candidate_runtime(runtime)
+        run.assert_not_called()
+
     def test_materialized_uv_runtime_view_filters_hostile_metadata_and_symlinks(self) -> None:
         from scripts.pilot import runner
         from scripts.pilot import candidate_runtime as runtime_module

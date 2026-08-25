@@ -1903,7 +1903,11 @@ def validate_candidate_runtime(
         "PYTHONDONTWRITEBYTECODE": "1",
         "LC_ALL": "C",
     }
+    deadline = time.monotonic() + 120
     for module, script in checks:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CandidateRuntimeError("candidate_runtime_import_failed")
         try:
             completed = subprocess.run(
                 [os.fspath(python), "-c", script],
@@ -1911,10 +1915,10 @@ def validate_candidate_runtime(
                 env=environment,
                 capture_output=True,
                 check=False,
-                timeout=120,
+                timeout=remaining,
             )
-        except (OSError, subprocess.SubprocessError) as exc:
-            raise CandidateRuntimeError("candidate_runtime_import_failed") from exc
+        except (OSError, subprocess.SubprocessError):
+            raise CandidateRuntimeError("candidate_runtime_import_failed") from None
         if completed.returncode != 0:
             suffix = f":{module}" if module is not None else ""
             raise CandidateRuntimeError(f"candidate_runtime_import_failed{suffix}")
