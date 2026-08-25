@@ -1287,6 +1287,64 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                         venv, root / "candidate-runtime-race", repo_root=repo
                     )
 
+    def test_runtime_preserves_trusted_lib64_stdlib_layout(self) -> None:
+        from scripts.pilot import candidate_runtime as runtime_module
+        from scripts.pilot import runner
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "repo"
+            venv = repo / ".venv"
+            stdlib = root / "trusted/lib64/python3.12"
+            site = venv / "lib64/python3.12/site-packages"
+            (venv / "bin").mkdir(parents=True)
+            (stdlib / "encodings").mkdir(parents=True)
+            site.mkdir(parents=True)
+            (stdlib / "os.py").write_text("", encoding="utf-8")
+            (stdlib / "encodings/__init__.py").write_text("", encoding="utf-8")
+            interpreter = root / "trusted/bin/python3"
+            interpreter.parent.mkdir(parents=True)
+            interpreter.write_text(
+                "#!/bin/sh\n"
+                "test -f \"$PYTHONHOME/lib64/python3.12/encodings/__init__.py\" || "
+                "{ echo 'ModuleNotFoundError: encodings' >&2; exit 1; }\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            interpreter.chmod(0o755)
+            (venv / "bin/python").symlink_to(interpreter)
+            (venv / "pyvenv.cfg").write_text("version = 3.12.1\n", encoding="utf-8")
+            probe = runtime_module.RuntimeProbe(
+                "3.12",
+                stdlib,
+                stdlib,
+                site,
+                site,
+                stdlib / "lib-dynload",
+                interpreter=interpreter,
+                base_prefix=root / "trusted",
+                exec_prefix=root / "trusted",
+                libdir=root / "trusted/lib64",
+            )
+            with (
+                mock.patch.object(runtime_module, "_probe", return_value=probe),
+                mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=[]),
+            ):
+                runtime = runner.materialize_candidate_runtime(
+                    venv, root / "cache", repo_root=repo
+                )
+            self.assertTrue(
+                (runtime / "lib64/python3.12/encodings/__init__.py").is_file()
+            )
+            self.assertFalse((runtime / "lib/python3.12").exists())
+            with self.assertRaisesRegex(
+                runtime_module.CandidateRuntimeError,
+                "^candidate_runtime_stdlib_layout$",
+            ):
+                runtime_module._stdlib_relative(
+                    "3.12", root / "trusted/python3.12"
+                )
+
     def test_runtime_cache_reuses_one_immutable_identity_and_serializes_builders(self) -> None:
         from concurrent.futures import ThreadPoolExecutor
         from scripts.pilot import candidate_runtime as runtime_module

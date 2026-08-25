@@ -851,7 +851,9 @@ def _parse_tool_dependencies(
     return tuple(dict.fromkeys(dependencies))
 
 
-def _relocate_libpython(path: Path, forbidden: tuple[bytes, ...]) -> None:
+def _relocate_libpython(
+    path: Path, stable_id: str, forbidden: tuple[bytes, ...]
+) -> None:
     """Rewrite the standalone Python dylib identity to the stable mount."""
 
     if platform.system() == "Darwin":
@@ -861,7 +863,7 @@ def _relocate_libpython(path: Path, forbidden: tuple[bytes, ...]) -> None:
         try:
             path.chmod(0o755)
             completed = subprocess.run(
-                [tool, "-id", f"/runtime/lib/{path.name}", os.fspath(path)],
+                [tool, "-id", stable_id, os.fspath(path)],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -962,6 +964,26 @@ def _stdlib_identity(stdlib: Path) -> list[tuple[str, str]]:
     return facts
 
 
+def _stdlib_relative(version: str, stdlib: Path) -> PurePosixPath:
+    resolved = stdlib.resolve()
+    expected = f"python{version}"
+    if resolved.name != expected or resolved.parent.name not in {"lib", "lib64"}:
+        raise CandidateRuntimeError("candidate_runtime_stdlib_layout")
+    return PurePosixPath(resolved.parent.name, expected)
+
+
+def _runtime_stdlib(runtime: Path) -> Path:
+    candidates = [
+        path
+        for library in ("lib", "lib64")
+        for path in (runtime / library).glob("python*")
+        if path.is_dir() and _VERSION.fullmatch(path.name)
+    ]
+    if len(candidates) != 1:
+        raise CandidateRuntimeError("candidate_runtime_stdlib_unavailable")
+    return candidates[0]
+
+
 def _bind_installed_record_bytes(
     probe: RuntimeProbe, allowed_roots: tuple[Path, ...]
 ) -> RuntimeProbe:
@@ -1021,7 +1043,9 @@ def _bind_installed_record_bytes(
     return replace(probe, distributions=tuple(distributions))
 
 
-def _cache_identity(venv: Path, probe: RuntimeProbe, interpreter: Path) -> str:
+def _cache_identity(
+    venv: Path, probe: RuntimeProbe, interpreter: Path, stdlib: Path
+) -> str:
     cfg = _parse_cfg(venv / "pyvenv.cfg")
     normalized_cfg = {
         key: value
@@ -1032,7 +1056,8 @@ def _cache_identity(venv: Path, probe: RuntimeProbe, interpreter: Path) -> str:
         "schema": _CACHE_SCHEMA,
         "platform": [platform.system(), platform.machine(), platform.python_implementation()],
         "python": [probe.version, probe.cache_tag],
-        "stdlib": _stdlib_identity(probe.stdlib),
+        "stdlib": _stdlib_identity(stdlib),
+        "stdlib_layout": _stdlib_relative(probe.version, stdlib).as_posix(),
         "cfg": normalized_cfg,
         "interpreter": _digest_small(interpreter),
         "libpython": _digest_small(probe.libpython) if probe.libpython and probe.libpython.is_file() else None,
@@ -1222,10 +1247,7 @@ def _is_complete(runtime: Path, identity: str) -> bool:
             and isinstance(value["receipt_sha256"], str)
             and not (runtime.stat().st_mode & 0o222)
             and (runtime / "bin/python").is_file()
-            and any(
-                path.is_dir() and _VERSION.fullmatch(path.name)
-                for path in (runtime / "lib").glob("python*")
-            )
+            and _runtime_stdlib(runtime).is_dir()
             and _validate_manifest(runtime, identity, value["manifest_sha256"])
             and _validate_import_receipt(
                 runtime,
@@ -1234,7 +1256,7 @@ def _is_complete(runtime: Path, identity: str) -> bool:
                 value["receipt_sha256"],
             )
         )
-    except OSError:
+    except (OSError, CandidateRuntimeError):
         return False
 
 
@@ -1544,6 +1566,7 @@ def _rewrite_map(
     probe: RuntimeProbe,
     stdlib: Path,
     site_roots: tuple[Path, ...],
+    runtime_stdlib: PurePosixPath,
 ) -> tuple[tuple[bytes, bytes], ...]:
     pairs: dict[str, str] = {}
 
@@ -1556,15 +1579,16 @@ def _rewrite_map(
         except OSError:
             pass
 
-    add(stdlib, f"/runtime/lib/python{probe.version}")
-    add(probe.stdlib, f"/runtime/lib/python{probe.version}")
-    add(probe.platstdlib, f"/runtime/lib/python{probe.version}")
-    add(probe.dynload, f"/runtime/lib/python{probe.version}/lib-dynload")
+    runtime_path = f"/runtime/{runtime_stdlib.as_posix()}"
+    add(stdlib, runtime_path)
+    add(probe.stdlib, runtime_path)
+    add(probe.platstdlib, runtime_path)
+    add(probe.dynload, f"{runtime_path}/lib-dynload")
     add(venv, "/runtime")
     for site in site_roots:
-        add(site, f"/runtime/lib/python{probe.version}/site-packages")
-    add(probe.purelib, f"/runtime/lib/python{probe.version}/site-packages")
-    add(probe.platlib, f"/runtime/lib/python{probe.version}/site-packages")
+        add(site, f"{runtime_path}/site-packages")
+    add(probe.purelib, f"{runtime_path}/site-packages")
+    add(probe.platlib, f"{runtime_path}/site-packages")
     for source in (probe.base_prefix, probe.exec_prefix, probe.libdir, probe.interpreter.parent if probe.interpreter else None):
         add(source, "/runtime")
     return tuple(
@@ -1586,10 +1610,11 @@ def _build_runtime(
 ) -> tuple[str, str]:
     target.mkdir(mode=0o700)
     (target / "bin").mkdir(mode=0o755)
-    runtime_lib = target / "lib" / f"python{probe.version}"
+    stdlib_relative = _stdlib_relative(probe.version, stdlib)
+    runtime_lib = target / stdlib_relative
     runtime_lib.mkdir(parents=True, mode=0o755)
     budget = _CopyBudget()
-    rewrite = _rewrite_map(venv, probe, stdlib, site_roots)
+    rewrite = _rewrite_map(venv, probe, stdlib, site_roots, stdlib_relative)
     forbidden_values: list[bytes] = []
 
     def forbid(source: Path | None, *, system_path_is_safe: bool = False) -> None:
@@ -1686,7 +1711,7 @@ def _build_runtime(
             if package_target.suffix.lower() in {".so", ".dylib", ".dll", ".pyd"}:
                 _relocate_native(
                     package_target,
-                    f"/runtime/lib/python{probe.version}/site-packages/{relative.as_posix()}",
+                    f"/runtime/{stdlib_relative.as_posix()}/site-packages/{relative.as_posix()}",
                     forbidden,
                 )
                 native_source = source.resolve()
@@ -1715,7 +1740,7 @@ def _build_runtime(
         libpython = _resolve_regular(probe.libpython, label="candidate_runtime_libpython")
         if not _under(libpython, (venv, stdlib, *site_roots, probe.libdir or libpython.parent)):
             raise CandidateRuntimeError("candidate_runtime_loader_escape")
-        destination = target / "lib" / libpython.name
+        destination = target / stdlib_relative.parts[0] / libpython.name
         relative_root = libpython.parent
         _copy_file_stream(
             relative_root,
@@ -1724,7 +1749,11 @@ def _build_runtime(
             budget=budget,
             forbidden=(),
         )
-        _relocate_libpython(destination, forbidden)
+        _relocate_libpython(
+            destination,
+            f"/runtime/{stdlib_relative.parts[0]}/{libpython.name}",
+            forbidden,
+        )
         native_files.append(libpython)
         native_targets[libpython] = destination
     python_destination = target / "bin/python"
@@ -1759,7 +1788,11 @@ def _build_runtime(
                 forbidden=forbidden,
             )
             if alias.suffix.lower() == ".dylib":
-                _relocate_native(alias, f"/runtime/lib/python{probe.version}/site-packages/{alias.relative_to(target / 'lib' / f'python{probe.version}' / 'site-packages').as_posix()}", forbidden)
+                _relocate_native(
+                    alias,
+                    f"/runtime/{stdlib_relative.as_posix()}/site-packages/{alias.relative_to(package_root).as_posix()}",
+                    forbidden,
+                )
     manifest_sha256 = _write_manifest(target, identity)
     imports = CAD_RUNTIME_IMPORTS
     validate_candidate_runtime(target, imports)
@@ -1808,7 +1841,7 @@ def materialize_candidate_runtime(
         if root and root.is_dir() and _under(root, (venv, stdlib))
     )
     probe = _bind_installed_record_bytes(probe, (venv, stdlib, *site_roots))
-    identity = _cache_identity(venv, probe, interpreter)
+    identity = _cache_identity(venv, probe, interpreter, stdlib)
     final = raw_cache / identity
     if final.is_symlink():
         raise CandidateRuntimeError("candidate_runtime_cache_corrupt")
@@ -1882,14 +1915,7 @@ def validate_candidate_runtime(
     if any(not isinstance(name, str) or not _IDENTIFIER.fullmatch(name) for name in modules):
         raise CandidateRuntimeError("candidate_runtime_import_contract")
     python = _resolve_regular(Path(runtime) / "bin/python", label="candidate_runtime_interpreter")
-    versions = sorted(
-        path.name
-        for path in (Path(runtime) / "lib").glob("python*")
-        if path.is_dir() and _VERSION.fullmatch(path.name)
-    )
-    if not versions:
-        raise CandidateRuntimeError("candidate_runtime_stdlib_unavailable")
-    site = Path(runtime) / "lib" / versions[0] / "site-packages"
+    site = _runtime_stdlib(Path(runtime)) / "site-packages"
     checks: tuple[tuple[str | None, str], ...]
     if modules == CAD_RUNTIME_IMPORTS:
         checks = tuple((module, f"import {module}") for module in modules)
