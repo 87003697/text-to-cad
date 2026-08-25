@@ -1512,10 +1512,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 path.mkdir(parents=True, exist_ok=True)
             input_path.write_bytes(b"ply\n")
             gateway.write_text("#!/bin/sh\n", encoding="utf-8")
-            # Copy the projection's canonical skill sources from the real
-            # repo so the runner's live-source verification succeeds without
-            # binding host-wide state.
-            for source_rel, _ in agent_source_projection.ALLOWED_SOURCES:
+            # Stage and bundle the fixed projection without binding host-wide
+            # state into the runner test.
+            for source_rel, _ in agent_source_projection.SOURCE_MAPPINGS:
                 source_path = REPO_ROOT / source_rel
                 destination = root / source_rel
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1523,7 +1522,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             projection_target = (
                 root / agent_source_projection.PROJECTION_ROOT_REL
             )
-            agent_source_projection.materialize(root, projection_target)
+            agent_source_projection.bundle(root, projection_target)
             socket_path = Path(temporary) / "bridge.sock"
             bridge_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             bridge_socket.bind(os.fspath(socket_path))

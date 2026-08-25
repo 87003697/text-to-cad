@@ -8,21 +8,19 @@ PROJECTION_MODULE="$REPO_ROOT/scripts/pilot/agent_source_projection.py"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 MODE="write"
-PRINT_OUTPUTS=0
 
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/bundle/bundle-agent-source-projection.sh [--check] [--clean] [--print-outputs]
+  scripts/bundle/bundle-agent-source-projection.sh [--check] [--print-outputs]
 
 Materializes the Agent Source Projection into .claude/agent-source-projection/
-from the canonical allowlist in scripts/pilot/agent_source_projection.py. The
+from five fixed mappings in scripts/pilot/agent_source_projection.py. The
 projection is a physical-file tree with a canonical manifest.json; symlinks,
 extra files, missing files, or digest drift fail closed.
 
 Options:
   --check          Verify the checked-in projection matches skill source.
-  --clean          Remove the projection tree before materializing.
   --print-outputs  Print projection output paths relative to the repo root.
   -h, --help       Show this help.
 EOF
@@ -33,11 +31,15 @@ while [ "$#" -gt 0 ]; do
     --check)
       MODE="check"
       ;;
-    --clean)
-      MODE="clean"
-      ;;
     --print-outputs)
-      PRINT_OUTPUTS=1
+      printf '%s\n' \
+        '.claude/agent-source-projection/manifest.json' \
+        '.claude/agent-source-projection/skills/mesh-to-cad/SKILL.md' \
+        '.claude/agent-source-projection/skills/mesh-to-cad/references/candidate-authoring.md' \
+        '.claude/agent-source-projection/skills/mesh-to-cad/references/assessment.md' \
+        '.claude/agent-source-projection/skills/mesh-to-cad/references/agent-selection-claim.md' \
+        '.claude/agent-source-projection/agent-surface/client.py'
+      exit 0
       ;;
     -h|--help)
       usage
@@ -52,24 +54,14 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-if [ "$PRINT_OUTPUTS" -eq 1 ]; then
-  "$PYTHON_BIN" "$PROJECTION_MODULE" print-outputs --repo-root "$REPO_ROOT"
-  exit 0
-fi
-
 case "$MODE" in
   check)
     "$PYTHON_BIN" "$PROJECTION_MODULE" check \
       --repo-root "$REPO_ROOT" --target "$PROJECTION_TARGET"
     ;;
-  clean)
-    rm -rf "$PROJECTION_TARGET"
-    "$PYTHON_BIN" "$PROJECTION_MODULE" materialize \
-      --repo-root "$REPO_ROOT" --target "$PROJECTION_TARGET"
-    echo "Bundled .claude/agent-source-projection/"
-    ;;
   write)
-    "$PYTHON_BIN" "$PROJECTION_MODULE" materialize \
+    rm -rf "$PROJECTION_TARGET"
+    "$PYTHON_BIN" "$PROJECTION_MODULE" bundle \
       --repo-root "$REPO_ROOT" --target "$PROJECTION_TARGET"
     echo "Bundled .claude/agent-source-projection/"
     ;;

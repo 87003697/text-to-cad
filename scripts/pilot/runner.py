@@ -733,15 +733,13 @@ def prepare_agent_source_projection(repo_root: Path) -> Path:
     """Return the verified Agent Source Projection root under ``repo_root``.
 
     The projection is materialized offline by ``scripts/bundle/bundle.sh``.
-    The runner never regenerates it; it only verifies the checked-in tree
-    matches the canonical manifest embedded in the projection and the source
-    used to build it. Any drift fails closed here so an isolated Agent
-    Execution cannot start against a stale, torn, or tampered projection.
+    The runner never consults source or regenerates it; it verifies the exact
+    five-file installed tree against its canonical manifest.
     """
 
     target = Path(repo_root) / agent_source_projection.PROJECTION_ROOT_REL
     try:
-        agent_source_projection.verify_matches_source(repo_root, target)
+        agent_source_projection.verify(target)
     except agent_source_projection.ProjectionError as exc:
         raise PilotError(
             f"agent source projection is unavailable: {exc}"
