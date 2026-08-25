@@ -493,108 +493,156 @@ print(json.dumps({
                 f"aws s3 cp fatal (exit={status}) — aborting", status
             )
 
-    @staticmethod
-    def _decode_file_list(stdout: str, label: str) -> tuple[str, ...]:
-        try:
-            value = json.loads(stdout)
-        except json.JSONDecodeError as error:
-            raise PullError(f"Invalid {label} file list", 5) from error
-        if not isinstance(value, list) or not all(
-            isinstance(item, str) for item in value
-        ):
-            raise PullError(f"Invalid {label} file list", 5)
-        return tuple(sorted(value))
+    def _terminal_content_inventories(
+        self, exp: str
+    ) -> tuple[
+        dict[str, tuple[int, str]],
+        dict[str, tuple[int, str]],
+        dict[str, tuple[int, str]],
+    ]:
+        """Return authenticated manifest, CVM, and S3 content inventories."""
 
-    def _list_local_files(self, exp: str) -> tuple[str, ...]:
+        group, child = exp.split("/", 1)
         script = """
-import fnmatch
+import hashlib
 import json
 import os
 import pathlib
 import stat
+import subprocess
 import sys
+import tempfile
 
-root = pathlib.Path.home() / "text-to-cad/outputs" / sys.argv[1]
-patterns = json.loads(sys.argv[2])
-files = []
-for directory, _dirnames, filenames in os.walk(root, followlinks=False):
+group, child, bucket, prefix = sys.argv[1:]
+handoff_path = pathlib.Path.home() / (
+    "text-to-cad/outputs/" + group + "/.internal-terminal-validation/"
+    + child + "/terminal-validation.json"
+)
+info = handoff_path.lstat()
+if not stat.S_ISREG(info.st_mode):
+    raise SystemExit("terminal handoff is not a regular file")
+handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+if (
+    not isinstance(handoff, dict)
+    or set(handoff) != {"schema", "terminal_identity_sha256", "bundle"}
+    or handoff.get("schema") != "mesh-to-cad.terminal-validation-handoff/1"
+    or not isinstance(handoff.get("bundle"), dict)
+):
+    raise SystemExit("terminal handoff schema is unsupported")
+
+def identity(schema, value):
+    body = (json.dumps(
+        value, indent=2, sort_keys=True, separators=(",", ": ")
+    ) + "\\n").encode("utf-8")
+    return hashlib.sha256(schema.encode("utf-8") + b"\\0" + body).hexdigest()
+
+bundle = handoff["bundle"]
+if (
+    set(bundle) != {"schema", "result", "manifest"}
+    or bundle.get("schema") != "mesh-to-cad.terminal-validation-bundle/1"
+    or identity("mesh-to-cad.terminal-validation-handoff/1", bundle)
+       != handoff.get("terminal_identity_sha256")
+):
+    raise SystemExit("terminal handoff identity mismatch")
+manifest = bundle["manifest"]
+if (
+    not isinstance(manifest, dict)
+    or set(manifest) != {
+        "schema", "workspace_id", "workspace_identity_sha256", "files",
+        "identity_sha256",
+    }
+    or manifest.get("schema") != "mesh-to-cad.content-manifest/1"
+    or not isinstance(manifest.get("files"), list)
+):
+    raise SystemExit("terminal content manifest is unsupported")
+manifest_body = dict(manifest)
+manifest_identity = manifest_body.pop("identity_sha256")
+if identity("mesh-to-cad.content-manifest/1", manifest_body) != manifest_identity:
+    raise SystemExit("terminal content manifest identity mismatch")
+
+expected = {}
+previous = ""
+for item in manifest["files"]:
+    if not isinstance(item, dict) or set(item) != {"path", "size_bytes", "sha256"}:
+        raise SystemExit("terminal content manifest entry is unsupported")
+    name, size, digest = item["path"], item["size_bytes"], item["sha256"]
+    pure = pathlib.PurePosixPath(name) if isinstance(name, str) else None
+    if (
+        pure is None or pure.is_absolute() or not pure.parts
+        or any(part in {"", ".", ".."} for part in pure.parts)
+        or name != pure.as_posix() or name <= previous
+        or pure.parts[0] in {".git", "run", "work"}
+        or not isinstance(size, int) or isinstance(size, bool) or size < 0
+        or not isinstance(digest, str) or len(digest) != 64
+        or any(char not in "0123456789abcdef" for char in digest)
+    ):
+        raise SystemExit("terminal content manifest entry is invalid")
+    expected[name] = [size, digest]
+    previous = name
+
+def file_digest(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return [path.stat().st_size, digest.hexdigest()]
+
+root = pathlib.Path.home() / "text-to-cad/outputs" / group / child
+local = {}
+for directory, dirnames, filenames in os.walk(root, followlinks=False):
     parent = pathlib.Path(directory)
+    relative_parent = parent.relative_to(root)
+    if not relative_parent.parts:
+        dirnames[:] = [name for name in dirnames if name not in {".git", "run", "work"}]
     for name in filenames:
         path = parent / name
         if not stat.S_ISREG(path.lstat().st_mode):
             continue
         relative = path.relative_to(root).as_posix()
-        if (
-            relative != "run/terminal-validation-locator.json"
-            and any(fnmatch.fnmatch(relative, pattern) for pattern in patterns)
-        ):
-            continue
-        files.append(relative)
-print(json.dumps(sorted(files)))
-""".strip()
-        command = " ".join(
-            (
-                "python3",
-                "-c",
-                shlex.quote(script),
-                shlex.quote(exp),
-                shlex.quote(json.dumps(self.excludes)),
-            )
-        )
-        result = self.runner.remote(command, check=False)
-        if result.returncode != 0:
-            raise PullError(f"Cannot list CVM files: {exp}", 5)
-        return self._decode_file_list(result.stdout, "CVM")
+        if relative.split("/", 1)[0] not in {".git", "run", "work"}:
+            local[relative] = file_digest(path)
 
-    def _list_s3_files(self, exp: str) -> tuple[str, ...]:
-        script = """
-import fnmatch
-import json
-import subprocess
-import sys
-
-bucket = sys.argv[1]
-prefix = sys.argv[2]
-patterns = json.loads(sys.argv[3])
-files = []
+keys = []
 token = None
 while True:
     command = [
-        "aws", "s3api", "list-objects-v2",
-        "--bucket", bucket,
-        "--prefix", prefix,
-        "--output", "json",
+        "aws", "s3api", "list-objects-v2", "--bucket", bucket,
+        "--prefix", prefix, "--output", "json",
     ]
     if token is not None:
         command.extend(["--continuation-token", token])
-    completed = subprocess.run(
-        command,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    completed = subprocess.run(command, check=False, text=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if completed.returncode != 0:
         sys.stderr.write(completed.stderr)
         raise SystemExit(completed.returncode)
-    payload = json.loads(completed.stdout)
-    for item in payload.get("Contents", []):
+    page = json.loads(completed.stdout)
+    for item in page.get("Contents", []):
         key = item.get("Key")
         if not isinstance(key, str) or not key.startswith(prefix):
             continue
         relative = key[len(prefix):]
-        if not relative or (
-            relative != "run/terminal-validation-locator.json"
-            and any(fnmatch.fnmatch(relative, pattern) for pattern in patterns)
-        ):
-            continue
-        files.append(relative)
-    if not payload.get("IsTruncated"):
+        if relative and relative.split("/", 1)[0] not in {".git", "run", "work"}:
+            keys.append((relative, key))
+    if not page.get("IsTruncated"):
         break
-    token = payload.get("NextContinuationToken")
+    token = page.get("NextContinuationToken")
     if not isinstance(token, str) or not token:
         raise SystemExit("S3 listing omitted its continuation token")
-print(json.dumps(sorted(files)))
+
+s3 = {}
+for relative, key in keys:
+    with tempfile.NamedTemporaryFile() as target:
+        completed = subprocess.run(
+            ["aws", "s3api", "get-object", "--bucket", bucket,
+             "--key", key, target.name],
+            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        if completed.returncode != 0:
+            sys.stderr.write(completed.stderr.decode("utf-8", errors="replace"))
+            raise SystemExit(completed.returncode)
+        s3[relative] = file_digest(pathlib.Path(target.name))
+print(json.dumps({"expected": expected, "local": local, "s3": s3}, sort_keys=True))
 """.strip()
         prefix = f"ericzyma/text-to-cad/outputs/{exp}/"
         command = " ".join(
@@ -602,46 +650,80 @@ print(json.dumps(sorted(files)))
                 "python3",
                 "-c",
                 shlex.quote(script),
+                shlex.quote(group),
+                shlex.quote(child),
                 shlex.quote("arcwm-code-us-west-2"),
                 shlex.quote(prefix),
-                shlex.quote(json.dumps(self.excludes)),
             )
         )
         result = self.runner.remote(command, check=False)
         if result.returncode != 0:
-            raise PullError(f"Cannot list S3 files: {exp}", 5)
-        return self._decode_file_list(result.stdout, "S3")
+            raise PullError(f"Cannot verify terminal content: {exp}", 5)
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise PullError(f"Invalid terminal content inventory: {exp}", 5) from error
+        if not isinstance(payload, dict) or set(payload) != {"expected", "local", "s3"}:
+            raise PullError(f"Invalid terminal content inventory: {exp}", 5)
 
-    def _count_local_files(self, exp: str) -> int:
-        return len(self._list_local_files(exp))
+        decoded: list[dict[str, tuple[int, str]]] = []
+        for label in ("expected", "local", "s3"):
+            value = payload[label]
+            if not isinstance(value, dict):
+                raise PullError(f"Invalid {label} content inventory: {exp}", 5)
+            inventory: dict[str, tuple[int, str]] = {}
+            for path, entry in value.items():
+                if (
+                    not isinstance(path, str)
+                    or not isinstance(entry, list)
+                    or len(entry) != 2
+                    or not isinstance(entry[0], int)
+                    or isinstance(entry[0], bool)
+                    or entry[0] < 0
+                    or not isinstance(entry[1], str)
+                    or len(entry[1]) != 64
+                ):
+                    raise PullError(f"Invalid {label} content inventory: {exp}", 5)
+                inventory[path] = (entry[0], entry[1])
+            decoded.append(inventory)
+        return decoded[0], decoded[1], decoded[2]
 
-    def _count_s3_files(self, exp: str) -> int:
-        return len(self._list_s3_files(exp))
+    @staticmethod
+    def _content_mismatch(
+        expected: dict[str, tuple[int, str]],
+        actual: dict[str, tuple[int, str]],
+    ) -> tuple[list[str], list[str], list[str]]:
+        missing = sorted(set(expected) - set(actual))[:5]
+        extra = sorted(set(actual) - set(expected))[:5]
+        changed = sorted(
+            path for path in set(expected) & set(actual) if expected[path] != actual[path]
+        )[:5]
+        return missing, extra, changed
 
     def _verify_exp(self, exp: str) -> int:
-        local_files = self._list_local_files(exp)
-        s3_files = self._list_s3_files(exp)
-        if local_files != s3_files:
-            missing = sorted(set(local_files) - set(s3_files))[:5]
-            extra = sorted(set(s3_files) - set(local_files))[:5]
+        expected, local, s3 = self._terminal_content_inventories(exp)
+        local_mismatch = self._content_mismatch(expected, local)
+        s3_mismatch = self._content_mismatch(expected, s3)
+        if any(local_mismatch) or any(s3_mismatch):
             raise PullError(
-                "VERIFY FAILED "
-                f"(local={len(local_files)} s3={len(s3_files)} "
-                f"missing={missing} extra={extra}); "
+                "VERIFY FAILED terminal content "
+                f"(expected={len(expected)} local={len(local)} s3={len(s3)} "
+                f"local_missing={local_mismatch[0]} local_extra={local_mismatch[1]} "
+                f"local_changed={local_mismatch[2]} s3_missing={s3_mismatch[0]} "
+                f"s3_extra={s3_mismatch[1]} s3_changed={s3_mismatch[2]}); "
                 "keeping CVM local. Investigate.",
                 5,
             )
-        return len(local_files)
+        return len(expected)
 
     def _existing_s3_is_complete(self, exp: str) -> tuple[bool, int, int]:
         """Compare an existing S3 prefix with its immutable CVM source."""
 
-        local_files = self._list_local_files(exp)
-        s3_files = self._list_s3_files(exp)
+        expected, local, s3 = self._terminal_content_inventories(exp)
         return (
-            local_files == s3_files,
-            len(local_files),
-            len(s3_files),
+            expected == local == s3,
+            len(local),
+            len(s3),
         )
 
     def _digest_local_handoff(self, exp: str) -> tuple[str, str, int]:
@@ -868,25 +950,11 @@ print(json.dumps({
                         f"  terminal handoff verified "
                         f"(identity={identity[:12]} size={size} bytes)"
                     )
-                elif s3_count <= local_count:
-                    self._log(
-                        "  existing S3 prefix is incomplete "
-                        f"(local={local_count} s3={s3_count}); retrying upload"
-                    )
-                    self._upload_exp(exp)
-                    self._upload_exp_handoff(exp)
-                    count = self._verify_exp(exp)
-                    identity, _digest, size = self._verify_exp_handoff(exp)
-                    uploaded.append(exp)
-                    self._log(
-                        f"  terminal handoff verified "
-                        f"(identity={identity[:12]} size={size} bytes)"
-                    )
                 else:
                     raise PullError(
-                        "VERIFY FAILED "
+                        "VERIFY FAILED existing S3 terminal content "
                         f"(local={local_count} s3={s3_count}); "
-                        "S3 contains extra objects, keeping CVM local. Investigate.",
+                        "keeping CVM local. Investigate.",
                         5,
                     )
             else:

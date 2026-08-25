@@ -496,7 +496,7 @@ class PullPlanTests(unittest.TestCase):
             workflow.publish(plan)
         self.assertEqual(events, ["verify_handoff", "cleanup"])
 
-    def test_publish_repairs_partial_s3_prefix_before_cleanup(self) -> None:
+    def test_publish_rejects_stale_existing_prefix_before_cleanup(self) -> None:
         runner = FakeRunner()
         workflow = self.workflow(runner)
         plan = cvm_pull.PullPlan(
@@ -511,7 +511,7 @@ class PullPlanTests(unittest.TestCase):
             mock.patch.object(
                 workflow,
                 "_existing_s3_is_complete",
-                return_value=(False, 3, 1),
+                return_value=(False, 3, 3),
             ),
             mock.patch.object(
                 workflow,
@@ -540,17 +540,9 @@ class PullPlanTests(unittest.TestCase):
                 side_effect=lambda _exp: events.append("cleanup"),
             ),
         ):
-            workflow.publish(plan)
-        self.assertEqual(
-            events,
-            [
-                "upload",
-                "upload_handoff",
-                "verify",
-                "verify_handoff",
-                "cleanup",
-            ],
-        )
+            with self.assertRaisesRegex(cvm_pull.PullError, "existing S3"):
+                workflow.publish(plan)
+        self.assertEqual(events, [])
 
     def test_publish_preserves_source_when_s3_has_extra_objects(self) -> None:
         runner = FakeRunner()
@@ -576,20 +568,6 @@ class PullPlanTests(unittest.TestCase):
         self.assertEqual(error.exception.status, 5)
         upload.assert_not_called()
         cleanup.assert_not_called()
-
-    def test_count_local_files_uses_relative_fnmatch_contract(self) -> None:
-        runner = FakeRunner()
-        runner.respond(
-            "path.relative_to(root).as_posix()",
-            stdout=json.dumps([f"file-{index}" for index in range(7)]),
-        )
-        workflow = self.workflow(runner)
-        workflow.excludes = ("stderr.log", ".git/*")
-        self.assertEqual(workflow._count_local_files("group/exp"), 7)
-        command = runner.remote_commands[-1]
-        self.assertIn("path.relative_to(root).as_posix()", command)
-        self.assertIn("fnmatch.fnmatch(relative, pattern)", command)
-        self.assertIn("stat.S_ISREG(path.lstat().st_mode)", command)
 
     def test_disposable_browser_runtimes_are_always_excluded(self) -> None:
         runner = FakeRunner()
@@ -674,14 +652,6 @@ class PullPlanTests(unittest.TestCase):
         command = runner.remote_commands[-1]
         self.assertIn("--exclude 'run/*'", command)
         self.assertIn("--include run/terminal-validation-locator.json", command)
-        runner.respond(
-            "path.relative_to(root).as_posix()",
-            stdout=json.dumps(["run/terminal-validation-locator.json"]),
-        )
-        self.assertEqual(
-            ("run/terminal-validation-locator.json",),
-            workflow._list_local_files("group/exp"),
-        )
 
     def test_external_handoff_uploads_to_sibling_namespace(self) -> None:
         runner = FakeRunner()
@@ -797,32 +767,22 @@ class PullPlanTests(unittest.TestCase):
         self.assertEqual([f"exp:{fresh}", f"handoff:{fresh}"], upload_calls)
         self.assertEqual([], cleanup_calls)
 
-    def test_s3_listing_filters_relative_keys_with_the_same_excludes(self) -> None:
-        runner = FakeRunner()
-        runner.respond(
-            "s3api",
-            stdout=json.dumps([f"file-{index}" for index in range(7)]),
-        )
-        workflow = self.workflow(runner)
-        self.assertEqual(workflow._count_s3_files("group/exp"), 7)
-        command = runner.remote_commands[-1]
-        self.assertIn("list-objects-v2", command)
-        self.assertIn("fnmatch.fnmatch(relative, pattern)", command)
-        self.assertIn("ericzyma/text-to-cad/outputs/group/exp/", command)
-
-    def test_existing_s3_requires_exact_filtered_key_set(self) -> None:
+    def test_existing_s3_requires_exact_manifest_bytes(self) -> None:
         runner = FakeRunner()
         workflow = self.workflow(runner)
+        expected = {
+            "artifact_manifest.json": (10, "a" * 64),
+            "workspace.json": (20, "b" * 64),
+        }
         with (
             mock.patch.object(
                 workflow,
-                "_list_local_files",
-                return_value=("artifact_manifest.json", "step_index.json", "workspace.json"),
-            ),
-            mock.patch.object(
-                workflow,
-                "_list_s3_files",
-                return_value=("artifact_manifest.json", "wrong-offsetting-object.json", "workspace.json"),
+                "_terminal_content_inventories",
+                return_value=(
+                    expected,
+                    expected,
+                    {**expected, "workspace.json": (20, "c" * 64)},
+                ),
             ),
         ):
             complete, local_count, s3_count = workflow._existing_s3_is_complete(
@@ -830,29 +790,50 @@ class PullPlanTests(unittest.TestCase):
             )
 
         self.assertFalse(complete)
-        self.assertEqual((3, 3), (local_count, s3_count))
+        self.assertEqual((2, 2), (local_count, s3_count))
 
-    def test_verify_reports_missing_and_extra_filtered_keys(self) -> None:
+    def test_verify_rejects_missing_extra_and_changed_content(self) -> None:
         runner = FakeRunner()
         workflow = self.workflow(runner)
+        expected = {
+            "missing.json": (1, "a" * 64),
+            "changed.json": (2, "b" * 64),
+        }
         with (
             mock.patch.object(
                 workflow,
-                "_list_local_files",
-                return_value=("artifact_manifest.json", "step_index.json"),
-            ),
-            mock.patch.object(
-                workflow,
-                "_list_s3_files",
-                return_value=("artifact_manifest.json", "run/playwright-version.json"),
+                "_terminal_content_inventories",
+                return_value=(
+                    expected,
+                    expected,
+                    {
+                        "changed.json": (2, "c" * 64),
+                        "extra.json": (3, "d" * 64),
+                    },
+                ),
             ),
         ):
             with self.assertRaises(cvm_pull.PullError) as error:
                 workflow._verify_exp("group/exp")
 
         self.assertEqual(5, error.exception.status)
-        self.assertIn("step_index.json", str(error.exception))
-        self.assertIn("run/playwright-version.json", str(error.exception))
+        self.assertIn("missing.json", str(error.exception))
+        self.assertIn("extra.json", str(error.exception))
+        self.assertIn("changed.json", str(error.exception))
+
+    def test_verify_exact_manifest_content_allows_cleanup(self) -> None:
+        runner = FakeRunner()
+        workflow = self.workflow(runner)
+        inventory = {
+            "artifact_manifest.json": (10, "a" * 64),
+            "workspace.json": (20, "b" * 64),
+        }
+        with mock.patch.object(
+            workflow,
+            "_terminal_content_inventories",
+            return_value=(inventory, inventory, inventory),
+        ):
+            self.assertEqual(workflow._verify_exp("group/exp"), 2)
 
     def test_cleanup_revalidates_exact_two_component_target(self) -> None:
         runner = FakeRunner()
