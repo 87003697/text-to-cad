@@ -112,30 +112,43 @@ canonical PLY bytes, path names, and arbitrary geometry operations do not.
 
 After trusted Final Delivery succeeds, the outer runner asks the W1 facade to
 compile terminal validation once and writes the bundle plus expected identity
-to an atomic, locked handoff outside the Workspace tree. Exceptional rollback
-objects are retained as bounded, hidden quarantine tombstones rather than
-deleted through a racy pathname. The resulting
-`TerminalValidationLocator` is a runner/reviewer contract and is never part of
-an Agent response or Agent-visible environment. A valid existing handoff is
-reused on retry; an incomplete write is never published as success. The same
-closed bundle is also published as the explicit ignored transfer capsule
-`run/terminal-validation-locator.json`. CVM transfer preserves that one
-sidecar even when broad disposable `run/*` excludes are configured, so W5 can
-verify the expected identity after the external sibling handoff is no longer
-locally present.
+to an atomic, locked handoff at
+`<workspace.parent>/.internal-terminal-validation/<workspace.name>/terminal-validation.json`,
+outside the Workspace tree. That external handoff is the sole trust lineage
+for the transferred bundle. Exceptional rollback objects are retained as
+bounded, hidden quarantine tombstones rather than deleted through a racy
+pathname. The resulting `TerminalValidationLocator` is a runner/reviewer
+contract and is never part of an Agent response or Agent-visible environment.
+A valid existing handoff is reused on retry; an incomplete write is never
+published as success.
+The Workspace-local `run/terminal-validation-locator.json` is a minimal closed
+discovery marker (`{schema, handoff_layout}`); it never carries the bundle or
+expected identity and therefore cannot authenticate a transferred Workspace on
+its own. CVM transfer preserves that marker so downstream consumers can
+confirm the fixed external handoff layout even when broad disposable `run/*`
+excludes are configured. Alongside the exp bytes CVM transfer publishes the
+external handoff as a sibling S3 prefix at
+`<group>/.internal-terminal-validation/<child>/terminal-validation.json` and
+verifies byte length, SHA-256 file digest, and terminal identity match
+exactly before cleaning either the exp tree or the handoff directory. A
+mismatch or missing handoff retains the CVM source for investigation.
 `select_and_finalize` itself only publishes Final Delivery; the outer runner
 publishes its final artifact manifest first and then performs the single W1
 compile/persist step.
 
-The default pilot-review/evaluate consumer reads the fixed
-`run/terminal-validation-locator.json` through the Workspace/run directory
-descriptors. The locator carries the transported terminal bundle, while the
-opaque expected identity is passed directly to W1
+The default pilot-review/evaluate consumer derives the external handoff path
+`<workspace.parent>/.internal-terminal-validation/<workspace.name>/terminal-validation.json`
+from the trusted experiment/group context and opens it through
+descriptor-relative `O_DIRECTORY`/`O_NOFOLLOW` traversal. The handoff carries
+the closed bundle and the terminal identity that is passed directly to W1
 `verify_terminal_validation` exactly once; W1 is the only bundle identity
-authenticator. The consumer uses W1's closed graph, `review_graph`, review
-facts, and evaluation facts as its structural input. Reviewer-owned default
-`prepare`/`review` outputs live under `run/review/`, excluded from the W1
-inventory. The old full Workspace validator/graph reconstruction is an
+authenticator. The Workspace-local locator is consulted only to confirm the
+minimal marker; its content is never used for verification, so a locator
+forged to carry an embedded bundle plus matching identity cannot
+self-authenticate. The consumer uses W1's closed graph, `review_graph`,
+review facts, and evaluation facts as its structural input. Reviewer-owned
+default `prepare`/`review` outputs live under `run/review/`, excluded from the
+W1 inventory. The old full Workspace validator/graph reconstruction is an
 explicit `--full-audit` diagnostic route only; missing or legacy handoff data
 fails closed on the default path.
 

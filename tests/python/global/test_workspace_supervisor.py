@@ -868,6 +868,70 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertTrue((workspace / "run/terminal-validation-locator.json").is_file())
 
+    def test_terminal_locator_facade_rejects_bundle_or_identity_payloads(self) -> None:
+        workspace_root = (
+            Path(__file__).resolve().parents[3]
+            / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
+        )
+        if str(workspace_root) not in sys.path:
+            sys.path.insert(0, str(workspace_root))
+        spec = importlib.util.spec_from_file_location(
+            "closed_locator_facade", workspace_root / "workspace.py"
+        )
+        assert spec is not None and spec.loader is not None
+        facade = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(facade)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary) / "exp"
+            (workspace / "run").mkdir(parents=True)
+            (workspace / "workspace.json").write_text("{}", encoding="utf-8")
+
+            # Legacy v1 locator with a self-authenticating bundle+identity.
+            with self.assertRaises(facade.WorkspaceError):
+                facade.write_terminal_locator(
+                    workspace,
+                    {
+                        "schema": "mesh-to-cad.terminal-validation-locator/1",
+                        "expected_identity": "a" * 64,
+                        "bundle": {"schema": "b/1"},
+                    },
+                )
+            # v2 marker augmented with a smuggled bundle: extra keys must fail.
+            with self.assertRaises(facade.WorkspaceError):
+                facade.write_terminal_locator(
+                    workspace,
+                    {
+                        "schema": facade.TERMINAL_LOCATOR_SCHEMA,
+                        "handoff_layout": facade.TERMINAL_HANDOFF_LAYOUT,
+                        "bundle": {"schema": "b/1"},
+                    },
+                )
+            # v2 marker with a foreign handoff layout must fail.
+            with self.assertRaises(facade.WorkspaceError):
+                facade.write_terminal_locator(
+                    workspace,
+                    {
+                        "schema": facade.TERMINAL_LOCATOR_SCHEMA,
+                        "handoff_layout": "attacker-controlled/1",
+                    },
+                )
+            self.assertFalse(
+                (workspace / "run/terminal-validation-locator.json").exists()
+            )
+
+            # The exact minimal marker publishes atomically.
+            facade.write_terminal_locator(
+                workspace,
+                {
+                    "schema": facade.TERMINAL_LOCATOR_SCHEMA,
+                    "handoff_layout": facade.TERMINAL_HANDOFF_LAYOUT,
+                },
+            )
+            self.assertTrue(
+                (workspace / "run/terminal-validation-locator.json").is_file()
+            )
+
     def test_workspace_tree_copy_rejects_growing_nested_source_and_cleans_stage(self) -> None:
         from scripts.pilot import workspace_supervisor as supervisor_module
 

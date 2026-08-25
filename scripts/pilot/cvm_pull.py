@@ -39,6 +39,7 @@ DISPOSABLE_RUNTIME_EXCLUDES = (
 )
 TERMINAL_LOCATOR_RELATIVE = "run/terminal-validation-locator.json"
 INTERNAL_TERMINAL_DIR = ".internal-terminal-validation"
+TERMINAL_HANDOFF_FILENAME = "terminal-validation.json"
 
 
 class PullError(RuntimeError):
@@ -459,13 +460,38 @@ print(json.dumps({
         )
         if exclude_args:
             command = f"{command} {exclude_args}"
-        # The locator carries the W1 terminal bundle when the external handoff
-        # is not part of the transferred sibling tree.  Keep this one ignored
-        # run-sidecar even if a local .cvmignore.pull contains run/*.
+        # The locator is a minimal Workspace-local discovery marker; it never
+        # authenticates the terminal bundle but downstream review still
+        # consults it to confirm the fixed external handoff layout.
         command = f"{command} --include {TERMINAL_LOCATOR_RELATIVE}"
         status = self.runner.remote_tee(command, self.log_path)
         if status not in {0, 2}:
             raise PullError(f"aws s3 cp fatal (exit={status}) — aborting", status)
+
+    def _upload_exp_handoff(self, exp: str) -> None:
+        """Publish the runner-owned external Terminal Validation Handoff.
+
+        The handoff lives at the fixed sibling namespace
+        ``<group>/.internal-terminal-validation/<child>`` alongside the exp
+        tree.  It is the sole authentication lineage for the transferred
+        bundle, so we transfer it as an independent step and let verification
+        gate cleanup on the bytes and digest of the file it contains.
+        """
+
+        group, child = exp.split("/", 1)
+        source = (
+            f"~/text-to-cad/outputs/{group}/{INTERNAL_TERMINAL_DIR}/{child}/"
+        )
+        destination = f"{S3_PREFIX}/{group}/{INTERNAL_TERMINAL_DIR}/{child}/"
+        command = (
+            "aws s3 cp --recursive --no-follow-symlinks "
+            f"{source} {destination}"
+        )
+        status = self.runner.remote_tee(command, self.log_path)
+        if status not in {0, 2}:
+            raise PullError(
+                f"aws s3 cp fatal (exit={status}) — aborting", status
+            )
 
     @staticmethod
     def _decode_file_list(stdout: str, label: str) -> tuple[str, ...]:
@@ -618,6 +644,190 @@ print(json.dumps(sorted(files)))
             len(s3_files),
         )
 
+    def _digest_local_handoff(self, exp: str) -> tuple[str, str, int]:
+        """Return the local handoff SHA-256 identity + digest and file size."""
+
+        group, child = exp.split("/", 1)
+        script = """
+import hashlib
+import json
+import pathlib
+import stat
+import sys
+
+path = pathlib.Path.home() / (
+    "text-to-cad/outputs/" + sys.argv[1] + "/.internal-terminal-validation/"
+    + sys.argv[2] + "/terminal-validation.json"
+)
+info = path.lstat()
+if not stat.S_ISREG(info.st_mode):
+    raise SystemExit("terminal handoff is not a regular file")
+data = path.read_bytes()
+try:
+    parsed = json.loads(data.decode("utf-8"))
+except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"terminal handoff is not valid JSON: {exc}")
+if (
+    not isinstance(parsed, dict)
+    or parsed.get("schema") != "mesh-to-cad.terminal-validation-handoff/1"
+    or not isinstance(parsed.get("terminal_identity_sha256"), str)
+    or len(parsed["terminal_identity_sha256"]) != 64
+    or not isinstance(parsed.get("bundle"), dict)
+):
+    raise SystemExit("terminal handoff schema is unsupported")
+print(json.dumps({
+    "identity": parsed["terminal_identity_sha256"],
+    "digest": hashlib.sha256(data).hexdigest(),
+    "size": len(data),
+}))
+""".strip()
+        command = " ".join(
+            (
+                "python3",
+                "-c",
+                shlex.quote(script),
+                shlex.quote(group),
+                shlex.quote(child),
+            )
+        )
+        result = self.runner.remote(command, check=False)
+        if result.returncode != 0:
+            raise PullError(
+                f"Cannot digest CVM terminal handoff: {exp}", 5
+            )
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise PullError(
+                f"Cannot decode CVM terminal handoff digest: {exp}", 5
+            ) from error
+        if not isinstance(payload, dict):
+            raise PullError(
+                f"Invalid CVM terminal handoff digest: {exp}", 5
+            )
+        identity = payload.get("identity")
+        digest = payload.get("digest")
+        size = payload.get("size")
+        if (
+            not isinstance(identity, str)
+            or len(identity) != 64
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or not isinstance(size, int)
+        ):
+            raise PullError(
+                f"Invalid CVM terminal handoff digest: {exp}", 5
+            )
+        return identity, digest, size
+
+    def _digest_s3_handoff(self, exp: str) -> tuple[str, str, int]:
+        """Return the transferred handoff SHA-256 identity + digest and size."""
+
+        group, child = exp.split("/", 1)
+        script = """
+import hashlib
+import json
+import subprocess
+import sys
+
+bucket = sys.argv[1]
+key = sys.argv[2]
+process = subprocess.run(
+    ["aws", "s3api", "get-object",
+     "--bucket", bucket,
+     "--key", key,
+     "/dev/stdout"],
+    check=False,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+if process.returncode != 0:
+    sys.stderr.write(process.stderr.decode("utf-8", errors="replace"))
+    raise SystemExit(process.returncode)
+data = process.stdout
+try:
+    parsed = json.loads(data.decode("utf-8"))
+except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"S3 terminal handoff is not valid JSON: {exc}")
+if (
+    not isinstance(parsed, dict)
+    or parsed.get("schema") != "mesh-to-cad.terminal-validation-handoff/1"
+    or not isinstance(parsed.get("terminal_identity_sha256"), str)
+    or len(parsed["terminal_identity_sha256"]) != 64
+    or not isinstance(parsed.get("bundle"), dict)
+):
+    raise SystemExit("S3 terminal handoff schema is unsupported")
+print(json.dumps({
+    "identity": parsed["terminal_identity_sha256"],
+    "digest": hashlib.sha256(data).hexdigest(),
+    "size": len(data),
+}))
+""".strip()
+        key = (
+            f"ericzyma/text-to-cad/outputs/{group}/"
+            f"{INTERNAL_TERMINAL_DIR}/{child}/{TERMINAL_HANDOFF_FILENAME}"
+        )
+        command = " ".join(
+            (
+                "python3",
+                "-c",
+                shlex.quote(script),
+                shlex.quote("arcwm-code-us-west-2"),
+                shlex.quote(key),
+            )
+        )
+        result = self.runner.remote(command, check=False)
+        if result.returncode != 0:
+            raise PullError(
+                f"Cannot digest S3 terminal handoff: {exp}", 5
+            )
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as error:
+            raise PullError(
+                f"Cannot decode S3 terminal handoff digest: {exp}", 5
+            ) from error
+        if not isinstance(payload, dict):
+            raise PullError(
+                f"Invalid S3 terminal handoff digest: {exp}", 5
+            )
+        identity = payload.get("identity")
+        digest = payload.get("digest")
+        size = payload.get("size")
+        if (
+            not isinstance(identity, str)
+            or len(identity) != 64
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or not isinstance(size, int)
+        ):
+            raise PullError(
+                f"Invalid S3 terminal handoff digest: {exp}", 5
+            )
+        return identity, digest, size
+
+    def _verify_exp_handoff(self, exp: str) -> tuple[str, str, int]:
+        """Verify exact byte, digest, and identity parity of the handoff."""
+
+        local_identity, local_digest, local_size = self._digest_local_handoff(exp)
+        s3_identity, s3_digest, s3_size = self._digest_s3_handoff(exp)
+        if (
+            local_identity != s3_identity
+            or local_digest != s3_digest
+            or local_size != s3_size
+        ):
+            raise PullError(
+                "VERIFY FAILED terminal handoff "
+                f"(local_identity={local_identity[:12]} "
+                f"s3_identity={s3_identity[:12]} "
+                f"local_digest={local_digest[:12]} "
+                f"s3_digest={s3_digest[:12]} "
+                f"local_size={local_size} s3_size={s3_size}); "
+                "keeping CVM local. Investigate.",
+                5,
+            )
+        return local_identity, local_digest, local_size
+
     def _cleanup_exp(self, exp: str) -> None:
         if not is_safe_exp(exp):
             raise PullError(f"Refusing unsafe cleanup target: {exp}", 7)
@@ -649,9 +859,14 @@ print(json.dumps(sorted(files)))
                 complete, local_count, s3_count = self._existing_s3_is_complete(exp)
                 if complete:
                     count = local_count
+                    identity, _digest, size = self._verify_exp_handoff(exp)
                     verified_existing.append(exp)
                     self._log(
                         f"  existing S3 prefix verified ({count} files)"
+                    )
+                    self._log(
+                        f"  terminal handoff verified "
+                        f"(identity={identity[:12]} size={size} bytes)"
                     )
                 elif s3_count <= local_count:
                     self._log(
@@ -659,8 +874,14 @@ print(json.dumps(sorted(files)))
                         f"(local={local_count} s3={s3_count}); retrying upload"
                     )
                     self._upload_exp(exp)
+                    self._upload_exp_handoff(exp)
                     count = self._verify_exp(exp)
+                    identity, _digest, size = self._verify_exp_handoff(exp)
                     uploaded.append(exp)
+                    self._log(
+                        f"  terminal handoff verified "
+                        f"(identity={identity[:12]} size={size} bytes)"
+                    )
                 else:
                     raise PullError(
                         "VERIFY FAILED "
@@ -670,8 +891,14 @@ print(json.dumps(sorted(files)))
                     )
             else:
                 self._upload_exp(exp)
+                self._upload_exp_handoff(exp)
                 count = self._verify_exp(exp)
+                identity, _digest, size = self._verify_exp_handoff(exp)
                 uploaded.append(exp)
+                self._log(
+                    f"  terminal handoff verified "
+                    f"(identity={identity[:12]} size={size} bytes)"
+                )
             if retain_source:
                 self._log(f"  verify OK ({count} files); retaining CVM source")
                 retained_source.append(exp)

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Read-only pilot review compiler.
 
-The default path consumes the runner's authenticated terminal bundle through
-``run/terminal-validation-locator.json`` and verifies it once with W1. The
-legacy full Workspace validator remains only behind ``--full-audit`` (or an
-explicit helper Python file) for operator diagnostics.
+The default path consumes the runner-owned external
+``.internal-terminal-validation/<exp>/terminal-validation.json`` handoff and
+verifies it once with W1. The Workspace-local
+``run/terminal-validation-locator.json`` is only a minimal discovery marker;
+its content is never used to authenticate the bundle. The legacy full
+Workspace validator remains only behind ``--full-audit`` (or an explicit
+helper Python file) for operator diagnostics.
 """
 
 from __future__ import annotations
@@ -26,8 +29,12 @@ from typing import Any
 DEFAULT_WORKSPACE_HELPER = "mesh-to-cad-workspace"
 DEFAULT_VALIDATION_TIMEOUT_SECONDS = 1800
 MAX_VALIDATION_TIMEOUT_SECONDS = 1800
-TERMINAL_LOCATOR_SCHEMA = "mesh-to-cad.terminal-validation-locator/1"
+TERMINAL_LOCATOR_SCHEMA = "mesh-to-cad.terminal-validation-locator/2"
+TERMINAL_HANDOFF_LAYOUT = "external-sibling-namespace/1"
 TERMINAL_LOCATOR_RELATIVE = "run/terminal-validation-locator.json"
+TERMINAL_HANDOFF_SCHEMA = "mesh-to-cad.terminal-validation-handoff/1"
+TERMINAL_HANDOFF_NAMESPACE = ".internal-terminal-validation"
+TERMINAL_HANDOFF_FILENAME = "terminal-validation.json"
 MAX_TERMINAL_INPUT_BYTES = 32 * 1024 * 1024
 VALID_ROOT_CAUSES = {
     "agent-policy-deviation",
@@ -256,26 +263,106 @@ def _read_locator_descriptor(workspace: Path) -> dict[str, Any]:
             os.close(root_fd)
 
 
-def _terminal_bundle(
-    workspace: Path, helper: str | Path | None
-) -> tuple[dict[str, Any], dict[str, Any], str]:
-    """Load the W4 locator and authenticate its closed W1 bundle once."""
+def _read_handoff_descriptor(workspace: Path) -> dict[str, Any]:
+    """Open the external runner-owned handoff via descriptor-relative traversal.
 
-    _reject_symlink_components(workspace, "Workspace")
+    The handoff lives at the fixed sibling namespace
+    ``<workspace.parent>/.internal-terminal-validation/<workspace.name>/terminal-validation.json``.
+    Every hop uses O_DIRECTORY/O_NOFOLLOW to reject symlink swaps.
+    """
+
+    exp_name = workspace.name
+    parent = workspace.parent
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+    )
+    parent_fd: int | None = None
+    namespace_fd: int | None = None
+    exp_fd: int | None = None
+    try:
+        parent_fd = os.open(parent, flags)
+        parent_metadata = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_metadata.st_mode):
+            raise ReviewError("Workspace parent is not a directory")
+        namespace_fd = os.open(TERMINAL_HANDOFF_NAMESPACE, flags, dir_fd=parent_fd)
+        namespace_metadata = os.fstat(namespace_fd)
+        if not stat.S_ISDIR(namespace_metadata.st_mode):
+            raise ReviewError("terminal handoff namespace is unavailable")
+        exp_fd = os.open(exp_name, flags, dir_fd=namespace_fd)
+        exp_metadata = os.fstat(exp_fd)
+        if not stat.S_ISDIR(exp_metadata.st_mode):
+            raise ReviewError("terminal handoff directory is unavailable")
+        handoff_fd = os.open(
+            TERMINAL_HANDOFF_FILENAME,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=exp_fd,
+        )
+        try:
+            return _read_fd_json(handoff_fd, "terminal handoff")
+        finally:
+            os.close(handoff_fd)
+    except ReviewError:
+        raise
+    except (OSError, TypeError) as exc:
+        raise ReviewError("terminal handoff is unavailable or unsafe") from exc
+    finally:
+        if exp_fd is not None:
+            os.close(exp_fd)
+        if namespace_fd is not None:
+            os.close(namespace_fd)
+        if parent_fd is not None:
+            os.close(parent_fd)
+
+
+def _confirm_locator_marker(workspace: Path) -> None:
+    """Consume the Workspace-local marker for discovery only.
+
+    A well-formed marker never authenticates anything; a malformed or
+    dual-authority payload (e.g. embedded bundle/identity) fails closed so a
+    Workspace author cannot smuggle a self-authenticating pair.
+    """
+
     locator = _read_locator_descriptor(workspace)
-    if set(locator) != {"schema", "expected_identity", "bundle"}:
+    if set(locator) != {"schema", "handoff_layout"}:
         raise ReviewError("terminal locator has an unsupported closed schema")
     if locator.get("schema") != TERMINAL_LOCATOR_SCHEMA:
         raise ReviewError("terminal locator schema is unsupported")
-    identity = locator.get("expected_identity")
-    bundle = locator.get("bundle")
+    if locator.get("handoff_layout") != TERMINAL_HANDOFF_LAYOUT:
+        raise ReviewError("terminal locator handoff layout is unsupported")
+
+
+def _terminal_bundle(
+    workspace: Path, helper: str | Path | None
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """Authenticate the runner-owned external handoff once with W1.
+
+    The Workspace-local locator is consulted only as a marker so operators can
+    discover the layout; it never provides the bundle or identity used for
+    verification. The bundle and expected identity always originate from the
+    external ``.internal-terminal-validation`` sibling namespace.
+    """
+
+    _reject_symlink_components(workspace, "Workspace")
+    _confirm_locator_marker(workspace)
+    handoff = _read_handoff_descriptor(workspace)
+    if set(handoff) != {"schema", "terminal_identity_sha256", "bundle"}:
+        raise ReviewError("terminal handoff has an unsupported closed schema")
+    if handoff.get("schema") != TERMINAL_HANDOFF_SCHEMA:
+        raise ReviewError("terminal handoff schema is unsupported")
+    identity = handoff.get("terminal_identity_sha256")
+    bundle = handoff.get("bundle")
     if (
         not isinstance(identity, str)
         or len(identity) != 64
         or any(char not in "0123456789abcdef" for char in identity)
         or not isinstance(bundle, dict)
     ):
-        raise ReviewError("terminal locator identity or bundle is malformed")
+        raise ReviewError("terminal handoff identity or bundle is malformed")
 
     verifier = _load_workspace_verifier(helper)
     try:
@@ -1088,7 +1175,9 @@ def _bundle_review(workspace: Path, helper: str | Path | None) -> dict[str, Any]
         },
         "contract_provenance": {
             "terminal_locator": TERMINAL_LOCATOR_RELATIVE,
-            "terminal_handoff": TERMINAL_LOCATOR_RELATIVE,
+            "terminal_handoff": (
+                f"../{TERMINAL_HANDOFF_NAMESPACE}/<exp>/{TERMINAL_HANDOFF_FILENAME}"
+            ),
             "runner": "artifact_manifest.json",
         },
         "workspace_validation": {

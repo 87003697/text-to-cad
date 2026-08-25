@@ -509,12 +509,46 @@ def _locator_quarantine_delete_exact(
         return False
 
 
+TERMINAL_LOCATOR_SCHEMA = "mesh-to-cad.terminal-validation-locator/2"
+TERMINAL_HANDOFF_LAYOUT = "external-sibling-namespace/1"
+_TERMINAL_LOCATOR_FIELDS = frozenset({"schema", "handoff_layout"})
+
+
+def _validate_locator_payload(payload: Mapping[str, Any]) -> None:
+    """Reject any locator payload that could authenticate a transferred bundle."""
+
+    if not isinstance(payload, Mapping) or set(payload) != _TERMINAL_LOCATOR_FIELDS:
+        _fail(
+            "terminal_locator_conflict",
+            "terminal locator payload has an unsupported closed schema",
+            "$.run",
+        )
+    if payload["schema"] != TERMINAL_LOCATOR_SCHEMA:
+        _fail(
+            "terminal_locator_conflict",
+            "terminal locator schema is unsupported",
+            "$.run",
+        )
+    if payload["handoff_layout"] != TERMINAL_HANDOFF_LAYOUT:
+        _fail(
+            "terminal_locator_conflict",
+            "terminal locator handoff layout is unsupported",
+            "$.run",
+        )
+
+
 def write_terminal_locator(
     workspace: Path,
     payload: Mapping[str, Any],
 ) -> str:
-    """Own atomic publication of the ignored terminal transfer sidecar."""
+    """Own atomic publication of the minimal terminal discovery marker.
 
+    The marker only names the fixed external handoff layout; it never carries a
+    bundle or expected identity that could authenticate a transferred Workspace
+    on its own.
+    """
+
+    _validate_locator_payload(payload)
     target = _terminal_locator_path(workspace)
     if target.is_symlink() or (target.exists() and not target.is_file()):
         _fail("invalid_workspace_path", "terminal locator is not a regular file", "$.run")

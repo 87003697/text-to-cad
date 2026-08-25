@@ -2129,29 +2129,28 @@ def _validated_handoff(
     return identity, bundle
 
 
-def _terminal_pair(
-    workspace_api: object,
-    exp_dir: Path,
-    handoff_target: Path,
-    handoff: Mapping[str, object],
-    locator: Mapping[str, object],
-) -> TerminalValidationLocator:
-    identity, bundle = _validated_handoff(
-        workspace_api, exp_dir, handoff
-    )
-    if set(locator) != {"schema", "expected_identity", "bundle"}:
+TERMINAL_LOCATOR_SCHEMA = "mesh-to-cad.terminal-validation-locator/2"
+TERMINAL_HANDOFF_LAYOUT = "external-sibling-namespace/1"
+_TERMINAL_LOCATOR_FIELDS = frozenset({"schema", "handoff_layout"})
+
+
+def _closed_locator_payload() -> dict[str, object]:
+    return {
+        "schema": TERMINAL_LOCATOR_SCHEMA,
+        "handoff_layout": TERMINAL_HANDOFF_LAYOUT,
+    }
+
+
+def _validate_terminal_marker(locator: Mapping[str, object]) -> None:
+    """Ignore locator identity/bundle but reject an incompatible marker."""
+
+    if set(locator) != _TERMINAL_LOCATOR_FIELDS:
         raise PilotError("terminal_locator_conflict")
     if (
-        locator.get("schema") != "mesh-to-cad.terminal-validation-locator/1"
-        or locator.get("expected_identity") != identity
-        or locator.get("bundle") != bundle
+        locator.get("schema") != TERMINAL_LOCATOR_SCHEMA
+        or locator.get("handoff_layout") != TERMINAL_HANDOFF_LAYOUT
     ):
         raise PilotError("terminal_locator_conflict")
-    return TerminalValidationLocator(
-        bundle_path=handoff_target,
-        expected_identity=identity,
-        sidecar_path=TERMINAL_LOCATOR_RELATIVE,
-    )
 
 
 def _recover_terminal_handoff_quarantines(
@@ -2240,23 +2239,21 @@ def persist_terminal_validation(exp_dir: Path) -> TerminalValidationLocator | No
         locator = reader(exp_dir) if reader is not None else _read_terminal_json(locator_target)
         if handoff is None and locator is not None:
             raise PilotError("terminal_locator_without_handoff")
+        locator_payload = _closed_locator_payload()
         if handoff is not None:
-            identity, bundle = _validated_handoff(workspace_api, exp_dir, handoff)
-            if locator is None:
-                locator_payload = {
-                    "schema": "mesh-to-cad.terminal-validation-locator/1",
-                    "expected_identity": identity,
-                    "bundle": bundle,
-                }
+            identity, _bundle = _validated_handoff(workspace_api, exp_dir, handoff)
+            if locator is not None:
+                _validate_terminal_marker(locator)
+                sidecar_path = TERMINAL_LOCATOR_RELATIVE
+            else:
                 sidecar_path = workspace_api.write_terminal_locator(  # type: ignore[attr-defined]
                     exp_dir, locator_payload
                 )
-                return TerminalValidationLocator(
-                    bundle_path=handoff_target,
-                    expected_identity=identity,
-                    sidecar_path=sidecar_path,
-                )
-            return _terminal_pair(workspace_api, exp_dir, handoff_target, handoff, locator)
+            return TerminalValidationLocator(
+                bundle_path=handoff_target,
+                expected_identity=identity,
+                sidecar_path=sidecar_path,
+            )
 
         compiled = workspace_api.compile_terminal_validation(exp_dir)  # type: ignore[attr-defined]
         if not isinstance(compiled, Mapping):
@@ -2278,11 +2275,6 @@ def persist_terminal_validation(exp_dir: Path) -> TerminalValidationLocator | No
         }
         handoff_identity = _write_terminal_handoff(handoff_target, handoff_payload)
         created_handoff = True
-        locator_payload = {
-            "schema": "mesh-to-cad.terminal-validation-locator/1",
-            "expected_identity": identity,
-            "bundle": bundle,
-        }
         sidecar_path = workspace_api.write_terminal_locator(exp_dir, locator_payload)  # type: ignore[attr-defined]
         return TerminalValidationLocator(
             bundle_path=handoff_target,

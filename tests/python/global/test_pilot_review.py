@@ -371,20 +371,28 @@ class PilotReviewTests(unittest.TestCase):
             "result": result,
             "manifest": {"schema": "mesh-to-cad.content-manifest/1", "files": []},
         }
-        # The locator's identity is an opaque W4 value; this test deliberately
-        # leaves its authentication to the mocked W1 verifier.
+        # The runner-owned external handoff carries the sole authentication
+        # lineage; the Workspace-local locator is only a discovery marker.
         identity = "a" * 64
         write_json(
             self.exp / "run/terminal-validation-locator.json",
             {
-                "schema": "mesh-to-cad.terminal-validation-locator/1",
-                "expected_identity": identity,
+                "schema": "mesh-to-cad.terminal-validation-locator/2",
+                "handoff_layout": "external-sibling-namespace/1",
+            },
+        )
+        handoff_dir = self.exp.parent / ".internal-terminal-validation" / self.exp.name
+        write_json(
+            handoff_dir / "terminal-validation.json",
+            {
+                "schema": "mesh-to-cad.terminal-validation-handoff/1",
+                "terminal_identity_sha256": identity,
                 "bundle": bundle,
             },
         )
         return bundle, result
 
-    def test_default_review_consumes_verified_locator_bundle_once(self) -> None:
+    def test_default_review_consumes_verified_handoff_bundle_once(self) -> None:
         bundle, result = self.terminal_bundle()
         verifier = mock.Mock()
         verifier.verify_terminal_validation.return_value = result
@@ -396,12 +404,15 @@ class PilotReviewTests(unittest.TestCase):
         ):
             status, review = self.reviewer.review_workspace(self.exp)
         self.assertEqual(0, status)
+        handoff_path = (
+            self.exp.parent
+            / ".internal-terminal-validation"
+            / self.exp.name
+            / "terminal-validation.json"
+        )
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
         verifier.verify_terminal_validation.assert_called_once_with(
-            self.exp.resolve(), bundle, json.loads(
-                (self.exp / "run/terminal-validation-locator.json").read_text(
-                    encoding="utf-8"
-                )
-            )["expected_identity"]
+            self.exp.resolve(), bundle, handoff["terminal_identity_sha256"]
         )
         self.assertEqual(result["evaluation_facts"], review["evaluation_facts"])
         self.assertTrue(review["graph"]["nodes"])
@@ -450,26 +461,168 @@ class PilotReviewTests(unittest.TestCase):
             },
         )
 
-    def test_default_review_rejects_tampered_or_symlinked_locator(self) -> None:
-        _bundle, _result = self.terminal_bundle()
+    def test_default_review_rejects_locator_carrying_matching_identity(self) -> None:
+        bundle, result = self.terminal_bundle()
         locator = self.exp / "run/terminal-validation-locator.json"
-        value = json.loads(locator.read_text(encoding="utf-8"))
-        value["expected_identity"] = "b" * 64
-        write_json(locator, value)
+        # A Workspace attacker forges the retired v1 locator embedding the
+        # bundle and a matching identity that self-authenticates through the
+        # mocked verifier.  The review path must ignore the locator's payload
+        # and still authenticate solely from the external handoff.
+        handoff_path = (
+            self.exp.parent
+            / ".internal-terminal-validation"
+            / self.exp.name
+            / "terminal-validation.json"
+        )
+        handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+        write_json(
+            locator,
+            {
+                "schema": "mesh-to-cad.terminal-validation-locator/1",
+                "expected_identity": handoff["terminal_identity_sha256"],
+                "bundle": bundle,
+            },
+        )
         verifier = mock.Mock()
-        with mock.patch.object(self.reviewer, "_load_workspace_verifier", return_value=verifier):
+        verifier.verify_terminal_validation.return_value = result
+        with mock.patch.object(
+            self.reviewer, "_load_workspace_verifier", return_value=verifier
+        ):
             with self.assertRaises(self.reviewer.ReviewError):
                 self.reviewer.review_workspace(self.exp)
-        verifier.verify_terminal_validation.assert_called_once_with(
-            self.exp.resolve(), _bundle, "b" * 64
+        self.assertEqual(0, verifier.verify_terminal_validation.call_count)
+
+    def test_default_review_rejects_locator_with_foreign_marker(self) -> None:
+        self.terminal_bundle()
+        locator = self.exp / "run/terminal-validation-locator.json"
+        write_json(
+            locator,
+            {
+                "schema": "mesh-to-cad.terminal-validation-locator/2",
+                "handoff_layout": "attacker-controlled/1",
+            },
+        )
+        verifier = mock.Mock()
+        with mock.patch.object(
+            self.reviewer, "_load_workspace_verifier", return_value=verifier
+        ):
+            with self.assertRaises(self.reviewer.ReviewError):
+                self.reviewer.review_workspace(self.exp)
+        self.assertEqual(0, verifier.verify_terminal_validation.call_count)
+
+    def test_default_review_rejects_tampered_handoff(self) -> None:
+        bundle, _result = self.terminal_bundle()
+        handoff_path = (
+            self.exp.parent
+            / ".internal-terminal-validation"
+            / self.exp.name
+            / "terminal-validation.json"
+        )
+        # Bundle tamper: swap in a foreign bundle while keeping the identity.
+        original = json.loads(handoff_path.read_text(encoding="utf-8"))
+        tampered_bundle = dict(bundle)
+        tampered_bundle["result"] = dict(tampered_bundle["result"])
+        tampered_bundle["result"]["workspace_identity_sha256"] = "e" * 64
+        write_json(
+            handoff_path,
+            {
+                "schema": "mesh-to-cad.terminal-validation-handoff/1",
+                "terminal_identity_sha256": original["terminal_identity_sha256"],
+                "bundle": tampered_bundle,
+            },
+        )
+        rejecting = mock.Mock()
+        rejecting.verify_terminal_validation.side_effect = RuntimeError(
+            "identity mismatch"
+        )
+        with mock.patch.object(
+            self.reviewer, "_load_workspace_verifier", return_value=rejecting
+        ):
+            with self.assertRaises(self.reviewer.ReviewError):
+                self.reviewer.review_workspace(self.exp)
+        rejecting.verify_terminal_validation.assert_called_once_with(
+            self.exp.resolve(),
+            tampered_bundle,
+            original["terminal_identity_sha256"],
         )
 
+        # Identity tamper: keep the bundle, forge a matching-length identity.
+        write_json(
+            handoff_path,
+            {
+                "schema": "mesh-to-cad.terminal-validation-handoff/1",
+                "terminal_identity_sha256": "f" * 64,
+                "bundle": bundle,
+            },
+        )
+        with mock.patch.object(
+            self.reviewer,
+            "_load_workspace_verifier",
+            return_value=rejecting,
+        ):
+            with self.assertRaises(self.reviewer.ReviewError):
+                self.reviewer.review_workspace(self.exp)
+
+    def test_default_review_rejects_missing_handoff(self) -> None:
+        _bundle, _result = self.terminal_bundle()
+        handoff_path = (
+            self.exp.parent
+            / ".internal-terminal-validation"
+            / self.exp.name
+            / "terminal-validation.json"
+        )
+        handoff_path.unlink()
+        verifier = mock.Mock()
+        with mock.patch.object(
+            self.reviewer, "_load_workspace_verifier", return_value=verifier
+        ):
+            with self.assertRaises(self.reviewer.ReviewError):
+                self.reviewer.review_workspace(self.exp)
+        self.assertEqual(0, verifier.verify_terminal_validation.call_count)
+
+    def test_default_review_rejects_foreign_exp_replay(self) -> None:
+        _bundle, _result = self.terminal_bundle()
+        handoff_dir = (
+            self.exp.parent
+            / ".internal-terminal-validation"
+            / self.exp.name
+        )
+        # A foreign exp's handoff cannot be smuggled by renaming the
+        # experiment directory — the review derives the namespace from
+        # ``<workspace.parent>/.internal-terminal-validation/<workspace.name>``.
+        foreign_exp = self.root / "foreign-exp"
+        (foreign_exp / "run").mkdir(parents=True)
+        write_json(
+            foreign_exp / "run/terminal-validation-locator.json",
+            {
+                "schema": "mesh-to-cad.terminal-validation-locator/2",
+                "handoff_layout": "external-sibling-namespace/1",
+            },
+        )
+        # Deliberately do NOT create the foreign exp's own handoff.
+        verifier = mock.Mock()
+        with mock.patch.object(
+            self.reviewer, "_load_workspace_verifier", return_value=verifier
+        ):
+            with self.assertRaises(self.reviewer.ReviewError):
+                self.reviewer.review_workspace(foreign_exp)
+        self.assertEqual(0, verifier.verify_terminal_validation.call_count)
+        # Original handoff remains untouched.
+        self.assertTrue((handoff_dir / "terminal-validation.json").is_file())
+
+    def test_default_review_rejects_symlinked_locator_or_handoff(self) -> None:
+        _bundle, _result = self.terminal_bundle()
+        locator = self.exp / "run/terminal-validation-locator.json"
         outside = self.root / "outside.json"
         outside.write_text("{}", encoding="utf-8")
         locator.unlink()
         locator.symlink_to(outside)
-        with self.assertRaises(self.reviewer.ReviewError):
-            self.reviewer.review_workspace(self.exp)
+        verifier = mock.Mock()
+        with mock.patch.object(
+            self.reviewer, "_load_workspace_verifier", return_value=verifier
+        ):
+            with self.assertRaises(self.reviewer.ReviewError):
+                self.reviewer.review_workspace(self.exp)
 
         locator.unlink()
         run = self.exp / "run"
@@ -477,6 +630,34 @@ class PilotReviewTests(unittest.TestCase):
         run.symlink_to(self.root, target_is_directory=True)
         with self.assertRaises(self.reviewer.ReviewError):
             self.reviewer.review_workspace(self.exp)
+
+        # Restore a valid locator and swap the handoff for a symlink.
+        run.unlink()
+        (self.exp / "run").mkdir()
+        write_json(
+            locator,
+            {
+                "schema": "mesh-to-cad.terminal-validation-locator/2",
+                "handoff_layout": "external-sibling-namespace/1",
+            },
+        )
+        handoff_path = (
+            self.exp.parent
+            / ".internal-terminal-validation"
+            / self.exp.name
+            / "terminal-validation.json"
+        )
+        handoff_body = handoff_path.read_bytes()
+        handoff_path.unlink()
+        foreign_handoff = self.root / "attacker-handoff.json"
+        foreign_handoff.write_bytes(handoff_body)
+        handoff_path.symlink_to(foreign_handoff)
+        with mock.patch.object(
+            self.reviewer, "_load_workspace_verifier", return_value=verifier
+        ):
+            with self.assertRaises(self.reviewer.ReviewError):
+                self.reviewer.review_workspace(self.exp)
+        self.assertEqual(0, verifier.verify_terminal_validation.call_count)
 
     def test_default_prepare_reuses_run_review_without_mutating_authority(self) -> None:
         _bundle, result = self.terminal_bundle()

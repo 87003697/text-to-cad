@@ -299,8 +299,19 @@ class PullPlanTests(unittest.TestCase):
             ),
             mock.patch.object(
                 workflow,
+                "_upload_exp_handoff",
+                side_effect=lambda _exp: events.append("upload_handoff"),
+            ),
+            mock.patch.object(
+                workflow,
                 "_verify_exp",
                 side_effect=lambda _exp: events.append("verify") or 3,
+            ),
+            mock.patch.object(
+                workflow,
+                "_verify_exp_handoff",
+                side_effect=lambda _exp: events.append("verify_handoff")
+                or ("a" * 64, "b" * 64, 100),
             ),
             mock.patch.object(
                 workflow,
@@ -309,7 +320,10 @@ class PullPlanTests(unittest.TestCase):
             ),
         ):
             result = workflow.publish(plan)
-        self.assertEqual(events, ["upload", "verify", "cleanup"])
+        self.assertEqual(
+            events,
+            ["upload", "upload_handoff", "verify", "verify_handoff", "cleanup"],
+        )
         self.assertEqual(result.uploaded, ("group/exp",))
 
         events.clear()
@@ -321,8 +335,18 @@ class PullPlanTests(unittest.TestCase):
             ),
             mock.patch.object(
                 workflow,
+                "_upload_exp_handoff",
+                side_effect=lambda _exp: events.append("upload_handoff"),
+            ),
+            mock.patch.object(
+                workflow,
                 "_verify_exp",
                 side_effect=cvm_pull.PullError("bad verify", 5),
+            ),
+            mock.patch.object(
+                workflow,
+                "_verify_exp_handoff",
+                side_effect=AssertionError("must not verify handoff"),
             ),
             mock.patch.object(
                 workflow,
@@ -332,7 +356,7 @@ class PullPlanTests(unittest.TestCase):
         ):
             with self.assertRaises(cvm_pull.PullError):
                 workflow.publish(plan)
-        self.assertEqual(events, ["upload"])
+        self.assertEqual(events, ["upload", "upload_handoff"])
 
     def test_publish_can_verify_postmortem_without_cleaning_cvm_source(self) -> None:
         runner = FakeRunner()
@@ -358,8 +382,19 @@ class PullPlanTests(unittest.TestCase):
             ),
             mock.patch.object(
                 workflow,
+                "_upload_exp_handoff",
+                side_effect=lambda _exp: events.append("upload_handoff"),
+            ),
+            mock.patch.object(
+                workflow,
                 "_verify_exp",
                 side_effect=lambda _exp: events.append("verify") or 7,
+            ),
+            mock.patch.object(
+                workflow,
+                "_verify_exp_handoff",
+                side_effect=lambda _exp: events.append("verify_handoff")
+                or ("a" * 64, "b" * 64, 100),
             ),
             mock.patch.object(
                 workflow,
@@ -368,7 +403,9 @@ class PullPlanTests(unittest.TestCase):
             ),
         ):
             result = workflow.publish(plan)
-        self.assertEqual(events, ["upload", "verify"])
+        self.assertEqual(
+            events, ["upload", "upload_handoff", "verify", "verify_handoff"]
+        )
         self.assertEqual(result.uploaded, ("group/failed",))
         self.assertEqual(result.retained_source, ("group/failed",))
 
@@ -396,10 +433,16 @@ class PullPlanTests(unittest.TestCase):
                 return_value=(True, 7, 7),
             ),
             mock.patch.object(workflow, "_upload_exp") as upload,
+            mock.patch.object(
+                workflow,
+                "_verify_exp_handoff",
+                return_value=("a" * 64, "b" * 64, 100),
+            ) as verify_handoff,
             mock.patch.object(workflow, "_cleanup_exp") as cleanup,
         ):
             result = workflow.publish(plan)
         upload.assert_not_called()
+        verify_handoff.assert_called_once_with("group/failed")
         cleanup.assert_not_called()
         self.assertEqual(result.uploaded, ())
         self.assertEqual(result.verified_existing, ("group/failed",))
@@ -440,12 +483,18 @@ class PullPlanTests(unittest.TestCase):
             ),
             mock.patch.object(
                 workflow,
+                "_verify_exp_handoff",
+                side_effect=lambda _exp: events.append("verify_handoff")
+                or ("a" * 64, "b" * 64, 100),
+            ),
+            mock.patch.object(
+                workflow,
                 "_cleanup_exp",
                 side_effect=lambda _exp: events.append("cleanup"),
             ),
         ):
             workflow.publish(plan)
-        self.assertEqual(events, ["cleanup"])
+        self.assertEqual(events, ["verify_handoff", "cleanup"])
 
     def test_publish_repairs_partial_s3_prefix_before_cleanup(self) -> None:
         runner = FakeRunner()
@@ -471,8 +520,19 @@ class PullPlanTests(unittest.TestCase):
             ),
             mock.patch.object(
                 workflow,
+                "_upload_exp_handoff",
+                side_effect=lambda _exp: events.append("upload_handoff"),
+            ),
+            mock.patch.object(
+                workflow,
                 "_verify_exp",
                 side_effect=lambda _exp: events.append("verify") or 3,
+            ),
+            mock.patch.object(
+                workflow,
+                "_verify_exp_handoff",
+                side_effect=lambda _exp: events.append("verify_handoff")
+                or ("a" * 64, "b" * 64, 100),
             ),
             mock.patch.object(
                 workflow,
@@ -481,7 +541,16 @@ class PullPlanTests(unittest.TestCase):
             ),
         ):
             workflow.publish(plan)
-        self.assertEqual(events, ["upload", "verify", "cleanup"])
+        self.assertEqual(
+            events,
+            [
+                "upload",
+                "upload_handoff",
+                "verify",
+                "verify_handoff",
+                "cleanup",
+            ],
+        )
 
     def test_publish_preserves_source_when_s3_has_extra_objects(self) -> None:
         runner = FakeRunner()
@@ -593,7 +662,7 @@ class PullPlanTests(unittest.TestCase):
         workflow._upload_exp("group/exp")
         self.assertIn("--no-follow-symlinks", runner.remote_commands[-1])
 
-    def test_terminal_locator_sidecar_is_forced_through_transfer_filters(self) -> None:
+    def test_terminal_marker_survives_locator_pattern_exclusion(self) -> None:
         runner = FakeRunner()
         workflow = self.workflow(runner)
         workflow.excludes = ("run/*",)
@@ -613,6 +682,120 @@ class PullPlanTests(unittest.TestCase):
             ("run/terminal-validation-locator.json",),
             workflow._list_local_files("group/exp"),
         )
+
+    def test_external_handoff_uploads_to_sibling_namespace(self) -> None:
+        runner = FakeRunner()
+        workflow = self.workflow(runner)
+        workflow._upload_exp_handoff("group/exp")
+        command = runner.remote_commands[-1]
+        self.assertIn("--no-follow-symlinks", command)
+        self.assertIn(
+            "~/text-to-cad/outputs/group/.internal-terminal-validation/exp/",
+            command,
+        )
+        self.assertIn(
+            f"{cvm_pull.S3_PREFIX}/group/.internal-terminal-validation/exp/",
+            command,
+        )
+        # The handoff is deliberately not part of the exp transfer namespace,
+        # so no exclude/include filters on run/* apply to it.
+        self.assertNotIn("--exclude", command)
+
+    def test_handoff_verify_fails_closed_on_digest_mismatch(self) -> None:
+        runner = FakeRunner()
+        runner.respond(
+            "pathlib.Path.home()",
+            stdout=json.dumps(
+                {"identity": "a" * 64, "digest": "1" * 64, "size": 100}
+            ),
+        )
+        runner.respond(
+            "get-object",
+            stdout=json.dumps(
+                {"identity": "a" * 64, "digest": "2" * 64, "size": 100}
+            ),
+        )
+        workflow = self.workflow(runner)
+        with self.assertRaises(cvm_pull.PullError) as error:
+            workflow._verify_exp_handoff("group/exp")
+        self.assertEqual(5, error.exception.status)
+        self.assertIn("VERIFY FAILED terminal handoff", str(error.exception))
+
+    def test_handoff_verify_fails_closed_on_identity_mismatch(self) -> None:
+        runner = FakeRunner()
+        runner.respond(
+            "pathlib.Path.home()",
+            stdout=json.dumps(
+                {"identity": "a" * 64, "digest": "3" * 64, "size": 100}
+            ),
+        )
+        runner.respond(
+            "get-object",
+            stdout=json.dumps(
+                {"identity": "b" * 64, "digest": "3" * 64, "size": 100}
+            ),
+        )
+        workflow = self.workflow(runner)
+        with self.assertRaises(cvm_pull.PullError) as error:
+            workflow._verify_exp_handoff("group/exp")
+        self.assertEqual(5, error.exception.status)
+
+    def test_handoff_verify_succeeds_when_bytes_match_exactly(self) -> None:
+        runner = FakeRunner()
+        payload = json.dumps(
+            {"identity": "a" * 64, "digest": "9" * 64, "size": 100}
+        )
+        runner.respond("pathlib.Path.home()", stdout=payload)
+        runner.respond("get-object", stdout=payload)
+        workflow = self.workflow(runner)
+        identity, digest, size = workflow._verify_exp_handoff("group/exp")
+        self.assertEqual(identity, "a" * 64)
+        self.assertEqual(digest, "9" * 64)
+        self.assertEqual(size, 100)
+
+    def test_publish_gates_cleanup_on_handoff_verify(self) -> None:
+        fresh = "group/fresh"
+        runner = FakeRunner()
+        workflow = self.workflow(runner)
+        upload_calls: list[str] = []
+        cleanup_calls: list[str] = []
+        with (
+            mock.patch.object(
+                workflow,
+                "_upload_exp",
+                side_effect=lambda exp: upload_calls.append(f"exp:{exp}"),
+            ),
+            mock.patch.object(
+                workflow,
+                "_upload_exp_handoff",
+                side_effect=lambda exp: upload_calls.append(f"handoff:{exp}"),
+            ),
+            mock.patch.object(workflow, "_verify_exp", return_value=7),
+            mock.patch.object(
+                workflow,
+                "_verify_exp_handoff",
+                side_effect=cvm_pull.PullError(
+                    "VERIFY FAILED terminal handoff (synthetic)", 5
+                ),
+            ),
+            mock.patch.object(
+                workflow,
+                "_cleanup_exp",
+                side_effect=lambda exp: cleanup_calls.append(exp),
+            ),
+        ):
+            plan = cvm_pull.PullPlan(
+                cvm_exps=(fresh,),
+                candidates=(fresh,),
+                s3_exps=frozenset(),
+                publish=(fresh,),
+                preserve=(),
+            )
+            with self.assertRaises(cvm_pull.PullError) as error:
+                workflow.publish(plan)
+        self.assertEqual(5, error.exception.status)
+        self.assertEqual([f"exp:{fresh}", f"handoff:{fresh}"], upload_calls)
+        self.assertEqual([], cleanup_calls)
 
     def test_s3_listing_filters_relative_keys_with_the_same_excludes(self) -> None:
         runner = FakeRunner()
