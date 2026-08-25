@@ -58,6 +58,10 @@ plugin_deployment = _load(
     "plugin_deployment", "scripts/pilot/plugin_deployment.py"
 )
 smoke = _load("smoke_installed_plugin", "scripts/release/smoke_installed_plugin.py")
+agent_source_projection = _load(
+    "agent_source_projection", "scripts/pilot/agent_source_projection.py"
+)
+trusted_tools = _load("trusted_tools", "scripts/pilot/trusted_tools.py")
 
 # ``cvm_install_plugin`` imports smoke via ``from scripts.release import
 # smoke_installed_plugin as smoke``, so the module object bound inside the
@@ -344,6 +348,13 @@ def _build_transferred_source(root: Path) -> tuple[Path, str]:
         probe = src / runtime_dir / probe_rel
         probe.parent.mkdir(parents=True, exist_ok=True)
         probe.write_bytes(b"probe\n")
+    shutil.copytree(
+        REPO_ROOT / agent_source_projection.PROJECTION_ROOT_REL,
+        src / agent_source_projection.PROJECTION_ROOT_REL,
+    )
+    trusted_manifest = src / trusted_tools.MANIFEST_RELATIVE
+    trusted_manifest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(REPO_ROOT / trusted_tools.MANIFEST_RELATIVE, trusted_manifest)
     digest = plugin_deployment.write_stage_manifest(src)
     return src, digest
 
@@ -660,6 +671,8 @@ class ManifestDrivenIdentityTests(unittest.TestCase):
             stale_file.write_text(
                 "this file was removed from the Mac side\n", encoding="utf-8"
             )
+            private_claude = src / ".claude/private-state.txt"
+            private_claude.write_text("must never publish\n", encoding="utf-8")
 
             codex_home_root = root / "home"
             codex_home_root.mkdir()
@@ -679,6 +692,14 @@ class ManifestDrivenIdentityTests(unittest.TestCase):
                     (publish_tree / runtime_dir / probe_rel).is_file(),
                     f"listed critical runtime probe missing: {runtime_dir}/{probe_rel}",
                 )
+            self.assertTrue(
+                (publish_tree / agent_source_projection.PROJECTION_ROOT_REL).is_dir()
+            )
+            self.assertEqual(
+                (REPO_ROOT / trusted_tools.MANIFEST_RELATIVE).read_bytes(),
+                (publish_tree / trusted_tools.MANIFEST_RELATIVE).read_bytes(),
+            )
+            self.assertFalse((publish_tree / ".claude/private-state.txt").exists())
             # Stale unlisted file is absent from publish staging even
             # though it lived under the persistent source root.
             self.assertFalse(

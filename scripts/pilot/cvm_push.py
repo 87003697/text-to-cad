@@ -34,6 +34,7 @@ RSYNC_SUMMARY_PATTERN = re.compile(
 
 from scripts.pilot import plugin_deployment as _plugin_deployment  # noqa: E402
 from scripts.pilot import agent_source_projection as _agent_source_projection  # noqa: E402
+from scripts.pilot import trusted_tools as _trusted_tools  # noqa: E402
 
 # Mac-side staging hygiene only. This keeps ``.venv/`` symlinks, ``.agents/``,
 # editor scratch, and other local state from ever entering the stage in the
@@ -747,6 +748,17 @@ class CvmPush:
             raise PushError(
                 f"Agent projection bundle failed with status {status}", 4
             )
+        status = self.runner.stream(
+            ["scripts/bundle/bundle-trusted-tools.sh"],
+            cwd=stage,
+            log_path=self.log_path,
+            env=env,
+            echo=False,
+        )
+        if status != 0:
+            raise PushError(
+                f"Trusted tools manifest bundle failed with status {status}", 4
+            )
 
     def materialize_skill_symlinks(self, stage: Path) -> None:
         """Replace stage-internal development skill links with physical copies."""
@@ -869,6 +881,25 @@ class CvmPush:
         ) as exc:
             raise PushError(
                 f"Cannot carry Agent Source Projection into CVM transfer: {exc}",
+                4,
+            ) from exc
+        trusted_manifest_source = stage / _trusted_tools.MANIFEST_RELATIVE
+        trusted_manifest_target = transfer_tree / _trusted_tools.MANIFEST_RELATIVE
+        try:
+            _trusted_tools.validate_trusted_tools(stage)
+            if (
+                trusted_manifest_source.is_symlink()
+                or not trusted_manifest_source.is_file()
+                or trusted_manifest_target.exists()
+                or trusted_manifest_target.is_symlink()
+            ):
+                raise OSError("trusted tools manifest source/target is unsafe")
+            trusted_manifest_target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(trusted_manifest_source, trusted_manifest_target)
+            _trusted_tools.validate_trusted_tools(transfer_tree)
+        except (OSError, _trusted_tools.TrustedToolsError) as exc:
+            raise PushError(
+                f"Cannot carry trusted tools manifest into CVM transfer: {exc}",
                 4,
             ) from exc
         try:
