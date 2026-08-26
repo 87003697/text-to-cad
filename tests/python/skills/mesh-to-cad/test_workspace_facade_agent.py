@@ -57,6 +57,7 @@ def _isolated_package_import(package_name: str):
         for name, module in sys.modules.items()
         if name == package_name or name.startswith(prefix)
     }
+    saved_path = sys.path[:]
     try:
         for name in saved:
             sys.modules.pop(name, None)
@@ -66,6 +67,7 @@ def _isolated_package_import(package_name: str):
             if name == package_name or name.startswith(prefix):
                 sys.modules.pop(name, None)
         sys.modules.update(saved)
+        sys.path[:] = saved_path
 
 
 def _sha(data: bytes) -> str:
