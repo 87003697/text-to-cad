@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import builtins
 import json
+import os
 from pathlib import Path
+import stat
 import tempfile
 import unittest
 from unittest import mock
@@ -31,6 +33,7 @@ from meshscope.reference_capability import (  # noqa: E402
     RESPONSE_SCHEMA,
     SUMMARY_SCHEMA,
 )
+import meshscope.reference_capability as reference_module  # noqa: E402
 
 
 def _cube() -> trimesh.Trimesh:
@@ -311,6 +314,89 @@ class ReferenceCapabilityTests(unittest.TestCase):
             lambda: ReferenceCapability("job-escape", self.root / ".." / self.reference.name),
             "invalid_reference_material",
         )
+
+    def test_windows_platform_opens_a_regular_ply_without_o_nofollow(self) -> None:
+        with mock.patch.object(
+            reference_module, "_reference_windows_platform", return_value=True
+        ):
+            capability = ReferenceCapability("windows-reference", self.reference)
+        self.assertEqual(
+            8,
+            capability.handle(
+                self.request("summary", reference_id="windows-reference")
+            )["observation"]["stats"]["vertices"],
+        )
+
+    def test_windows_platform_rejects_reparse_metadata_before_open(self) -> None:
+        flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+        metadata = type(
+            "ReparseStat",
+            (),
+            {
+                "st_mode": stat.S_IFREG | 0o600,
+                "st_size": 1,
+                "st_nlink": 1,
+                "st_dev": 1,
+                "st_ino": 2,
+                "st_mtime_ns": 3,
+                "st_ctime_ns": 4,
+                "st_file_attributes": flag,
+            },
+        )()
+        with (
+            mock.patch.object(
+                reference_module, "_reference_windows_platform", return_value=True
+            ),
+            mock.patch.object(reference_module.os, "lstat", return_value=metadata),
+            mock.patch.object(reference_module.os, "open") as opened,
+            self.assertRaises(ReferenceCapabilityError) as raised,
+        ):
+            reference_module._open_reference_descriptor(self.reference)
+        self.assertEqual("invalid_reference_material", raised.exception.classification)
+        opened.assert_not_called()
+
+    def test_reference_descriptor_rejects_identity_mutation_before_read(self) -> None:
+        original_fstat = reference_module.os.fstat
+
+        def changed_fstat(descriptor):
+            metadata = original_fstat(descriptor)
+            values = list(metadata)
+            values[6] += 1
+            return os.stat_result(values)
+
+        with (
+            mock.patch.object(
+                reference_module, "_reference_windows_platform", return_value=True
+            ),
+            mock.patch.object(reference_module.os, "fstat", side_effect=changed_fstat),
+        ):
+            with self.assertRaises(ReferenceCapabilityError) as raised:
+                reference_module._open_reference_descriptor(self.reference)
+        self.assertEqual("invalid_reference_material", raised.exception.classification)
+
+    def test_reference_loader_rejects_identity_mutation_after_parse(self) -> None:
+        original_fstat = reference_module.os.fstat
+        calls = 0
+
+        def changed_after_open(descriptor):
+            nonlocal calls
+            calls += 1
+            metadata = original_fstat(descriptor)
+            if calls == 2:
+                values = list(metadata)
+                values[6] += 1
+                return os.stat_result(values)
+            return metadata
+
+        with (
+            mock.patch.object(
+                reference_module, "_reference_windows_platform", return_value=True
+            ),
+            mock.patch.object(reference_module.os, "fstat", side_effect=changed_after_open),
+        ):
+            with self.assertRaises(ReferenceCapabilityError) as raised:
+                ReferenceCapability("windows-mutated", self.reference)
+        self.assertEqual("invalid_reference_material", raised.exception.classification)
 
     def test_texture_comments_never_resolve_external_files(self) -> None:
         outside = self.root.parent / "outside.png"

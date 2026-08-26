@@ -956,20 +956,49 @@ _NOTES_HEADINGS = (
 )
 
 
-def _is_canonical_absolute_path(value: str) -> bool:
-    """Fail-closed check for a native absolute filesystem path.
+_SANDBOX_REPO_ROOT = PurePosixPath("/workspace/repo")
+_SANDBOX_ENTRYPOINT_ROOT = _SANDBOX_REPO_ROOT / "skills"
 
-    Registered tool entrypoints live on the executor host. On a POSIX host
-    that means a single-leading-slash absolute path; on Windows it means a
-    drive-letter or UNC path in native form. In both cases the string must
-    match the host's canonical spelling (no ``..``, no double roots, no
-    mixed separators, no trailing separator) so a serialized registry
-    cannot smuggle a traversal or a foreign-flavored path through the
-    permissive host parser.
+
+def _is_canonical_sandbox_absolute_path(value: str) -> bool:
+    """Validate the fixed POSIX namespace emitted by the pilot runner.
+
+    This is a serialized container path, not a host filesystem path.  It must
+    therefore be parsed with ``PurePosixPath`` even when the validator itself
+    runs on Windows.  Only the shipped ``/workspace/repo/skills`` subtree is
+    an entrypoint namespace; callers still bind the bytes to the host-side
+    executable before execution.
     """
 
-    if not value or "\0" in value:
+    if not isinstance(value, str) or not value or "\0" in value:
         return False
+    if not value.startswith("/workspace/repo/") or "\\" in value:
+        return False
+    pure = PurePosixPath(value)
+    if (
+        pure.as_posix() != value
+        or not pure.is_absolute()
+        or ".." in pure.parts
+        or not pure.is_relative_to(_SANDBOX_ENTRYPOINT_ROOT)
+    ):
+        return False
+    return pure != _SANDBOX_ENTRYPOINT_ROOT
+
+
+def _is_canonical_absolute_path(value: str) -> bool:
+    """Fail-closed check for a host path or fixed sandbox entrypoint.
+
+    Registered tool entrypoints normally carry the runner's fixed POSIX
+    ``/workspace/repo/skills`` namespace.  That representation is stable
+    across executor hosts and is checked independently above.  Test and
+    offline callers may instead provide an actual host path; those paths use
+    the native POSIX or Windows spelling and never cross the two parsers.
+    """
+
+    if not isinstance(value, str) or not value or "\0" in value:
+        return False
+    if _is_canonical_sandbox_absolute_path(value):
+        return True
     if os.name == "nt":
         return _is_canonical_windows_absolute_path(value)
     return _is_canonical_posix_absolute_path(value)

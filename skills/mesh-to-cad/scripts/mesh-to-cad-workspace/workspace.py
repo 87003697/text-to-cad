@@ -1975,6 +1975,7 @@ _OBJECTIVE_FACT_FIELDS = {
 _MANIFEST_EXCLUDED_ROOTS = frozenset({".git", "run", "work"})
 _AGENT_MAX_FILE_BYTES = 512 * 1024 * 1024
 _AGENT_MAX_TREE_BYTES = 1024 * 1024 * 1024
+_AGENT_MAX_TREE_FILES = 4096
 
 
 def _agent_source_file(root: Path, value: str) -> Path:
@@ -2000,7 +2001,118 @@ def _agent_relative(root: Path, value: str) -> str:
     return _agent_source_file(root, value).relative_to(root).as_posix()
 
 
+def _agent_is_reparse_point(metadata: os.stat_result) -> bool:
+    flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+    return bool(flag and getattr(metadata, "st_file_attributes", 0) & flag)
+
+
+def _agent_identity(metadata: os.stat_result) -> tuple[object, ...]:
+    return tuple(
+        getattr(metadata, field, None)
+        for field in (
+            "st_dev",
+            "st_ino",
+            "st_nlink",
+            "st_mode",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+            "st_file_attributes",
+        )
+    )
+
+
+def _agent_same_identity(
+    first: os.stat_result,
+    second: os.stat_result,
+) -> bool:
+    return _agent_identity(first) == _agent_identity(second)
+
+
+def _agent_lstat(path: Path) -> os.stat_result:
+    try:
+        return os.lstat(path)
+    except OSError as error:
+        raise WorkspaceError(
+            "invalid_workspace_path", "Agent artifact cannot be inspected"
+        ) from error
+
+
+def _agent_validate_directory_stat(metadata: os.stat_result) -> None:
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or _agent_is_reparse_point(metadata)
+    ):
+        raise WorkspaceError("invalid_workspace_path", "Agent tree contains symlink")
+
+
+def _agent_validate_file_stat(
+    metadata: os.stat_result,
+    *,
+    max_bytes: int = _AGENT_MAX_FILE_BYTES,
+) -> None:
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or _agent_is_reparse_point(metadata)
+        or metadata.st_nlink != 1
+        or metadata.st_size > _AGENT_MAX_FILE_BYTES
+        or metadata.st_size > max_bytes
+    ):
+        raise WorkspaceError(
+            "invalid_workspace_path", "Agent artifact is not a regular file"
+        )
+
+
+def _agent_windows_platform() -> bool:
+    """Private seam for the path-based implementation on Windows."""
+
+    return os.name == "nt"
+
+
+def _agent_open_windows_file(path: Path) -> tuple[int, os.stat_result]:
+    """Open one file without POSIX ``dir_fd`` APIs, with identity binding."""
+
+    expected = _agent_lstat(path)
+    _agent_validate_file_stat(expected)
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_CLOEXEC", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        _agent_validate_file_stat(opened)
+        current = _agent_lstat(path)
+        _agent_validate_file_stat(current)
+        if (
+            not _agent_same_identity(expected, opened)
+            or not _agent_same_identity(expected, current)
+            or not _agent_same_identity(current, opened)
+        ):
+            raise WorkspaceError(
+                "invalid_workspace_path", "Agent artifact changed before copy"
+            )
+        return descriptor, expected
+    except WorkspaceError:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+    except OSError as error:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise WorkspaceError(
+            "invalid_workspace_path", "Agent artifact cannot be opened"
+        ) from error
+
+
 def _agent_open(path: Path, *, directory: bool = False, dir_fd: int | None = None) -> int:
+    if _agent_windows_platform():
+        if directory or dir_fd is not None:
+            raise WorkspaceError(
+                "invalid_workspace_path", "Agent directory descriptors are unsupported"
+            )
+        descriptor, _ = _agent_open_windows_file(path)
+        return descriptor
     flags = (
         os.O_RDONLY
         | getattr(os, "O_NOFOLLOW", 0)
@@ -2025,7 +2137,7 @@ def _copy_agent_file(source: Path, target: Path) -> None:
         os.close(descriptor)
 
 
-def _copy_agent_tree(source: Path, target: Path) -> None:
+def _copy_agent_tree_posix(source: Path, target: Path) -> None:
     source_fd = _agent_open(source, directory=True)
     total = 0
 
@@ -2084,20 +2196,107 @@ def _copy_agent_tree(source: Path, target: Path) -> None:
         os.close(source_fd)
 
 
+def _copy_agent_tree_windows(source: Path, target: Path) -> None:
+    """Copy an Agent tree using path traversal on hosts without ``dir_fd``.
+
+    Every directory and file is checked with no-follow ``lstat`` metadata. A
+    regular file is opened and bound to that metadata before its descriptor is
+    handed to the shared byte-copy guard; directory identities are checked
+    again after traversal. A replacement therefore fails closed even though
+    the Windows CRT cannot provide POSIX descriptor-relative opens.
+    """
+
+    total = 0
+    file_count = 0
+
+    def visit(directory: Path, destination: Path, relative: PurePosixPath) -> None:
+        nonlocal total, file_count
+        before = _agent_lstat(directory)
+        _agent_validate_directory_stat(before)
+        try:
+            with os.scandir(directory) as entries:
+                for entry in sorted(entries, key=lambda item: item.name):
+                    if entry.name in {"", ".", ".."}:
+                        raise WorkspaceError(
+                            "invalid_workspace_path", "Agent tree contains symlink"
+                        )
+                    if not relative.parts and entry.name == "bootstrap.json":
+                        continue
+                    child = directory / entry.name
+                    child_relative = relative / entry.name
+                    metadata = _agent_lstat(child)
+                    if stat.S_ISDIR(metadata.st_mode):
+                        _agent_validate_directory_stat(metadata)
+                        child_destination = destination / child_relative
+                        child_destination.mkdir(parents=True, exist_ok=True)
+                        visit(child, destination, child_relative)
+                        continue
+                    _agent_validate_file_stat(
+                        metadata,
+                        max_bytes=_AGENT_MAX_TREE_BYTES - total,
+                    )
+                    file_count += 1
+                    if file_count > _AGENT_MAX_TREE_FILES:
+                        raise WorkspaceError(
+                            "invalid_workspace_path", "Agent tree has too many files"
+                        )
+                    if total + metadata.st_size > _AGENT_MAX_TREE_BYTES:
+                        raise WorkspaceError(
+                            "invalid_workspace_path", "Agent tree is too large"
+                        )
+                    descriptor, expected = _agent_open_windows_file(child)
+                    try:
+                        copied = _copy_agent_file_from_descriptor(
+                            descriptor,
+                            destination / child_relative,
+                            max_bytes=_AGENT_MAX_TREE_BYTES - total,
+                            expected_before=expected,
+                        )
+                    finally:
+                        os.close(descriptor)
+                    total += copied
+                    if total > _AGENT_MAX_TREE_BYTES:
+                        raise WorkspaceError(
+                            "invalid_workspace_path", "Agent tree is too large"
+                        )
+        finally:
+            after = _agent_lstat(directory)
+            if not _agent_same_identity(before, after):
+                raise WorkspaceError(
+                    "invalid_workspace_path", "Agent tree changed during copy"
+                )
+
+    target_created = False
+    try:
+        root_metadata = _agent_lstat(source)
+        _agent_validate_directory_stat(root_metadata)
+        target.mkdir(parents=True, exist_ok=False)
+        target_created = True
+        visit(source, target, PurePosixPath())
+    except Exception:
+        if target_created:
+            shutil.rmtree(target, ignore_errors=True)
+        raise
+
+
+def _copy_agent_tree(source: Path, target: Path) -> None:
+    if _agent_windows_platform():
+        _copy_agent_tree_windows(source, target)
+        return
+    _copy_agent_tree_posix(source, target)
+
+
 def _copy_agent_file_from_descriptor(
     descriptor: int,
     target: Path,
     *,
     max_bytes: int = _AGENT_MAX_FILE_BYTES,
+    expected_before: os.stat_result | None = None,
 ) -> int:
     before = os.fstat(descriptor)
-    if (
-        not stat.S_ISREG(before.st_mode)
-        or before.st_nlink != 1
-        or before.st_size > _AGENT_MAX_FILE_BYTES
-        or before.st_size > max_bytes
-    ):
-        raise WorkspaceError("invalid_workspace_path", "Agent artifact is not a regular file")
+    _agent_validate_file_stat(before, max_bytes=max_bytes)
+    if expected_before is not None and not _agent_same_identity(expected_before, before):
+        raise WorkspaceError("invalid_workspace_path", "Agent artifact changed before copy")
     target.parent.mkdir(parents=True, exist_ok=True)
     target_created = False
     try:
@@ -2112,6 +2311,7 @@ def _copy_agent_file_from_descriptor(
     except OSError as error:
         raise WorkspaceError("invalid_workspace_path", "Agent artifact target is unavailable") from error
     target_created = True
+    failed = False
     try:
         digest = hashlib.sha256()
         copied = 0
@@ -2165,6 +2365,9 @@ def _copy_agent_file_from_descriptor(
             or copied_metadata.st_mode != after.st_mode
             or copied_metadata.st_mtime_ns != after.st_mtime_ns
             or copied_metadata.st_ctime_ns != after.st_ctime_ns
+            or getattr(copied_metadata, "st_file_attributes", None)
+            != getattr(after, "st_file_attributes", None)
+            or _agent_is_reparse_point(after)
             or digest.digest() != reread.digest()
         ):
             raise WorkspaceError("invalid_workspace_path", "Agent artifact changed during copy")
@@ -2173,11 +2376,17 @@ def _copy_agent_file_from_descriptor(
             raise WorkspaceError("invalid_workspace_path", "Agent artifact target size is invalid")
         os.fsync(target_fd)
     except Exception:
-        if target_created:
-            target.unlink(missing_ok=True)
+        failed = True
         raise
     finally:
-        os.close(target_fd)
+        try:
+            os.close(target_fd)
+        finally:
+            if failed and target_created:
+                try:
+                    target.unlink(missing_ok=True)
+                except OSError:
+                    pass
     return copied
 
 

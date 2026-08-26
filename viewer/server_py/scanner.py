@@ -156,11 +156,23 @@ def path_is_inside(file_path: str, root_path: str) -> bool:
     # viewer opens any absolute directory named in the page URL.
     file_abs = os.path.abspath(file_path)
     root_abs = os.path.abspath(root_path)
-    if relative_path_stays_inside_root(os.path.relpath(file_abs, root_abs)):
+    try:
+        lexical_relative = os.path.relpath(file_abs, root_abs)
+    except ValueError:
+        # Windows cannot form a relative path across drive letters or UNC
+        # shares.  Those locations are outside the requested root; never
+        # normalize them onto the current volume just to make the comparison
+        # succeed.
+        return False
+    if relative_path_stays_inside_root(lexical_relative):
         return True
-    return relative_path_stays_inside_root(
-        os.path.relpath(os.path.realpath(file_path), os.path.realpath(root_path))
-    )
+    try:
+        resolved_relative = os.path.relpath(
+            os.path.realpath(file_path), os.path.realpath(root_path)
+        )
+    except ValueError:
+        return False
+    return relative_path_stays_inside_root(resolved_relative)
 
 
 # --- file stats / hashing / urls ---
