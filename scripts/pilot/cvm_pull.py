@@ -443,9 +443,14 @@ print(json.dumps({
             if should_preserve:
                 preserve.append(item)
             else:
-                publish.append(item.exp)
-                if item.final_status != 0 and not item.has_terminal_handoff:
+                if (
+                    self.request.postmortem_policy
+                    is PostmortemPolicy.INCLUDE_RETAIN
+                    and item.final_status != 0
+                    and not item.has_terminal_handoff
+                ):
                     handoffless_postmortems.add(item.exp)
+                publish.append(item.exp)
         return PullPlan(
             cvm_exps=cvm_exps,
             candidates=candidates,
@@ -585,6 +590,8 @@ except FileNotFoundError:
         raise SystemExit("terminal handoff is not a regular file")
     handoff = None
 else:
+    if allow_missing_handoff:
+        raise SystemExit("terminal handoff appeared after planning")
     if not stat.S_ISREG(info.st_mode):
         raise SystemExit("terminal handoff is not a regular file")
     handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
@@ -746,6 +753,15 @@ print(json.dumps({"expected": expected, "local": local, "s3": s3}, sort_keys=Tru
         )
         result = self.runner.remote(command, check=False)
         if result.returncode != 0:
+            if (
+                allow_missing_handoff
+                and "terminal handoff appeared after planning"
+                in (result.stderr or "")
+            ):
+                raise PullError(
+                    f"terminal handoff appeared after planning: {exp}; replan required.",
+                    5,
+                )
             raise PullError(f"Cannot verify terminal content: {exp}", 5)
         try:
             payload = json.loads(result.stdout)

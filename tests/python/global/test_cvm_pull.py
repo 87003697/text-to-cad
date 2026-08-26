@@ -3,6 +3,8 @@ from __future__ import annotations
 import fnmatch
 import importlib.util
 import json
+import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -563,6 +565,105 @@ class PullPlanTests(unittest.TestCase):
             with self.assertRaisesRegex(cvm_pull.PullError, "missing handoff"):
                 workflow.publish(plan)
         upload_handoff.assert_called_once_with("group/missing-handoff")
+
+    def test_handoffless_publish_rejects_handoff_appearing_after_planning(self) -> None:
+        with tempfile.TemporaryDirectory() as home_text:
+            handoff = (
+                Path(home_text)
+                / "text-to-cad/outputs/group/.internal-terminal-validation/early-failure"
+                / "terminal-validation.json"
+            )
+            handoff.mkdir(parents=True)
+
+            class RaceRunner(FakeRunner):
+                def __init__(self) -> None:
+                    super().__init__()
+                    self.inspecting = True
+
+                def remote(self, command: str, *, check: bool = True):
+                    self.remote_commands.append(command)
+                    if self.inspecting:
+                        self.inspecting = False
+                        return mock.Mock(
+                            returncode=0,
+                            stdout=json.dumps(
+                                {
+                                    "path_safe": True,
+                                    "complete": True,
+                                    "final_status": 1,
+                                    "has_postmortem": True,
+                                    "has_terminal_handoff": False,
+                                }
+                            ),
+                            stderr="",
+                        )
+                    environment = os.environ.copy()
+                    environment["HOME"] = home_text
+                    return subprocess.run(
+                        shlex.split(command),
+                        cwd=cvm_pull.REPO_ROOT,
+                        env=environment,
+                        check=False,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    )
+
+            runner = RaceRunner()
+            workflow = cvm_pull.CvmPull(
+                cvm_pull.PullRequest(
+                    None,
+                    None,
+                    cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
+                ),
+                runner,
+            )
+            plan = workflow.qualify(
+                ("group/early-failure",), ("group/early-failure",)
+            )
+            with (
+                mock.patch.object(workflow, "_upload_exp"),
+                mock.patch.object(workflow, "_upload_exp_handoff") as upload_handoff,
+                mock.patch.object(workflow, "_verify_exp_handoff") as verify_handoff,
+            ):
+                with self.assertRaisesRegex(
+                    cvm_pull.PullError,
+                    "terminal handoff appeared after planning",
+                ) as error:
+                    workflow.publish(plan)
+            self.assertEqual(error.exception.status, 5)
+            upload_handoff.assert_not_called()
+            verify_handoff.assert_not_called()
+
+    def test_handoffless_postmortem_is_exclusive_to_include_retain(self) -> None:
+        payload = {
+            "path_safe": True,
+            "complete": True,
+            "final_status": 1,
+            "has_postmortem": True,
+            "has_terminal_handoff": False,
+        }
+        for policy in (
+            cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
+            cvm_pull.PostmortemPolicy.INCLUDE_CLEAN,
+            cvm_pull.PostmortemPolicy.DISCARD_CLEAN,
+        ):
+            with self.subTest(policy=policy):
+                runner = FakeRunner()
+                runner.respond("python3 -c", stdout=json.dumps(payload))
+                workflow = cvm_pull.CvmPull(
+                    cvm_pull.PullRequest(None, None, policy),
+                    runner,
+                )
+                plan = workflow.qualify(
+                    ("group/early-failure",), ("group/early-failure",)
+                )
+                expected = (
+                    frozenset({"group/early-failure"})
+                    if policy is cvm_pull.PostmortemPolicy.INCLUDE_RETAIN
+                    else frozenset()
+                )
+                self.assertEqual(plan.handoffless_postmortems, expected)
 
     def test_existing_verified_postmortem_is_not_reported_as_uploaded(self) -> None:
         runner = FakeRunner()
