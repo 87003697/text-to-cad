@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+from contextlib import contextmanager
 from io import BytesIO
 import json
 import os
@@ -39,6 +40,32 @@ def _load_facade():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+@contextmanager
+def _isolated_package_import(package_name: str):
+    """Load one provider package from the path selected by its importer.
+
+    The full skill suite imports editable ``meshscope`` for Agent Surface tests
+    before this file exercises the physically materialized shipped runtime. Keep
+    that ambient module state out of the provider call, then restore it so the
+    test remains a good citizen for later modules.
+    """
+    prefix = f"{package_name}."
+    saved = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == package_name or name.startswith(prefix)
+    }
+    try:
+        for name in saved:
+            sys.modules.pop(name, None)
+        yield
+    finally:
+        for name in tuple(sys.modules):
+            if name == package_name or name.startswith(prefix):
+                sys.modules.pop(name, None)
+        sys.modules.update(saved)
 
 
 def _sha(data: bytes) -> str:
@@ -886,12 +913,13 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
                 request, renderer=renderer
             )
 
-        published = facade.publish_step_zero_from_candidate(
-            case.workspace,
-            attempt=1,
-            source=source,
-            evidence_provider=real_provider,
-        )
+        with _isolated_package_import("meshscope"):
+            published = facade.publish_step_zero_from_candidate(
+                case.workspace,
+                attempt=1,
+                source=source,
+                evidence_provider=real_provider,
+            )
 
         self.assertEqual({"step": 0}, published)
         self.assertTrue(
