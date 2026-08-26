@@ -1840,6 +1840,12 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         from scripts.pilot import candidate_runtime as runtime_module
         from scripts.pilot import runner
 
+        loader_patch = mock.patch.object(
+            runtime_module, "_parse_tool_dependencies", return_value=()
+        )
+        loader_patch.start()
+        self.addCleanup(loader_patch.stop)
+
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             repo = root / "repo"
@@ -1882,7 +1888,6 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             with (
                 mock.patch.object(runtime_module, "_probe", return_value=probe),
                 mock.patch.object(runtime_module, "_copy_file_stream", side_effect=counted_copy),
-                mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=()),
             ):
                 first = runner.materialize_candidate_runtime(venv, cache, repo_root=repo)
                 first_calls = calls
