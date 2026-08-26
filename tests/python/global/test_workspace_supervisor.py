@@ -3823,9 +3823,10 @@ class WorkspaceSupervisorTests(unittest.TestCase):
 
                 final_preview_calls = 0
 
-                def counted_final_preview(*args, **kwargs):
+                def counted_final_preview(*args, scope=None, **kwargs):
                     nonlocal final_preview_calls
                     final_preview_calls += 1
+                    del scope
                     return case.write_provider_free_final_preview(*args, **kwargs)
 
                 finalize_from_claim = (
