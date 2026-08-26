@@ -1,3 +1,4 @@
 --editable ./scripts/packages/cadgen
 ezdxf
+playwright
 shapely

@@ -1,0 +1,2 @@
+--editable ./scripts/packages/cadgen
+playwright
