@@ -67,11 +67,15 @@ manifest; you never call `export_step`, write files under `work/`
 outside `source/`, or touch `candidate.glb`. Doing so causes
 `run_candidate_tool` to fail closed.
 
-`Location` is a transform value, not a context manager. Place a shape with
-`Location((x, y, z)) * shape` or `shape.moved(Location((x, y, z)))`; do not
-write `with Location(...):`. If a candidate operation fails, change the
-candidate source first, then reuse the same active Attempt's opaque operation
-handle while its command budget permits; never repeat unchanged source.
+`Location` is a transform value, not a context manager. Inside a
+`BuildPart` or `BuildSketch` context, place geometry with plural
+`with Locations((x, y, z)):`. In direct shape flow outside a builder, return or
+explicitly use `Location((x, y, z)) * shape` or
+`shape.moved(Location((x, y, z)))`; do not discard the transformed value.
+Never write singular `with Location(...):`. If a candidate operation fails,
+change the candidate source first, then reuse the same active Attempt's opaque
+operation handle while its command budget permits; never repeat unchanged
+source.
 
 ## Repair edits
 

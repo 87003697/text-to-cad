@@ -137,16 +137,19 @@ class AgentSourceProjectionTests(unittest.TestCase):
             / ".claude/agent-source-projection/skills/mesh-to-cad/references"
             / "candidate-authoring.md"
         ).read_text(encoding="utf-8")
+        normalized = " ".join(guidance.split())
         for required in (
             "`Location` is a transform value, not a context manager.",
+            "`with Locations((x, y, z)):`",
             "`Location((x, y, z)) * shape`",
             "`shape.moved(Location((x, y, z)))`",
             "`with Location(...):`",
+            "do not discard the transformed value",
             "reuse the same active Attempt's opaque operation",
             "never repeat unchanged source",
         ):
             with self.subTest(required=required):
-                self.assertIn(required, guidance)
+                self.assertIn(required, normalized)
 
     def test_verify_rejects_missing_extra_and_digest_mismatch(self) -> None:
         mutations = (

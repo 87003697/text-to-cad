@@ -245,9 +245,12 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
 
         valid_source = "\n".join(
             (
-                "from build123d import Box, Location",
+                "from build123d import Align, Box, BuildPart, Locations",
                 "def gen_step():",
-                "    return Location((0.1, 0.2, 0.3)) * Box(0.2, 0.1, 0.05)",
+                "    with BuildPart() as part:",
+                "        with Locations((0.1, 0.2, 0.3)):",
+                "            Box(0.2, 0.1, 0.05, align=(Align.CENTER, Align.CENTER, Align.CENTER))",
+                "    return part.part",
             )
         )
         with temporary_directory(prefix="cad-location-transform-") as valid_root_text:
@@ -262,6 +265,15 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
                 "candidate",
             )
             self.assertEqual(0, valid.returncode, valid.stderr)
+            minimum, maximum = _position_bounds(valid_root / "candidate/measurement.glb")
+            minimum = [round(value, 6) for value in minimum]
+            maximum = [round(value, 6) for value in maximum]
+            self.assertEqual([0.0, 0.15, 0.275], minimum)
+            self.assertEqual([0.2, 0.25, 0.325], maximum)
+            self.assertEqual(
+                [0.1, 0.2, 0.3],
+                [round((low + high) / 2.0, 6) for low, high in zip(minimum, maximum)],
+            )
 
     def test_public_adapter_builds_canonical_step_measurement_and_provenance(self) -> None:
         with temporary_directory(prefix="cad-canonical-build-") as temp_dir:
