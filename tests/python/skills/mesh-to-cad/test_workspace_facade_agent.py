@@ -66,17 +66,28 @@ def _isolated_package_import(package_name: str):
         sys.path[:] = saved_path
 
 
+def _assert_exact_import_state(test_case, expected_modules, expected_path) -> None:
+    """Assert keys, module identities, and path entries all match exactly."""
+    test_case.assertEqual(set(expected_modules), set(sys.modules))
+    for name, module in expected_modules.items():
+        test_case.assertIs(module, sys.modules[name])
+    test_case.assertEqual(expected_path, sys.path)
+
+
 class ProviderImportIsolationTests(unittest.TestCase):
     def _assert_restored_after(self, *, raise_inside: bool) -> None:
         inserted_name = "_codex_provider_isolation_inserted"
         removed_name = "_codex_provider_isolation_removed"
         replaced_name = "_codex_provider_isolation_replaced"
-        self.assertNotIn(inserted_name, sys.modules)
-        before_path = sys.path[:]
-        sys.modules[removed_name] = ModuleType(removed_name)
-        sys.modules[replaced_name] = ModuleType(replaced_name)
-        before_modules = sys.modules.copy()
+        ambient_modules = sys.modules.copy()
+        ambient_path = sys.path[:]
         try:
+            self.assertNotIn(inserted_name, sys.modules)
+            sys.modules[removed_name] = ModuleType(removed_name)
+            sys.modules[replaced_name] = ModuleType(replaced_name)
+            probe_modules = sys.modules.copy()
+            probe_path = sys.path[:]
+
             def exercise() -> None:
                 with _isolated_package_import("meshscope"):
                     self.assertFalse(
@@ -97,18 +108,23 @@ class ProviderImportIsolationTests(unittest.TestCase):
                     exercise()
             else:
                 exercise()
-            self.assertEqual(before_modules, dict(sys.modules))
-            self.assertEqual(before_path, sys.path)
+            _assert_exact_import_state(self, probe_modules, probe_path)
         finally:
             sys.modules.clear()
-            sys.modules.update(before_modules)
-            sys.path[:] = before_path
+            sys.modules.update(ambient_modules)
+            sys.path[:] = ambient_path
 
     def test_isolated_package_import_restores_exact_state_after_success(self) -> None:
+        ambient_modules = sys.modules.copy()
+        ambient_path = sys.path[:]
         self._assert_restored_after(raise_inside=False)
+        _assert_exact_import_state(self, ambient_modules, ambient_path)
 
     def test_isolated_package_import_restores_exact_state_after_exception(self) -> None:
+        ambient_modules = sys.modules.copy()
+        ambient_path = sys.path[:]
         self._assert_restored_after(raise_inside=True)
+        _assert_exact_import_state(self, ambient_modules, ambient_path)
 
 
 def _sha(data: bytes) -> str:
