@@ -2,7 +2,7 @@
 
 Status: **Current authority for implementation progress**  
 Updated: 2026-08-26  
-Baseline: `develop@2d438f3c`
+Integration baseline: `develop@7712be8d`
 
 This file records current product progress. Historical plans and handoffs retain
 design and execution evidence, but their old `Planning`, `not started`, or
@@ -80,7 +80,7 @@ These items do not require a new product architecture.
 | Item | Status | Completion evidence |
 |---|---|---|
 | Exact-head integration gate | **Pending rerun** | On the exact release head: Linux `bwrap` vertical slice, focused/full regression, bundle freshness, symlink check, installed-plugin smoke, and independent review all pass. |
-| Publish current `develop` | **Pending** | `origin/develop` contains the exact reviewed and tested head. At this update, local `develop` is three commits ahead. |
+| Publish integrated `develop` | **Complete — 2026-08-26** | `origin/develop` advanced through merge head `7712be8d` without a force push. |
 | Current-stack paid acceptance | **Pending** | Authorized airplane and bicycle runs use the current Agent Surface and shipped authority, publish valid terminal Workspaces and Final Deliveries, transfer successfully, and pass `pilot-review`. |
 | Reconstruction Spec matched comparison | **Pending evidence** | A Spec-enabled and Spec-disabled matched run supports or rejects a causal quality claim. The feature itself is implemented. |
 
