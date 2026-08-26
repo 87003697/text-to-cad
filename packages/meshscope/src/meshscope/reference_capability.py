@@ -33,8 +33,14 @@ DEFAULT_COMPONENT_LIMIT = 32
 MAX_COMPONENT_LIMIT = 32
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_REFERENCE_BYTES = 32 * 1024 * 1024
-MAX_REFERENCE_VERTICES = 150_000
-MAX_REFERENCE_FACES = 50_000
+# These are loose array-safety ceilings derived from the shortest valid ASCII
+# records in the accepted PLY subset.  ``_read_ply_header`` tightens them to
+# the exact declared format and remaining file bytes before invoking trimesh;
+# they are not an independent topology policy.
+_MIN_ASCII_VERTEX_RECORD_BYTES = len(b"0 0 0\n")
+_MIN_ASCII_FACE_RECORD_BYTES = len(b"3 0 0 0\n")
+MAX_REFERENCE_VERTICES = MAX_REFERENCE_BYTES // _MIN_ASCII_VERTEX_RECORD_BYTES
+MAX_REFERENCE_FACES = MAX_REFERENCE_BYTES // _MIN_ASCII_FACE_RECORD_BYTES
 MAX_REFERENCE_ID_LENGTH = 128
 PLY_HEADER_MAX_BYTES = 64 * 1024
 PLY_HEADER_MAX_LINES = 1024
@@ -199,6 +205,24 @@ _PLY_FORMATS = frozenset(
 )
 _PLY_FACE_COUNT_TYPES = frozenset({"uchar", "uint8", "ushort", "uint16"})
 _PLY_FACE_INDEX_TYPES = frozenset({"int", "uint", "int32", "uint32"})
+_PLY_SCALAR_BYTES = {
+    "char": 1,
+    "uchar": 1,
+    "short": 2,
+    "ushort": 2,
+    "int": 4,
+    "uint": 4,
+    "float": 4,
+    "double": 8,
+    "int8": 1,
+    "uint8": 1,
+    "int16": 2,
+    "uint16": 2,
+    "int32": 4,
+    "uint32": 4,
+    "float32": 4,
+    "float64": 8,
+}
 
 
 def _header_fail() -> None:
@@ -221,7 +245,7 @@ def _header_count(token: str, limit: int) -> int:
     return value
 
 
-def _read_ply_header(stream: BinaryIO) -> None:
+def _read_ply_header(stream: BinaryIO, file_size: int) -> tuple[int, int]:
     """Preflight a bounded canonical PLY header before parser allocation."""
 
     elements: dict[str, tuple[int, list[tuple[str, ...]]]] = {}
@@ -263,8 +287,7 @@ def _read_ply_header(stream: BinaryIO) -> None:
             name = tokens[1]
             if name in elements:
                 _header_fail()
-            limit = MAX_REFERENCE_VERTICES if name == "vertex" else MAX_REFERENCE_FACES
-            elements[name] = (_header_count(tokens[2], limit), [])
+            elements[name] = (_header_count(tokens[2], file_size), [])
             element_order.append(name)
             current = name
         elif keyword == "property":
@@ -319,6 +342,29 @@ def _read_ply_header(stream: BinaryIO) -> None:
     ):
         _header_fail()
 
+    vertex_count = elements["vertex"][0]
+    face_count = elements["face"][0]
+    if format_name == "ascii 1.0":
+        vertex_record_bytes = _MIN_ASCII_VERTEX_RECORD_BYTES
+        face_record_bytes = _MIN_ASCII_FACE_RECORD_BYTES
+    else:
+        vertex_record_bytes = sum(
+            _PLY_SCALAR_BYTES[item[1]] for item in vertex_properties
+        )
+        face_property = face_properties[0]
+        face_record_bytes = (
+            _PLY_SCALAR_BYTES[face_property[1]]
+            + 3 * _PLY_SCALAR_BYTES[face_property[2]]
+        )
+    remaining_bytes = file_size - stream.tell()
+    if (
+        remaining_bytes < 0
+        or vertex_count * vertex_record_bytes + face_count * face_record_bytes
+        > remaining_bytes
+    ):
+        _fail("reference_too_complex")
+    return vertex_count, face_count
+
 
 def _load_ply(path: Path) -> trimesh.Trimesh:
     """Open, preflight, and parse one PLY through one no-follow descriptor."""
@@ -340,7 +386,7 @@ def _load_ply(path: Path) -> trimesh.Trimesh:
             _fail("invalid_reference_material")
         stream = os.fdopen(descriptor, "rb", closefd=True)
         descriptor = None
-        _read_ply_header(stream)
+        header_counts = _read_ply_header(stream, metadata.st_size)
         stream.seek(0)
         mesh = trimesh.load(
             stream,
@@ -360,7 +406,11 @@ def _load_ply(path: Path) -> trimesh.Trimesh:
             stream.close()
         if descriptor is not None:
             os.close(descriptor)
-    if not isinstance(mesh, trimesh.Trimesh) or len(mesh.vertices) == 0:
+    if (
+        not isinstance(mesh, trimesh.Trimesh)
+        or len(mesh.vertices) == 0
+        or (len(mesh.vertices), len(mesh.faces)) != header_counts
+    ):
         _fail("invalid_reference_material")
     return mesh
 
