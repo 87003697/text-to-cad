@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+from types import ModuleType
 import unittest
 
 
@@ -52,22 +53,62 @@ def _isolated_package_import(package_name: str):
     test remains a good citizen for later modules.
     """
     prefix = f"{package_name}."
-    saved = {
-        name: module
-        for name, module in sys.modules.items()
-        if name == package_name or name.startswith(prefix)
-    }
+    saved_modules = sys.modules.copy()
     saved_path = sys.path[:]
     try:
-        for name in saved:
-            sys.modules.pop(name, None)
-        yield
-    finally:
         for name in tuple(sys.modules):
             if name == package_name or name.startswith(prefix):
                 sys.modules.pop(name, None)
-        sys.modules.update(saved)
+        yield
+    finally:
+        sys.modules.clear()
+        sys.modules.update(saved_modules)
         sys.path[:] = saved_path
+
+
+class ProviderImportIsolationTests(unittest.TestCase):
+    def _assert_restored_after(self, *, raise_inside: bool) -> None:
+        inserted_name = "_codex_provider_isolation_inserted"
+        removed_name = "_codex_provider_isolation_removed"
+        replaced_name = "_codex_provider_isolation_replaced"
+        self.assertNotIn(inserted_name, sys.modules)
+        before_path = sys.path[:]
+        sys.modules[removed_name] = ModuleType(removed_name)
+        sys.modules[replaced_name] = ModuleType(replaced_name)
+        before_modules = sys.modules.copy()
+        try:
+            def exercise() -> None:
+                with _isolated_package_import("meshscope"):
+                    self.assertFalse(
+                        any(
+                            name == "meshscope" or name.startswith("meshscope.")
+                            for name in sys.modules
+                        )
+                    )
+                    sys.modules[inserted_name] = ModuleType(inserted_name)
+                    sys.modules.pop(removed_name)
+                    sys.modules[replaced_name] = ModuleType(replaced_name)
+                    sys.path.insert(0, "/codex-provider-isolation-probe")
+                    if raise_inside:
+                        raise RuntimeError("isolation probe")
+
+            if raise_inside:
+                with self.assertRaisesRegex(RuntimeError, "isolation probe"):
+                    exercise()
+            else:
+                exercise()
+            self.assertEqual(before_modules, dict(sys.modules))
+            self.assertEqual(before_path, sys.path)
+        finally:
+            sys.modules.clear()
+            sys.modules.update(before_modules)
+            sys.path[:] = before_path
+
+    def test_isolated_package_import_restores_exact_state_after_success(self) -> None:
+        self._assert_restored_after(raise_inside=False)
+
+    def test_isolated_package_import_restores_exact_state_after_exception(self) -> None:
+        self._assert_restored_after(raise_inside=True)
 
 
 def _sha(data: bytes) -> str:
