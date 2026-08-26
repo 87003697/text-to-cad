@@ -54,6 +54,8 @@ class AgentSourceProjectionTests(unittest.TestCase):
             "Every selected target must be covered by one or more planned",
             "`/candidate/work/assessment.json` is Repair-only",
             "mesh-to-cad.assessment/1",
+            "`/candidate/selection.json` is the bounded semantic claim",
+            "exact six-key schema is in the projected",
             "exactly these seven lines, in this order",
             "`## Preserved Structural Features`",
             '"components":',
@@ -67,6 +69,16 @@ class AgentSourceProjectionTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, skill)
+        assessment = (
+            REPO_ROOT
+            / ".claude/agent-source-projection/skills/mesh-to-cad/references"
+            / "assessment.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Repair Cycle's Measured Step", assessment)
+        self.assertIn("Submit through `submit_repair`", assessment)
+        for forbidden in ("Step 0", "`null`", "submit_step_zero"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, assessment)
 
     def test_verify_rejects_missing_extra_and_digest_mismatch(self) -> None:
         mutations = (

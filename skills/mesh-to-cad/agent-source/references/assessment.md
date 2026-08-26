@@ -1,9 +1,9 @@
 # Assessment authoring
 
 `/candidate/work/assessment.json` is the one Agent-authored file that
-travels with a Measured Step. It records, in your own words, the
-falsifiable repair hypothesis that motivated this Attempt's source
-edit and how you plan to check it against the next measured facts.
+travels with a Repair Cycle's Measured Step. It records, in your own words,
+the falsifiable repair hypothesis that motivated this Attempt's source edit
+and how you plan to check it against the next measured facts.
 
 ## Fixed schema
 
@@ -24,10 +24,9 @@ Fields:
 
 - `schema` — must be exactly `mesh-to-cad.assessment/1`. Any other
   value is rejected.
-- `from_step` — the parent step ordinal you branched from. Use `null`
-  for Step 0. For a repair it must equal the `parent_step_ordinal`
-  in the decision facts the supervisor returned for the current
-  Attempt.
+- `from_step` — the parent step ordinal you branched from. It must equal
+  the `parent_step_ordinal` in the decision facts the supervisor returned
+  for the current Repair Attempt.
 - `to_step` — the step ordinal this Attempt will publish. It must
   equal the `step_ordinal` in the decision facts.
 - `preview_observation` — a short human-language note about the
@@ -60,8 +59,8 @@ or non-string values fail closed.
      next decision-fact reading should show if the hypothesis holds;
    - a `preview_observation` grounded only in what the preview
      identity's rendered variant let you see.
-5. Submit through the appropriate intent. The supervisor uses your
-   assessment as authored notes only.
+5. Submit through `submit_repair`. The supervisor uses your assessment as
+   authored notes only.
 
 ## What assessment is not
 
@@ -77,12 +76,12 @@ or non-string values fail closed.
   handles, digests other than the preview identity, or paths outside
   `/candidate/work/`. Cite semantic facts, not identifiers.
 - **Assessment cannot substitute for a submission.** Writing the
-  file has no effect until you invoke `submit_step_zero` or
-  `submit_repair` with the current handles.
+  file has no effect until you invoke `submit_repair` with the current
+  handles.
 
 ## One worked example
 
-Suppose the last Step 0 response reported:
+Suppose the parent Measured Step response reported:
 
 - `acceptance_state`: `unaccepted`
 - `residual_summary.objective_facts.global_depth_8_zero`: `false`

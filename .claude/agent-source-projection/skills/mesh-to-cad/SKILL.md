@@ -208,6 +208,10 @@ evidence, previews, manifests, and export artifacts.
   `mesh-to-cad.assessment/1`. Bind `from_step` to the parent and `to_step` to
   the current step; both prose fields must be nonempty strings. See the
   projected assessment reference for the authoring flow.
+- `/candidate/selection.json` is the bounded semantic claim consumed by
+  `select_and_finalize`; its exact six-key schema is in the projected
+  selection-claim reference. Do not add evidence, step, hash, acceptance, or
+  provider fields.
 - `/candidate/notes.md` must be readable UTF-8. Its `## ` headings must be
   exactly these seven lines, in this order:
   `## Input`, `## Modeling Intent`, `## Preserved Structural Features`,
