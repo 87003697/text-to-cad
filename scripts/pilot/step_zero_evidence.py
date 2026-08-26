@@ -74,6 +74,9 @@ _MESHSHOT_SRC = _SHIPPED_PACKAGES / "meshshot/src"
 
 
 _SHIPPED_IMPORT_LOCK = threading.RLock()
+# A package family may be reloaded only after this helper authenticated its
+# current root; unknown ambient modules remain fail-closed.
+_SHIPPED_PACKAGE_ROOTS: dict[str, Path] = {}
 
 
 @contextmanager
@@ -92,6 +95,37 @@ def _shipped_import_transaction():
             sys.dont_write_bytecode = previous_dont_write_bytecode
 
 
+def _package_modules(package_name: str) -> dict[str, object]:
+    """Return one top-level package family without touching other modules."""
+
+    prefix = f"{package_name}."
+    return {
+        name: module
+        for name, module in sys.modules.items()
+        if name == package_name or name.startswith(prefix)
+    }
+
+
+def _package_modules_are_from_root(
+    modules: Mapping[str, object], package_root: Path, package_name: str
+) -> bool:
+    package_directory = package_root / package_name
+    for module in modules.values():
+        origin = getattr(module, "__file__", None)
+        if not isinstance(origin, str):
+            return False
+        try:
+            Path(origin).resolve().relative_to(package_directory)
+        except (OSError, ValueError):
+            return False
+    return True
+
+
+def _evict_package_modules(package_name: str) -> None:
+    for name in _package_modules(package_name):
+        sys.modules.pop(name, None)
+
+
 def _ensure_shipped_package(package_root: Path, package_name: str) -> Path:
     """Import one package from its fixed vendored skill runtime."""
 
@@ -100,24 +134,64 @@ def _ensure_shipped_package(package_root: Path, package_name: str) -> Path:
             "provider_dependency_missing",
             f"{package_name} is missing from the shipped tool subset",
         )
-    if str(package_root) not in sys.path:
-        sys.path.insert(0, str(package_root))
+    resolved_root = package_root.resolve()
+    loaded_modules = _package_modules(package_name)
+    previous_root = _SHIPPED_PACKAGE_ROOTS.get(package_name)
+    if loaded_modules:
+        loaded_root = previous_root or resolved_root
+        if not _package_modules_are_from_root(
+            loaded_modules, loaded_root, package_name
+        ):
+            raise StepZeroEvidenceError(
+                "provider_dependency_missing",
+                f"{package_name} resolved outside the shipped tool subset",
+            )
+    switching_root = bool(loaded_modules and previous_root != resolved_root)
+    previous_path = sys.path[:]
+    previous_roots = _SHIPPED_PACKAGE_ROOTS.copy()
+    package_path = str(package_root)
+    path_changed = package_path not in sys.path or sys.path.index(package_path) != 0
+    if switching_root:
+        _evict_package_modules(package_name)
+    if path_changed:
+        sys.path[:] = [package_path] + [
+            path for path in sys.path if path != package_path
+        ]
+
+    def restore_previous_import_state() -> None:
+        _evict_package_modules(package_name)
+        sys.modules.update(loaded_modules)
+        if path_changed:
+            sys.path[:] = previous_path
+        _SHIPPED_PACKAGE_ROOTS.clear()
+        _SHIPPED_PACKAGE_ROOTS.update(previous_roots)
+
     try:
         with _shipped_import_transaction():
             package = importlib.import_module(package_name)
     except ImportError as error:
+        restore_previous_import_state()
         raise StepZeroEvidenceError(
             "provider_dependency_missing",
             f"{package_name} is not importable from the shipped tool subset: {error}",
         ) from error
+    except BaseException:
+        restore_previous_import_state()
+        raise
     origin = getattr(package, "__file__", None)
     try:
-        Path(origin).resolve().relative_to(package_root.resolve())
+        Path(origin).resolve().relative_to(resolved_root / package_name)
+        if not _package_modules_are_from_root(
+            _package_modules(package_name), resolved_root, package_name
+        ):
+            raise ValueError("package family resolved outside shipped root")
     except (TypeError, ValueError) as error:
+        restore_previous_import_state()
         raise StepZeroEvidenceError(
             "provider_dependency_missing",
             f"{package_name} resolved outside the shipped tool subset",
         ) from error
+    _SHIPPED_PACKAGE_ROOTS[package_name] = resolved_root
     return package_root
 
 

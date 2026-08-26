@@ -16,6 +16,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -23,6 +24,18 @@ from scripts.pilot import step_zero_evidence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _snapshot_tree(root: Path) -> dict[str, tuple[str, int]]:
+    files: dict[str, tuple[str, int]] = {}
+    for path in root.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        files[path.relative_to(root).as_posix()] = (
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            stat.S_IMODE(path.stat().st_mode),
+        )
+    return files
 
 
 class StepZeroEvidenceImportTests(unittest.TestCase):
@@ -33,6 +46,10 @@ class StepZeroEvidenceImportTests(unittest.TestCase):
             if name.split(".", 1)[0] in {"meshscope", "meshshot"}
         }
         self._sys_path = sys.path[:]
+        self._shipped_package_roots = (
+            step_zero_evidence._SHIPPED_PACKAGE_ROOTS.copy()
+        )
+        step_zero_evidence._SHIPPED_PACKAGE_ROOTS.clear()
         for name in self._provider_modules:
             sys.modules.pop(name, None)
         self.addCleanup(self._restore_provider_imports)
@@ -43,6 +60,10 @@ class StepZeroEvidenceImportTests(unittest.TestCase):
                 sys.modules.pop(name, None)
         sys.modules.update(self._provider_modules)
         sys.path[:] = self._sys_path
+        step_zero_evidence._SHIPPED_PACKAGE_ROOTS.clear()
+        step_zero_evidence._SHIPPED_PACKAGE_ROOTS.update(
+            self._shipped_package_roots
+        )
 
     def test_repo_root_resolves_to_repository_top(self) -> None:
         # The provider file lives at scripts/pilot/step_zero_evidence.py;
@@ -110,18 +131,6 @@ class StepZeroEvidenceImportTests(unittest.TestCase):
     def test_imports_do_not_mutate_a_published_package_tree(self) -> None:
         """Shipped imports must leave their digest-bound source tree untouched."""
 
-        def snapshot(root: Path) -> dict[str, tuple[str, int]]:
-            files: dict[str, tuple[str, int]] = {}
-            for path in root.rglob("*"):
-                if not path.is_file() or path.is_symlink():
-                    continue
-                digest = hashlib.sha256(path.read_bytes()).hexdigest()
-                files[path.relative_to(root).as_posix()] = (
-                    digest,
-                    stat.S_IMODE(path.stat().st_mode),
-                )
-            return files
-
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
             meshscope_src = root / "meshscope-src"
@@ -136,15 +145,15 @@ class StepZeroEvidenceImportTests(unittest.TestCase):
                 meshshot_src / "meshshot",
                 ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.so"),
             )
-            before_meshscope = snapshot(meshscope_src)
-            before_meshshot = snapshot(meshshot_src)
+            before_meshscope = _snapshot_tree(meshscope_src)
+            before_meshshot = _snapshot_tree(meshshot_src)
             previous_dont_write_bytecode = sys.dont_write_bytecode
 
             step_zero_evidence._import_meshscope(meshscope_src)
             step_zero_evidence._import_meshshot(meshshot_src)
 
-            after_meshscope = snapshot(meshscope_src)
-            after_meshshot = snapshot(meshshot_src)
+            after_meshscope = _snapshot_tree(meshscope_src)
+            after_meshshot = _snapshot_tree(meshshot_src)
             self.assertEqual(set(before_meshscope), set(after_meshscope))
             self.assertEqual(set(before_meshshot), set(after_meshshot))
             self.assertEqual(before_meshscope, after_meshscope)
@@ -153,6 +162,57 @@ class StepZeroEvidenceImportTests(unittest.TestCase):
                 previous_dont_write_bytecode,
                 sys.dont_write_bytecode,
             )
+
+    def test_production_import_order_reloads_verified_package_root(self) -> None:
+        """Reference binding followed by provider import cannot leave stale modules."""
+
+        from scripts.pilot.workspace_supervisor import _load_reference_type
+
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            meshscope_src_a = root / "meshscope-src-a"
+            meshscope_src_b = root / "meshscope-src-b"
+            for destination in (meshscope_src_a, meshscope_src_b):
+                shutil.copytree(
+                    step_zero_evidence._MESHSCOPE_SRC / "meshscope",
+                    destination / "meshscope",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.so"),
+                )
+            before_a = _snapshot_tree(meshscope_src_a)
+            before_b = _snapshot_tree(meshscope_src_b)
+            previous_dont_write_bytecode = sys.dont_write_bytecode
+
+            _load_reference_type(meshscope_src_a)
+            step_zero_evidence._import_meshscope(meshscope_src_b)
+            import meshscope  # noqa: WPS433 — imported after helper.
+
+            self.assertEqual(
+                meshscope_src_b.resolve() / "meshscope",
+                Path(meshscope.__file__).resolve().parent,
+            )
+            self.assertEqual(before_a, _snapshot_tree(meshscope_src_a))
+            self.assertEqual(before_b, _snapshot_tree(meshscope_src_b))
+            self.assertEqual(
+                previous_dont_write_bytecode,
+                sys.dont_write_bytecode,
+            )
+
+    def test_ambient_package_module_is_rejected_before_eviction(self) -> None:
+        """An unverified ambient module must not be replaced by a shipped root."""
+
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            (root / "meshscope").mkdir()
+            (root / "meshscope/__init__.py").write_text("", encoding="utf-8")
+            ambient = types.ModuleType("meshscope")
+            ambient.__file__ = "/ambient/provider/meshscope/__init__.py"
+            sys.modules["meshscope"] = ambient
+            with self.assertRaises(step_zero_evidence.StepZeroEvidenceError) as raised:
+                step_zero_evidence._ensure_shipped_package(root, "meshscope")
+            self.assertEqual(
+                "provider_dependency_missing", raised.exception.classification
+            )
+            self.assertIs(ambient, sys.modules["meshscope"])
 
 
 if __name__ == "__main__":  # pragma: no cover
