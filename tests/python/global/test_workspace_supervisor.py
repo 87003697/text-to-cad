@@ -4175,7 +4175,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     "airplane",
                     "20260825-120000-w4",
                     "exp",
-                    "direct",
+                    "e2e",
                 ],
                 cwd=root,
                 env=environment,
@@ -4188,8 +4188,30 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             prompt = (exp / "run/prompt.txt").read_text(encoding="utf-8")
             self.assertNotIn("models/toys4k/airplane.ply", prompt)
             self.assertNotIn("outputs/20260825-120000-w4/exp", prompt)
+            self.assertIn(
+                "You are the $mesh-to-cad skill orchestrator.", prompt
+            )
+            self.assertIn(
+                "skills/mesh-to-cad/SKILL.md verbatim; it is the authoritative contract.",
+                prompt,
+            )
             self.assertIn("/candidate/bootstrap.json", prompt)
             self.assertIn("/agent-surface/client.py", prompt)
+            projection_skill = (
+                Path(__file__).resolve().parents[3]
+                / ".claude/agent-source-projection/skills/mesh-to-cad/SKILL.md"
+            )
+            self.assertIn(
+                "Author an initial plan at `/candidate/plan.json`",
+                projection_skill.read_text(encoding="utf-8"),
+            )
+            for forbidden in (
+                os.fspath(root),
+                ".text-to-cad-codex/deployments",
+                "/workspace/repo/outputs",
+                "/private/",
+            ):
+                self.assertNotIn(forbidden, prompt)
             for intent in (
                 "workspace_status",
                 "start_attempt",

@@ -49,11 +49,14 @@ Root `tests/` contains repo-wide policy tests that are not owned by one package,
 skill, or app runtime.
 
 Detached pilots default to `--plugin-mode direct`, which invokes the benchmark
-orchestrator explicitly with plugin discovery disabled. Use `e2e` only when a
-paid pilot must test natural-language discovery through the verified
-job-private installed plugin authority. `run/plugin-mode.txt` and job status
-record the request; the rollout and authority receipt are still required to
-prove which installed skill actually ran.
+orchestrator explicitly with plugin discovery disabled. For non-Agent Surface
+pilots, `e2e` tests natural-language discovery through the verified job-private
+installed plugin authority. Agent Surface pilots are candidate-only and use
+the verified Agent Source Projection with a minimal `CODEX_HOME`; their
+`e2e` marker records the requested mode, not installed-plugin discovery.
+`run/plugin-mode.txt` and job status record the request; an installed-plugin
+smoke or a matching authority receipt plus rollout is required to prove which
+installed skill actually ran.
 
 Toys4K pilots enable the `view_image` treatment by default. Setup/initial
 modeling, Repair Hypothesis parent-child comparison, and final selection must

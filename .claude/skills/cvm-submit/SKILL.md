@@ -15,11 +15,14 @@ scripts/pilot/cvm-submit.sh pilot <object> <group> [--model sol|terra|luna|gpt-5
 
 `direct` is the default and preserves the benchmark path: it names
 `$mesh-to-cad` in the prompt and disables Codex plugin discovery. Use `e2e`
-when the paid pilot must exercise discovery of the installed plugin: it keeps
-the same verified job-private plugin authority and `CODEX_HOME`, enables plugin
-discovery, and gives Codex a natural-language CAD request. Production or paid
-claims that the installed plugin was discovered require an `e2e` pilot; normal
-benchmark batches remain `direct`.
+for a natural-language pilot that exercises the installed plugin when the
+runner uses the verified job-private plugin authority and `CODEX_HOME`.
+Agent Surface pilots are intentionally candidate-only: they use a minimal
+`CODEX_HOME` and the verified Agent Source Projection, so their `e2e` marker
+records the requested mode but does not prove installed-plugin skill
+discovery. Installed-plugin claims require the installed-plugin smoke or an
+e2e run with its authority receipt and rollout; normal benchmark batches
+remain `direct`.
 
 The model defaults to the public `gpt-5.5` Responses API slug. Selection
 precedence is explicit `--model`, then the `MODEL` environment variable, then

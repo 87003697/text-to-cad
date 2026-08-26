@@ -176,7 +176,7 @@ fi
 # Minimal orchestrator prompt — peer skills, references, and commit
 # conventions live in skills/mesh-to-cad/SKILL.md; duplicating them here
 # would drift.
-if [[ "$PLUGIN_MODE" == "direct" ]]; then
+if [[ "$PLUGIN_MODE" == "direct" || "$AGENT_SURFACE_MODE" == 1 ]]; then
     PROMPT_PREAMBLE=$(cat <<'EOF'
 You are the $mesh-to-cad skill orchestrator. Follow
 skills/mesh-to-cad/SKILL.md verbatim; it is the authoritative contract.
