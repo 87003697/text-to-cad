@@ -215,6 +215,54 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
             self.assertEqual([0.2, -0.25, 0.075], [round(value, 6) for value in minimum])
             self.assertEqual([0.4, -0.15, 0.125], [round(value, 6) for value in maximum])
 
+    def test_location_transform_uses_supported_composition(self) -> None:
+        invalid_source = "\n".join(
+            (
+                "from build123d import BuildPart, Box, Location",
+                "def gen_step():",
+                "    with BuildPart() as part:",
+                "        with Location((0.1, 0.2, 0.3)):",
+                "            Box(0.2, 0.1, 0.05)",
+                "    return part.part",
+            )
+        )
+        with temporary_directory(prefix="cad-location-transform-") as invalid_root_text:
+            invalid_root = Path(invalid_root_text)
+            _write_canonical_source(invalid_root, body=invalid_source)
+            invalid = _run_adapter(
+                invalid_root,
+                "build",
+                "--source",
+                "source/model.py",
+                "--output-dir",
+                "candidate",
+            )
+            self.assertNotEqual(0, invalid.returncode)
+            self.assertIn(
+                "Location' object does not support the context manager protocol",
+                invalid.stderr,
+            )
+
+        valid_source = "\n".join(
+            (
+                "from build123d import Box, Location",
+                "def gen_step():",
+                "    return Location((0.1, 0.2, 0.3)) * Box(0.2, 0.1, 0.05)",
+            )
+        )
+        with temporary_directory(prefix="cad-location-transform-") as valid_root_text:
+            valid_root = Path(valid_root_text)
+            _write_canonical_source(valid_root, body=valid_source)
+            valid = _run_adapter(
+                valid_root,
+                "build",
+                "--source",
+                "source/model.py",
+                "--output-dir",
+                "candidate",
+            )
+            self.assertEqual(0, valid.returncode, valid.stderr)
+
     def test_public_adapter_builds_canonical_step_measurement_and_provenance(self) -> None:
         with temporary_directory(prefix="cad-canonical-build-") as temp_dir:
             root = Path(temp_dir)

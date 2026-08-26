@@ -131,6 +131,23 @@ class AgentSourceProjectionTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, assessment)
 
+    def test_projected_candidate_authoring_carries_location_guidance(self) -> None:
+        guidance = (
+            REPO_ROOT
+            / ".claude/agent-source-projection/skills/mesh-to-cad/references"
+            / "candidate-authoring.md"
+        ).read_text(encoding="utf-8")
+        for required in (
+            "`Location` is a transform value, not a context manager.",
+            "`Location((x, y, z)) * shape`",
+            "`shape.moved(Location((x, y, z)))`",
+            "`with Location(...):`",
+            "reuse the same active Attempt's opaque operation",
+            "never repeat unchanged source",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, guidance)
+
     def test_verify_rejects_missing_extra_and_digest_mismatch(self) -> None:
         mutations = (
             lambda target: (target / projection.PROJECTED_PATHS[0]).unlink(),

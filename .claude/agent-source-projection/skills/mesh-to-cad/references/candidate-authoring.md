@@ -67,6 +67,12 @@ manifest; you never call `export_step`, write files under `work/`
 outside `source/`, or touch `candidate.glb`. Doing so causes
 `run_candidate_tool` to fail closed.
 
+`Location` is a transform value, not a context manager. Place a shape with
+`Location((x, y, z)) * shape` or `shape.moved(Location((x, y, z)))`; do not
+write `with Location(...):`. If a candidate operation fails, change the
+candidate source first, then reuse the same active Attempt's opaque operation
+handle while its command budget permits; never repeat unchanged source.
+
 ## Repair edits
 
 When you form a repair hypothesis, edit `/candidate/work/source/model.py`
