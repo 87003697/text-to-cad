@@ -2209,10 +2209,20 @@ def _copy_agent_tree_windows(source: Path, target: Path) -> None:
     total = 0
     file_count = 0
 
-    def visit(directory: Path, destination: Path, relative: PurePosixPath) -> None:
+    def visit(
+        directory: Path,
+        destination: Path,
+        relative: PurePosixPath,
+        *,
+        expected: os.stat_result | None = None,
+    ) -> None:
         nonlocal total, file_count
         before = _agent_lstat(directory)
         _agent_validate_directory_stat(before)
+        if expected is not None and not _agent_same_identity(expected, before):
+            raise WorkspaceError(
+                "invalid_workspace_path", "Agent tree changed before copy"
+            )
         try:
             with os.scandir(directory) as entries:
                 for entry in sorted(entries, key=lambda item: item.name):
@@ -2272,7 +2282,7 @@ def _copy_agent_tree_windows(source: Path, target: Path) -> None:
         _agent_validate_directory_stat(root_metadata)
         target.mkdir(parents=True, exist_ok=False)
         target_created = True
-        visit(source, target, PurePosixPath())
+        visit(source, target, PurePosixPath(), expected=root_metadata)
     except Exception:
         if target_created:
             shutil.rmtree(target, ignore_errors=True)

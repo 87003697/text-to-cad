@@ -986,19 +986,15 @@ def _is_canonical_sandbox_absolute_path(value: str) -> bool:
 
 
 def _is_canonical_absolute_path(value: str) -> bool:
-    """Fail-closed check for a host path or fixed sandbox entrypoint.
+    """Fail-closed check for a native host filesystem path.
 
-    Registered tool entrypoints normally carry the runner's fixed POSIX
-    ``/workspace/repo/skills`` namespace.  That representation is stable
-    across executor hosts and is checked independently above.  Test and
-    offline callers may instead provide an actual host path; those paths use
-    the native POSIX or Windows spelling and never cross the two parsers.
+    Serialized tool registries use ``_is_canonical_sandbox_absolute_path``
+    instead; this helper is reserved for separately defined host-native
+    fields.
     """
 
     if not isinstance(value, str) or not value or "\0" in value:
         return False
-    if _is_canonical_sandbox_absolute_path(value):
-        return True
     if os.name == "nt":
         return _is_canonical_windows_absolute_path(value)
     return _is_canonical_posix_absolute_path(value)
@@ -2254,12 +2250,12 @@ def _validate_tool_registry_document(value: Mapping[str, Any]) -> dict[str, Any]
     ):
         if schema == TOOL_REGISTRY_SCHEMA:
             entrypoint = entry["entrypoint"]
-            if not isinstance(entrypoint, str) or not _is_canonical_absolute_path(
+            if not isinstance(entrypoint, str) or not _is_canonical_sandbox_absolute_path(
                 entrypoint
             ):
                 _fail(
                     "untrusted_tool",
-                    "tool registry entrypoint is not an absolute canonical path",
+                    "tool registry entrypoint is not a canonical sandbox path",
                     path_field,
                 )
         _sha256(entry["entrypoint_sha256"], digest_field)

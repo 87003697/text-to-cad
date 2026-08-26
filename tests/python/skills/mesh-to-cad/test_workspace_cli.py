@@ -32,6 +32,12 @@ MESH_COMPARE_PATH = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare"
 CAD_BUILD_PATH = REPO_ROOT / "skills/cad/scripts/canonical-build"
 MESH_COMPARE_ENTRYPOINT = MESH_COMPARE_PATH / "cli.py"
 CAD_BUILD_ENTRYPOINT = CAD_BUILD_PATH / "__main__.py"
+SANDBOX_CAD_BUILD_ENTRYPOINT = (
+    "/workspace/repo/skills/cad/scripts/canonical-build/__main__.py"
+)
+SANDBOX_MESH_COMPARE_ENTRYPOINT = (
+    "/workspace/repo/skills/mesh-compare/scripts/mesh-compare/__main__.py"
+)
 PREVIEW_PROFILE_PATH = (
     REPO_ROOT
     / "packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json"
@@ -218,21 +224,27 @@ class WorkspaceCliTests(unittest.TestCase):
         output_relative = "work/attempts/000001/candidate/artifacts"
 
         registry = self.final_tool_arguments()[-1]
-        status, command, stderr = self.invoke(
-            "build",
-            "--workspace",
-            str(self.workspace),
-            "--attempt",
-            str(attempt["attempt"]["attempt"]),
-            "--source",
-            source_relative,
-            "--input",
-            sidecar_relative,
-            "--output-dir",
-            output_relative,
-            "--tool-registry",
-            registry,
-        )
+        with mock.patch.dict(
+            self.cli.run_canonical_build.__globals__,
+            {
+                "_registered_tool_entrypoint": lambda _path, _tool: CAD_BUILD_ENTRYPOINT,
+            },
+        ):
+            status, command, stderr = self.invoke(
+                "build",
+                "--workspace",
+                str(self.workspace),
+                "--attempt",
+                str(attempt["attempt"]["attempt"]),
+                "--source",
+                source_relative,
+                "--input",
+                sidecar_relative,
+                "--output-dir",
+                output_relative,
+                "--tool-registry",
+                registry,
+            )
 
         self.assertEqual(0, status, (stderr, command))
         command_stderr = (
@@ -301,19 +313,25 @@ class WorkspaceCliTests(unittest.TestCase):
         )
         output_relative = "work/attempts/000001/candidate/artifacts"
 
-        status, result, _stderr = self.invoke(
-            "build",
-            "--workspace",
-            str(self.workspace),
-            "--attempt",
-            str(attempt["attempt"]["attempt"]),
-            "--source",
-            source.relative_to(self.workspace).as_posix(),
-            "--output-dir",
-            output_relative,
-            "--tool-registry",
-            self.final_tool_arguments()[-1],
-        )
+        with mock.patch.dict(
+            self.cli.run_canonical_build.__globals__,
+            {
+                "_registered_tool_entrypoint": lambda _path, _tool: CAD_BUILD_ENTRYPOINT,
+            },
+        ):
+            status, result, _stderr = self.invoke(
+                "build",
+                "--workspace",
+                str(self.workspace),
+                "--attempt",
+                str(attempt["attempt"]["attempt"]),
+                "--source",
+                source.relative_to(self.workspace).as_posix(),
+                "--output-dir",
+                output_relative,
+                "--tool-registry",
+                self.final_tool_arguments()[-1],
+            )
 
         self.assertEqual(2, status)
         self.assertEqual("build_preflight_failed", result["error"]["classification"])
@@ -943,12 +961,12 @@ class WorkspaceCliTests(unittest.TestCase):
             "schema": "mesh-to-cad.tool-registry/2",
             "rebuild": {
                 "id": "cad.canonical-build/1",
-                "entrypoint": str(rebuild),
+                "entrypoint": SANDBOX_CAD_BUILD_ENTRYPOINT,
                 "entrypoint_sha256": _sha(rebuild.read_bytes()),
             },
             "geometry": {
                 "id": "mesh-compare.voxblame/1",
-                "entrypoint": str(MESH_COMPARE_ENTRYPOINT),
+                "entrypoint": SANDBOX_MESH_COMPARE_ENTRYPOINT,
                 "entrypoint_sha256": _sha(MESH_COMPARE_ENTRYPOINT.read_bytes()),
             },
         }
@@ -965,7 +983,7 @@ class WorkspaceCliTests(unittest.TestCase):
             str(registry),
         ]
 
-    def test_tool_registry_requires_canonical_absolute_entrypoint(self) -> None:
+    def test_tool_registry_requires_canonical_sandbox_entrypoint(self) -> None:
         arguments = self.final_tool_arguments()
         registry = Path(arguments[-1])
         value = json.loads(registry.read_text(encoding="utf-8"))
@@ -1005,34 +1023,6 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertEqual("untrusted_tool", raised.exception.classification)
         self.assertEqual(
             "$.tool_registry.rebuild.entrypoint_sha256", raised.exception.path
-        )
-
-    def test_registered_tool_entrypoint_resolves_bwrap_namespace(self) -> None:
-        # This temporary tree stands in for bwrap's /workspace/repo mount.
-        arguments = self.final_tool_arguments()
-        registry = Path(arguments[-1])
-        value = json.loads(registry.read_text(encoding="utf-8"))
-        rebuild_entrypoint = self.root / (
-            "workspace/repo/skills/cad/scripts/canonical-build/__main__.py"
-        )
-        rebuild_entrypoint.parent.mkdir(parents=True)
-        rebuild_entrypoint.write_bytes(b"sandbox rebuild\n")
-        value["rebuild"]["entrypoint"] = str(rebuild_entrypoint)
-        value["rebuild"]["entrypoint_sha256"] = _sha(
-            rebuild_entrypoint.read_bytes()
-        )
-        value_without_identity = dict(value)
-        value_without_identity.pop("identity_sha256")
-        value["identity_sha256"] = _identity(
-            "mesh-to-cad.tool-registry/2", value_without_identity
-        )
-        _write_json(registry, value)
-
-        entrypoint = self.cli.finalize_workspace.__globals__[
-            "_registered_tool_entrypoint"
-        ]
-        self.assertEqual(
-            rebuild_entrypoint.resolve(), entrypoint(registry, "rebuild")
         )
 
     def test_tool_registry_rejects_double_slash_entrypoint(self) -> None:

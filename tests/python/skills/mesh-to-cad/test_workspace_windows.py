@@ -202,6 +202,46 @@ class WindowsAgentTreeCopyTests(unittest.TestCase):
                 self.workspace._copy_agent_tree(source, target)
         self.assertFalse(target.exists())
 
+    def test_root_replacement_before_first_traversal_is_rejected_without_copy(self) -> None:
+        source = self.root / "source"
+        source.mkdir()
+        (source / "original.txt").write_bytes(b"original")
+        replacement = self.root / "replacement"
+        replacement.mkdir()
+        (replacement / "replacement.txt").write_bytes(b"replacement")
+        target = self.root / "target"
+        original_lstat = self.workspace._agent_lstat
+        source_snapshots = 0
+
+        def replace_after_outer_validation(path: Path):
+            nonlocal source_snapshots
+            metadata = original_lstat(path)
+            if path == source:
+                source_snapshots += 1
+                if source_snapshots == 1:
+                    source.rename(self.root / "original-source")
+                    replacement.rename(source)
+            return metadata
+
+        with (
+            mock.patch.object(
+                self.workspace, "_agent_windows_platform", return_value=True
+            ),
+            mock.patch.object(
+                self.workspace, "_agent_lstat", side_effect=replace_after_outer_validation
+            ),
+            mock.patch.object(
+                self.workspace,
+                "_copy_agent_file_from_descriptor",
+            ) as copy_file,
+        ):
+            with self.assertRaises(self.workspace.WorkspaceError) as raised:
+                self.workspace._copy_agent_tree(source, target)
+
+        self.assertEqual("invalid_workspace_path", raised.exception.classification)
+        self.assertFalse(target.exists())
+        copy_file.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
