@@ -11,6 +11,9 @@ via ``_ensure_shipped_package``. Two invariants matter here:
 
 from __future__ import annotations
 
+import hashlib
+import shutil
+import stat
 import sys
 import tempfile
 import unittest
@@ -88,6 +91,7 @@ class StepZeroEvidenceImportTests(unittest.TestCase):
         # elsewhere.
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
+            previous_dont_write_bytecode = sys.dont_write_bytecode
             with self.assertRaises(step_zero_evidence.StepZeroEvidenceError) as raised:
                 step_zero_evidence._ensure_shipped_package(
                     root,
@@ -98,6 +102,57 @@ class StepZeroEvidenceImportTests(unittest.TestCase):
             )
             # A rejected root must never leak into ``sys.path``.
             self.assertNotIn(str(root), sys.path)
+            self.assertEqual(
+                previous_dont_write_bytecode,
+                sys.dont_write_bytecode,
+            )
+
+    def test_imports_do_not_mutate_a_published_package_tree(self) -> None:
+        """Shipped imports must leave their digest-bound source tree untouched."""
+
+        def snapshot(root: Path) -> dict[str, tuple[str, int]]:
+            files: dict[str, tuple[str, int]] = {}
+            for path in root.rglob("*"):
+                if not path.is_file() or path.is_symlink():
+                    continue
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+                files[path.relative_to(root).as_posix()] = (
+                    digest,
+                    stat.S_IMODE(path.stat().st_mode),
+                )
+            return files
+
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            meshscope_src = root / "meshscope-src"
+            meshshot_src = root / "meshshot-src"
+            shutil.copytree(
+                step_zero_evidence._MESHSCOPE_SRC / "meshscope",
+                meshscope_src / "meshscope",
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.so"),
+            )
+            shutil.copytree(
+                step_zero_evidence._MESHSHOT_SRC / "meshshot",
+                meshshot_src / "meshshot",
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.so"),
+            )
+            before_meshscope = snapshot(meshscope_src)
+            before_meshshot = snapshot(meshshot_src)
+            previous_dont_write_bytecode = sys.dont_write_bytecode
+
+            step_zero_evidence._import_meshscope(meshscope_src)
+            step_zero_evidence._import_meshshot(meshshot_src)
+
+            after_meshscope = snapshot(meshscope_src)
+            after_meshshot = snapshot(meshshot_src)
+            self.assertEqual(set(before_meshscope), set(after_meshscope))
+            self.assertEqual(set(before_meshshot), set(after_meshshot))
+            self.assertEqual(before_meshscope, after_meshscope)
+            self.assertEqual(before_meshshot, after_meshshot)
+            self.assertEqual(
+                previous_dont_write_bytecode,
+                sys.dont_write_bytecode,
+            )
 
 
 if __name__ == "__main__":  # pragma: no cover

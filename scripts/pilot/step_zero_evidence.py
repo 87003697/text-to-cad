@@ -23,10 +23,12 @@ Browser Runtime remains the gate for a real production claim.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import importlib
 from pathlib import Path
 import sys
+import threading
 from typing import Any, Callable, Mapping, Protocol
 
 
@@ -71,6 +73,25 @@ _MESHSCOPE_SRC = _SHIPPED_PACKAGES / "meshscope/src"
 _MESHSHOT_SRC = _SHIPPED_PACKAGES / "meshshot/src"
 
 
+_SHIPPED_IMPORT_LOCK = threading.RLock()
+
+
+@contextmanager
+def _shipped_import_transaction():
+    """Keep trusted imports from writing bytecode into the shipped tree."""
+
+    # ``importlib`` consults this process-global flag while loading source.
+    # Serialize only these short transactions and restore the caller's value
+    # so concurrent provider work cannot inherit a changed import policy.
+    with _SHIPPED_IMPORT_LOCK:
+        previous_dont_write_bytecode = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        try:
+            yield
+        finally:
+            sys.dont_write_bytecode = previous_dont_write_bytecode
+
+
 def _ensure_shipped_package(package_root: Path, package_name: str) -> Path:
     """Import one package from its fixed vendored skill runtime."""
 
@@ -82,7 +103,8 @@ def _ensure_shipped_package(package_root: Path, package_name: str) -> Path:
     if str(package_root) not in sys.path:
         sys.path.insert(0, str(package_root))
     try:
-        package = importlib.import_module(package_name)
+        with _shipped_import_transaction():
+            package = importlib.import_module(package_name)
     except ImportError as error:
         raise StepZeroEvidenceError(
             "provider_dependency_missing",
@@ -99,28 +121,36 @@ def _ensure_shipped_package(package_root: Path, package_name: str) -> Path:
     return package_root
 
 
+@contextmanager
+def _shipped_package_import(package_root: Path, package_name: str):
+    """Import package symbols without mutating the digest-bound source tree."""
+
+    with _shipped_import_transaction():
+        yield _ensure_shipped_package(package_root, package_name)
+
+
 def _import_meshscope(meshscope_src: Path | None = None):
     """Import the shipped meshscope.voxblame canonical measurement API."""
 
-    _ensure_shipped_package(meshscope_src or _MESHSCOPE_SRC, "meshscope")
-    from meshscope.voxblame import (  # type: ignore
-        measure_step,
-        prepare_preview_scene,
-        publish_preview,
-        validate_preview_identity,
-    )
+    with _shipped_package_import(meshscope_src or _MESHSCOPE_SRC, "meshscope"):
+        from meshscope.voxblame import (  # type: ignore
+            measure_step,
+            prepare_preview_scene,
+            publish_preview,
+            validate_preview_identity,
+        )
     return measure_step, prepare_preview_scene, publish_preview, validate_preview_identity
 
 
 def _import_meshshot(meshshot_src: Path | None = None):
     """Import the shipped meshshot canonical Browser Runtime renderer."""
 
-    _ensure_shipped_package(meshshot_src or _MESHSHOT_SRC, "meshshot")
-    from meshshot import (  # type: ignore
-        MeshGeometry,
-        load_profile,
-        render_residual_preview,
-    )
+    with _shipped_package_import(meshshot_src or _MESHSHOT_SRC, "meshshot"):
+        from meshshot import (  # type: ignore
+            MeshGeometry,
+            load_profile,
+            render_residual_preview,
+        )
     return MeshGeometry, load_profile, render_residual_preview
 
 

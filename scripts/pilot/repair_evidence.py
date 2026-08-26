@@ -46,7 +46,7 @@ from typing import Any, Callable, Mapping, Protocol
 try:
     from scripts.pilot.step_zero_evidence import (  # type: ignore
         StepZeroEvidenceError,
-        _ensure_shipped_package,
+        _shipped_package_import,
         _MESHSCOPE_SRC,
         _MESHSHOT_SRC,
     )
@@ -55,7 +55,7 @@ except ModuleNotFoundError as exc:
         raise
     from step_zero_evidence import (  # type: ignore
         StepZeroEvidenceError,
-        _ensure_shipped_package,
+        _shipped_package_import,
         _MESHSCOPE_SRC,
         _MESHSHOT_SRC,
     )
@@ -120,14 +120,14 @@ class RepairEvidenceProvider(Protocol):
 def _import_meshscope(meshscope_src: Path | None = None):
     """Import the shipped ``meshscope.voxblame`` canonical Repair API."""
 
-    _ensure_shipped_package(meshscope_src or _MESHSCOPE_SRC, "meshscope")
-    from meshscope.voxblame import (  # type: ignore
-        measure_step,
-        prepare_preview_scene,
-        publish_preview,
-        publish_region_diff,
-        validate_preview_identity,
-    )
+    with _shipped_package_import(meshscope_src or _MESHSCOPE_SRC, "meshscope"):
+        from meshscope.voxblame import (  # type: ignore
+            measure_step,
+            prepare_preview_scene,
+            publish_preview,
+            publish_region_diff,
+            validate_preview_identity,
+        )
     return (
         measure_step,
         prepare_preview_scene,
@@ -140,12 +140,12 @@ def _import_meshscope(meshscope_src: Path | None = None):
 def _import_meshshot(meshshot_src: Path | None = None):
     """Import the shipped ``meshshot`` Browser Runtime renderer."""
 
-    _ensure_shipped_package(meshshot_src or _MESHSHOT_SRC, "meshshot")
-    from meshshot import (  # type: ignore
-        MeshGeometry,
-        load_profile,
-        render_residual_preview,
-    )
+    with _shipped_package_import(meshshot_src or _MESHSHOT_SRC, "meshshot"):
+        from meshshot import (  # type: ignore
+            MeshGeometry,
+            load_profile,
+            render_residual_preview,
+        )
     return MeshGeometry, load_profile, render_residual_preview
 
 

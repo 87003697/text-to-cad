@@ -52,14 +52,14 @@ except ModuleNotFoundError as _exc:  # pragma: no cover - direct-execution fallb
 try:
     from scripts.pilot.step_zero_evidence import (  # type: ignore[import-not-found]
         _MESHSCOPE_SRC,
-        _ensure_shipped_package,
+        _shipped_package_import,
     )
 except ModuleNotFoundError as _exc:  # pragma: no cover - direct-execution fallback
     if _exc.name not in {"scripts", "scripts.pilot"}:
         raise
     from step_zero_evidence import (  # type: ignore[no-redef]
         _MESHSCOPE_SRC,
-        _ensure_shipped_package,
+        _shipped_package_import,
     )
 
 
@@ -395,8 +395,8 @@ def _load_workspace_api() -> ModuleType:
 
 
 def _load_reference_type(meshscope_src: Path | None = None) -> type[Any]:
-    _ensure_shipped_package(meshscope_src or _MESHSCOPE_SRC, "meshscope")
-    from meshscope import ReferenceCapability
+    with _shipped_package_import(meshscope_src or _MESHSCOPE_SRC, "meshscope"):
+        from meshscope import ReferenceCapability
 
     return ReferenceCapability
 

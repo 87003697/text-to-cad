@@ -71,14 +71,14 @@ except ModuleNotFoundError as exc:
 
 try:
     from scripts.pilot.step_zero_evidence import (
-        _ensure_shipped_package,
+        _shipped_package_import,
         real_step_zero_evidence_provider,
     )
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
     from step_zero_evidence import (  # type: ignore[no-redef]
-        _ensure_shipped_package,
+        _shipped_package_import,
         real_step_zero_evidence_provider,
     )
 
@@ -1349,10 +1349,10 @@ def prepare_and_initialize_workspace(
             raise PilotError("trusted tools are unavailable") from exc
         meshscope_src = Path(trusted_tools_root) / MESHSCOPE_RUNTIME_RELATIVE / "src"
         meshshot_src = Path(trusted_tools_root) / MESHSHOT_RUNTIME_RELATIVE / "src"
-        _ensure_shipped_package(meshscope_src, "meshscope")
-        from meshscope.voxblame import prepare_reference
-        _ensure_shipped_package(meshshot_src, "meshshot")
-        from meshshot import load_profile
+        with _shipped_package_import(meshscope_src, "meshscope"):
+            from meshscope.voxblame import prepare_reference
+        with _shipped_package_import(meshshot_src, "meshshot"):
+            from meshshot import load_profile
 
         prepared_input = prepared / "input"
         result = prepare_reference(input_path, prepared_input)

@@ -732,16 +732,18 @@ from PIL import Image
 installed = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(installed / "scripts/pilot"))
 from step_zero_evidence import (
-    _MESHSCOPE_SRC, _MESHSHOT_SRC, _ensure_shipped_package,
+    _MESHSCOPE_SRC, _MESHSHOT_SRC, _shipped_package_import,
     StepZeroEvidenceRequest, real_step_zero_evidence_provider,
 )
 from repair_evidence import RepairEvidenceRequest, real_repair_evidence_provider
 from workspace_supervisor import _load_reference_type
 
-_ensure_shipped_package(_MESHSCOPE_SRC, "meshscope")
-_ensure_shipped_package(_MESHSHOT_SRC, "meshshot")
-from meshscope.voxblame import prepare_reference
-from meshshot import RenderedPreview, load_profile
+with (
+    _shipped_package_import(_MESHSCOPE_SRC, "meshscope"),
+    _shipped_package_import(_MESHSHOT_SRC, "meshshot"),
+):
+    from meshscope.voxblame import prepare_reference
+    from meshshot import RenderedPreview, load_profile
 
 profile = load_profile()
 
