@@ -1111,6 +1111,14 @@ class WorkspaceSupervisor:
             return "preterminal"
         return "ready"
 
+    @staticmethod
+    def _attempt_next_intents(intended_step: int) -> list[str]:
+        return [
+            "run_candidate_tool",
+            "submit_step_zero" if intended_step == 0 else "submit_repair",
+            "workspace_status",
+        ]
+
     def workspace_status(self, workspace_handle: str) -> Mapping[str, Any]:
         workspace = self._workspace(workspace_handle)
         try:
@@ -1122,7 +1130,10 @@ class WorkspaceSupervisor:
         failures = int(status.get("tool_failures", 0))
         if completed < 0 or completed > MAX_CYCLES or total_attempts < 0 or failures < 0:
             raise SupervisorError("workspace_contract_violation")
-        state = self._status_state(status)
+        active_attempt = next(iter(self._attempts.values()), None)
+        state = (
+            "blocked" if active_attempt is not None else self._status_state(status)
+        )
         remaining_attempts = status.get("remaining_attempts", MAX_ATTEMPTS_PER_STEP)
         remaining_tool_failures = status.get("remaining_tool_failures")
         if remaining_tool_failures is None:
@@ -1134,8 +1145,11 @@ class WorkspaceSupervisor:
             or remaining_tool_failures < 0
         ):
             raise SupervisorError("workspace_contract_violation")
-        next_intents = ["workspace_status"]
-        if state != "terminal":
+        if active_attempt is not None:
+            next_intents = self._attempt_next_intents(active_attempt.intended_step)
+        else:
+            next_intents = ["workspace_status"]
+        if active_attempt is None and state != "terminal":
             next_intents.append("observe_reference")
             next_intents.append("start_attempt")
             if state == "preterminal":
@@ -1239,11 +1253,7 @@ class WorkspaceSupervisor:
             "attempt_handle": attempt_handle,
             "candidate_handle": candidate_handle,
             "capability_bundle_handle": capability_bundle_handle,
-            "permitted_next_intents": [
-                "run_candidate_tool",
-                "submit_step_zero" if intended_step == 0 else "submit_repair",
-                "workspace_status",
-            ],
+            "permitted_next_intents": self._attempt_next_intents(intended_step),
         }
 
     def _issue_attempt_capabilities(self, context: _AttemptContext) -> str:

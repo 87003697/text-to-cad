@@ -2949,9 +2949,61 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         # There is exactly one current-attempt subtree.  A second
         # start_attempt while an Attempt is already active must fail
         # closed rather than silently reset the live work tree.
-        self._start()
-        with self.assertRaises(SupervisorError):
-            self._start()
+        plan = self.sup.candidate_root / "plan.json"
+        plan.write_text("{}", encoding="utf-8")
+        plan_handle = self.sup.register_plan(plan)
+        started = self.sup.start_attempt(
+            self.sup.workspace_handle, plan_handle, None
+        )
+        status = self.sup.workspace_status(self.sup.workspace_handle)
+        self.assertEqual("blocked", status["state"])
+        self.assertNotIn("start_attempt", status["permitted_next_intents"])
+        self.assertEqual(
+            {
+                "workspace_status",
+                "run_candidate_tool",
+                "submit_step_zero",
+            },
+            set(status["permitted_next_intents"]),
+        )
+
+        surface = self.sup.agent_surface()
+        with self.assertRaises(ValueError) as raised:
+            surface.handle(
+                {
+                    "schema": "mesh-to-cad.agent-intent/1",
+                    "intent": "start_attempt",
+                    "args": {
+                        "workspace_handle": self.sup.workspace_handle,
+                        "plan_handle": plan_handle,
+                    },
+                }
+            )
+        self.assertEqual("supervisor_failure", raised.exception.classification)
+        self.assertEqual("$.supervisor", raised.exception.path)
+        with self.assertRaises(SupervisorError) as direct:
+            self.sup.start_attempt(self.sup.workspace_handle, plan_handle, None)
+        self.assertEqual("attempt_already_active", direct.exception.classification)
+        self.assertEqual(started["state"], "started")
+
+    def test_active_repair_status_permits_repair_submission_only(self) -> None:
+        self.workspace.completed_cycles = 1
+        self.workspace.seed_repair_source_from_parent_step = (
+            lambda _workspace, **_kwargs: None
+        )
+        plan = self.sup.candidate_root / "repair-plan.json"
+        plan.write_text("{}", encoding="utf-8")
+        plan_handle = self.sup.register_plan(plan)
+        parent_handle = self.sup.registry.issue("step", 0)
+        self.sup.start_attempt(
+            self.sup.workspace_handle, plan_handle, parent_handle
+        )
+
+        status = self.sup.workspace_status(self.sup.workspace_handle)
+        self.assertEqual("blocked", status["state"])
+        self.assertNotIn("start_attempt", status["permitted_next_intents"])
+        self.assertIn("submit_repair", status["permitted_next_intents"])
+        self.assertNotIn("submit_step_zero", status["permitted_next_intents"])
 
     def test_w3_handler_can_dispatch_concrete_ports_without_authority_imports(self) -> None:
         surface = self.sup.agent_surface()
@@ -2964,6 +3016,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             "workspace_handle": self.sup.workspace_handle,
         }))
         self.assertEqual("ready", status["result"]["state"])
+        self.assertIn("start_attempt", status["result"]["permitted_next_intents"])
         observed = surface.handle(request("observe_reference", {
             "reference_handle": self.sup.reference_handle,
             "observation": {"method": "summary", "args": {}},
