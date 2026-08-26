@@ -181,6 +181,7 @@ class _Workspace:
         self.remaining_tool_failures = 2
         self.final_delivery_present = False
         self.finalize_calls = 0
+        self.head_steps: list[int] = []
         self.published: list[dict] = []
 
     def read_canonical_reference_binding(self, _workspace: Path) -> dict:
@@ -199,7 +200,7 @@ class _Workspace:
             "next_intended_step": 0 if not self.completed_cycles else self.completed_cycles + 1,
             "total_attempts": self.total_attempts,
             "tool_failures": self.tool_failures,
-            "head_steps": [0] if self.completed_cycles else [],
+            "head_steps": self.head_steps or ([0] if self.completed_cycles else []),
             "final_delivery_present": self.final_delivery_present,
             "remaining_attempts": self.remaining_attempts,
             "remaining_tool_failures": self.remaining_tool_failures,
@@ -237,7 +238,8 @@ class _Workspace:
                 "provider": evidence_provider,
             }
         )
-        return {"step": 0}
+        self.head_steps = [0]
+        return {"step": 0, "decision_facts": _decision_facts_stub(0)}
 
     def publish_cycle_from_candidate(
         self, _workspace: Path, *, attempt: int, source: Path, evidence_provider
@@ -251,7 +253,12 @@ class _Workspace:
                 "provider": evidence_provider,
             }
         )
-        return {"step": {"step": self.completed_cycles}, "cycle": self.completed_cycles}
+        self.head_steps = [*self.head_steps, self.completed_cycles]
+        return {
+            "step": {"step": self.completed_cycles},
+            "cycle": self.completed_cycles,
+            "decision_facts": _decision_facts_stub(self.completed_cycles),
+        }
 
     def read_current_step_decision_facts(
         self, _workspace: Path, *, step: int
@@ -2706,11 +2713,20 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         started = self.sup.start_attempt(
             self.sup.workspace_handle, plan_handle, parent_handle
         )
-        repair = self.sup.submit_repair(
-            self.sup.workspace_handle,
-            started["attempt_handle"],
-            started["candidate_handle"],
-        )
+        original_reader = self.workspace.read_current_step_decision_facts
+
+        def unexpected_read(*_args, **_kwargs):
+            raise AssertionError("repair publication must carry decision facts")
+
+        self.workspace.read_current_step_decision_facts = unexpected_read  # type: ignore[assignment]
+        try:
+            repair = self.sup.submit_repair(
+                self.sup.workspace_handle,
+                started["attempt_handle"],
+                started["candidate_handle"],
+            )
+        finally:
+            self.workspace.read_current_step_decision_facts = original_reader
         self.assertIn("decision_facts", repair)
         repair_facts = repair["decision_facts"]
         self.assertGreater(repair_facts["step_ordinal"], 0)
@@ -2739,26 +2755,24 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         ):
             self.assertNotIn(literal, serialized)
 
-    def test_submit_intents_fail_closed_on_broken_decision_facts_projection(
+    def test_submit_intents_use_returned_decision_facts_without_post_read(
         self,
     ) -> None:
-        # If W1 raises inside the projection, the supervisor surfaces one
-        # closed classification and does not silently drop decision facts.
+        # W1 returns bounded facts with publication, so W4 does not perform
+        # a second fallible post-publication read.
         attempt, candidate = self._start()
 
         def broken(_workspace, *, step):
-            raise RuntimeError("projection collapsed")
+            raise AssertionError("post-publication decision-facts read")
 
         self.workspace.read_current_step_decision_facts = broken  # type: ignore[assignment]
-        with self.assertRaises(SupervisorError) as raised:
-            self.sup.submit_step_zero(
-                self.sup.workspace_handle, attempt, candidate
-            )
-        self.assertEqual(
-            "decision_facts_unavailable", raised.exception.classification
+        published = self.sup.submit_step_zero(
+            self.sup.workspace_handle, attempt, candidate
         )
+        self.assertEqual("published", published["state"])
+        self.assertEqual(0, published["decision_facts"]["step_ordinal"])
         status = self.sup.workspace_status(self.sup.workspace_handle)
-        self.assertEqual("ready", status["state"])
+        self.assertEqual("preterminal", status["state"])
         self.assertIn("start_attempt", status["permitted_next_intents"])
         self.assertNotIn("run_candidate_tool", status["permitted_next_intents"])
         self.assertNotIn("submit_step_zero", status["permitted_next_intents"])
@@ -2992,6 +3006,13 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         self.assertEqual("attempt_already_active", direct.exception.classification)
         self.assertEqual(started["state"], "started")
 
+        # A stale local Attempt cannot mask a terminal W1 publication.  The
+        # terminal state wins, and only the status read remains advertised.
+        self.workspace.final_delivery_present = True
+        terminal = self.sup.workspace_status(self.sup.workspace_handle)
+        self.assertEqual("terminal", terminal["state"])
+        self.assertEqual(["workspace_status"], terminal["permitted_next_intents"])
+
     def test_active_repair_status_permits_repair_submission_only(self) -> None:
         self.workspace.completed_cycles = 1
         self.workspace.seed_repair_source_from_parent_step = (
@@ -3010,6 +3031,48 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         self.assertNotIn("start_attempt", status["permitted_next_intents"])
         self.assertIn("submit_repair", status["permitted_next_intents"])
         self.assertNotIn("submit_step_zero", status["permitted_next_intents"])
+
+    def test_w3_rejects_finalize_while_attempt_is_active(self) -> None:
+        # W3 validates the closed handle envelope, then W4 must still enforce
+        # the advertised lifecycle order.  Finalization cannot bypass an
+        # active Attempt merely because the caller supplied handle-shaped
+        # values.
+        attempt, _candidate = self._start()
+        self.assertIsNotNone(attempt)
+        selection_handle, notes_handle = self._prepare_finalize_inputs(
+            claim=self._valid_agent_claim()
+        )
+        step_handle = self.sup.registry.issue("step", 0)
+        surface = self.sup.agent_surface()
+        with self.assertRaises(ValueError) as raised:
+            surface.handle(
+                {
+                    "schema": "mesh-to-cad.agent-intent/1",
+                    "intent": "select_and_finalize",
+                    "args": {
+                        "workspace_handle": self.sup.workspace_handle,
+                        "step_handle": step_handle,
+                        "selection_handle": selection_handle,
+                        "notes_handle": notes_handle,
+                    },
+                }
+            )
+        self.assertEqual("supervisor_failure", raised.exception.classification)
+        self.assertEqual("$.supervisor", raised.exception.path)
+        self.assertEqual(0, self.workspace.finalize_calls)
+        self.assertEqual(
+            "blocked",
+            self.sup.workspace_status(self.sup.workspace_handle)["state"],
+        )
+
+        with self.assertRaises(SupervisorError) as direct:
+            self.sup.select_and_finalize(
+                self.sup.workspace_handle,
+                step_handle,
+                selection_handle,
+                notes_handle,
+            )
+        self.assertEqual("attempt_already_active", direct.exception.classification)
 
     def test_w3_handler_can_dispatch_concrete_ports_without_authority_imports(self) -> None:
         surface = self.sup.agent_surface()

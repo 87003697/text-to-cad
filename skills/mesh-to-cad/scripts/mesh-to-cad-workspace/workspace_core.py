@@ -1202,6 +1202,10 @@ def publish_step_zero(
     candidate_mesh: str,
     measurement: Path,
     preview: Path,
+    _decision_facts_factory: Callable[
+        [Mapping[str, Any], Mapping[str, Any], Mapping[str, Any] | None],
+        Mapping[str, Any],
+    ] | None = None,
 ) -> dict[str, Any]:
     workspace = workspace.resolve()
     validate_workspace(workspace, allowed_voxblame_step=0)
@@ -1255,6 +1259,7 @@ def publish_step_zero(
         "files": files,
     }
     document["identity_sha256"] = _identity(STEP_SCHEMA, document)
+    decision_facts = None
     _write_json(stage / "step.json", document)
     _write_json(
         transaction / "transaction.json",
@@ -1266,6 +1271,17 @@ def publish_step_zero(
         },
     )
     _validate_step_directory(workspace, stage, expected_step=0)
+    if _decision_facts_factory is not None:
+        try:
+            decision_facts = _decision_facts_factory(
+                document, evidence.measurement_document, None
+            )
+        except Exception:
+            shutil.rmtree(transaction, ignore_errors=True)
+            raise
+        if not isinstance(decision_facts, Mapping):
+            shutil.rmtree(transaction, ignore_errors=True)
+            _fail("invalid_contract", "publication decision facts are invalid")
     stage.rename(workspace / "steps/000000")
     graph = rebuild_index(workspace, validate=False)
     _commit_protocol_paths(
@@ -1285,7 +1301,10 @@ def publish_step_zero(
     (transaction / "transaction.json").unlink()
     transaction.rmdir()
     shutil.rmtree(active_root)
-    return {**document, "graph": graph}
+    result = {**document, "graph": graph}
+    if decision_facts is not None:
+        result["_decision_facts"] = dict(decision_facts)
+    return result
 
 
 def _run_attempt_command(
@@ -1569,6 +1588,10 @@ def publish_cycle(
     region_diff: Path,
     assessment: Path,
     source_changes: Path,
+    _decision_facts_factory: Callable[
+        [Mapping[str, Any], Mapping[str, Any], Mapping[str, Any] | None],
+        Mapping[str, Any],
+    ] | None = None,
 ) -> dict[str, Any]:
     """Publish one successful Repair Cycle edge and its Measured Step node."""
 
@@ -1694,6 +1717,7 @@ def publish_cycle(
         "files": cycle_files,
     }
     cycle_document["identity_sha256"] = _identity(CYCLE_SCHEMA, cycle_document)
+    decision_facts = None
     _write_json(cycle_stage / "cycle.json", cycle_document)
     _write_json(
         transaction / "transaction.json",
@@ -1709,6 +1733,17 @@ def publish_cycle(
     _validate_cycle_directory(
         workspace, cycle_stage, expected_cycle=intended_step, step=step_document
     )
+    if _decision_facts_factory is not None:
+        try:
+            decision_facts = _decision_facts_factory(
+                step_document, evidence.measurement_document, parent_manifest
+            )
+        except Exception:
+            shutil.rmtree(transaction, ignore_errors=True)
+            raise
+        if not isinstance(decision_facts, Mapping):
+            shutil.rmtree(transaction, ignore_errors=True)
+            _fail("invalid_contract", "publication decision facts are invalid")
     steps_root = workspace / "steps"
     cycles_root = workspace / "cycles"
     steps_root.mkdir(exist_ok=True)
@@ -1746,7 +1781,10 @@ def publish_cycle(
     (transaction / "transaction.json").unlink()
     transaction.rmdir()
     shutil.rmtree(active_root)
-    return {**cycle_document, "step": step_document, "graph": graph}
+    result = {**cycle_document, "step": step_document, "graph": graph}
+    if decision_facts is not None:
+        result["_decision_facts"] = dict(decision_facts)
+    return result
 
 
 def finalize_workspace(

@@ -810,6 +810,7 @@ def publish_step_zero_from_candidate(
                 candidate_mesh=_agent_relative(authority, CANDIDATE_MESH_RELATIVE),
                 measurement=measurement_target,
                 preview=internal_preview,
+                _decision_facts_factory=_build_decision_facts,
             )
         except Exception:
             _rollback_step_zero_voxblame(workspace)
@@ -827,7 +828,13 @@ def publish_step_zero_from_candidate(
     step_value = result.get("step", 0)
     if isinstance(step_value, Mapping):
         step_value = step_value.get("step", 0)
-    return {"step": int(step_value)}
+    decision_facts = result.get("_decision_facts")
+    if not isinstance(decision_facts, Mapping):
+        raise WorkspaceError(
+            "corrupt_workspace",
+            "publication did not return decision facts",
+        )
+    return {"step": int(step_value), "decision_facts": dict(decision_facts)}
 
 
 def publish_cycle_from_candidate(
@@ -1010,6 +1017,7 @@ def publish_cycle_from_candidate(
                 assessment=authority
                 / _agent_relative(authority, CANDIDATE_ASSESSMENT_RELATIVE),
                 source_changes=internal_source_changes,
+                _decision_facts_factory=_build_decision_facts,
             )
         except Exception:
             _rollback_repair_voxblame_step(workspace, intended_step)
@@ -1030,7 +1038,17 @@ def publish_cycle_from_candidate(
     cycle_value = result.get("cycle", step_value)
     if isinstance(cycle_value, Mapping):
         cycle_value = cycle_value.get("cycle", 0)
-    return {"step": {"step": int(step_value)}, "cycle": int(cycle_value)}
+    decision_facts = result.get("_decision_facts")
+    if not isinstance(decision_facts, Mapping):
+        raise WorkspaceError(
+            "corrupt_workspace",
+            "publication did not return decision facts",
+        )
+    return {
+        "step": {"step": int(step_value)},
+        "cycle": int(cycle_value),
+        "decision_facts": dict(decision_facts),
+    }
 
 
 def seed_repair_source_from_parent_step(
@@ -1279,6 +1297,59 @@ def _project_residual_summary(measurement: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_decision_facts(
+    step_document: Mapping[str, Any],
+    measurement_document: Mapping[str, Any],
+    parent_document: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Project facts from the validated publication documents in memory."""
+
+    step = _fact_int(step_document.get("step"), "step manifest ordinal is malformed")
+    accepted = _fact_bool(
+        step_document.get("accepted"), "step manifest accepted is malformed"
+    )
+    preview_identity = _fact_sha256(
+        step_document.get("preview_identity_sha256"),
+        "step manifest preview identity is malformed",
+    )
+    parent_value = step_document.get("parent_step")
+    if parent_value is None:
+        parent_ordinal = None
+        change_from_parent = None
+    else:
+        parent_ordinal = _fact_int(
+            parent_value, "step manifest parent ordinal is malformed"
+        )
+        if parent_document is None:
+            _decision_facts_fail("parent step manifest is unavailable")
+        change_from_parent = {
+            "no_observable_geometry_change": _fact_bool(
+                step_document.get("no_observable_geometry_change"),
+                "step manifest no-op fact is malformed",
+            ),
+            "parent_accepted": _fact_bool(
+                parent_document.get("accepted"),
+                "parent step accepted is malformed",
+            ),
+        }
+    return {
+        "schema": DECISION_FACTS_SCHEMA,
+        "step_ordinal": step,
+        "parent_step_ordinal": parent_ordinal,
+        "accepted": accepted,
+        "acceptance_state": "acceptance_satisfied" if accepted else "unaccepted",
+        "residual_summary": _project_residual_summary(measurement_document),
+        "repair_targets": _project_repair_targets(
+            measurement_document.get("repair_targets"), step=step
+        ),
+        "preview": {
+            "identity_sha256": preview_identity,
+            "render_variant": "step",
+        },
+        "change_from_parent": change_from_parent,
+    }
+
+
 def read_current_step_decision_facts(
     workspace: Path, *, step: int
 ) -> dict[str, Any]:
@@ -1309,11 +1380,6 @@ def read_current_step_decision_facts(
     )
     if step_document.get("step") != step:
         _decision_facts_fail("step manifest ordinal conflicts with request")
-    accepted = _fact_bool(step_document.get("accepted"), "step manifest accepted is malformed")
-    preview_identity = _fact_sha256(
-        step_document.get("preview_identity_sha256"),
-        "step manifest preview identity is malformed",
-    )
     parent_step_value = step_document.get("parent_step")
     parent_ordinal: int | None
     if parent_step_value is None:
@@ -1332,43 +1398,18 @@ def read_current_step_decision_facts(
         workspace / measurement_relative,
         f"$.steps[{step}].measurement",
     )
-    residual_summary = _project_residual_summary(measurement_document)
-    targets_source = measurement_document.get("repair_targets")
-    projected_targets = _project_repair_targets(targets_source, step=step)
-    change_from_parent: dict[str, Any] | None
-    if parent_ordinal is None:
-        change_from_parent = None
-    else:
-        no_change = _fact_bool(
-            step_document.get("no_observable_geometry_change"),
-            "step manifest no-op fact is malformed",
-        )
-        parent_document = _read_authority_json(
+    parent_document = (
+        _read_authority_json(
             workspace,
             workspace / "steps" / f"{parent_ordinal:06d}" / "step.json",
             f"$.steps[{parent_ordinal}]",
         )
-        parent_accepted = _fact_bool(
-            parent_document.get("accepted"), "parent step accepted is malformed"
-        )
-        change_from_parent = {
-            "no_observable_geometry_change": no_change,
-            "parent_accepted": parent_accepted,
-        }
-    return {
-        "schema": DECISION_FACTS_SCHEMA,
-        "step_ordinal": step,
-        "parent_step_ordinal": parent_ordinal,
-        "accepted": accepted,
-        "acceptance_state": "acceptance_satisfied" if accepted else "unaccepted",
-        "residual_summary": residual_summary,
-        "repair_targets": projected_targets,
-        "preview": {
-            "identity_sha256": preview_identity,
-            "render_variant": "step",
-        },
-        "change_from_parent": change_from_parent,
-    }
+        if parent_ordinal is not None
+        else None
+    )
+    return _build_decision_facts(
+        step_document, measurement_document, parent_document
+    )
 
 
 def _finalization_staging_path(workspace: Path) -> Path:

@@ -500,7 +500,14 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
             source=cycle_source,
             evidence_provider=repair_stub,
         )
-        self.assertEqual({"step": {"step": 1}, "cycle": 1}, repaired)
+        self.assertEqual(
+            {"step": {"step": 1}, "cycle": 1},
+            {key: repaired[key] for key in ("step", "cycle")},
+        )
+        self.assertEqual(
+            "mesh-to-cad.decision-facts/1",
+            repaired["decision_facts"]["schema"],
+        )
         self.assertTrue((case.workspace / "steps/000001").is_dir())
         self.assertTrue((case.workspace / "cycles/000001").is_dir())
         self.assertTrue(
@@ -958,7 +965,11 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
                 evidence_provider=real_provider,
             )
 
-        self.assertEqual({"step": 0}, published)
+        self.assertEqual(0, published["step"])
+        self.assertEqual(
+            "mesh-to-cad.decision-facts/1",
+            published["decision_facts"]["schema"],
+        )
         self.assertTrue(
             (case.workspace / "voxblame/steps/000000/summary.json").is_file()
         )
@@ -1020,7 +1031,11 @@ class WorkspaceFacadeAgentTests(unittest.TestCase):
         published = facade.publish_step_zero_from_candidate(
             case.workspace, attempt=1, source=source, evidence_provider=capturing_provider
         )
-        self.assertEqual({"step": 0}, published)
+        self.assertEqual(0, published["step"])
+        self.assertEqual(
+            "mesh-to-cad.decision-facts/1",
+            published["decision_facts"]["schema"],
+        )
         # All four request paths must be outside the Workspace tree.
         for label, path in observed["paths"].items():
             with self.assertRaises(ValueError, msg=f"{label} escaped Workspace"):
@@ -1296,9 +1311,23 @@ class WorkspaceDecisionFactsTests(WorkspaceFacadeAgentTests):
         case.setUp()
         self.addCleanup(case.temporary.cleanup)
         facade = _load_facade()
-        self._publish_step_zero(case, facade)
+
+        def unexpected_read(*_args, **_kwargs):
+            raise AssertionError("publication must carry decision facts")
+
+        original_reader = facade.read_current_step_decision_facts
+        facade.read_current_step_decision_facts = unexpected_read
+        try:
+            published, _candidate_sha = self._publish_step_zero(case, facade)
+        finally:
+            facade.read_current_step_decision_facts = original_reader
+        self.assertEqual(
+            "mesh-to-cad.decision-facts/1",
+            published["decision_facts"]["schema"],
+        )
 
         facts = facade.read_current_step_decision_facts(case.workspace, step=0)
+        self.assertEqual(published["decision_facts"], facts)
         self._assert_closed_decision_facts(
             facts, step_ordinal=0, parent=None, accepted=False
         )
@@ -1340,14 +1369,28 @@ class WorkspaceDecisionFactsTests(WorkspaceFacadeAgentTests):
         self.addCleanup(case.temporary.cleanup)
         facade = _load_facade()
         cycle_source, repair_stub = self._prepare_repair_cycle(case, facade)
-        facade.publish_cycle_from_candidate(
-            case.workspace,
-            attempt=2,
-            source=cycle_source,
-            evidence_provider=repair_stub,
+
+        def unexpected_read(*_args, **_kwargs):
+            raise AssertionError("publication must carry decision facts")
+
+        original_reader = facade.read_current_step_decision_facts
+        facade.read_current_step_decision_facts = unexpected_read
+        try:
+            published = facade.publish_cycle_from_candidate(
+                case.workspace,
+                attempt=2,
+                source=cycle_source,
+                evidence_provider=repair_stub,
+            )
+        finally:
+            facade.read_current_step_decision_facts = original_reader
+        self.assertEqual(
+            "mesh-to-cad.decision-facts/1",
+            published["decision_facts"]["schema"],
         )
 
         facts = facade.read_current_step_decision_facts(case.workspace, step=1)
+        self.assertEqual(published["decision_facts"], facts)
         self._assert_closed_decision_facts(
             facts,
             step_ordinal=1,

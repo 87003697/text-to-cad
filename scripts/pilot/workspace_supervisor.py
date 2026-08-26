@@ -1131,8 +1131,11 @@ class WorkspaceSupervisor:
         if completed < 0 or completed > MAX_CYCLES or total_attempts < 0 or failures < 0:
             raise SupervisorError("workspace_contract_violation")
         active_attempt = next(iter(self._attempts.values()), None)
+        workspace_state = self._status_state(status)
         state = (
-            "blocked" if active_attempt is not None else self._status_state(status)
+            workspace_state
+            if workspace_state == "terminal"
+            else "blocked" if active_attempt is not None else workspace_state
         )
         remaining_attempts = status.get("remaining_attempts", MAX_ATTEMPTS_PER_STEP)
         remaining_tool_failures = status.get("remaining_tool_failures")
@@ -1145,14 +1148,16 @@ class WorkspaceSupervisor:
             or remaining_tool_failures < 0
         ):
             raise SupervisorError("workspace_contract_violation")
-        if active_attempt is not None:
+        if workspace_state == "terminal":
+            next_intents = ["workspace_status"]
+        elif active_attempt is not None:
             next_intents = self._attempt_next_intents(active_attempt.intended_step)
         else:
             next_intents = ["workspace_status"]
-        if active_attempt is None and state != "terminal":
+        if active_attempt is None and workspace_state != "terminal":
             next_intents.append("observe_reference")
             next_intents.append("start_attempt")
-            if state == "preterminal":
+            if workspace_state == "preterminal":
                 next_intents.append("select_and_finalize")
         return {
             "state": state,
@@ -1825,10 +1830,10 @@ class WorkspaceSupervisor:
             workspace_handle, attempt_handle, candidate_handle, kind="step_zero"
         )
         published = self._publish_submission(submission)
+        decision_facts = published["decision_facts"]
         self._retire_attempt(submission.attempt_id)
         step_number = int(published["step"])
         step_handle = self.registry.issue("step", step_number)
-        decision_facts = self._read_decision_facts(step_number)
         return {
             "state": "published",
             "step_handle": step_handle,
@@ -1846,11 +1851,11 @@ class WorkspaceSupervisor:
             workspace_handle, attempt_handle, candidate_handle, kind="repair"
         )
         published = self._publish_submission(submission)
+        decision_facts = published["decision_facts"]
         self._retire_attempt(submission.attempt_id)
         step_number = int(published["step"])
         step_handle = self.registry.issue("step", step_number)
         cycle_handle = self.registry.issue("cycle", int(published["cycle"]))
-        decision_facts = self._read_decision_facts(step_number)
         return {
             "state": "published",
             "step_handle": step_handle,
@@ -1858,27 +1863,6 @@ class WorkspaceSupervisor:
             "decision_facts": decision_facts,
             "permitted_next_intents": ["start_attempt", "select_and_finalize", "workspace_status"],
         }
-
-    def _read_decision_facts(self, step_number: int) -> Mapping[str, Any]:
-        """Fetch bounded W1-authenticated decision facts for one Measured Step.
-
-        The supervisor never parses any Workspace authority subtree,
-        measurement document, preview asset, or review graph itself.
-        The W1 facade owns the projection and returns semantic scalars
-        only.  A malformed projection fails closed so the Agent Surface
-        handler sees a supervisor error rather than an oversized or
-        ill-typed decision-facts document.
-        """
-
-        try:
-            facts = self.workspace_api.read_current_step_decision_facts(
-                self.workspace, step=step_number
-            )
-        except Exception as exc:
-            raise SupervisorError("decision_facts_unavailable") from exc
-        if not isinstance(facts, Mapping):
-            raise SupervisorError("decision_facts_unavailable")
-        return facts
 
     def _prepare_submission(
         self,
@@ -1898,12 +1882,16 @@ class WorkspaceSupervisor:
 
     def _publish_submission(
         self, submission: CandidateSubmission
-    ) -> Mapping[str, int]:
+    ) -> Mapping[str, Any]:
         """Delegate one candidate submission to the W1 facade.
 
         The W1 facade owns candidate ingestion and authority mutation, and
         discovers evidence from the trusted candidate tree using its fixed
         internal producer filenames.  The Agent never named a path.
+        Publication also returns the bounded decision-facts receipt built
+        from the validated Step/Cycle documents included in the commit, so
+        W4 need not perform a second fallible authority read after retiring
+        the Attempt.
         """
 
         if submission.kind == "step_zero":
@@ -1935,10 +1923,15 @@ class WorkspaceSupervisor:
                 else "cycle_publication_failed"
             )
             raise SupervisorError(classification) from exc
+        if not isinstance(document, Mapping):
+            raise SupervisorError("decision_facts_unavailable")
+        decision_facts = document.get("decision_facts")
+        if not isinstance(decision_facts, Mapping):
+            raise SupervisorError("decision_facts_unavailable")
         step_value = document.get("step", 0)
         if isinstance(step_value, Mapping):
             step_value = step_value.get("step", 0)
-        result = {"step": int(step_value)}
+        result = {"step": int(step_value), "decision_facts": decision_facts}
         if submission.kind == "repair":
             cycle_value = document.get("cycle", step_value)
             if isinstance(cycle_value, Mapping):
@@ -2013,6 +2006,8 @@ class WorkspaceSupervisor:
         notes_handle: str,
     ) -> Mapping[str, Any]:
         self._workspace(workspace_handle)
+        if self._attempts:
+            raise SupervisorError("attempt_already_active")
         selected_step = self.registry.resolve(step_handle, "step")
         selection = self.registry.resolve(selection_handle, "selection")
         notes = self.registry.resolve(notes_handle, "notes")
