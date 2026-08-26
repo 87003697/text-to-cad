@@ -76,6 +76,7 @@ class ExpInspection:
     complete: bool
     final_status: int | None
     has_postmortem: bool
+    has_terminal_handoff: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,6 +88,7 @@ class PullPlan:
     s3_exps: frozenset[str]
     publish: tuple[str, ...]
     preserve: tuple[ExpInspection, ...]
+    handoffless_postmortems: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -355,6 +357,7 @@ if not path_safe:
         "complete": False,
         "final_status": None,
         "has_postmortem": False,
+        "has_terminal_handoff": False,
     }, separators=(",", ":")))
     raise SystemExit(0)
 try:
@@ -363,11 +366,24 @@ try:
 except (OSError, json.JSONDecodeError):
     value = None
 complete = type(value) is int
+handoff = (
+    root / group / ".internal-terminal-validation" / child
+    / "terminal-validation.json"
+)
+try:
+    handoff.lstat()
+except FileNotFoundError:
+    has_terminal_handoff = False
+except OSError:
+    raise SystemExit("cannot inspect terminal handoff")
+else:
+    has_terminal_handoff = True
 print(json.dumps({
     "path_safe": True,
     "complete": complete,
     "final_status": value if complete else None,
     "has_postmortem": (exp / "run/.codex-home").is_dir(),
+    "has_terminal_handoff": has_terminal_handoff,
 }, separators=(",", ":")))
 """.strip()
         command = " ".join(
@@ -396,6 +412,7 @@ print(json.dumps({
                 else None
             ),
             has_postmortem=payload.get("has_postmortem") is True,
+            has_terminal_handoff=payload.get("has_terminal_handoff") is True,
         )
 
     def qualify(
@@ -417,6 +434,7 @@ print(json.dumps({
 
         publish: list[str] = []
         preserve: list[ExpInspection] = []
+        handoffless_postmortems: set[str] = set()
         for item in inspections:
             should_preserve = (
                 self.request.postmortem_policy is PostmortemPolicy.DEFAULT
@@ -426,12 +444,15 @@ print(json.dumps({
                 preserve.append(item)
             else:
                 publish.append(item.exp)
+                if item.final_status != 0 and not item.has_terminal_handoff:
+                    handoffless_postmortems.add(item.exp)
         return PullPlan(
             cvm_exps=cvm_exps,
             candidates=candidates,
             s3_exps=s3_exps,
             publish=tuple(publish),
             preserve=tuple(preserve),
+            handoffless_postmortems=frozenset(handoffless_postmortems),
         )
 
     def _load_excludes(self) -> tuple[str, ...]:
@@ -493,17 +514,54 @@ print(json.dumps({
                 f"aws s3 cp fatal (exit={status}) — aborting", status
             )
 
-    def _terminal_content_inventories(
+    def _verify_exp_without_handoff(self, exp: str) -> int:
+        """Verify an early failed experiment without terminal evidence."""
+
+        expected, local, s3 = self._terminal_content_inventories(
+            exp, allow_missing_handoff=True
+        )
+        local_mismatch = self._content_mismatch(expected, local)
+        s3_mismatch = self._content_mismatch(expected, s3)
+        if any(local_mismatch) or any(s3_mismatch):
+            raise PullError(
+                "VERIFY FAILED transfer content "
+                f"(local={len(local)} s3={len(s3)} "
+                f"local_missing={local_mismatch[0]} "
+                f"local_extra={local_mismatch[1]} "
+                f"local_changed={local_mismatch[2]} "
+                f"s3_missing={s3_mismatch[0]} s3_extra={s3_mismatch[1]} "
+                f"s3_changed={s3_mismatch[2]}); "
+                "keeping CVM local. Investigate.",
+                5,
+            )
+        return len(local)
+
+    def _existing_s3_is_complete_without_handoff(
         self, exp: str
+    ) -> tuple[bool, int, int]:
+        """Compare a handoffless prefix with its immutable CVM source."""
+
+        expected, local, s3 = self._terminal_content_inventories(
+            exp, allow_missing_handoff=True
+        )
+        return (
+            expected == local == s3,
+            len(local),
+            len(s3),
+        )
+
+    def _terminal_content_inventories(
+        self, exp: str, *, allow_missing_handoff: bool = False
     ) -> tuple[
         dict[str, tuple[int, str]],
         dict[str, tuple[int, str]],
         dict[str, tuple[int, str]],
     ]:
-        """Return authenticated manifest, CVM, and S3 content inventories."""
+        """Return expected, CVM, and S3 content inventories."""
 
         group, child = exp.split("/", 1)
         script = """
+import fnmatch
 import hashlib
 import json
 import os
@@ -513,22 +571,30 @@ import subprocess
 import sys
 import tempfile
 
-group, child, bucket, prefix = sys.argv[1:]
+group, child, bucket, prefix, allow_missing, patterns_json = sys.argv[1:]
+allow_missing_handoff = allow_missing == "1"
+patterns = json.loads(patterns_json)
 handoff_path = pathlib.Path.home() / (
     "text-to-cad/outputs/" + group + "/.internal-terminal-validation/"
     + child + "/terminal-validation.json"
 )
-info = handoff_path.lstat()
-if not stat.S_ISREG(info.st_mode):
-    raise SystemExit("terminal handoff is not a regular file")
-handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
-if (
-    not isinstance(handoff, dict)
-    or set(handoff) != {"schema", "terminal_identity_sha256", "bundle"}
-    or handoff.get("schema") != "mesh-to-cad.terminal-validation-handoff/1"
-    or not isinstance(handoff.get("bundle"), dict)
-):
-    raise SystemExit("terminal handoff schema is unsupported")
+try:
+    info = handoff_path.lstat()
+except FileNotFoundError:
+    if not allow_missing_handoff:
+        raise SystemExit("terminal handoff is not a regular file")
+    handoff = None
+else:
+    if not stat.S_ISREG(info.st_mode):
+        raise SystemExit("terminal handoff is not a regular file")
+    handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(handoff, dict)
+        or set(handoff) != {"schema", "terminal_identity_sha256", "bundle"}
+        or handoff.get("schema") != "mesh-to-cad.terminal-validation-handoff/1"
+        or not isinstance(handoff.get("bundle"), dict)
+    ):
+        raise SystemExit("terminal handoff schema is unsupported")
 
 def identity(schema, value):
     body = (json.dumps(
@@ -536,49 +602,50 @@ def identity(schema, value):
     ) + "\\n").encode("utf-8")
     return hashlib.sha256(schema.encode("utf-8") + b"\\0" + body).hexdigest()
 
-bundle = handoff["bundle"]
-if (
-    set(bundle) != {"schema", "result", "manifest"}
-    or bundle.get("schema") != "mesh-to-cad.terminal-validation-bundle/1"
-    or identity("mesh-to-cad.terminal-validation-handoff/1", bundle)
-       != handoff.get("terminal_identity_sha256")
-):
-    raise SystemExit("terminal handoff identity mismatch")
-manifest = bundle["manifest"]
-if (
-    not isinstance(manifest, dict)
-    or set(manifest) != {
-        "schema", "workspace_id", "workspace_identity_sha256", "files",
-        "identity_sha256",
-    }
-    or manifest.get("schema") != "mesh-to-cad.content-manifest/1"
-    or not isinstance(manifest.get("files"), list)
-):
-    raise SystemExit("terminal content manifest is unsupported")
-manifest_body = dict(manifest)
-manifest_identity = manifest_body.pop("identity_sha256")
-if identity("mesh-to-cad.content-manifest/1", manifest_body) != manifest_identity:
-    raise SystemExit("terminal content manifest identity mismatch")
-
 expected = {}
-previous = ""
-for item in manifest["files"]:
-    if not isinstance(item, dict) or set(item) != {"path", "size_bytes", "sha256"}:
-        raise SystemExit("terminal content manifest entry is unsupported")
-    name, size, digest = item["path"], item["size_bytes"], item["sha256"]
-    pure = pathlib.PurePosixPath(name) if isinstance(name, str) else None
+if handoff is not None:
+    bundle = handoff["bundle"]
     if (
-        pure is None or pure.is_absolute() or not pure.parts
-        or any(part in {"", ".", ".."} for part in pure.parts)
-        or name != pure.as_posix() or name <= previous
-        or pure.parts[0] in {".git", "run", "work"}
-        or not isinstance(size, int) or isinstance(size, bool) or size < 0
-        or not isinstance(digest, str) or len(digest) != 64
-        or any(char not in "0123456789abcdef" for char in digest)
+        set(bundle) != {"schema", "result", "manifest"}
+        or bundle.get("schema") != "mesh-to-cad.terminal-validation-bundle/1"
+        or identity("mesh-to-cad.terminal-validation-handoff/1", bundle)
+           != handoff.get("terminal_identity_sha256")
     ):
-        raise SystemExit("terminal content manifest entry is invalid")
-    expected[name] = [size, digest]
-    previous = name
+        raise SystemExit("terminal handoff identity mismatch")
+    manifest = bundle["manifest"]
+    if (
+        not isinstance(manifest, dict)
+        or set(manifest) != {
+            "schema", "workspace_id", "workspace_identity_sha256", "files",
+            "identity_sha256",
+        }
+        or manifest.get("schema") != "mesh-to-cad.content-manifest/1"
+        or not isinstance(manifest.get("files"), list)
+    ):
+        raise SystemExit("terminal content manifest is unsupported")
+    manifest_body = dict(manifest)
+    manifest_identity = manifest_body.pop("identity_sha256")
+    if identity("mesh-to-cad.content-manifest/1", manifest_body) != manifest_identity:
+        raise SystemExit("terminal content manifest identity mismatch")
+
+    previous = ""
+    for item in manifest["files"]:
+        if not isinstance(item, dict) or set(item) != {"path", "size_bytes", "sha256"}:
+            raise SystemExit("terminal content manifest entry is unsupported")
+        name, size, digest = item["path"], item["size_bytes"], item["sha256"]
+        pure = pathlib.PurePosixPath(name) if isinstance(name, str) else None
+        if (
+            pure is None or pure.is_absolute() or not pure.parts
+            or any(part in {"", ".", ".."} for part in pure.parts)
+            or name != pure.as_posix() or name <= previous
+            or pure.parts[0] in {".git", "run", "work"}
+            or not isinstance(size, int) or isinstance(size, bool) or size < 0
+            or not isinstance(digest, str) or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            raise SystemExit("terminal content manifest entry is invalid")
+        expected[name] = [size, digest]
+        previous = name
 
 def file_digest(path):
     digest = hashlib.sha256()
@@ -592,15 +659,25 @@ local = {}
 for directory, dirnames, filenames in os.walk(root, followlinks=False):
     parent = pathlib.Path(directory)
     relative_parent = parent.relative_to(root)
-    if not relative_parent.parts:
+    if handoff is not None and not relative_parent.parts:
         dirnames[:] = [name for name in dirnames if name not in {".git", "run", "work"}]
     for name in filenames:
         path = parent / name
         if not stat.S_ISREG(path.lstat().st_mode):
             continue
         relative = path.relative_to(root).as_posix()
-        if relative.split("/", 1)[0] not in {".git", "run", "work"}:
+        if handoff is None:
+            if (
+                relative != "run/terminal-validation-locator.json"
+                and any(fnmatch.fnmatch(relative, pattern) for pattern in patterns)
+            ):
+                continue
             local[relative] = file_digest(path)
+        elif relative.split("/", 1)[0] not in {".git", "run", "work"}:
+            local[relative] = file_digest(path)
+
+if handoff is None:
+    expected = dict(local)
 
 keys = []
 token = None
@@ -622,7 +699,16 @@ while True:
         if not isinstance(key, str) or not key.startswith(prefix):
             continue
         relative = key[len(prefix):]
-        if relative and relative.split("/", 1)[0] not in {".git", "run", "work"}:
+        if not relative:
+            continue
+        if handoff is None:
+            if (
+                relative != "run/terminal-validation-locator.json"
+                and any(fnmatch.fnmatch(relative, pattern) for pattern in patterns)
+            ):
+                continue
+            keys.append((relative, key))
+        elif relative.split("/", 1)[0] not in {".git", "run", "work"}:
             keys.append((relative, key))
     if not page.get("IsTruncated"):
         break
@@ -654,6 +740,8 @@ print(json.dumps({"expected": expected, "local": local, "s3": s3}, sort_keys=Tru
                 shlex.quote(child),
                 shlex.quote("arcwm-code-us-west-2"),
                 shlex.quote(prefix),
+                shlex.quote("1" if allow_missing_handoff else "0"),
+                shlex.quote(json.dumps(self.excludes)),
             )
         )
         result = self.runner.remote(command, check=False)
@@ -936,20 +1024,29 @@ print(json.dumps({
         )
         for index, exp in enumerate(plan.publish, start=1):
             self._log(f"=== [{index}/{len(plan.publish)}] {exp} ===")
+            handoffless = exp in plan.handoffless_postmortems
             count: int
             if exp in plan.s3_exps:
-                complete, local_count, s3_count = self._existing_s3_is_complete(exp)
+                if handoffless:
+                    complete, local_count, s3_count = (
+                        self._existing_s3_is_complete_without_handoff(exp)
+                    )
+                else:
+                    complete, local_count, s3_count = self._existing_s3_is_complete(
+                        exp
+                    )
                 if complete:
                     count = local_count
-                    identity, _digest, size = self._verify_exp_handoff(exp)
                     verified_existing.append(exp)
                     self._log(
                         f"  existing S3 prefix verified ({count} files)"
                     )
-                    self._log(
-                        f"  terminal handoff verified "
-                        f"(identity={identity[:12]} size={size} bytes)"
-                    )
+                    if not handoffless:
+                        identity, _digest, size = self._verify_exp_handoff(exp)
+                        self._log(
+                            f"  terminal handoff verified "
+                            f"(identity={identity[:12]} size={size} bytes)"
+                        )
                 else:
                     raise PullError(
                         "VERIFY FAILED existing S3 terminal content "
@@ -959,14 +1056,17 @@ print(json.dumps({
                     )
             else:
                 self._upload_exp(exp)
-                self._upload_exp_handoff(exp)
-                count = self._verify_exp(exp)
-                identity, _digest, size = self._verify_exp_handoff(exp)
+                if handoffless:
+                    count = self._verify_exp_without_handoff(exp)
+                else:
+                    self._upload_exp_handoff(exp)
+                    count = self._verify_exp(exp)
+                    identity, _digest, size = self._verify_exp_handoff(exp)
+                    self._log(
+                        f"  terminal handoff verified "
+                        f"(identity={identity[:12]} size={size} bytes)"
+                    )
                 uploaded.append(exp)
-                self._log(
-                    f"  terminal handoff verified "
-                    f"(identity={identity[:12]} size={size} bytes)"
-                )
             if retain_source:
                 self._log(f"  verify OK ({count} files); retaining CVM source")
                 retained_source.append(exp)

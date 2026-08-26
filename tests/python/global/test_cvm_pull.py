@@ -409,6 +409,161 @@ class PullPlanTests(unittest.TestCase):
         self.assertEqual(result.uploaded, ("group/failed",))
         self.assertEqual(result.retained_source, ("group/failed",))
 
+    def test_early_failed_manifest_without_handoff_skips_handoff_transfer(self) -> None:
+        runner = FakeRunner()
+        workflow = cvm_pull.CvmPull(
+            cvm_pull.PullRequest(
+                None,
+                None,
+                cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
+            ),
+            runner,
+        )
+        runner.respond(
+            "python3 -c",
+            stdout=json.dumps(
+                {
+                    "path_safe": True,
+                    "complete": True,
+                    "final_status": 1,
+                    "has_postmortem": True,
+                    "has_terminal_handoff": False,
+                }
+            ),
+        )
+        plan = workflow.qualify(
+            ("group/early-failure",), ("group/early-failure",)
+        )
+        self.assertEqual(
+            plan.handoffless_postmortems,
+            frozenset({"group/early-failure"}),
+        )
+        with (
+            mock.patch.object(workflow, "_upload_exp") as upload,
+            mock.patch.object(
+                workflow,
+                "_terminal_content_inventories",
+                return_value=(
+                    {"failure.log": (4, "a" * 64)},
+                    {"failure.log": (4, "a" * 64)},
+                    {"failure.log": (4, "a" * 64)},
+                ),
+            ) as inventories,
+            mock.patch.object(
+                workflow,
+                "_upload_exp_handoff",
+                side_effect=AssertionError("early failure has no handoff"),
+            ) as upload_handoff,
+            mock.patch.object(
+                workflow,
+                "_verify_exp_handoff",
+                side_effect=AssertionError("early failure has no handoff"),
+            ) as verify_handoff,
+        ):
+            result = workflow.publish(plan)
+        upload.assert_called_once_with("group/early-failure")
+        inventories.assert_called_once_with(
+            "group/early-failure", allow_missing_handoff=True
+        )
+        upload_handoff.assert_not_called()
+        verify_handoff.assert_not_called()
+        self.assertEqual(result.uploaded, ("group/early-failure",))
+        self.assertEqual(result.retained_source, ("group/early-failure",))
+
+    def test_terminal_handoff_bearing_failure_keeps_strict_verification(self) -> None:
+        runner = FakeRunner()
+        workflow = cvm_pull.CvmPull(
+            cvm_pull.PullRequest(
+                None,
+                None,
+                cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
+            ),
+            runner,
+        )
+        runner.respond(
+            "python3 -c",
+            stdout=json.dumps(
+                {
+                    "path_safe": True,
+                    "complete": True,
+                    "final_status": 1,
+                    "has_postmortem": True,
+                    "has_terminal_handoff": True,
+                }
+            ),
+        )
+        plan = workflow.qualify(
+            ("group/validated-failure",), ("group/validated-failure",)
+        )
+        events: list[str] = []
+        with (
+            mock.patch.object(
+                workflow,
+                "_upload_exp",
+                side_effect=lambda _exp: events.append("upload"),
+            ),
+            mock.patch.object(
+                workflow,
+                "_upload_exp_handoff",
+                side_effect=lambda _exp: events.append("upload_handoff"),
+            ),
+            mock.patch.object(
+                workflow,
+                "_verify_exp",
+                side_effect=lambda _exp: events.append("verify") or 4,
+            ),
+            mock.patch.object(
+                workflow,
+                "_verify_exp_handoff",
+                side_effect=lambda _exp: events.append("verify_handoff")
+                or ("a" * 64, "b" * 64, 100),
+            ),
+        ):
+            result = workflow.publish(plan)
+        self.assertEqual(plan.handoffless_postmortems, frozenset())
+        self.assertEqual(
+            events,
+            ["upload", "upload_handoff", "verify", "verify_handoff"],
+        )
+        self.assertEqual(result.retained_source, ("group/validated-failure",))
+
+    def test_success_without_terminal_handoff_remains_fail_closed(self) -> None:
+        runner = FakeRunner()
+        workflow = cvm_pull.CvmPull(
+            cvm_pull.PullRequest(
+                None,
+                None,
+                cvm_pull.PostmortemPolicy.INCLUDE_RETAIN,
+            ),
+            runner,
+        )
+        runner.respond(
+            "python3 -c",
+            stdout=json.dumps(
+                {
+                    "path_safe": True,
+                    "complete": True,
+                    "final_status": 0,
+                    "has_postmortem": False,
+                    "has_terminal_handoff": False,
+                }
+            ),
+        )
+        plan = workflow.qualify(
+            ("group/missing-handoff",), ("group/missing-handoff",)
+        )
+        with (
+            mock.patch.object(workflow, "_upload_exp"),
+            mock.patch.object(
+                workflow,
+                "_upload_exp_handoff",
+                side_effect=cvm_pull.PullError("missing handoff", 5),
+            ) as upload_handoff,
+        ):
+            with self.assertRaisesRegex(cvm_pull.PullError, "missing handoff"):
+                workflow.publish(plan)
+        upload_handoff.assert_called_once_with("group/missing-handoff")
+
     def test_existing_verified_postmortem_is_not_reported_as_uploaded(self) -> None:
         runner = FakeRunner()
         workflow = cvm_pull.CvmPull(
