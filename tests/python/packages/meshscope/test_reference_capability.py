@@ -386,7 +386,7 @@ class ReferenceCapabilityTests(unittest.TestCase):
                     )
                     loader.assert_not_called()
 
-    def test_ascii_body_is_exact_finite_and_indexed(self) -> None:
+    def test_ascii_body_is_exact_and_index_lexical(self) -> None:
         header = (
             b"ply\n"
             b"format ascii 1.0\n"
@@ -399,7 +399,21 @@ class ReferenceCapabilityTests(unittest.TestCase):
             b"end_header\n"
         )
         valid_body = b"0 0 0\n0.4 0 0\n0 0.4 0\n3 0 1 2\n"
-        cases = {
+        valid_index_spellings = {
+            "plus-indices": b"0 0 0\n0.4 0 0\n0 0.4 0\n3 +0 +1 +2\n",
+            "zero-padded-indices": b"0 0 0\n0.4 0 0\n0 0.4 0\n3 00 01 02\n",
+        }
+        for name, body in valid_index_spellings.items():
+            path = self.root / f"{name}.ply"
+            path.write_bytes(header + body)
+            with self.subTest(name=name):
+                capability = ReferenceCapability(name, path)
+                result = capability.handle(
+                    self.request("summary", reference_id=name)
+                )
+                self.assertEqual(1, result["observation"]["stats"]["faces"])
+
+        lexical_cases = {
             "undeclared-vertex-column": (
                 b"0 0 0 nan\n0.4 0 0\n0 0.4 0\n3 0 1 2\n"
             ),
@@ -407,10 +421,8 @@ class ReferenceCapabilityTests(unittest.TestCase):
                 b"0 0 0\n0.4 0 0\n0 0.4 0\n3 0 1 2 99\n"
             ),
             "trailing-vertex-record": valid_body + b"0 0 0\n",
-            "nonfinite-vertex": b"nan 0 0\n0.4 0 0\n0 0.4 0\n3 0 1 2\n",
-            "out-of-range-index": b"0 0 0\n0.4 0 0\n0 0.4 0\n3 0 1 3\n",
         }
-        for name, body in cases.items():
+        for name, body in lexical_cases.items():
             path = self.root / f"{name}.ply"
             path.write_bytes(header + body)
             with self.subTest(name=name), mock.patch(
@@ -422,6 +434,20 @@ class ReferenceCapabilityTests(unittest.TestCase):
                     "invalid_reference_material",
                 )
                 loader.assert_not_called()
+
+        semantic_cases = {
+            "nonfinite-vertex": b"nan 0 0\n0.4 0 0\n0 0.4 0\n3 0 1 2\n",
+            "negative-index": b"0 0 0\n0.4 0 0\n0 0.4 0\n3 -1 1 2\n",
+            "out-of-range-index": b"0 0 0\n0.4 0 0\n0 0.4 0\n3 0 1 3\n",
+        }
+        for name, body in semantic_cases.items():
+            path = self.root / f"{name}.ply"
+            path.write_bytes(header + body)
+            with self.subTest(name=name):
+                self.assert_error(
+                    lambda path=path: ReferenceCapability(name, path),
+                    "invalid_reference_material",
+                )
 
     def test_bounded_malformed_headers_fail_before_trimesh(self) -> None:
         valid_prefix = (

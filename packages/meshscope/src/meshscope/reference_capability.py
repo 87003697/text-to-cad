@@ -205,7 +205,7 @@ _PLY_FACE_INDEX_TYPES = frozenset({"int", "uint", "int32", "uint32"})
 _ASCII_FLOAT_TOKEN = re.compile(
     r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z"
 )
-_ASCII_INDEX_TOKEN = re.compile(r"(?:0|[1-9][0-9]*)\Z")
+_ASCII_INDEX_TOKEN = re.compile(r"[+-]?[0-9]+\Z")
 _PLY_SCALAR_BYTES = {
     "char": 1,
     "uchar": 1,
@@ -410,23 +410,11 @@ def _validate_ascii_body(
             for token in tokens:
                 if _ASCII_FLOAT_TOKEN.fullmatch(token) is None:
                     _fail("invalid_reference_material")
-                try:
-                    value = float(token)
-                except (OverflowError, ValueError):
-                    _fail("invalid_reference_material")
-                if not np.isfinite(value):
-                    _fail("invalid_reference_material")
             continue
         if len(tokens) != 4 or tokens[0] != "3":
             _fail("invalid_reference_material")
         for token in tokens[1:]:
             if _ASCII_INDEX_TOKEN.fullmatch(token) is None:
-                _fail("invalid_reference_material")
-            try:
-                index = int(token, 10)
-            except ValueError:
-                _fail("invalid_reference_material")
-            if index >= vertex_count:
                 _fail("invalid_reference_material")
 
     while chunk := stream.read(8192):
