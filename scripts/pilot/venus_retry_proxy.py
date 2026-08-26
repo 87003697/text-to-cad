@@ -134,8 +134,13 @@ class _ProxyServer(ThreadingHTTPServer):
             self.stop_event.set()
             client_sockets = tuple(self._client_sockets)
             upstream_connections = tuple(self._upstream_connections)
+        close_error: OSError | None = None
         for connection in upstream_connections:
-            connection.close()
+            try:
+                connection.close()
+            except OSError as exc:
+                if close_error is None:
+                    close_error = exc
         for client_socket in client_sockets:
             try:
                 client_socket.shutdown(socket.SHUT_RDWR)
@@ -145,6 +150,8 @@ class _ProxyServer(ThreadingHTTPServer):
                 client_socket.close()
             except OSError:
                 pass
+        if close_error is not None:
+            raise close_error
 
     def wait_for_handlers(self, timeout: float) -> bool:
         """Wait until every active handler has exited, within a hard bound."""
@@ -495,17 +502,43 @@ class RetryProxy:
     def stop(self) -> None:
         """Cancel handlers, then stop the loopback listener within a bound."""
 
-        self._server.cancel_active()
-        self._server.shutdown()
-        self._server.server_close()
-        self._thread.join(timeout=1)
-        if self._thread.is_alive():
+        failure: BaseException | None = None
+
+        def capture(operation) -> None:
+            """Run cleanup while retaining the first failure for the caller."""
+
+            nonlocal failure
+            try:
+                operation()
+            except BaseException as exc:
+                if failure is None:
+                    failure = exc
+
+        def join_server() -> None:
+            """Join the serving thread without extending the shutdown bound."""
+
+            self._thread.join(timeout=1)
+            if self._thread.is_alive():
+                raise TimeoutError("Venus retry proxy server did not stop")
+
+        def wait_for_handlers() -> None:
+            """Require every request handler to quiesce before returning."""
+
+            if not self._server.wait_for_handlers(
+                HANDLER_QUIESCE_TIMEOUT_SECONDS
+            ):
+                raise TimeoutError("Venus retry proxy handlers did not stop")
+
+        try:
+            capture(self._server.cancel_active)
+            capture(self._server.shutdown)
+            capture(join_server)
+            capture(wait_for_handlers)
+        finally:
+            capture(self._server.server_close)
             self._server.clear_credentials()
-            raise TimeoutError("Venus retry proxy server did not stop")
-        if not self._server.wait_for_handlers(HANDLER_QUIESCE_TIMEOUT_SECONDS):
-            self._server.clear_credentials()
-            raise TimeoutError("Venus retry proxy handlers did not stop")
-        self._server.clear_credentials()
+        if failure is not None:
+            raise failure
 
     def __enter__(self) -> RetryProxy:
         """Start the proxy for a bounded lifecycle."""

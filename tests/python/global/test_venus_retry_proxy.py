@@ -90,6 +90,35 @@ class ScriptedUpstream:
 class VenusRetryProxyTests(unittest.TestCase):
     """Verify the retry proxy through its loopback HTTP interface."""
 
+    def test_stop_closes_listener_after_upstream_close_error(self) -> None:
+        from scripts.pilot.venus_retry_proxy import RetryProxy
+
+        with tempfile.TemporaryDirectory() as temp:
+            proxy = RetryProxy(
+                "http://127.0.0.1:1/llmproxy/v1",
+                Path(temp) / "venus-retry.jsonl",
+                upstream_bearer_token="upstream-token",
+                required_client_bearer_token="client-token",
+            )
+            proxy.start()
+            failing_connection = mock.Mock()
+            failing_connection.close.side_effect = OSError(
+                "synthetic upstream close failure"
+            )
+            with proxy._server._active_condition:
+                proxy._server._upstream_connections.add(failing_connection)
+
+            with self.assertRaisesRegex(
+                OSError, "synthetic upstream close failure"
+            ):
+                proxy.stop()
+
+            self.assertFalse(proxy._thread.is_alive())
+            self.assertEqual(-1, proxy._server.fileno())
+            self.assertIsNone(proxy._server.upstream_bearer_token)
+            self.assertIsNone(proxy._server.required_client_bearer_token)
+            failing_connection.close.assert_called_once_with()
+
     def test_stop_cancels_inflight_rate_limit_backoff(self) -> None:
         from scripts.pilot.venus_retry_proxy import RetryProxy
 
