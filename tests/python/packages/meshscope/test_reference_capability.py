@@ -386,6 +386,43 @@ class ReferenceCapabilityTests(unittest.TestCase):
                     )
                     loader.assert_not_called()
 
+    def test_ascii_body_is_exact_finite_and_indexed(self) -> None:
+        header = (
+            b"ply\n"
+            b"format ascii 1.0\n"
+            b"element vertex 3\n"
+            b"property float x\n"
+            b"property float y\n"
+            b"property float z\n"
+            b"element face 1\n"
+            b"property list uchar int vertex_indices\n"
+            b"end_header\n"
+        )
+        valid_body = b"0 0 0\n0.4 0 0\n0 0.4 0\n3 0 1 2\n"
+        cases = {
+            "undeclared-vertex-column": (
+                b"0 0 0 nan\n0.4 0 0\n0 0.4 0\n3 0 1 2\n"
+            ),
+            "undeclared-face-column": (
+                b"0 0 0\n0.4 0 0\n0 0.4 0\n3 0 1 2 99\n"
+            ),
+            "trailing-vertex-record": valid_body + b"0 0 0\n",
+            "nonfinite-vertex": b"nan 0 0\n0.4 0 0\n0 0.4 0\n3 0 1 2\n",
+            "out-of-range-index": b"0 0 0\n0.4 0 0\n0 0.4 0\n3 0 1 3\n",
+        }
+        for name, body in cases.items():
+            path = self.root / f"{name}.ply"
+            path.write_bytes(header + body)
+            with self.subTest(name=name), mock.patch(
+                "meshscope.reference_capability.trimesh.load",
+                side_effect=AssertionError("PLY parser was reached"),
+            ) as loader:
+                self.assert_error(
+                    lambda path=path: ReferenceCapability(name, path),
+                    "invalid_reference_material",
+                )
+                loader.assert_not_called()
+
     def test_bounded_malformed_headers_fail_before_trimesh(self) -> None:
         valid_prefix = (
             b"ply\nformat ascii 1.0\nelement vertex 3\n"
