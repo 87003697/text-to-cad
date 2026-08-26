@@ -1625,6 +1625,10 @@ class WorkspaceCliTests(unittest.TestCase):
             published_registry["geometry"]["entrypoint"],
         )
 
+    @unittest.skipUnless(
+        os.name == "posix",
+        "external terminal validation handoff publication requires POSIX",
+    )
     def test_runner_accepts_and_reviewer_audits_real_synthetic_delivery(
         self,
     ) -> None:
@@ -1787,6 +1791,63 @@ class WorkspaceCliTests(unittest.TestCase):
                 for node in review["graph"]["nodes"]
                 if node["type"] == "final_delivery"
             },
+        )
+
+    def test_runner_fails_closed_when_terminal_publication_is_unavailable(self) -> None:
+        """Unsupported publication never turns a valid run into a false success."""
+
+        runner_spec = importlib.util.spec_from_file_location(
+            "terminal_publication_runner",
+            PILOT_RUNNER_PATH,
+        )
+        self.assertIsNotNone(runner_spec)
+        self.assertIsNotNone(runner_spec.loader)
+        runner = importlib.util.module_from_spec(runner_spec)
+        runner_spec.loader.exec_module(runner)
+
+        rollout = (
+            self.workspace
+            / "run/.codex-home/sessions/a/b/c/rollout-terminal-publication.jsonl"
+        )
+        rollout.parent.mkdir(parents=True)
+        rollout.write_text("{}\n", encoding="utf-8")
+        with (
+            mock.patch.object(
+                runner,
+                "validate_workspace_delivery",
+                return_value={"selected_step": 0, "accepted": True},
+            ),
+            mock.patch.object(runner, "compact_exp_history"),
+            mock.patch.object(
+                runner,
+                "persist_terminal_validation",
+                side_effect=runner.PilotError("terminal_publication_unavailable"),
+            ) as persist,
+        ):
+            status = runner.finalize_pilot(
+                self.workspace,
+                0,
+                {"KEEP_STATE": "1"},
+            )
+
+        self.assertEqual(runner.ARTIFACT_CONTRACT_STATUS, status)
+        persist.assert_called_once_with(self.workspace)
+        artifact_manifest = json.loads(
+            (self.workspace / "artifact_manifest.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            runner.ARTIFACT_CONTRACT_STATUS,
+            artifact_manifest["final_status"],
+        )
+        self.assertFalse(
+            (self.workspace / "run/terminal-validation-locator.json").exists()
+        )
+        self.assertFalse(
+            (
+                self.workspace.parent
+                / ".internal-terminal-validation"
+                / self.workspace.name
+            ).exists()
         )
 
     def test_finalize_conflict_publishes_no_final_delivery(self) -> None:
