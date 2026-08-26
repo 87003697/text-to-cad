@@ -37,6 +37,22 @@ def _load_smoke_module():
 smoke = _load_smoke_module()
 
 
+def _load_workspace_core():
+    module_name = "text_to_cad_smoke_workspace_core"
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    path = (
+        REPO_ROOT
+        / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace/workspace_core.py"
+    )
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 class ManifestTests(unittest.TestCase):
     def test_deterministic_and_sorted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -348,10 +364,52 @@ class ReceiptShapeTests(unittest.TestCase):
             rebuild.write_text("rebuild")
             geometry.write_text("geometry")
             registry = smoke._tool_registry(rebuild, geometry)
+            rebuild_sha256 = smoke._hash_file(rebuild)
+            geometry_sha256 = smoke._hash_file(geometry)
         self.assertEqual(registry["schema"], "mesh-to-cad.tool-registry/2")
-        self.assertEqual(registry["rebuild"]["entrypoint"], str(rebuild))
-        self.assertEqual(registry["geometry"]["entrypoint"], str(geometry))
+        self.assertEqual(
+            registry["rebuild"]["entrypoint"],
+            "/workspace/repo/skills/cad/scripts/canonical-build/__main__.py",
+        )
+        self.assertEqual(
+            registry["geometry"]["entrypoint"],
+            "/workspace/repo/skills/mesh-compare/scripts/mesh-compare/__main__.py",
+        )
+        self.assertEqual(
+            registry["rebuild"]["entrypoint_sha256"],
+            rebuild_sha256,
+        )
+        self.assertEqual(
+            registry["geometry"]["entrypoint_sha256"],
+            geometry_sha256,
+        )
         self.assertEqual(len(registry["identity_sha256"]), 64)
+
+    def test_tool_registry_matches_installed_workspace_schema(self) -> None:
+        """The smoke registry must use the runner's canonical sandbox paths."""
+
+        workspace_core = _load_workspace_core()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rebuild = root / "canonical.py"
+            geometry = root / "geometry.py"
+            rebuild.write_text("rebuild")
+            geometry.write_text("geometry")
+            registry = smoke._tool_registry(rebuild, geometry)
+
+            try:
+                workspace_core._validate_tool_registry_document(registry)
+            except workspace_core.WorkspaceError as exc:
+                self.fail(f"smoke registry rejected by shipped Workspace: {exc}")
+
+        self.assertEqual(
+            registry["rebuild"]["entrypoint"],
+            "/workspace/repo/skills/cad/scripts/canonical-build/__main__.py",
+        )
+        self.assertEqual(
+            registry["geometry"]["entrypoint"],
+            "/workspace/repo/skills/mesh-compare/scripts/mesh-compare/__main__.py",
+        )
 
     def test_sys_path_rejects_source_checkout_entries(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

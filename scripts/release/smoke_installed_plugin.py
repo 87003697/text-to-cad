@@ -5,7 +5,9 @@ through the real Codex plugin CLI into an isolated CODEX_HOME, and asserts the
 installed cache matches the prepared tree exactly. It resolves the installed
 canonical CAD adapter through the installed Workspace's trusted-tool registry
 and runs a provider-free build with the repo checkout hidden from Python's
-import path, so a silent fallback to source cannot mask a missing runtime.
+import path, so a silent fallback to source cannot mask a missing runtime. The
+host-side build probe uses a fixed adapter for the two canonical sandbox
+entrypoint names; production does not translate registry paths.
 
 Pure validation logic (manifest / digest / fail-closed assertions / receipt
 construction) is exposed as functions and covered by tests/python/global/
@@ -79,6 +81,17 @@ CRITICAL_RUNTIME_PATHS: tuple[tuple[str, str], ...] = (
 
 
 RECEIPT_SCHEMA = "text-to-cad.installed-plugin-smoke.receipt/1"
+
+# Schema 2 serializes entrypoints in the fixed runner sandbox namespace.  The
+# smoke runs on the developer host, so it binds these two names to the
+# installed files in a subprocess adapter below; it must never put host paths
+# into the registry document itself.
+SANDBOX_CAD_REBUILD_ENTRYPOINT = (
+    "/workspace/repo/skills/cad/scripts/canonical-build/__main__.py"
+)
+SANDBOX_GEOMETRY_ENTRYPOINT = (
+    "/workspace/repo/skills/mesh-compare/scripts/mesh-compare/__main__.py"
+)
 
 
 class SmokeError(RuntimeError):
@@ -645,10 +658,12 @@ def run_installed_registered_build(
             "--timeout-seconds",
             str(int(timeout_seconds)),
         ]
-        build_result = _run_workspace_command(
+        build_result = _run_installed_workspace_build(
             python_executable,
             workspace_entrypoint,
             build_args,
+            rebuild_entrypoint=canonical_entrypoint,
+            geometry_entrypoint=geometry_entrypoint,
             cwd=fixture_root,
             env=env,
             timeout_seconds=timeout_seconds,
@@ -677,9 +692,11 @@ def run_installed_registered_build(
     return {
         "workspace_registry_resolver": str(workspace_core),
         "workspace_entrypoint": str(workspace_entrypoint),
-        "registry_path_entrypoint": str(canonical_entrypoint),
+        "registry_entrypoint": SANDBOX_CAD_REBUILD_ENTRYPOINT,
+        "host_entrypoint": str(canonical_entrypoint),
         "geometry_entrypoint": str(geometry_entrypoint),
         "resolved_entrypoint": str(Path(command_argv[1]).resolve()),
+        "sandbox_adapter": "fixed-canonical-entrypoint-binding",
         "workspace_build_argv": [
             str(python_executable), str(workspace_entrypoint), *build_args
         ],
@@ -857,6 +874,55 @@ def _run_checked(
     return result
 
 
+_INSTALLED_WORKSPACE_SANDBOX_ADAPTER = r'''
+import runpy
+import sys
+from pathlib import Path
+
+workspace_entrypoint = Path(sys.argv[1])
+host_rebuild_entrypoint = Path(sys.argv[2])
+host_geometry_entrypoint = Path(sys.argv[3])
+arguments = sys.argv[4:]
+
+# The installed Workspace is normally launched inside the runner's Linux
+# sandbox, where these canonical names are real paths.  This smoke runs the
+# installed tree on the host, so bind only the two fixed shipped names to the
+# already-contained installed files.  Workspace validation still runs first;
+# unknown or malformed registry paths are not translated.
+bindings = {
+    "/workspace/repo/skills/cad/scripts/canonical-build/__main__.py": host_rebuild_entrypoint,
+    "/workspace/repo/skills/mesh-compare/scripts/mesh-compare/__main__.py": host_geometry_entrypoint,
+}
+sys.path.insert(0, str(workspace_entrypoint.parent))
+import workspace_core
+
+external_entrypoint = workspace_core._external_entrypoint
+
+def bind_installed_entrypoint(path, field):
+    return external_entrypoint(bindings.get(str(path), path), field)
+
+workspace_core._external_entrypoint = bind_installed_entrypoint
+sys.argv = [str(workspace_entrypoint), *arguments]
+runpy.run_path(str(workspace_entrypoint), run_name="__main__")
+'''
+
+
+def _decode_workspace_result(
+    result: subprocess.CompletedProcess[str], command: str
+) -> dict[str, Any]:
+    try:
+        document = json.loads(result.stdout.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise SmokeError(
+            f"installed Workspace {command} returned invalid JSON: {result.stdout!r}"
+        ) from exc
+    if not document.get("ok"):
+        raise SmokeError(
+            f"installed Workspace {command} returned failure: {document!r}"
+        )
+    return document
+
+
 def _run_workspace_command(
     python_executable: Path,
     workspace_entrypoint: Path,
@@ -873,30 +939,54 @@ def _run_workspace_command(
         label=f"installed Workspace {arguments[0]}",
         timeout_seconds=timeout_seconds,
     )
-    try:
-        document = json.loads(result.stdout.strip().splitlines()[-1])
-    except (IndexError, json.JSONDecodeError) as exc:
-        raise SmokeError(
-            f"installed Workspace {arguments[0]} returned invalid JSON: {result.stdout!r}"
-        ) from exc
-    if not document.get("ok"):
-        raise SmokeError(
-            f"installed Workspace {arguments[0]} returned failure: {document!r}"
-        )
-    return document
+    return _decode_workspace_result(result, arguments[0])
 
 
-def _tool_registry(canonical_entrypoint: Path, geometry_entrypoint: Path) -> dict[str, Any]:
+def _run_installed_workspace_build(
+    python_executable: Path,
+    workspace_entrypoint: Path,
+    arguments: Sequence[str],
+    *,
+    rebuild_entrypoint: Path,
+    geometry_entrypoint: Path,
+    cwd: Path,
+    env: Mapping[str, str],
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Run the installed Workspace build through its fixed sandbox adapter."""
+
+    result = _run_checked(
+        [
+            str(python_executable),
+            "-I",
+            "-c",
+            _INSTALLED_WORKSPACE_SANDBOX_ADAPTER,
+            str(workspace_entrypoint),
+            str(rebuild_entrypoint),
+            str(geometry_entrypoint),
+            *arguments,
+        ],
+        cwd=cwd,
+        env=env,
+        label=f"installed Workspace {arguments[0]}",
+        timeout_seconds=timeout_seconds,
+    )
+    return _decode_workspace_result(result, arguments[0])
+
+
+def _tool_registry(
+    rebuild_entrypoint: Path, geometry_entrypoint: Path
+) -> dict[str, Any]:
     value: dict[str, Any] = {
         "schema": "mesh-to-cad.tool-registry/2",
         "rebuild": {
             "id": "cad.canonical-build/1",
-            "entrypoint": str(canonical_entrypoint),
-            "entrypoint_sha256": _hash_file(canonical_entrypoint),
+            "entrypoint": SANDBOX_CAD_REBUILD_ENTRYPOINT,
+            "entrypoint_sha256": _hash_file(rebuild_entrypoint),
         },
         "geometry": {
             "id": "mesh-compare.voxblame/1",
-            "entrypoint": str(geometry_entrypoint),
+            "entrypoint": SANDBOX_GEOMETRY_ENTRYPOINT,
             "entrypoint_sha256": _hash_file(geometry_entrypoint),
         },
     }
