@@ -364,6 +364,18 @@ class RealBackendRegressionTests(unittest.TestCase):
 WINDOWS_LOCK_CONTENTION_ERRNO = lock.WINDOWS_LOCK_CONTENTION_ERRNO
 
 
+def _fake_msvcrt_access_mode(fd: int) -> int | None:
+    """The O_ACCMODE access mode of an open fd, or None where it cannot be read.
+
+    POSIX-only (``fcntl.F_GETFL``), which is fine: this fake exists precisely because
+    ``msvcrt`` is not importable on the POSIX CI box that runs these tests."""
+    try:
+        import fcntl  # noqa: PLC0415 - POSIX only; see docstring
+    except ImportError:  # pragma: no cover - non-POSIX test host
+        return None
+    return fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE
+
+
 class _FakeMsvcrt:
     """In-process stand-in for ``msvcrt.locking``: a 1-byte region lock keyed by file
     identity (dev+inode), non-blocking acquire raising the CONTENTION errno when another
@@ -373,7 +385,14 @@ class _FakeMsvcrt:
     thing it exists to catch. The real ``_locking`` reports contention as EDEADLOCK, which was
     missing from the backend's busy set, so on Windows the loser of a race fell through to the
     degradation branch and ran with no lock at all. Every test passed, because the fake was
-    faithful to everything except the errno that decides which branch is taken."""
+    faithful to everything except the errno that decides which branch is taken.
+
+    It is likewise faithful about HANDLE MODE, because that decided a second real bug: the
+    CRT refuses to take a region lock through a READ-ONLY descriptor (EBADF), and ``probe``
+    used to open the mutex ``rb``, so every real Windows probe failed EBADF -- not a
+    contention errno -- and reported a writer-held mutex as degraded-idle. The fake checks
+    each fd's access mode and raises EBADF for read-only handles, so a probe that regresses
+    to a read-only open fails here instead of only on Windows."""
 
     LK_NBLCK = 1
     LK_UNLCK = 2
@@ -381,11 +400,19 @@ class _FakeMsvcrt:
 
     def __init__(self) -> None:
         self._held: set[tuple[int, int]] = set()
+        # Access modes (O_ACCMODE values) observed on locked descriptors, in call order.
+        self.locked_access_modes: list[int] = []
 
     def locking(self, fd, mode, nbytes: int = 1) -> None:
         info = os.fstat(fd)
         key = (info.st_dev, info.st_ino)
+        access = _fake_msvcrt_access_mode(fd)
+        if access == os.O_RDONLY:
+            # The real CRT contract: region locks need a write-capable handle.
+            raise OSError(errno.EBADF, "Bad file descriptor")
         if mode == self.LK_NBLCK:
+            if access is not None:
+                self.locked_access_modes.append(access)
             if key in self._held:
                 raise OSError(WINDOWS_LOCK_CONTENTION_ERRNO, "Resource deadlock avoided")
             self._held.add(key)
@@ -485,6 +512,54 @@ class WindowsLockBackendTests(unittest.TestCase):
         finally:
             release.set()
             thread.join(10)
+
+    def test_probe_takes_its_region_lock_through_a_write_capable_handle(self) -> None:
+        # Finding: the CRT refuses a region lock through a READ-ONLY descriptor (EBADF,
+        # not a contention errno), and the old probe opened the mutex ``rb`` -- so every
+        # real Windows probe failed EBADF and reported a writer-held mutex as
+        # degraded-idle. The open mode is captured at Path.open, which reads the same on
+        # every platform; the fake's fd-mode ledger additionally pins O_RDWR where the
+        # fd flags are readable at all (POSIX -- Windows has no fcntl).
+        with exclusive(self.lock_path):
+            pass
+        observed_modes: list[str] = []
+        real_open = Path.open
+
+        def recording_open(path_self, mode="r", *args, **kwargs):
+            observed_modes.append(mode)
+            return real_open(path_self, mode, *args, **kwargs)
+
+        lock.msvcrt.locked_access_modes.clear()  # drop the acquire's own "a+b" lock record
+        with mock.patch.object(Path, "open", recording_open):
+            self.assertEqual((False, False), lock.probe(self.lock_path))
+        self.assertEqual(["r+b"], observed_modes)
+        if os.name != "nt":
+            self.assertEqual([os.O_RDWR], lock.msvcrt.locked_access_modes)
+
+    def test_a_probe_never_materialises_a_missing_mutex(self) -> None:
+        # The reason the old probe opened read-only: a status GET must not create a
+        # sentinel for a model that has never been built. The write-capable Windows open
+        # must keep that property -- ``r+b``, never ``a+b``.
+        result = lock.probe(self.lock_path)
+        self.assertEqual((False, False), result)
+        self.assertFalse(lock.mutex_path(self.lock_path).exists(), "probe created the mutex")
+        self.assertFalse(self.lock_path.exists(), "probe created the sentinel")
+
+    def test_an_unwritable_mutex_probes_degraded_neither_idle_nor_held(self) -> None:
+        # A mutex that exists but cannot be opened for writing (permissions, share
+        # conflict) leaves the truth unknowable: degraded, never a confident answer.
+        mutex = lock.mutex_path(self.lock_path)
+        mutex.parent.mkdir(parents=True, exist_ok=True)
+        mutex.write_bytes(b" ")
+        real_open = Path.open
+
+        def refuse_write(path_self, mode="r", *args, **kwargs):
+            if mode == "r+b":
+                raise PermissionError(errno.EACCES, "write handle refused")
+            return real_open(path_self, mode, *args, **kwargs)
+
+        with mock.patch.object(Path, "open", refuse_write):
+            self.assertEqual((False, True), lock.probe(self.lock_path))
 
     def test_an_empty_mutex_reads_as_idle(self) -> None:
         # A 0-byte file cannot carry a Windows region lock at all. The MUTEX is padded before

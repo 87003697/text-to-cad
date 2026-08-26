@@ -26,6 +26,7 @@ htmlcov/
 .agents/
 graphify-out/
 .vite
+.vercel
 node_modules
 dist
 coverage
@@ -35,12 +36,15 @@ coverage
 !skills/cad-viewer/scripts/viewer/dist/
 !skills/cad-viewer/scripts/viewer/dist/**
 
-# Temporary files
+# Temporary files and scratch notes
 *.tmp
 *.swp
 *.step.glb.lock
 *.stp.glb.lock
 tmp/
+repo-scan*.md
+*-scan-*.md
+*-fix-plan*.md
 
 # Pilot/experiment outputs (not committed; use models/ for durable artifacts)
 outputs
