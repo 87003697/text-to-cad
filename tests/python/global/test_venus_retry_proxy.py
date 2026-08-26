@@ -90,6 +90,67 @@ class ScriptedUpstream:
 class VenusRetryProxyTests(unittest.TestCase):
     """Verify the retry proxy through its loopback HTTP interface."""
 
+    def test_stop_cancels_inflight_rate_limit_backoff(self) -> None:
+        from scripts.pilot.venus_retry_proxy import RetryProxy
+
+        with tempfile.TemporaryDirectory() as temp:
+            audit_path = Path(temp) / "venus-retry.jsonl"
+            request_error: list[BaseException] = []
+            with ScriptedUpstream(
+                [
+                    (429, b'{"error":{"code":"rate_limited"}}'),
+                    (200, b'{"id":"must-not-be-sent"}'),
+                ]
+            ) as upstream:
+                proxy = RetryProxy(
+                    upstream.url,
+                    audit_path,
+                    rate_limit_backoffs=(2.0,),
+                    upstream_bearer_token="upstream-token",
+                    required_client_bearer_token="client-token",
+                )
+                proxy.start()
+
+                def send_request() -> None:
+                    try:
+                        connection = http.client.HTTPConnection(
+                            "127.0.0.1", proxy.port, timeout=3
+                        )
+                        connection.request(
+                            "POST",
+                            "/v1/responses",
+                            body=b"{}",
+                            headers={"Authorization": "Bearer client-token"},
+                        )
+                        response = connection.getresponse()
+                        response.read()
+                        connection.close()
+                    except BaseException as error:
+                        request_error.append(error)
+
+                request_thread = threading.Thread(target=send_request)
+                request_thread.start()
+                deadline = time.monotonic() + 2
+                while len(upstream.requests) < 1 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertEqual(1, len(upstream.requests))
+
+                started = time.monotonic()
+                proxy.stop()
+                elapsed = time.monotonic() - started
+                request_thread.join(timeout=1)
+
+                self.assertLess(elapsed, 1)
+                self.assertFalse(request_thread.is_alive())
+                self.assertEqual(1, len(upstream.requests))
+                self.assertEqual(0, proxy._server._active_handlers)
+                self.assertIsNone(proxy._server.upstream_bearer_token)
+                self.assertIsNone(proxy._server.required_client_bearer_token)
+                self.assertEqual(
+                    "Bearer upstream-token", upstream.requests[0][2]
+                )
+                self.assertLessEqual(len(request_error), 1)
+
     def test_tap_gateway_uses_client_token_and_proxy_replaces_upstream(self) -> None:
         from scripts.pilot.venus_retry_proxy import RetryProxy
 
@@ -319,26 +380,25 @@ class VenusRetryProxyTests(unittest.TestCase):
             ) as upstream:
                 from scripts.pilot.venus_retry_proxy import RetryProxy
 
-                with (
-                    mock.patch(
-                        "scripts.pilot.venus_retry_proxy.time.sleep"
-                    ) as sleep,
-                    RetryProxy(
-                        upstream.url,
-                        audit_path,
-                        rate_limit_backoffs=(7,),
-                    ) as proxy,
-                ):
-                    connection = http.client.HTTPConnection(
-                        "127.0.0.1", proxy.port, timeout=2
-                    )
-                    connection.request("POST", "/v1/responses", body=b"{}")
-                    response = connection.getresponse()
-                    response_body = response.read()
-                    connection.close()
+                proxy = RetryProxy(
+                    upstream.url,
+                    audit_path,
+                    rate_limit_backoffs=(7,),
+                )
+                with mock.patch.object(
+                    proxy._server.stop_event, "wait", return_value=False
+                ) as wait:
+                    with proxy:
+                        connection = http.client.HTTPConnection(
+                            "127.0.0.1", proxy.port, timeout=2
+                        )
+                        connection.request("POST", "/v1/responses", body=b"{}")
+                        response = connection.getresponse()
+                        response_body = response.read()
+                        connection.close()
 
         self.assertEqual((response.status, response_body), (200, success))
-        self.assertIn(mock.call(25.0), sleep.call_args_list)
+        self.assertIn(mock.call(25.0), wait.call_args_list)
 
     def test_default_rate_limit_backoffs_cover_a_minute_window(self) -> None:
         from scripts.pilot.venus_retry_proxy import RetryProxy

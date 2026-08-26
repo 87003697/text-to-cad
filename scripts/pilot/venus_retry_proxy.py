@@ -6,6 +6,7 @@ from __future__ import annotations
 import http.client
 import json
 import math
+import socket
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,6 +18,7 @@ from urllib.parse import urlsplit
 RETRYABLE_ERROR_CODE = "invalid_encrypted_content"
 VENUS_CODEX_ROUTING_HEADER = "Venus-Codex-Routing"
 MAX_RETRY_AFTER_SECONDS = 120.0
+HANDLER_QUIESCE_TIMEOUT_SECONDS = 5.0
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -79,7 +81,89 @@ class _ProxyServer(ThreadingHTTPServer):
         self.upstream_attempt_count = 0
         self.request_lock = threading.Lock()
         self.audit_lock = threading.Lock()
+        self.stop_event = threading.Event()
+        self._active_condition = threading.Condition()
+        self._active_handlers = 0
+        self._client_sockets: set[socket.socket] = set()
+        self._upstream_connections: set[http.client.HTTPConnection] = set()
         super().__init__(("127.0.0.1", 0), _ProxyHandler)
+
+    def begin_handler(self, connection: socket.socket) -> bool:
+        """Register one request connection unless shutdown has started."""
+
+        with self._active_condition:
+            if self.stop_event.is_set():
+                return False
+            self._active_handlers += 1
+            self._client_sockets.add(connection)
+            return True
+
+    def finish_handler(self, connection: socket.socket) -> None:
+        """Forget one request connection and wake a waiting shutdown."""
+
+        with self._active_condition:
+            self._client_sockets.discard(connection)
+            self._active_handlers -= 1
+            self._active_condition.notify_all()
+
+    def register_upstream_connection(
+        self,
+        connection: http.client.HTTPConnection,
+    ) -> bool:
+        """Register an upstream connection unless shutdown has started."""
+
+        with self._active_condition:
+            if self.stop_event.is_set():
+                return False
+            self._upstream_connections.add(connection)
+            return True
+
+    def unregister_upstream_connection(
+        self,
+        connection: http.client.HTTPConnection,
+    ) -> None:
+        """Forget one upstream connection after forwarding completes."""
+
+        with self._active_condition:
+            self._upstream_connections.discard(connection)
+
+    def cancel_active(self) -> None:
+        """Cancel retry waits and close every active forwarding connection."""
+
+        with self._active_condition:
+            self.stop_event.set()
+            client_sockets = tuple(self._client_sockets)
+            upstream_connections = tuple(self._upstream_connections)
+        for connection in upstream_connections:
+            connection.close()
+        for client_socket in client_sockets:
+            try:
+                client_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                client_socket.close()
+            except OSError:
+                pass
+
+    def wait_for_handlers(self, timeout: float) -> bool:
+        """Wait until every active handler has exited, within a hard bound."""
+
+        deadline = time.monotonic() + timeout
+        with self._active_condition:
+            while self._active_handlers:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._active_condition.wait(remaining)
+            return True
+
+    def clear_credentials(self) -> None:
+        """Drop bearer credentials once no handler can use them."""
+
+        with self._active_condition:
+            self.upstream_bearer_token = None
+            self.required_client_bearer_token = None
 
     def target_path(self, incoming_path: str) -> str:
         """Replace the local /v1 prefix with the configured Venus base path."""
@@ -113,9 +197,21 @@ class _ProxyHandler(BaseHTTPRequestHandler):
 
     server: _ProxyServer
 
+    def handle(self) -> None:
+        """Track this connection for cancellation during proxy shutdown."""
+
+        if not self.server.begin_handler(self.connection):
+            return
+        try:
+            super().handle()
+        finally:
+            self.server.finish_handler(self.connection)
+
     def do_POST(self) -> None:
         """Forward a Responses request, preserving its bytes across attempts."""
 
+        if self.server.stop_event.is_set():
+            return
         required_token = self.server.required_client_bearer_token
         if required_token is not None and self.headers.get("Authorization") != (
             f"Bearer {required_token}"
@@ -162,6 +258,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             len(self.server.rate_limit_backoffs),
         )
         for attempt in range(1, retry_budget + 2):
+            if self.server.stop_event.is_set():
+                return
             with self.server.request_lock:
                 if (
                     self.server.max_upstream_attempts is not None
@@ -182,6 +280,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                 body,
                 forwarded_headers,
             )
+            if self.server.stop_event.is_set():
+                return
             error_code = self._error_code(status, response_body)
             retry_after_seconds = (
                 self._retry_after_seconds(headers) if status == 429 else None
@@ -215,7 +315,8 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             delay = retry_backoffs[attempt - 1]
             if retry_after_seconds is not None:
                 delay = max(delay, retry_after_seconds)
-            time.sleep(delay)
+            if self.server.stop_event.wait(delay):
+                return
 
     def _forward(
         self,
@@ -235,6 +336,13 @@ class _ProxyHandler(BaseHTTPRequestHandler):
             target.port,
             timeout=self.server.upstream_timeout,
         )
+        if not self.server.register_upstream_connection(connection):
+            connection.close()
+            return (
+                503,
+                [("Content-Type", "application/json")],
+                b'{"error":{"code":"proxy_shutting_down"}}',
+            )
         try:
             try:
                 connection.request(
@@ -256,6 +364,7 @@ class _ProxyHandler(BaseHTTPRequestHandler):
                     response_body,
                 )
         finally:
+            self.server.unregister_upstream_connection(connection)
             connection.close()
 
     @staticmethod
@@ -384,11 +493,19 @@ class RetryProxy:
         return self
 
     def stop(self) -> None:
-        """Stop accepting requests and close the loopback listener."""
+        """Cancel handlers, then stop the loopback listener within a bound."""
 
+        self._server.cancel_active()
         self._server.shutdown()
         self._server.server_close()
         self._thread.join(timeout=1)
+        if self._thread.is_alive():
+            self._server.clear_credentials()
+            raise TimeoutError("Venus retry proxy server did not stop")
+        if not self._server.wait_for_handlers(HANDLER_QUIESCE_TIMEOUT_SECONDS):
+            self._server.clear_credentials()
+            raise TimeoutError("Venus retry proxy handlers did not stop")
+        self._server.clear_credentials()
 
     def __enter__(self) -> RetryProxy:
         """Start the proxy for a bounded lifecycle."""
