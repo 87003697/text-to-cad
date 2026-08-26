@@ -21,6 +21,7 @@ import unittest
 from unittest import mock
 import socket
 
+from tests.python.support.import_state import isolated_package_import
 from scripts.pilot.workspace_supervisor import (
     SupervisorError,
     WorkspaceSupervisor,
@@ -526,35 +527,105 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         self.assertLess(reference.stat().st_size, 32 * 1024 * 1024)
         workspace = _Workspace(workspace_root, reference_path=reference)
 
-        supervisor = WorkspaceSupervisor(
-            workspace_root,
-            bind_reference=True,
-            candidate_root=self.root / "production-shaped-candidate",
-            staging_dir=self.root / "production-shaped-staging",
-            workspace_api=workspace,
-        )
-        try:
-            reference_handle = supervisor.reference_handle
-            self.assertIsNotNone(reference_handle)
-            assert reference_handle is not None
-            summary = supervisor.observe_reference(
-                reference_handle,
-                {"method": "summary", "args": {}},
-            )
-            stats = summary["observation"]["stats"]
-            self.assertEqual(triangle_count * 3, stats["vertices"])
-            self.assertEqual(triangle_count, stats["faces"])
+        from scripts.pilot import workspace_supervisor as supervisor_module
 
-            components = supervisor.observe_reference(
-                reference_handle,
-                {"method": "components", "args": {"limit": 1}},
+        with isolated_package_import("meshscope"):
+            supervisor = WorkspaceSupervisor(
+                workspace_root,
+                bind_reference=True,
+                candidate_root=self.root / "production-shaped-candidate",
+                staging_dir=self.root / "production-shaped-staging",
+                workspace_api=workspace,
             )
-            observation = components["observation"]
-            self.assertEqual(triangle_count, observation["total"])
-            self.assertEqual(1, observation["returned"])
-            self.assertEqual(1, len(observation["components"]))
-        finally:
-            supervisor.close()
+            import meshscope
+
+            self.assertEqual(
+                supervisor_module._MESHSCOPE_SRC.resolve() / "meshscope",
+                Path(meshscope.__file__).resolve().parent,
+            )
+            try:
+                reference_handle = supervisor.reference_handle
+                self.assertIsNotNone(reference_handle)
+                assert reference_handle is not None
+                summary = supervisor.observe_reference(
+                    reference_handle,
+                    {"method": "summary", "args": {}},
+                )
+                stats = summary["observation"]["stats"]
+                self.assertEqual(triangle_count * 3, stats["vertices"])
+                self.assertEqual(triangle_count, stats["faces"])
+
+                components = supervisor.observe_reference(
+                    reference_handle,
+                    {"method": "components", "args": {"limit": 1}},
+                )
+                observation = components["observation"]
+                self.assertEqual(triangle_count, observation["total"])
+                self.assertEqual(1, observation["returned"])
+                self.assertEqual(1, len(observation["components"]))
+            finally:
+                supervisor.close()
+
+    def test_linux_loader_parser_rejects_nonzero_loader_status(self) -> None:
+        from scripts.pilot import candidate_runtime as runtime_module
+
+        with tempfile.TemporaryDirectory() as temporary:
+            native = Path(temporary) / "fake-native"
+            native.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            with (
+                mock.patch.object(runtime_module.platform, "system", return_value="Linux"),
+                mock.patch.object(runtime_module.shutil, "which", return_value="/usr/bin/ldd"),
+                mock.patch.object(
+                    runtime_module.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess(
+                        ["/usr/bin/ldd", os.fspath(native)],
+                        1,
+                        stdout="",
+                        stderr="not a dynamic executable",
+                    ),
+                ) as run,
+            ):
+                with self.assertRaisesRegex(
+                    runtime_module.CandidateRuntimeError,
+                    "^candidate_runtime_loader_unavailable$",
+                ):
+                    runtime_module._parse_tool_dependencies(native, (Path(temporary),))
+            run.assert_called_once_with(
+                ["/usr/bin/ldd", os.fspath(native)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+
+    def test_linux_loader_parser_returns_contained_dependencies(self) -> None:
+        from scripts.pilot import candidate_runtime as runtime_module
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            native = root / "fake-native"
+            dependency = root / "libcustom.so"
+            native.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            dependency.write_bytes(b"native")
+            completed = subprocess.CompletedProcess(
+                ["/usr/bin/ldd", os.fspath(native)],
+                0,
+                stdout=(
+                    f"{native}:\n"
+                    "\tlinux-vdso.so.1 (0x00007fff)\n"
+                    f"\tlibcustom.so => {dependency} (0x00007f00)\n"
+                    "\t/lib/x86_64-linux-gnu/libc.so.6 (0x00007f00)\n"
+                ),
+                stderr="",
+            )
+            with (
+                mock.patch.object(runtime_module.platform, "system", return_value="Linux"),
+                mock.patch.object(runtime_module.shutil, "which", return_value="/usr/bin/ldd"),
+                mock.patch.object(runtime_module.subprocess, "run", return_value=completed),
+            ):
+                dependencies = runtime_module._parse_tool_dependencies(native, (root.resolve(),))
+            self.assertEqual(((os.fspath(dependency), dependency.resolve()),), dependencies)
 
     def test_trusted_tools_use_exact_authority_not_stale_source_overlay(self) -> None:
         from scripts.pilot import trusted_tools
@@ -847,6 +918,8 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         processes = []
         try:
             for scope in (scope_a, scope_b):
+                token = scope.begin_spawn()
+                self.assertIsInstance(token, int)
                 process = subprocess.Popen(
                     [sys.executable, "-c", "import time; time.sleep(30)"],
                     start_new_session=True,
@@ -854,9 +927,10 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     stderr=subprocess.PIPE,
                 )
                 self.assertTrue(
-                    scope.register(
+                    scope.register_spawn(
                         process,
                         lambda process=process: os.killpg(process.pid, __import__("signal").SIGTERM),
+                        token=token,
                     )
                 )
                 processes.append(process)
@@ -1337,31 +1411,35 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     ),
                 ),
             )
-            with mock.patch.object(runtime_module, "_probe", return_value=probe):
+            with (
+                mock.patch.object(runtime_module, "_probe", return_value=probe),
+                mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=()),
+            ):
                 runtime = runner.materialize_candidate_runtime(
                     venv, root / "candidate-runtime", repo_root=repo
                 )
-            self.assertTrue((runtime / "bin/python").is_file())
-            self.assertTrue((runtime / "lib/python3.12/os.py").is_file())
+            runtime_path = runtime.runtime
+            self.assertTrue((runtime_path / "bin/python").is_file())
+            self.assertTrue((runtime_path / "lib/python3.12/os.py").is_file())
             self.assertIn(
                 b"/runtime/lib/python3.12",
-                (runtime / "lib/python3.12/_sysconfigdata_test.py").read_bytes(),
+                (runtime_path / "lib/python3.12/_sysconfigdata_test.py").read_bytes(),
             )
-            self.assertTrue((runtime / "lib/python3.12/site-packages/cad.py").is_file())
-            self.assertFalse((runtime / "lib/python3.12/site-packages/playwright").exists())
-            runner.validate_candidate_runtime(runtime, required_imports=())
-            self.assertFalse((runtime / "pyvenv.cfg").exists())
-            self.assertFalse((runtime / "lib/python3.12/site-packages/direct_url.json").exists())
-            self.assertFalse((runtime / "lib/python3.12/site-packages/editable.pth").exists())
+            self.assertTrue((runtime_path / "lib/python3.12/site-packages/cad.py").is_file())
+            self.assertFalse((runtime_path / "lib/python3.12/site-packages/playwright").exists())
+            runner.validate_candidate_runtime(runtime_path, required_imports=())
+            self.assertFalse((runtime_path / "pyvenv.cfg").exists())
+            self.assertFalse((runtime_path / "lib/python3.12/site-packages/direct_url.json").exists())
+            self.assertFalse((runtime_path / "lib/python3.12/site-packages/editable.pth").exists())
             self.assertIn(
                 b"system_prefix = '/usr'",
-                (runtime / "lib/python3.12/os.py").read_bytes(),
+                (runtime_path / "lib/python3.12/os.py").read_bytes(),
             )
             self.assertEqual(
                 b"LIBDIR=/usr/lib64\nINCLUDEDIR=/usr/include\n",
-                (runtime / "lib/python3.12/Makefile").read_bytes(),
+                (runtime_path / "lib/python3.12/Makefile").read_bytes(),
             )
-            for path in runtime.rglob("*"):
+            for path in runtime_path.rglob("*"):
                 self.assertFalse(path.is_symlink())
                 if path.is_file():
                     self.assertNotIn(os.fsencode(repo), path.read_bytes())
@@ -1419,7 +1497,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 argv = supervisor_module._candidate_sandbox_argv(
                     supervisor_module._CandidateOperation(("/runtime/bin/python", "-c", "pass"), 1, ()),
                     root / "candidate",
-                    runtime,
+                    runtime_path,
                 )
             self.assertIn("/runtime/bin/python", argv)
             self.assertNotIn(os.fspath(repo), argv)
@@ -1539,14 +1617,15 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 runtime = runner.materialize_candidate_runtime(
                     venv, root / "cache", repo_root=repo
                 )
+            runtime_path = runtime.runtime
             self.assertTrue(
-                (runtime / "lib64/python3.12/encodings/__init__.py").is_file()
+                (runtime_path / "lib64/python3.12/encodings/__init__.py").is_file()
             )
-            self.assertFalse((runtime / "lib/python3.12").exists())
-            self.assertTrue((runtime / "lib64/libpython3.12.so").is_file())
+            self.assertFalse((runtime_path / "lib/python3.12").exists())
+            self.assertTrue((runtime_path / "lib64/libpython3.12.so").is_file())
             self.assertIn(
                 b"LIBDIR = '/runtime/lib64'",
-                (runtime / "lib64/python3.12/_sysconfigdata_test.py").read_bytes(),
+                (runtime_path / "lib64/python3.12/_sysconfigdata_test.py").read_bytes(),
             )
             with self.assertRaisesRegex(
                 runtime_module.CandidateRuntimeError,
@@ -1639,11 +1718,12 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 runtime = runner.materialize_candidate_runtime(
                     venv, root / "cache", repo_root=repo
                 )
-            runtime_lookup = lookup(runtime)
+            runtime_path = runtime.runtime
+            runtime_lookup = lookup(runtime_path)
             self.assertEqual(0, runtime_lookup.returncode, runtime_lookup.stderr)
-            self.assertTrue((runtime / "lib/python3.12/encodings/mac_roman.pyc").is_file())
-            self.assertFalse((runtime / "lib/python3.12/encodings/ascii.pyc").exists())
-            self.assertFalse((runtime / "lib/python3.12/encodings/__pycache__").exists())
+            self.assertTrue((runtime_path / "lib/python3.12/encodings/mac_roman.pyc").is_file())
+            self.assertFalse((runtime_path / "lib/python3.12/encodings/ascii.pyc").exists())
+            self.assertFalse((runtime_path / "lib/python3.12/encodings/__pycache__").exists())
 
             original_pyc = codec_pyc.read_bytes()
             original_copy = runtime_module._copy_file_stream
@@ -1692,7 +1772,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             self.assertEqual(restored.identity, warm.identity)
             self.assertEqual(
                 original_pyc,
-                (warm / "lib/python3.12/encodings/mac_roman.pyc").read_bytes(),
+                (warm.runtime / "lib/python3.12/encodings/mac_roman.pyc").read_bytes(),
             )
 
             original_walk = runtime_module._walk_tree
@@ -1758,13 +1838,19 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     self.assertEqual(restored.identity, warm.identity)
                     self.assertEqual(
                         original_pyc,
-                        (warm / "lib/python3.12/encodings/mac_roman.pyc").read_bytes(),
+                        (warm.runtime / "lib/python3.12/encodings/mac_roman.pyc").read_bytes(),
                     )
 
     def test_runtime_cache_reuses_one_immutable_identity_and_serializes_builders(self) -> None:
         from concurrent.futures import ThreadPoolExecutor
         from scripts.pilot import candidate_runtime as runtime_module
         from scripts.pilot import runner
+
+        loader_patch = mock.patch.object(
+            runtime_module, "_parse_tool_dependencies", return_value=()
+        )
+        loader_patch.start()
+        self.addCleanup(loader_patch.stop)
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1820,12 +1906,12 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 ),
             ):
                 second = runner.materialize_candidate_runtime(venv, cache, repo_root=repo)
-            self.assertEqual(first, second)
+            self.assertEqual(first.runtime, second.runtime)
             self.assertGreater(first_calls, 0)
             self.assertEqual(first_calls, calls)
             self.assertFalse(any(path.name.startswith(".") and ".tmp-" in path.name for path in cache.iterdir()))
-            self.assertEqual(0, first.stat().st_mode & 0o222)
-            receipt = first / runtime_module._RECEIPT_NAME
+            self.assertEqual(0, first.runtime.stat().st_mode & 0o222)
+            receipt = first.runtime / runtime_module._RECEIPT_NAME
             receipt_value = json.loads(receipt.read_text(encoding="ascii"))
             for malformed in (
                 {**receipt_value, "imports": []},
@@ -1838,18 +1924,18 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     repaired_receipt_runtime = runner.materialize_candidate_runtime(
                         venv, cache, repo_root=repo
                     )
-                receipt = repaired_receipt_runtime / runtime_module._RECEIPT_NAME
+                receipt = repaired_receipt_runtime.runtime / runtime_module._RECEIPT_NAME
                 self.assertEqual(
                     list(runtime_module.CAD_RUNTIME_IMPORTS),
                     json.loads(receipt.read_text(encoding="ascii"))["imports"],
                 )
-            corrupt = first / "lib/python3.12/site-packages/cad.py"
+            corrupt = first.runtime / "lib/python3.12/site-packages/cad.py"
             corrupt.chmod(0o644)
             corrupt.write_text("tampered = True\n", encoding="utf-8")
             corrupt.chmod(0o444)
             with mock.patch.object(runtime_module, "_probe", return_value=probe):
                 repaired = runner.materialize_candidate_runtime(venv, cache, repo_root=repo)
-            self.assertEqual(first, repaired)
+            self.assertEqual(first.runtime, repaired.runtime)
             self.assertEqual("CAD = True\n", corrupt.read_text(encoding="utf-8"))
             lease_files_before = {
                 path
@@ -1889,7 +1975,10 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                         (1, 2),
                     )
                 )
-            self.assertEqual([results[0], results[0]], results)
+            self.assertEqual(
+                [results[0].runtime, results[0].runtime],
+                [result.runtime for result in results],
+            )
             self.assertEqual(first_calls, calls - before_concurrent)
             self.assertFalse(
                 any(
@@ -1956,7 +2045,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 first = runner.materialize_candidate_runtime(
                     venv, root / "cache", repo_root=repo
                 )
-            copied = first / "lib/python3.12/site-packages/cad_native.so"
+            copied = first.runtime / "lib/python3.12/site-packages/cad_native.so"
             self.assertEqual(installed, copied.read_bytes())
 
             changed = b"stable stripped native bytes v2"
@@ -1972,12 +2061,12 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 )
             self.assertNotEqual(first.identity, second.identity)
             self.assertNotEqual(
-                json.loads((first / runtime_module._MARKER_NAME).read_text())["manifest_sha256"],
-                json.loads((second / runtime_module._MARKER_NAME).read_text())["manifest_sha256"],
+                json.loads((first.runtime / runtime_module._MARKER_NAME).read_text())["manifest_sha256"],
+                json.loads((second.runtime / runtime_module._MARKER_NAME).read_text())["manifest_sha256"],
             )
             self.assertEqual(
                 changed,
-                (second / "lib/python3.12/site-packages/cad_native.so").read_bytes(),
+                (second.runtime / "lib/python3.12/site-packages/cad_native.so").read_bytes(),
             )
 
             original_copy = runtime_module._copy_file_stream
@@ -2107,31 +2196,34 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 )
 
             cache = root / "cache"
-            with mock.patch.object(
-                runtime_module,
-                "_probe",
-                side_effect=[probe("a"), probe("b"), probe("c"), probe("d"), probe("e")],
+            with (
+                mock.patch.object(
+                    runtime_module,
+                    "_probe",
+                    side_effect=[probe("a"), probe("b"), probe("c"), probe("d"), probe("e")],
+                ),
+                mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=()),
             ):
                 first = runner.materialize_candidate_runtime(venv, cache, repo_root=repo)
                 first_lease = first
                 second = runner.materialize_candidate_runtime(venv, cache, repo_root=repo)
                 second.release()
                 third = runner.materialize_candidate_runtime(venv, cache, repo_root=repo)
-                self.assertTrue(first.is_dir() and third.is_dir())
-                self.assertFalse(second.exists())
+                self.assertTrue(first.runtime.is_dir() and third.runtime.is_dir())
+                self.assertFalse(second.runtime.exists())
                 first_lease.release()
                 third.release()
                 fourth = runner.materialize_candidate_runtime(venv, cache, repo_root=repo)
-                self.assertTrue(fourth.is_dir())
+                self.assertTrue(fourth.runtime.is_dir())
                 fourth.release()
-                lease_dir = cache / "leases" / third.name
+                lease_dir = cache / "leases" / third.runtime.name
                 lease_dir.mkdir(parents=True, exist_ok=True)
                 dead = lease_dir / "dead.json"
                 dead.write_text(
                     json.dumps(
                         {
                             "schema": runtime_module._CACHE_SCHEMA,
-                            "identity": third.name,
+                            "identity": third.runtime.name,
                             "pid": 99999999,
                             "host": __import__("socket").gethostname(),
                             "boot": runtime_module._boot_token(),
@@ -2142,7 +2234,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     encoding="ascii",
                 )
                 fifth = runner.materialize_candidate_runtime(venv, cache, repo_root=repo)
-                self.assertTrue(fifth.is_dir())
+                self.assertTrue(fifth.runtime.is_dir())
                 self.assertFalse(dead.exists())
             entries = [
                 path
@@ -2177,6 +2269,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 repo_root=source_repo,
             )
             self.addCleanup(runtime.release)
+            runtime_path = runtime.runtime
             self.assertEqual(("build123d", "trimesh", "OCP"), runner.CAD_CANDIDATE_RUNTIME_IMPORTS)
             from scripts.pilot import candidate_runtime as runtime_module
             self.assertEqual(
@@ -2185,25 +2278,25 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             )
             version = next(
                 path.name
-                for path in (runtime / "lib").glob("python*")
+                for path in (runtime_path / "lib").glob("python*")
                 if path.is_dir()
             )
             env = {
                 "PATH": "/runtime/bin",
-                "PYTHONHOME": os.fspath(runtime),
-                "PYTHONPATH": os.fspath(runtime / "lib" / version / "site-packages"),
+                "PYTHONHOME": os.fspath(runtime_path),
+                "PYTHONPATH": os.fspath(runtime_path / "lib" / version / "site-packages"),
                 "PYTHONNOUSERSITE": "1",
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "LC_ALL": "C",
             }
             launched = subprocess.run(
                 [
-                    os.fspath(runtime / "bin/python"),
+                    os.fspath(runtime_path / "bin/python"),
                     "-c",
                     "import os,sys,sysconfig; print(sys.version_info[:2]); print(sysconfig.get_path('stdlib')); print(os.path.basename(sys.executable))",
                 ],
                 env=env,
-                cwd=runtime,
+                cwd=runtime_path,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -2212,8 +2305,8 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             self.assertEqual(0, launched.returncode, launched.stderr)
             self.assertIn("(3, 12)", launched.stdout)
             self.assertNotIn(os.fspath(source_repo), launched.stdout + launched.stderr)
-            self.assertTrue(any(path.name.startswith("libpython") for path in (runtime / "lib").glob("libpython*")))
-            self.assertFalse((runtime / "lib" / version / "site-packages/playwright").exists())
+            self.assertTrue(any(path.name.startswith("libpython") for path in (runtime_path / "lib").glob("libpython*")))
+            self.assertFalse((runtime_path / "lib" / version / "site-packages/playwright").exists())
             source_cad = subprocess.run(
                 [os.fspath(source_venv / "bin/python"), "-c", "import build123d"],
                 capture_output=True,
@@ -2222,9 +2315,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             )
             if source_cad.returncode == 0:
                 cad = subprocess.run(
-                    [os.fspath(runtime / "bin/python"), "-c", "import build123d"],
+                    [os.fspath(runtime_path / "bin/python"), "-c", "import build123d"],
                     env=env,
-                    cwd=runtime,
+                    cwd=runtime_path,
                     capture_output=True,
                     text=True,
                     check=False,
@@ -3555,7 +3648,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 rebuild_entrypoint=runner.CAD_REBUILD_ENTRYPOINT,
                 geometry_entrypoint=runner.GEOMETRY_ENTRYPOINT,
                 tool_registry=registry,
-                candidate_runtime=candidate_runtime,
+                candidate_runtime=candidate_runtime.runtime,
                 trusted_tools_root=trusted_tools_root,
                 step_zero_evidence_provider=counted_step_zero,
                 repair_evidence_provider=counted_repair,

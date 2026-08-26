@@ -33,6 +33,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
 
 from server_py import backend as backend_mod  # noqa: E402
 from server_py import paths  # noqa: E402
+from server_py import scanner as scanner_mod  # noqa: E402
 from server_py import server as server_mod  # noqa: E402
 from server_py import server_info  # noqa: E402
 from server_py import start_viewer  # noqa: E402
@@ -334,6 +335,37 @@ class NormalizedFileRefTests(unittest.TestCase):
     )
     def test_a_posix_absolute_ref_is_unchanged(self):
         self.assertEqual("/Users/me/models/part.step", backend_mod.normalized_file_ref("/Users/me/models/part.step"))
+
+
+class PathContainmentWindowsTests(unittest.TestCase):
+    """Cross-volume paths are outside, never malformed requests."""
+
+    def _inside(self, file_path: str, root_path: str) -> bool:
+        with _windows_os_for(scanner_mod):
+            return scanner_mod.path_is_inside(file_path, root_path)
+
+    def test_same_drive_inside_and_outside_paths(self):
+        self.assertTrue(self._inside(r"C:\workspace\models\part.step", r"C:\workspace"))
+        self.assertFalse(self._inside(r"C:\other\part.step", r"C:\workspace"))
+
+    def test_same_drive_traversal_is_outside(self):
+        self.assertFalse(
+            self._inside(r"C:\workspace\models\..\..\Windows\System32", r"C:\workspace")
+        )
+
+    def test_cross_drive_paths_are_outside_without_normalization(self):
+        self.assertFalse(self._inside(r"D:\outside\part.step", r"C:\workspace"))
+
+    def test_unc_same_share_and_different_share(self):
+        self.assertTrue(
+            self._inside(r"\\server\share\models\part.step", r"\\server\share\models")
+        )
+        self.assertFalse(
+            self._inside(r"\\server\share\other\part.step", r"\\server\share\models")
+        )
+        self.assertFalse(
+            self._inside(r"\\other\share\models\part.step", r"\\server\share\models")
+        )
 
 
 class ServerInfoRootTests(unittest.TestCase):

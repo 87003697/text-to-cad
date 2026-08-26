@@ -116,8 +116,11 @@ staging reset/cleanup, and sidecar placement; the Supervisor passes only a
 validated external candidate source and relative capability names and does
 not reconstruct `work/`, `final/`, or other authority paths. Candidate file
 copies are descriptor-bounded, no-follow, regular-file-only, single-link
-copies with stable metadata and a second digest check. A growing, swapped,
-hard-linked, or special-file source aborts and removes partial staging.
+copies with stable metadata and a second digest check. On Windows, where the
+POSIX `dir_fd` traversal primitives are unavailable, W1 uses no-follow
+`lstat`/open/`fstat` identity binding for each path and checks directory
+identity before and after traversal. A growing, swapped, hard-linked, or
+special-file source aborts and removes partial staging.
 
 Candidate execution receives a trusted content-addressed CAD runtime at the
 stable `/runtime` mount. The runner resolves the interpreter from the pinned

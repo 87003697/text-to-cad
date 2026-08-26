@@ -150,29 +150,6 @@ class ExecutionScope:
                 self._terminating_spawns.pop(token)
                 self._condition.notify_all()
 
-    def register(
-        self,
-        process: subprocess.Popen[Any],
-        terminate: Callable[[], None],
-        force: Callable[[], None] | None = None,
-    ) -> bool:
-        """Backward-compatible direct registration for test/injected callers."""
-
-        if force is None:
-            force = terminate
-        with self._condition:
-            cancelled = self._cancelled
-            if not cancelled:
-                self._active[process] = (terminate, force)
-        if cancelled:
-            for callback in (terminate, force):
-                try:
-                    callback()
-                except OSError:
-                    pass
-            return False
-        return True
-
     def complete(self, process: subprocess.Popen[Any]) -> None:
         with self._condition:
             self._active.pop(process, None)
@@ -956,19 +933,44 @@ _NOTES_HEADINGS = (
 )
 
 
-def _is_canonical_absolute_path(value: str) -> bool:
-    """Fail-closed check for a native absolute filesystem path.
+_SANDBOX_REPO_ROOT = PurePosixPath("/workspace/repo")
+_SANDBOX_ENTRYPOINT_ROOT = _SANDBOX_REPO_ROOT / "skills"
 
-    Registered tool entrypoints live on the executor host. On a POSIX host
-    that means a single-leading-slash absolute path; on Windows it means a
-    drive-letter or UNC path in native form. In both cases the string must
-    match the host's canonical spelling (no ``..``, no double roots, no
-    mixed separators, no trailing separator) so a serialized registry
-    cannot smuggle a traversal or a foreign-flavored path through the
-    permissive host parser.
+
+def _is_canonical_sandbox_absolute_path(value: str) -> bool:
+    """Validate the fixed POSIX namespace emitted by the pilot runner.
+
+    This is a serialized container path, not a host filesystem path.  It must
+    therefore be parsed with ``PurePosixPath`` even when the validator itself
+    runs on Windows.  Only the shipped ``/workspace/repo/skills`` subtree is
+    an entrypoint namespace; callers still bind the bytes to the host-side
+    executable before execution.
     """
 
-    if not value or "\0" in value:
+    if not isinstance(value, str) or not value or "\0" in value:
+        return False
+    if not value.startswith("/workspace/repo/") or "\\" in value:
+        return False
+    pure = PurePosixPath(value)
+    if (
+        pure.as_posix() != value
+        or not pure.is_absolute()
+        or ".." in pure.parts
+        or not pure.is_relative_to(_SANDBOX_ENTRYPOINT_ROOT)
+    ):
+        return False
+    return pure != _SANDBOX_ENTRYPOINT_ROOT
+
+
+def _is_canonical_absolute_path(value: str) -> bool:
+    """Fail-closed check for a native host filesystem path.
+
+    Serialized tool registries use ``_is_canonical_sandbox_absolute_path``
+    instead; this helper is reserved for separately defined host-native
+    fields.
+    """
+
+    if not isinstance(value, str) or not value or "\0" in value:
         return False
     if os.name == "nt":
         return _is_canonical_windows_absolute_path(value)
@@ -2225,12 +2227,12 @@ def _validate_tool_registry_document(value: Mapping[str, Any]) -> dict[str, Any]
     ):
         if schema == TOOL_REGISTRY_SCHEMA:
             entrypoint = entry["entrypoint"]
-            if not isinstance(entrypoint, str) or not _is_canonical_absolute_path(
+            if not isinstance(entrypoint, str) or not _is_canonical_sandbox_absolute_path(
                 entrypoint
             ):
                 _fail(
                     "untrusted_tool",
-                    "tool registry entrypoint is not an absolute canonical path",
+                    "tool registry entrypoint is not a canonical sandbox path",
                     path_field,
                 )
         _sha256(entry["entrypoint_sha256"], digest_field)

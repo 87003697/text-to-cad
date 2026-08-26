@@ -1,21 +1,21 @@
-"""Cross-platform coverage for the tool-registry entrypoint path predicate.
+"""Cross-platform coverage for tool-registry entrypoint path predicates.
 
-The registry entrypoint is executed on the host that ran ``finalize`` -- a
-POSIX box in CI, a Windows workstation for offline reviews -- so the
-predicate must accept native absolute paths for the running platform while
-rejecting relative paths, traversal segments, foreign-flavored spellings
-and malformed roots. Regression: the previous
-``entrypoint.startswith("/")`` gate turned every Windows registry into an
-``untrusted_tool`` failure. See
+Published runner registries carry the fixed POSIX ``/workspace/repo/skills``
+namespace even when validation runs on Windows. Host-native paths belong to
+separately defined host fields and are covered by their own predicate. The
+serialized field rejects relative paths, traversal segments, foreign-flavored
+spellings and malformed roots. See
 ``skills/mesh-to-cad/scripts/mesh-to-cad-workspace/workspace_core.py``.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 
@@ -80,6 +80,129 @@ class WindowsAbsolutePathPredicateTests(unittest.TestCase):
         self.assertFalse(self.check("D:\\repo\\tool.py\x00"))
 
 
+class SandboxEntrypointPredicateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.core = _load_workspace_core()
+        self.check = self.core._is_canonical_sandbox_absolute_path
+
+    def test_accepts_the_fixed_posix_sandbox_namespace(self) -> None:
+        self.assertTrue(
+            self.check(
+                "/workspace/repo/skills/cad/scripts/canonical-build/__main__.py"
+            )
+        )
+        self.assertTrue(
+            self.check(
+                "/workspace/repo/skills/mesh-compare/scripts/mesh-compare/__main__.py"
+            )
+        )
+
+    def test_rejects_host_drive_and_unc_spellings(self) -> None:
+        self.assertFalse(self.check(r"C:\workspace\repo\skills\tool.py"))
+        self.assertFalse(self.check(r"\\server\share\workspace\repo\skills\tool.py"))
+
+    def test_rejects_mixed_separators_and_traversal(self) -> None:
+        self.assertFalse(self.check("/workspace/repo/skills\\cad/tool.py"))
+        self.assertFalse(self.check("/workspace/repo/skills/../tool.py"))
+        self.assertFalse(self.check("/workspace/repo//skills/tool.py"))
+        self.assertFalse(self.check("/workspace/repo/skills/tool.py/"))
+
+    def test_rejects_namespace_root_without_entrypoint(self) -> None:
+        self.assertFalse(self.check("/workspace/repo"))
+        self.assertFalse(self.check("/workspace/repo/skills"))
+
+    def test_exact_sandbox_paths_reach_digest_validation(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="registry-windows-") as directory:
+            root = Path(directory)
+            rebuild = root / "rebuild.py"
+            geometry = root / "geometry.py"
+            rebuild.write_bytes(b"rebuild")
+            geometry.write_bytes(b"geometry")
+            value = {
+                "schema": "mesh-to-cad.tool-registry/2",
+                "rebuild": {
+                    "id": "cad.canonical-build/1",
+                    "entrypoint": "/workspace/repo/skills/cad/scripts/canonical-build/__main__.py",
+                    "entrypoint_sha256": "0" * 64,
+                },
+                "geometry": {
+                    "id": "mesh-compare.voxblame/1",
+                    "entrypoint": "/workspace/repo/skills/mesh-compare/scripts/mesh-compare/__main__.py",
+                    "entrypoint_sha256": "1" * 64,
+                },
+            }
+            value["identity_sha256"] = self.core._identity(
+                "mesh-to-cad.tool-registry/2", value
+            )
+            registry = root / "registry.json"
+            registry.write_text(
+                json.dumps(value, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+            )
+            with self.assertRaises(self.core.WorkspaceError) as raised:
+                self.core._load_tool_registry(
+                    registry,
+                    rebuild_entrypoint=rebuild,
+                    geometry_entrypoint=geometry,
+                )
+            self.assertEqual("untrusted_tool", raised.exception.classification)
+            self.assertEqual(
+                "$.tool_registry.rebuild.entrypoint_sha256", raised.exception.path
+            )
+
+
+class SerializedRegistryEntrypointTests(unittest.TestCase):
+    """The serialized field is a fixed runner namespace, never a host path."""
+
+    _REBUILD_ENTRYPOINT = (
+        "/workspace/repo/skills/cad/scripts/canonical-build/__main__.py"
+    )
+    _GEOMETRY_ENTRYPOINT = (
+        "/workspace/repo/skills/mesh-compare/scripts/mesh-compare/__main__.py"
+    )
+
+    def setUp(self) -> None:
+        self.core = _load_workspace_core()
+
+    def _registry(self, rebuild_entrypoint: str) -> dict:
+        value = {
+            "schema": "mesh-to-cad.tool-registry/2",
+            "rebuild": {
+                "id": "cad.canonical-build/1",
+                "entrypoint": rebuild_entrypoint,
+                "entrypoint_sha256": "0" * 64,
+            },
+            "geometry": {
+                "id": "mesh-compare.voxblame/1",
+                "entrypoint": self._GEOMETRY_ENTRYPOINT,
+                "entrypoint_sha256": "1" * 64,
+            },
+        }
+        value["identity_sha256"] = self.core._identity(
+            "mesh-to-cad.tool-registry/2", value
+        )
+        return value
+
+    def test_rejects_host_and_smuggled_entrypoint_spellings(self) -> None:
+        attacks = (
+            r"C:\arbitrary\tool.py",
+            r"\\server\share\arbitrary\tool.py",
+            "/tmp/arbitrary/tool.py",
+            "/workspace/repo/skills/cad\\scripts/canonical-build/__main__.py",
+            "/workspace/repo/skills/../outside.py",
+            "/workspace/repo/skills-evil/tool.py",
+        )
+        for attack in attacks:
+            with self.subTest(entrypoint=attack):
+                with self.assertRaises(self.core.WorkspaceError) as raised:
+                    self.core._validate_tool_registry_document(
+                        self._registry(attack)
+                    )
+                self.assertEqual("untrusted_tool", raised.exception.classification)
+                self.assertEqual(
+                    "$.tool_registry.rebuild.entrypoint", raised.exception.path
+                )
+
+
 class PosixAbsolutePathPredicateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.core = _load_workspace_core()
@@ -108,8 +231,7 @@ class PosixAbsolutePathPredicateTests(unittest.TestCase):
 
 
 class HostDispatchTests(unittest.TestCase):
-    """``_is_canonical_absolute_path`` selects the native predicate for the
-    running host and does not accept the foreign flavor unattended."""
+    """Host-native fields dispatch using the running platform's spelling."""
 
     def setUp(self) -> None:
         self.core = _load_workspace_core()
@@ -129,7 +251,6 @@ class HostDispatchTests(unittest.TestCase):
             self.assertFalse(
                 self.core._is_canonical_absolute_path(r"D:\repo\tool.py")
             )
-
 
 if __name__ == "__main__":
     unittest.main()
