@@ -8,7 +8,8 @@ The seam has one small typed shape:
   preview profile identity the Workspace already committed to.
 * ``StepZeroEvidenceProvider`` is the callable that consumes the request
   and writes canonical measurement and formal preview bytes into the
-  stage.  Providers never learn a Workspace authority path.
+  stage.  The request never carries a Workspace authority path; the
+  runner binds the fixed shipped package roots privately.
 
 The production provider (:func:`real_step_zero_evidence_provider`) is
 runner-assembled and fixed; the Agent cannot configure or replace it.
@@ -98,10 +99,10 @@ def _ensure_shipped_package(package_root: Path, package_name: str) -> Path:
     return package_root
 
 
-def _import_meshscope():
+def _import_meshscope(meshscope_src: Path | None = None):
     """Import the shipped meshscope.voxblame canonical measurement API."""
 
-    _ensure_shipped_package(_MESHSCOPE_SRC, "meshscope")
+    _ensure_shipped_package(meshscope_src or _MESHSCOPE_SRC, "meshscope")
     from meshscope.voxblame import (  # type: ignore
         measure_step,
         prepare_preview_scene,
@@ -111,10 +112,10 @@ def _import_meshscope():
     return measure_step, prepare_preview_scene, publish_preview, validate_preview_identity
 
 
-def _import_meshshot():
+def _import_meshshot(meshshot_src: Path | None = None):
     """Import the shipped meshshot canonical Browser Runtime renderer."""
 
-    _ensure_shipped_package(_MESHSHOT_SRC, "meshshot")
+    _ensure_shipped_package(meshshot_src or _MESHSHOT_SRC, "meshshot")
     from meshshot import (  # type: ignore
         MeshGeometry,
         load_profile,
@@ -127,6 +128,8 @@ def real_step_zero_evidence_provider(
     request: StepZeroEvidenceRequest,
     *,
     renderer: Callable[..., Any] | None = None,
+    meshscope_src: Path | None = None,
+    meshshot_src: Path | None = None,
 ) -> None:
     """Production Step 0 evidence provider.
 
@@ -151,8 +154,8 @@ def real_step_zero_evidence_provider(
         prepare_preview_scene,
         publish_preview,
         validate_preview_identity,
-    ) = _import_meshscope()
-    MeshGeometry, load_profile, render_residual_preview = _import_meshshot()
+    ) = _import_meshscope(meshscope_src)
+    MeshGeometry, load_profile, render_residual_preview = _import_meshshot(meshshot_src)
 
     if renderer is None:
         renderer = render_residual_preview

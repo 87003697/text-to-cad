@@ -523,6 +523,18 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         finally:
             verified.close()
 
+        (authority / trusted_tools.CANONICAL_BUILD_RELATIVE / "runtime.py").write_text(
+            "tampered = True\n", encoding="utf-8"
+        )
+        with self.assertRaisesRegex(SupervisorError, "trusted_tools_unavailable"):
+            WorkspaceSupervisor(
+                self.workspace_root,
+                candidate_root=self.root / "tampered-authority-candidate",
+                staging_dir=self.root / "tampered-authority-staging",
+                workspace_api=self.workspace,
+                trusted_tools_root=authority,
+            )
+
         with self.assertRaisesRegex(SupervisorError, "trusted_tools_unavailable"):
             WorkspaceSupervisor(
                 self.workspace_root,
@@ -3243,7 +3255,11 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             raw = root / "raw.ply"
             raw.write_text("\n".join(ply_lines) + "\n", encoding="utf-8")
             runner.prepare_exp(workspace)
-            reference = runner.prepare_and_initialize_workspace(workspace, raw)
+            reference = runner.prepare_and_initialize_workspace(
+                workspace,
+                raw,
+                trusted_tools_root=runner.REPO_ROOT,
+            )
             self.assertTrue(reference.is_file())
             status = subprocess.run(
                 [

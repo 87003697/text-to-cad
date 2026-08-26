@@ -34,6 +34,7 @@ try:
     from scripts.pilot.trusted_tools import (  # type: ignore[import-not-found]
         CADGEN_RUNTIME_RELATIVE,
         CANONICAL_BUILD_RELATIVE,
+        MESHSCOPE_RUNTIME_RELATIVE,
         TrustedToolsError,
         validate_trusted_tools,
     )
@@ -43,6 +44,7 @@ except ModuleNotFoundError as _exc:  # pragma: no cover - direct-execution fallb
     from trusted_tools import (  # type: ignore[no-redef]
         CADGEN_RUNTIME_RELATIVE,
         CANONICAL_BUILD_RELATIVE,
+        MESHSCOPE_RUNTIME_RELATIVE,
         TrustedToolsError,
         validate_trusted_tools,
     )
@@ -392,8 +394,8 @@ def _load_workspace_api() -> ModuleType:
     return module
 
 
-def _load_reference_type() -> type[Any]:
-    _ensure_shipped_package(_MESHSCOPE_SRC, "meshscope")
+def _load_reference_type(meshscope_src: Path | None = None) -> type[Any]:
+    _ensure_shipped_package(meshscope_src or _MESHSCOPE_SRC, "meshscope")
     from meshscope import ReferenceCapability
 
     return ReferenceCapability
@@ -748,6 +750,7 @@ class WorkspaceSupervisor:
                 self.candidate_runtime = runtime
             self.canonical_build_root: Path | None = None
             self.cadgen_runtime_root: Path | None = None
+            trusted_meshscope_src: Path | None = None
             if trusted_tools_root is not None:
                 tool_root = Path(trusted_tools_root).resolve()
                 try:
@@ -756,6 +759,9 @@ class WorkspaceSupervisor:
                     raise SupervisorError("trusted_tools_unavailable") from exc
                 canonical_build_root = (tool_root / CANONICAL_BUILD_RELATIVE).resolve()
                 cadgen_runtime_root = (tool_root / CADGEN_RUNTIME_RELATIVE).resolve()
+                trusted_meshscope_src = (
+                    tool_root / MESHSCOPE_RUNTIME_RELATIVE / "src"
+                ).resolve()
                 try:
                     canonical_build_root.relative_to(self.workspace)
                     raise SupervisorError("trusted_tools_unavailable")
@@ -772,7 +778,7 @@ class WorkspaceSupervisor:
                 binding = self._bind_workspace_canonical_reference()
                 path = binding["path"]
                 self.reference_handle = self.registry.issue("reference", path)
-                factory = reference_factory or _load_reference_type()
+                factory = reference_factory or _load_reference_type(trusted_meshscope_src)
                 try:
                     # W2's response id is the Agent-visible opaque reference handle.
                     self._reference = factory(self.reference_handle, path)

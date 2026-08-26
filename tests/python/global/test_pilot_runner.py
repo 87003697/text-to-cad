@@ -777,10 +777,200 @@ class RunnerTests(unittest.TestCase):
             publish_tree,
             supervisor.call_args.kwargs["trusted_tools_root"],
         )
+        self.assertEqual(
+            publish_tree / "skills/mesh-compare/scripts/packages/meshscope/src",
+            supervisor.call_args.kwargs["step_zero_evidence_provider"].keywords[
+                "meshscope_src"
+            ],
+        )
+        self.assertEqual(
+            publish_tree / "skills/mesh-compare/scripts/packages/meshshot/src",
+            supervisor.call_args.kwargs["repair_evidence_provider"].keywords[
+                "meshshot_src"
+            ],
+        )
         self.assertNotEqual(
             self.supervisor.REPO_ROOT,
             supervisor.call_args.kwargs["trusted_tools_root"],
         )
+
+    def test_agent_surface_preparation_uses_deployed_authority_not_stale_overlay(
+        self,
+    ) -> None:
+        """The real outer-preparation seam must use the resolved publish tree."""
+
+        from scripts.pilot import trusted_tools
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_overlay = root / "source-overlay"
+            authority = root / "publish-tree"
+            authority_used = root / "authority-used"
+
+            def seed_tool_roots(tree: Path) -> None:
+                for relative in (
+                    trusted_tools.CANONICAL_BUILD_RELATIVE,
+                    trusted_tools.CADGEN_RUNTIME_RELATIVE / "src/cadgen",
+                    trusted_tools.MESHSCOPE_RUNTIME_RELATIVE / "src/meshscope",
+                    trusted_tools.MESHSHOT_RUNTIME_RELATIVE / "src/meshshot",
+                ):
+                    runtime = tree / relative
+                    runtime.mkdir(parents=True)
+                    (runtime / "runtime.py").write_text(
+                        "# fixed test runtime\n", encoding="utf-8"
+                    )
+
+            seed_tool_roots(source_overlay)
+            source_meshscope_src = (
+                source_overlay / trusted_tools.MESHSCOPE_RUNTIME_RELATIVE / "src"
+            )
+            (source_meshscope_src / "meshscope/__init__.py").write_text(
+                "\n", encoding="utf-8"
+            )
+            (source_meshscope_src / "meshscope/voxblame").mkdir()
+            (source_meshscope_src / "meshscope/voxblame/__init__.py").write_text(
+                "raise RuntimeError('stale source overlay imported')\n",
+                encoding="utf-8",
+            )
+            source_meshshot_src = (
+                source_overlay / trusted_tools.MESHSHOT_RUNTIME_RELATIVE / "src"
+            )
+            (source_meshshot_src / "meshshot/__init__.py").write_text(
+                "raise RuntimeError('stale source overlay imported')\n",
+                encoding="utf-8",
+            )
+            source_manifest = source_overlay / trusted_tools.MANIFEST_RELATIVE
+            source_manifest.parent.mkdir(parents=True)
+            source_manifest.write_bytes(trusted_tools.manifest_bytes(source_overlay))
+            # This file is outside the recorded source inventory, reproducing
+            # the non-deleting CVM overlay that caused the production failure.
+            (source_overlay / trusted_tools.CANONICAL_BUILD_RELATIVE / "stale.py").write_text(
+                "stale = True\n", encoding="utf-8"
+            )
+
+            seed_tool_roots(authority)
+            meshscope_src = authority / trusted_tools.MESHSCOPE_RUNTIME_RELATIVE / "src"
+            (meshscope_src / "meshscope/__init__.py").write_text(
+                "\n", encoding="utf-8"
+            )
+            (meshscope_src / "meshscope/voxblame").mkdir()
+            (meshscope_src / "meshscope/voxblame/__init__.py").write_text(
+                "from pathlib import Path\n"
+                "class _Result:\n"
+                "    manifest = {'canonical_reference_sha256': 'a' * 64}\n"
+                "def prepare_reference(_input, output):\n"
+                f"    Path({str(authority_used)!r}).write_text('authority', encoding='utf-8')\n"
+                "    Path(output).mkdir(parents=True, exist_ok=True)\n"
+                "    return _Result()\n",
+                encoding="utf-8",
+            )
+            meshshot_src = authority / trusted_tools.MESHSHOT_RUNTIME_RELATIVE / "src"
+            (meshshot_src / "meshshot/__init__.py").write_text(
+                "class _Profile:\n"
+                "    profile = {'name': 'test-profile'}\n"
+                "    sha256 = 'b' * 64\n"
+                "def load_profile():\n"
+                "    return _Profile()\n",
+                encoding="utf-8",
+            )
+            authority_manifest = authority / trusted_tools.MANIFEST_RELATIVE
+            authority_manifest.parent.mkdir(parents=True)
+            authority_manifest.write_bytes(trusted_tools.manifest_bytes(authority))
+
+            raw_input = root / "input.ply"
+            raw_input.write_text("ply\n", encoding="utf-8")
+            exp_dir = root / "outputs/group/exp"
+            receipt = SimpleNamespace(publish_tree=authority)
+            relay = mock.MagicMock(cancelled=False, signum=None)
+            relay.__enter__ = mock.Mock(return_value=relay)
+            relay.__exit__ = mock.Mock(return_value=False)
+            lease = SimpleNamespace(runtime=root / "candidate-runtime", release=mock.Mock())
+            agent_supervisor = mock.MagicMock()
+            agent_supervisor.candidate_root = root / "candidate"
+            agent_supervisor.agent_bootstrap_contract.return_value = {}
+            agent_supervisor.cancellation_confirmed = True
+
+            provider_modules = {
+                name: module
+                for name, module in sys.modules.items()
+                if name.split(".", 1)[0] in {"meshscope", "meshshot"}
+            }
+            original_sys_path = sys.path[:]
+            for name in provider_modules:
+                sys.modules.pop(name, None)
+
+            def restore_provider_imports() -> None:
+                for name in tuple(sys.modules):
+                    if name.split(".", 1)[0] in {"meshscope", "meshshot"}:
+                        sys.modules.pop(name, None)
+                sys.modules.update(provider_modules)
+                sys.path[:] = original_sys_path
+
+            self.addCleanup(restore_provider_imports)
+
+            class RuntimeFactory(FakeBrowserRuntimeJob):
+                @classmethod
+                def create(cls, *args, **kwargs):
+                    return cls()
+
+                def start(self):
+                    relay.cancelled = True
+                    relay.signum = signal.SIGTERM
+
+            with (
+                mock.patch.object(self.supervisor, "REPO_ROOT", source_overlay),
+                mock.patch.object(self.supervisor, "prepare_exp"),
+                mock.patch.object(
+                    self.supervisor,
+                    "_workspace_status_available",
+                    return_value=False,
+                ),
+                mock.patch.object(self.supervisor, "SignalRelay", return_value=relay),
+                mock.patch.object(self.supervisor, "BrowserRuntimeJob", RuntimeFactory),
+                mock.patch.object(self.supervisor, "publish_tool_registry"),
+                mock.patch.object(
+                    self.supervisor,
+                    "materialize_candidate_runtime",
+                    return_value=lease,
+                ),
+                mock.patch.object(
+                    self.supervisor,
+                    "WorkspaceSupervisor",
+                    return_value=agent_supervisor,
+                ),
+                mock.patch.object(self.supervisor, "write_agent_bootstrap"),
+                mock.patch.object(
+                    self.supervisor,
+                    "resolve_deployed_authority",
+                    return_value=receipt,
+                ) as resolve,
+                mock.patch.object(
+                    self.supervisor.subprocess,
+                    "run",
+                    return_value=SimpleNamespace(returncode=0),
+                ),
+                mock.patch.object(
+                    self.supervisor,
+                    "finalize_pilot",
+                    side_effect=lambda exp, status, env, **kwargs: status,
+                ),
+                mock.patch.object(
+                    self.supervisor,
+                    "validate_exp_dir",
+                    return_value=exp_dir,
+                ),
+            ):
+                status = self.supervisor.run_pilot(
+                    exp_dir,
+                    [raw_input],
+                    ["/fake/workload"],
+                    {**self.environ, "HOME": os.fspath(root / "home")},
+                    agent_surface=True,
+                )
+
+            self.assertEqual(128 + signal.SIGTERM, status)
+            resolve.assert_called_once_with(root / "home")
+            self.assertEqual("authority", authority_used.read_text(encoding="utf-8"))
 
     def test_run_pilot_preflights_cad_render_before_paid_workload(self) -> None:
         events: list[str] = []

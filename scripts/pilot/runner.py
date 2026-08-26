@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from collections import namedtuple
+from functools import partial
 import hashlib
 import json
 import math
@@ -69,8 +70,6 @@ except ModuleNotFoundError as exc:
 
 try:
     from scripts.pilot.step_zero_evidence import (
-        _MESHSCOPE_SRC,
-        _MESHSHOT_SRC,
         _ensure_shipped_package,
         real_step_zero_evidence_provider,
     )
@@ -78,18 +77,26 @@ except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
     from step_zero_evidence import (  # type: ignore[no-redef]
-        _MESHSCOPE_SRC,
-        _MESHSHOT_SRC,
         _ensure_shipped_package,
         real_step_zero_evidence_provider,
     )
 
 try:
-    from scripts.pilot.trusted_tools import TrustedToolsError, validate_trusted_tools
+    from scripts.pilot.trusted_tools import (
+        MESHSCOPE_RUNTIME_RELATIVE,
+        MESHSHOT_RUNTIME_RELATIVE,
+        TrustedToolsError,
+        validate_trusted_tools,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
-    from trusted_tools import TrustedToolsError, validate_trusted_tools  # type: ignore[no-redef]
+    from trusted_tools import (  # type: ignore[no-redef]
+        MESHSCOPE_RUNTIME_RELATIVE,
+        MESHSHOT_RUNTIME_RELATIVE,
+        TrustedToolsError,
+        validate_trusted_tools,
+    )
 
 try:
     from scripts.pilot.repair_evidence import real_repair_evidence_provider
@@ -1322,7 +1329,12 @@ def _workspace_status_available(exp_dir: Path) -> bool:
     return completed.returncode == 0
 
 
-def prepare_and_initialize_workspace(exp_dir: Path, input_path: Path) -> Path:
+def prepare_and_initialize_workspace(
+    exp_dir: Path,
+    input_path: Path,
+    *,
+    trusted_tools_root: Path,
+) -> Path:
     """Prepare Canonical Reference and initialize a fresh Workspace outside Agent view."""
 
     if _workspace_status_available(exp_dir):
@@ -1330,12 +1342,14 @@ def prepare_and_initialize_workspace(exp_dir: Path, input_path: Path) -> Path:
     prepared = exp_dir.parent / f".agent-prepared-{os.getpid()}-{secrets.token_hex(8)}"
     try:
         try:
-            validate_trusted_tools(REPO_ROOT)
+            validate_trusted_tools(trusted_tools_root)
         except TrustedToolsError as exc:
             raise PilotError("trusted tools are unavailable") from exc
-        _ensure_shipped_package(_MESHSCOPE_SRC, "meshscope")
+        meshscope_src = Path(trusted_tools_root) / MESHSCOPE_RUNTIME_RELATIVE / "src"
+        meshshot_src = Path(trusted_tools_root) / MESHSHOT_RUNTIME_RELATIVE / "src"
+        _ensure_shipped_package(meshscope_src, "meshscope")
         from meshscope.voxblame import prepare_reference
-        _ensure_shipped_package(_MESHSHOT_SRC, "meshshot")
+        _ensure_shipped_package(meshshot_src, "meshshot")
         from meshshot import load_profile
 
         prepared_input = prepared / "input"
@@ -1970,7 +1984,11 @@ def run_pilot(
                 trusted_tools_root = resolve_deployed_authority(
                     Path(host_home)
                 ).publish_tree
-                prepare_and_initialize_workspace(exp_dir, input_paths[0])
+                prepare_and_initialize_workspace(
+                    exp_dir,
+                    input_paths[0],
+                    trusted_tools_root=trusted_tools_root,
+                )
             sidecar = BrowserRuntimeJob.create(
                 exp_dir,
                 image_lock_path=HOST_IMAGE_LOCK_PATH,
@@ -2003,8 +2021,24 @@ def run_pilot(
                     tool_registry=tool_registry,
                     candidate_runtime=candidate_runtime,
                     trusted_tools_root=trusted_tools_root,
-                    step_zero_evidence_provider=real_step_zero_evidence_provider,
-                    repair_evidence_provider=real_repair_evidence_provider,
+                    step_zero_evidence_provider=partial(
+                        real_step_zero_evidence_provider,
+                        meshscope_src=(
+                            trusted_tools_root / MESHSCOPE_RUNTIME_RELATIVE / "src"
+                        ),
+                        meshshot_src=(
+                            trusted_tools_root / MESHSHOT_RUNTIME_RELATIVE / "src"
+                        ),
+                    ),
+                    repair_evidence_provider=partial(
+                        real_repair_evidence_provider,
+                        meshscope_src=(
+                            trusted_tools_root / MESHSCOPE_RUNTIME_RELATIVE / "src"
+                        ),
+                        meshshot_src=(
+                            trusted_tools_root / MESHSHOT_RUNTIME_RELATIVE / "src"
+                        ),
+                    ),
                 )
                 write_agent_bootstrap(
                     agent_supervisor.candidate_root,

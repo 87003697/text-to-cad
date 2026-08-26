@@ -28,8 +28,8 @@ the production provider
 
 The Region Diff, source-change delta, measurement, and preview are all
 derived from bytes W1 hydrated into the private external stage; the
-provider never observes any Workspace-relative path and never sees the
-semantic Agent assessment.
+provider request never carries a Workspace-relative path or the semantic
+Agent assessment. The runner privately binds the fixed shipped package roots.
 """
 
 from __future__ import annotations
@@ -117,10 +117,10 @@ class RepairEvidenceProvider(Protocol):
     def __call__(self, request: RepairEvidenceRequest) -> None: ...
 
 
-def _import_meshscope():
+def _import_meshscope(meshscope_src: Path | None = None):
     """Import the shipped ``meshscope.voxblame`` canonical Repair API."""
 
-    _ensure_shipped_package(_MESHSCOPE_SRC, "meshscope")
+    _ensure_shipped_package(meshscope_src or _MESHSCOPE_SRC, "meshscope")
     from meshscope.voxblame import (  # type: ignore
         measure_step,
         prepare_preview_scene,
@@ -137,10 +137,10 @@ def _import_meshscope():
     )
 
 
-def _import_meshshot():
+def _import_meshshot(meshshot_src: Path | None = None):
     """Import the shipped ``meshshot`` Browser Runtime renderer."""
 
-    _ensure_shipped_package(_MESHSHOT_SRC, "meshshot")
+    _ensure_shipped_package(meshshot_src or _MESHSHOT_SRC, "meshshot")
     from meshshot import (  # type: ignore
         MeshGeometry,
         load_profile,
@@ -276,6 +276,8 @@ def real_repair_evidence_provider(
     request: RepairEvidenceRequest,
     *,
     renderer: Callable[..., Any] | None = None,
+    meshscope_src: Path | None = None,
+    meshshot_src: Path | None = None,
 ) -> None:
     """Production Repair evidence provider.
 
@@ -289,8 +291,8 @@ def real_repair_evidence_provider(
         publish_preview,
         publish_region_diff,
         validate_preview_identity,
-    ) = _import_meshscope()
-    MeshGeometry, load_profile, render_residual_preview = _import_meshshot()
+    ) = _import_meshscope(meshscope_src)
+    MeshGeometry, load_profile, render_residual_preview = _import_meshshot(meshshot_src)
 
     if renderer is None:
         renderer = render_residual_preview
