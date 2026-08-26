@@ -68,7 +68,7 @@ outside `source/`, or touch `candidate.glb`. Doing so causes
 `run_candidate_tool` to fail closed.
 
 `Location` is a transform value, not a context manager. Inside a
-`BuildPart` or `BuildSketch` context, place geometry with plural
+`BuildPart` context, place geometry with plural
 `with Locations((x, y, z)):`. In direct shape flow outside a builder, return or
 explicitly use `Location((x, y, z)) * shape` or
 `shape.moved(Location((x, y, z)))`; do not discard the transformed value.
