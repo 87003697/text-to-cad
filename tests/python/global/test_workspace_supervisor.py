@@ -371,6 +371,22 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         result = self.sup.start_attempt(self.sup.workspace_handle, plan_handle, None)
         return result["attempt_handle"], result["candidate_handle"]
 
+    def test_candidate_sidecar_inventory_enforces_count_and_size_bounds(self) -> None:
+        source = self.root / "source"
+        source.mkdir()
+        (source / "model.py").write_text("def gen_step(): pass\n", encoding="utf-8")
+        for index in range(33):
+            (source / f"sidecar-{index:02d}.txt").write_text("1\n", encoding="ascii")
+        with self.assertRaises(SupervisorError):
+            self.sup._collect_declared_sidecars(source)
+
+        shutil.rmtree(source)
+        source.mkdir()
+        (source / "model.py").write_text("def gen_step(): pass\n", encoding="utf-8")
+        (source / "oversized.txt").write_bytes(b"x" * (512 * 1024 + 1))
+        with self.assertRaises(SupervisorError):
+            self.sup._collect_declared_sidecars(source)
+
     def test_handles_are_run_private_and_one_shot_operations_reject_replay(self) -> None:
         other = WorkspaceSupervisor(
             self.workspace_root,

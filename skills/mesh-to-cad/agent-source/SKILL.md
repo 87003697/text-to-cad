@@ -161,6 +161,90 @@ Rules:
   Attempt is a repair, the supervisor seeds `work/source/` from the
   parent Measured Step before the Attempt begins; edit it in place.
 
+## Agent-authored control documents
+
+The following are the only Agent-authored documents outside candidate source.
+The objects are closed: do not add fields. The supervisor owns all measured
+evidence, previews, manifests, and export artifacts.
+
+- For Step 0, `/candidate/plan.json` must be exactly:
+
+  ```json
+  {
+    "schema": "mesh-to-cad.initial-plan/1",
+    "summary": "Build the first CAD candidate directly in canonical coordinates."
+  }
+  ```
+
+  `summary` must be a nonempty string. Do not add observations, targets, or
+  other planning fields.
+- For a Repair Attempt, replace `/candidate/plan.json` with exactly:
+
+  ```json
+  {
+    "schema": "voxblame.repair-batch/1",
+    "from_step": 0,
+    "selected_targets": [
+      {"target_key": "step-000000:target-0123456789abcdef", "mask_sha256": "<sha256>"}
+    ],
+    "planned_edits": [
+      {
+        "edit_key": "edit-key",
+        "target_keys": ["step-000000:target-0123456789abcdef"],
+        "description": "Agent-authored modeling change"
+      }
+    ],
+    "rationale": "Why these targets form one coherent modeling problem.",
+    "preview_observation": "What the formal preview shows before editing."
+  }
+  ```
+
+  `from_step` must be the current parent step. Target keys and edit keys are
+  unique stable lowercase keys; each `mask_sha256` is a lowercase 64-character
+  SHA-256 digest. Every selected target must be covered by one or more planned
+  edits, and every target/edit list and prose field must be nonempty.
+- `/candidate/work/assessment.json` is Repair-only and must have exactly
+  `{schema, from_step, to_step, preview_observation, summary}` with schema
+  `mesh-to-cad.assessment/1`. Bind `from_step` to the parent and `to_step` to
+  the current step; both prose fields must be nonempty strings. See the
+  projected assessment reference for the authoring flow.
+- `/candidate/notes.md` must be readable UTF-8. Its `## ` headings must be
+  exactly these seven lines, in this order:
+  `## Input`, `## Modeling Intent`, `## Preserved Structural Features`,
+  `## Omitted Surface Details`, `## Repair Trajectory`, `## Final Selection`,
+  `## Verification`.
+- When Reconstruction Spec is enabled, author the separate mutable
+  `/candidate/reconstruction-spec.json` document with exactly these top-level
+  arrays (they may be empty):
+
+  ```json
+  {
+    "components": [{"id": "component.body", "certainty": "observed"}],
+    "features": [{"id": "feature.opening", "certainty": "inferred"}],
+    "relations": [
+      {
+        "id": "relation.opening-part-of-body",
+        "kind": "part_of",
+        "from": "feature.opening",
+        "to": "component.body"
+      }
+    ]
+  }
+  ```
+
+  Components and Features require an `id`; Relations require `id`, `kind`,
+  `from`, and `to`. IDs are globally unique, relation endpoints name an
+  existing Component or Feature, and `kind` is nonempty. `description`,
+  `certainty`, and `evidence` are optional; `certainty` is one of `observed`,
+  `inferred`, `hidden`, `uncertain`, or `mixed`. The Spec is non-authority
+  working state: do not add `parent_id`, revisions, digests, history, request
+  records, or Spec fields to a Repair Batch.
+- The supervisor admits at most 32 regular sidecar files under `source/`, each
+  at most 512 KiB. Keep every sidecar access bundle-relative. Never author
+  `candidate.glb`, `measurement.json`, `preview/`, `region-diff.json`, or
+  `source-changes.json`; trusted operations produce measured evidence and
+  export artifacts.
+
 ## Reconstruction reasoning
 
 You never see raw reference bytes. Instead you request one bounded

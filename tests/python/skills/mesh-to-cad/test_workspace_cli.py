@@ -205,6 +205,34 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertEqual("invalid_command", result["error"]["classification"])
         self.assertFalse((self.workspace / "work/attempts/000001/commands").exists())
 
+    def test_begin_attempt_rejects_extra_initial_plan_fields(self) -> None:
+        status, _initialized, stderr = self.invoke(
+            "init",
+            "--workspace",
+            str(self.workspace),
+            "--prepared",
+            str(self.prepared_setup()),
+        )
+        self.assertEqual(0, status, stderr)
+        plan = self.initial_plan()
+        value = json.loads(plan.read_text(encoding="utf-8"))
+        value["observations"] = {"bounds": [1.0, 1.0, 1.0]}
+        _write_json(plan, value)
+
+        status, rejected, _stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(plan),
+            "--intended-step",
+            "0",
+        )
+        self.assertEqual(2, status)
+        self.assertEqual("invalid_contract", rejected["error"]["classification"])
+        self.assertEqual("$.plan", rejected["error"]["path"])
+        self.assertFalse((self.workspace / "work/attempts/000001").exists())
+
     def test_workspace_build_preflights_registered_entrypoint(self) -> None:
         status, _initialized, stderr = self.invoke(
             "init",
@@ -2029,6 +2057,29 @@ time.sleep(60)
                 self.fail("the SIGTERM-ignoring command descendant is still running")
             time.sleep(0.05)
 
+    def test_begin_attempt_rejects_extra_repair_batch_fields(self) -> None:
+        self.publish_initial_flow()
+        plan = self.repair_plan("extra-repair-field", from_step=0)
+        value = json.loads(plan.read_text(encoding="utf-8"))
+        value["observations"] = {"depth": 8}
+        _write_json(plan, value)
+
+        status, rejected, _stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(plan),
+            "--intended-step",
+            "1",
+            "--from-step",
+            "0",
+        )
+        self.assertEqual(2, status)
+        self.assertEqual("invalid_contract", rejected["error"]["classification"])
+        self.assertEqual("$.plan", rejected["error"]["path"])
+        self.assertFalse((self.workspace / "work/attempts/000002").exists())
+
     def test_failed_attempt_is_auditable_but_does_not_consume_cycle_budget(self) -> None:
         self.publish_initial_flow()
         plan = self.repair_plan("repair-plan", from_step=0)
@@ -3207,6 +3258,32 @@ time.sleep(60)
         self.assertEqual("invalid_workspace_path", rejected["error"]["classification"])
         self.assertFalse((self.workspace / "steps/000000").exists())
         self.assertFalse(list((self.workspace / "work").glob(".tmp-step-zero-*")))
+
+
+class AgentAuthoredNotesContractTests(unittest.TestCase):
+    def test_final_notes_requires_exact_ordered_headings(self) -> None:
+        helper = _load_workspace_helper()
+        headings = [
+            "## Input",
+            "## Modeling Intent",
+            "## Preserved Structural Features",
+            "## Omitted Surface Details",
+            "## Repair Trajectory",
+            "## Final Selection",
+            "## Verification",
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            notes = Path(temporary) / "notes.md"
+            notes.write_text("\n".join(headings) + "\n", encoding="utf-8")
+            self.assertEqual(
+                notes.read_bytes(), helper._core._validate_final_notes(notes)
+            )
+
+            notes.write_text("\n".join(headings + ["## Extra"]) + "\n", encoding="utf-8")
+            with self.assertRaises(helper.WorkspaceError) as ctx:
+                helper._core._validate_final_notes(notes)
+            self.assertEqual("invalid_contract", ctx.exception.classification)
+            self.assertEqual("$.notes", ctx.exception.path)
 
 
 def _valid_agent_claim(

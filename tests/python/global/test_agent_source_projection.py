@@ -40,6 +40,34 @@ class AgentSourceProjectionTests(unittest.TestCase):
                 files.add(path.relative_to(checked_in).as_posix())
         self.assertEqual({projection.MANIFEST_NAME, *projection.PROJECTED_PATHS}, files)
 
+    def test_projected_skill_carries_agent_authored_document_contracts(self) -> None:
+        skill = (
+            REPO_ROOT
+            / ".claude/agent-source-projection/skills/mesh-to-cad/SKILL.md"
+        ).read_text(encoding="utf-8")
+        for required in (
+            '"schema": "mesh-to-cad.initial-plan/1"',
+            '"summary": "Build the first CAD candidate directly in canonical coordinates."',
+            '"schema": "voxblame.repair-batch/1"',
+            '"selected_targets"',
+            '"planned_edits"',
+            "Every selected target must be covered by one or more planned",
+            "`/candidate/work/assessment.json` is Repair-only",
+            "mesh-to-cad.assessment/1",
+            "exactly these seven lines, in this order",
+            "`## Preserved Structural Features`",
+            '"components":',
+            '"features":',
+            '"relations":',
+            "IDs are globally unique",
+            "`parent_id`, revisions, digests, history, request",
+            "at most 32 regular sidecar files",
+            "at most 512 KiB",
+            "trusted operations produce measured evidence",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, skill)
+
     def test_verify_rejects_missing_extra_and_digest_mismatch(self) -> None:
         mutations = (
             lambda target: (target / projection.PROJECTED_PATHS[0]).unlink(),
