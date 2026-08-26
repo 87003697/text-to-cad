@@ -126,6 +126,19 @@ def _evict_package_modules(package_name: str) -> None:
         sys.modules.pop(name, None)
 
 
+def _restore_package_import_state(
+    package_name: str,
+    modules: Mapping[str, object],
+    path: list[str],
+    roots: Mapping[str, Path],
+) -> None:
+    _evict_package_modules(package_name)
+    sys.modules.update(modules)
+    sys.path[:] = path
+    _SHIPPED_PACKAGE_ROOTS.clear()
+    _SHIPPED_PACKAGE_ROOTS.update(roots)
+
+
 def _ensure_shipped_package(package_root: Path, package_name: str) -> Path:
     """Import one package from its fixed vendored skill runtime."""
 
@@ -138,9 +151,8 @@ def _ensure_shipped_package(package_root: Path, package_name: str) -> Path:
     loaded_modules = _package_modules(package_name)
     previous_root = _SHIPPED_PACKAGE_ROOTS.get(package_name)
     if loaded_modules:
-        loaded_root = previous_root or resolved_root
-        if not _package_modules_are_from_root(
-            loaded_modules, loaded_root, package_name
+        if previous_root is None or not _package_modules_are_from_root(
+            loaded_modules, previous_root, package_name
         ):
             raise StepZeroEvidenceError(
                 "provider_dependency_missing",
@@ -158,25 +170,21 @@ def _ensure_shipped_package(package_root: Path, package_name: str) -> Path:
             path for path in sys.path if path != package_path
         ]
 
-    def restore_previous_import_state() -> None:
-        _evict_package_modules(package_name)
-        sys.modules.update(loaded_modules)
-        if path_changed:
-            sys.path[:] = previous_path
-        _SHIPPED_PACKAGE_ROOTS.clear()
-        _SHIPPED_PACKAGE_ROOTS.update(previous_roots)
-
     try:
         with _shipped_import_transaction():
             package = importlib.import_module(package_name)
     except ImportError as error:
-        restore_previous_import_state()
+        _restore_package_import_state(
+            package_name, loaded_modules, previous_path, previous_roots
+        )
         raise StepZeroEvidenceError(
             "provider_dependency_missing",
             f"{package_name} is not importable from the shipped tool subset: {error}",
         ) from error
     except BaseException:
-        restore_previous_import_state()
+        _restore_package_import_state(
+            package_name, loaded_modules, previous_path, previous_roots
+        )
         raise
     origin = getattr(package, "__file__", None)
     try:
@@ -186,7 +194,9 @@ def _ensure_shipped_package(package_root: Path, package_name: str) -> Path:
         ):
             raise ValueError("package family resolved outside shipped root")
     except (TypeError, ValueError) as error:
-        restore_previous_import_state()
+        _restore_package_import_state(
+            package_name, loaded_modules, previous_path, previous_roots
+        )
         raise StepZeroEvidenceError(
             "provider_dependency_missing",
             f"{package_name} resolved outside the shipped tool subset",
@@ -200,7 +210,26 @@ def _shipped_package_import(package_root: Path, package_name: str):
     """Import package symbols without mutating the digest-bound source tree."""
 
     with _shipped_import_transaction():
-        yield _ensure_shipped_package(package_root, package_name)
+        previous_modules = _package_modules(package_name)
+        previous_path = sys.path[:]
+        previous_roots = _SHIPPED_PACKAGE_ROOTS.copy()
+        try:
+            imported_root = _ensure_shipped_package(package_root, package_name)
+            yield imported_root
+            if not _package_modules_are_from_root(
+                _package_modules(package_name),
+                Path(imported_root).resolve(),
+                package_name,
+            ):
+                raise StepZeroEvidenceError(
+                    "provider_dependency_missing",
+                    f"{package_name} resolved outside the shipped tool subset",
+                )
+        except BaseException:
+            _restore_package_import_state(
+                package_name, previous_modules, previous_path, previous_roots
+            )
+            raise
 
 
 def _import_meshscope(meshscope_src: Path | None = None):

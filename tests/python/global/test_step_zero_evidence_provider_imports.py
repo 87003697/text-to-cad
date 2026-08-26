@@ -205,7 +205,7 @@ class StepZeroEvidenceImportTests(unittest.TestCase):
             (root / "meshscope").mkdir()
             (root / "meshscope/__init__.py").write_text("", encoding="utf-8")
             ambient = types.ModuleType("meshscope")
-            ambient.__file__ = "/ambient/provider/meshscope/__init__.py"
+            ambient.__file__ = str(root / "meshscope/__init__.py")
             sys.modules["meshscope"] = ambient
             with self.assertRaises(step_zero_evidence.StepZeroEvidenceError) as raised:
                 step_zero_evidence._ensure_shipped_package(root, "meshscope")
@@ -213,6 +213,42 @@ class StepZeroEvidenceImportTests(unittest.TestCase):
                 "provider_dependency_missing", raised.exception.classification
             )
             self.assertIs(ambient, sys.modules["meshscope"])
+
+    def test_submodule_import_failure_restores_previous_package_state(self) -> None:
+        """A failed root switch restores modules, path, and root registry exactly."""
+
+        from scripts.pilot.workspace_supervisor import _load_reference_type
+
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            meshscope_src_a = root / "meshscope-src-a"
+            meshscope_src_b = root / "meshscope-src-b"
+            for destination in (meshscope_src_a, meshscope_src_b):
+                shutil.copytree(
+                    step_zero_evidence._MESHSCOPE_SRC / "meshscope",
+                    destination / "meshscope",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.so"),
+                )
+            (meshscope_src_b / "meshscope/voxblame/__init__.py").write_text(
+                "raise RuntimeError('intentional diagnostic failure')\n",
+                encoding="utf-8",
+            )
+
+            _load_reference_type(meshscope_src_a)
+            before_modules = step_zero_evidence._package_modules("meshscope")
+            before_path = sys.path[:]
+            before_roots = step_zero_evidence._SHIPPED_PACKAGE_ROOTS.copy()
+            before_dont_write_bytecode = sys.dont_write_bytecode
+            with self.assertRaisesRegex(RuntimeError, "intentional diagnostic failure"):
+                step_zero_evidence._import_meshscope(meshscope_src_b)
+
+            self.assertEqual(
+                before_modules,
+                step_zero_evidence._package_modules("meshscope"),
+            )
+            self.assertEqual(before_path, sys.path)
+            self.assertEqual(before_roots, step_zero_evidence._SHIPPED_PACKAGE_ROOTS)
+            self.assertEqual(before_dont_write_bytecode, sys.dont_write_bytecode)
 
 
 if __name__ == "__main__":  # pragma: no cover
