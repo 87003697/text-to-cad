@@ -8,7 +8,7 @@ import importlib.util
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shutil
 import sqlite3
 import subprocess
@@ -46,6 +46,33 @@ PILOT_RUNNER_PATH = REPO_ROOT / "scripts/pilot/runner.py"
 PILOT_REVIEW_PATH = (
     REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-review/__main__.py"
 )
+
+
+class RunnerSandboxPathTests(unittest.TestCase):
+    """Sandbox paths retain their fixed POSIX spelling on every host."""
+
+    def test_runner_serialized_sandbox_paths_are_not_host_paths(self) -> None:
+        from scripts.pilot import runner
+
+        for value in (
+            runner.SANDBOX_REPO_ROOT,
+            runner.SANDBOX_HOME,
+            runner.SANDBOX_CODEX_HOME,
+            runner.SANDBOX_PUBLISH_TREE,
+            runner.SANDBOX_CAD_REBUILD_ENTRYPOINT,
+            runner.SANDBOX_GEOMETRY_ENTRYPOINT,
+        ):
+            self.assertIs(type(value), PurePosixPath)
+            self.assertNotIn("\\", str(value))
+
+        self.assertEqual(
+            "/workspace/repo/skills/cad/scripts/canonical-build/__main__.py",
+            str(runner.SANDBOX_CAD_REBUILD_ENTRYPOINT),
+        )
+        self.assertEqual(
+            "/workspace/repo/skills/mesh-compare/scripts/mesh-compare/__main__.py",
+            str(runner.SANDBOX_GEOMETRY_ENTRYPOINT),
+        )
 
 
 def _load_cli():

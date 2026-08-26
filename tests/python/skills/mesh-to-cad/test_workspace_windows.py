@@ -64,6 +64,37 @@ class WindowsAgentTreeCopyTests(unittest.TestCase):
             b"child", (target / "nested/deeper/child.txt").read_bytes()
         )
 
+    def test_windows_lstat_and_fstat_creation_time_fields_compare_stably(self) -> None:
+        """Windows lstat/fstat expose different meanings for st_ctime_ns."""
+
+        def metadata(*, ctime: int) -> SimpleNamespace:
+            return SimpleNamespace(
+                st_mode=stat.S_IFREG | 0o600,
+                st_size=1,
+                st_nlink=1,
+                st_dev=11,
+                st_ino=22,
+                st_mtime_ns=33,
+                st_ctime_ns=ctime,
+                st_birthtime_ns=44,
+                st_file_attributes=0,
+            )
+
+        expected = metadata(ctime=101)
+        opened = metadata(ctime=202)
+        current = metadata(ctime=101)
+        with (
+            mock.patch.object(self.workspace, "_agent_lstat", side_effect=(expected, current)),
+            mock.patch.object(self.workspace.os, "open", return_value=17),
+            mock.patch.object(self.workspace.os, "fstat", return_value=opened),
+        ):
+            descriptor, result = self.workspace._agent_open_windows_file(
+                self.root / "regular.txt"
+            )
+
+        self.assertEqual(17, descriptor)
+        self.assertIs(expected, result)
+
     def test_symlink_is_rejected_and_partial_target_is_removed(self) -> None:
         source = self.root / "source"
         source.mkdir()

@@ -466,7 +466,10 @@ def _reference_file_identity(metadata: os.stat_result) -> tuple[object, ...]:
             "st_mode",
             "st_size",
             "st_mtime_ns",
-            "st_ctime_ns",
+            # Python 3.12's Windows lstat() exposes creation time as
+            # st_ctime_ns, while fstat() exposes metadata-change time there.
+            # st_birthtime_ns is the creation-time field shared by both APIs.
+            "st_birthtime_ns",
             "st_file_attributes",
         )
     )
@@ -477,6 +480,23 @@ def _same_reference_file_identity(
     second: os.stat_result,
 ) -> bool:
     return _reference_file_identity(first) == _reference_file_identity(second)
+
+
+def _same_reference_file_snapshot(
+    first: os.stat_result,
+    second: os.stat_result,
+) -> bool:
+    """Compare two snapshots produced by the same stat API.
+
+    ``st_ctime_ns`` has different meanings for Windows ``lstat`` and
+    ``fstat``.  It remains useful for detecting a mutation when both
+    snapshots came from the same API, so keep that check at those call sites.
+    """
+
+    return _same_reference_file_identity(first, second) and (
+        getattr(first, "st_ctime_ns", None)
+        == getattr(second, "st_ctime_ns", None)
+    )
 
 
 def _reference_windows_platform() -> bool:
@@ -530,7 +550,7 @@ def _open_reference_descriptor(path: Path) -> tuple[int, os.stat_result]:
             current = os.lstat(os.fspath(path))
             if (
                 not _is_regular_reference_file(current)
-                or not _same_reference_file_identity(expected, current)
+                or not _same_reference_file_snapshot(expected, current)
                 or not _same_reference_file_identity(current, metadata)
             ):
                 _fail("invalid_reference_material")
@@ -573,7 +593,7 @@ def _load_ply(path: Path) -> trimesh.Trimesh:
         if (
             not _is_regular_reference_file(final_metadata)
             or final_metadata.st_size > MAX_REFERENCE_BYTES
-            or not _same_reference_file_identity(metadata, final_metadata)
+            or not _same_reference_file_snapshot(metadata, final_metadata)
         ):
             _fail("invalid_reference_material")
     except ReferenceCapabilityError:

@@ -21,7 +21,7 @@ import sys
 import time
 import zipfile
 from contextlib import closing, nullcontext
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import FrameType
 from typing import Callable, Mapping
 
@@ -167,10 +167,10 @@ FINAL_SESSION_STATUSES = {"complete", "error", "empty"}
 REQUIRED_TAP_VERSION = "0.1.140"
 TAP_TARGET = "http://v2.open.venus.oa.com/llmproxy/v1"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SANDBOX_REPO_ROOT = Path("/workspace/repo")
-SANDBOX_HOME = Path("/home/pilot")
+SANDBOX_REPO_ROOT = PurePosixPath("/workspace/repo")
+SANDBOX_HOME = PurePosixPath("/home/pilot")
 SANDBOX_CODEX_HOME = SANDBOX_HOME / ".codex"
-SANDBOX_PUBLISH_TREE = Path(plugin_deployment.SANDBOX_MARKETPLACE_SOURCE)
+SANDBOX_PUBLISH_TREE = PurePosixPath(plugin_deployment.SANDBOX_MARKETPLACE_SOURCE)
 JOB_CODEX_HOME_REL = "run/.codex-home"
 JOB_PUBLISH_TREE_REL = "run/.plugin-publish-tree"
 ARTIFACT_CONTRACT_STATUS = 4
@@ -933,7 +933,7 @@ def build_bwrap_argv(
     elif agent_surface_socket is not None:
         raise PilotError("Agent Surface requires candidate-only isolation")
     relative_exp = exp_dir.relative_to(repo_root)
-    sandbox_exp = SANDBOX_REPO_ROOT / relative_exp
+    sandbox_exp = SANDBOX_REPO_ROOT / PurePosixPath(*relative_exp.parts)
     gateway = repo_root / "gateway" / "codex-tap-gpt56"
     if not gateway.is_file():
         raise PilotError(f"gateway not found: {gateway}")
@@ -988,9 +988,9 @@ def build_bwrap_argv(
                 "browser runtime capability directory must be inside the experiment"
             ) from exc
         sandbox_browser_capability_dir = (
-            Path(SANDBOX_MOUNT_ROOT)
+            PurePosixPath(SANDBOX_MOUNT_ROOT)
             if isolated_agent
-            else sandbox_exp / browser_capability_relative
+            else sandbox_exp / PurePosixPath(*browser_capability_relative.parts)
         )
     argv = [
         bwrap,
@@ -1095,13 +1095,14 @@ def build_bwrap_argv(
         )
         for input_path in inputs:
             relative_input = input_path.relative_to(repo_root)
+            sandbox_relative_input = PurePosixPath(*relative_input.parts)
             argv.extend(
                 [
                     "--dir",
-                    str((SANDBOX_REPO_ROOT / relative_input).parent),
+                    str((SANDBOX_REPO_ROOT / sandbox_relative_input).parent),
                     "--ro-bind",
                     str(input_path),
-                    str(SANDBOX_REPO_ROOT / relative_input),
+                    str(SANDBOX_REPO_ROOT / sandbox_relative_input),
                 ]
             )
         for skill_dir in skill_dirs:

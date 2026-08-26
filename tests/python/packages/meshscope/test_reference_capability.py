@@ -7,6 +7,7 @@ from pathlib import Path
 import stat
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 import trimesh
@@ -326,6 +327,44 @@ class ReferenceCapabilityTests(unittest.TestCase):
                 self.request("summary", reference_id="windows-reference")
             )["observation"]["stats"]["vertices"],
         )
+
+    def test_windows_lstat_and_fstat_creation_time_fields_compare_stably(self) -> None:
+        """Windows lstat/fstat expose different meanings for st_ctime_ns."""
+
+        def metadata(*, ctime: int) -> SimpleNamespace:
+            return SimpleNamespace(
+                st_mode=stat.S_IFREG | 0o600,
+                st_size=1,
+                st_nlink=1,
+                st_dev=11,
+                st_ino=22,
+                st_mtime_ns=33,
+                st_ctime_ns=ctime,
+                st_birthtime_ns=44,
+                st_file_attributes=0,
+            )
+
+        expected = metadata(ctime=101)
+        opened = metadata(ctime=202)
+        current = metadata(ctime=101)
+        with (
+            mock.patch.object(
+                reference_module, "_reference_windows_platform", return_value=True
+            ),
+            mock.patch.object(
+                reference_module.os,
+                "lstat",
+                side_effect=(expected, current),
+            ),
+            mock.patch.object(reference_module.os, "open", return_value=17),
+            mock.patch.object(reference_module.os, "fstat", return_value=opened),
+        ):
+            descriptor, result = reference_module._open_reference_descriptor(
+                self.reference
+            )
+
+        self.assertEqual(17, descriptor)
+        self.assertIs(opened, result)
 
     def test_windows_platform_rejects_reparse_metadata_before_open(self) -> None:
         flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
