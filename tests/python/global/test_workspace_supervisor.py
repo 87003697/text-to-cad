@@ -3821,16 +3821,33 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 selection_handle = supervisor.register_selection(selection)
                 notes_handle = supervisor.register_notes(notes)
 
-                final = call(
-                    "select_and_finalize",
-                    {
-                        "workspace_handle": supervisor.workspace_handle,
-                        "step_handle": published_repair["step_handle"],
-                        "selection_handle": selection_handle,
-                        "notes_handle": notes_handle,
-                    },
+                final_preview_calls = 0
+
+                def counted_final_preview(*args, **kwargs):
+                    nonlocal final_preview_calls
+                    final_preview_calls += 1
+                    return case.write_provider_free_final_preview(*args, **kwargs)
+
+                finalize_from_claim = (
+                    supervisor.workspace_api.finalize_from_agent_selection_claim
                 )
+                workspace_core = finalize_from_claim.__globals__["_core"]
+                with mock.patch.object(
+                    workspace_core,
+                    "_run_final_preview",
+                    side_effect=counted_final_preview,
+                ):
+                    final = call(
+                        "select_and_finalize",
+                        {
+                            "workspace_handle": supervisor.workspace_handle,
+                            "step_handle": published_repair["step_handle"],
+                            "selection_handle": selection_handle,
+                            "notes_handle": notes_handle,
+                        },
+                    )
                 self.assertEqual("finalized", final["state"])
+                self.assertEqual(1, final_preview_calls)
             finally:
                 bridge.stop()
             # bridge.stop → surface.cancel → supervisor.cancel drained
