@@ -51,9 +51,11 @@ test("Python STEP artifact cleanup kills descendants that inherit output pipes",
     "",
   ].join("\n"));
 
-  const timeoutMs = process.platform === "win32" ? 30_000 : 8_000;
+  // The fixture imports build123d before writing its readiness marker. Keep
+  // the cleanup timeout finite, but allow a cold import on a loaded host.
+  const timeoutMs = 30_000;
   const started = Date.now();
-  const result = await ensurePythonStepTopologyArtifact({
+  const resultPromise = ensurePythonStepTopologyArtifact({
     repoRoot: tmp,
     stepPath,
     sourcePath: generatorPath,
@@ -61,6 +63,10 @@ test("Python STEP artifact cleanup kills descendants that inherit output pipes",
     writeStepAfterArtifact: true,
     timeoutMs,
   });
+  while (!fs.existsSync(pidPath) && Date.now() - started < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const result = await resultPromise;
   if (process.platform === "win32") {
     assert.equal(result.ok, true, result.error);
   } else {
