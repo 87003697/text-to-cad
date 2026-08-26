@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
-from contextlib import contextmanager
 from io import BytesIO
 import json
 import os
@@ -13,6 +12,8 @@ import shutil
 import sys
 from types import ModuleType
 import unittest
+
+from tests.python.support.import_state import isolated_package_import as _isolated_package_import
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -41,29 +42,6 @@ def _load_facade():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
-
-
-@contextmanager
-def _isolated_package_import(package_name: str):
-    """Load one provider package from the path selected by its importer.
-
-    The full skill suite imports editable ``meshscope`` for Agent Surface tests
-    before this file exercises the physically materialized shipped runtime. Keep
-    that ambient module state out of the provider call, then restore it so the
-    test remains a good citizen for later modules.
-    """
-    prefix = f"{package_name}."
-    saved_modules = sys.modules.copy()
-    saved_path = sys.path[:]
-    try:
-        for name in tuple(sys.modules):
-            if name == package_name or name.startswith(prefix):
-                sys.modules.pop(name, None)
-        yield
-    finally:
-        sys.modules.clear()
-        sys.modules.update(saved_modules)
-        sys.path[:] = saved_path
 
 
 def _assert_exact_import_state(test_case, expected_modules, expected_path) -> None:
