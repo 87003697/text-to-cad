@@ -54,9 +54,10 @@ pilots, `e2e` tests natural-language discovery through the verified job-private
 installed plugin authority. Agent Surface pilots are candidate-only and use
 the verified Agent Source Projection with a minimal `CODEX_HOME`; their
 `e2e` marker records the requested mode, not installed-plugin discovery.
-`run/plugin-mode.txt` and job status record the request; an installed-plugin
-smoke or a matching authority receipt plus rollout is required to prove which
-installed skill actually ran.
+`run/plugin-mode.txt` and job status record the request. The installed-plugin
+smoke proves only the finalized shipped/installable plugin surface and
+runtime/manifest parity; proving a successful installed-skill invocation or
+discovery requires both a matching authority receipt and rollout evidence.
 
 Toys4K pilots enable the `view_image` treatment by default. Setup/initial
 modeling, Repair Hypothesis parent-child comparison, and final selection must

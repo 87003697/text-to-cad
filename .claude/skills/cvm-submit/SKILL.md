@@ -20,9 +20,11 @@ runner uses the verified job-private plugin authority and `CODEX_HOME`.
 Agent Surface pilots are intentionally candidate-only: they use a minimal
 `CODEX_HOME` and the verified Agent Source Projection, so their `e2e` marker
 records the requested mode but does not prove installed-plugin skill
-discovery. Installed-plugin claims require the installed-plugin smoke or an
-e2e run with its authority receipt and rollout; normal benchmark batches
-remain `direct`.
+discovery. The installed-plugin smoke proves only the finalized
+shipped/installable plugin surface and runtime/manifest parity; a successful
+installed-skill invocation or discovery claim requires both a matching
+authority receipt and rollout evidence. Normal benchmark batches remain
+`direct`.
 
 The model defaults to the public `gpt-5.5` Responses API slug. Selection
 precedence is explicit `--model`, then the `MODEL` environment variable, then
