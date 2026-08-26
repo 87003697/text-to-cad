@@ -95,6 +95,39 @@ class WindowsAgentTreeCopyTests(unittest.TestCase):
         self.assertEqual(17, descriptor)
         self.assertIs(expected, result)
 
+    def test_windows_target_is_opened_in_binary_mode(self) -> None:
+        """The Windows CRT must not expand LF bytes while copying."""
+
+        source = self.root / "source.txt"
+        source.write_bytes(b"line one\nline two\n")
+        target = self.root / "target.txt"
+        source_fd = self.workspace.os.open(source, self.workspace.os.O_RDONLY)
+        binary_flag = 0x8000
+        opened_flags: list[int] = []
+        original_open = self.workspace.os.open
+
+        def capture_target_open(path, flags, *args, **kwargs):
+            if Path(path) == target:
+                opened_flags.append(flags)
+                flags &= ~binary_flag
+            return original_open(path, flags, *args, **kwargs)
+
+        try:
+            with mock.patch.object(
+                self.workspace.os, "O_BINARY", binary_flag, create=True
+            ), mock.patch.object(
+                self.workspace.os, "open", side_effect=capture_target_open
+            ):
+                copied = self.workspace._copy_agent_file_from_descriptor(
+                    source_fd, target
+                )
+        finally:
+            self.workspace.os.close(source_fd)
+
+        self.assertEqual(len(b"line one\nline two\n"), copied)
+        self.assertEqual([binary_flag], [flags & binary_flag for flags in opened_flags])
+        self.assertEqual(b"line one\nline two\n", target.read_bytes())
+
     def test_symlink_is_rejected_and_partial_target_is_removed(self) -> None:
         source = self.root / "source"
         source.mkdir()

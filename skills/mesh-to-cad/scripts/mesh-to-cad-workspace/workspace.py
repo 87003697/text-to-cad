@@ -2335,6 +2335,7 @@ def _copy_agent_file_from_descriptor(
             os.O_WRONLY
             | os.O_CREAT
             | os.O_EXCL
+            | getattr(os, "O_BINARY", 0)
             | getattr(os, "O_NOFOLLOW", 0),
             0o600,
         )
