@@ -18,6 +18,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import zipfile
 from contextlib import closing, nullcontext
@@ -1975,6 +1976,7 @@ def run_pilot(
     candidate_runtime_lease: CandidateRuntimeLease | None = None
     lifetime_confirmed = True
     agent_socket: Path | None = None
+    agent_socket_dir: Path | None = None
     with SignalRelay() as relay:
         try:
             trusted_tools_root: Path | None = None
@@ -2045,9 +2047,15 @@ def run_pilot(
                     agent_supervisor.candidate_root,
                     agent_supervisor.agent_bootstrap_contract(),
                 )
-                agent_socket = exp_dir.parent / (
-                    f".agent-surface-{exp_dir.name}-{os.getpid()}-{secrets.token_hex(6)}.sock"
-                )
+                try:
+                    agent_socket_dir = Path(
+                        tempfile.mkdtemp(prefix="ttc-a-", dir="/tmp")
+                    )
+                except OSError as exc:
+                    raise PilotError(
+                        "cannot prepare Agent Surface socket directory"
+                    ) from exc
+                agent_socket = agent_socket_dir / "surface.sock"
             if relay.cancelled:
                 workload_status = 128 + (relay.signum or signal.SIGTERM)
             else:
@@ -2107,6 +2115,17 @@ def run_pilot(
                 except (OSError, RuntimeError) as exc:
                     print(
                         f"pilot-runner: Agent Surface cleanup failed: {exc}",
+                        file=sys.stderr,
+                    )
+                    lifetime_confirmed = False
+                    if not relay.cancelled:
+                        workload_status = workload_status or 1
+            if agent_socket_dir is not None:
+                try:
+                    agent_socket_dir.rmdir()
+                except OSError as exc:
+                    print(
+                        f"pilot-runner: Agent Surface socket cleanup failed: {exc}",
                         file=sys.stderr,
                     )
                     lifetime_confirmed = False

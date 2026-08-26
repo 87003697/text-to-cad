@@ -8,6 +8,7 @@ import re
 import signal
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -793,6 +794,105 @@ class RunnerTests(unittest.TestCase):
             self.supervisor.REPO_ROOT,
             supervisor.call_args.kwargs["trusted_tools_root"],
         )
+
+    def test_agent_surface_socket_path_is_short_and_private_for_production_exp(
+        self,
+    ) -> None:
+        """The host socket must fit AF_UNIX and live in a private directory."""
+
+        root = Path(self.temp.name) / "runtime"
+        exp_dir = (
+            root
+            / "outputs/20260826-212129-workspace-smoke-paid/"
+            "20260826-132205-airplane_airplane_016"
+        )
+        exp_dir.parent.mkdir(parents=True)
+        input_path = root / "reference.ply"
+        input_path.parent.mkdir(parents=True, exist_ok=True)
+        input_path.write_bytes(b"ply\n")
+        authority = root / "authority"
+        authority.mkdir(parents=True)
+        home = root / "home"
+        home.mkdir()
+
+        observed: dict[str, object] = {}
+
+        class RecordingBridge:
+            def __init__(self, _surface, socket_path: Path) -> None:
+                observed["socket_path"] = socket_path
+
+            def start(self) -> None:
+                socket_path = observed["socket_path"]
+                assert isinstance(socket_path, Path)
+                observed["parent_mode"] = stat.S_IMODE(
+                    socket_path.parent.stat().st_mode
+                )
+
+            def stop(self) -> None:
+                return None
+
+        class FakeRuntime(FakeBrowserRuntimeJob):
+            @classmethod
+            def create(cls, *args, **kwargs):
+                return cls(capability_dir=root / "capabilities")
+
+        agent_supervisor = mock.MagicMock()
+        agent_supervisor.candidate_root = root / "candidate"
+        agent_supervisor.agent_bootstrap_contract.return_value = {}
+        agent_supervisor.agent_surface.return_value = object()
+        agent_supervisor.cancellation_confirmed = True
+        lease = SimpleNamespace(runtime=root / "candidate-runtime", release=mock.Mock())
+
+        with (
+            mock.patch.object(self.supervisor, "REPO_ROOT", root),
+            mock.patch.object(self.supervisor, "prepare_exp"),
+            mock.patch.object(
+                self.supervisor,
+                "resolve_deployed_authority",
+                return_value=SimpleNamespace(publish_tree=authority),
+            ),
+            mock.patch.object(self.supervisor, "prepare_and_initialize_workspace"),
+            mock.patch.object(self.supervisor, "BrowserRuntimeJob", FakeRuntime),
+            mock.patch.object(
+                self.supervisor,
+                "publish_tool_registry",
+                return_value=root / "registry.json",
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "materialize_candidate_runtime",
+                return_value=lease,
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "WorkspaceSupervisor",
+                return_value=agent_supervisor,
+            ),
+            mock.patch.object(self.supervisor, "write_agent_bootstrap"),
+            mock.patch.object(self.supervisor, "AgentSurfaceBridge", RecordingBridge),
+            mock.patch.object(self.supervisor, "run_supervised", return_value=1),
+            mock.patch.object(
+                self.supervisor,
+                "finalize_pilot",
+                side_effect=lambda exp, status, env, **kwargs: status,
+            ),
+        ):
+            status = self.supervisor.run_pilot(
+                exp_dir,
+                [input_path],
+                ["/fake/workload"],
+                {"HOME": os.fspath(home)},
+                agent_surface=True,
+            )
+
+        self.assertEqual(status, 1)
+        socket_path = observed["socket_path"]
+        self.assertIsInstance(socket_path, Path)
+        assert isinstance(socket_path, Path)
+        self.assertLess(len(os.fspath(socket_path)), 104)
+        self.assertEqual(observed["parent_mode"], 0o700)
+        self.assertFalse(socket_path.parent == exp_dir.parent)
+        self.assertFalse(socket_path.parent.exists())
 
     def test_agent_surface_preparation_uses_deployed_authority_not_stale_overlay(
         self,
