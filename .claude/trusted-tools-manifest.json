@@ -407,8 +407,8 @@
     },
     {
       "path": "packages/meshscope/src/meshscope/reference_capability.py",
-      "sha256": "40170babc7299934dcd83e1ae4dca5e54e80dfb66cb793409628fb49db1acc95",
-      "size": 23847
+      "sha256": "70d2ab9c23c299c5a2667192e582a84ca2e608a80a256793f0ec87d23bd84406",
+      "size": 23495
     },
     {
       "path": "packages/meshscope/src/meshscope/viewer_glb.py",

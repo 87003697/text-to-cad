@@ -24,8 +24,6 @@ from meshscope.reference_capability import (  # noqa: E402
     DEFAULT_COMPONENT_LIMIT,
     MAX_COMPONENT_LIMIT,
     MAX_REFERENCE_BYTES,
-    MAX_REFERENCE_FACES,
-    MAX_REFERENCE_VERTICES,
     MAX_RESPONSE_BYTES,
     PLY_HEADER_MAX_BYTES,
     PLY_HEADER_MAX_LINE_BYTES,
@@ -156,7 +154,7 @@ class ReferenceCapabilityTests(unittest.TestCase):
                 "property float x\n"
                 "property float y\n"
                 "property float z\n"
-                f"element face {MAX_REFERENCE_FACES + 1}\n"
+                f"element face {MAX_REFERENCE_BYTES}\n"
                 "property list uchar int vertex_indices\n"
                 "end_header\n"
             ).encode("ascii")
@@ -369,11 +367,11 @@ class ReferenceCapabilityTests(unittest.TestCase):
             for name, data in (
                 (
                     f"{format_name.split()[0]}-too-many-vertices",
-                    header(format_name, str(MAX_REFERENCE_VERTICES + 1), "1"),
+                    header(format_name, str(MAX_REFERENCE_BYTES), "1"),
                 ),
                 (
                     f"{format_name.split()[0]}-too-many-faces",
-                    header(format_name, "3", str(MAX_REFERENCE_FACES + 1)),
+                    header(format_name, "3", str(MAX_REFERENCE_BYTES)),
                 ),
             ):
                 path = self.root / f"{name}.ply"
