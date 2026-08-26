@@ -109,7 +109,12 @@ class WindowsAgentTreeCopyTests(unittest.TestCase):
         def capture_target_open(path, flags, *args, **kwargs):
             if Path(path) == target:
                 opened_flags.append(flags)
-                flags &= ~binary_flag
+                # The POSIX test host does not know the Windows CRT flag, so
+                # strip only the fabricated bit that would otherwise make
+                # the local open fail.  A real Windows run must keep
+                # O_BINARY on the fd so the test exercises the CRT contract.
+                if self.workspace.os.name != "nt":
+                    flags &= ~binary_flag
             return original_open(path, flags, *args, **kwargs)
 
         try:
