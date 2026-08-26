@@ -1825,10 +1825,10 @@ class WorkspaceSupervisor:
             workspace_handle, attempt_handle, candidate_handle, kind="step_zero"
         )
         published = self._publish_submission(submission)
+        self._retire_attempt(submission.attempt_id)
         step_number = int(published["step"])
         step_handle = self.registry.issue("step", step_number)
         decision_facts = self._read_decision_facts(step_number)
-        self._retire_attempt(submission.attempt_id)
         return {
             "state": "published",
             "step_handle": step_handle,
@@ -1846,11 +1846,11 @@ class WorkspaceSupervisor:
             workspace_handle, attempt_handle, candidate_handle, kind="repair"
         )
         published = self._publish_submission(submission)
+        self._retire_attempt(submission.attempt_id)
         step_number = int(published["step"])
         step_handle = self.registry.issue("step", step_number)
         cycle_handle = self.registry.issue("cycle", int(published["cycle"]))
         decision_facts = self._read_decision_facts(step_number)
-        self._retire_attempt(submission.attempt_id)
         return {
             "state": "published",
             "step_handle": step_handle,

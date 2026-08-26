@@ -2757,6 +2757,12 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         self.assertEqual(
             "decision_facts_unavailable", raised.exception.classification
         )
+        status = self.sup.workspace_status(self.sup.workspace_handle)
+        self.assertEqual("ready", status["state"])
+        self.assertIn("start_attempt", status["permitted_next_intents"])
+        self.assertNotIn("run_candidate_tool", status["permitted_next_intents"])
+        self.assertNotIn("submit_step_zero", status["permitted_next_intents"])
+        self.assertEqual({}, self.sup._attempts)
 
     def test_submit_intents_reject_stale_or_cross_attempt_handles(self) -> None:
         # start_attempt refuses a concurrent second Attempt: the current
