@@ -373,6 +373,32 @@ class UrdfSourceTests(unittest.TestCase):
             read_urdf_source(source_path)
         self.assertFalse(any("more than 10x off" in str(warning.message) for warning in caught))
 
+    def test_read_urdf_source_rotates_box_inertia_into_inertial_frame(self) -> None:
+        # A 10x1x1 m box has its large moment on Y in the link frame. A 90-degree
+        # inertial-frame rotation about Z swaps the declared Ixx/Iyy values.
+        source_path = self._write_urdf(
+            "robot",
+            """
+            <robot name="sample-robot">
+              <link name="base_link">
+                <inertial>
+                  <origin xyz="0 0 0" rpy="0 0 1.5707963267948966" />
+                  <mass value="1" />
+                  <inertia ixx="8.4166667" ixy="0" ixz="0" iyy="0.1666667" iyz="0" izz="8.4166667" />
+                </inertial>
+                <visual>
+                  <geometry><box size="10 1 1" /></geometry>
+                </visual>
+              </link>
+            </robot>
+            """,
+        )
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", UrdfSourceWarning)
+            read_urdf_source(source_path)
+        self.assertFalse(any("more than 10x off" in str(warning.message) for warning in caught))
+
     def test_read_urdf_source_skips_magnitude_check_for_mesh_geometry(self) -> None:
         # No independent size is available for a mesh without loading the
         # file, so the magnitude check should not fire here even though this

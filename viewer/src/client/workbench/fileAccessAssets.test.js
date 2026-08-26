@@ -127,9 +127,9 @@ test("file access open URLs target the local reveal endpoint", () => {
 });
 
 test("file access URLs carry the active directory the server contains files against", () => {
-  // The server rejects file routes without ?dir= (missing containment root), so the
-  // builders must append the page's directory. URL building without a window leaves
-  // the dir off (the headless/review flows never hit these routes).
+  // Non-root pages contribute the directory that the server uses as the
+  // containment root. URL building without a window leaves the dir off (the
+  // headless/review flows never hit these routes).
   const originalWindow = globalThis.window;
   globalThis.window = { location: { href: "http://127.0.0.1:4179/Users/me/models" } };
   try {
@@ -140,6 +140,23 @@ test("file access URLs carry the active directory the server contains files agai
     assert.equal(
       openUrlForFileAsset("assemblies/robot arm.step", "source"),
       "/__cad/reveal?file=assemblies%2Frobot%20arm.step&asset=source&dir=%2FUsers%2Fme%2Fmodels"
+    );
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});
+
+test("file access URLs omit dir at the bare origin for the server cwd root", () => {
+  const originalWindow = globalThis.window;
+  globalThis.window = { location: { href: "http://127.0.0.1:4179/" } };
+  try {
+    assert.equal(
+      downloadUrlForFileAsset("part.step", "output"),
+      "/__cad/download?file=part.step&asset=output"
+    );
+    assert.equal(
+      openUrlForFileAsset("part.step", "output"),
+      "/__cad/reveal?file=part.step&asset=output"
     );
   } finally {
     globalThis.window = originalWindow;

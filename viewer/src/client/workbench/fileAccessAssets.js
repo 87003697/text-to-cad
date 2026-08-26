@@ -173,8 +173,9 @@ export function fileAccessAssetsForEntry(entry, {
 
 export function downloadUrlForFileAsset(fileRef, asset = "output", baseUrl = "") {
   let path = `/__cad/download?file=${encodeURIComponent(fileRef)}&asset=${encodeURIComponent(asset || "output")}`;
-  // The server requires the active directory to contain the file; without it the
-  // request is rejected outright (400).
+  // A non-root page contributes its URL directory. The bare origin deliberately
+  // contributes nothing; the server binds that spelling to its startup cwd and
+  // still applies the same containment gate.
   const activeDir = readActiveCadDir();
   if (activeDir) {
     path += `&dir=${encodeURIComponent(activeDir)}`;
@@ -191,6 +192,9 @@ export function downloadUrlForFileAsset(fileRef, asset = "output", baseUrl = "")
 
 export function openUrlForFileAsset(fileRef, asset = "output", baseUrl = "") {
   let path = `/__cad/reveal?file=${encodeURIComponent(fileRef)}&asset=${encodeURIComponent(asset || "output")}`;
+  // Keep the bare-origin spelling dir-less so it resolves against the server's
+  // startup cwd; explicit directories remain part of the URL and containment
+  // is enforced by the backend for both cases.
   const activeDir = readActiveCadDir();
   if (activeDir) {
     path += `&dir=${encodeURIComponent(activeDir)}`;

@@ -14,9 +14,10 @@ origin names no directory, which the backend reads as the process cwd. The only
 paths that are NOT a directory are the bundle's /assets/* and the /__cad/* API.
 
 File routes (/__cad/asset, /__cad/download, /__cad/reveal and the legacy asset
-route) REQUIRE ?dir=: it is the containment root the backend verifies every file
-against, and a request that names no directory gets 400 rather than a file. Any
-other /__cad/* path answers 404 JSON instead of falling through to the SPA.
+route) use ?dir= as their containment root. When ?dir= is omitted (the bare
+origin), the server's startup working directory is the root; the same
+containment gate still runs, so an absolute file outside that cwd is forbidden.
+Any other /__cad/* path answers 404 JSON instead of falling through to the SPA.
 
 Security / trust model: binds to loopback (127.0.0.1) and serves UNAUTHENTICATED.
 Any local process can read files under --dir (GET /__cad/asset), trigger STEP
@@ -77,10 +78,24 @@ def _sibling_file_ref(source_file_ref: str, relative_file_ref: str) -> str:
 
 class _Ctx:
     backend = None
-    directory_root = ""
+    directory_root = os.getcwd()
     dist_root = ""
     port = server_info_mod.DEFAULT_VIEWER_PORT
     host = server_info_mod.DEFAULT_VIEWER_HOST
+
+
+def _request_directory(query: dict[str, str]) -> str:
+    """Return the immutable root for one request, defaulting to server-start cwd.
+
+    A bare Viewer origin deliberately has no URL directory. Resolving that
+    spelling here gives file routes the same cwd semantics as catalog routes,
+    while keeping every asset request inside the normal backend containment
+    check. ``directory_root`` is set once by ``main`` and is never controlled by
+    the request itself.
+    """
+
+    requested = str(query.get("dir", "") or "").strip()
+    return requested or str(_Ctx.directory_root)
 
 
 def _server_info(root_dir: str = "") -> dict:
@@ -135,12 +150,13 @@ class Handler(BaseHTTPRequestHandler):
         path, q = self._query()
         try:
             if path == "/__cad/server":
-                self._send_json(200, _server_info(q.get("dir", "")))
+                self._send_json(200, _server_info(_request_directory(q)))
             elif path == "/__cad/catalog":
-                catalog = _Ctx.backend.read_catalog(root_dir=q.get("dir", ""), file_ref=q.get("file", ""))
+                root_dir = _request_directory(q)
+                catalog = _Ctx.backend.read_catalog(root_dir=root_dir, file_ref=q.get("file", ""))
                 self._send_json(200, catalog)
             elif path == "/__cad/artifact":
-                root_dir = q.get("dir", "")
+                root_dir = _request_directory(q)
                 catalog = _Ctx.backend.read_catalog(root_dir=root_dir, file_ref=q.get("file", ""))
                 resolved = _Ctx.backend.resolve_root(root_dir)
                 self._send_json(200, _Ctx.backend.artifact_status(q.get("file", ""), resolved, catalog))
@@ -243,10 +259,7 @@ class Handler(BaseHTTPRequestHandler):
         file_ref = _sibling_file_ref(self._request_referer_file_ref(), relative_path)
         if not file_ref:
             return False
-        root_dir = q.get("dir", "")
-        if not str(root_dir or "").strip():
-            self._send_json(400, {"error": "Missing directory"})
-            return True
+        root_dir = _request_directory(q)
         try:
             candidate = _Ctx.backend.asset_path_for_file_ref(file_ref, root_dir=root_dir)
         except backend_mod.ForbiddenAssetError:
@@ -326,14 +339,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         file_ref = q.get("file", "")
-        root_dir = q.get("dir", "")
-        if not str(root_dir or "").strip():
-            # The directory names the containment root for `file`. Without it the
-            # backend would have no root to verify a request against; the client
-            # always sends ?dir= (readActiveCadDir), so this only ever fires for
-            # hand-built or third-party requests.
-            self._send_json(400, {"error": "Missing directory"})
-            return
+        root_dir = _request_directory(q)
         resolved = _Ctx.backend.resolve_root(root_dir)
         candidate = _Ctx.backend.asset_path_for_file_ref(file_ref, resolved_root=resolved, root_dir=root_dir)
         if not candidate or not os.path.isfile(candidate):
@@ -348,10 +354,7 @@ class Handler(BaseHTTPRequestHandler):
         # file manager. Resolution goes through the SAME containment gate as every other
         # file route, so reveal cannot be pointed at an arbitrary path.
         file_ref = q.get("file", "")
-        root_dir = q.get("dir", "")
-        if not str(root_dir or "").strip():
-            self._send_json(400, {"error": "Missing directory"})
-            return
+        root_dir = _request_directory(q)
         resolved = _Ctx.backend.resolve_root(root_dir)
         candidate = _Ctx.backend.asset_path_for_file_ref(file_ref, resolved_root=resolved, root_dir=root_dir)
         if not candidate or not os.path.exists(candidate):
@@ -363,7 +366,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(200, {"ok": True})
 
     def _artifact_build(self, q):
-        root_dir = q.get("dir", "")
+        root_dir = _request_directory(q)
         catalog = _Ctx.backend.read_catalog(root_dir=root_dir, file_ref=q.get("file", ""))
         resolved = _Ctx.backend.resolve_root(root_dir)
         result = _Ctx.backend.resolve_artifact(q.get("file", ""), q.get("force", "") == "1", resolved, catalog)
@@ -373,7 +376,7 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(status, {**result, "catalog": next_catalog})
 
     def _export(self, q):
-        root_dir = q.get("dir", "")
+        root_dir = _request_directory(q)
         catalog = _Ctx.backend.read_catalog(root_dir=root_dir, file_ref=q.get("file", ""))
         resolved = _Ctx.backend.resolve_root(root_dir)
         result = _Ctx.backend.generate_export(q.get("file", ""), q.get("format", "step") or "step", resolved, catalog)

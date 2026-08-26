@@ -3,8 +3,9 @@
 The L2 finding these pin down: file routes accepted requests with NO ?dir= and then let
 the backend skip its containment check entirely, so any local process could read arbitrary
 CAD files with `?file=<absolute path>`; and unknown /__cad/* GETs fell through to the SPA
-index.html as if they were directories. Now a file route without a directory is 400, the
-containment gate always runs, and unrecognized /__cad/* paths answer 404 JSON.
+index.html as if they were directories. Now a file route without a directory uses the
+server startup cwd as its containment root, the containment gate always runs, and
+unrecognized /__cad/* paths answer 404 JSON.
 """
 
 import contextlib
@@ -73,11 +74,11 @@ class ServerRouteSecurityTest(unittest.TestCase):
             query.append(f"dir={os.path.abspath(dir_ref)}")
         return "/__cad/asset?" + "&".join(query)
 
-    def test_asset_without_directory_is_400_not_a_file(self):
+    def test_asset_without_directory_uses_cwd_containment(self):
         status, headers, body = _request("GET", self.port, self._assets_url(self.inside))
-        self.assertEqual(status, 400)
+        self.assertEqual(status, 403)
         self.assertTrue(headers.get("content-type", "").startswith("application/json"))
-        self.assertEqual(json.loads(body)["error"], "Missing directory")
+        self.assertEqual(json.loads(body)["error"], "Forbidden")
 
     def test_asset_outside_the_directory_is_forbidden(self):
         status, _, body = _request("GET", self.port, self._assets_url(self.outside, self.root))
@@ -143,17 +144,17 @@ class ServerRouteSecurityTest(unittest.TestCase):
                 if method == "GET":  # HEAD carries headers only, by design
                     self.assertEqual(json.loads(body)["error"], "Not found")
 
-    def test_legacy_cad_asset_without_directory_is_400(self):
+    def test_legacy_cad_asset_without_directory_uses_cwd_containment(self):
         status, _, body = _request(
             "GET", self.port, "/__cad/mesh.stl", {"Referer": f"http://127.0.0.1:{self.port}/x?file=/a/b.step"}
         )
-        self.assertEqual(status, 400)
-        self.assertEqual(json.loads(body)["error"], "Missing directory")
+        self.assertEqual(status, 403)
+        self.assertEqual(body, b"Forbidden")
 
-    def test_reveal_requires_directory_and_respects_containment(self):
+    def test_reveal_without_directory_uses_cwd_containment(self):
         status, _, body = _request("POST", self.port, "/__cad/reveal?file=%2Ftmp%2Fwhatever.step")
-        self.assertEqual(status, 400)
-        self.assertEqual(json.loads(body)["error"], "Missing directory")
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(body)["error"], "Forbidden")
 
         with mock.patch.object(server_mod, "reveal_command_for_path", return_value=None) as reveal, \
                 mock.patch.object(server_mod.subprocess, "run") as run:
@@ -164,6 +165,50 @@ class ServerRouteSecurityTest(unittest.TestCase):
             self.assertEqual(json.loads(body)["error"], "Forbidden")
             reveal.assert_not_called()
             run.assert_not_called()
+
+    def test_bare_origin_download_uses_startup_cwd_and_forbids_outside_file(self):
+        with tempfile.TemporaryDirectory(dir=os.getcwd(), prefix="viewer-cwd-") as startup_cwd:
+            inside = pathlib.Path(startup_cwd) / "part.step"
+            inside.write_text("cwd part", encoding="utf-8")
+            with mock.patch.object(server_mod._Ctx, "directory_root", startup_cwd):
+                status, _, body = _request(
+                    "GET", self.port, self._assets_url(inside).replace("/__cad/asset", "/__cad/download")
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(body, b"cwd part")
+
+                status, _, body = _request(
+                    "GET", self.port, self._assets_url(self.outside).replace("/__cad/asset", "/__cad/download")
+                )
+                self.assertEqual(status, 403)
+                self.assertEqual(json.loads(body)["error"], "Forbidden")
+
+    def test_bare_origin_reveal_uses_startup_cwd_and_forbids_outside_file(self):
+        with tempfile.TemporaryDirectory(dir=os.getcwd(), prefix="viewer-cwd-") as startup_cwd:
+            inside = pathlib.Path(startup_cwd) / "part.step"
+            inside.write_text("cwd part", encoding="utf-8")
+            with (
+                mock.patch.object(server_mod._Ctx, "directory_root", startup_cwd),
+                mock.patch.object(server_mod, "reveal_command_for_path", return_value=["echo", "reveal"]) as reveal,
+                mock.patch.object(server_mod.subprocess, "run") as run,
+            ):
+                status, _, body = _request(
+                    "POST", self.port, self._assets_url(inside).replace("/__cad/asset", "/__cad/reveal")
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body)["ok"], True)
+                reveal.assert_called_once_with(os.path.abspath(inside))
+                run.assert_called_once_with(["echo", "reveal"], check=False)
+
+                reveal.reset_mock()
+                run.reset_mock()
+                status, _, body = _request(
+                    "POST", self.port, self._assets_url(self.outside).replace("/__cad/asset", "/__cad/reveal")
+                )
+                self.assertEqual(status, 403)
+                self.assertEqual(json.loads(body)["error"], "Forbidden")
+                reveal.assert_not_called()
+                run.assert_not_called()
 
     def test_reveal_reveals_the_entry_file_in_the_file_manager(self):
         with mock.patch.object(server_mod, "reveal_command_for_path", return_value=["echo", "reveal"]) as reveal, \

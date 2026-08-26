@@ -29,8 +29,6 @@ _CADGEN_CONSTANTS = (
     "CADGEN_MODELS_DIRNAME",
     "DRAWING_DESCRIPTOR_NAME",
     "DRAWING_PACKAGE_KIND",
-    "IMPLICIT_DESCRIPTOR_NAME",
-    "IMPLICIT_PACKAGE_KIND",
 )
 
 
@@ -40,17 +38,11 @@ def _cadgen_constant_values():
         DRAWING_DESCRIPTOR_NAME,
         DRAWING_PACKAGE_KIND,
     )
-    from cadgen._internal.implicit_package import (  # noqa: PLC0415
-        IMPLICIT_DESCRIPTOR_NAME,
-        IMPLICIT_PACKAGE_KIND,
-    )
     return {
         "CADGEN_DIRNAME": CADGEN_DIRNAME,
         "CADGEN_MODELS_DIRNAME": CADGEN_MODELS_DIRNAME,
         "DRAWING_DESCRIPTOR_NAME": DRAWING_DESCRIPTOR_NAME,
         "DRAWING_PACKAGE_KIND": DRAWING_PACKAGE_KIND,
-        "IMPLICIT_DESCRIPTOR_NAME": IMPLICIT_DESCRIPTOR_NAME,
-        "IMPLICIT_PACKAGE_KIND": IMPLICIT_PACKAGE_KIND,
     }
 
 
@@ -62,7 +54,9 @@ class ScannerStandaloneTests(unittest.TestCase):
     def test_scanner_imports_without_cadgen_and_drifts_with_it(self):
         try:
             expected = _cadgen_constant_values()
-        except ImportError:
+        except ModuleNotFoundError as error:
+            if error.name != "cadgen":
+                raise
             self.skipTest("cadgen is not importable here")
         saved = sys.modules.pop("cadgen", None)
         try:

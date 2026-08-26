@@ -450,7 +450,16 @@ def _validate_link_inertials(
             return mass
         values[key] = parsed
     _validate_inertia_tensor(link_name, values, result, display, path=f"{inertial_path}/inertia")
-    _validate_inertia_magnitude(link_element, link_name, mass, values, result, display, path=f"{inertial_path}/inertia")
+    _validate_inertia_magnitude(
+        link_element,
+        link_name,
+        mass,
+        values,
+        result,
+        display,
+        path=f"{inertial_path}/inertia",
+        inertial_element=inertial_element,
+    )
     return mass
 
 
@@ -498,6 +507,7 @@ def _validate_inertia_tensor(
 
 
 _MAGNITUDE_CHECK_FACTOR = 10.0
+_INERTIAL_AXIS_ALIGNMENT_TOLERANCE = 1e-6
 
 
 def _link_primitive_geometry(link_element: ET.Element) -> tuple[str, ET.Element] | None:
@@ -558,6 +568,58 @@ def _primitive_inertia_diagonal(tag: str, geometry_element: ET.Element, mass: fl
     return None
 
 
+def _inertial_origin_rpy(inertial_element: ET.Element) -> tuple[float, float, float] | None:
+    """Return a valid inertial-frame rotation, or None when the origin is malformed."""
+    origin_element = inertial_element.find("origin")
+    if origin_element is None or "rpy" not in origin_element.attrib:
+        return (0.0, 0.0, 0.0)
+    parts = origin_element.attrib["rpy"].split()
+    if len(parts) != 3:
+        return None
+    try:
+        values = tuple(float(part) for part in parts)
+    except ValueError:
+        return None
+    return values if all(isfinite(value) for value in values) else None
+
+
+def _rotate_inertia_diagonal_to_inertial_frame(
+    expected: tuple[float, float, float],
+    rpy: tuple[float, float, float],
+) -> tuple[float, float, float] | None:
+    """Rotate link-frame primitive moments into an aligned inertial frame.
+
+    ``origin rpy`` maps inertial-frame axes into the link frame, so the
+    declared tensor is ``R.T @ diag(expected) @ R``. The magnitude gate only
+    compares diagonal entries; for a general rotation, off-diagonal terms are
+    meaningful and the diagonal-only check would be misleading. Return None
+    for those cases, while handling signed axis permutations such as a 90°
+    CAD export rotation exactly.
+    """
+    roll, pitch, yaw = rpy
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    rotation = (
+        (cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr),
+        (sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr),
+        (-sp, cp * sr, cp * cr),
+    )
+    tolerance = _INERTIAL_AXIS_ALIGNMENT_TOLERANCE
+    for row in rotation:
+        if sum(abs(abs(value) - 1.0) <= tolerance for value in row) != 1:
+            return None
+        if any(abs(value) > tolerance and abs(abs(value) - 1.0) > tolerance for value in row):
+            return None
+    for column in range(3):
+        if sum(abs(abs(rotation[row][column]) - 1.0) <= tolerance for row in range(3)) != 1:
+            return None
+    return tuple(
+        sum(expected[row] * rotation[row][column] ** 2 for row in range(3))
+        for column in range(3)
+    )
+
+
 def _validate_inertia_magnitude(
     link_element: ET.Element,
     link_name: str,
@@ -567,6 +629,7 @@ def _validate_inertia_magnitude(
     display: str,
     *,
     path: str,
+    inertial_element: ET.Element,
 ) -> None:
     """references/inertials.md documents this as "Sanity Gate" 3 ("Magnitude
     plausibility... within roughly an order of magnitude of m*d^2/10... A 0.5
@@ -574,9 +637,12 @@ def _validate_inertia_magnitude(
     enforced it -- that exact example passed validation with zero findings.
     When collision/visual geometry is a primitive with known dimensions, the
     same order-of-magnitude comparison the doc already describes by hand is
-    checkable automatically; mesh-backed links still rely on the manual gate
-    plus a helper script, exactly as documented, since no independent size is
-    available here without loading the mesh file."""
+    checkable automatically. The primitive moments are rotated into the
+    declared inertial frame when its ``origin rpy`` is a signed axis
+    permutation; general rotations are skipped because their off-diagonal
+    terms cannot be judged from diagonal values alone. Mesh-backed links still
+    rely on the manual gate plus a helper script, exactly as documented, since
+    no independent size is available here without loading the mesh file."""
     if mass <= 0.0:
         return
     primitive = _link_primitive_geometry(link_element)
@@ -585,6 +651,18 @@ def _validate_inertia_magnitude(
     tag, geometry_element = primitive
     expected = _primitive_inertia_diagonal(tag, geometry_element, mass)
     if expected is None:
+        return
+    inertial_rpy = _inertial_origin_rpy(inertial_element)
+    if inertial_rpy is None:
+        # The origin validator already reports malformed values. Do not add a
+        # second finding or compare a tensor in the wrong frame.
+        return
+    expected = _rotate_inertia_diagonal_to_inertial_frame(expected, inertial_rpy)
+    if expected is None:
+        # A general inertial-frame rotation introduces off-diagonal terms. The
+        # magnitude gate only compares diagonal terms, so skip it unless the
+        # rotation is a signed axis permutation (including common 90-degree
+        # CAD export rotations).
         return
     declared = (values["ixx"], values["iyy"], values["izz"])
     if any(
