@@ -24,11 +24,12 @@ Fields:
 
 - `schema` — must be exactly `mesh-to-cad.assessment/1`. Any other
   value is rejected.
-- `from_step` — the parent step ordinal you branched from. It must equal
-  the `parent_step_ordinal` in the decision facts the supervisor returned
-  for the current Repair Attempt.
-- `to_step` — the step ordinal this Attempt will publish. It must
-  equal the `step_ordinal` in the decision facts.
+- `from_step` — the selected parent step ordinal. Copy `step_ordinal` from
+  the decision facts returned by that selected parent's submission. Do not
+  use `parent_step_ordinal`; that names the selected parent's parent.
+- `to_step` — the intended child step ordinal for the current Repair Attempt,
+  as bound by the Attempt/plan lifecycle. The current Attempt has no decision
+  facts yet; W1 checks this value against the intended child at submission.
 - `preview_observation` — a short human-language note about the
   candidate preview you inspected before submitting. Free text, but
   scoped to what you observed in the returned preview identity, not
@@ -52,8 +53,8 @@ or non-string values fail closed.
    other file the supervisor named as its own.
 4. After `run_candidate_tool` produces the preview, write
    `/candidate/work/assessment.json` with:
-   - `from_step` bound to the current parent, `to_step` bound to the
-     step you are about to publish;
+   - `from_step` copied from the selected parent's `decision_facts.step_ordinal`;
+     `to_step` bound to the current Repair Attempt's intended child step;
    - a `summary` naming which of the three objective facts you expect
      to flip, which repair-target `kind` you targeted, and what the
      next decision-fact reading should show if the hypothesis holds;
@@ -69,9 +70,10 @@ or non-string values fail closed.
   acceptance, residuals, and observable change. If your assessment
   claims a residual is fixed but `residual_summary.objective_facts`
   says otherwise, the objective facts win.
-- **Assessment cannot rename or renumber steps.** `from_step` and
-  `to_step` are bound to the ordinals in the supervisor's decision
-  facts; inventing other numbers is rejected.
+- **Assessment cannot rename or renumber steps.** `from_step` is bound to the
+  selected parent's `decision_facts.step_ordinal`, while `to_step` is bound
+  to the current Repair Attempt's intended child step; inventing other
+  numbers is rejected.
 - **Assessment cannot reference internal identifiers.** Do not paste
   handles, digests other than the preview identity, or paths outside
   `/candidate/work/`. Cite semantic facts, not identifiers.

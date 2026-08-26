@@ -76,6 +76,20 @@ class AgentSourceProjectionTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("Repair Cycle's Measured Step", assessment)
         self.assertIn("Submit through `submit_repair`", assessment)
+        from_step_contract = assessment.split("- `from_step`", 1)[1].split(
+            "- `to_step`", 1
+        )[0]
+        self.assertIn("selected parent's submission", from_step_contract)
+        from_step_source = from_step_contract.split("Do not", 1)[0]
+        self.assertIn("`step_ordinal`", from_step_source)
+        self.assertNotIn("`parent_step_ordinal`", from_step_source)
+        self.assertIn("Do not", from_step_contract)
+        self.assertIn("`parent_step_ordinal`", from_step_contract)
+        to_step_contract = assessment.split("- `to_step`", 1)[1].split(
+            "- `preview_observation`", 1
+        )[0]
+        self.assertIn("intended child step", to_step_contract)
+        self.assertNotIn("`step_ordinal` in the decision facts", to_step_contract)
         for forbidden in ("Step 0", "`null`", "submit_step_zero"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, assessment)

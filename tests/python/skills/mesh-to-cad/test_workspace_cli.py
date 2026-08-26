@@ -3286,6 +3286,29 @@ class AgentAuthoredNotesContractTests(unittest.TestCase):
             self.assertEqual("$.notes", ctx.exception.path)
 
 
+class AgentAssessmentEdgeContractTests(unittest.TestCase):
+    def test_repair_assessment_binds_selected_parent_to_intended_child(self) -> None:
+        helper = _load_workspace_helper()
+        parent_facts = {"step_ordinal": 1, "parent_step_ordinal": 0}
+        assessment = {
+            "schema": "mesh-to-cad.assessment/1",
+            "from_step": parent_facts["step_ordinal"],
+            "to_step": 2,
+            "preview_observation": "Inspected the parent preview.",
+            "summary": "Test the repair hypothesis against the child measurement.",
+        }
+        helper._core._validate_assessment(assessment, from_step=1, to_step=2)
+
+        reversed_edges = {
+            **assessment,
+            "from_step": parent_facts["parent_step_ordinal"],
+            "to_step": parent_facts["step_ordinal"],
+        }
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper._core._validate_assessment(reversed_edges, from_step=1, to_step=2)
+        self.assertEqual("parent_mismatch", ctx.exception.classification)
+
+
 def _valid_agent_claim(
     *,
     stop_reason: str = "cycle_limit",
