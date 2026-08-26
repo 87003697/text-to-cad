@@ -2109,6 +2109,7 @@ def run_pilot(
                 else 1
             )
         finally:
+            bridge_shutdown_confirmed = True
             if agent_bridge is not None:
                 try:
                     agent_bridge.stop()
@@ -2118,9 +2119,10 @@ def run_pilot(
                         file=sys.stderr,
                     )
                     lifetime_confirmed = False
+                    bridge_shutdown_confirmed = False
                     if not relay.cancelled:
                         workload_status = workload_status or 1
-            if agent_socket_dir is not None:
+            if agent_socket_dir is not None and bridge_shutdown_confirmed:
                 try:
                     agent_socket_dir.rmdir()
                 except OSError as exc:
