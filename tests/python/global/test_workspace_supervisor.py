@@ -21,6 +21,7 @@ import unittest
 from unittest import mock
 import socket
 
+from tests.python.support.import_state import isolated_package_import
 from scripts.pilot.workspace_supervisor import (
     SupervisorError,
     WorkspaceSupervisor,
@@ -526,35 +527,105 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         self.assertLess(reference.stat().st_size, 32 * 1024 * 1024)
         workspace = _Workspace(workspace_root, reference_path=reference)
 
-        supervisor = WorkspaceSupervisor(
-            workspace_root,
-            bind_reference=True,
-            candidate_root=self.root / "production-shaped-candidate",
-            staging_dir=self.root / "production-shaped-staging",
-            workspace_api=workspace,
-        )
-        try:
-            reference_handle = supervisor.reference_handle
-            self.assertIsNotNone(reference_handle)
-            assert reference_handle is not None
-            summary = supervisor.observe_reference(
-                reference_handle,
-                {"method": "summary", "args": {}},
-            )
-            stats = summary["observation"]["stats"]
-            self.assertEqual(triangle_count * 3, stats["vertices"])
-            self.assertEqual(triangle_count, stats["faces"])
+        from scripts.pilot import workspace_supervisor as supervisor_module
 
-            components = supervisor.observe_reference(
-                reference_handle,
-                {"method": "components", "args": {"limit": 1}},
+        with isolated_package_import("meshscope"):
+            supervisor = WorkspaceSupervisor(
+                workspace_root,
+                bind_reference=True,
+                candidate_root=self.root / "production-shaped-candidate",
+                staging_dir=self.root / "production-shaped-staging",
+                workspace_api=workspace,
             )
-            observation = components["observation"]
-            self.assertEqual(triangle_count, observation["total"])
-            self.assertEqual(1, observation["returned"])
-            self.assertEqual(1, len(observation["components"]))
-        finally:
-            supervisor.close()
+            import meshscope
+
+            self.assertEqual(
+                supervisor_module._MESHSCOPE_SRC.resolve() / "meshscope",
+                Path(meshscope.__file__).resolve().parent,
+            )
+            try:
+                reference_handle = supervisor.reference_handle
+                self.assertIsNotNone(reference_handle)
+                assert reference_handle is not None
+                summary = supervisor.observe_reference(
+                    reference_handle,
+                    {"method": "summary", "args": {}},
+                )
+                stats = summary["observation"]["stats"]
+                self.assertEqual(triangle_count * 3, stats["vertices"])
+                self.assertEqual(triangle_count, stats["faces"])
+
+                components = supervisor.observe_reference(
+                    reference_handle,
+                    {"method": "components", "args": {"limit": 1}},
+                )
+                observation = components["observation"]
+                self.assertEqual(triangle_count, observation["total"])
+                self.assertEqual(1, observation["returned"])
+                self.assertEqual(1, len(observation["components"]))
+            finally:
+                supervisor.close()
+
+    def test_linux_loader_parser_rejects_nonzero_loader_status(self) -> None:
+        from scripts.pilot import candidate_runtime as runtime_module
+
+        with tempfile.TemporaryDirectory() as temporary:
+            native = Path(temporary) / "fake-native"
+            native.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            with (
+                mock.patch.object(runtime_module.platform, "system", return_value="Linux"),
+                mock.patch.object(runtime_module.shutil, "which", return_value="/usr/bin/ldd"),
+                mock.patch.object(
+                    runtime_module.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess(
+                        ["/usr/bin/ldd", os.fspath(native)],
+                        1,
+                        stdout="",
+                        stderr="not a dynamic executable",
+                    ),
+                ) as run,
+            ):
+                with self.assertRaisesRegex(
+                    runtime_module.CandidateRuntimeError,
+                    "^candidate_runtime_loader_unavailable$",
+                ):
+                    runtime_module._parse_tool_dependencies(native, (Path(temporary),))
+            run.assert_called_once_with(
+                ["/usr/bin/ldd", os.fspath(native)],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+
+    def test_linux_loader_parser_returns_contained_dependencies(self) -> None:
+        from scripts.pilot import candidate_runtime as runtime_module
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            native = root / "fake-native"
+            dependency = root / "libcustom.so"
+            native.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            dependency.write_bytes(b"native")
+            completed = subprocess.CompletedProcess(
+                ["/usr/bin/ldd", os.fspath(native)],
+                0,
+                stdout=(
+                    f"{native}:\n"
+                    "\tlinux-vdso.so.1 (0x00007fff)\n"
+                    f"\tlibcustom.so => {dependency} (0x00007f00)\n"
+                    "\t/lib/x86_64-linux-gnu/libc.so.6 (0x00007f00)\n"
+                ),
+                stderr="",
+            )
+            with (
+                mock.patch.object(runtime_module.platform, "system", return_value="Linux"),
+                mock.patch.object(runtime_module.shutil, "which", return_value="/usr/bin/ldd"),
+                mock.patch.object(runtime_module.subprocess, "run", return_value=completed),
+            ):
+                dependencies = runtime_module._parse_tool_dependencies(native, (root.resolve(),))
+            self.assertEqual(((os.fspath(dependency), dependency.resolve()),), dependencies)
 
     def test_trusted_tools_use_exact_authority_not_stale_source_overlay(self) -> None:
         from scripts.pilot import trusted_tools
@@ -1337,7 +1408,10 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                     ),
                 ),
             )
-            with mock.patch.object(runtime_module, "_probe", return_value=probe):
+            with (
+                mock.patch.object(runtime_module, "_probe", return_value=probe),
+                mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=()),
+            ):
                 runtime = runner.materialize_candidate_runtime(
                     venv, root / "candidate-runtime", repo_root=repo
                 )
@@ -1766,6 +1840,12 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         from scripts.pilot import candidate_runtime as runtime_module
         from scripts.pilot import runner
 
+        loader_patch = mock.patch.object(
+            runtime_module, "_parse_tool_dependencies", return_value=()
+        )
+        loader_patch.start()
+        self.addCleanup(loader_patch.stop)
+
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             repo = root / "repo"
@@ -2107,10 +2187,13 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 )
 
             cache = root / "cache"
-            with mock.patch.object(
-                runtime_module,
-                "_probe",
-                side_effect=[probe("a"), probe("b"), probe("c"), probe("d"), probe("e")],
+            with (
+                mock.patch.object(
+                    runtime_module,
+                    "_probe",
+                    side_effect=[probe("a"), probe("b"), probe("c"), probe("d"), probe("e")],
+                ),
+                mock.patch.object(runtime_module, "_parse_tool_dependencies", return_value=()),
             ):
                 first = runner.materialize_candidate_runtime(venv, cache, repo_root=repo)
                 first_lease = first

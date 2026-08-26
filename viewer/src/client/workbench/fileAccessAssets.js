@@ -4,6 +4,7 @@ import {
   stripViewerRootDirPrefix,
   viewerRootRelativePath
 } from "./pathPresentation.js";
+import { readActiveCadDir } from "./cadManifestStore.js";
 import { fileKey } from "./sidebar.js";
 
 function basenameFromFileRef(value) {
@@ -171,7 +172,14 @@ export function fileAccessAssetsForEntry(entry, {
 }
 
 export function downloadUrlForFileAsset(fileRef, asset = "output", baseUrl = "") {
-  const path = `/__cad/download?file=${encodeURIComponent(fileRef)}&asset=${encodeURIComponent(asset || "output")}`;
+  let path = `/__cad/download?file=${encodeURIComponent(fileRef)}&asset=${encodeURIComponent(asset || "output")}`;
+  // A non-root page contributes its URL directory. The bare origin deliberately
+  // contributes nothing; the server binds that spelling to its startup cwd and
+  // still applies the same containment gate.
+  const activeDir = readActiveCadDir();
+  if (activeDir) {
+    path += `&dir=${encodeURIComponent(activeDir)}`;
+  }
   if (!baseUrl) {
     return path;
   }
@@ -183,7 +191,14 @@ export function downloadUrlForFileAsset(fileRef, asset = "output", baseUrl = "")
 }
 
 export function openUrlForFileAsset(fileRef, asset = "output", baseUrl = "") {
-  const path = `/__cad/reveal?file=${encodeURIComponent(fileRef)}&asset=${encodeURIComponent(asset || "output")}`;
+  let path = `/__cad/reveal?file=${encodeURIComponent(fileRef)}&asset=${encodeURIComponent(asset || "output")}`;
+  // Keep the bare-origin spelling dir-less so it resolves against the server's
+  // startup cwd; explicit directories remain part of the URL and containment
+  // is enforced by the backend for both cases.
+  const activeDir = readActiveCadDir();
+  if (activeDir) {
+    path += `&dir=${encodeURIComponent(activeDir)}`;
+  }
   if (!baseUrl) {
     return path;
   }

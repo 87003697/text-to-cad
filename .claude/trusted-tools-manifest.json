@@ -7,8 +7,8 @@
     },
     {
       "path": "packages/cadgen/src/cadgen/__init__.py",
-      "sha256": "caf759d8288696f36357b26c3134637ecd2c1cf82404d8fdb18b24d2782d22ef",
-      "size": 2050
+      "sha256": "690199fc784aba67e4c5f028e09eaf4248c046f1f224cc033204409c064ddd18",
+      "size": 2904
     },
     {
       "path": "packages/cadgen/src/cadgen/_internal/__init__.py",
@@ -37,8 +37,8 @@
     },
     {
       "path": "packages/cadgen/src/cadgen/_internal/component_package.py",
-      "sha256": "d31e0d291a01238b6bd5efebdce634f7fdbcd77c39bf53caec69ae931c75b66d",
-      "size": 38281
+      "sha256": "a002fe84e397c7dcd5ac3b03e950d7477ea13d161c9494437af7d686787edfab",
+      "size": 38751
     },
     {
       "path": "packages/cadgen/src/cadgen/_internal/drawing_package.py",
@@ -49,6 +49,11 @@
       "path": "packages/cadgen/src/cadgen/_internal/file_metadata.py",
       "sha256": "3023c66a99a2225b38b9d395b85e6b4e910845daaa1d1e5cc3998f650e695e06",
       "size": 1903
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/font_scan.py",
+      "sha256": "e1d0c65b76a4d05ddde3916c5b689afcbb64e035354f4e01d1e64b7eebedd8d7",
+      "size": 9800
     },
     {
       "path": "packages/cadgen/src/cadgen/_internal/generation.py",
@@ -67,8 +72,8 @@
     },
     {
       "path": "packages/cadgen/src/cadgen/_internal/glb.py",
-      "sha256": "48fd60c14163d990452514eb954d39672aa861f6b050af09e0d149a001f932dc",
-      "size": 47822
+      "sha256": "c753f9c4b61b187e55d2c462f6bb0d629e3e2055b1c08aaf3a2bbe8639c1f530",
+      "size": 47174
     },
     {
       "path": "packages/cadgen/src/cadgen/_internal/glb_mesh_payload.py",
@@ -77,8 +82,8 @@
     },
     {
       "path": "packages/cadgen/src/cadgen/_internal/glb_topology.py",
-      "sha256": "ac04ebb4876faa1da89263c0fa46d4db42c763d3b00891e23acffa1ded73fb34",
-      "size": 21627
+      "sha256": "3810daeb79d8eae9b2c32f3d5c3762730b4e17a28447dd8413371ebbf0e0e0b6",
+      "size": 22425
     },
     {
       "path": "packages/cadgen/src/cadgen/_internal/legacy_artifacts.py",
@@ -117,8 +122,8 @@
     },
     {
       "path": "packages/cadgen/src/cadgen/_internal/step_metadata.py",
-      "sha256": "b4940af52312d41acb00f33bc82bed220fc3f62ea61f5a39e45d96c44824305c",
-      "size": 12383
+      "sha256": "634fc87d36a3bbcf01253d344cd3688c1ad6fb6e3d7b496697f18a74d568ab3a",
+      "size": 13057
     },
     {
       "path": "packages/cadgen/src/cadgen/_internal/step_scene.py",
@@ -127,8 +132,8 @@
     },
     {
       "path": "packages/cadgen/src/cadgen/_internal/step_scene_cache.py",
-      "sha256": "85837382434f0f568981f74fdfd30a7cd620124731441526b9717888a8a3c582",
-      "size": 12720
+      "sha256": "67309a44259cbc03f50da51911ad76f104ee7af84a255d6015cb343b3a8f73c7",
+      "size": 14726
     },
     {
       "path": "packages/cadgen/src/cadgen/_internal/step_scene_geometry.py",
@@ -177,8 +182,8 @@
     },
     {
       "path": "packages/cadgen/src/cadgen/analysis.py",
-      "sha256": "13a21fccd4c81b7e1f06e9da48d840fa924aaadc0f264f0045894f6aadbc3c2e",
-      "size": 25476
+      "sha256": "294bd45d1a98f633742a846d465c62cf0d62b8cee78761e4987108865e8f81d9",
+      "size": 24977
     },
     {
       "path": "packages/cadgen/src/cadgen/api.py",
@@ -211,6 +216,11 @@
       "size": 20089
     },
     {
+      "path": "packages/cadgen/src/cadgen/check_fonts.py",
+      "sha256": "071aebbafcae40794ef26e0ef2ed063f34261ce1905dbc97b40d82d8162bf1e3",
+      "size": 3757
+    },
+    {
       "path": "packages/cadgen/src/cadgen/cli_logging.py",
       "sha256": "e51a72a0ab88b7de1c084b44ffd89a88e1423329b5cf2073b9766197dab41960",
       "size": 1685
@@ -237,8 +247,8 @@
     },
     {
       "path": "packages/cadgen/src/cadgen/coordination/lock.py",
-      "sha256": "4e90e054ea5d5983cc1a0ef998dab083d585d0b910795ef908360db261b87f87",
-      "size": 20094
+      "sha256": "d8c0a57faf24db4917b7a4b67aea404d157d87026a777fef4fbf90ea0be48dc1",
+      "size": 20716
     },
     {
       "path": "packages/cadgen/src/cadgen/coordination/paths.py",
@@ -297,8 +307,8 @@
     },
     {
       "path": "packages/cadgen/src/cadgen/lookup.py",
-      "sha256": "599f0a9bf9dc36738d18557c45fa00f3d062605efd553f58bd4e8aa533b5c8c4",
-      "size": 10935
+      "sha256": "f1001a885274a9d131a2e8bfc818ca11b378a535dfe933f67d05bcd659442442",
+      "size": 11210
     },
     {
       "path": "packages/cadgen/src/cadgen/metadata.py",
@@ -362,8 +372,8 @@
     },
     {
       "path": "packages/cadgen/src/cadgen/step_export_target.py",
-      "sha256": "c8121af6d2068762f576d6256370f4e7ac98283c805a62bbf6cc61eea71aa97f",
-      "size": 16817
+      "sha256": "2cf025a1438669533c3858dda3711c812241097aac6a83dbb1f05e2b7687afed",
+      "size": 18186
     },
     {
       "path": "packages/cadgen/src/cadgen/step_scene.py",
@@ -397,8 +407,8 @@
     },
     {
       "path": "packages/meshscope/src/meshscope/reference_capability.py",
-      "sha256": "ec5c85fa2b136582a5fe980d06e60c914b711936596d22b5a12d7c6969a84f93",
-      "size": 26249
+      "sha256": "5a13c1c19fee5943bb6c07a2e2850b651ac709b28638b06f75105358ec6a5207",
+      "size": 30795
     },
     {
       "path": "packages/meshscope/src/meshscope/viewer_glb.py",

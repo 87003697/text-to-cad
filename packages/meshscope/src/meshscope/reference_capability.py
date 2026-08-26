@@ -434,24 +434,144 @@ def _validate_ascii_body(
             _fail("invalid_reference_material")
 
 
-def _load_ply(path: Path) -> trimesh.Trimesh:
-    """Open, preflight, and parse one PLY through one no-follow descriptor."""
+def _is_reparse_point(metadata: os.stat_result) -> bool:
+    """Return whether a Windows directory-entry identity is a reparse point."""
 
-    nofollow = getattr(os, "O_NOFOLLOW", None)
-    if nofollow is None:
-        _fail("invalid_reference_material")
-    flags = os.O_RDONLY | nofollow
+    # 0x0400 is the Windows FILE_ATTRIBUTE_REPARSE_POINT value.  The named
+    # constant is present on supported Windows Pythons, but the fallback keeps
+    # the fail-closed check intact on older stdlib builds and in simulations.
+    flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+    return bool(flag and getattr(metadata, "st_file_attributes", 0) & flag)
+
+
+def _is_regular_reference_file(metadata: os.stat_result) -> bool:
+    """Keep the descriptor guard's regular-file/no-follow contract portable."""
+
+    return (
+        stat.S_ISREG(metadata.st_mode)
+        and not stat.S_ISLNK(metadata.st_mode)
+        and not _is_reparse_point(metadata)
+    )
+
+
+def _reference_file_identity(metadata: os.stat_result) -> tuple[object, ...]:
+    """Capture identity and mutable metadata used by the read race guard."""
+
+    return tuple(
+        getattr(metadata, field, None)
+        for field in (
+            "st_dev",
+            "st_ino",
+            "st_nlink",
+            "st_mode",
+            "st_size",
+            "st_mtime_ns",
+            # Python 3.12's Windows lstat() exposes creation time as
+            # st_ctime_ns, while fstat() exposes metadata-change time there.
+            # st_birthtime_ns is the creation-time field shared by both APIs.
+            "st_birthtime_ns",
+            "st_file_attributes",
+        )
+    )
+
+
+def _same_reference_file_identity(
+    first: os.stat_result,
+    second: os.stat_result,
+) -> bool:
+    return _reference_file_identity(first) == _reference_file_identity(second)
+
+
+def _same_reference_file_snapshot(
+    first: os.stat_result,
+    second: os.stat_result,
+) -> bool:
+    """Compare two snapshots produced by the same stat API.
+
+    ``st_ctime_ns`` has different meanings for Windows ``lstat`` and
+    ``fstat``.  It remains useful for detecting a mutation when both
+    snapshots came from the same API, so keep that check at those call sites.
+    """
+
+    return _same_reference_file_identity(first, second) and (
+        getattr(first, "st_ctime_ns", None)
+        == getattr(second, "st_ctime_ns", None)
+    )
+
+
+def _reference_windows_platform() -> bool:
+    """Small platform seam kept private so Windows behavior can be exercised."""
+
+    return os.name == "nt"
+
+
+def _open_reference_descriptor(path: Path) -> tuple[int, os.stat_result]:
+    """Open a regular PLY without following a path replacement.
+
+    POSIX uses the existing descriptor-level ``O_NOFOLLOW`` guard.  Windows
+    does not expose that flag through ``os.open``; there we reject symlink and
+    reparse-point metadata before opening, then bind the resulting descriptor
+    back to that exact identity before any bytes are read.  A later descriptor
+    check in ``_load_ply`` covers mutation during parsing.
+    """
+
+    windows = _reference_windows_platform()
+    expected: os.stat_result | None = None
+    if windows:
+        try:
+            expected = os.lstat(os.fspath(path))
+        except OSError:
+            _fail("invalid_reference_material")
+        if not _is_regular_reference_file(expected) or expected.st_size > MAX_REFERENCE_BYTES:
+            _fail("invalid_reference_material")
+
+    flags = os.O_RDONLY
+    if not windows:
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if nofollow is None:
+            _fail("invalid_reference_material")
+        flags |= nofollow
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
+
     descriptor: int | None = None
-    stream: BinaryIO | None = None
     try:
         descriptor = os.open(os.fspath(path), flags)
         metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > MAX_REFERENCE_BYTES:
+        if (
+            not _is_regular_reference_file(metadata)
+            or metadata.st_size > MAX_REFERENCE_BYTES
+            or (expected is not None and not _same_reference_file_identity(expected, metadata))
+        ):
             _fail("invalid_reference_material")
+        if expected is not None:
+            current = os.lstat(os.fspath(path))
+            if (
+                not _is_regular_reference_file(current)
+                or not _same_reference_file_snapshot(expected, current)
+                or not _same_reference_file_identity(current, metadata)
+            ):
+                _fail("invalid_reference_material")
+        return descriptor, metadata
+    except ReferenceCapabilityError:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+    except Exception:
+        if descriptor is not None:
+            os.close(descriptor)
+        _fail("invalid_reference_material")
+
+
+def _load_ply(path: Path) -> trimesh.Trimesh:
+    """Open, preflight, and parse one PLY through one no-follow descriptor."""
+
+    descriptor: int | None = None
+    stream: BinaryIO | None = None
+    try:
+        descriptor, metadata = _open_reference_descriptor(path)
         stream = os.fdopen(descriptor, "rb", closefd=True)
         descriptor = None
         format_name, vertex_count, face_count = _read_ply_header(
@@ -469,6 +589,13 @@ def _load_ply(path: Path) -> trimesh.Trimesh:
             process=False,
             skip_materials=True,
         )
+        final_metadata = os.fstat(stream.fileno())
+        if (
+            not _is_regular_reference_file(final_metadata)
+            or final_metadata.st_size > MAX_REFERENCE_BYTES
+            or not _same_reference_file_snapshot(metadata, final_metadata)
+        ):
+            _fail("invalid_reference_material")
     except ReferenceCapabilityError:
         raise
     except Exception:

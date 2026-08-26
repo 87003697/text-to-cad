@@ -24,8 +24,8 @@ _STEP_REMEDIATION = {
     "skill": "cad",
     "reason": "STEP/STP is boundary-representation CAD, not a mesh.",
     "next_step": (
-        "Export an STL sidecar with $cad: `python scripts/step --kind part <input> --stl <output>.stl`. "
-        "When a Python generator exists, target it instead: `python scripts/step <model>.step.py --stl <output>.stl`. "
+        "Export an STL sidecar with $cad: `python scripts/export <input> --stl <output>.stl`. "
+        "When a Python generator exists, target it instead: `python scripts/export <model>.step.py --stl <output>.stl`. "
         "Then slice the exported .stl with this skill."
     ),
 }
@@ -35,7 +35,7 @@ _DXF_REMEDIATION = {
     "next_step": (
         "Use $dxf to inspect or regenerate the 2D drawing. For an FDM print, model the corresponding 3D solid "
         "in $cad with `gen_step()` and export an STL sidecar "
-        "(`python scripts/step <model>.step.py --stl <output>.stl`), then slice that .stl here. "
+        "(`python scripts/export <model>.step.py --stl <output>.stl`), then slice that .stl here. "
         "If the part is a flat cut rather than a print, use $sendcutsend instead of this skill."
     ),
 }
@@ -44,7 +44,7 @@ _SVG_REMEDIATION = {
     "reason": "SVG is a 2D drawing, not a printable solid, and this toolchain has no direct SVG-to-mesh conversion.",
     "next_step": (
         "For an FDM print, model the 3D solid in $cad with `gen_step()` and export an STL sidecar "
-        "(`python scripts/step <model>.step.py --stl <output>.stl`), then slice that .stl here. "
+        "(`python scripts/export <model>.step.py --stl <output>.stl`), then slice that .stl here. "
         "If the part is a flat cut rather than a print, use $sendcutsend instead of this skill."
     ),
 }
@@ -57,7 +57,7 @@ def _robot_description_remediation(skill: str, label: str) -> dict[str, str]:
         "next_step": (
             f"Slice the per-link .stl/.obj meshes the {label} references, one mesh at a time. "
             f"If those meshes are missing or stale, regenerate them from the owning CAD source with $cad "
-            "(`python scripts/step <model>.step.py --stl <output>.stl`), then slice the exported mesh here. "
+            "(`python scripts/export <model>.step.py --stl <output>.stl`), then slice the exported mesh here. "
             f"Use ${skill} for the robot description itself."
         ),
     }

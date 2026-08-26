@@ -1,7 +1,5 @@
 import gifencDefault, {
-  GIFEncoder as exportedGifEncoder,
-  applyPalette as exportedApplyPalette,
-  quantize as exportedQuantize
+  GIFEncoder as exportedGifEncoder
 } from "gifenc";
 import * as THREE from "three";
 import {
@@ -23,10 +21,11 @@ import {
 import {
   orbitFrameOutputs
 } from "./headlessOrbitFrames.js";
+import {
+  encodeGifFrameImageData
+} from "./gifFrameEncoder.js";
 
 const GIFEncoder = exportedGifEncoder || gifencDefault?.GIFEncoder || gifencDefault;
-const quantize = exportedQuantize || gifencDefault?.quantize;
-const applyPalette = exportedApplyPalette || gifencDefault?.applyPalette;
 
 async function dataUrlToImageData(dataUrl, width, height) {
   const image = new Image();
@@ -50,30 +49,6 @@ function shouldEncodeTransparentGif(job = {}) {
     job.theme?.background?.type || ""
   ).toLowerCase();
   return Boolean(job.render?.transparent) || backgroundType === "transparent";
-}
-
-function encodeGifFrameImageData(imageData, { transparent = false } = {}) {
-  if (!transparent) {
-    const palette = quantize(imageData.data, 256);
-    return {
-      indexed: applyPalette(imageData.data, palette),
-      palette,
-      transparent: false,
-      transparentIndex: 0
-    };
-  }
-
-  const palette = quantize(imageData.data, 256, {
-    format: "rgba4444",
-    oneBitAlpha: true
-  });
-  const transparentIndex = palette.findIndex((color) => Number(color?.[3]) <= 127);
-  return {
-    indexed: applyPalette(imageData.data, palette, "rgba4444"),
-    palette,
-    transparent: transparentIndex >= 0,
-    transparentIndex: Math.max(transparentIndex, 0)
-  };
 }
 
 async function capturePreparedSource(source, job) {
