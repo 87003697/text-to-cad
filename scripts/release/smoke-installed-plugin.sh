@@ -14,6 +14,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+SMOKE_TMP_ROOT="/private/tmp"
 
 SOURCE_ROOT="$REPO_ROOT"
 PREPARED_TREE=""
@@ -46,7 +47,7 @@ Runs the full installed-plugin smoke against the current checkout:
 
 Options:
   --receipt PATH          Where to write the JSON receipt (default:
-                          tmp/installed-plugin-smoke/receipt.json).
+                          /private/tmp/installed-plugin-smoke-receipt-<pid>.json).
   --prepared-tree DIR     Skip preparation and audit DIR directly. The
                           caller is responsible for having run bundle,
                           check-builds, and finalize-publish-tree in it.
@@ -109,7 +110,7 @@ if [ -z "$PYTHON_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
 fi
 
 if [ -z "$RECEIPT" ]; then
-  RECEIPT="$REPO_ROOT/tmp/installed-plugin-smoke/receipt.json"
+  RECEIPT="$SMOKE_TMP_ROOT/installed-plugin-smoke-receipt-$$.json"
 fi
 mkdir -p "$(dirname "$RECEIPT")"
 
@@ -124,20 +125,74 @@ WORKTREE=""
 PUBLISH_TREE=""
 PUBLISH_ARCHIVE=""
 CODEX_HOME_DIR=""
+is_owned_temp_path() {
+  local path="$1"
+  local prefix="$2"
+  case "$path" in
+    "$SMOKE_TMP_ROOT/$prefix"-*) ;;
+    *) return 1 ;;
+  esac
+  [ "$(dirname "$path")" = "$SMOKE_TMP_ROOT" ] || return 1
+  [ ! -L "$path" ] || return 1
+  [ "$path" != "$REPO_ROOT" ] || return 1
+  [ "$path" != "$SOURCE_ROOT" ] || return 1
+}
+
+require_owned_temp_path() {
+  local path="$1"
+  local prefix="$2"
+  if ! is_owned_temp_path "$path" "$prefix"; then
+    echo "Refusing unsafe smoke temp path: $path" >&2
+    exit 2
+  fi
+}
+
+remove_owned_temp_dir() {
+  local path="$1"
+  local prefix="$2"
+  [ -n "$path" ] || return 0
+  if [ ! -d "$path" ]; then
+    return 0
+  fi
+  if ! is_owned_temp_path "$path" "$prefix"; then
+    echo "Refusing cleanup of unsafe smoke temp path: $path" >&2
+    return 1
+  fi
+  rm -rf "$path"
+}
+
+remove_owned_temp_file() {
+  local path="$1"
+  local prefix="$2"
+  [ -n "$path" ] || return 0
+  if [ ! -f "$path" ]; then
+    return 0
+  fi
+  if ! is_owned_temp_path "$path" "$prefix"; then
+    echo "Refusing cleanup of unsafe smoke temp path: $path" >&2
+    return 1
+  fi
+  rm -f "$path"
+}
+
 cleanup() {
   local exit_code=$?
-  if [ -n "$CODEX_HOME_DIR" ] && [ -d "$CODEX_HOME_DIR" ]; then
-    rm -rf "$CODEX_HOME_DIR" || true
+  if [ -n "$CODEX_HOME_DIR" ]; then
+    remove_owned_temp_dir "$CODEX_HOME_DIR" installed-plugin-smoke-codex || true
   fi
   if [ "$KEEP_PREPARED" -eq 0 ] && [ -n "$WORKTREE" ] && [ -d "$WORKTREE" ]; then
-    git -C "$REPO_ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1 || rm -rf "$WORKTREE" || true
+    if ! is_owned_temp_path "$WORKTREE" installed-plugin-smoke-prep; then
+      echo "Refusing cleanup of unsafe smoke temp path: $WORKTREE" >&2
+    elif [ ! -d "$REPO_ROOT" ] || [ ! -e "$REPO_ROOT/.git" ]; then
+      echo "Preserving temporary worktree because its Git owner is unavailable: $WORKTREE" >&2
+    elif ! git -C "$REPO_ROOT" worktree remove --force "$WORKTREE" >/dev/null 2>&1; then
+      echo "Preserving temporary worktree because Git could not unregister it: $WORKTREE" >&2
+    fi
   fi
-  if [ "$KEEP_PREPARED" -eq 0 ] && [ -n "$PUBLISH_TREE" ] && [ -d "$PUBLISH_TREE" ]; then
-    rm -rf "$PUBLISH_TREE" || true
+  if [ "$KEEP_PREPARED" -eq 0 ] && [ -n "$PUBLISH_TREE" ]; then
+    remove_owned_temp_dir "$PUBLISH_TREE" installed-plugin-smoke-publish || true
   fi
-  if [ -n "$PUBLISH_ARCHIVE" ] && [ -f "$PUBLISH_ARCHIVE" ]; then
-    rm -f "$PUBLISH_ARCHIVE" || true
-  fi
+  remove_owned_temp_file "$PUBLISH_ARCHIVE" installed-plugin-smoke-publish || true
   exit "$exit_code"
 }
 trap cleanup EXIT INT TERM
@@ -160,6 +215,7 @@ require_cached_build_dependencies() {
 
 if [ -z "$PREPARED_TREE" ]; then
   WORKTREE="$(mktemp -d /private/tmp/installed-plugin-smoke-prep-XXXXXX)"
+  require_owned_temp_path "$WORKTREE" installed-plugin-smoke-prep
   # mktemp created the directory; git worktree needs it to not exist.
   rm -rf "$WORKTREE"
   git -C "$REPO_ROOT" worktree add --detach "$WORKTREE" HEAD >/dev/null
@@ -199,7 +255,9 @@ if [ -z "$PREPARED_TREE" ]; then
   git -C "$WORKTREE" add -A
   publish_tree_oid="$(git -C "$WORKTREE" write-tree)"
   PUBLISH_TREE="$(mktemp -d /private/tmp/installed-plugin-smoke-publish-XXXXXX)"
+  require_owned_temp_path "$PUBLISH_TREE" installed-plugin-smoke-publish
   PUBLISH_ARCHIVE="$(mktemp /private/tmp/installed-plugin-smoke-publish-XXXXXX.tar)"
+  require_owned_temp_path "$PUBLISH_ARCHIVE" installed-plugin-smoke-publish
   git -C "$WORKTREE" archive --format=tar --output="$PUBLISH_ARCHIVE" "$publish_tree_oid"
   tar -xf "$PUBLISH_ARCHIVE" -C "$PUBLISH_TREE"
   PREPARED_TREE="$PUBLISH_TREE"
@@ -212,6 +270,7 @@ if [ ! -d "$PREPARED_TREE" ]; then
 fi
 
 CODEX_HOME_DIR="$(mktemp -d /private/tmp/installed-plugin-smoke-codex-XXXXXX)"
+require_owned_temp_path "$CODEX_HOME_DIR" installed-plugin-smoke-codex
 echo "Isolated CODEX_HOME: $CODEX_HOME_DIR"
 
 echo "Installing plugin through real Codex CLI..."
