@@ -33,14 +33,11 @@ DEFAULT_COMPONENT_LIMIT = 32
 MAX_COMPONENT_LIMIT = 32
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_REFERENCE_BYTES = 32 * 1024 * 1024
-# These are loose array-safety ceilings derived from the shortest valid ASCII
-# records in the accepted PLY subset.  ``_read_ply_header`` tightens them to
-# the exact declared format and remaining file bytes before invoking trimesh;
-# they are not an independent topology policy.
+# The header preflight derives record-count bounds from these shortest valid
+# ASCII records, then tightens them to the declared format and remaining file
+# bytes before invoking trimesh.  There is no independent topology cap.
 _MIN_ASCII_VERTEX_RECORD_BYTES = len(b"0 0 0\n")
 _MIN_ASCII_FACE_RECORD_BYTES = len(b"3 0 0 0\n")
-MAX_REFERENCE_VERTICES = MAX_REFERENCE_BYTES // _MIN_ASCII_VERTEX_RECORD_BYTES
-MAX_REFERENCE_FACES = MAX_REFERENCE_BYTES // _MIN_ASCII_FACE_RECORD_BYTES
 MAX_REFERENCE_ID_LENGTH = 128
 PLY_HEADER_MAX_BYTES = 64 * 1024
 PLY_HEADER_MAX_LINES = 1024
@@ -432,11 +429,6 @@ def _validate_mesh(mesh: Any) -> tuple[np.ndarray, np.ndarray]:
         or not np.all(np.isfinite(vertices))
     ):
         _fail("invalid_reference_material")
-    if (
-        len(vertices) > MAX_REFERENCE_VERTICES
-        or len(faces) > MAX_REFERENCE_FACES
-    ):
-        _fail("reference_too_complex")
     try:
         face_indices = np.asarray(faces, dtype=np.int64)
     except (TypeError, ValueError, OverflowError):
