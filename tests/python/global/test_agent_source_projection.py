@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -69,6 +70,42 @@ class AgentSourceProjectionTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, skill)
+        request_section = skill.split(
+            "### Exact `run_candidate_tool` request", 1
+        )[1].split("\n## ", 1)[0]
+        shape_match = re.search(
+            r"```json\n(?P<body>\{.*?\})\n```",
+            request_section,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(shape_match)
+        assert shape_match is not None
+        request_shape = json.loads(shape_match.group("body"))
+        self.assertEqual(
+            {
+                "workspace_handle",
+                "attempt_handle",
+                "candidate_handle",
+                "operation_handle",
+            },
+            set(request_shape),
+        )
+        self.assertEqual(
+            "<capability_bundle_handle returned by start_attempt>",
+            request_shape["operation_handle"],
+        )
+        self.assertIn(
+            "Replace the `operation_handle` placeholder with the capability bundle handle",
+            request_section,
+        )
+        for forbidden_field in (
+            '"tool":',
+            '"argv":',
+            '"command":',
+            '"capability_bundle_handle":',
+        ):
+            with self.subTest(forbidden_field=forbidden_field):
+                self.assertNotIn(forbidden_field, request_section)
         assessment = (
             REPO_ROOT
             / ".claude/agent-source-projection/skills/mesh-to-cad/references"

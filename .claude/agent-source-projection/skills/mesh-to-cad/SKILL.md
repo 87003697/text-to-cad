@@ -61,6 +61,25 @@ a closed result plus the list of intents permitted next.
 - `observe_reference` — request one bounded, structured observation of
   the Canonical Reference through a fixed Reference Capability.
 
+### Exact `run_candidate_tool` request
+
+For both Step 0 and Repair Attempts, the request `args` object has exactly
+these four fields:
+
+```json
+{
+  "workspace_handle": "<opaque workspace handle>",
+  "attempt_handle": "<opaque active Attempt handle>",
+  "candidate_handle": "<opaque candidate handle>",
+  "operation_handle": "<capability_bundle_handle returned by start_attempt>"
+}
+```
+
+Replace the `operation_handle` placeholder with the capability bundle handle
+returned by that Attempt's `start_attempt` response, verbatim. Keep every
+handle opaque. There is no `tool`, `argv`, `command`, or
+`capability_bundle_handle` request field.
+
 Each intent request is one JSON document on stdin:
 
 ```json
