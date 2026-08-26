@@ -2,6 +2,10 @@
 
 This context defines the language used by reconstruction evaluation, provider-free preview execution, and the sealed Agent runtime. It names domain concepts only; ADRs and design documents own implementation decisions.
 
+Current implementation progress, validation gates, and deferred work are
+tracked in [`docs/roadmap.md`](docs/roadmap.md). Historical plan status does not
+override that roadmap.
+
 ## Reconstruction Language
 
 **Reconstruction Spec**:

@@ -1,6 +1,6 @@
 # Workspace deep module requirements
 
-Status: Accepted design input
+Status: **Implemented; exact-head integration gate pending**
 
 Date: 2026-08-25
 
@@ -118,20 +118,22 @@ Windows publication is not required.
   cleanup of historical outputs. The existing terminal-handoff transfer path
   is in scope only far enough to verify exact bytes before deleting its source.
 
-## Remaining blockers-first implementation tickets
+## Implementation record and remaining acceptance
 
-The original W1–W5 behavior is represented by the current branch. The
-remaining work corrects and reduces that implementation; it must not add a
-second framework around it.
+The original W1–W5 behavior and the R1–R5 reduction work are represented by
+the current `develop` branch. This table is now an implementation record. R6
+is the only remaining gate, and it must not add a second framework around the
+implemented module.
 
-| Ticket | Change | Depends on | Exit evidence |
+| Ticket | Status | Implementation | Exit evidence |
 |---|---|---|---|
-| R1 — Reduce terminal publication | Keep external identity handoff and pair recovery; remove unsupported-platform publication and machinery that defends a runner-owned directory from an Agent that cannot see it. | None | Concurrent/retry tests pass; unsupported platforms fail before mutation. |
-| R2 — Ship trusted tools once | Bundle one fixed read-only tool subset containing canonical build and its required CAD/evidence packages; remove per-pilot build-bundle cache and lease. | None | Finalized publish-tree and installed-plugin provider execution pass without source-checkout fallback. |
-| R3 — Reduce Agent projection | Keep the five fixed Agent files and exact manifest; move source/content lint to bundle time and keep only exact runtime verification. | None | Bundle freshness, exact inventory, digest, and no-symlink tests pass. |
-| R4 — Verify transferred bytes | Compare transferred experiment bytes with the terminal content manifest before cleanup; reject missing, changed, and extra files. | None | Corrupt and stale destinations retain the CVM source; an exact transfer cleans it. |
-| R5 — Authority-boundary review | Inspect remaining runner/review callers and remove only proven direct Workspace Authority interpretation or mutation. | R1, R2, R3, R4 | Independent review finds no remaining bypass; no speculative interface is added. |
-| R6 — Integration gate | Run the production-shaped lifecycle and shipped-surface gates. | R5 | Linux `bwrap` vertical slice, full regression, bundle, symlink, installed-plugin smoke, and independent review pass. |
+| R1 — Reduce terminal publication | **Implemented** | `81d25804` | Concurrent/retry coverage; unsupported hosts fail before mutation. |
+| R2 — Ship trusted tools once | **Implemented** | `1bebe1e6` plus follow-up runtime fixes | Finalized publish-tree and installed-plugin execution use the shipped tool authority without source-checkout fallback. |
+| R3 — Reduce Agent projection | **Implemented** | `e1365bba` plus type/nonregular-file hardening | Five-file inventory, digest, policy, and no-symlink coverage. |
+| R4 — Verify transferred bytes | **Implemented** | `ed2850d7` | Missing, changed, extra, corrupt, and stale destinations fail before CVM cleanup. |
+| R5 — Authority-boundary review | **Implemented** | `66bd1851` and the subsequent deep-module integration range | Review consumes Terminal Validation; the vertical slice uses the public Workspace/Agent seams. |
+| R6 — Integration gate | **Pending exact-head rerun** | No architecture change authorized | On the exact release head: Linux `bwrap` vertical slice, full regression, bundle, symlink, installed-plugin smoke, and independent review pass. |
 
-R1–R4 are implemented serially. R5 is a review-and-delete ticket, not a
-pre-authorized deepening project. R6 makes no architecture changes.
+R1–R5 are complete implementation work. R6 remains a verification and release
+gate and makes no architecture changes. Current cross-project progress is
+tracked in [`docs/roadmap.md`](../roadmap.md).
