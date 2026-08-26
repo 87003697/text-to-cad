@@ -150,29 +150,6 @@ class ExecutionScope:
                 self._terminating_spawns.pop(token)
                 self._condition.notify_all()
 
-    def register(
-        self,
-        process: subprocess.Popen[Any],
-        terminate: Callable[[], None],
-        force: Callable[[], None] | None = None,
-    ) -> bool:
-        """Backward-compatible direct registration for test/injected callers."""
-
-        if force is None:
-            force = terminate
-        with self._condition:
-            cancelled = self._cancelled
-            if not cancelled:
-                self._active[process] = (terminate, force)
-        if cancelled:
-            for callback in (terminate, force):
-                try:
-                    callback()
-                except OSError:
-                    pass
-            return False
-        return True
-
     def complete(self, process: subprocess.Popen[Any]) -> None:
         with self._condition:
             self._active.pop(process, None)

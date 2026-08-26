@@ -82,41 +82,19 @@ class _CopyBudget:
 
 @dataclass
 class CandidateRuntimeLease:
-    """A live-run lease that protects one immutable cache identity."""
+    """A live-run lease that protects one immutable cache identity.
+
+    The runtime path is intentionally explicit: callers use ``runtime`` for
+    filesystem operations and ``release`` for lease cleanup.
+    """
 
     runtime: Path
     lease_path: Path
     cache_root: Path
 
     @property
-    def path(self) -> Path:
-        return self.runtime
-
-    @property
     def identity(self) -> str:
         return self.runtime.name
-
-    def __fspath__(self) -> str:
-        return os.fspath(self.runtime)
-
-    def __str__(self) -> str:
-        return str(self.runtime)
-
-    def __truediv__(self, value: str) -> Path:
-        return self.runtime / value
-
-    def __getattr__(self, name: str):
-        return getattr(self.runtime, name)
-
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, CandidateRuntimeLease):
-            return self.runtime == other.runtime
-        if isinstance(other, (str, Path)):
-            return self.runtime == Path(other)
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        return hash(self.runtime)
 
     def release(self) -> None:
         if not self.cache_root.exists() and not self.cache_root.is_symlink():
@@ -1856,7 +1834,7 @@ def materialize_candidate_runtime(
     cache_root: Path,
     *,
     repo_root: Path | None = None,
-) -> Path:
+) -> CandidateRuntimeLease:
     """Return the shared immutable runtime for the fixed CAD operation."""
 
     raw_venv = Path(source_venv)
