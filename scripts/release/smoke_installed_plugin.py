@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 import shutil
+import importlib.util
 import stat
 import subprocess
 import sys
@@ -33,6 +34,30 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+
+
+def _load_agent_source_projection(source_root: Path | None = None):
+    """Load ``agent_source_projection`` from either an installed tree or source.
+
+    The smoke inspects both the developer checkout (to run the CLI) and the
+    installed plugin cache (to verify the projection shipped intact). Loading
+    by path lets the same module cover both without polluting ``sys.path``.
+    """
+
+    if "agent_source_projection" in sys.modules:
+        return sys.modules["agent_source_projection"]
+    if source_root is None:
+        source_root = Path(__file__).resolve().parents[2]
+    module_path = source_root / "scripts" / "pilot" / "agent_source_projection.py"
+    spec = importlib.util.spec_from_file_location(
+        "agent_source_projection", module_path
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load agent_source_projection module")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 # The nine skill runtime paths that develop tracks as symlinks and that a raw
@@ -207,6 +232,35 @@ def _format_manifest_diff(
             if len(values) > 20:
                 lines.append(f"    ... ({len(values) - 20} more)")
     return "\n".join(lines)
+
+
+def assert_agent_source_projection(root: Path) -> dict[str, str]:
+    """Assert the Agent Source Projection is installed intact under root.
+
+    Runs the projection module's ``verify`` against the installed cache so a
+    release cannot ship a torn, tampered, or extra-populated projection. The
+    developer-checkout copy of the module is used to interpret the installed
+    tree's manifest without polluting ``sys.path``.
+    """
+
+    module = _load_agent_source_projection()
+    projection_root = root / module.PROJECTION_ROOT_REL
+    if not projection_root.is_dir() or projection_root.is_symlink():
+        raise SmokeError(
+            "Agent Source Projection is missing from installed tree"
+        )
+    try:
+        inventory = module.verify(projection_root)
+    except module.ProjectionError as exc:
+        raise SmokeError(
+            f"Agent Source Projection failed verification: {exc}"
+        ) from exc
+    return {
+        "schema": inventory.schema,
+        "version": inventory.version,
+        "digest": inventory.digest,
+        "entry_count": str(len(inventory.entries)),
+    }
 
 
 def assert_critical_runtimes(root: Path) -> list[dict[str, str]]:
@@ -635,6 +689,143 @@ def run_installed_registered_build(
     }
 
 
+def run_installed_evidence_provider_probe(
+    installed_root: Path,
+    source_root: Path,
+    *,
+    python_executable: Path,
+    timeout_seconds: float = 180.0,
+) -> dict[str, Any]:
+    """Run valid Step 0/Repair evidence through the installed tool subset."""
+
+    env = sanitize_env_for_installed_run(
+        installed_root, source_root, python_executable=python_executable
+    )
+    probe = r'''
+import json
+import sys
+import tempfile
+from io import BytesIO
+from pathlib import Path
+
+import numpy as np
+import trimesh
+from PIL import Image
+
+installed = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(installed / "scripts/pilot"))
+from step_zero_evidence import (
+    _MESHSCOPE_SRC, _MESHSHOT_SRC, _ensure_shipped_package,
+    StepZeroEvidenceRequest, real_step_zero_evidence_provider,
+)
+from repair_evidence import RepairEvidenceRequest, real_repair_evidence_provider
+from workspace_supervisor import _load_reference_type
+
+_ensure_shipped_package(_MESHSCOPE_SRC, "meshscope")
+_ensure_shipped_package(_MESHSHOT_SRC, "meshshot")
+from meshscope.voxblame import prepare_reference
+from meshshot import RenderedPreview, load_profile
+
+profile = load_profile()
+
+def render_fixture(_reference, _candidate, *, variant="step", exterior_directions=()):
+    pixels = tuple(profile.profile["variants"][variant]["image_pixels"])
+    image = Image.new("RGB", pixels, (0, 0, 0))
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
+    views = tuple({
+        **view,
+        "framing": {"projection": "orthographic" if view["kind"] == "axial_depth" else "perspective"},
+        "markers": ([{"direction": exterior_directions[0]}] if exterior_directions else []),
+    } for view in profile.profile["views"])
+    return RenderedPreview(encoded.getvalue(), variant, profile.sha256, views)
+
+with tempfile.TemporaryDirectory() as text:
+    root = Path(text)
+    raw = root / "raw.ply"
+    reference_mesh = trimesh.Trimesh(
+        vertices=np.asarray([
+            [-0.5, -0.01, 0.0], [0.0, -0.01, 0.0], [-0.5, 0.01, 0.0],
+            [0.0, -0.01, 0.0], [0.5, -0.01, 0.0], [0.5, 0.01, 0.0],
+        ], dtype=np.float64),
+        faces=np.asarray([[0, 1, 2], [3, 4, 5]], dtype=np.int64),
+        process=False,
+    )
+    reference_mesh.export(raw)
+    reference = root / "reference"
+    prepare_reference(raw, reference)
+    canonical_ply = reference / "reference.ply"
+    capability = _load_reference_type()("installed-probe", canonical_ply)
+    observation = capability.handle({
+        "schema": "meshscope.reference-request/1", "reference_id": "installed-probe",
+        "method": "summary", "args": {},
+    })
+
+    partial = trimesh.load(canonical_ply, force="mesh", process=False)
+    partial.update_faces([0])
+    partial.remove_unreferenced_vertices()
+    step_candidate = root / "step-candidate.ply"
+    partial.export(step_candidate)
+    preview_identity = {"name": profile.profile["name"], "sha256": profile.sha256}
+    step_vox = root / "step/voxblame"
+    real_step_zero_evidence_provider(StepZeroEvidenceRequest(
+        reference, step_candidate, step_vox, root / "step-preview", preview_identity,
+    ), renderer=render_fixture)
+
+    summary = json.loads((step_vox / "steps/000000/summary.json").read_text())
+    target = summary["repair_targets"]["items"][0]
+    plan = {
+        "schema": "voxblame.repair-batch/1", "from_step": 0,
+        "selected_targets": [{"target_key": target["target_key"], "mask_sha256": target["mask"]["logical_sha256"]}],
+        "planned_edits": [{"edit_key": "repair-installed-probe", "target_keys": [target["target_key"]], "description": "Restore the omitted triangle."}],
+        "rationale": "Exercise installed Repair evidence.",
+        "preview_observation": "One missing region is visible.",
+    }
+    parent_source = root / "parent-source"
+    candidate_source = root / "candidate-source"
+    parent_source.mkdir()
+    candidate_source.mkdir()
+    (parent_source / "model.py").write_text("STEP = 0\n")
+    (candidate_source / "model.py").write_text("STEP = 1\n")
+    real_repair_evidence_provider(RepairEvidenceRequest(
+        reference, canonical_ply, candidate_source, step_vox, parent_source,
+        root / "repair/voxblame", root / "repair-preview", root / "region",
+        root / "changes", plan, preview_identity, 0, 1, "1" * 64, "2" * 64,
+    ), renderer=render_fixture)
+
+    import meshscope
+    import meshshot
+    print(json.dumps({
+        "step_zero": (step_vox / "steps/000000/measurement.json").is_file(),
+        "repair": (root / "repair/voxblame/steps/000001/measurement.json").is_file(),
+        "reference_observation": observation["method"],
+        "profile_sha256": profile.sha256,
+        "meshscope": str(Path(meshscope.__file__).resolve()),
+        "meshshot": str(Path(meshshot.__file__).resolve()),
+    }, sort_keys=True))
+'''
+    with tempfile.TemporaryDirectory(prefix="installed-provider-probe-") as text:
+        result = _run_checked(
+            [str(python_executable), "-I", "-c", probe, str(installed_root)],
+            cwd=Path(text),
+            env=env,
+            label="installed evidence provider probe",
+            timeout_seconds=timeout_seconds,
+        )
+    value = json.loads(result.stdout.strip().splitlines()[-1])
+    for package, relative in (
+        ("meshscope", "skills/mesh-compare/scripts/packages/meshscope"),
+        ("meshshot", "skills/mesh-compare/scripts/packages/meshshot"),
+    ):
+        try:
+            Path(value[package]).resolve().relative_to(
+                (installed_root / relative).resolve()
+            )
+        except (KeyError, ValueError) as exc:
+            raise SmokeError(f"installed {package} resolved outside shipped tools") from exc
+    return value
+
+
 def _write_json_document(path: Path, value: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -816,6 +1007,7 @@ def build_receipt(
     installed_root: Path,
     installed_manifest: Manifest,
     critical_runtimes: Sequence[Mapping[str, str]],
+    agent_source_projection: Mapping[str, Any],
     registered_build_probe: Mapping[str, Any],
     argv: Sequence[str],
     codex_home: Path,
@@ -852,8 +1044,10 @@ def build_receipt(
             "source_checkout_hidden_from_installed_run": True,
             "isolated_python_sys_path_source_free": True,
             "registered_build_completed": True,
+            "agent_source_projection_present": True,
         },
         "critical_runtimes": [dict(item) for item in critical_runtimes],
+        "agent_source_projection": dict(agent_source_projection),
         "registered_build_probe": dict(registered_build_probe),
         "argv": list(argv),
         "success": True,
@@ -922,6 +1116,7 @@ def _install_verify(
     installed_manifest = compute_manifest(installed_root)
     assert_manifests_equal(prepared_manifest, installed_manifest)
     critical_runtimes = assert_critical_runtimes(installed_root)
+    agent_source_projection_inventory = assert_agent_source_projection(installed_root)
     with tempfile.TemporaryDirectory(prefix="installed-plugin-probe-python-") as python_temp:
         isolated_python, python_audit = prepare_isolated_probe_python(
             python_executable,
@@ -929,6 +1124,9 @@ def _install_verify(
             Path(python_temp) / "venv",
         )
         registered_probe = run_installed_registered_build(
+            installed_root, source_root, python_executable=isolated_python
+        )
+        registered_probe["evidence_providers"] = run_installed_evidence_provider_probe(
             installed_root, source_root, python_executable=isolated_python
         )
         registered_probe["python_environment"] = python_audit
@@ -942,6 +1140,7 @@ def _install_verify(
         installed_root=installed_root,
         installed_manifest=installed_manifest,
         critical_runtimes=critical_runtimes,
+        agent_source_projection=agent_source_projection_inventory,
         registered_build_probe=registered_probe,
         argv=argv,
         codex_home=codex_home,

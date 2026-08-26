@@ -24,6 +24,10 @@ CLI_PATH = (
     REPO_ROOT
     / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace/cli.py"
 )
+WORKSPACE_HELPER_PATH = (
+    REPO_ROOT
+    / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace/workspace.py"
+)
 MESH_COMPARE_PATH = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare"
 CAD_BUILD_PATH = REPO_ROOT / "skills/cad/scripts/canonical-build"
 MESH_COMPARE_ENTRYPOINT = MESH_COMPARE_PATH / "cli.py"
@@ -44,6 +48,29 @@ def _load_cli():
         raise RuntimeError("cannot load Workspace CLI")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def _load_workspace_helper():
+    module_name = "mesh_to_cad_workspace_helper"
+    cached = sys.modules.get(module_name)
+    if cached is not None:
+        return cached
+    helper_dir = str(WORKSPACE_HELPER_PATH.parent)
+    if helper_dir not in sys.path:
+        sys.path.insert(0, helper_dir)
+    spec = importlib.util.spec_from_file_location(
+        module_name, WORKSPACE_HELPER_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load Workspace helper")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(module_name, None)
+        raise
     return module
 
 
@@ -408,7 +435,14 @@ class WorkspaceCliTests(unittest.TestCase):
         root = self.workspace / "work" / name
         (root / "source").mkdir(parents=True)
         (root / "artifacts").mkdir()
-        (root / "source/model.py").write_text("# synthetic source\n", encoding="utf-8")
+        # Include the candidate ``name`` in the synthetic source so
+        # distinct candidates carry distinct source bytes.  This lets
+        # Repair Cycle tests exercise the source-change delta the
+        # trusted Repair evidence provider derives from the parent
+        # selected candidate and the current candidate.
+        (root / "source/model.py").write_text(
+            f"# synthetic source for {name}\n", encoding="utf-8"
+        )
         (root / "artifacts/model.glb").write_bytes(mesh_bytes)
         return root, _sha(mesh_bytes)
 
@@ -931,7 +965,7 @@ class WorkspaceCliTests(unittest.TestCase):
             str(registry),
         ]
 
-    def test_tool_registry_requires_matching_absolute_entrypoint(self) -> None:
+    def test_tool_registry_requires_canonical_absolute_entrypoint(self) -> None:
         arguments = self.final_tool_arguments()
         registry = Path(arguments[-1])
         value = json.loads(registry.read_text(encoding="utf-8"))
@@ -951,6 +985,55 @@ class WorkspaceCliTests(unittest.TestCase):
                 geometry_entrypoint=MESH_COMPARE_ENTRYPOINT,
             )
         self.assertEqual("untrusted_tool", raised.exception.classification)
+
+    def test_tool_registry_rejects_wrong_host_entrypoint_bytes(self) -> None:
+        from scripts.pilot import runner
+
+        registry = runner.publish_tool_registry(self.root / "runner-authority")
+        wrong_rebuild = self.root / "wrong-rebuild.py"
+        wrong_rebuild.write_bytes(
+            runner.CAD_REBUILD_ENTRYPOINT.read_bytes() + b"\ntampered\n"
+        )
+
+        load_registry = self.cli.finalize_workspace.__globals__["_load_tool_registry"]
+        with self.assertRaises(self.cli.WorkspaceError) as raised:
+            load_registry(
+                registry,
+                rebuild_entrypoint=wrong_rebuild,
+                geometry_entrypoint=runner.GEOMETRY_ENTRYPOINT,
+            )
+        self.assertEqual("untrusted_tool", raised.exception.classification)
+        self.assertEqual(
+            "$.tool_registry.rebuild.entrypoint_sha256", raised.exception.path
+        )
+
+    def test_registered_tool_entrypoint_resolves_bwrap_namespace(self) -> None:
+        # This temporary tree stands in for bwrap's /workspace/repo mount.
+        arguments = self.final_tool_arguments()
+        registry = Path(arguments[-1])
+        value = json.loads(registry.read_text(encoding="utf-8"))
+        rebuild_entrypoint = self.root / (
+            "workspace/repo/skills/cad/scripts/canonical-build/__main__.py"
+        )
+        rebuild_entrypoint.parent.mkdir(parents=True)
+        rebuild_entrypoint.write_bytes(b"sandbox rebuild\n")
+        value["rebuild"]["entrypoint"] = str(rebuild_entrypoint)
+        value["rebuild"]["entrypoint_sha256"] = _sha(
+            rebuild_entrypoint.read_bytes()
+        )
+        value_without_identity = dict(value)
+        value_without_identity.pop("identity_sha256")
+        value["identity_sha256"] = _identity(
+            "mesh-to-cad.tool-registry/2", value_without_identity
+        )
+        _write_json(registry, value)
+
+        entrypoint = self.cli.finalize_workspace.__globals__[
+            "_registered_tool_entrypoint"
+        ]
+        self.assertEqual(
+            rebuild_entrypoint.resolve(), entrypoint(registry, "rebuild")
+        )
 
     def test_tool_registry_rejects_double_slash_entrypoint(self) -> None:
         arguments = self.final_tool_arguments()
@@ -1038,6 +1121,7 @@ class WorkspaceCliTests(unittest.TestCase):
         candidate: Path,
         candidate_mesh_relative: str,
         accepted: bool,
+        tool_arguments: list[str] | None = None,
     ) -> dict:
         status, _initialized, stderr = self.invoke(
             "init", "--workspace", str(self.workspace), "--prepared", str(prepared)
@@ -1095,6 +1179,11 @@ class WorkspaceCliTests(unittest.TestCase):
             str(self.preview("candidate-preview", candidate_sha)),
         )
         self.assertEqual(0, status, stderr)
+        final_tool_arguments = (
+            self.final_tool_arguments()
+            if tool_arguments is None
+            else tool_arguments
+        )
         with mock.patch.dict(
             self.cli.finalize_workspace.__globals__,
             {"_run_final_preview": self.write_provider_free_final_preview},
@@ -1107,7 +1196,7 @@ class WorkspaceCliTests(unittest.TestCase):
                 str(self.final_selection(accepted=accepted)),
                 "--notes",
                 str(self.final_notes()),
-                *self.final_tool_arguments(),
+                *final_tool_arguments,
             )
         self.assertEqual(0, status, stderr)
         self.assertIs(accepted, finalized["final"]["accepted"])
@@ -1486,6 +1575,39 @@ class WorkspaceCliTests(unittest.TestCase):
         self.assertNotIn("route", final)
         self.assertEqual("cycle_limit", final["stop_reason"])
 
+    def test_runner_registry_reaches_real_workspace_finalize(self) -> None:
+        from scripts.pilot import runner
+
+        registry = runner.publish_tool_registry(self.root / "runner-authority")
+        prepared, candidate = self.canonical_cad_flow()
+        final = self.execute_final_case(
+            prepared=prepared,
+            candidate=candidate,
+            candidate_mesh_relative="built/measurement.glb",
+            accepted=True,
+            tool_arguments=[
+                "--rebuild-entrypoint",
+                str(runner.CAD_REBUILD_ENTRYPOINT),
+                "--geometry-entrypoint",
+                str(runner.GEOMETRY_ENTRYPOINT),
+                "--tool-registry",
+                str(registry),
+            ],
+        )
+
+        self.assertTrue(final["accepted"])
+        published_registry = json.loads(
+            (self.workspace / "final/tool-registry.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            str(runner.SANDBOX_CAD_REBUILD_ENTRYPOINT),
+            published_registry["rebuild"]["entrypoint"],
+        )
+        self.assertEqual(
+            str(runner.SANDBOX_GEOMETRY_ENTRYPOINT),
+            published_registry["geometry"]["entrypoint"],
+        )
+
     def test_runner_accepts_and_reviewer_audits_real_synthetic_delivery(
         self,
     ) -> None:
@@ -1629,15 +1751,14 @@ class WorkspaceCliTests(unittest.TestCase):
         )
 
         self.assertEqual(0, runner_status)
-        self.assertEqual(0, reviewed.returncode, reviewed.stderr)
+        self.assertEqual(0, reviewed.returncode, reviewed.stdout + reviewed.stderr)
         self.assertFalse((self.workspace / "reviews").exists())
         self.assertTrue((self.workspace / "run/rollout.jsonl").is_file())
         self.assertTrue((self.workspace / "run/traces.sqlite3").is_file())
         self.assertTrue((self.workspace / "run/trace.html").is_file())
         review = json.loads(
-            (self.workspace / "review.json").read_text(encoding="utf-8")
+            (self.workspace / "run/review/review.json").read_text(encoding="utf-8")
         )
-        self.assertEqual("pass", review["verdicts"]["runner_completion"])
         self.assertEqual("pass", review["verdicts"]["workspace_protocol"])
         self.assertEqual("accepted", review["verdicts"]["reconstruction_quality"])
         self.assertIn(
@@ -2787,6 +2908,178 @@ time.sleep(60)
         self.assertEqual(0, status, stderr)
         self.assertTrue(valid["valid"])
 
+    def _seed_prepared_repair(self) -> tuple[object, int]:
+        """Set up Step 0 published + one active repair Attempt bound to it."""
+
+        self.publish_initial_flow()
+        plan = self.repair_plan("seed-plan", from_step=0)
+        status, attempt, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(plan),
+            "--intended-step",
+            "1",
+            "--from-step",
+            "0",
+        )
+        self.assertEqual(0, status, stderr)
+        helper = _load_workspace_helper()
+        return helper, attempt["attempt"]["attempt"]
+
+    def test_seed_rejects_unknown_parent_step_index(self) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        destination = self.root / "ext-work-unknown"
+        destination.mkdir()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.seed_repair_source_from_parent_step(
+                self.workspace,
+                attempt=attempt_id,
+                from_step=99,
+                destination=destination,
+            )
+        self.assertEqual("invalid_attempt", ctx.exception.classification)
+        self.assertFalse((destination / "source").exists())
+
+    def test_seed_rejects_from_step_mismatch_against_active_attempt(self) -> None:
+        # A second published cycle so a step index other than the parent
+        # actually exists and yet still fails the parent-binding check.
+        self.publish_initial_flow()
+        self.publish_one_cycle()
+        plan = self.repair_plan("seed-plan-mismatch", from_step=1)
+        status, attempt, stderr = self.invoke(
+            "begin-attempt",
+            "--workspace",
+            str(self.workspace),
+            "--plan",
+            str(plan),
+            "--intended-step",
+            "2",
+            "--from-step",
+            "1",
+        )
+        self.assertEqual(0, status, stderr)
+        helper = _load_workspace_helper()
+        destination = self.root / "ext-work-mismatch"
+        destination.mkdir()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.seed_repair_source_from_parent_step(
+                self.workspace,
+                attempt=attempt["attempt"]["attempt"],
+                from_step=0,
+                destination=destination,
+            )
+        self.assertEqual("invalid_attempt", ctx.exception.classification)
+        self.assertFalse((destination / "source").exists())
+
+    def test_seed_rejects_destination_that_is_a_symlink(self) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        real = self.root / "real-empty"
+        real.mkdir()
+        destination = self.root / "ext-work-symlink"
+        os.symlink(real, destination)
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.seed_repair_source_from_parent_step(
+                self.workspace,
+                attempt=attempt_id,
+                from_step=0,
+                destination=destination,
+            )
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self.assertFalse((real / "source").exists())
+
+    def test_seed_rejects_destination_that_is_not_empty(self) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        destination = self.root / "ext-work-nonempty"
+        destination.mkdir()
+        (destination / "stowaway.txt").write_text("stow\n", encoding="utf-8")
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.seed_repair_source_from_parent_step(
+                self.workspace,
+                attempt=attempt_id,
+                from_step=0,
+                destination=destination,
+            )
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self.assertFalse((destination / "source").exists())
+        self.assertTrue((destination / "stowaway.txt").exists())
+
+    def test_seed_rejects_destination_inside_the_workspace(self) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        destination = self.workspace / "work" / "internal-seed"
+        destination.mkdir(parents=True)
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.seed_repair_source_from_parent_step(
+                self.workspace,
+                attempt=attempt_id,
+                from_step=0,
+                destination=destination,
+            )
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self.assertFalse((destination / "source").exists())
+
+    def test_seed_rejects_parent_authority_source_that_is_a_symlink(self) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        authority_source = (
+            self.workspace / "steps" / "000000" / "candidate" / "source"
+        )
+        replacement = self.workspace / "steps" / "000000" / "candidate" / "source.real"
+        shutil.move(str(authority_source), str(replacement))
+        os.symlink(replacement, authority_source)
+        destination = self.root / "ext-work-authority-symlink"
+        destination.mkdir()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.seed_repair_source_from_parent_step(
+                self.workspace,
+                attempt=attempt_id,
+                from_step=0,
+                destination=destination,
+            )
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self.assertFalse((destination / "source").exists())
+
+    def test_seed_happy_path_copies_committed_parent_source_into_empty_destination(
+        self,
+    ) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        destination = self.root / "ext-work-happy"
+        destination.mkdir()
+        helper.seed_repair_source_from_parent_step(
+            self.workspace,
+            attempt=attempt_id,
+            from_step=0,
+            destination=destination,
+        )
+        seeded = destination / "source" / "model.py"
+        self.assertTrue(seeded.is_file())
+        expected = (
+            self.workspace / "steps" / "000000" / "candidate" / "source" / "model.py"
+        ).read_bytes()
+        self.assertEqual(expected, seeded.read_bytes())
+
+    def test_seed_rollback_leaves_no_partial_work_tree_when_copy_fails(self) -> None:
+        helper, attempt_id = self._seed_prepared_repair()
+        destination = self.root / "ext-work-rollback"
+        destination.mkdir()
+        with mock.patch.object(
+            helper,
+            "_copy_agent_tree",
+            side_effect=helper.WorkspaceError(
+                "invalid_workspace_path", "simulated descriptor-safe failure"
+            ),
+        ):
+            with self.assertRaises(helper.WorkspaceError):
+                helper.seed_repair_source_from_parent_step(
+                    self.workspace,
+                    attempt=attempt_id,
+                    from_step=0,
+                    destination=destination,
+                )
+        self.assertFalse((destination / "source").exists())
+        with os.scandir(destination) as entries:
+            self.assertEqual([], list(entries))
+
     def test_voxblame_placement_is_checked_before_step_authority_rename(self) -> None:
         status, _payload, stderr = self.invoke(
             "init",
@@ -2836,6 +3129,358 @@ time.sleep(60)
         self.assertEqual("invalid_workspace_path", rejected["error"]["classification"])
         self.assertFalse((self.workspace / "steps/000000").exists())
         self.assertFalse(list((self.workspace / "work").glob(".tmp-step-zero-*")))
+
+
+def _valid_agent_claim(
+    *,
+    stop_reason: str = "cycle_limit",
+    conflict: bool = False,
+    conflict_details=None,
+    preview_observation: str = "Preview matches intent.",
+    rationale: str = "Only head available under budget.",
+) -> dict:
+    return {
+        "schema": "mesh-to-cad.agent-selection-claim/1",
+        "preview_observation": preview_observation,
+        "stop_reason": stop_reason,
+        "conflict": conflict,
+        "conflict_details": conflict_details,
+        "rationale": rationale,
+    }
+
+
+class AgentSelectionClaimSchemaTests(unittest.TestCase):
+    """Pure schema tests for ``_validate_agent_selection_claim``.
+
+    The claim schema is the entire agent-to-W1 boundary for select_and_finalize;
+    the validator must be closed and fail-closed so no evidence path, hash,
+    accepted flag, step id, provider fact, or authority schema can leak
+    through as an extra key.
+    """
+
+    def setUp(self) -> None:
+        self.helper = _load_workspace_helper()
+
+    def _reject(self, claim: dict, path: str) -> None:
+        with self.assertRaises(self.helper.WorkspaceError) as ctx:
+            self.helper._validate_agent_selection_claim(claim)
+        self.assertEqual("invalid_contract", ctx.exception.classification)
+        self.assertEqual(path, ctx.exception.path)
+
+    def test_valid_clear_preview_round_trips_normalized(self) -> None:
+        claim = _valid_agent_claim()
+        normalized = self.helper._validate_agent_selection_claim(claim)
+        self.assertEqual(claim, normalized)
+
+    def test_valid_conflict_requires_details_and_round_trips(self) -> None:
+        claim = _valid_agent_claim(
+            conflict=True,
+            conflict_details="Preview shows unexpected feature not requested.",
+            stop_reason="modeling_intent_conflict",
+        )
+        normalized = self.helper._validate_agent_selection_claim(claim)
+        self.assertEqual(claim, normalized)
+
+    def test_schema_field_must_match_exact_agent_claim_version(self) -> None:
+        claim = _valid_agent_claim()
+        claim["schema"] = "mesh-to-cad.agent-selection-claim/2"
+        self._reject(claim, "$.selection_claim.schema")
+
+    def test_missing_required_key_is_refused(self) -> None:
+        claim = _valid_agent_claim()
+        del claim["rationale"]
+        self._reject(claim, "$.selection_claim")
+
+    def test_extra_key_would_be_refused_even_if_named_evidence(self) -> None:
+        # The whole point of the closed schema is that an agent cannot
+        # smuggle evidence paths, hashes, accepted facts, considered_steps,
+        # step_id, provider facts, or authority schemas into finalization.
+        for extra_key in (
+            "evidence",
+            "evidence_sha256",
+            "considered_steps",
+            "selected_step",
+            "step_id",
+            "accepted",
+            "measurement_path",
+            "preview_identity_sha256",
+            "provider_fact",
+            "authority",
+        ):
+            with self.subTest(extra_key=extra_key):
+                claim = _valid_agent_claim()
+                claim[extra_key] = "smuggled"
+                self._reject(claim, "$.selection_claim")
+
+    def test_unknown_stop_reason_is_refused(self) -> None:
+        claim = _valid_agent_claim(stop_reason="operator_stop")
+        self._reject(claim, "$.selection_claim.stop_reason")
+
+    def test_all_seven_stop_reasons_are_accepted(self) -> None:
+        for stop_reason in (
+            "acceptance_satisfied",
+            "cycle_limit",
+            "no_feasible_strategy",
+            "representation_limit",
+            "modeling_intent_conflict",
+            "repeated_ineffective_strategy",
+            "tool_failure",
+        ):
+            with self.subTest(stop_reason=stop_reason):
+                claim = _valid_agent_claim(stop_reason=stop_reason)
+                self.helper._validate_agent_selection_claim(claim)
+
+    def test_conflict_flag_must_be_bool_not_truthy_int(self) -> None:
+        claim = _valid_agent_claim()
+        claim["conflict"] = 1
+        self._reject(claim, "$.selection_claim.conflict")
+
+    def test_conflict_true_requires_nonempty_details(self) -> None:
+        claim = _valid_agent_claim(conflict=True, conflict_details=None)
+        self._reject(claim, "$.selection_claim.conflict_details")
+        claim = _valid_agent_claim(conflict=True, conflict_details="")
+        self._reject(claim, "$.selection_claim.conflict_details")
+
+    def test_clear_preview_must_leave_conflict_details_null(self) -> None:
+        claim = _valid_agent_claim(conflict=False, conflict_details="lingering")
+        self._reject(claim, "$.selection_claim.conflict_details")
+
+    def test_preview_observation_and_rationale_must_be_bounded_nonempty(self) -> None:
+        for field, path in (
+            ("preview_observation", "$.selection_claim.preview_observation"),
+            ("rationale", "$.selection_claim.rationale"),
+        ):
+            for bad in ("", "x" * 4097, 42, None, ["listy"]):
+                with self.subTest(field=field, bad=bad):
+                    claim = _valid_agent_claim()
+                    claim[field] = bad
+                    self._reject(claim, path)
+
+    def test_top_level_must_be_dict(self) -> None:
+        for bad in (None, "string", 5, [], (1, 2, 3)):
+            with self.subTest(bad=bad):
+                with self.assertRaises(self.helper.WorkspaceError) as ctx:
+                    self.helper._validate_agent_selection_claim(bad)
+                self.assertEqual("invalid_contract", ctx.exception.classification)
+                self.assertEqual("$.selection_claim", ctx.exception.path)
+
+
+class AgentSelectionClaimFinalizationTests(unittest.TestCase):
+    """Adversarial coverage for ``finalize_from_agent_selection_claim``.
+
+    Uses composition with WorkspaceCliTests to reuse the workspace/publish
+    helpers without inheriting its (unrelated) test methods.
+    """
+
+    def setUp(self) -> None:
+        self._fixture = WorkspaceCliTests(methodName="setUp")
+        self._fixture.setUp()
+        self.addCleanup(self._fixture.doCleanups)
+        self.root = self._fixture.root
+        self.workspace = self._fixture.workspace
+
+    def _prepare_source(
+        self,
+        *,
+        claim: dict | str,
+        notes_text: str | None = None,
+        notes_symlink_target: Path | None = None,
+    ) -> tuple[Path, str, str]:
+        source = self.root / "agent-source"
+        source.mkdir()
+        selection_rel = "claim.json"
+        notes_rel = "notes.md"
+        selection_path = source / selection_rel
+        if isinstance(claim, str):
+            selection_path.write_text(claim, encoding="utf-8")
+        else:
+            selection_path.write_text(
+                json.dumps(claim, sort_keys=True) + "\n", encoding="utf-8"
+            )
+        notes_path = source / notes_rel
+        if notes_symlink_target is not None:
+            os.symlink(notes_symlink_target, notes_path)
+        else:
+            notes_path.write_text(
+                notes_text if notes_text is not None else "notes body\n",
+                encoding="utf-8",
+            )
+        return source, selection_rel, notes_rel
+
+    def _finalize(
+        self,
+        *,
+        selected_step,
+        claim: dict | str,
+        notes_text: str | None = None,
+        notes_symlink_target: Path | None = None,
+        source: Path | None = None,
+    ):
+        helper = _load_workspace_helper()
+        prepared_source, selection_rel, notes_rel = self._prepare_source(
+            claim=claim,
+            notes_text=notes_text,
+            notes_symlink_target=notes_symlink_target,
+        )
+        return helper.finalize_from_agent_selection_claim(
+            self.workspace,
+            source=source if source is not None else prepared_source,
+            selection=selection_rel,
+            notes=notes_rel,
+            selected_step=selected_step,
+            rebuild_entrypoint=Path("/dev/null"),
+            geometry_entrypoint=Path("/dev/null"),
+            tool_registry=Path("/dev/null"),
+        )
+
+    def _assert_no_final_state(self) -> None:
+        final_dir = self.workspace / "final"
+        if final_dir.exists():
+            self.assertFalse(
+                any(final_dir.iterdir()),
+                f"final/ should be empty on fail-closed, saw {list(final_dir.iterdir())}",
+            )
+        for tmp in (self.workspace / "work").glob(".tmp-final-*"):
+            self.fail(f"finalization staging leaked: {tmp}")
+
+    def test_finalize_rejects_selected_step_below_zero(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=-1, claim=_valid_agent_claim())
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self.assertEqual("$.selected_step", ctx.exception.path)
+        self._assert_no_final_state()
+
+    def test_finalize_rejects_selected_step_above_repair_budget(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=6, claim=_valid_agent_claim())
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self._assert_no_final_state()
+
+    def test_finalize_rejects_bool_selected_step_disguised_as_int(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=True, claim=_valid_agent_claim())
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+
+    def test_finalize_rejects_selected_step_absent_from_graph(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=3, claim=_valid_agent_claim())
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self._assert_no_final_state()
+
+    def test_finalize_rejects_non_head_ancestor_step(self) -> None:
+        # After a repair cycle publishes step 1 from step 0, step 0 is no
+        # longer a selectable current head; agent cannot re-select it.
+        self._fixture.publish_initial_flow()
+        self._fixture.publish_one_cycle()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=0, claim=_valid_agent_claim())
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self._assert_no_final_state()
+
+    def test_finalize_fails_closed_on_agent_semantic_conflict(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        conflict_claim = _valid_agent_claim(
+            conflict=True,
+            conflict_details="Preview identity mismatches modeling intent.",
+            stop_reason="modeling_intent_conflict",
+        )
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=0, claim=conflict_claim)
+        self.assertEqual("agent_semantic_conflict", ctx.exception.classification)
+        self.assertEqual("$.selection_claim.conflict", ctx.exception.path)
+        self._assert_no_final_state()
+
+    def test_finalize_refuses_acceptance_satisfied_on_unaccepted_step(self) -> None:
+        # publish_initial_flow publishes step 0 with accepted=False; the
+        # agent cannot claim acceptance_satisfied against it.
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(
+                selected_step=0,
+                claim=_valid_agent_claim(stop_reason="acceptance_satisfied"),
+            )
+        self.assertEqual("identity_conflict", ctx.exception.classification)
+        self.assertEqual("$.selection_claim.stop_reason", ctx.exception.path)
+        self._assert_no_final_state()
+
+    def test_finalize_refuses_extra_smuggled_evidence_key_in_claim(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        smuggled = _valid_agent_claim()
+        smuggled["evidence"] = [
+            {"path": "steps/000000/measurement.json", "sha256": "0" * 64}
+        ]
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=0, claim=smuggled)
+        self.assertEqual("invalid_contract", ctx.exception.classification)
+        self._assert_no_final_state()
+
+    def test_finalize_refuses_preview_identity_injection_in_claim(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        smuggled = _valid_agent_claim()
+        smuggled["preview_identity_sha256"] = "f" * 64
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=0, claim=smuggled)
+        self.assertEqual("invalid_contract", ctx.exception.classification)
+
+    def test_finalize_refuses_non_json_claim_body(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(selected_step=0, claim="not-a-json-object\n")
+        self.assertEqual("invalid_contract", ctx.exception.classification)
+        self.assertEqual("$.selection_claim", ctx.exception.path)
+        self._assert_no_final_state()
+
+    def test_finalize_refuses_symlinked_notes_inside_source(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        target = self.root / "elsewhere.md"
+        target.write_text("outside\n", encoding="utf-8")
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            self._finalize(
+                selected_step=0,
+                claim=_valid_agent_claim(),
+                notes_symlink_target=target,
+            )
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
+        self._assert_no_final_state()
+
+    def test_finalize_refuses_symlinked_source_root(self) -> None:
+        self._fixture.publish_initial_flow()
+        helper = _load_workspace_helper()
+        real = self.root / "real-agent-source"
+        real.mkdir()
+        (real / "claim.json").write_text(
+            json.dumps(_valid_agent_claim()) + "\n", encoding="utf-8"
+        )
+        (real / "notes.md").write_text("notes\n", encoding="utf-8")
+        linked = self.root / "linked-agent-source"
+        os.symlink(real, linked)
+        with self.assertRaises(helper.WorkspaceError) as ctx:
+            helper.finalize_from_agent_selection_claim(
+                self.workspace,
+                source=linked,
+                selection="claim.json",
+                notes="notes.md",
+                selected_step=0,
+                rebuild_entrypoint=Path("/dev/null"),
+                geometry_entrypoint=Path("/dev/null"),
+                tool_registry=Path("/dev/null"),
+            )
+        self.assertEqual("invalid_workspace_path", ctx.exception.classification)
 
 
 def _run_synthetic_runner_workload(workspace: Path) -> int:

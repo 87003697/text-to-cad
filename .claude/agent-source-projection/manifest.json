@@ -1,0 +1,31 @@
+{
+  "entries": [
+    {
+      "path": "agent-surface/client.py",
+      "sha256": "fce707ec8cdefb113814fc76f901e3a6375947aaaab5ea0af1d406ed89401939",
+      "size": 3957
+    },
+    {
+      "path": "skills/mesh-to-cad/SKILL.md",
+      "sha256": "73f4daf9ad561e4262ef86507d76e0898ecc17eacb333eaac82b0f8c31a194bf",
+      "size": 13995
+    },
+    {
+      "path": "skills/mesh-to-cad/references/agent-selection-claim.md",
+      "sha256": "4586a9203e58454e4f0241e9c5136776d3ceb377e8d1ac7f494dfb6232b7d035",
+      "size": 4528
+    },
+    {
+      "path": "skills/mesh-to-cad/references/assessment.md",
+      "sha256": "1b15f80924022f15609375ac16286b0b84be5e24fc39ce4102d81f71aab37b69",
+      "size": 4392
+    },
+    {
+      "path": "skills/mesh-to-cad/references/candidate-authoring.md",
+      "sha256": "7b440ac42ce18e088b67fdccb66627afa7b037580188978d747d4b8ba5c55517",
+      "size": 4018
+    }
+  ],
+  "schema": "text-to-cad.agent-source-projection/2",
+  "version": "2"
+}

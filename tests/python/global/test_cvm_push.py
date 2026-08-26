@@ -119,7 +119,7 @@ def create_repo(root: Path) -> Path:
     (repo / "viewer").mkdir()
     (repo / "AGENTS.md").write_text("test\n", encoding="utf-8")
     (repo / ".cvmignore").write_text(
-        ".git/\n.git\nnode_modules\nnode_modules/\n/viewer/\n.cvm-jobs/\n",
+        ".git/\n.git\nnode_modules\nnode_modules/\n/viewer/\n.claude/\n.cvm-jobs/\n",
         encoding="utf-8",
     )
     (repo / "viewer/package-lock.json").write_text(
@@ -139,6 +139,26 @@ def create_repo(root: Path) -> Path:
         encoding="utf-8",
     )
     return repo
+
+
+def stage_publish_artifacts(root: Path) -> None:
+    shutil.copytree(
+        REPO_ROOT / cvm_push._agent_source_projection.PROJECTION_ROOT_REL,
+        root / cvm_push._agent_source_projection.PROJECTION_ROOT_REL,
+    )
+    runtime_roots = (
+        cvm_push._trusted_tools.CANONICAL_BUILD_RELATIVE,
+        cvm_push._trusted_tools.CADGEN_RUNTIME_RELATIVE / "src/cadgen",
+        cvm_push._trusted_tools.MESHSCOPE_RUNTIME_RELATIVE / "src/meshscope",
+        cvm_push._trusted_tools.MESHSHOT_RUNTIME_RELATIVE / "src/meshshot",
+    )
+    for relative in runtime_roots:
+        runtime = root / relative
+        runtime.mkdir(parents=True, exist_ok=True)
+        (runtime / "runtime.py").write_text("# fixed runtime\n", encoding="utf-8")
+    manifest = root / cvm_push._trusted_tools.MANIFEST_RELATIVE
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_bytes(cvm_push._trusted_tools.manifest_bytes(root))
 
 
 def create_viewer_dependencies(root: Path) -> Path:
@@ -986,6 +1006,9 @@ class TransferAndVerifyTests(unittest.TestCase):
             for path in (root_viewer, nested_viewer):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("x\n", encoding="utf-8")
+            stage_publish_artifacts(source)
+            private_claude = source / ".claude/private-state.txt"
+            private_claude.write_text("must not transfer\n", encoding="utf-8")
             nested_viewer.chmod(0o700)
             linked_modules = source / "packages/cadjs/node_modules"
             linked_modules.parent.mkdir(parents=True)
@@ -1011,6 +1034,15 @@ class TransferAndVerifyTests(unittest.TestCase):
             self.assertTrue(
                 (target / "skills/cad-viewer/scripts/viewer/nested.txt").is_file()
             )
+            cvm_push._agent_source_projection.verify(
+                target / cvm_push._agent_source_projection.PROJECTION_ROOT_REL
+            )
+            cvm_push._trusted_tools.validate_trusted_tools(target)
+            self.assertTrue(
+                (transfer_tree / cvm_push._trusted_tools.MANIFEST_RELATIVE).is_file()
+            )
+            self.assertFalse((transfer_tree / ".claude/private-state.txt").exists())
+            self.assertFalse((target / ".claude/private-state.txt").exists())
             self.assertEqual(
                 stat.S_IMODE(
                     (transfer_tree / "skills/cad-viewer/scripts/viewer/nested.txt")
@@ -1030,6 +1062,7 @@ class TransferAndVerifyTests(unittest.TestCase):
             package_file = source / "packages/meshscope/src/meshscope/__init__.py"
             package_file.parent.mkdir(parents=True)
             package_file.write_text("# real package\n", encoding="utf-8")
+            stage_publish_artifacts(source)
             workflow = cvm_push.CvmPush(
                 cvm_push.CommandRunner(),
                 repo_root=REPO_ROOT,
@@ -1077,6 +1110,7 @@ class TransferAndVerifyTests(unittest.TestCase):
             outside = root / "outside.txt"
             outside.write_text("outside\n", encoding="utf-8")
             os.symlink(outside, source / "unlisted-link")
+            stage_publish_artifacts(source)
             workflow = cvm_push.CvmPush(
                 cvm_push.CommandRunner(),
                 repo_root=repo,
@@ -1377,7 +1411,15 @@ class WorkflowTests(unittest.TestCase):
             workflow.bundle_stage(stage)
 
         self.assertEqual(runner.stream_status, 0)
-        self.assertEqual(len(runner.stream_envs), 1)
+        self.assertEqual(
+            [stream[0] for stream in runner.streams],
+            [
+                ("scripts/bundle/bundle-skill.sh", "--all"),
+                ("scripts/bundle/bundle-agent-source-projection.sh",),
+                ("scripts/bundle/bundle-trusted-tools.sh",),
+            ],
+        )
+        self.assertEqual(len(runner.stream_envs), 3)
         env = runner.stream_envs[0]
         assert env is not None
         expected = str(stage / "tmp/cad-snapshot-build")

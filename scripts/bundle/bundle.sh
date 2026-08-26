@@ -65,6 +65,22 @@ else
 fi
 
 if [ "$MODE" = "check" ]; then
+  echo "Checking Agent Source Projection..."
+  "$SCRIPT_DIR/bundle-agent-source-projection.sh" --check
+else
+  echo "Bundling Agent Source Projection..."
+  "$SCRIPT_DIR/bundle-agent-source-projection.sh"
+fi
+
+if [ "$MODE" = "check" ]; then
+  echo "Checking trusted tools..."
+  "$SCRIPT_DIR/bundle-trusted-tools.sh" --check
+else
+  echo "Bundling trusted tools..."
+  "$SCRIPT_DIR/bundle-trusted-tools.sh"
+fi
+
+if [ "$MODE" = "check" ]; then
   echo "All bundle outputs are up to date."
 else
   echo "Bundled all production outputs."

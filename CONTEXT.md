@@ -112,6 +112,54 @@ _Avoid_: Copy of the latest files
 The experiment-local state graph containing immutable measured steps, repair cycles, attempts, VoxBlame evidence, and final delivery, plus an ignored mutable work area.
 _Avoid_: Output folder, VoxBlame directory
 
+**Workspace Authority**:
+The immutable reconstruction facts whose publication changes a Workspace state graph. Runner completion, transfer results, review verdicts, and evaluation scores are outside this authority.
+_Avoid_: Experiment contents, output manifest, review authority
+
+**Workspace View**:
+A validated, read-only projection of Workspace Authority facts for a declared consumer purpose.
+_Avoid_: Workspace copy, report, cached directory scan
+
+**Agent Surface**:
+The closed set of reconstruction intents and purpose-bound Workspace facts available to a Modeling Agent without exposing Workspace Authority or its publication machinery.
+_Avoid_: Internal, Workspace interface, authority CLI
+
+**Agent Intent**:
+A domain-level request made through the Agent Surface to observe a reference, develop or measure a candidate, submit a repair result, select a step, or request delivery.
+_Avoid_: Authority publication, shell command, file operation
+
+**Consumer Verdict**:
+A conclusion produced by a runner, reviewer, evaluator, or transfer process from a Workspace View without becoming Workspace Authority.
+_Avoid_: Workspace fact, acceptance fact, transaction result
+
+**Reference Capability**:
+A job-private authority to request a closed set of bounded observations of one Canonical Reference without exposing its raw representation.
+_Avoid_: Mesh path, read-only mesh, geometry export
+
+**Reference Observation**:
+A bounded fact or rendering returned through a Reference Capability for reconstruction reasoning.
+_Avoid_: Raw mesh, Workspace inspection, arbitrary geometry query
+
+**Terminal Validation Result**:
+The reusable result of the required complete Workspace validation after pilot execution reaches a terminal state.
+_Avoid_: Final Delivery, review verdict, repeated review validation
+
+**Reference Binding**:
+The trusted association, established during outer Workspace preparation and initialization, between a Reference Capability instance and the single Canonical Reference committed by one Workspace. It names one absolute Canonical Reference location and the published content and identity digests that describe it. It is derived from Workspace state, never chosen by the Agent, never overridden by ambient environment, and proven before the Agent Surface starts.
+_Avoid_: Reference path option, environment override, Agent-selected reference, foreign identity claim
+
+**Trusted Candidate Execution**:
+The choreography of Agent Intents through which fixed, release-shipped tools develop, measure, preview, and diff one candidate under Workspace Authority. All evidence flows through this choreography; its packaging is not a runtime cache, lease, or separate domain object.
+_Avoid_: Agent build command, Agent-owned measurement, side-channel preview, runtime tool bundle
+
+**Terminal Validation Handoff**:
+The runner-owned, one-way transfer of a Terminal Validation Result and expected identity to a downstream consumer over its own trust lineage. Its storage is invisible to the Agent and uses the host's supported lock and atomic-file primitives; unsupported hosts fail before publication. It is independent of Workspace Authority and does not introduce a general transaction or receipt framework.
+_Avoid_: Signed evidence bundle, KMS-brokered receipt, review authority publication, cross-platform transaction framework
+
+**Agent Source Projection**:
+The five-file, Agent-only subset of installed skill source materialized by bundle and release with an exact manifest. The runner verifies and mounts that subset; it does not regenerate it or mount a complete installed skill tree.
+_Avoid_: Full skill mount, workspace source bind, installed plugin tree, runtime projection builder
+
 ## Browser Runtime Language
 
 **Local Rendering Browser**:

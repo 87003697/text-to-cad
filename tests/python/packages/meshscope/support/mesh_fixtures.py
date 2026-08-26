@@ -16,20 +16,20 @@ class GeneratedMeshFixtures:
             prefix="meshscope-mesh-fixtures-"
         )
         root = Path(self._temporary.name)
-        self.cube = root / "cube.obj"
-        self.cube_scaled = root / "cube_scaled.obj"
+        self.cube = root / "cube.ply"
+        self.cube_scaled = root / "cube_scaled.ply"
         self.tetrahedron = root / "tetrahedron.ply"
 
         cube = trimesh.Trimesh(
             vertices=[
-                [0, 0, 0],
-                [1, 0, 0],
-                [1, 1, 0],
-                [0, 1, 0],
-                [0, 0, 1],
-                [1, 0, 1],
-                [1, 1, 1],
-                [0, 1, 1],
+                [-0.5, -0.5, -0.5],
+                [0.5, -0.5, -0.5],
+                [0.5, 0.5, -0.5],
+                [-0.5, 0.5, -0.5],
+                [-0.5, -0.5, 0.5],
+                [0.5, -0.5, 0.5],
+                [0.5, 0.5, 0.5],
+                [-0.5, 0.5, 0.5],
             ],
             faces=[
                 [0, 1, 2],
@@ -55,10 +55,10 @@ class GeneratedMeshFixtures:
 
         tetrahedron = trimesh.Trimesh(
             vertices=[
-                [0, 0, 0],
-                [1, 0, 0],
-                [0.5, 0.866, 0],
-                [0.5, 0.289, 0.816],
+                [-0.5, -0.433, -0.408],
+                [0.5, -0.433, -0.408],
+                [0.0, 0.433, -0.408],
+                [0.0, -0.144, 0.408],
             ],
             faces=[
                 [0, 1, 2],

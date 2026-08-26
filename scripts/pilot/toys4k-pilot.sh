@@ -11,6 +11,18 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 
+# Production checkouts ship the trusted bridge and use the authority-hidden
+# Agent Surface by default. Small launcher fixtures that copy only this script
+# retain the legacy prompt; operators can force that compatibility path with
+# AGENT_SURFACE_MODE=0.
+if [[ "${AGENT_SURFACE_MODE:-}" == "0" ]]; then
+    AGENT_SURFACE_MODE=0
+elif [[ -f "$SCRIPT_DIR/agent_surface_bridge.py" ]]; then
+    AGENT_SURFACE_MODE=1
+else
+    AGENT_SURFACE_MODE=0
+fi
+
 # Defensive: source secrets so `nohup ./toys4k-pilot.sh ...` works without
 # a caller wrapper. The direct Venus provider still needs VENUS_TOKEN; nohup
 # does not source shell startup files. A missing file is fine for local tests.
@@ -108,7 +120,22 @@ case "$PLUGIN_MODE" in
 esac
 
 RECONSTRUCTION_SPEC_INSTRUCTION=""
-if [[ "$RECONSTRUCTION_SPEC" == 1 ]]; then
+if [[ "$AGENT_SURFACE_MODE" == 1 ]]; then
+    if [[ "$RECONSTRUCTION_SPEC" == 1 ]]; then
+        RECONSTRUCTION_SPEC_INSTRUCTION=$(cat <<'EOF'
+Reconstruction Spec is enabled. Keep the mutable document at the fixed
+candidate mount path /candidate/reconstruction-spec.json. Do not inspect or
+name any host, Workspace, input, or persistence path.
+EOF
+        )
+    else
+        RECONSTRUCTION_SPEC_INSTRUCTION=$(cat <<'EOF'
+Reconstruction Spec is disabled for this run. Do not create, read, or update a
+Reconstruction Spec.
+EOF
+        )
+    fi
+elif [[ "$RECONSTRUCTION_SPEC" == 1 ]]; then
     RECONSTRUCTION_SPEC_INSTRUCTION=$(cat <<EOF
 Reconstruction Spec is enabled for this pilot. After raw-mesh inspection and
 Canonical Reference preparation, create and maintain the mutable file
@@ -164,7 +191,34 @@ EOF
     )
 fi
 
-PROMPT=$(cat <<EOF
+if [[ "$AGENT_SURFACE_MODE" == 1 ]]; then
+    PROMPT=$(cat <<EOF
+${PROMPT_PREAMBLE}
+
+This is an authority-hidden Agent Surface execution. Read the opaque bootstrap
+contract from the fixed candidate mount /candidate/bootstrap.json. Use only
+the fixed client /agent-surface/client.py (or its --mcp mode) to invoke these
+seven intents: workspace_status, start_attempt, run_candidate_tool,
+submit_step_zero, submit_repair, select_and_finalize, and observe_reference.
+Use only handles from the bootstrap contract and the returned
+capability_bundle_handle; reuse that attempt-scoped bundle for candidate tool
+and evidence submissions. Never invent paths, argv, shell
+commands, Workspace IDs, reference IDs, or persistence locations. Write model
+source and candidate evidence only below /candidate. The trusted supervisor
+owns Workspace publication, Git/LFS, validation, recovery, and the terminal
+handoff. Raw and canonical reference bytes are unavailable to this process.
+
+The canonical Workspace and its atomically published Final Delivery define
+success. ${RECONSTRUCTION_SPEC_INSTRUCTION}
+
+Use \`view_image\` to inspect key generated setup/formal preview PNGs for
+initial modeling, Repair Hypothesis parent/child comparison, and final
+selection, alongside objective measurements returned through the fixed
+capabilities.
+EOF
+    )
+else
+    PROMPT=$(cat <<EOF
 ${PROMPT_PREAMBLE}
 
 Input mesh: ${PLY}
@@ -180,7 +234,8 @@ ${VIEW_IMAGE_INSTRUCTION}
 
 Stay under ${EXP_DIR}; do not modify skills/, packages/, or files outside.
 EOF
-)
+    )
+fi
 
 echo "[pilot] $OBJ → $EXP_DIR"
 
@@ -204,10 +259,18 @@ WORKLOAD+=(
 )
 
 PILOT_EXIT=0
-PYTHONPATH="$REPO_ROOT/packages/browser_runtime/src${PYTHONPATH:+:$PYTHONPATH}" \
-"$PYTHON_BIN" "$SCRIPT_DIR/runner.py" run --input "$PLY" "$EXP_DIR" -- \
-    "${WORKLOAD[@]}" < /dev/null > /dev/null \
-    2> "${EXP_DIR}/run/stderr.log" || PILOT_EXIT=$?
+if [[ "$AGENT_SURFACE_MODE" == 1 ]]; then
+    PYTHONPATH="$REPO_ROOT/packages/browser_runtime/src${PYTHONPATH:+:$PYTHONPATH}" \
+    "$PYTHON_BIN" "$SCRIPT_DIR/runner.py" run --agent-surface --input "$PLY" "$EXP_DIR" -- \
+        "${WORKLOAD[@]}" < /dev/null > /dev/null \
+        2> "${EXP_DIR}/run/stderr.log" || PILOT_EXIT=$?
+else
+    # Legacy compatibility syntax retained for controlled non-bridge runs.
+    PYTHONPATH="$REPO_ROOT/packages/browser_runtime/src${PYTHONPATH:+:$PYTHONPATH}" \
+    "$PYTHON_BIN" "$SCRIPT_DIR/runner.py" run --input "$PLY" "$EXP_DIR" -- \
+        "${WORKLOAD[@]}" < /dev/null > /dev/null \
+        2> "${EXP_DIR}/run/stderr.log" || PILOT_EXIT=$?
+fi
 
 if [[ $PILOT_EXIT -ne 0 ]]; then
     exit "$PILOT_EXIT"

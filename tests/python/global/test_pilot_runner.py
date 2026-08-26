@@ -711,6 +711,77 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(events[-1], "relay-exit")
         supervised.assert_not_called()
 
+    def test_agent_surface_uses_deployed_publish_tree_for_trusted_tools(self) -> None:
+        publish_tree = Path("/authority/publish-tree")
+        receipt = SimpleNamespace(publish_tree=publish_tree)
+        relay = mock.MagicMock(cancelled=True, signum=signal.SIGTERM)
+        relay.__enter__ = mock.Mock(return_value=relay)
+        relay.__exit__ = mock.Mock(return_value=False)
+        runtime = FakeBrowserRuntimeJob()
+
+        class RuntimeFactory(FakeBrowserRuntimeJob):
+            @classmethod
+            def create(cls, *args, **kwargs):
+                return runtime
+
+        lease = SimpleNamespace(runtime=Path("/candidate-runtime"), release=mock.Mock())
+        agent_supervisor = mock.MagicMock()
+        agent_supervisor.candidate_root = Path("/candidate")
+        agent_supervisor.agent_bootstrap_contract.return_value = {}
+        agent_supervisor.cancellation_confirmed = True
+
+        with (
+            mock.patch.object(self.supervisor, "prepare_exp"),
+            mock.patch.object(self.supervisor, "prepare_and_initialize_workspace"),
+            mock.patch.object(self.supervisor, "SignalRelay", return_value=relay),
+            mock.patch.object(self.supervisor, "BrowserRuntimeJob", RuntimeFactory),
+            mock.patch.object(self.supervisor, "publish_tool_registry"),
+            mock.patch.object(
+                self.supervisor,
+                "materialize_candidate_runtime",
+                return_value=lease,
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "resolve_deployed_authority",
+                return_value=receipt,
+            ) as resolve,
+            mock.patch.object(
+                self.supervisor,
+                "WorkspaceSupervisor",
+                return_value=agent_supervisor,
+            ) as supervisor,
+            mock.patch.object(self.supervisor, "write_agent_bootstrap"),
+            mock.patch.object(
+                self.supervisor,
+                "finalize_pilot",
+                side_effect=lambda exp, status, env, **kwargs: status,
+            ),
+            mock.patch.object(
+                self.supervisor,
+                "validate_exp_dir",
+                return_value=self.supervisor.REPO_ROOT / "outputs/group/exp",
+            ),
+        ):
+            status = self.supervisor.run_pilot(
+                self.supervisor.REPO_ROOT / "outputs/group/exp",
+                [Path("/input.ply")],
+                ["/fake/workload"],
+                {**self.environ, "HOME": "/home/test"},
+                agent_surface=True,
+            )
+
+        self.assertEqual(128 + signal.SIGTERM, status)
+        resolve.assert_called_once_with(Path("/home/test"))
+        self.assertEqual(
+            publish_tree,
+            supervisor.call_args.kwargs["trusted_tools_root"],
+        )
+        self.assertNotEqual(
+            self.supervisor.REPO_ROOT,
+            supervisor.call_args.kwargs["trusted_tools_root"],
+        )
+
     def test_run_pilot_preflights_cad_render_before_paid_workload(self) -> None:
         events: list[str] = []
 

@@ -305,6 +305,12 @@ class ReceiptShapeTests(unittest.TestCase):
                 installed_root=installed,
                 installed_manifest=installed_manifest,
                 critical_runtimes=[{"runtime": "example", "probe": "example/x", "probe_sha256": "a" * 64}],
+                agent_source_projection={
+                    "schema": "text-to-cad.agent-source-projection/1",
+                    "version": "1",
+                    "digest": "b" * 64,
+                    "entry_count": 20,
+                },
                 registered_build_probe={
                     "resolved_entrypoint": str(installed / "cli"),
                     "build_exit_code": 0,
@@ -326,8 +332,13 @@ class ReceiptShapeTests(unittest.TestCase):
             "source_checkout_hidden_from_installed_run",
             "isolated_python_sys_path_source_free",
             "registered_build_completed",
+            "agent_source_projection_present",
         ):
             self.assertIs(receipt["assertions"][name], True)
+        self.assertEqual(
+            receipt["agent_source_projection"]["schema"],
+            "text-to-cad.agent-source-projection/1",
+        )
 
     def test_tool_registry_binds_installed_entrypoints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

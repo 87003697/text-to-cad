@@ -382,6 +382,10 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                 ),
             )
             source = closure.meshscope_source_record(clean_repo)
+            self.assertIn(
+                "src/meshscope/reference_capability.py",
+                {record["path"] for record in source["files"]},
+            )
             wheel = root / "meshscope-0.1.0-cp312-cp312-linux_x86_64.whl"
             libraries = {
                 name: root / name
@@ -564,7 +568,7 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
             )
             self.assertTrue(result["nativeConformanceDigest"].startswith("sha256:"))
 
-    def test_meshscope_development_evidence_reassembles_and_rejects_mutation(self) -> None:
+    def test_meshscope_development_evidence_rejects_stale_source_closure(self) -> None:
         closure = _load_project_closure()
         root = (
             REPO_ROOT
@@ -585,15 +589,13 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
         local_admission = json.loads(
             (root / "local-development-admission.json").read_bytes()
         )
-        candidate = closure.assemble_meshscope_development_candidate(
-            builds, audit, conformance, local_admission
-        )
-        self.assertEqual(
-            closure.canonical_json_bytes(candidate) + b"\n",
-            (root / "candidate.json").read_bytes(),
-        )
-        conformance["providerExecution"]["dispatchCount"] = 1
-        with self.assertRaises(closure.ProjectClosureError):
+        # This durable Linux evidence predates ReferenceCapability. Exact
+        # closure must reject it rather than rewriting signed build facts on
+        # macOS to make the historical candidate appear current.
+        with self.assertRaisesRegex(
+            closure.ProjectClosureError,
+            "file manifest member set is not exact",
+        ):
             closure.assemble_meshscope_development_candidate(
                 builds, audit, conformance, local_admission
             )
@@ -614,39 +616,58 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
         mutations = []
         compiler = copy.deepcopy(builds)
         compiler[0]["toolchain"]["compiler"] = "arbitrary compiler"
-        mutations.append(compiler)
+        mutations.append((compiler, "execution closure"))
         platform = copy.deepcopy(builds)
         platform[0]["platform"]["architecture"] = "arm64"
-        mutations.append(platform)
+        mutations.append((platform, "execution closure"))
         environment = copy.deepcopy(builds)
         environment[0]["environment"]["TZ"] = "local"
-        mutations.append(environment)
+        mutations.append((environment, "execution closure"))
         for command_index in (0, 1):
             command = copy.deepcopy(builds)
             command[0]["commands"][command_index] += " -funsafe-math-optimizations"
-            mutations.append(command)
+            mutations.append((command, "execution closure"))
         epoch = copy.deepcopy(builds)
         epoch[0]["sourceDateEpoch"] = 1
-        mutations.append(epoch)
+        mutations.append((epoch, "record shape"))
         source = copy.deepcopy(builds)
-        source[0]["source"]["sourceTreeDigest"] = "sha256:" + "0" * 64
-        mutations.append(source)
+        source[0]["source"]["files"][0]["sha256"] = "0" * 64
+        mutations.append((source, "file manifest path or digest"))
         wheel = copy.deepcopy(builds)
         wheel[0]["wheel"]["sha256"] = "sha256:" + "0" * 64
-        mutations.append(wheel)
+        mutations.append((wheel, "wheel identity"))
         launch = copy.deepcopy(builds)
         launch[0]["executionContext"]["launchSpec"]["networkMode"] = "bridge"
-        mutations.append(launch)
+        mutations.append((launch, "execution closure"))
         duplicate = copy.deepcopy(builds)
         duplicate = (duplicate[0], duplicate[0], duplicate[2])
-        mutations.append(duplicate)
-        for index, mutated in enumerate(mutations):
-            with self.subTest(mutation=index), self.assertRaises(
-                closure.ProjectClosureError
-            ):
+        mutations.append((duplicate, "not reproducibly cross-bound"))
+        # The immutable build records predate ReferenceCapability. Freeze only
+        # their historical file names; the real source-record validator still
+        # checks shape, file digests, and the manifest digest.
+        with (
+            mock.patch.object(
+                closure,
+                "_MESHSCOPE_SOURCE_FILES",
+                tuple(record["path"] for record in builds[0]["source"]["files"]),
+            ),
+            mock.patch.object(
+                closure, "_MESHSCOPE_WHEEL_FILES", tuple(audit["files"])
+            ),
+        ):
+            self.assertEqual(
+                "text-to-cad.meshscope-development-candidate/1",
                 closure.assemble_meshscope_development_candidate(
-                    mutated, audit, conformance, local_admission
-                )
+                    builds, audit, conformance, local_admission
+                )["schema"],
+            )
+            for index, (mutated, reason) in enumerate(mutations):
+                with self.subTest(mutation=index), self.assertRaisesRegex(
+                    closure.ProjectClosureError, reason
+                ):
+                    closure.assemble_meshscope_development_candidate(
+                        mutated, audit, conformance, local_admission
+                    )
 
     def test_meshscope_candidate_rejects_audit_and_conformance_substitution(self) -> None:
         closure = _load_project_closure()
@@ -685,30 +706,23 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
                 without_digest
             )
             audit_mutations.append((path, attacked))
-        for path, attacked in audit_mutations:
-            with self.subTest(audit_path=path), self.assertRaises(
-                closure.ProjectClosureError
-            ):
-                closure.assemble_meshscope_development_candidate(
-                    builds, attacked, conformance, local_admission
-                )
-
-        for path, value in (
-            ("dependencyWheels", [{"path": "arbitrary.whl", "sha256": "sha256:" + "0" * 64, "bytes": 1}] * 3),
-            ("imports", ["meshscope"]),
-            ("meshscopeWheel", {"path": "arbitrary.whl", "sha256": "sha256:" + "0" * 64, "bytes": 1}),
-            ("fixture.id", "arbitrary"),
-            ("fixture.inputTriangleCount", 1),
-            ("nativeModuleBasename", "arbitrary.so"),
-            ("nativeModuleSha256", "sha256:" + "0" * 64),
-            ("nativeBackendCallable", False),
-            ("measurement.depthEight.depth", 7),
-            ("measurement.depthEight.reference_surface_count", 1),
-            ("measurement.depthEight.missing_surface_count", 1),
-            ("measurement.summarySha256", "sha256:" + "0" * 64),
-            ("measurement.objectiveFacts.global_depth_8_zero", False),
-            ("providerExecution.mode", "network-denied"),
-            ("providerExecution.dispatchCount", 1),
+        conformance_mutations = []
+        for path, value, reason in (
+            ("dependencyWheels", [{"path": "arbitrary.whl", "sha256": "sha256:" + "0" * 64, "bytes": 1}] * 3, "dependency candidate set"),
+            ("imports", ["meshscope"], "Cup conformance facts"),
+            ("meshscopeWheel", {"path": "arbitrary.whl", "sha256": "sha256:" + "0" * 64, "bytes": 1}, "not bound to the audit"),
+            ("fixture.id", "arbitrary", "Cup conformance facts"),
+            ("fixture.inputTriangleCount", 1, "Cup conformance facts"),
+            ("nativeModuleBasename", "arbitrary.so", "not bound to the audit"),
+            ("nativeModuleSha256", "sha256:" + "0" * 64, "not bound to the audit"),
+            ("nativeBackendCallable", False, "not bound to the audit"),
+            ("measurement.depthEight.depth", 7, "Cup conformance facts"),
+            ("measurement.depthEight.reference_surface_count", 1, "Cup conformance facts"),
+            ("measurement.depthEight.missing_surface_count", 1, "Cup conformance facts"),
+            ("measurement.summarySha256", "sha256:" + "0" * 64, "Cup conformance facts"),
+            ("measurement.objectiveFacts.global_depth_8_zero", False, "Cup conformance facts"),
+            ("providerExecution.mode", "network-denied", "record shape"),
+            ("providerExecution.dispatchCount", 1, "record shape"),
         ):
             attacked = copy.deepcopy(conformance)
             target = attacked
@@ -721,38 +735,48 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
             attacked["nativeConformanceDigest"] = closure.canonical_json_digest(
                 without_digest
             )
-            with self.subTest(path=path), self.assertRaises(
-                closure.ProjectClosureError
-            ):
-                closure.assemble_meshscope_development_candidate(
-                    builds, audit, attacked, local_admission
-                )
+            conformance_mutations.append((path, attacked, reason))
 
-    def test_meshscope_candidate_closes_local_development_admission_without_formal_upgrade(self) -> None:
+        # Freeze only the two obsolete file-name inventories. The real source
+        # validator and every other check remain active, so the mutations below
+        # reach their named invariant.
+        with (
+            mock.patch.object(
+                closure,
+                "_MESHSCOPE_SOURCE_FILES",
+                tuple(record["path"] for record in builds[0]["source"]["files"]),
+            ),
+            mock.patch.object(
+                closure, "_MESHSCOPE_WHEEL_FILES", tuple(audit["files"])
+            ),
+        ):
+            self.assertEqual(
+                "text-to-cad.meshscope-development-candidate/1",
+                closure.assemble_meshscope_development_candidate(
+                    builds, audit, conformance, local_admission
+                )["schema"],
+            )
+            for path, attacked in audit_mutations:
+                with self.subTest(audit_path=path), self.assertRaisesRegex(
+                    closure.ProjectClosureError, "audit is not bound to the build"
+                ):
+                    closure.assemble_meshscope_development_candidate(
+                        builds, attacked, conformance, local_admission
+                    )
+            for path, attacked, reason in conformance_mutations:
+                with self.subTest(path=path), self.assertRaisesRegex(
+                    closure.ProjectClosureError, reason
+                ):
+                    closure.assemble_meshscope_development_candidate(
+                        builds, audit, attacked, local_admission
+                    )
+
+    def test_meshscope_local_development_admission_rejects_substitution(self) -> None:
         closure = _load_project_closure()
         root = REPO_ROOT / "models/agent-runtime/cup_cup_033/meshscope-development"
-        builds = tuple(
-            json.loads((root / name).read_bytes())
-            for name in ("build-1.json", "build-2.json", "build-alternate-root.json")
-        )
-        audit = json.loads((root / "wheel-audit.json").read_bytes())
-        conformance = json.loads((root / "cup-native-conformance.json").read_bytes())
         local_admission = json.loads(
             (root / "local-development-admission.json").read_bytes()
         )
-        candidate = closure.assemble_meshscope_development_candidate(
-            builds, audit, conformance, local_admission
-        )
-        self.assertEqual(
-            candidate["localDevelopmentAdmission"],
-            {
-                "status": "qualified-local-candidate",
-                "formalAdmission": False,
-                "immutableMirrorVisible": False,
-                "digest": local_admission["localDevelopmentAdmissionDigest"],
-            },
-        )
-        self.assertFalse(candidate["admission"]["admitted"])
 
         for path, value in (
             ("sai004CandidateCommit", "0" * 40),
@@ -778,12 +802,11 @@ class AgentRuntimeProjectClosureTests(unittest.TestCase):
             attacked["localDevelopmentAdmissionDigest"] = (
                 closure.canonical_json_digest(without_digest)
             )
-            with self.subTest(path=path), self.assertRaises(
-                closure.ProjectClosureError
+            with self.subTest(path=path), self.assertRaisesRegex(
+                closure.ProjectClosureError,
+                "local Development admission is invalid",
             ):
-                closure.assemble_meshscope_development_candidate(
-                    builds, audit, conformance, attacked
-                )
+                closure._validate_meshscope_local_development_admission(attacked)
 
     def test_project_manifest_closes_all_project_artifacts(self) -> None:
         closure = _load_project_closure()

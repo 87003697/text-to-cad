@@ -1,0 +1,137 @@
+# Workspace deep module requirements
+
+Status: Accepted design input
+
+Date: 2026-08-25
+
+## Outcome
+
+Concentrate the existing Mesh-to-CAD Workspace behavior behind one deep module and place one separate Agent Surface in front of it. The first vertical slice succeeds when an isolated Agent can complete a synthetic reconstruction without access to raw reference data or Workspace Authority, the retained Workspace layout publishes normally, and review reuses the pilot's terminal validation rather than repeating it.
+
+## Module seams
+
+```text
+Modeling Agent
+  -> Agent Surface handler
+       -> bounded Reference Capability
+       -> Workspace module
+            -> existing Workspace Authority implementation
+
+Runner / Review / Evaluation
+  -> Workspace module
+       -> Workspace View or Terminal Validation Result
+```
+
+### Workspace module
+
+The Workspace module is the only interface through which repository code may interpret or publish Workspace Authority. It retains the current `attempts/`, `steps/`, `cycles/`, `final/`, `step_index.json`, staging, recovery, Git, and LFS behavior. The existing implementation begins as an internal dependency rather than being rewritten or mechanically split.
+
+The first interface needs only these capabilities:
+
+- perform the existing Workspace mutations;
+- return the current validated workflow state;
+- run the complete terminal validation once;
+- publish and read a Terminal Validation Result;
+- expose the validated facts required by review and current evaluation.
+
+Callers must not parse authority directories, rebuild the graph, repeat Workspace schema validation, or write authority files directly.
+
+### Agent Surface
+
+The Agent Surface is a separate module with one shared request handler and thin CLI/MCP adapters. It exposes the existing reconstruction workflow in a small safe facade:
+
+- inspect current workflow state;
+- start an Attempt;
+- run a bounded candidate tool;
+- submit Step 0;
+- submit a repair result;
+- select and finalize;
+- request a bounded Reference Observation.
+
+The Agent understands Attempts, Measured Steps, Repair Cycles, Repair Frontiers, and Selected Steps. It does not see authority paths, staging, recovery, Git/LFS, validator implementation, raw or canonical PLY, captured originals, or reference-derived storage such as `reference.vbsvo`.
+
+The Agent writes only a job-private candidate area. Reference observations have fixed operations, fixed output profiles, bounded response sizes, and no raw mesh, export, arbitrary ROI, arbitrary camera, raycast, vertex, face, or filesystem-path access.
+
+## Terminal Validation Result
+
+After pilot execution reaches a terminal state, the Workspace module runs the existing complete validator once and atomically writes a closed, versioned result containing:
+
+- Workspace identity and validator version;
+- the validated Workspace graph;
+- deterministic review facts;
+- existing objective facts needed by evaluation;
+- the identity of an exact content manifest.
+
+The Workspace copy does not authenticate the bundle by itself. Compilation
+returns a stable terminal identity covering the closed bundle and exact
+manifest; the trusted outer supervisor retains that identity and bundle out of
+band. Verification requires the expected identity, fails closed when it is
+absent or mismatched, and does not rerun complete validation or use Git.
+Workspace persistence and crash retry belong to the outer W4 runner. A hard
+crash may cause another compilation; exactly-once means one validator call per
+successful compilation. W4/W5 carries the bundle and identity to transfer and
+review. This is an identity handoff, not a generalized receipt framework.
+
+The transfer path verifies every retained file's size and SHA-256 before it
+removes the source copy. Review verifies and consumes the retained result; it
+does not run the complete Workspace validator or reconstruct the graph. Review
+verdicts and evaluation scores remain Consumer Verdicts outside Workspace
+Authority.
+
+The handoff implementation stays small. The runner-owned handoff directory is
+not visible to the Agent, so publication needs one host lock, one atomic
+no-replace file publication, one locator, and crash reconciliation for that
+pair. Platforms without those primitives fail before compilation or mutation.
+Windows publication is not required.
+
+## Compatibility and migration
+
+- Historical Workspace readability is not required.
+- Keep the current authority layout and behavior during the first slice.
+- Introduce the Workspace module before deleting consumer logic.
+- Cut consumers over one at a time with equivalence tests.
+- Delete duplicated runner/review parsing only after the new path passes its fixed tests.
+- Further incremental validation is permitted only after profiling demonstrates that publication-time validation is still a material bottleneck.
+
+## Acceptance criteria
+
+1. On Linux, one `bwrap` vertical slice completes Step 0, one Repair Cycle,
+   finalization, terminal compilation, and review through the Agent Surface and
+   publishes a valid Final Delivery through the retained Workspace
+   implementation.
+2. An adversarial simulated Agent cannot resolve or copy raw PLY, canonical PLY, captured originals, `reference.vbsvo`, Workspace Authority roots, or the outer Git repository.
+3. Fixed Reference Observations remain usable from the isolated Agent execution.
+4. Pilot terminal handling invokes the complete Workspace validator exactly once and produces a valid Terminal Validation Result plus exact content manifest.
+5. Pilot review consumes that retained result and neither invokes the complete validator nor reconstructs the Workspace graph from authority directories.
+6. The Terminal Validation Result exposes current objective evaluation facts without defining a new score or evaluation policy.
+7. Focused Workspace, Agent Surface, runner, and review tests pass, followed by the symlink check, bundle freshness check, and installed-plugin smoke.
+8. Independent code review reports no unresolved findings against this document and ADR 0006.
+
+## Explicit non-goals
+
+- New Workspace storage layout, transaction log, event store, database, Merkle tree, or general receipt framework.
+- Historical Workspace compatibility or migration.
+- A new evaluation or scoring system.
+- Arbitrary geometry queries or a general mesh SDK.
+- Broad decomposition of `workspace_core.py` before stable responsibilities emerge.
+- General CVM/S3 synchronization, paid pilots, production deployment, or
+  cleanup of historical outputs. The existing terminal-handoff transfer path
+  is in scope only far enough to verify exact bytes before deleting its source.
+
+## Remaining blockers-first implementation tickets
+
+The original W1–W5 behavior is represented by the current branch. The
+remaining work corrects and reduces that implementation; it must not add a
+second framework around it.
+
+| Ticket | Change | Depends on | Exit evidence |
+|---|---|---|---|
+| R1 — Reduce terminal publication | Keep external identity handoff and pair recovery; remove unsupported-platform publication and machinery that defends a runner-owned directory from an Agent that cannot see it. | None | Concurrent/retry tests pass; unsupported platforms fail before mutation. |
+| R2 — Ship trusted tools once | Bundle one fixed read-only tool subset containing canonical build and its required CAD/evidence packages; remove per-pilot build-bundle cache and lease. | None | Finalized publish-tree and installed-plugin provider execution pass without source-checkout fallback. |
+| R3 — Reduce Agent projection | Keep the five fixed Agent files and exact manifest; move source/content lint to bundle time and keep only exact runtime verification. | None | Bundle freshness, exact inventory, digest, and no-symlink tests pass. |
+| R4 — Verify transferred bytes | Compare transferred experiment bytes with the terminal content manifest before cleanup; reject missing, changed, and extra files. | None | Corrupt and stale destinations retain the CVM source; an exact transfer cleans it. |
+| R5 — Authority-boundary review | Inspect remaining runner/review callers and remove only proven direct Workspace Authority interpretation or mutation. | R1, R2, R3, R4 | Independent review finds no remaining bypass; no speculative interface is added. |
+| R6 — Integration gate | Run the production-shaped lifecycle and shipped-surface gates. | R5 | Linux `bwrap` vertical slice, full regression, bundle, symlink, installed-plugin smoke, and independent review pass. |
+
+R1–R4 are implemented serially. R5 is a review-and-delete ticket, not a
+pre-authorized deepening project. R6 makes no architecture changes.

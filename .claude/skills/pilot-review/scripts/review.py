@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
-"""Read-only canonical Workspace graph audit for pilot-review."""
+"""Read-only pilot review compiler.
+
+Review consumes the runner-owned external Terminal Validation handoff and
+verifies it once with W1. It never interprets Workspace Authority directly.
+"""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
-import signal
-import subprocess
+import stat
 import sys
 import tempfile
 from typing import Any
 
 
-DEFAULT_WORKSPACE_HELPER = "mesh-to-cad-workspace"
-DEFAULT_VALIDATION_TIMEOUT_SECONDS = 1800
-MAX_VALIDATION_TIMEOUT_SECONDS = 1800
+TERMINAL_LOCATOR_SCHEMA = "mesh-to-cad.terminal-validation-locator/2"
+TERMINAL_HANDOFF_LAYOUT = "external-sibling-namespace/1"
+TERMINAL_LOCATOR_RELATIVE = "run/terminal-validation-locator.json"
+TERMINAL_HANDOFF_SCHEMA = "mesh-to-cad.terminal-validation-handoff/1"
+TERMINAL_HANDOFF_NAMESPACE = ".internal-terminal-validation"
+TERMINAL_HANDOFF_FILENAME = "terminal-validation.json"
+MAX_TERMINAL_INPUT_BYTES = 32 * 1024 * 1024
 VALID_ROOT_CAUSES = {
     "agent-policy-deviation",
     "contract-gap",
@@ -97,16 +105,6 @@ class ReviewError(RuntimeError):
     """The review could not read its declared evidence."""
 
 
-class ValidatorTimeoutError(ReviewError):
-    """The Workspace validator exceeded the configured review budget."""
-
-    def __init__(self, timeout_seconds: int):
-        super().__init__(
-            f"Workspace validator exceeded {timeout_seconds} seconds"
-        )
-        self.timeout_seconds = timeout_seconds
-
-
 def _read_json(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -117,227 +115,380 @@ def _read_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def _validate(
-    workspace: Path,
-    helper: str | Path,
-    timeout_seconds: int,
-) -> tuple[int, dict[str, Any]]:
-    helper_text = str(helper)
-    helper_path = Path(helper_text).expanduser()
-    if helper_path.exists() and (helper_path.is_dir() or helper_path.suffix == ".py"):
-        command = [sys.executable, str(helper_path)]
-    else:
-        command = [helper_text]
-    argv = [
-        *command,
-        "validate",
-        "--workspace",
-        str(workspace),
-    ]
+def _reject_symlink_components(path: Path, label: str) -> None:
+    current = path
+    while True:
+        if current.is_symlink():
+            raise ReviewError(f"{label} contains a symlink")
+        if current.parent == current:
+            return
+        current = current.parent
+
+
+def _load_workspace_verifier(helper: str | Path | None) -> Any:
+    """Load the W1 facade from the source tree or an explicit helper directory."""
+
+    candidates: list[Path] = []
+    if helper is not None:
+        candidate = Path(str(helper)).expanduser()
+        if candidate.is_dir():
+            candidates.append(candidate / "workspace.py")
+        elif candidate.name == "workspace.py":
+            candidates.append(candidate)
+    candidates.append(
+        Path(__file__).resolve().parent.parent
+        / "mesh-to-cad-workspace"
+        / "workspace.py"
+    )
+    facade_path = next(
+        (path.resolve() for path in candidates if path.is_file() and not path.is_symlink()),
+        None,
+    )
+    if facade_path is None:
+        raise ReviewError("W1 Workspace facade is unavailable for terminal verification")
+    module_name = "_mesh_to_cad_workspace_for_review"
+    loaded = sys.modules.get(module_name)
+    if loaded is not None:
+        return loaded
+    helper_root = str(facade_path.parent)
+    if helper_root not in sys.path:
+        sys.path.insert(0, helper_root)
+    spec = importlib.util.spec_from_file_location(module_name, facade_path)
+    if spec is None or spec.loader is None:
+        raise ReviewError("W1 Workspace facade cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
     try:
-        process = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=os.name == "posix",
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        sys.modules.pop(module_name, None)
+        raise ReviewError("W1 Workspace facade failed to load") from exc
+    return module
+
+
+def _read_fd_json(descriptor: int, label: str) -> dict[str, Any]:
+    """Read a bounded regular file using only the already-open descriptor."""
+
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_size < 0
+            or metadata.st_size > MAX_TERMINAL_INPUT_BYTES
+        ):
+            raise ReviewError(f"{label} is not a private regular file")
+        chunks: list[bytes] = []
+        remaining = metadata.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                raise ReviewError(f"{label} ended before its declared size")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise ReviewError(f"{label} grew during read")
+    except ReviewError:
+        raise
+    except OSError as exc:
+        raise ReviewError(f"cannot read {label}") from exc
+    try:
+        value = json.loads(b"".join(chunks).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ReviewError(f"{label} is not valid JSON") from exc
+    if not isinstance(value, dict):
+        raise ReviewError(f"{label} must be a JSON object")
+    return value
+
+
+def _read_locator_descriptor(workspace: Path) -> dict[str, Any]:
+    """Open Workspace/run/locator through directory descriptors without races."""
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+    )
+    root_fd: int | None = None
+    run_fd: int | None = None
+    try:
+        root_fd = os.open(workspace, flags)
+        root_metadata = os.fstat(root_fd)
+        if not stat.S_ISDIR(root_metadata.st_mode):
+            raise ReviewError("Workspace root is not a directory")
+        run_fd = os.open("run", flags, dir_fd=root_fd)
+        run_metadata = os.fstat(run_fd)
+        if not stat.S_ISDIR(run_metadata.st_mode):
+            raise ReviewError("Workspace run directory is unavailable")
+        locator_fd = os.open(
+            "terminal-validation-locator.json",
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=run_fd,
         )
         try:
-            stdout, stderr = process.communicate(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGTERM)
-            else:
-                process.terminate()
-            try:
-                process.communicate(timeout=2)
-            except subprocess.TimeoutExpired:
-                if os.name == "posix":
-                    os.killpg(process.pid, signal.SIGKILL)
-                else:
-                    process.kill()
-                process.communicate()
-            raise ValidatorTimeoutError(timeout_seconds)
-    except ValidatorTimeoutError:
+            return _read_fd_json(locator_fd, "terminal locator")
+        finally:
+            os.close(locator_fd)
+    except ReviewError:
         raise
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ReviewError(f"Workspace validator failed to run: {exc}") from exc
+    except (OSError, TypeError) as exc:
+        raise ReviewError("terminal locator is unavailable or unsafe") from exc
+    finally:
+        if run_fd is not None:
+            os.close(run_fd)
+        if root_fd is not None:
+            os.close(root_fd)
+
+
+def _read_handoff_descriptor(workspace: Path) -> dict[str, Any]:
+    """Open the external runner-owned handoff via descriptor-relative traversal.
+
+    The handoff lives at the fixed sibling namespace
+    ``<workspace.parent>/.internal-terminal-validation/<workspace.name>/terminal-validation.json``.
+    Every hop uses O_DIRECTORY/O_NOFOLLOW to reject symlink swaps.
+    """
+
+    exp_name = workspace.name
+    parent = workspace.parent
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+    )
+    parent_fd: int | None = None
+    namespace_fd: int | None = None
+    exp_fd: int | None = None
     try:
-        payload = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        detail = stderr.strip()
-        suffix = f": {detail}" if detail else ""
-        raise ReviewError(
-            f"Workspace validator returned invalid JSON{suffix}"
-        ) from exc
-    if not isinstance(payload, dict):
-        raise ReviewError("Workspace validator returned a non-object")
-    return process.returncode, payload
+        parent_fd = os.open(parent, flags)
+        parent_metadata = os.fstat(parent_fd)
+        if not stat.S_ISDIR(parent_metadata.st_mode):
+            raise ReviewError("Workspace parent is not a directory")
+        namespace_fd = os.open(TERMINAL_HANDOFF_NAMESPACE, flags, dir_fd=parent_fd)
+        namespace_metadata = os.fstat(namespace_fd)
+        if not stat.S_ISDIR(namespace_metadata.st_mode):
+            raise ReviewError("terminal handoff namespace is unavailable")
+        exp_fd = os.open(exp_name, flags, dir_fd=namespace_fd)
+        exp_metadata = os.fstat(exp_fd)
+        if not stat.S_ISDIR(exp_metadata.st_mode):
+            raise ReviewError("terminal handoff directory is unavailable")
+        handoff_fd = os.open(
+            TERMINAL_HANDOFF_FILENAME,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=exp_fd,
+        )
+        try:
+            return _read_fd_json(handoff_fd, "terminal handoff")
+        finally:
+            os.close(handoff_fd)
+    except ReviewError:
+        raise
+    except (OSError, TypeError) as exc:
+        raise ReviewError("terminal handoff is unavailable or unsafe") from exc
+    finally:
+        if exp_fd is not None:
+            os.close(exp_fd)
+        if namespace_fd is not None:
+            os.close(namespace_fd)
+        if parent_fd is not None:
+            os.close(parent_fd)
 
 
-def _runner_verdict(workspace: Path) -> tuple[str, list[dict[str, str]]]:
-    path = workspace / "artifact_manifest.json"
-    if not path.is_file():
-        return "not_auditable", [
-            {
-                "classification": "observability-gap",
-                "detail": "artifact_manifest.json is missing",
-                "evidence": "artifact_manifest.json",
-            }
-        ]
+def _confirm_locator_marker(workspace: Path) -> None:
+    """Consume the Workspace-local marker for discovery only.
+
+    A well-formed marker never authenticates anything; a malformed or
+    dual-authority payload (e.g. embedded bundle/identity) fails closed so a
+    Workspace author cannot smuggle a self-authenticating pair.
+    """
+
+    locator = _read_locator_descriptor(workspace)
+    if set(locator) != {"schema", "handoff_layout"}:
+        raise ReviewError("terminal locator has an unsupported closed schema")
+    if locator.get("schema") != TERMINAL_LOCATOR_SCHEMA:
+        raise ReviewError("terminal locator schema is unsupported")
+    if locator.get("handoff_layout") != TERMINAL_HANDOFF_LAYOUT:
+        raise ReviewError("terminal locator handoff layout is unsupported")
+
+
+def _terminal_bundle(
+    workspace: Path, helper: str | Path | None
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    """Authenticate the runner-owned external handoff once with W1.
+
+    The Workspace-local locator is consulted only as a marker so operators can
+    discover the layout; it never provides the bundle or identity used for
+    verification. The bundle and expected identity always originate from the
+    external ``.internal-terminal-validation`` sibling namespace.
+    """
+
+    _reject_symlink_components(workspace, "Workspace")
+    _confirm_locator_marker(workspace)
+    handoff = _read_handoff_descriptor(workspace)
+    if set(handoff) != {"schema", "terminal_identity_sha256", "bundle"}:
+        raise ReviewError("terminal handoff has an unsupported closed schema")
+    if handoff.get("schema") != TERMINAL_HANDOFF_SCHEMA:
+        raise ReviewError("terminal handoff schema is unsupported")
+    identity = handoff.get("terminal_identity_sha256")
+    bundle = handoff.get("bundle")
+    if (
+        not isinstance(identity, str)
+        or len(identity) != 64
+        or any(char not in "0123456789abcdef" for char in identity)
+        or not isinstance(bundle, dict)
+    ):
+        raise ReviewError("terminal handoff identity or bundle is malformed")
+
+    verifier = _load_workspace_verifier(helper)
     try:
-        manifest = _read_json(path)
-    except ReviewError as exc:
-        return "not_auditable", [
-            {
-                "classification": "observability-gap",
-                "detail": str(exc),
-                "evidence": "artifact_manifest.json",
-            }
-        ]
-    return ("pass" if manifest.get("final_status") == 0 else "fail"), []
+        result = verifier.verify_terminal_validation(workspace, bundle, identity)
+    except Exception as exc:
+        raise ReviewError("W1 terminal bundle verification failed") from exc
+    if not isinstance(result, dict) or result != bundle.get("result"):
+        raise ReviewError("W1 terminal verifier returned a conflicting result")
+    if not isinstance(result.get("graph"), dict):
+        raise ReviewError("verified terminal bundle omitted its closed graph")
+    review_graph = result.get("review_graph")
+    if not isinstance(review_graph, dict) or review_graph.get("schema") != "mesh-to-cad.review-graph/1":
+        raise ReviewError("verified terminal bundle omitted its closed review graph")
+    if not isinstance(result.get("review_facts"), dict) or not isinstance(
+        result.get("evaluation_facts"), dict
+    ):
+        raise ReviewError("verified terminal bundle omitted current facts")
+    return bundle, result, identity
 
 
-def _invalid_workspace_review(
-    workspace: Path,
-    payload: dict[str, Any],
+def _bundle_graph_view(
+    graph: dict[str, Any], review_graph: dict[str, Any] | None = None
 ) -> dict[str, Any]:
-    error = payload.get("error")
-    if not isinstance(error, dict):
-        error = {}
-    classification = str(error.get("classification") or "invalid_workspace")
-    runner, issues = _runner_verdict(workspace)
-    issues.append(
+    """Project only closed W1 graph facts into the legacy review graph shape."""
+
+    nodes: list[dict[str, Any]] = [
+        {"id": "canonical-reference", "type": "canonical_reference", "evidence": "input/input.json"},
+        {"id": "workspace", "type": "workspace", "evidence": "workspace.json"},
+    ]
+    edges: list[dict[str, str]] = [
         {
-            "classification": "contract-gap",
-            "detail": str(error.get("detail") or "Workspace validation failed"),
-            "evidence": str(error.get("path") or "$"),
+            "from": "canonical-reference",
+            "to": "workspace",
+            "type": "reference_initializes_workspace",
         }
-    )
-    return {
-        "verdicts": {
-            "runner_completion": runner,
-            "workspace_protocol": classification,
-            "reconstruction_quality": "not_auditable",
-            "production_runtime_integration": "not_auditable",
-        },
-        "contract_provenance": {
-            "workspace": "workspace.json",
-            "runner": "artifact_manifest.json",
-        },
-        "workspace_validation": {
-            "valid": False,
-            "classification": classification,
-            "path": str(error.get("path") or "$"),
-            "detail": str(error.get("detail") or "Workspace validation failed"),
-        },
-        "graph": {"nodes": [], "edges": []},
-        "issues": issues,
-        "unresolved": [],
-        "evidence_gaps": ["canonical Workspace graph unavailable"],
+    ]
+    review_steps = {
+        item.get("step"): item
+        for item in (review_graph or {}).get("steps", [])
+        if isinstance(item, dict) and isinstance(item.get("step"), int)
     }
-
-
-def _node(
-    nodes: list[dict[str, Any]],
-    node_id: str,
-    node_type: str,
-    evidence: str,
-    **facts: Any,
-) -> None:
-    nodes.append({"id": node_id, "type": node_type, "evidence": evidence, **facts})
-
-
-def _edge(
-    edges: list[dict[str, str]],
-    source: str,
-    target: str,
-    edge_type: str,
-) -> None:
-    edges.append({"from": source, "to": target, "type": edge_type})
-
-
-def _canonical_graph(
-    workspace: Path,
-    graph: dict[str, Any],
-) -> dict[str, list[dict[str, Any]]]:
-    nodes: list[dict[str, Any]] = []
-    edges: list[dict[str, str]] = []
-    _node(
-        nodes,
-        "canonical-reference",
-        "canonical_reference",
-        "input/input.json",
-    )
-    _node(nodes, "workspace", "workspace", "workspace.json")
-    _edge(edges, "canonical-reference", "workspace", "reference_initializes_workspace")
-
+    attempt_records = {
+        item["attempt"].get("attempt"): item
+        for item in (review_graph or {}).get("attempts", [])
+        if isinstance(item, dict)
+        and isinstance(item.get("attempt"), dict)
+        and isinstance(item["attempt"].get("attempt"), int)
+    }
+    cycle_records = {
+        item.get("cycle"): item
+        for item in (review_graph or {}).get("cycles", [])
+        if isinstance(item, dict) and isinstance(item.get("cycle"), int)
+    }
     steps = graph.get("steps") if isinstance(graph.get("steps"), list) else []
-    for step in steps:
-        number = int(step["step"])
+    for item in steps:
+        if not isinstance(item, dict) or not isinstance(item.get("step"), int):
+            raise ReviewError("verified terminal graph contains an invalid step")
+        number = item["step"]
         step_id = f"step:{number}"
         preview_id = f"preview:{number}"
         measurement_id = f"measurement:{number}"
-        _node(
-            nodes,
-            step_id,
-            "measured_step",
-            f"steps/{number:06d}/step.json",
-            accepted=bool(step.get("accepted")),
-            parent_step=step.get("parent_step"),
+        nodes.extend(
+            [
+                {
+                    "id": step_id,
+                    "type": "measured_step",
+                    "evidence": f"steps/{number:06d}/step.json",
+                    "accepted": item.get("accepted"),
+                    "parent_step": item.get("parent_step"),
+                },
+                {
+                    "id": preview_id,
+                    "type": "formal_preview",
+                    "evidence": item.get(
+                        "preview", f"steps/{number:06d}/preview/preview.json"
+                    ),
+                },
+                {
+                    "id": measurement_id,
+                    "type": "measurement",
+                    "evidence": item.get(
+                        "measurement", f"steps/{number:06d}/measurement.json"
+                    ),
+                },
+            ]
         )
-        _node(
-            nodes,
-            preview_id,
-            "formal_preview",
-            str(step.get("preview") or f"steps/{number:06d}/preview/preview.json"),
+        parent = item.get("parent_step")
+        edges.append(
+            {
+                "from": "workspace" if parent is None else f"step:{parent}",
+                "to": step_id,
+                "type": "workspace_publishes_initial_step"
+                if parent is None
+                else "measured_step_descends_from",
+            }
         )
-        _node(
-            nodes,
-            measurement_id,
-            "measurement",
-            str(step.get("measurement") or f"steps/{number:06d}/measurement.json"),
+        edges.extend(
+            [
+                {"from": preview_id, "to": measurement_id, "type": "preview_has_measurement"},
+                {"from": measurement_id, "to": step_id, "type": "measurement_publishes_step"},
+            ]
         )
-        parent = step.get("parent_step")
-        if number == 0:
-            _edge(edges, "workspace", step_id, "workspace_publishes_initial_step")
-        else:
-            _edge(
-                edges,
-                f"step:{parent}",
-                step_id,
-                "measured_step_descends_from",
+        attempt_ids = review_steps.get(number, {}).get(
+            "attempt_ids", item.get("attempt_ids", [])
+        )
+        if isinstance(attempt_ids, list):
+            successful_attempt = next(
+                (
+                    attempt_number
+                    for attempt_number in reversed(attempt_ids)
+                    if isinstance(attempt_number, int)
+                    and attempt_records.get(attempt_number, {})
+                    .get("attempt", {})
+                    .get("result")
+                    in {"measured_step_published", "repair_cycle_published"}
+                ),
+                None,
             )
-
-        cycle_number = step.get("cycle")
-        attempt_path = (
-            workspace / "steps/000000/attempt.json"
-            if number == 0
-            else workspace
-            / "cycles"
-            / f"{int(cycle_number if cycle_number is not None else number):06d}"
-            / "attempt.json"
-        )
-        attempt = _read_json(attempt_path)
-        attempt_number = int(attempt["attempt"])
-        attempt_id = f"attempt:{attempt_number}"
-        _node(
-            nodes,
-            attempt_id,
-            "attempt",
-            attempt_path.relative_to(workspace).as_posix(),
-            result=attempt.get("result"),
-            intended_step=attempt.get("intended_step"),
-        )
-        _edge(
-            edges,
-            "workspace" if parent is None else f"step:{parent}",
-            attempt_id,
-            "attempt_branches_from_step",
-        )
-        _edge(edges, attempt_id, preview_id, "attempt_produces_preview")
-        _edge(edges, preview_id, measurement_id, "preview_has_measurement")
-        _edge(edges, measurement_id, step_id, "measurement_publishes_step")
+            if successful_attempt is not None:
+                record = attempt_records.get(successful_attempt, {})
+                document = record.get("attempt", {})
+                nodes.append(
+                    {
+                        "id": f"attempt:{successful_attempt}",
+                        "type": "attempt",
+                        "evidence": record.get(
+                            "path", f"attempts/{successful_attempt:06d}/attempt.json"
+                        ),
+                        "result": document.get("result"),
+                        "intended_step": document.get("intended_step"),
+                    }
+                )
+                edges.append(
+                    {
+                        "from": "workspace" if parent is None else f"step:{parent}",
+                        "to": f"attempt:{successful_attempt}",
+                        "type": "attempt_branches_from_step",
+                    }
+                )
+                edges.append(
+                    {
+                        "from": f"attempt:{successful_attempt}",
+                        "to": preview_id,
+                        "type": "attempt_produces_preview",
+                    }
+                )
 
     failed_attempts = (
         graph.get("failed_attempts")
@@ -345,247 +496,243 @@ def _canonical_graph(
         else []
     )
     for attempt in failed_attempts:
-        attempt_number = int(attempt["attempt"])
-        attempt_id = f"attempt:{attempt_number}"
+        if not isinstance(attempt, dict) or not isinstance(attempt.get("attempt"), int):
+            raise ReviewError("verified terminal graph contains an invalid attempt")
+        attempt_id = f"attempt:{attempt['attempt']}"
         if not any(node["id"] == attempt_id for node in nodes):
-            _node(
-                nodes,
-                attempt_id,
-                "attempt",
-                f"attempts/{attempt_number:06d}/attempt.json",
-                result=attempt.get("result"),
-                classification=attempt.get("classification"),
+            nodes.append(
+                {
+                    "id": attempt_id,
+                    "type": "attempt",
+                    "evidence": attempt_records.get(attempt["attempt"], {}).get(
+                        "path", f"attempts/{attempt['attempt']:06d}/attempt.json"
+                    ),
+                    "result": attempt_records.get(attempt["attempt"], {})
+                    .get("attempt", {})
+                    .get("result", attempt.get("result")),
+                    "classification": attempt_records.get(attempt["attempt"], {})
+                    .get("attempt", {})
+                    .get("classification", attempt.get("classification")),
+                }
             )
         parent = attempt.get("from_step")
-        _edge(
-            edges,
-            "workspace" if parent is None else f"step:{parent}",
-            attempt_id,
-            "attempt_branches_from_step",
+        edges.append(
+            {
+                "from": "workspace" if parent is None else f"step:{parent}",
+                "to": attempt_id,
+                "type": "attempt_branches_from_step",
+            }
         )
 
     cycles = graph.get("cycles") if isinstance(graph.get("cycles"), list) else []
     for cycle in cycles:
-        number = int(cycle["cycle"])
-        root = workspace / "cycles" / f"{number:06d}"
-        plan = _read_json(root / "plan.json")
-        source_changes = _read_json(root / "source_changes.json")
-        region_diff = _read_json(root / "diff.json")
-        assessment = _read_json(root / "assessment.json")
+        if not isinstance(cycle, dict) or not isinstance(cycle.get("cycle"), int):
+            raise ReviewError("verified terminal graph contains an invalid cycle")
+        number = cycle["cycle"]
         cycle_id = f"cycle:{number}"
         batch_id = f"repair-batch:{number}"
         source_id = f"source-change:{number}"
         diff_id = f"region-diff:{number}"
         assessment_id = f"assessment:{number}"
-        _node(
-            nodes,
-            cycle_id,
-            "repair_cycle",
-            f"cycles/{number:06d}/cycle.json",
-            from_step=cycle.get("from_step"),
-            to_step=cycle.get("to_step"),
+        cycle_record = cycle_records.get(number, {})
+        plan = cycle_record.get("plan", {})
+        source_changes = cycle_record.get("source_changes", {})
+        region_diff = cycle_record.get("diff_document", {})
+        assessment = cycle_record.get("assessment", {})
+        nodes.extend(
+            [
+                {"id": cycle_id, "type": "repair_cycle", "evidence": f"cycles/{number:06d}/cycle.json", "from_step": cycle.get("from_step"), "to_step": cycle.get("to_step")},
+                {"id": batch_id, "type": "repair_batch", "evidence": f"cycles/{number:06d}/plan.json", "rationale": plan.get("rationale") if isinstance(plan, dict) else None},
+                {"id": source_id, "type": "source_change", "evidence": f"cycles/{number:06d}/source_changes.json", "files": source_changes.get("files", []) if isinstance(source_changes, dict) else []},
+                {"id": diff_id, "type": "region_diff", "evidence": cycle.get("diff", f"cycles/{number:06d}/diff.json"), "identity": region_diff.get("identity") if isinstance(region_diff, dict) else None},
+                {"id": assessment_id, "type": "agent_assessment", "evidence": f"cycles/{number:06d}/assessment.json", "summary": assessment.get("summary") if isinstance(assessment, dict) else None},
+            ]
         )
-        _node(
-            nodes,
-            batch_id,
-            "repair_batch",
-            f"cycles/{number:06d}/plan.json",
-            rationale=plan.get("rationale"),
-        )
-        _node(
-            nodes,
-            source_id,
-            "source_change",
-            f"cycles/{number:06d}/source_changes.json",
-            files=source_changes.get("files", []),
-        )
-        _node(
-            nodes,
-            diff_id,
-            "region_diff",
-            f"cycles/{number:06d}/diff.json",
-            identity=region_diff.get("identity"),
-        )
-        _node(
-            nodes,
-            assessment_id,
-            "agent_assessment",
-            f"cycles/{number:06d}/assessment.json",
-            summary=assessment.get("summary"),
-        )
-        for target in plan.get("selected_targets", []):
-            target_key = str(target.get("target_key"))
-            target_id = f"repair-target:{number}:{target_key}"
-            _node(
-                nodes,
-                target_id,
-                "repair_target",
-                f"cycles/{number:06d}/plan.json",
-                target_key=target_key,
-                mask_sha256=target.get("mask_sha256"),
-            )
-            _edge(
-                edges,
-                f"step:{cycle['from_step']}",
-                target_id,
-                "step_exposes_target",
-            )
-            _edge(edges, target_id, batch_id, "target_selected_by_batch")
-        edit_ids: list[str] = []
-        for edit in plan.get("planned_edits", []):
-            edit_key = str(edit.get("edit_key"))
-            edit_id = f"planned-edit:{number}:{edit_key}"
-            edit_ids.append(edit_id)
-            _node(
-                nodes,
-                edit_id,
-                "planned_edit",
-                f"cycles/{number:06d}/plan.json",
-                edit_key=edit_key,
-                target_keys=edit.get("target_keys", []),
-                description=edit.get("description"),
-            )
-            _edge(edges, batch_id, edit_id, "batch_contains_edit")
-            _edge(edges, edit_id, source_id, "edit_has_source_change")
-        if not edit_ids:
-            _edge(edges, batch_id, source_id, "batch_has_source_change")
-        _edge(edges, source_id, diff_id, "source_change_measured_by_diff")
-        _edge(edges, diff_id, assessment_id, "diff_assessed_by_agent")
-        _edge(edges, assessment_id, cycle_id, "assessment_publishes_cycle")
-        _edge(edges, cycle_id, f"step:{cycle['to_step']}", "cycle_publishes_step")
-        attempt_ids = cycle.get("attempt_ids", [])
-        if attempt_ids:
-            successful_attempt = attempt_ids[-1]
-            if any(node["id"] == f"attempt:{successful_attempt}" for node in nodes):
-                _edge(
-                    edges,
-                    f"attempt:{successful_attempt}",
-                    cycle_id,
-                    "attempt_contributes_to_cycle",
+        if isinstance(plan, dict):
+            for target in plan.get("selected_targets", []):
+                if not isinstance(target, dict):
+                    continue
+                target_key = str(target.get("target_key"))
+                target_id = f"repair-target:{number}:{target_key}"
+                nodes.append(
+                    {
+                        "id": target_id,
+                        "type": "repair_target",
+                        "evidence": f"cycles/{number:06d}/plan.json",
+                        "target_key": target_key,
+                        "mask_sha256": target.get("mask_sha256"),
+                    }
                 )
+                edges.append(
+                    {"from": f"step:{cycle.get('from_step')}", "to": target_id, "type": "step_exposes_target"}
+                )
+                edges.append(
+                    {"from": target_id, "to": batch_id, "type": "target_selected_by_batch"}
+                )
+            edit_ids: list[str] = []
+            for edit in plan.get("planned_edits", []):
+                if not isinstance(edit, dict):
+                    continue
+                edit_key = str(edit.get("edit_key"))
+                edit_id = f"planned-edit:{number}:{edit_key}"
+                edit_ids.append(edit_id)
+                nodes.append(
+                    {
+                        "id": edit_id,
+                        "type": "planned_edit",
+                        "evidence": f"cycles/{number:06d}/plan.json",
+                        "edit_key": edit_key,
+                        "target_keys": edit.get("target_keys", []),
+                        "description": edit.get("description"),
+                    }
+                )
+                edges.append({"from": batch_id, "to": edit_id, "type": "batch_contains_edit"})
+                edges.append({"from": edit_id, "to": source_id, "type": "edit_has_source_change"})
+            if not edit_ids:
+                edges.append({"from": batch_id, "to": source_id, "type": "batch_has_source_change"})
+        edges.extend(
+            [
+                {"from": source_id, "to": diff_id, "type": "source_change_measured_by_diff"},
+                {"from": diff_id, "to": assessment_id, "type": "diff_assessed_by_agent"},
+                {"from": assessment_id, "to": cycle_id, "type": "assessment_publishes_cycle"},
+                {"from": cycle_id, "to": f"step:{cycle.get('to_step')}", "type": "cycle_publishes_step"},
+            ]
+        )
+        attempt_ids = cycle.get("attempt_ids", [])
+        if isinstance(attempt_ids, list) and attempt_ids:
+            attempt_id = attempt_ids[-1]
+            if isinstance(attempt_id, int):
+                node_id = f"attempt:{attempt_id}"
+                if any(node["id"] == node_id for node in nodes):
+                    edges.append(
+                        {
+                            "from": node_id,
+                            "to": cycle_id,
+                            "type": "attempt_contributes_to_cycle",
+                        }
+                    )
 
     delivery = graph.get("final_delivery")
     if isinstance(delivery, dict):
-        selection = _read_json(workspace / "final/selection.json")
-        manifest_path = str(delivery.get("manifest") or "final/manifest.json")
-        manifest = _read_json(workspace / manifest_path)
-        _node(
-            nodes,
-            "selection",
-            "selection",
-            "final/selection.json",
-            selected_step=selection.get("selected_step"),
-            considered_steps=selection.get("considered_steps", []),
-        )
-        _node(
-            nodes,
-            "rebuild",
-            "rebuild",
-            "final/rebuild.json",
-            identity=manifest.get("rebuild_sha256"),
-            execution=manifest.get("rebuild_execution"),
-        )
-        _node(
-            nodes,
-            "verification",
-            "verification",
-            "final/verification.json",
-            identity=manifest.get("verification_sha256"),
-            verification_identity=manifest.get(
-                "verification_identity_sha256"
-            ),
-        )
-        _node(
-            nodes,
-            "final-delivery",
-            "final_delivery",
-            manifest_path,
-            selected_step=delivery.get("selected_step"),
-            accepted=delivery.get("accepted"),
-            identity_sha256=delivery.get("identity_sha256"),
-        )
-        for step in selection.get("considered_steps", []):
-            _edge(
-                edges,
-                f"step:{step}",
-                "selection",
-                "step_considered_for_selection",
+        final = (review_graph or {}).get("final")
+        final = final if isinstance(final, dict) else {}
+        selection = final.get("selection")
+        manifest = final.get("manifest")
+        rebuild = final.get("rebuild")
+        verification = final.get("verification")
+        if isinstance(selection, dict):
+            nodes.append(
+                {
+                    "id": "selection",
+                    "type": "selection",
+                    "evidence": "final/selection.json",
+                    "selected_step": selection.get("selected_step"),
+                    "considered_steps": selection.get("considered_steps", []),
+                }
             )
-        _edge(edges, "selection", "rebuild", "selection_triggers_rebuild")
-        _edge(
-            edges,
-            "rebuild",
-            "verification",
-            "rebuild_verified_independently",
+            for step_number in selection.get("considered_steps", []):
+                if isinstance(step_number, int):
+                    edges.append(
+                        {
+                            "from": f"step:{step_number}",
+                            "to": "selection",
+                            "type": "step_considered_for_selection",
+                        }
+                    )
+        if isinstance(rebuild, dict):
+            nodes.append(
+                {
+                    "id": "rebuild",
+                    "type": "rebuild",
+                    "evidence": "final/rebuild.json",
+                    "identity": manifest.get("rebuild_sha256") if isinstance(manifest, dict) else None,
+                    "execution": manifest.get("rebuild_execution") if isinstance(manifest, dict) else None,
+                }
+            )
+        if isinstance(verification, dict):
+            nodes.append(
+                {
+                    "id": "verification",
+                    "type": "verification",
+                    "evidence": "final/verification.json",
+                    "identity": manifest.get("verification_sha256") if isinstance(manifest, dict) else None,
+                    "verification_identity": manifest.get("verification_identity_sha256") if isinstance(manifest, dict) else None,
+                }
+            )
+        nodes.append(
+            {
+                "id": "final-delivery",
+                "type": "final_delivery",
+                "evidence": str(delivery.get("manifest") or "final/manifest.json"),
+                "selected_step": delivery.get("selected_step"),
+                "accepted": delivery.get("accepted"),
+                "identity_sha256": delivery.get("identity_sha256"),
+            }
         )
-        _edge(
-            edges,
-            "verification",
-            "final-delivery",
-            "verification_supports_delivery",
-        )
-    return {"nodes": nodes, "edges": edges}
+        if isinstance(selection, dict) and isinstance(rebuild, dict):
+            edges.append({"from": "selection", "to": "rebuild", "type": "selection_triggers_rebuild"})
+        if isinstance(rebuild, dict) and isinstance(verification, dict):
+            edges.append({"from": "rebuild", "to": "verification", "type": "rebuild_verified_independently"})
+        if isinstance(verification, dict):
+            edges.append({"from": "verification", "to": "final-delivery", "type": "verification_supports_delivery"})
+    unique_nodes: dict[str, dict[str, Any]] = {}
+    for node in nodes:
+        unique_nodes.setdefault(str(node["id"]), node)
+    unique_edges: dict[tuple[str, str, str], dict[str, str]] = {}
+    for edge in edges:
+        key = (edge["from"], edge["to"], edge["type"])
+        unique_edges.setdefault(key, edge)
+    return {
+        "nodes": list(unique_nodes.values()),
+        "edges": list(unique_edges.values()),
+        "source_graph": graph,
+    }
 
 
-def _canonical_review(
-    workspace: Path,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    graph = payload.get("graph")
-    if not isinstance(graph, dict):
-        raise ReviewError("valid Workspace response omitted its graph")
+def _bundle_review(workspace: Path, helper: str | Path | None) -> dict[str, Any]:
+    _bundle, result, identity = _terminal_bundle(workspace, helper)
+    graph = result["graph"]
     delivery = graph.get("final_delivery")
-    runner, issues = _runner_verdict(workspace)
     accepted = bool(delivery.get("accepted")) if isinstance(delivery, dict) else False
     return {
         "verdicts": {
-            "runner_completion": runner,
             "workspace_protocol": "pass",
-            "reconstruction_quality": (
-                "accepted" if accepted else "delivered_with_residual"
-            ),
+            "reconstruction_quality": "accepted" if accepted else "delivered_with_residual",
             "production_runtime_integration": "not_auditable",
         },
         "contract_provenance": {
-            "workspace": "workspace.json",
-            "canonical_reference": "input/input.json",
-            "graph_index": "step_index.json",
-            "runner": "artifact_manifest.json",
-            "telemetry": "run/",
+            "terminal_locator": TERMINAL_LOCATOR_RELATIVE,
+            "terminal_handoff": (
+                f"../{TERMINAL_HANDOFF_NAMESPACE}/<exp>/{TERMINAL_HANDOFF_FILENAME}"
+            ),
         },
         "workspace_validation": {
             "valid": True,
             "classification": "valid",
-            "recovery": payload.get("recovery", []),
+            "recovery": result.get("recovery", []),
+            "terminal_identity_sha256": identity,
         },
-        "graph": _canonical_graph(workspace, graph),
-        "issues": issues,
+        "graph": _bundle_graph_view(graph, result.get("review_graph")),
+        "review_facts": result["review_facts"],
+        "evaluation_facts": result["evaluation_facts"],
+        "issues": [],
         "unresolved": [],
         "evidence_gaps": [
-            "production runtime integration requires shipped snapshot, invoked "
-            "installed-skill, bundle, parity, and isolation gate evidence"
+            "production runtime integration requires shipped snapshot, invoked installed-skill, bundle, parity, and isolation gate evidence"
         ],
     }
 
 
 def review_workspace(
     workspace: Path,
-    helper: str | Path,
-    validation_timeout_seconds: int = DEFAULT_VALIDATION_TIMEOUT_SECONDS,
+    helper: str | Path | None = None,
 ) -> tuple[int, dict[str, Any]]:
-    """Validate and reconstruct one experiment without changing its authority."""
+    """Review one experiment from its verified Terminal Validation handoff."""
 
+    if Path(workspace).is_symlink():
+        raise ReviewError("review workspace must not be a symlink")
     workspace = workspace.resolve()
-    status, payload = _validate(
-        workspace,
-        helper,
-        validation_timeout_seconds,
-    )
-    if status != 0 or payload.get("ok") is not True:
-        review = _invalid_workspace_review(workspace, payload)
-        classification = review["workspace_validation"]["classification"]
-        return (2 if classification == "unsupported_legacy_workspace" else 1), review
-    return 0, _canonical_review(workspace, payload)
+    return 0, _bundle_review(workspace, helper)
 
 
 def _atomic_write_json(path: Path, value: dict[str, Any]) -> None:
@@ -697,32 +844,33 @@ def _group_records(
 
 
 def _is_experiment(path: Path) -> bool:
-    file_markers = any(
-        (path / name).is_file()
-        for name in ("workspace.json", "experiment.json", "artifact_manifest.json")
-    )
-    directory_markers = any(
-        (path / name).is_dir()
-        for name in ("run", "input", "attempts", "steps", "cycles", "final")
-    )
-    return file_markers or directory_markers
+    return (
+        path.parent
+        / TERMINAL_HANDOFF_NAMESPACE
+        / path.name
+        / TERMINAL_HANDOFF_FILENAME
+    ).is_file()
 
 
 def _discover_target(target: Path) -> tuple[Path | None, list[Path]]:
+    if target.is_symlink():
+        raise ReviewError(f"review target must not be a symlink: {target}")
     target = target.resolve()
     if _is_experiment(target):
         return None, [target]
     if not target.is_dir():
         raise ReviewError(f"review target is not a directory: {target}")
-    # Canonical output groups define every non-snapshot child directory as an
-    # experiment. Do not require success markers here: a runner can fail before
-    # workspace.json or artifact_manifest.json is published and that failure
-    # still needs an explicit review record.
-    experiments = sorted(
-        child.resolve()
-        for child in target.iterdir()
-        if child.name != "_snapshot" and child.is_dir()
-    )
+    namespace = target / TERMINAL_HANDOFF_NAMESPACE
+    if namespace.is_symlink() or not namespace.is_dir():
+        raise ReviewError(f"group has no terminal handoff namespace: {target}")
+    experiments: list[Path] = []
+    for handoff in namespace.iterdir():
+        child = target / handoff.name
+        if handoff.is_symlink() or child.is_symlink():
+            raise ReviewError(f"review target contains a symlink: {child}")
+        if handoff.is_dir() and child.is_dir():
+            experiments.append(child.resolve())
+    experiments.sort()
     if not experiments:
         raise ReviewError(f"group contains no reviewable experiments: {target}")
     return target, experiments
@@ -732,11 +880,26 @@ def _review_paths(
     group: Path | None,
     experiments: list[Path],
     review_root: Path | None,
+    *,
+    bundle_mode: bool = False,
 ) -> tuple[Path, dict[Path, Path]]:
     """Map immutable evidence sources to their writable review destinations."""
 
     if review_root is None:
-        root = group if group is not None else experiments[0]
+        if bundle_mode:
+            root = (group if group is not None else experiments[0]) / "run" / "review"
+            for component in (root.parent, root):
+                if component.is_symlink() or (
+                    component.exists() and not component.is_dir()
+                ):
+                    raise ReviewError(
+                        f"default review destination is not a directory: {component}"
+                    )
+                component.mkdir(parents=True, exist_ok=True)
+            if root.is_symlink():
+                raise ReviewError("default review destination must not be a symlink")
+        else:
+            root = group if group is not None else experiments[0]
     else:
         root = review_root.expanduser().resolve()
         source_root = group if group is not None else experiments[0]
@@ -769,135 +932,13 @@ def _review_paths(
                 )
     for workspace in experiments:
         destination = candidates[workspace]
+        if destination.is_symlink():
+            raise ReviewError(
+                f"review destination must not be a symlink: {destination}"
+            )
         destination.mkdir(parents=True, exist_ok=True)
         destinations[workspace] = destination.resolve()
     return root, destinations
-
-
-def _read_bounded_text(path: Path, limit: int = 4096) -> str:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    if len(text) <= limit:
-        return text
-    half = limit // 2
-    return text[:half] + "\n...[truncated by Evidence Compiler]...\n" + text[-half:]
-
-
-def _command_records(workspace: Path) -> list[dict[str, Any]]:
-    paths: set[Path] = set()
-    for pattern in (
-        "attempts/*/commands/*/command.json",
-        "steps/*/commands/*/command.json",
-        "cycles/*/commands/*/command.json",
-    ):
-        paths.update(workspace.glob(pattern))
-    records: list[dict[str, Any]] = []
-    for path in sorted(paths):
-        command = _read_json(path)
-        stderr = command.get("stderr")
-        stderr_path: Path | None = None
-        if isinstance(stderr, dict) and isinstance(stderr.get("path"), str):
-            declared = Path(stderr["path"])
-            command_scope = path.parents[2].resolve()
-            if declared.is_absolute():
-                raise ReviewError(
-                    f"command stderr path must be relative: {path}"
-                )
-            candidate = (command_scope / declared).resolve()
-            try:
-                candidate.relative_to(command_scope)
-            except ValueError as exc:
-                raise ReviewError(
-                    f"command stderr path escapes its command scope: {path}"
-                ) from exc
-            if candidate.is_file():
-                stderr_path = candidate
-        records.append(
-            {
-                "evidence": path.relative_to(workspace).as_posix(),
-                "phase": command.get("phase"),
-                "argv": command.get("argv", []),
-                "duration_ms": command.get("duration_ms"),
-                "exit_code": command.get("exit_code"),
-                "timed_out": command.get("timed_out"),
-                "stderr": (
-                    {
-                        "path": stderr_path.relative_to(workspace).as_posix(),
-                        "preview": _read_bounded_text(stderr_path),
-                    }
-                    if stderr_path is not None
-                    else None
-                ),
-            }
-        )
-    return records
-
-
-def _artifact_summary(workspace: Path) -> dict[str, Any]:
-    path = workspace / "artifact_manifest.json"
-    if not path.is_file():
-        return {"path": "artifact_manifest.json", "present": False}
-    manifest = _read_json(path)
-    return {
-        "path": "artifact_manifest.json",
-        "present": True,
-        "final_status": manifest.get("final_status"),
-        "workload_status": manifest.get("workload_status"),
-    }
-
-
-def _execution_evidence(
-    workspace: Path,
-) -> tuple[dict[str, Any], list[str]]:
-    """Compile execution evidence while containing malformed sub-records."""
-
-    errors: list[str] = []
-    try:
-        artifact = _artifact_summary(workspace)
-    except ReviewError as exc:
-        errors.append(str(exc))
-        artifact = {
-            "path": "artifact_manifest.json",
-            "present": (workspace / "artifact_manifest.json").is_file(),
-            "error": str(exc),
-        }
-    try:
-        commands = _command_records(workspace)
-    except ReviewError as exc:
-        errors.append(str(exc))
-        commands = []
-    return (
-        {
-            "artifact_manifest": artifact,
-            "files": _presence_index(workspace),
-            "commands": commands,
-            "rollout": (
-                {"path": "run/rollout.jsonl"}
-                if (workspace / "run/rollout.jsonl").is_file()
-                else None
-            ),
-        },
-        errors,
-    )
-
-
-def _presence_index(workspace: Path) -> dict[str, bool]:
-    return {
-        path: (workspace / path).is_file()
-        for path in (
-            "workspace.json",
-            "experiment.json",
-            "input/input.json",
-            "step_index.json",
-            "notes.md",
-            "final/manifest.json",
-            "run/rollout.jsonl",
-            "run/stderr.log",
-            "run/traces.sqlite3",
-        )
-    }
 
 
 def _snapshot_head(group: Path | None, workspace: Path) -> str | None:
@@ -912,98 +953,14 @@ def _snapshot_head(group: Path | None, workspace: Path) -> str | None:
     return value or None
 
 
-def _timeout_review(workspace: Path, timeout_seconds: int) -> dict[str, Any]:
-    runner, issues = _runner_verdict(workspace)
-    issues.append(
-        {
-            "classification": "observability-gap",
-            "detail": (
-                "Workspace authority was not classified because its validator "
-                f"exceeded the {timeout_seconds}-second review budget"
-            ),
-            "evidence": "workspace.json",
-        }
-    )
-    return {
-        "verdicts": {
-            "runner_completion": runner,
-            "workspace_protocol": "not_auditable",
-            "reconstruction_quality": "not_auditable",
-            "production_runtime_integration": "not_auditable",
-        },
-        "contract_provenance": {
-            "workspace": "workspace.json",
-            "runner": "artifact_manifest.json",
-        },
-        "workspace_validation": {
-            "valid": None,
-            "classification": "validator_timeout",
-            "timeout_seconds": timeout_seconds,
-        },
-        "graph": {"nodes": [], "edges": []},
-        "issues": issues,
-        "unresolved": ["Workspace validation did not reach a terminal result"],
-        "evidence_gaps": ["canonical Workspace graph unavailable"],
-    }
-
-
-def _compiler_error_review(workspace: Path, detail: str) -> dict[str, Any]:
-    runner, issues = _runner_verdict(workspace)
-    issues.append(
-        {
-            "classification": "observability-gap",
-            "detail": f"Evidence Compiler could not classify Workspace authority: {detail}",
-            "evidence": "workspace.json",
-        }
-    )
-    return {
-        "verdicts": {
-            "runner_completion": runner,
-            "workspace_protocol": "not_auditable",
-            "reconstruction_quality": "not_auditable",
-            "production_runtime_integration": "not_auditable",
-        },
-        "contract_provenance": {
-            "workspace": "workspace.json",
-            "runner": "artifact_manifest.json",
-        },
-        "workspace_validation": {
-            "valid": None,
-            "classification": "compiler_failure",
-            "detail": detail,
-        },
-        "graph": {"nodes": [], "edges": []},
-        "issues": issues,
-        "unresolved": ["Workspace validation did not produce readable evidence"],
-        "evidence_gaps": ["canonical Workspace graph unavailable"],
-    }
-
-
 def _prepare_experiment(
     workspace: Path,
     group: Path | None,
     review_destination: Path,
-    helper: str | Path,
-    timeout_seconds: int,
+    helper: str | Path | None,
+    bundle_mode: bool,
 ) -> tuple[int, dict[str, Any]]:
-    try:
-        status, baseline = review_workspace(
-            workspace,
-            helper,
-            validation_timeout_seconds=timeout_seconds,
-        )
-    except ValidatorTimeoutError:
-        status = 1
-        baseline = _timeout_review(workspace, timeout_seconds)
-    except ReviewError as exc:
-        status = 1
-        baseline = _compiler_error_review(workspace, str(exc))
-    execution, execution_errors = _execution_evidence(workspace)
-    if execution_errors:
-        status = 1
-        detail = "; ".join(execution_errors)
-        baseline = _compiler_error_review(workspace, detail)
-        execution["compiler_errors"] = execution_errors
+    status, baseline = review_workspace(workspace, helper)
     evidence = _seal_compiler_output({
         "schema": "pilot-review.evidence/2",
         "experiment": workspace.name,
@@ -1018,8 +975,10 @@ def _prepare_experiment(
         },
         "snapshot_head": _snapshot_head(group, workspace),
         "protocol_checks": list(PROTOCOL_CHECKS),
+        "review_storage": {
+            "scope": "workspace-root" if not bundle_mode else "run/review"
+        },
         "baseline": baseline,
-        "execution": execution,
     })
     _atomic_write_json(review_destination / "review-input.json", evidence)
     return status, evidence
@@ -1027,19 +986,16 @@ def _prepare_experiment(
 
 def prepare_target(
     target: Path,
-    helper: str | Path,
-    timeout_seconds: int,
+    helper: str | Path | None = None,
     review_root: Path | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Compile deterministic review evidence for one experiment or a group."""
 
-    if timeout_seconds <= 0 or timeout_seconds > MAX_VALIDATION_TIMEOUT_SECONDS:
-        raise ReviewError(
-            "validation timeout must be between 1 and "
-            f"{MAX_VALIDATION_TIMEOUT_SECONDS} seconds"
-        )
     group, experiments = _discover_target(target)
-    output_root, destinations = _review_paths(group, experiments, review_root)
+    bundle_mode = review_root is None
+    output_root, destinations = _review_paths(
+        group, experiments, review_root, bundle_mode=bundle_mode
+    )
     results: list[dict[str, Any]] = []
     status = 0
     for workspace in experiments:
@@ -1048,7 +1004,7 @@ def prepare_target(
             group,
             destinations[workspace],
             helper,
-            timeout_seconds,
+            bundle_mode,
         )
         status = max(status, experiment_status)
         results.append(
@@ -1071,6 +1027,7 @@ def prepare_target(
         "schema": "pilot-review.group-evidence/2",
         "group": group.name if group is not None else None,
         "source_group": str(group.resolve()) if group is not None else None,
+        "review_root": str(output_root.resolve()),
         "snapshot_head": _snapshot_head(group, experiments[0]),
         "experiments": results,
     })
@@ -1085,6 +1042,51 @@ def _require_string_list(value: Any, field: str) -> list[str]:
     ):
         raise ReviewError(f"{field} must be a list of non-empty strings")
     return value
+
+
+def _default_bundle_review_mode(
+    group: Path | None, experiments: list[Path], review_root: Path | None
+) -> bool:
+    """Find the storage mode written by prepare without trusting caller paths."""
+
+    if review_root is not None:
+        return False
+    source = group if group is not None else experiments[0]
+    bundle_root = source / "run" / "review"
+    if group is not None:
+        if (bundle_root / "review-input.json").is_file():
+            return True
+        if bundle_root.is_dir() and not bundle_root.is_symlink() and any(
+            (child / "review-input.json").is_file()
+            for child in bundle_root.iterdir()
+            if not child.is_symlink() and child.is_dir()
+        ):
+            return True
+    elif (bundle_root / "review-input.json").is_file():
+        return True
+
+    legacy_input = source / "review-input.json"
+    if legacy_input.is_file():
+        evidence_paths = (
+            [
+                child / "review-input.json"
+                for child in experiments
+                if (child / "review-input.json").is_file()
+            ]
+            if group is not None
+            else [legacy_input]
+        )
+        scopes = {
+            _read_json(path).get("review_storage", {}).get("scope")
+            for path in evidence_paths
+        }
+        if not evidence_paths or scopes != {"workspace-root"}:
+            raise ReviewError(
+                "legacy review input is unscoped; rerun prepare to use the "
+                "default run/review bundle"
+            )
+        return False
+    return True
 
 
 def _validate_evidence_reference(
@@ -1274,7 +1276,7 @@ def _final_review(evidence: dict[str, Any], draft: dict[str, Any]) -> dict[str, 
         raise ReviewError("review-input.json omitted its baseline")
     verdicts = dict(baseline["verdicts"])
     verdicts.update(draft["semantic_verdicts"])
-    return {
+    result = {
         "verdicts": verdicts,
         "contract_provenance": baseline["contract_provenance"],
         "workspace_validation": baseline["workspace_validation"],
@@ -1285,6 +1287,10 @@ def _final_review(evidence: dict[str, Any], draft: dict[str, Any]) -> dict[str, 
         "evidence_gaps": draft["evidence_gaps"],
         "fix_playbook": draft["fix_playbook"],
     }
+    for key in ("review_facts", "evaluation_facts"):
+        if key in baseline:
+            result[key] = baseline[key]
+    return result
 
 
 def _markdown(review: dict[str, Any]) -> str:
@@ -1408,14 +1414,13 @@ def _group_markdown(
         "",
         "## Experiment verdicts",
         "",
-        "| Experiment | Runner | Workspace | Reconstruction | Production runtime |",
-        "|---|---|---|---|---|",
+        "| Experiment | Workspace | Reconstruction | Production runtime |",
+        "|---|---|---|---|",
     ]
     for workspace, review in reviews:
         verdicts = review["verdicts"]
         lines.append(
-            f"| {workspace.name} | {verdicts['runner_completion']} | "
-            f"{verdicts['workspace_protocol']} | "
+            f"| {workspace.name} | {verdicts['workspace_protocol']} | "
             f"{verdicts['reconstruction_quality']} | "
             f"{verdicts['production_runtime_integration']} |"
         )
@@ -1455,7 +1460,10 @@ def publish_target(
     """Validate Review Agent drafts and publish final review artifacts."""
 
     group, experiments = _discover_target(target)
-    output_root, destinations = _review_paths(group, experiments, review_root)
+    bundle_mode = _default_bundle_review_mode(group, experiments, review_root)
+    output_root, destinations = _review_paths(
+        group, experiments, review_root, bundle_mode=bundle_mode
+    )
     group_root = group if group is not None else experiments[0]
     records: dict[str, dict[str, Any]] | None = None
     if group is not None:
@@ -1542,12 +1550,8 @@ def _legacy_parser() -> argparse.ArgumentParser:
     parser.add_argument("workspace", type=Path)
     parser.add_argument(
         "--workspace-helper",
-        default=DEFAULT_WORKSPACE_HELPER,
-    )
-    parser.add_argument(
-        "--validation-timeout-seconds",
-        type=int,
-        default=DEFAULT_VALIDATION_TIMEOUT_SECONDS,
+        default=None,
+        help="W1 Workspace facade used to verify the Terminal Validation handoff",
     )
     return parser
 
@@ -1560,16 +1564,15 @@ def _workflow_parser() -> argparse.ArgumentParser:
         help="compile deterministic evidence for a local Review Agent",
     )
     prepare.add_argument("target", type=Path)
-    prepare.add_argument("--workspace-helper", default=DEFAULT_WORKSPACE_HELPER)
+    prepare.add_argument(
+        "--workspace-helper",
+        default=None,
+        help="W1 Workspace facade used to verify the Terminal Validation handoff",
+    )
     prepare.add_argument(
         "--review-root",
         type=Path,
         help="write review artifacts outside the immutable evidence target",
-    )
-    prepare.add_argument(
-        "--validation-timeout-seconds",
-        type=int,
-        default=DEFAULT_VALIDATION_TIMEOUT_SECONDS,
     )
     publish = subparsers.add_parser(
         "publish",
@@ -1593,7 +1596,6 @@ def main(argv: list[str] | None = None) -> int:
                 status, summary = prepare_target(
                     args.target,
                     args.workspace_helper,
-                    args.validation_timeout_seconds,
                     args.review_root,
                 )
                 print(
@@ -1630,20 +1632,11 @@ def main(argv: list[str] | None = None) -> int:
 
     args = _legacy_parser().parse_args(raw)
     try:
-        if (
-            args.validation_timeout_seconds <= 0
-            or args.validation_timeout_seconds > MAX_VALIDATION_TIMEOUT_SECONDS
-        ):
-            raise ReviewError(
-                "validation timeout must be between 1 and "
-                f"{MAX_VALIDATION_TIMEOUT_SECONDS} seconds"
-            )
-        status, review = review_workspace(
-            args.workspace,
-            args.workspace_helper,
-            args.validation_timeout_seconds,
-        )
-        _publish(args.workspace.resolve(), review)
+        workspace = args.workspace.resolve()
+        status, review = review_workspace(workspace, args.workspace_helper)
+        _, destinations = _review_paths(None, [workspace], None, bundle_mode=True)
+        destination = destinations[workspace]
+        _publish(destination, review)
     except (OSError, ReviewError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}))
         return 1
@@ -1653,8 +1646,8 @@ def main(argv: list[str] | None = None) -> int:
                 "ok": status == 0,
                 "status": status,
                 "classification": review["workspace_validation"]["classification"],
-                "review_json": str(args.workspace / "review.json"),
-                "review_markdown": str(args.workspace / "review.md"),
+                "review_json": str(destination / "review.json"),
+                "review_markdown": str(destination / "review.md"),
             },
             separators=(",", ":"),
         )

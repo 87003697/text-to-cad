@@ -1,0 +1,515 @@
+{
+  "files": [
+    {
+      "path": "canonical-build/__main__.py",
+      "sha256": "6eb4442e2ed34ec2a09c9ce64f4c628f21753bec49639878e8a898a768021fe6",
+      "size": 544
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/__init__.py",
+      "sha256": "caf759d8288696f36357b26c3134637ecd2c1cf82404d8fdb18b24d2782d22ef",
+      "size": 2050
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/__init__.py",
+      "sha256": "7b26b26b0dea1f2480234245289badffee5fda54cb31f7ad5f8d29a7de1abce3",
+      "size": 235
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/assembly_spec.py",
+      "sha256": "fe0f89aed071efbc90c366d9d2347ac469934d1d3725976f026e79ba1c2bcfca",
+      "size": 1849
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/atomic_replace.py",
+      "sha256": "16018faf6612e4a4ed0c0110b6d32d92d27916eba3e5bac39940db43073eb9a2",
+      "size": 7204
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/cli_errors.py",
+      "sha256": "e475789a3f56991dc4ce666774dde8a30693f72cb9cb758a08ae51dfe5142621",
+      "size": 4200
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/cli_locking.py",
+      "sha256": "1fdf3fa6b1ec68697f9d367919e8a6313684c79f7d714e0db2d833090d223423",
+      "size": 3864
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/component_package.py",
+      "sha256": "d31e0d291a01238b6bd5efebdce634f7fdbcd77c39bf53caec69ae931c75b66d",
+      "size": 38281
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/drawing_package.py",
+      "sha256": "7745f075afcff6b8280bb590470e31cd6534b7f03b2e3934233abf161596a4a9",
+      "size": 28069
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/file_metadata.py",
+      "sha256": "3023c66a99a2225b38b9d395b85e6b4e910845daaa1d1e5cc3998f650e695e06",
+      "size": 1903
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/generation.py",
+      "sha256": "561feb39f9c0456aa3c9bec22e4e2750dda915bc037dd7ae29a86de1754cee35",
+      "size": 62554
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/generation_runner.py",
+      "sha256": "fda0f83a70f737f6b66f03be71cdcb3428434e36649ef695fcef10313522a4e9",
+      "size": 26131
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/generation_spec.py",
+      "sha256": "4f84ca09e3ff838b2383ee23f7443ecf8460181d55c3a8f11cd678d00cb6fe79",
+      "size": 21179
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/glb.py",
+      "sha256": "48fd60c14163d990452514eb954d39672aa861f6b050af09e0d149a001f932dc",
+      "size": 47822
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/glb_mesh_payload.py",
+      "sha256": "720c818ce53f47a4b987968bc28992bc73cfe9642a108ff8a57feddfdd1dde11",
+      "size": 27167
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/glb_topology.py",
+      "sha256": "ac04ebb4876faa1da89263c0fa46d4db42c763d3b00891e23acffa1ded73fb34",
+      "size": 21627
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/legacy_artifacts.py",
+      "sha256": "2bcc0e19770f8641bef62f45458f01f688537de7f8dcc77be2534296892efcd1",
+      "size": 6510
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/node_resolve_hooks.mjs",
+      "sha256": "bfb5fd33798858e2aa128557731d61d788e183b1ac38ca2b64701d5a238f7be9",
+      "size": 2112
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/node_resolve_register.mjs",
+      "sha256": "1ba73dc58b31df6aa1f9e7e42430cacc4d684c14f47382903385ced03639a155",
+      "size": 367
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/node_runtime.py",
+      "sha256": "a2c10154a1ea28e7304e85e0f664a507f15554863790e58df1271dcd2ca162d4",
+      "size": 19326
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/package_freshness.py",
+      "sha256": "dbae6980787ceb002fa9b4c28dec4069fa1a70f1fdd63ec701f149cefa4d4806",
+      "size": 4854
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/source_hash.py",
+      "sha256": "783c152d726a4d956c92da5fe03889c47237d8a86663a7afd5189dba1756dff1",
+      "size": 24656
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/step_hash.py",
+      "sha256": "d392a61382c5193bbb4ff032018b51d67928561209cc87d59539c5eb2d2f0763",
+      "size": 345
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/step_metadata.py",
+      "sha256": "b4940af52312d41acb00f33bc82bed220fc3f62ea61f5a39e45d96c44824305c",
+      "size": 12383
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/step_scene.py",
+      "sha256": "be6caf441f50ce2fdc68f31bb28cd9eaacd5f7a589b7e92958f477b1ed6d0acd",
+      "size": 5437
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/step_scene_cache.py",
+      "sha256": "85837382434f0f568981f74fdfd30a7cd620124731441526b9717888a8a3c582",
+      "size": 12720
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/step_scene_geometry.py",
+      "sha256": "927440245e4781cbf50ca5554fd4d0eff1a071081a960b71435ba0ca55dd038b",
+      "size": 24639
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/step_scene_loader.py",
+      "sha256": "4385ed719f0702ae78e1d45340dbdf1ebdddc317150b7111ccf603164a12f749",
+      "size": 18441
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/step_scene_mesh.py",
+      "sha256": "8d41fe80ab80be4133b330da15e5c4552525d051088cb6fd619f98f2bca76bca",
+      "size": 17450
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/step_scene_selectors.py",
+      "sha256": "967bc10928ca79fad30ec7987607400b7a229800d952f1f8ce8786e7a07ff0d5",
+      "size": 45737
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/step_scene_types.py",
+      "sha256": "939e7c4e3d5ed133ae2031d6bae1ba600a0ed1a6f688b32da8572487c1c1795a",
+      "size": 4569
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/stl.py",
+      "sha256": "b909911a23a12a3f9ad9bfba7e2e594b86dd0b634ed1ec7959685da594540483",
+      "size": 926
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/threemf.py",
+      "sha256": "9cbeae215ffbed2d6a80d99923004b33300516d9feade15a785578135cacc31b",
+      "size": 20027
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/validators.py",
+      "sha256": "5f006ad60639011b7e016d194a557f6c6d4d203a6ee45faa33de902bb49dfbb0",
+      "size": 4032
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/_internal/windows_job_runner.py",
+      "sha256": "2eaae51d679777a7a912593e0deaa45d079b20525c4d4cd4cf3ccc626cc3732d",
+      "size": 4606
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/analysis.py",
+      "sha256": "13a21fccd4c81b7e1f06e9da48d840fa924aaadc0f264f0045894f6aadbc3c2e",
+      "size": 25476
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/api.py",
+      "sha256": "f85367d813adcf05dfa9e588c565bb690b4274756427529c4ab302244a4891aa",
+      "size": 292
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/assembly.py",
+      "sha256": "9ad4cb37f470d1597dfbcdfbc86f6c40327ba6bfb50c2b990f1d76d07fc93379",
+      "size": 14968
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/assembly_lookup.py",
+      "sha256": "1980c32628867cd3dc221880877228f0b3176caed2eacfc28c586ca79b68c958",
+      "size": 25786
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/cad_ref_syntax.py",
+      "sha256": "aa379916f021f28760c9e4f40fc2ab2509f9dcedc8516bb905a0a4ba86eb227d",
+      "size": 11960
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/canonical_build.py",
+      "sha256": "264516f06de1bef5bfa86b1a8c67c4117e49cae216fe4296de4be99dfd1f2218",
+      "size": 31343
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/catalog.py",
+      "sha256": "3ddb038dccbc0f3de71b664ef7cfcfb227421c5f493536d9403527896b3f2672",
+      "size": 20089
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/cli_logging.py",
+      "sha256": "e51a72a0ab88b7de1c084b44ffd89a88e1423329b5cf2073b9766197dab41960",
+      "size": 1685
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/cli_progress.py",
+      "sha256": "b90449ec37c00e3f70411b90df8ac061eaf5b423d75b237f36e0ec88ce7d5ef6",
+      "size": 6415
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/color.py",
+      "sha256": "47ea7b179c6fe1063d20f04a278bc84f55338ab1727ed87d8106d96d0e6a584d",
+      "size": 2293
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/coordination/__init__.py",
+      "sha256": "45d62bd9dbe954e126b28f63f629191488bc6de4d0ce087c636df7a72d65f93d",
+      "size": 21112
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/coordination/kinds.py",
+      "sha256": "b93408504e5f3c37e1df2fbcb4855bc4dd1005c634449234239e1eb4103bd4b7",
+      "size": 4186
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/coordination/lock.py",
+      "sha256": "4e90e054ea5d5983cc1a0ef998dab083d585d0b910795ef908360db261b87f87",
+      "size": 20094
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/coordination/paths.py",
+      "sha256": "5e4e09f3e29fb7db7f80317b3896e31a5c4575b9c1c332f3770659c6247e9d69",
+      "size": 5072
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/coordination/phases.py",
+      "sha256": "0c7e8722e55d1a864291bce7f3eb2506a1b382f6c330eaa3691865b4e1fd946b",
+      "size": 11535
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/coordination/record.py",
+      "sha256": "6814941d2c84ba30b6c1e06fd528af70de083a1b2d289959c60ccdbb3fb9fe3c",
+      "size": 7100
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/drawing_checks.py",
+      "sha256": "b56db86594ed22bd8445560db7f29922651ed54bf74bf234e7a90e1d5725fb20",
+      "size": 16690
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/drawing_render.py",
+      "sha256": "e31c9fc98d3e9e60bfb4f0a82b69566552d98fac3217c39024611780447b0117",
+      "size": 16668
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/dxf_artifact.py",
+      "sha256": "ef5091016b29ec1e543189c36172b706df47529e6ac6784fa63da6ecac29c3bf",
+      "size": 8552
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/flatten.py",
+      "sha256": "b98982bbb3fb997882e28e49dffd22ed978a14c3b518a85468c0f004a2fbfe22",
+      "size": 11258
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/generation.py",
+      "sha256": "42c27dbda5e7f3635a823abaaab12d37226909fbdbe111e228fe6382b691f758",
+      "size": 496
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/instances.py",
+      "sha256": "a60856e3b3815d2c1b8d7ad0ff5f2b1d3d57362ffd714f30156610357f10bfd4",
+      "size": 3728
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/interference.py",
+      "sha256": "82e2ee2ee7ca39adb4284cb3f2f5d6db2c5b677bef6f31bb9f7a35d4427e340e",
+      "size": 11361
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/label_refs.py",
+      "sha256": "4284671421f54b539bcd9394f53001cfcfd4bb8754fee8db8178f473cedfb298",
+      "size": 8703
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/lookup.py",
+      "sha256": "599f0a9bf9dc36738d18557c45fa00f3d062605efd553f58bd4e8aa533b5c8c4",
+      "size": 10935
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/metadata.py",
+      "sha256": "c94914023ca999d9392eff24f772e45bb1fe93a88fbf424c12ab83e2fc8d2130",
+      "size": 13474
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/progress.py",
+      "sha256": "e5f9862b101a0e10b65136bf0fc62a2d042a84c6e44ecb48e028c5ebb5fa3a35",
+      "size": 3348
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/py.typed",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "size": 1
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/render.py",
+      "sha256": "944367855d32f2b5e91675b61c403116bb5e7085c6b55aad583de8a42c28c2c1",
+      "size": 1925
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/reporting.py",
+      "sha256": "8be03b932b6bfc1b6fb37ad1b79c8d2964a8fa1a36f11ba99e95e63d6b055d18",
+      "size": 4046
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/selector_types.py",
+      "sha256": "6397931b98d9ab4e31d05a73351d7a722904fe0b1fa07125d4d277f6fb14e348",
+      "size": 374
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/snapshot_cli.py",
+      "sha256": "3a1b1063942e93fdc2750abc71fe628b8de27b1d9e0932d6a46562af84676c7a",
+      "size": 57916
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/snapshot_core.py",
+      "sha256": "f3584755048b6a53d567fbc598c0fd0c0804900e716196f00ca2d3b20daeaa6e",
+      "size": 62929
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/sources.py",
+      "sha256": "632144511a76034f1c7c4a2513a503d2765e4673009423240c988cf69ef2a9cd",
+      "size": 1263
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/step_artifact_cli.py",
+      "sha256": "114f81716f0d533fb7be404cf757e0cbf027623efb05b293e7de72584f57f6b0",
+      "size": 25941
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/step_artifacts.py",
+      "sha256": "9264a137dbd85504b7932db89a793c146fe722a75aaeeb677ff6e4a6a37d8238",
+      "size": 22191
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/step_export.py",
+      "sha256": "334ae27e5492d347c839196c8c1b1d9b3d6eef94304b8fc2f8ea103fec52166e",
+      "size": 15221
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/step_export_target.py",
+      "sha256": "c8121af6d2068762f576d6256370f4e7ac98283c805a62bbf6cc61eea71aa97f",
+      "size": 16817
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/step_scene.py",
+      "sha256": "c8ed11ab74d625d6af7f836fffa27eebeaf4f9a09219f6c8c1f0776573d7c24e",
+      "size": 629
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/step_targets.py",
+      "sha256": "39ce82f63467b3a8354314df86593699efee29e50d57092895c4ed49b6a35746",
+      "size": 20303
+    },
+    {
+      "path": "packages/cadgen/src/cadgen/validity.py",
+      "sha256": "583afdab26045fccee7ac1fa5662b5236e58c0893227b30d211f75458f8eab49",
+      "size": 7876
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/__init__.py",
+      "sha256": "b820d60e29c88a6dfd50c1d8c32957a0572c349dd88f352d0c9879f78633e5ac",
+      "size": 271
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/inspect.py",
+      "sha256": "056f2ae39858ac365052ed85d580c4c68788ff74e5616d999967f4f9adb5edb4",
+      "size": 1690
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/io.py",
+      "sha256": "2c8ae86900f272d465d2f917f41fee77a72919b75b2f761da8c44c3297dfca7d",
+      "size": 1613
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/reference_capability.py",
+      "sha256": "0fe921cd2f512c3aedc6ce3e9a608f88863ad342539b4375a2e274acfe7797b3",
+      "size": 22215
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/viewer_glb.py",
+      "sha256": "b100acf492f3f763ce0fa0dbed48962aa308a9b4e248e6c8ff621999612cabfe",
+      "size": 2565
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/__init__.py",
+      "sha256": "768f88e4df3354a48e366095261ea1fa7b8f4a3c337c83f213aaee965b7b21c9",
+      "size": 3461
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/canonical_artifacts.py",
+      "sha256": "b06f8bd83ef749caa7ebbdd66c6ab96d682f47ffa13bfbac008d9e416b48280e",
+      "size": 3735
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/codec.py",
+      "sha256": "b207df5bdd4a53a906d83ef9929999c4f00c28ecf6502cb606534c111a48bf49",
+      "size": 3097
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/contracts.py",
+      "sha256": "633381fbf44fddeea9186692d942ef5499fd4ae4435d58ba55c18c92f0f2ba71",
+      "size": 30090
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/errors.py",
+      "sha256": "aadf389f8cad58054092dd6dae09515489a7f6a66c26e73dfc42651047a22e9e",
+      "size": 810
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/exterior.py",
+      "sha256": "a145001f6194ff02f10f42e31d5de051235dc958e40ed95f11c5563b97429835",
+      "size": 16514
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/frame.py",
+      "sha256": "4ca977b62b4b707adc6c73482c8e96eeab00cf22ab236b92e6b7c458fcb3709f",
+      "size": 1817
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/measurement.py",
+      "sha256": "8bcec0de4b5ac8246daeb7a5c4a1316ce451707eee3eaa3ba571bdbade5b65cb",
+      "size": 24049
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/prepare_reference.py",
+      "sha256": "2f09862b43a85c3c39b994d75c21dbf70870c5bd081639260763c6141fed99fa",
+      "size": 28479
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/preview.py",
+      "sha256": "f3c5e2478cc94702c61c2786e5ed35caf38ddd68d3e5c56c0f9fbde628ac3e12",
+      "size": 14351
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/region_diff.py",
+      "sha256": "395183be70d026eceef463bab7da277c3ff85af499b421fdc888c50ad1004ecc",
+      "size": 49106
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/targets.py",
+      "sha256": "993791e2d8b0d5f95dd999c8574fe2f04609a5117befe72826c17b999c2d8c9e",
+      "size": 36574
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/tree.py",
+      "sha256": "c2233d6b25fead6cc6cf6bf3910c1958855a48aad3b44f1519fff1de1d3b22b2",
+      "size": 8487
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/verification.py",
+      "sha256": "5e36d88af5e0f89fbc6a2cdb0ffd69af7136cfa89da7ea210e5bfd56d3bc5c58",
+      "size": 4366
+    },
+    {
+      "path": "packages/meshscope/src/meshscope/voxblame/voxelize.py",
+      "sha256": "87f63662584a1b8e8370d550182606de53015c77f91c7c2c0615a62ede77f2c7",
+      "size": 5213
+    },
+    {
+      "path": "packages/meshshot/src/meshshot/__init__.py",
+      "sha256": "785e53bd46dc7357c8406ed4b575861a4fd5da3a6d60acab8a6f963e7f42e8f7",
+      "size": 392
+    },
+    {
+      "path": "packages/meshshot/src/meshshot/profile.py",
+      "sha256": "7166378d1b713fd5db94c996599a436561163433cd34e5a5fef94ac00676fc55",
+      "size": 1753
+    },
+    {
+      "path": "packages/meshshot/src/meshshot/profiles/cadena_residual_eight_view_v1.json",
+      "sha256": "87da3cc3f625cb9c24f51bed41dcdc70402a4d461b2af29eaa19846b1e8f7241",
+      "size": 2871
+    },
+    {
+      "path": "packages/meshshot/src/meshshot/runtime/render.html",
+      "sha256": "d2b6b80aaaa2c91b871b771f8a4222134c4d66d7729a6b161c9a4c25d8123672",
+      "size": 376
+    },
+    {
+      "path": "packages/meshshot/src/meshshot/runtime/residual-render.js",
+      "sha256": "189c20676386476d6a70011b9b7bdac229416656c33ffabe5a9b08d7e995d413",
+      "size": 473222
+    },
+    {
+      "path": "packages/meshshot/src/meshshot/runtime_client.py",
+      "sha256": "33047328d4c61a6c81abc3318226440acfcf11c202c6734296e9e73903173f49",
+      "size": 19552
+    }
+  ],
+  "schema": "text-to-cad.trusted-tools/1"
+}

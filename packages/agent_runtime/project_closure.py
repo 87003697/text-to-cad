@@ -73,6 +73,7 @@ _MESHSCOPE_SOURCE_FILES = (
     "src/meshscope/__init__.py",
     "src/meshscope/inspect.py",
     "src/meshscope/io.py",
+    "src/meshscope/reference_capability.py",
     "src/meshscope/viewer_glb.py",
     "src/meshscope/voxblame/CONTRACT.md",
     "src/meshscope/voxblame/README.md",

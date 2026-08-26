@@ -4,14 +4,15 @@
 from __future__ import annotations
 
 import argparse
+from collections import namedtuple
 import hashlib
 import json
 import math
 import os
 import re
+import secrets
 import shutil
 import signal
-import socket
 import sqlite3
 import stat
 import subprocess
@@ -22,6 +23,20 @@ from contextlib import closing, nullcontext
 from pathlib import Path
 from types import FrameType
 from typing import Callable, Mapping
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - unsupported publication platform.
+    fcntl = None
+
+
+TerminalValidationLocator = namedtuple(
+    "TerminalValidationLocator", "bundle_path expected_identity sidecar_path"
+)
+
+PILOT_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(PILOT_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(PILOT_SCRIPT_DIR))
 
 try:
     from scripts.pilot.venus_retry_proxy import RetryProxy
@@ -36,6 +51,91 @@ except ModuleNotFoundError as exc:
     if exc.name != "scripts":
         raise
     import plugin_deployment  # type: ignore[no-redef]
+
+try:
+    from scripts.pilot.workspace_supervisor import (
+        SupervisorError,
+        WorkspaceSupervisor,
+        _load_workspace_api,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from workspace_supervisor import (
+        SupervisorError,
+        WorkspaceSupervisor,
+        _load_workspace_api,
+    )
+
+try:
+    from scripts.pilot.step_zero_evidence import (
+        _MESHSCOPE_SRC,
+        _MESHSHOT_SRC,
+        _ensure_shipped_package,
+        real_step_zero_evidence_provider,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from step_zero_evidence import (  # type: ignore[no-redef]
+        _MESHSCOPE_SRC,
+        _MESHSHOT_SRC,
+        _ensure_shipped_package,
+        real_step_zero_evidence_provider,
+    )
+
+try:
+    from scripts.pilot.trusted_tools import TrustedToolsError, validate_trusted_tools
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from trusted_tools import TrustedToolsError, validate_trusted_tools  # type: ignore[no-redef]
+
+try:
+    from scripts.pilot.repair_evidence import real_repair_evidence_provider
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from repair_evidence import real_repair_evidence_provider
+
+try:
+    from scripts.pilot.agent_surface_bridge import (
+        AgentSurfaceBridge,
+        SOCKET_TARGET as AGENT_SURFACE_SOCKET_TARGET,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from agent_surface_bridge import (
+        AgentSurfaceBridge,
+        SOCKET_TARGET as AGENT_SURFACE_SOCKET_TARGET,
+    )
+
+try:
+    from scripts.pilot import agent_source_projection
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    import agent_source_projection  # type: ignore[no-redef]
+
+try:
+    from scripts.pilot.candidate_runtime import (
+        CAD_RUNTIME_IMPORTS,
+        CandidateRuntimeLease,
+        CandidateRuntimeError,
+        materialize_candidate_runtime,
+        validate_candidate_runtime,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "scripts":
+        raise
+    from candidate_runtime import (  # type: ignore[no-redef]
+        CAD_RUNTIME_IMPORTS,
+        CandidateRuntimeLease,
+        CandidateRuntimeError,
+        materialize_candidate_runtime,
+        validate_candidate_runtime,
+    )
 
 sys.path.insert(
     0,
@@ -69,6 +169,8 @@ JOB_PUBLISH_TREE_REL = "run/.plugin-publish-tree"
 ARTIFACT_CONTRACT_STATUS = 4
 MANIFEST_EXCLUDED_ROOTS = {".git"}
 MANIFEST_EXCLUDED_PREFIXES = {JOB_CODEX_HOME_REL, JOB_PUBLISH_TREE_REL}
+TERMINAL_LOCATOR_RELATIVE = "run/terminal-validation-locator.json"
+TERMINAL_PUBLISH_LOCK_SECONDS = 120.0
 WORKSPACE_HELPER = REPO_ROOT / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
 CAD_REBUILD_ENTRYPOINT = REPO_ROOT / "skills/cad/scripts/canonical-build/__main__.py"
 GEOMETRY_ENTRYPOINT = REPO_ROOT / "skills/mesh-compare/scripts/mesh-compare/__main__.py"
@@ -80,6 +182,7 @@ SANDBOX_GEOMETRY_ENTRYPOINT = (
 )
 VIEWER_RUNTIME_DIR = REPO_ROOT / "skills/cad-viewer/scripts/viewer"
 TRUSTED_TOOL_REGISTRY_NAME = "trusted-tool-registry.json"
+CAD_CANDIDATE_RUNTIME_IMPORTS = CAD_RUNTIME_IMPORTS
 SYSTEM_RO_PATHS = (
     Path("/usr"),
     Path("/etc/alternatives"),
@@ -593,6 +696,57 @@ def prepare_job_publish_tree(
         raise PilotError(f"cannot prepare job publish tree: {exc}") from exc
 
 
+def prepare_isolated_job_codex_home(exp_dir: Path) -> Path:
+    """Materialize a minimal writable CODEX_HOME for a candidate-only Agent.
+
+    A candidate-only Agent runs Codex with ``--disable plugins``; provider
+    config is injected via the gateway's ``-c`` flags. The Codex CLI still
+    requires a writable ``CODEX_HOME`` (for rollouts, sessions, and the
+    conversation log), so we allocate an empty per-job directory with a
+    minimal ``config.toml``. No plugin authority, marketplace, or installed
+    skill cache is materialized here — the Agent Source Projection is the
+    only skill source visible to this Agent Execution.
+    """
+
+    target = exp_dir / JOB_CODEX_HOME_REL
+    try:
+        if target.is_symlink():
+            target.unlink()
+        elif target.exists():
+            shutil.rmtree(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.mkdir(mode=0o700)
+        config_path = target / plugin_deployment.CONFIG_TOML_NAME
+        config_path.write_text(
+            "# Candidate-only Agent Execution CODEX_HOME.\n"
+            "# The gateway supplies provider config via -c flags; no\n"
+            "# marketplaces or plugins are registered here.\n",
+            encoding="utf-8",
+        )
+        config_path.chmod(0o600)
+    except OSError as exc:
+        raise PilotError(f"cannot prepare candidate CODEX_HOME: {exc}") from exc
+    return target
+
+
+def prepare_agent_source_projection(repo_root: Path) -> Path:
+    """Return the verified Agent Source Projection root under ``repo_root``.
+
+    The projection is materialized offline by ``scripts/bundle/bundle.sh``.
+    The runner never consults source or regenerates it; it verifies the exact
+    five-file installed tree against its canonical manifest.
+    """
+
+    target = Path(repo_root) / agent_source_projection.PROJECTION_ROOT_REL
+    try:
+        agent_source_projection.verify(target)
+    except agent_source_projection.ProjectionError as exc:
+        raise PilotError(
+            f"agent source projection is unavailable: {exc}"
+        ) from exc
+    return target
+
+
 def validate_exp_dir(repo_root: Path, exp_dir: Path) -> Path:
     """Require a resolved experiment child below the checkout outputs directory."""
 
@@ -677,8 +831,14 @@ def existing_system_paths() -> list[Path]:
 def build_sandbox_environment(
     environ: Mapping[str, str],
     tap_url: str,
+    *,
+    isolated_agent: bool = False,
 ) -> dict[str, str]:
-    """Return the explicit child environment allowlist for Codex."""
+    """Return the explicit child environment allowlist for Codex.
+
+    Provider credentials stay in the host-side tap/retry processes; the
+    Agent child receives no bearer token or other secret environment value.
+    """
 
     child_env = {
         name: environ[name]
@@ -692,12 +852,12 @@ def build_sandbox_environment(
             "GIT_TERMINAL_PROMPT": "0",
             "HOME": str(SANDBOX_HOME),
             "PATH": (
-                f"{SANDBOX_REPO_ROOT}/.venv/bin:"
                 "/usr/local/bin:/usr/bin:/bin"
+                if isolated_agent
+                else f"{SANDBOX_REPO_ROOT}/.venv/bin:/usr/local/bin:/usr/bin:/bin"
             ),
             "PYTHONDONTWRITEBYTECODE": "1",
             "UV_CACHE_DIR": "/tmp/uv-cache",
-            "VENUS_TOKEN": environ.get("VENUS_TOKEN", ""),
             "XDG_CACHE_HOME": "/tmp/cache",
         }
     )
@@ -713,8 +873,18 @@ def build_bwrap_argv(
     environ: Mapping[str, str],
     browser_capability_dir: Path | None = None,
     browser_mcp_url: str | None = None,
+    agent_candidate_dir: Path | None = None,
+    agent_surface_socket: Path | None = None,
 ) -> list[str]:
-    """Build a least-visibility bwrap argv without placing secrets in it."""
+    """Build a least-visibility bwrap argv without placing secrets in it.
+
+    ``agent_candidate_dir`` selects the W4 candidate-only seam.  In that mode
+    the workload receives a fixed ``/candidate`` mount, the Agent Source
+    Projection at ``/workspace/repo/skills``, the projected Agent Surface
+    client at ``/agent-surface/client.py``, and no experiment, input, or
+    output bind.  The default remains the historical pilot mount until the
+    Agent Surface workflow is enabled by the outer runner.
+    """
 
     repo_root = repo_root.resolve()
     if not environ.get("VENUS_TOKEN"):
@@ -732,7 +902,29 @@ def build_bwrap_argv(
 
     exp_dir = validate_exp_dir(repo_root, exp_dir)
     inputs = validate_input_paths(repo_root, input_paths)
-    receipt = resolve_deployed_authority(host_home)
+    isolated_agent = agent_candidate_dir is not None
+    if isolated_agent:
+        raw_candidate_dir = Path(agent_candidate_dir)
+        if raw_candidate_dir.is_symlink():
+            raise PilotError("agent candidate directory is unavailable")
+        agent_candidate_dir = raw_candidate_dir.resolve()
+        if not agent_candidate_dir.is_dir():
+            raise PilotError("agent candidate directory is unavailable")
+        try:
+            agent_candidate_dir.relative_to(exp_dir)
+        except ValueError:
+            pass
+        else:
+            raise PilotError("agent candidate directory must be outside EXP_DIR")
+        if agent_surface_socket is None:
+            raise PilotError("Agent Surface bridge is unavailable")
+        if (
+            not Path(agent_surface_socket).is_socket()
+            or Path(agent_surface_socket).is_symlink()
+        ):
+            raise PilotError("Agent Surface bridge is unavailable")
+    elif agent_surface_socket is not None:
+        raise PilotError("Agent Surface requires candidate-only isolation")
     relative_exp = exp_dir.relative_to(repo_root)
     sandbox_exp = SANDBOX_REPO_ROOT / relative_exp
     gateway = repo_root / "gateway" / "codex-tap-gpt56"
@@ -741,14 +933,43 @@ def build_bwrap_argv(
     venv = repo_root / ".venv"
     if not venv.is_dir():
         raise PilotError(f"pilot runtime not found: {venv}")
-    job_codex_home = prepare_job_codex_home(
-        exp_dir, receipt, browser_mcp_url=browser_mcp_url
-    )
-    job_publish_tree = prepare_job_publish_tree(exp_dir, receipt)
-    installed_relative = Path(receipt.installed_path).relative_to(receipt.codex_home)
-    skill_dirs = plugin_deployment.skill_directories_under_installed(
-        job_codex_home / installed_relative
-    )
+
+    if isolated_agent:
+        # Candidate-only Agent Executions see only the Agent Source Projection
+        # under /workspace/repo/skills, the fixed Agent Surface client (also
+        # sourced from the projection) at /agent-surface/client.py, the
+        # Agent Surface socket, /candidate, and a minimal writable CODEX_HOME.
+        # No full installed plugin cache, publish tree, per-skill
+        # enumeration, Workspace Authority path, or repository client source
+        # is bound into the sandbox.
+        projection_root = prepare_agent_source_projection(repo_root)
+        projection_skills = agent_source_projection.projected_skills_root(
+            projection_root
+        )
+        projected_client = agent_source_projection.projected_agent_surface_client(
+            projection_root
+        )
+        if not projected_client.is_file() or projected_client.is_symlink():
+            raise PilotError("Agent Surface client is unavailable")
+        job_codex_home = prepare_isolated_job_codex_home(exp_dir)
+        job_publish_tree = None
+        skill_dirs: tuple[Path, ...] = ()
+    else:
+        receipt = resolve_deployed_authority(host_home)
+        job_codex_home = prepare_job_codex_home(
+            exp_dir, receipt, browser_mcp_url=browser_mcp_url
+        )
+        job_publish_tree = prepare_job_publish_tree(exp_dir, receipt)
+        installed_relative = Path(receipt.installed_path).relative_to(
+            receipt.codex_home
+        )
+        skill_dirs = tuple(
+            plugin_deployment.skill_directories_under_installed(
+                job_codex_home / installed_relative
+            )
+        )
+        projection_skills = None
+
     if browser_capability_dir is not None:
         browser_capability_dir = browser_capability_dir.resolve()
         if not browser_capability_dir.is_dir():
@@ -760,7 +981,9 @@ def build_bwrap_argv(
                 "browser runtime capability directory must be inside the experiment"
             ) from exc
         sandbox_browser_capability_dir = (
-            sandbox_exp / browser_capability_relative
+            Path(SANDBOX_MOUNT_ROOT)
+            if isolated_agent
+            else sandbox_exp / browser_capability_relative
         )
     argv = [
         bwrap,
@@ -783,8 +1006,6 @@ def build_bwrap_argv(
         str(SANDBOX_REPO_ROOT / "models"),
         "--dir",
         str(SANDBOX_REPO_ROOT / "outputs"),
-        "--dir",
-        str(sandbox_exp.parent),
         "--dir",
         str(SANDBOX_REPO_ROOT / "gateway"),
         "--dir",
@@ -810,53 +1031,84 @@ def build_bwrap_argv(
         "usr/lib64",
         "/lib64",
         "--ro-bind",
-        str(venv),
-        str(SANDBOX_REPO_ROOT / ".venv"),
-        "--ro-bind",
         str(gateway),
         str(SANDBOX_REPO_ROOT / "gateway" / gateway.name),
         "--bind",
-        str(exp_dir),
-        str(sandbox_exp),
-        "--bind",
         str(job_codex_home),
         str(SANDBOX_CODEX_HOME),
-        "--ro-bind",
-        str(job_publish_tree),
-        str(SANDBOX_PUBLISH_TREE),
     ]
+    if job_publish_tree is not None:
+        argv.extend(
+            [
+                "--ro-bind",
+                str(job_publish_tree),
+                str(SANDBOX_PUBLISH_TREE),
+            ]
+        )
+    if not isolated_agent:
+        argv.extend(("--dir", str(sandbox_exp.parent)))
+    if not isolated_agent:
+        argv.extend(
+            (
+                "--ro-bind",
+                str(venv),
+                str(SANDBOX_REPO_ROOT / ".venv"),
+            )
+        )
     for path in existing_system_paths():
         argv.extend(["--ro-bind", str(path), str(path)])
-    for input_path in inputs:
-        relative_input = input_path.relative_to(repo_root)
+    if isolated_agent:
         argv.extend(
             [
+                "--ro-bind",
+                str(projection_skills),
+                str(SANDBOX_REPO_ROOT / "skills"),
                 "--dir",
-                str((SANDBOX_REPO_ROOT / relative_input).parent),
+                "/candidate",
+                "--bind",
+                str(agent_candidate_dir),
+                "/candidate",
+                "--dir",
+                "/agent-surface",
                 "--ro-bind",
-                str(input_path),
-                str(SANDBOX_REPO_ROOT / relative_input),
+                str(projected_client),
+                "/agent-surface/client.py",
+                "--ro-bind",
+                str(agent_surface_socket),
+                AGENT_SURFACE_SOCKET_TARGET,
             ]
         )
-    for skill_dir in skill_dirs:
+    else:
         argv.extend(
             [
-                "--ro-bind",
-                str(skill_dir),
-                str(SANDBOX_REPO_ROOT / "skills" / skill_dir.name),
+                "--bind",
+                str(exp_dir),
+                str(sandbox_exp),
             ]
         )
+        for input_path in inputs:
+            relative_input = input_path.relative_to(repo_root)
+            argv.extend(
+                [
+                    "--dir",
+                    str((SANDBOX_REPO_ROOT / relative_input).parent),
+                    "--ro-bind",
+                    str(input_path),
+                    str(SANDBOX_REPO_ROOT / relative_input),
+                ]
+            )
+        for skill_dir in skill_dirs:
+            argv.extend(
+                [
+                    "--ro-bind",
+                    str(skill_dir),
+                    str(SANDBOX_REPO_ROOT / "skills" / skill_dir.name),
+                ]
+            )
     if browser_capability_dir is not None:
-        argv.extend(
-            [
-                "--ro-bind",
-                str(browser_capability_dir),
-                str(sandbox_browser_capability_dir),
-                "--ro-bind",
-                str(browser_capability_dir),
-                SANDBOX_MOUNT_ROOT,
-            ]
-        )
+        argv.extend(["--ro-bind", str(browser_capability_dir), str(sandbox_browser_capability_dir)])
+        if not isolated_agent:
+            argv.extend(["--ro-bind", str(browser_capability_dir), SANDBOX_MOUNT_ROOT])
     argv.extend(
         [
             "--remount-ro",
@@ -880,6 +1132,8 @@ def run_supervised(
     state: LifecycleState | None = None,
     sidecar: BrowserRuntimeJob | None = None,
     relay: SignalRelay | None = None,
+    agent_candidate_dir: Path | None = None,
+    agent_surface_socket: Path | None = None,
 ) -> int:
     """Run command behind mandatory tap and return a shell-compatible status."""
 
@@ -897,6 +1151,8 @@ def run_supervised(
         environ,
         sidecar.capability_dir if sidecar is not None else None,
         sidecar.mcp_url if sidecar is not None else None,
+        agent_candidate_dir,
+        agent_surface_socket,
     )
     if state is None:
         state = LifecycleState()
@@ -929,6 +1185,7 @@ def run_supervised(
                     child_env = build_sandbox_environment(
                         environ,
                         tap_url,
+                        isolated_agent=agent_candidate_dir is not None,
                     )
                     workload = subprocess.Popen(
                         bwrap_argv,
@@ -1043,6 +1300,108 @@ def prepare_exp(exp_dir: Path) -> None:
         )
 
 
+def _workspace_status_available(exp_dir: Path) -> bool:
+    """Ask the public Workspace CLI whether an initialized authority exists."""
+
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(WORKSPACE_HELPER),
+                "status",
+                "--workspace",
+                str(exp_dir),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PilotError("cannot inspect Workspace initialization") from exc
+    return completed.returncode == 0
+
+
+def prepare_and_initialize_workspace(exp_dir: Path, input_path: Path) -> Path:
+    """Prepare Canonical Reference and initialize a fresh Workspace outside Agent view."""
+
+    if _workspace_status_available(exp_dir):
+        return exp_dir / "input" / "reference.ply"
+    prepared = exp_dir.parent / f".agent-prepared-{os.getpid()}-{secrets.token_hex(8)}"
+    try:
+        try:
+            validate_trusted_tools(REPO_ROOT)
+        except TrustedToolsError as exc:
+            raise PilotError("trusted tools are unavailable") from exc
+        _ensure_shipped_package(_MESHSCOPE_SRC, "meshscope")
+        from meshscope.voxblame import prepare_reference
+        _ensure_shipped_package(_MESHSHOT_SRC, "meshshot")
+        from meshshot import load_profile
+
+        prepared_input = prepared / "input"
+        result = prepare_reference(input_path, prepared_input)
+        profile = load_profile()
+        (prepared / "setup").mkdir(parents=True, exist_ok=False)
+        (prepared / "setup/outer-preparation.json").write_text(
+            json.dumps(
+                {
+                    "schema": "mesh-to-cad.outer-preparation/1",
+                    "canonical_reference_sha256": result.manifest[
+                        "canonical_reference_sha256"
+                    ],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        (prepared / "experiment.json").write_text(
+            json.dumps(
+                {
+                    "schema": "mesh-to-cad.experiment/1",
+                    "workspace_id": f"pilot-{exp_dir.name}",
+                    "coordinate_contract": "trellis2_canonical/1",
+                    "canonical_reference_sha256": result.manifest[
+                        "canonical_reference_sha256"
+                    ],
+                    "preview_profile": {
+                        "name": profile.profile["name"],
+                        "sha256": profile.sha256,
+                    },
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(WORKSPACE_HELPER),
+                "init",
+                "--workspace",
+                str(exp_dir),
+                "--prepared",
+                str(prepared),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if completed.returncode != 0:
+            raise PilotError("trusted Workspace initialization failed")
+        return exp_dir / "input" / "reference.ply"
+    except PilotError:
+        raise
+    except Exception as exc:
+        raise PilotError("trusted Canonical Reference preparation failed") from exc
+    finally:
+        shutil.rmtree(prepared, ignore_errors=True)
+
+
 def compact_exp_history(exp_dir: Path) -> None:
     """Pack successful pilot commits before cvm-pull preserves the Git authority."""
 
@@ -1057,6 +1416,16 @@ def compact_exp_history(exp_dir: Path) -> None:
 
 def validate_workspace_delivery(exp_dir: Path) -> dict[str, object]:
     """Validate canonical Workspace authority and return its Final Delivery."""
+
+    try:
+        workspace_api = _load_workspace_api()
+        if workspace_api.workspace_initialized(exp_dir):
+            # Terminal validation owns the only complete validator call. The
+            # runner's preflight here only distinguishes the public Workspace
+            # protocol from legacy/non-Workspace output.
+            return {"workspace_initialized": True}
+    except Exception:
+        pass
 
     try:
         completed = subprocess.run(
@@ -1096,6 +1465,301 @@ def validate_workspace_delivery(exp_dir: Path) -> dict[str, object]:
     return delivery
 
 
+def _acquire_terminal_publish_lock(exp_dir: Path) -> int:
+    """Serialize publication for one experiment on supported POSIX hosts."""
+
+    if fcntl is None:  # Kept explicit for type checkers and patched tests.
+        raise PilotError("terminal_publication_unavailable")
+    root = exp_dir.parent / ".internal-terminal-validation"
+    if root.is_symlink():
+        raise PilotError("terminal_handoff_path_conflict")
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if root.is_symlink() or not root.is_dir():
+        raise PilotError("terminal_handoff_path_conflict")
+    lock_path = root / f".{exp_dir.name}.publish.lock"
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise PilotError("terminal_handoff_lock_unavailable") from exc
+    deadline = time.monotonic() + TERMINAL_PUBLISH_LOCK_SECONDS
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise PilotError("terminal_handoff_lock_conflict")
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return descriptor
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise PilotError("terminal_handoff_lock_timeout")
+                time.sleep(0.02)
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _release_terminal_publish_lock(descriptor: int) -> None:
+    """Release the experiment publication lock and close its descriptor."""
+
+    try:
+        if fcntl is not None:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _read_terminal_json(path: Path) -> dict[str, object] | None:
+    """Read one regular terminal JSON object, or return None when absent."""
+
+    if path.is_symlink():
+        raise PilotError("terminal_handoff_path_conflict")
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise PilotError("terminal_handoff_path_conflict")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PilotError("terminal_handoff_invalid") from exc
+    if not isinstance(value, dict):
+        raise PilotError("terminal_handoff_invalid")
+    return value
+
+
+def _fsync_terminal_parent(path: Path) -> None:
+    """Make completed directory-entry changes durable."""
+
+    descriptor = os.open(
+        path,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _write_terminal_handoff(
+    path: Path,
+    payload: Mapping[str, object],
+) -> None:
+    """Publish a new handoff without replacing a file another publisher owns."""
+
+    if path.exists() or path.is_symlink():
+        raise PilotError("terminal_handoff_ownership_conflict")
+    encoded = (
+        json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+        + "\n"
+    ).encode("ascii")
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}-{secrets.token_hex(6)}")
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptor: int | None = None
+    linked = False
+    complete = False
+    try:
+        descriptor = os.open(temporary, flags, 0o600)
+        view = memoryview(encoded)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("short terminal handoff write")
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.link(temporary, path, follow_symlinks=False)
+        linked = True
+        temporary.unlink()
+        _fsync_terminal_parent(path.parent)
+        complete = True
+    except PilotError:
+        raise
+    except OSError as exc:
+        raise PilotError("terminal_handoff_write_failed") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+        if linked and not complete and path.exists():
+            path.unlink()
+
+
+def _validated_handoff(
+    workspace_api: object,
+    exp_dir: Path,
+    handoff: Mapping[str, object],
+) -> tuple[str, Mapping[str, object]]:
+    """Verify a closed handoff and return its trusted identity and bundle."""
+
+    if set(handoff) != {"schema", "terminal_identity_sha256", "bundle"}:
+        raise PilotError("terminal_handoff_invalid")
+    if handoff.get("schema") != "mesh-to-cad.terminal-validation-handoff/1":
+        raise PilotError("terminal_handoff_invalid")
+    identity = handoff.get("terminal_identity_sha256")
+    bundle = handoff.get("bundle")
+    if (
+        type(identity) is not str
+        or len(identity) != 64
+        or any(char not in "0123456789abcdef" for char in identity)
+        or not isinstance(bundle, Mapping)
+    ):
+        raise PilotError("terminal_handoff_invalid")
+    try:
+        workspace_api.verify_terminal_validation(exp_dir, bundle, identity)  # type: ignore[attr-defined]
+    except Exception as exc:
+        raise PilotError("terminal_handoff_invalid") from exc
+    return identity, bundle
+
+
+TERMINAL_LOCATOR_SCHEMA = "mesh-to-cad.terminal-validation-locator/2"
+TERMINAL_HANDOFF_LAYOUT = "external-sibling-namespace/1"
+_TERMINAL_LOCATOR_FIELDS = frozenset({"schema", "handoff_layout"})
+
+
+def _validate_terminal_marker(locator: Mapping[str, object]) -> None:
+    """Ignore locator identity/bundle but reject an incompatible marker."""
+
+    if set(locator) != _TERMINAL_LOCATOR_FIELDS:
+        raise PilotError("terminal_locator_conflict")
+    if (
+        locator.get("schema") != TERMINAL_LOCATOR_SCHEMA
+        or locator.get("handoff_layout") != TERMINAL_HANDOFF_LAYOUT
+    ):
+        raise PilotError("terminal_locator_conflict")
+
+
+def persist_terminal_validation(exp_dir: Path) -> TerminalValidationLocator | None:
+    """Compile and publish the W1/W5 pair after all Agent resources are closed."""
+
+    exp_dir = Path(exp_dir).resolve()
+    if os.name != "posix" or fcntl is None or not hasattr(os, "link"):
+        raise PilotError("terminal_publication_unavailable")
+    try:
+        workspace_api = _load_workspace_api()
+        if workspace_api.workspace_initialized(exp_dir) is not True:  # type: ignore[attr-defined]
+            raise PilotError("workspace_not_initialized")
+    except PilotError:
+        raise
+    except Exception as exc:
+        raise PilotError("workspace_not_initialized") from exc
+
+    lock: int | None = None
+    handoff_target = exp_dir.parent / ".internal-terminal-validation" / exp_dir.name / "terminal-validation.json"
+    locator_target = exp_dir / TERMINAL_LOCATOR_RELATIVE
+    created_handoff = False
+
+    def remove_own_handoff() -> None:
+        """Remove a handoff created by this failed publication attempt."""
+
+        if not created_handoff:
+            return
+        try:
+            handoff_target.unlink(missing_ok=True)
+            _fsync_terminal_parent(handoff_target.parent)
+        except OSError:
+            pass
+
+    try:
+        lock = _acquire_terminal_publish_lock(exp_dir)
+        handoff_dir = handoff_target.parent
+        handoff_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if handoff_dir.is_symlink() or not handoff_dir.is_dir():
+            raise PilotError("terminal_handoff_path_conflict")
+        handoff = _read_terminal_json(handoff_target)
+        reader = getattr(workspace_api, "read_terminal_locator", None)
+        locator = reader(exp_dir) if reader is not None else _read_terminal_json(locator_target)
+        if handoff is None and locator is not None:
+            raise PilotError("terminal_locator_without_handoff")
+        locator_payload = {
+            "schema": TERMINAL_LOCATOR_SCHEMA,
+            "handoff_layout": TERMINAL_HANDOFF_LAYOUT,
+        }
+        if handoff is not None:
+            identity, _bundle = _validated_handoff(workspace_api, exp_dir, handoff)
+            if locator is not None:
+                _validate_terminal_marker(locator)
+                sidecar_path = TERMINAL_LOCATOR_RELATIVE
+            else:
+                sidecar_path = workspace_api.write_terminal_locator(  # type: ignore[attr-defined]
+                    exp_dir, locator_payload
+                )
+            return TerminalValidationLocator(
+                bundle_path=handoff_target,
+                expected_identity=identity,
+                sidecar_path=sidecar_path,
+            )
+
+        compiled = workspace_api.compile_terminal_validation(exp_dir)  # type: ignore[attr-defined]
+        if not isinstance(compiled, Mapping):
+            raise PilotError("terminal_handoff_invalid")
+        bundle = compiled.get("bundle")
+        identity = compiled.get("terminal_identity_sha256")
+        if (
+            not isinstance(bundle, Mapping)
+            or type(identity) is not str
+            or len(identity) != 64
+            or any(char not in "0123456789abcdef" for char in identity)
+        ):
+            raise PilotError("terminal_handoff_invalid")
+        workspace_api.verify_terminal_validation(exp_dir, bundle, identity)  # type: ignore[attr-defined]
+        handoff_payload = {
+            "schema": "mesh-to-cad.terminal-validation-handoff/1",
+            "terminal_identity_sha256": identity,
+            "bundle": bundle,
+        }
+        _write_terminal_handoff(handoff_target, handoff_payload)
+        created_handoff = True
+        sidecar_path = workspace_api.write_terminal_locator(exp_dir, locator_payload)  # type: ignore[attr-defined]
+        return TerminalValidationLocator(
+            bundle_path=handoff_target,
+            expected_identity=identity,
+            sidecar_path=sidecar_path,
+        )
+    except PilotError:
+        remove_own_handoff()
+        raise
+    except (OSError, RuntimeError, ValueError) as exc:
+        remove_own_handoff()
+        raise PilotError("cannot persist terminal Workspace validation") from exc
+    finally:
+        if lock is not None:
+            _release_terminal_publish_lock(lock)
+
+
+def write_agent_bootstrap(candidate_dir: Path, contract: Mapping[str, object]) -> Path:
+    """Publish opaque Agent capabilities at the fixed candidate mount."""
+
+    target = Path(candidate_dir) / "bootstrap.json"
+    temporary = target.with_name(f".{target.name}.tmp-{os.getpid()}")
+    try:
+        temporary.write_text(
+            json.dumps(contract, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(target)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise PilotError("cannot publish Agent bootstrap") from exc
+    return target
+
+
 def write_artifact_manifest(
     exp_dir: Path,
     workload_status: int,
@@ -1116,7 +1780,11 @@ def write_artifact_manifest(
                     for prefix in MANIFEST_EXCLUDED_PREFIXES
                 )
                 or relative.as_posix()
-                in {"artifact_manifest.json", ".artifact_manifest.json.tmp"}
+                in {
+                    "artifact_manifest.json",
+                    ".artifact_manifest.json.tmp",
+                    TERMINAL_LOCATOR_RELATIVE,
+                }
                 or not path.is_file()
             ):
                 continue
@@ -1177,6 +1845,7 @@ def finalize_pilot(
     environ: Mapping[str, str],
     *,
     require_rollout: bool = True,
+    agent_surface: bool = False,
 ) -> int:
     """Collect the unique rollout, apply cleanup policy, and choose final status."""
 
@@ -1220,7 +1889,7 @@ def finalize_pilot(
         return final_status
 
     final_status = workload_status
-    if workload_status == 0:
+    if workload_status == 0 and not agent_surface:
         try:
             validate_workspace_delivery(exp_dir)
         except PilotError as exc:
@@ -1228,9 +1897,6 @@ def finalize_pilot(
             final_status = ARTIFACT_CONTRACT_STATUS
     if final_status == 0:
         compact_exp_history(exp_dir)
-    if not publish_artifact_manifest(exp_dir, workload_status, final_status):
-        if workload_status == 0:
-            final_status = ARTIFACT_CONTRACT_STATUS
 
     if final_status == 0 and not environ.get("KEEP_STATE"):
         try:
@@ -1242,19 +1908,7 @@ def finalize_pilot(
                 f"sandbox cleanup incomplete at {upper}",
                 file=sys.stderr,
             )
-            if not publish_artifact_manifest(
-                exp_dir,
-                workload_status,
-                final_status,
-            ):
-                try:
-                    (exp_dir / "artifact_manifest.json").unlink(missing_ok=True)
-                except OSError as unlink_exc:
-                    print(
-                        f"warning: cannot remove stale manifest: {unlink_exc}",
-                        file=sys.stderr,
-                    )
-    else:
+    elif final_status == 0:
         print(
             f"sandbox preserved at {upper} (exit={final_status})",
             file=sys.stderr,
@@ -1263,6 +1917,23 @@ def finalize_pilot(
             f"clean when done: {Path(__file__)} clean {str(exp_dir)!r}",
             file=sys.stderr,
         )
+
+    if not publish_artifact_manifest(exp_dir, workload_status, final_status):
+        if workload_status == 0:
+            final_status = ARTIFACT_CONTRACT_STATUS
+
+    if final_status == 0:
+        try:
+            # The artifact manifest is a later Workspace-root write, so W1
+            # must compile only after it is published.  No authority file is
+            # written after this handoff succeeds.
+            persist_terminal_validation(exp_dir)
+        except PilotError as exc:
+            if str(exc) == "workspace_not_initialized":
+                return final_status
+            print(f"pilot-runner: {exc}", file=sys.stderr)
+            final_status = ARTIFACT_CONTRACT_STATUS
+            publish_artifact_manifest(exp_dir, workload_status, final_status)
     return final_status
 
 
@@ -1273,6 +1944,8 @@ def run_pilot(
     input_paths: list[Path],
     command: list[str],
     environ: Mapping[str, str],
+    agent_candidate_dir: Path | None = None,
+    agent_surface: bool = False,
 ) -> int:
     """Prepare, supervise, and finalize one complete pilot transaction."""
 
@@ -1281,15 +1954,65 @@ def run_pilot(
     state = LifecycleState()
     workload_status = 1
     sidecar: BrowserRuntimeJob | None = None
+    agent_supervisor: WorkspaceSupervisor | None = None
+    agent_bridge: AgentSurfaceBridge | None = None
+    candidate_runtime: Path | None = None
+    candidate_runtime_lease: CandidateRuntimeLease | None = None
+    lifetime_confirmed = True
+    agent_socket: Path | None = None
     with SignalRelay() as relay:
         try:
+            trusted_tools_root: Path | None = None
+            if agent_surface:
+                host_home = environ.get("HOME")
+                if not host_home:
+                    raise PilotError("HOME must be set")
+                trusted_tools_root = resolve_deployed_authority(
+                    Path(host_home)
+                ).publish_tree
+                prepare_and_initialize_workspace(exp_dir, input_paths[0])
             sidecar = BrowserRuntimeJob.create(
                 exp_dir,
                 image_lock_path=HOST_IMAGE_LOCK_PATH,
                 viewer_runtime_dir=VIEWER_RUNTIME_DIR,
             )
             sidecar.start()
-            publish_tool_registry(sidecar.capability_dir)
+            tool_registry = publish_tool_registry(sidecar.capability_dir)
+            if agent_surface:
+                candidate_root = agent_candidate_dir or (
+                    exp_dir.parent
+                    / f".agent-candidate-{exp_dir.name}-{os.getpid()}-{secrets.token_hex(6)}"
+                )
+                source_runtime = REPO_ROOT / ".venv"
+                runtime_cache = REPO_ROOT / ".cache" / "mesh-to-cad-agent-runtime"
+                try:
+                    candidate_runtime_lease = materialize_candidate_runtime(
+                        source_runtime,
+                        runtime_cache,
+                        repo_root=REPO_ROOT,
+                    )
+                    candidate_runtime = candidate_runtime_lease.runtime
+                except CandidateRuntimeError as exc:
+                    raise PilotError(str(exc)) from exc
+                agent_supervisor = WorkspaceSupervisor(
+                    exp_dir,
+                    bind_reference=True,
+                    candidate_root=candidate_root,
+                    rebuild_entrypoint=CAD_REBUILD_ENTRYPOINT,
+                    geometry_entrypoint=GEOMETRY_ENTRYPOINT,
+                    tool_registry=tool_registry,
+                    candidate_runtime=candidate_runtime,
+                    trusted_tools_root=trusted_tools_root,
+                    step_zero_evidence_provider=real_step_zero_evidence_provider,
+                    repair_evidence_provider=real_repair_evidence_provider,
+                )
+                write_agent_bootstrap(
+                    agent_supervisor.candidate_root,
+                    agent_supervisor.agent_bootstrap_contract(),
+                )
+                agent_socket = exp_dir.parent / (
+                    f".agent-surface-{exp_dir.name}-{os.getpid()}-{secrets.token_hex(6)}.sock"
+                )
             if relay.cancelled:
                 workload_status = 128 + (relay.signum or signal.SIGTERM)
             else:
@@ -1298,6 +2021,16 @@ def run_pilot(
                 workload_status = 128 + (relay.signum or signal.SIGTERM)
             else:
                 sidecar.preflight_mcp()
+            if relay.cancelled:
+                workload_status = 128 + (relay.signum or signal.SIGTERM)
+            elif agent_supervisor is not None and agent_socket is not None:
+                try:
+                    agent_bridge = AgentSurfaceBridge(
+                        agent_supervisor.agent_surface(), agent_socket
+                    )
+                    agent_bridge.start()
+                except (OSError, RuntimeError) as exc:
+                    raise PilotError("cannot start Agent Surface bridge") from exc
             if relay.cancelled:
                 workload_status = 128 + (relay.signum or signal.SIGTERM)
             else:
@@ -1309,8 +2042,16 @@ def run_pilot(
                     state,
                     sidecar,
                     relay,
+                    agent_supervisor.candidate_root if agent_supervisor else agent_candidate_dir,
+                    agent_socket,
                 )
-        except (OSError, PilotError, TapError, subprocess.SubprocessError) as exc:
+        except (
+            OSError,
+            PilotError,
+            SupervisorError,
+            TapError,
+            subprocess.SubprocessError,
+        ) as exc:
             print(f"pilot-runner: {exc}", file=sys.stderr)
             workload_status = (
                 128 + (relay.signum or signal.SIGTERM)
@@ -1325,6 +2066,41 @@ def run_pilot(
                 else 1
             )
         finally:
+            if agent_bridge is not None:
+                try:
+                    agent_bridge.stop()
+                except (OSError, RuntimeError) as exc:
+                    print(
+                        f"pilot-runner: Agent Surface cleanup failed: {exc}",
+                        file=sys.stderr,
+                    )
+                    lifetime_confirmed = False
+                    if not relay.cancelled:
+                        workload_status = workload_status or 1
+            if agent_supervisor is not None and lifetime_confirmed:
+                try:
+                    agent_supervisor.close()
+                    if not agent_supervisor.cancellation_confirmed:
+                        raise SupervisorError("cancellation_incomplete")
+                except SupervisorError as exc:
+                    print(
+                        "pilot-runner: Agent candidate cleanup failed",
+                        file=sys.stderr,
+                    )
+                    lifetime_confirmed = False
+                    if not relay.cancelled:
+                        workload_status = workload_status or 1
+            if candidate_runtime_lease is not None and lifetime_confirmed:
+                try:
+                    candidate_runtime_lease.release()
+                except (OSError, RuntimeError) as exc:
+                    print(
+                        f"pilot-runner: candidate runtime lease cleanup failed: {exc}",
+                        file=sys.stderr,
+                    )
+                    lifetime_confirmed = False
+                    if not relay.cancelled:
+                        workload_status = workload_status or 1
             if sidecar is not None:
                 try:
                     sidecar.stop()
@@ -1335,11 +2111,17 @@ def run_pilot(
                     )
                     if not relay.cancelled:
                         workload_status = workload_status or 1
+            # A failed Agent bridge/supervisor/runtime lifetime confirmation
+            # must prevent terminal publication even when the pilot was
+            # interrupted at the same time.
+            if not lifetime_confirmed:
+                workload_status = workload_status or 1
     return finalize_pilot(
         exp_dir,
         workload_status,
         environ,
         require_rollout=state.workload_started,
+        agent_surface=agent_surface,
     )
 
 
@@ -1352,6 +2134,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="action", required=True)
     run_parser = subparsers.add_parser("run")
     run_parser.add_argument("--input", action="append", type=Path, required=True)
+    run_parser.add_argument(
+        "--agent-candidate-dir",
+        type=Path,
+        help="bind only this external candidate tree into the Agent sandbox",
+    )
+    run_parser.add_argument(
+        "--agent-surface",
+        action="store_true",
+        help="host the opaque Agent Surface over the candidate-only bridge",
+    )
     run_parser.add_argument("exp_dir", type=Path)
     run_parser.add_argument("command", nargs=argparse.REMAINDER)
     clean_parser = subparsers.add_parser("clean")
@@ -1379,6 +2171,8 @@ def main(argv: list[str] | None = None) -> int:
             args.input,
             args.command,
             dict(os.environ),
+            args.agent_candidate_dir,
+            args.agent_surface,
         )
     except PilotError as exc:
         print(f"pilot-runner: {exc}", file=sys.stderr)
