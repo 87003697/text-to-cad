@@ -202,6 +202,10 @@ _PLY_FORMATS = frozenset(
 )
 _PLY_FACE_COUNT_TYPES = frozenset({"uchar", "uint8", "ushort", "uint16"})
 _PLY_FACE_INDEX_TYPES = frozenset({"int", "uint", "int32", "uint32"})
+_ASCII_FLOAT_TOKEN = re.compile(
+    r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z"
+)
+_ASCII_INDEX_TOKEN = re.compile(r"(?:0|[1-9][0-9]*)\Z")
 _PLY_SCALAR_BYTES = {
     "char": 1,
     "uchar": 1,
@@ -242,7 +246,7 @@ def _header_count(token: str, limit: int) -> int:
     return value
 
 
-def _read_ply_header(stream: BinaryIO, file_size: int) -> tuple[int, int]:
+def _read_ply_header(stream: BinaryIO, file_size: int) -> tuple[str, int, int]:
     """Preflight a bounded canonical PLY header before parser allocation."""
 
     elements: dict[str, tuple[int, list[tuple[str, ...]]]] = {}
@@ -354,13 +358,80 @@ def _read_ply_header(stream: BinaryIO, file_size: int) -> tuple[int, int]:
             + 3 * _PLY_SCALAR_BYTES[face_property[2]]
         )
     remaining_bytes = file_size - stream.tell()
+    minimum_body_bytes = (
+        vertex_count * vertex_record_bytes + face_count * face_record_bytes
+    )
+    if format_name == "ascii 1.0":
+        # The final text row may legally end at EOF without a newline.
+        minimum_body_bytes -= 1
     if (
         remaining_bytes < 0
-        or vertex_count * vertex_record_bytes + face_count * face_record_bytes
-        > remaining_bytes
+        or minimum_body_bytes > remaining_bytes
     ):
         _fail("reference_too_complex")
-    return vertex_count, face_count
+    assert format_name is not None
+    return format_name, vertex_count, face_count
+
+
+def _read_ascii_row(stream: BinaryIO, *, final_row: bool) -> list[str]:
+    """Read one bounded ASCII PLY data row without accepting hidden columns."""
+
+    raw = stream.readline(PLY_HEADER_MAX_LINE_BYTES + 1)
+    if not raw or len(raw) > PLY_HEADER_MAX_LINE_BYTES:
+        _fail("invalid_reference_material")
+    if raw.endswith(b"\n"):
+        raw = raw[:-1]
+        if raw.endswith(b"\r"):
+            raw = raw[:-1]
+    elif not final_row:
+        _fail("invalid_reference_material")
+    try:
+        tokens = raw.decode("ascii").split()
+    except UnicodeDecodeError:
+        _fail("invalid_reference_material")
+    if not tokens:
+        _fail("invalid_reference_material")
+    return tokens
+
+
+def _validate_ascii_body(
+    stream: BinaryIO,
+    vertex_count: int,
+    face_count: int,
+) -> None:
+    """Validate every declared ASCII record before invoking the PLY parser."""
+
+    total_rows = vertex_count + face_count
+    for row_number in range(total_rows):
+        tokens = _read_ascii_row(stream, final_row=row_number == total_rows - 1)
+        if row_number < vertex_count:
+            if len(tokens) != 3:
+                _fail("invalid_reference_material")
+            for token in tokens:
+                if _ASCII_FLOAT_TOKEN.fullmatch(token) is None:
+                    _fail("invalid_reference_material")
+                try:
+                    value = float(token)
+                except (OverflowError, ValueError):
+                    _fail("invalid_reference_material")
+                if not np.isfinite(value):
+                    _fail("invalid_reference_material")
+            continue
+        if len(tokens) != 4 or tokens[0] != "3":
+            _fail("invalid_reference_material")
+        for token in tokens[1:]:
+            if _ASCII_INDEX_TOKEN.fullmatch(token) is None:
+                _fail("invalid_reference_material")
+            try:
+                index = int(token, 10)
+            except ValueError:
+                _fail("invalid_reference_material")
+            if index >= vertex_count:
+                _fail("invalid_reference_material")
+
+    while chunk := stream.read(8192):
+        if chunk.strip():
+            _fail("invalid_reference_material")
 
 
 def _load_ply(path: Path) -> trimesh.Trimesh:
@@ -383,7 +454,11 @@ def _load_ply(path: Path) -> trimesh.Trimesh:
             _fail("invalid_reference_material")
         stream = os.fdopen(descriptor, "rb", closefd=True)
         descriptor = None
-        header_counts = _read_ply_header(stream, metadata.st_size)
+        format_name, vertex_count, face_count = _read_ply_header(
+            stream, metadata.st_size
+        )
+        if format_name == "ascii 1.0":
+            _validate_ascii_body(stream, vertex_count, face_count)
         stream.seek(0)
         mesh = trimesh.load(
             stream,
@@ -406,7 +481,7 @@ def _load_ply(path: Path) -> trimesh.Trimesh:
     if (
         not isinstance(mesh, trimesh.Trimesh)
         or len(mesh.vertices) == 0
-        or (len(mesh.vertices), len(mesh.faces)) != header_counts
+        or (len(mesh.vertices), len(mesh.faces)) != (vertex_count, face_count)
     ):
         _fail("invalid_reference_material")
     return mesh
