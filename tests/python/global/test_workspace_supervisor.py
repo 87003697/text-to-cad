@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -301,6 +302,34 @@ class _Workspace:
         raise AssertionError("candidate execution must use the supervisor operation port")
 
 
+def _write_unindexed_canonical_ply(path: Path, triangle_count: int) -> None:
+    """Write the binary float64/unindexed PLY emitted by canonical preparation."""
+
+    spacing = 0.98 / triangle_count
+    header = (
+        "ply\n"
+        "format binary_little_endian 1.0\n"
+        "comment bounded production-shaped fixture\n"
+        f"element vertex {triangle_count * 3}\n"
+        "property double x\n"
+        "property double y\n"
+        "property double z\n"
+        f"element face {triangle_count}\n"
+        "property list uchar int vertex_indices\n"
+        "end_header\n"
+    ).encode("ascii")
+    with path.open("wb") as stream:
+        stream.write(header)
+        for index in range(triangle_count):
+            x = -0.49 + spacing * index
+            stream.write(struct.pack("<ddd", x, -0.1, 0.0))
+            stream.write(struct.pack("<ddd", x + spacing * 0.25, -0.1, 0.0))
+            stream.write(struct.pack("<ddd", x, -0.1 + spacing * 0.25, 0.0))
+        for index in range(triangle_count):
+            base = index * 3
+            stream.write(struct.pack("<Biii", 3, base, base + 1, base + 2))
+
+
 class WorkspaceSupervisorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -484,6 +513,48 @@ class WorkspaceSupervisorTests(unittest.TestCase):
                 staging_dir=self.root / "staging-inside",
                 workspace_api=self.workspace,
             )
+
+    def test_production_shaped_unindexed_reference_binds_and_stays_bounded(self) -> None:
+        """Canonical unindexed PLYs over the old count caps remain observable."""
+
+        workspace_root = self.root / "production-shaped-workspace"
+        input_dir = workspace_root / "input"
+        input_dir.mkdir(parents=True)
+        reference = input_dir / "reference.ply"
+        triangle_count = 50_001
+        _write_unindexed_canonical_ply(reference, triangle_count)
+        self.assertLess(reference.stat().st_size, 32 * 1024 * 1024)
+        workspace = _Workspace(workspace_root, reference_path=reference)
+
+        supervisor = WorkspaceSupervisor(
+            workspace_root,
+            bind_reference=True,
+            candidate_root=self.root / "production-shaped-candidate",
+            staging_dir=self.root / "production-shaped-staging",
+            workspace_api=workspace,
+        )
+        try:
+            reference_handle = supervisor.reference_handle
+            self.assertIsNotNone(reference_handle)
+            assert reference_handle is not None
+            summary = supervisor.observe_reference(
+                reference_handle,
+                {"method": "summary", "args": {}},
+            )
+            stats = summary["observation"]["stats"]
+            self.assertEqual(triangle_count * 3, stats["vertices"])
+            self.assertEqual(triangle_count, stats["faces"])
+
+            components = supervisor.observe_reference(
+                reference_handle,
+                {"method": "components", "args": {"limit": 1}},
+            )
+            observation = components["observation"]
+            self.assertEqual(triangle_count, observation["total"])
+            self.assertEqual(1, observation["returned"])
+            self.assertEqual(1, len(observation["components"]))
+        finally:
+            supervisor.close()
 
     def test_trusted_tools_use_exact_authority_not_stale_source_overlay(self) -> None:
         from scripts.pilot import trusted_tools

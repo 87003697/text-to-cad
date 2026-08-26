@@ -148,7 +148,19 @@ class ReferenceCapabilityTests(unittest.TestCase):
         )
 
         too_many = self.root / "too-many-components.ply"
-        _disconnected_triangles(MAX_REFERENCE_FACES + 1).export(too_many)
+        too_many.write_bytes(
+            (
+                "ply\n"
+                "format ascii 1.0\n"
+                "element vertex 3\n"
+                "property float x\n"
+                "property float y\n"
+                "property float z\n"
+                f"element face {MAX_REFERENCE_FACES + 1}\n"
+                "property list uchar int vertex_indices\n"
+                "end_header\n"
+            ).encode("ascii")
+        )
         self.assert_error(
             lambda: ReferenceCapability("too-many", too_many),
             "reference_too_complex",
