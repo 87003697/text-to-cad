@@ -219,6 +219,7 @@ SANDBOX_ENV_PASSTHROUGH = (
     "NO_PROXY",
     "TZ",
 )
+TAP_CLIENT_BEARER_TOKEN_ENV = "CLAUDE_TAP_CLIENT_TOKEN"
 GITIGNORE = """\
 run/
 artifact_manifest.json
@@ -841,11 +842,13 @@ def build_sandbox_environment(
     tap_url: str,
     *,
     isolated_agent: bool = False,
+    tap_client_token: str,
 ) -> dict[str, str]:
     """Return the explicit child environment allowlist for Codex.
 
-    Provider credentials stay in the host-side tap/retry processes; the
-    Agent child receives no bearer token or other secret environment value.
+    The upstream provider credential stays in the host-side tap/retry
+    processes. The child receives only the per-run local client credential
+    needed to reach that proxy.
     """
 
     child_env = {
@@ -869,6 +872,7 @@ def build_sandbox_environment(
             "XDG_CACHE_HOME": "/tmp/cache",
         }
     )
+    child_env[TAP_CLIENT_BEARER_TOKEN_ENV] = tap_client_token
     return child_env
 
 
@@ -1175,9 +1179,14 @@ def run_supervised(
     # the start_tap -> relay-enter window from orphaning the new proxy.
     relay_context = nullcontext(relay) if relay is not None else SignalRelay()
     with relay_context as active_relay:
+        # Codex needs a client credential for its local provider, but the real
+        # upstream token must remain in this host-side proxy process.
+        tap_client_token = secrets.token_hex(32)
         retry_proxy = RetryProxy(
             TAP_TARGET,
             exp_dir / "run/venus-retry.jsonl",
+            upstream_bearer_token=environ.get("VENUS_TOKEN"),
+            required_client_bearer_token=tap_client_token,
         )
         retry_proxy.start()
         try:
@@ -1195,6 +1204,7 @@ def run_supervised(
                         environ,
                         tap_url,
                         isolated_agent=agent_candidate_dir is not None,
+                        tap_client_token=tap_client_token,
                     )
                     workload = subprocess.Popen(
                         bwrap_argv,

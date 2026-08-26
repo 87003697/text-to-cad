@@ -3229,13 +3229,17 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         child = runner.build_sandbox_environment(
             {"PATH": "/host/bin", "VENUS_TOKEN": "secret", "UNRELATED": "nope"},
             "http://127.0.0.1:1/v1",
+            tap_client_token="client-token",
         )
         self.assertNotIn("VENUS_TOKEN", child)
+        self.assertEqual("client-token", child[runner.TAP_CLIENT_BEARER_TOKEN_ENV])
+        self.assertNotIn("secret", child.values())
         self.assertNotIn("UNRELATED", child)
         isolated = runner.build_sandbox_environment(
             {"PATH": "/host/bin", "VENUS_TOKEN": "secret"},
             "http://127.0.0.1:1/v1",
             isolated_agent=True,
+            tap_client_token="client-token",
         )
         self.assertNotIn("/workspace/repo/.venv", isolated["PATH"])
 

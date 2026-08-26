@@ -479,12 +479,19 @@ class RunnerTests(unittest.TestCase):
                 self.environ,
             )
         self.assertEqual(status, 0)
+        self.assertTrue(retry_proxy.started)
+        self.assertTrue(retry_proxy.stopped)
         retry_proxy_type.assert_called_once_with(
             self.supervisor.TAP_TARGET,
             self.exp_dir / "run/venus-retry.jsonl",
+            upstream_bearer_token=self.environ["VENUS_TOKEN"],
+            required_client_bearer_token=mock.ANY,
         )
-        self.assertTrue(retry_proxy.started)
-        self.assertTrue(retry_proxy.stopped)
+        client_token = retry_proxy_type.call_args.kwargs[
+            "required_client_bearer_token"
+        ]
+        self.assertIsInstance(client_token, str)
+        self.assertNotEqual(self.environ["VENUS_TOKEN"], client_token)
         self.assertEqual(start_tap.call_args.args[-1], retry_proxy.url)
         self.assertEqual(
             popen.call_args.kwargs["env"]["CLAUDE_TAP_URL"],
@@ -495,6 +502,13 @@ class RunnerTests(unittest.TestCase):
             popen.call_args.kwargs["env"]["CODEX_HOME"],
             "/home/pilot/.codex",
         )
+        self.assertEqual(
+            client_token,
+            popen.call_args.kwargs["env"][
+                self.supervisor.TAP_CLIENT_BEARER_TOKEN_ENV
+            ],
+        )
+        self.assertNotIn("VENUS_TOKEN", popen.call_args.kwargs["env"])
         self.assertNotIn("UNRELATED_SECRET", popen.call_args.kwargs["env"])
 
     def test_successful_workload_without_captured_request_fails(self) -> None:
@@ -1829,7 +1843,7 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                 {
                     "CAPTURE": str(capture),
                     "CODEX_BIN": str(fake_codex),
-                    "VENUS_TOKEN": "token",
+                    "CLAUDE_TAP_CLIENT_TOKEN": "client-token",
                 }
             )
             env.pop("CLAUDE_TAP_URL", None)
@@ -1849,7 +1863,7 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
         env.update(
             {
                 "CODEX_BIN": "/does/not/matter",
-                "VENUS_TOKEN": "token",
+                "CLAUDE_TAP_CLIENT_TOKEN": "client-token",
                 "CLAUDE_TAP_URL": "http://127.0.0.1:not-a-port/v1",
             }
         )
@@ -1877,7 +1891,7 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                     "CAPTURE": str(capture),
                     "CODEX_BIN": "/must/be-ignored",
                     "PATH": f"{temp}:{env.get('PATH', '')}",
-                    "VENUS_TOKEN": "token",
+                    "CLAUDE_TAP_CLIENT_TOKEN": "client-token",
                     "CLAUDE_TAP_URL": "http://127.0.0.1:18888/v1",
                 }
             )
@@ -1910,7 +1924,7 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
                 {
                     "CAPTURE": str(capture),
                     "PATH": f"{temp}:{env.get('PATH', '')}",
-                    "VENUS_TOKEN": "token",
+                    "CLAUDE_TAP_CLIENT_TOKEN": "client-token",
                     "CLAUDE_TAP_URL": "http://127.0.0.1:18888/v1",
                 }
             )
@@ -1932,7 +1946,7 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
         env = dict(os.environ)
         env.update(
             {
-                "VENUS_TOKEN": "token",
+                "CLAUDE_TAP_CLIENT_TOKEN": "client-token",
                 "CLAUDE_TAP_URL": "http://127.0.0.1:18888/v1",
             }
         )
@@ -2430,6 +2444,7 @@ pathlib.Path(os.environ["PILOT_CAPTURE"]).write_text(json.dumps({
         child_env = runner.build_sandbox_environment(
             environ,
             "http://127.0.0.1:18888/v1",
+            tap_client_token="client-token",
         )
         self.assertNotIn("PLAYWRIGHT_BROWSERS_PATH", child_env)
         self.assertNotIn("MESHSHOT_BROWSER_AUTHORITY_FILE", child_env)

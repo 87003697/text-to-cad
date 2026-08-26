@@ -5,7 +5,7 @@ set -euo pipefail
 # This gateway is intentionally tap-only: there is no Venus direct fallback.
 
 readonly CODEX_BIN="codex"
-VENUS_TOKEN="${VENUS_TOKEN:?VENUS_TOKEN must be set}"
+CLIENT_TOKEN="${CLAUDE_TAP_CLIENT_TOKEN:?CLAUDE_TAP_CLIENT_TOKEN must be set by pilot runner}"
 CLAUDE_TAP_URL="${CLAUDE_TAP_URL:?CLAUDE_TAP_URL must be set by pilot runner}"
 
 if [[ ! "$CLAUDE_TAP_URL" =~ ^http://127[.]0[.]0[.]1:[0-9]+/v1$ ]]; then
@@ -35,7 +35,7 @@ exec "$CODEX_BIN" \
   -c "model_providers.venus.name=\"Venus ${MODEL} (via claude-tap)\"" \
   -c "model_providers.venus.base_url=\"${CLAUDE_TAP_URL}\"" \
   -c 'model_providers.venus.wire_api="responses"' \
-  -c "model_providers.venus.experimental_bearer_token=\"${VENUS_TOKEN}\"" \
+  -c "model_providers.venus.experimental_bearer_token=\"${CLIENT_TOKEN}\"" \
   -c 'model_provider="venus"' \
   -m "$MODEL" \
   "$@"

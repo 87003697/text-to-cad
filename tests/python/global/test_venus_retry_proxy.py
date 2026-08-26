@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -86,6 +89,100 @@ class ScriptedUpstream:
 
 class VenusRetryProxyTests(unittest.TestCase):
     """Verify the retry proxy through its loopback HTTP interface."""
+
+    def test_tap_gateway_uses_client_token_and_proxy_replaces_upstream(self) -> None:
+        from scripts.pilot.venus_retry_proxy import RetryProxy
+
+        gateway = Path(__file__).resolve().parents[3] / "gateway/codex-tap-gpt56"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            capture = root / "codex-capture.json"
+            audit_path = root / "venus-retry.jsonl"
+            fake_codex = root / "codex"
+            fake_codex.write_text(
+                f"#!{sys.executable}\n"
+                "import json\n"
+                "import os\n"
+                "from pathlib import Path\n"
+                "import sys\n"
+                "from urllib.request import Request, urlopen\n"
+                "\n"
+                "args = sys.argv[1:]\n"
+                "key = 'model_providers.venus.experimental_bearer_token'\n"
+                "token = None\n"
+                "for index, arg in enumerate(args[:-1]):\n"
+                "    if arg in ('-c', '--config') and args[index + 1].startswith(key + '='):\n"
+                "        token = json.loads(args[index + 1].split('=', 1)[1])\n"
+                "        break\n"
+                "if token is None or 'VENUS_TOKEN' in os.environ:\n"
+                "    raise SystemExit(17)\n"
+                "request = Request(\n"
+                "    os.environ['CLAUDE_TAP_URL'] + '/responses',\n"
+                "    data=b'{}',\n"
+                "    headers={'Authorization': 'Bearer ' + token},\n"
+                ")\n"
+                "with urlopen(request, timeout=3) as response:\n"
+                "    response.read()\n"
+                "Path(os.environ['CAPTURE']).write_text(\n"
+                "    json.dumps({'argv': args, 'env': sorted(os.environ)}),\n"
+                "    encoding='utf-8',\n"
+                ")\n",
+                encoding="utf-8",
+            )
+            fake_codex.chmod(0o755)
+            environment = {
+                key: value
+                for key, value in os.environ.items()
+                if key != "VENUS_TOKEN"
+            }
+            environment.update(
+                {
+                    "PATH": f"{root}:{environment.get('PATH', '')}",
+                    "CAPTURE": str(capture),
+                    "CLAUDE_TAP_CLIENT_TOKEN": "client-token",
+                }
+            )
+            with ScriptedUpstream([(200, b'{"id":"upstream-ok"}')]) as upstream:
+                with RetryProxy(
+                    upstream.url,
+                    audit_path,
+                    upstream_bearer_token="upstream-token",
+                    required_client_bearer_token="client-token",
+                ) as proxy:
+                    environment["CLAUDE_TAP_URL"] = proxy.url
+                    completed = subprocess.run(
+                        [str(gateway), "gpt-5.5", "exec", "prompt"],
+                        env=environment,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(0, completed.returncode, completed.stderr)
+                    for authorization in (None, "Bearer wrong-client-token"):
+                        connection = http.client.HTTPConnection(
+                            "127.0.0.1", proxy.port, timeout=2
+                        )
+                        headers = (
+                            {}
+                            if authorization is None
+                            else {"Authorization": authorization}
+                        )
+                        connection.request(
+                            "POST", "/v1/responses", body=b"{}", headers=headers
+                        )
+                        response = connection.getresponse()
+                        response.read()
+                        connection.close()
+                        self.assertEqual(401, response.status)
+
+            captured = json.loads(capture.read_text(encoding="utf-8"))
+            self.assertNotIn("VENUS_TOKEN", captured["env"])
+            self.assertIn("client-token", json.dumps(captured["argv"]))
+            self.assertIn("gpt-5.5", captured["argv"])
+            self.assertNotIn("upstream-token", json.dumps(captured))
+            self.assertNotIn("upstream-token", completed.stdout + completed.stderr)
+            self.assertEqual("Bearer upstream-token", upstream.requests[0][2])
+            self.assertEqual(1, len(upstream.requests))
 
     def test_root_side_token_replaces_untrusted_client_authorization(self) -> None:
         success = b'{"id":"response-ok"}'
