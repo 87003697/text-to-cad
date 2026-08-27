@@ -424,6 +424,10 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             self.sup.workspace_handle, attempt, candidate, operation
         )
         self.assertEqual("completed", first["state"])
+        self.assertEqual(
+            ["run_candidate_tool", "submit_step_zero", "workspace_status"],
+            first["permitted_next_intents"],
+        )
         with self.assertRaises(SupervisorError):
             self.sup.run_candidate_tool(
                 self.sup.workspace_handle, attempt, candidate, operation

@@ -1126,6 +1126,26 @@ class WorkspaceSupervisor:
         )
         return next_intents
 
+    @staticmethod
+    def _candidate_output_present(candidate_root: Path) -> bool:
+        """Return whether the supervisor has already produced candidate.glb."""
+
+        try:
+            root_metadata = os.lstat(candidate_root)
+        except OSError as exc:
+            raise SupervisorError("candidate_unavailable") from exc
+        if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(
+            root_metadata.st_mode
+        ):
+            raise SupervisorError("candidate_unavailable")
+        try:
+            os.lstat(candidate_root / CANDIDATE_PUBLISHED_MEASUREMENT_NAME)
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise SupervisorError("candidate_unavailable") from exc
+        return True
+
     def workspace_status(self, workspace_handle: str) -> Mapping[str, Any]:
         workspace = self._workspace(workspace_handle)
         try:
@@ -1158,7 +1178,12 @@ class WorkspaceSupervisor:
         if workspace_state == "terminal":
             next_intents = ["workspace_status"]
         elif active_attempt is not None:
-            next_intents = self._attempt_next_intents(active_attempt.intended_step)
+            next_intents = self._attempt_next_intents(
+                active_attempt.intended_step,
+                allow_candidate_tool=not self._candidate_output_present(
+                    active_attempt.candidate_root
+                ),
+            )
         else:
             next_intents = ["workspace_status"]
         if active_attempt is None and workspace_state != "terminal":
@@ -1781,9 +1806,7 @@ class WorkspaceSupervisor:
             "state": "completed" if exit_code == 0 else "failed",
             "candidate_handle": context.candidate_handle,
             "result_handle": result_handle,
-            "permitted_next_intents": self._attempt_next_intents(
-                context.intended_step, allow_candidate_tool=exit_code != 0
-            ),
+            "permitted_next_intents": self._attempt_next_intents(context.intended_step),
         }
 
     def _resolve_operation_capability(

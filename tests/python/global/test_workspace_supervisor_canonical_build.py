@@ -23,6 +23,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts.pilot.workspace_supervisor import (
     CANDIDATE_PUBLISHED_MEASUREMENT_NAME,
@@ -194,6 +195,12 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
 
     def test_capability_bundle_runs_fixed_trusted_argv_and_publishes_candidate_glb(self) -> None:
         attempt, candidate, bundle, work = self._start()
+        self.assertIn(
+            "run_candidate_tool",
+            self.sup.workspace_status(self.sup.workspace_handle)[
+                "permitted_next_intents"
+            ],
+        )
         observed = self._install_runner()
         result = self.sup.run_candidate_tool(
             self.sup.workspace_handle, attempt, candidate, bundle
@@ -229,6 +236,12 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
                 self.sup.workspace_handle, attempt, candidate, bundle
             )
         self.assertEqual("candidate_glb_preexisting", raised.exception.classification)
+        self.assertEqual(
+            result["permitted_next_intents"],
+            self.sup.workspace_status(self.sup.workspace_handle)[
+                "permitted_next_intents"
+            ],
+        )
 
     def test_successful_repair_build_only_advertises_submit_repair(self) -> None:
         self.workspace.completed_cycles = 1
@@ -243,6 +256,18 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
             ["submit_repair", "workspace_status"],
             result["permitted_next_intents"],
         )
+        self.assertEqual(
+            result["permitted_next_intents"],
+            self.sup.workspace_status(self.sup.workspace_handle)[
+                "permitted_next_intents"
+            ],
+        )
+
+    def test_active_status_fails_closed_when_candidate_root_is_unavailable(self) -> None:
+        self._start()
+        with mock.patch.object(os, "lstat", side_effect=OSError("denied")):
+            with self.assertRaisesRegex(SupervisorError, "candidate_unavailable"):
+                self.sup.workspace_status(self.sup.workspace_handle)
 
     def test_preexisting_candidate_glb_rejected_and_partial_output_removed(self) -> None:
         attempt, candidate, bundle, work = self._start()
@@ -413,6 +438,12 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
             )
         self.assertEqual("candidate_tool_failed", raised.exception.classification)
         self.assertFalse((work / CANDIDATE_PUBLISHED_MEASUREMENT_NAME).exists())
+        self.assertIn(
+            "run_candidate_tool",
+            self.sup.workspace_status(self.sup.workspace_handle)[
+                "permitted_next_intents"
+            ],
+        )
         # Partial output removed.
         residual = [
             p.name
