@@ -757,8 +757,13 @@ exec "$HISTORICAL_REAL_PILOT" "$@"
             if calls < 2:
                 return
             deadline = time.monotonic() + 1
-            while not pid_path.exists() and time.monotonic() < deadline:
-                time.sleep(0.005)
+            while time.monotonic() < deadline:
+                try:
+                    int(pid_path.read_text(encoding="ascii"))
+                except (FileNotFoundError, ValueError):
+                    time.sleep(0.005)
+                    continue
+                break
             raise OSError("state storage unavailable")
 
         command = [
