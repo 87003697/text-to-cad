@@ -362,6 +362,7 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             rebuild_entrypoint=self.root / "rebuild",
             geometry_entrypoint=self.root / "geometry",
             tool_registry=self.root / "registry",
+            browser_runtime_capability=self.root / "runtime.json",
             step_zero_evidence_provider=lambda request: None,
         )
 
@@ -2679,6 +2680,9 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         self.assertEqual(0, observed["selected_step"])
         self.assertEqual("selection.json", observed["selection"])
         self.assertEqual("notes.md", observed["notes"])
+        self.assertEqual(
+            self.root / "runtime.json", observed["browser_runtime_capability"]
+        )
 
     def test_submit_intents_return_closed_w1_decision_facts(self) -> None:
         # submit_step_zero returns the bounded decision facts the W1 facade

@@ -807,6 +807,10 @@ class RunnerTests(unittest.TestCase):
         capability_path = runtime.capability_dir / "runtime.json"
         self.assertEqual(
             capability_path,
+            supervisor.call_args.kwargs["browser_runtime_capability"],
+        )
+        self.assertEqual(
+            capability_path,
             supervisor.call_args.kwargs["step_zero_evidence_provider"].keywords[
                 "capability_path"
             ],

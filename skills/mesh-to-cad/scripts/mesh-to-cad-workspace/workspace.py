@@ -1521,6 +1521,7 @@ def finalize_from_agent_selection_claim(
     rebuild_entrypoint: Path,
     geometry_entrypoint: Path,
     tool_registry: Path,
+    browser_runtime_capability: Path | None = None,
     scope: _core.ExecutionScope | None = None,
 ) -> dict[str, Any]:
     """Finalize from an opaque Selected Step handle plus bounded semantic claim.
@@ -1644,6 +1645,7 @@ def finalize_from_agent_selection_claim(
             tool_registry=tool_registry,
             validate_after_publish=False,
             scope=scope,
+            browser_runtime_capability=browser_runtime_capability,
         )
         return {
             "final_delivery": {

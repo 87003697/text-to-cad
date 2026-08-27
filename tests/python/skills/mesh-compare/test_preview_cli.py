@@ -331,6 +331,45 @@ class PreviewCliTests(unittest.TestCase):
         with Image.open(output / "preview.png") as image:
             self.assertEqual((1008, 2016), image.size)
 
+    def test_preview_forwards_private_browser_runtime_capability_path(self) -> None:
+        output = self.root / "capability-preview"
+        capability = self.root / "runtime.json"
+        capability.write_text("{}", encoding="utf-8")
+        observed: dict[str, Path | None] = {}
+
+        def render(
+            reference,
+            candidate,
+            *,
+            variant="step",
+            exterior_directions=(),
+            capability_path=None,
+        ):
+            del reference, candidate
+            observed["path"] = capability_path
+            return _rendered_preview_for_scene(
+                variant,
+                exterior_directions=tuple(
+                    str(value) for value in exterior_directions
+                ),
+            )
+
+        with mock.patch.object(cli, "render_residual_preview", side_effect=render):
+            status, _payload, stderr = self.invoke(*self.preview_arguments(
+                str(self.candidate),
+                "--reference",
+                str(self.reference),
+                "--output",
+                str(output),
+                "--variant",
+                "step",
+                "--capability-path",
+                str(capability),
+            ))
+
+        self.assertEqual(0, status, stderr)
+        self.assertEqual(capability, observed["path"])
+
     def test_preview_rejects_renderer_profile_identity_conflict(self) -> None:
         loaded = load_profile()
         image = Image.new("RGB", (504, 1008), (0, 0, 0))

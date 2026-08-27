@@ -2032,6 +2032,7 @@ def run_pilot(
                     rebuild_entrypoint=CAD_REBUILD_ENTRYPOINT,
                     geometry_entrypoint=GEOMETRY_ENTRYPOINT,
                     tool_registry=tool_registry,
+                    browser_runtime_capability=sidecar.capability_dir / "runtime.json",
                     candidate_runtime=candidate_runtime,
                     trusted_tools_root=trusted_tools_root,
                     step_zero_evidence_provider=partial(

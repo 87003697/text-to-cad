@@ -669,6 +669,7 @@ class WorkspaceSupervisor:
         rebuild_entrypoint: Path | None = None,
         geometry_entrypoint: Path | None = None,
         tool_registry: Path | None = None,
+        browser_runtime_capability: Path | None = None,
         candidate_runtime: Path | None = None,
         trusted_tools_root: Path | None = None,
         step_zero_evidence_provider: Callable[..., Any] | None = None,
@@ -720,6 +721,7 @@ class WorkspaceSupervisor:
             self._rebuild_entrypoint = rebuild_entrypoint
             self._geometry_entrypoint = geometry_entrypoint
             self._tool_registry = tool_registry
+            self._browser_runtime_capability = browser_runtime_capability
             self._step_zero_evidence_provider = step_zero_evidence_provider
             self._repair_evidence_provider = repair_evidence_provider
             self.candidate_runtime: Path | None = None
@@ -2057,16 +2059,23 @@ class WorkspaceSupervisor:
         ):
             raise SupervisorError("finalization_unavailable")
         try:
+            finalization_kwargs: dict[str, Any] = {
+                "source": self.candidate_root,
+                "selection": selection.relative_to(self.candidate_root).as_posix(),
+                "notes": notes.relative_to(self.candidate_root).as_posix(),
+                "selected_step": selected_step,
+                "rebuild_entrypoint": self._rebuild_entrypoint,
+                "geometry_entrypoint": self._geometry_entrypoint,
+                "tool_registry": self._tool_registry,
+                "scope": self._execution_scope,
+            }
+            if self._browser_runtime_capability is not None:
+                finalization_kwargs["browser_runtime_capability"] = (
+                    self._browser_runtime_capability
+                )
             finalized = self.workspace_api.finalize_from_agent_selection_claim(
                 self.workspace,
-                source=self.candidate_root,
-                selection=selection.relative_to(self.candidate_root).as_posix(),
-                notes=notes.relative_to(self.candidate_root).as_posix(),
-                selected_step=selected_step,
-                rebuild_entrypoint=self._rebuild_entrypoint,
-                geometry_entrypoint=self._geometry_entrypoint,
-                tool_registry=self._tool_registry,
-                scope=self._execution_scope,
+                **finalization_kwargs,
             )
         except SupervisorError:
             raise

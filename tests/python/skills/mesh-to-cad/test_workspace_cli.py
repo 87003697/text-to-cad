@@ -1536,23 +1536,64 @@ class WorkspaceCliTests(unittest.TestCase):
         )
         self.assertEqual(0, status, stderr)
 
-        with mock.patch.dict(
-            self.cli.finalize_workspace.__globals__,
-            {"_run_final_preview": self.write_provider_free_final_preview},
-        ):
-            status, finalized, stderr = self.invoke(
-                "finalize",
-                "--workspace",
-                str(self.workspace),
-                "--selection",
-                str(self.final_selection(accepted=True)),
-                "--notes",
-                str(self.final_notes()),
-                *self.final_tool_arguments(),
+        tool_arguments = self.final_tool_arguments()
+        tool_registry = Path(
+            tool_arguments[tool_arguments.index("--tool-registry") + 1]
+        )
+        helper = _load_workspace_helper()
+        agent_source = self.root / "agent-selection-claim"
+        agent_source.mkdir()
+        (agent_source / "selection.json").write_text(
+            json.dumps(
+                _valid_agent_claim(stop_reason="acceptance_satisfied"),
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        shutil.copy2(self.final_notes(), agent_source / "notes.md")
+        capability = self.root / "runtime.json"
+        observed: dict[str, list[str]] = {}
+        workspace_core = helper.finalize_from_agent_selection_claim.__globals__[
+            "_core"
+        ]
+        original_run = workspace_core._run_bounded_command
+
+        def run(argv, **kwargs):
+            if len(argv) > 2 and argv[2] == "voxblame-preview":
+                observed["argv"] = list(argv)
+                output = Path(argv[argv.index("--output") + 1])
+                self.write_provider_free_final_preview(
+                    self.workspace,
+                    Path(argv[3]),
+                    selected_step=int(argv[argv.index("--selected-step") + 1]),
+                    selected_summary=Path(
+                        argv[argv.index("--selected-summary") + 1]
+                    ),
+                    output=output,
+                    entrypoint=Path(argv[1]),
+                )
+                return subprocess.CompletedProcess(argv, 0, "", ""), False
+            return original_run(argv, **kwargs)
+
+        with mock.patch.object(workspace_core, "_run_bounded_command", new=run):
+            finalized = helper.finalize_from_agent_selection_claim(
+                self.workspace,
+                source=agent_source,
+                selection="selection.json",
+                notes="notes.md",
+                selected_step=0,
+                rebuild_entrypoint=CAD_BUILD_ENTRYPOINT,
+                geometry_entrypoint=MESH_COMPARE_ENTRYPOINT,
+                tool_registry=tool_registry,
+                browser_runtime_capability=capability,
             )
 
-        self.assertEqual(0, status, stderr)
-        self.assertTrue(finalized["final"]["accepted"])
+        self.assertEqual(
+            ["--capability-path", str(capability)],
+            observed["argv"][-2:],
+        )
+        self.assertTrue(finalized["final_delivery"]["accepted"])
         final = self.workspace / "final"
         for relative in (
             "source",

@@ -1795,6 +1795,7 @@ def finalize_workspace(
     rebuild_entrypoint: Path,
     geometry_entrypoint: Path,
     tool_registry: Path,
+    browser_runtime_capability: Path | None = None,
     validate_after_publish: bool = True,
     scope: ExecutionScope | None = None,
 ) -> dict[str, Any]:
@@ -1895,6 +1896,8 @@ def finalize_workspace(
         }
         if scope is not None:
             preview_kwargs["scope"] = scope
+        if browser_runtime_capability is not None:
+            preview_kwargs["capability_path"] = browser_runtime_capability
         _run_final_preview(workspace, measurement_mesh, **preview_kwargs)
         shutil.copy2(preview_root / "preview.png", package / "preview.png")
         shutil.copy2(preview_root / "preview.json", package / "preview.json")
@@ -2439,6 +2442,7 @@ def _run_final_preview(
     selected_summary: Path,
     output: Path,
     entrypoint: Path,
+    capability_path: Path | None = None,
     scope: ExecutionScope | None = None,
 ) -> None:
     argv = [
@@ -2459,6 +2463,8 @@ def _run_final_preview(
         "--selected-summary",
         str(selected_summary),
     ]
+    if capability_path is not None:
+        argv.extend(["--capability-path", str(capability_path)])
     last_detail = ""
     for _attempt in range(2):
         result, _timed_out = _run_bounded_command(

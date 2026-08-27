@@ -327,6 +327,11 @@ def _preview_main(argv: list[str]) -> int:
         type=Path,
         help="Canonical voxblame.summary/1 for the selected final step",
     )
+    parser.add_argument(
+        "--capability-path",
+        type=Path,
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
     if args.variant == "final" and (
         args.selected_step is None
@@ -372,11 +377,16 @@ def _preview_main(argv: list[str]) -> int:
             selected_summary=selected_summary,
             selected_summary_sha256=selected_summary_sha256,
         )
+        render_kwargs = {
+            "variant": args.variant,
+            "exterior_directions": scene.exterior.exact["outside_directions"],
+        }
+        if args.capability_path is not None:
+            render_kwargs["capability_path"] = args.capability_path
         rendered = render_residual_preview(
             MeshGeometry(**scene.reference_geometry),
             MeshGeometry(**scene.candidate_geometry),
-            variant=args.variant,
-            exterior_directions=scene.exterior.exact["outside_directions"],
+            **render_kwargs,
         )
         if (
             rendered.variant != args.variant
