@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 import importlib
 from pathlib import Path
 import sys
@@ -261,6 +262,7 @@ def real_step_zero_evidence_provider(
     request: StepZeroEvidenceRequest,
     *,
     renderer: Callable[..., Any] | None = None,
+    capability_path: Path | None = None,
     meshscope_src: Path | None = None,
     meshshot_src: Path | None = None,
 ) -> None:
@@ -280,6 +282,9 @@ def real_step_zero_evidence_provider(
       4. ``meshscope.voxblame.publish_preview`` writes ``preview.json``
          and ``preview.png`` into the caller-supplied ``preview_output``
          directory.
+
+    ``capability_path`` is private host-side runner wiring; it never crosses
+    the Agent Surface or enters the Workspace evidence request.
     """
 
     (
@@ -291,7 +296,10 @@ def real_step_zero_evidence_provider(
     MeshGeometry, load_profile, render_residual_preview = _import_meshshot(meshshot_src)
 
     if renderer is None:
-        renderer = render_residual_preview
+        renderer = partial(
+            render_residual_preview,
+            capability_path=capability_path,
+        )
 
     try:
         measurement = measure_step(

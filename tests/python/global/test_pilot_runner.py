@@ -804,6 +804,19 @@ class RunnerTests(unittest.TestCase):
                 "meshshot_src"
             ],
         )
+        capability_path = runtime.capability_dir / "runtime.json"
+        self.assertEqual(
+            capability_path,
+            supervisor.call_args.kwargs["step_zero_evidence_provider"].keywords[
+                "capability_path"
+            ],
+        )
+        self.assertEqual(
+            capability_path,
+            supervisor.call_args.kwargs["repair_evidence_provider"].keywords[
+                "capability_path"
+            ],
+        )
         self.assertNotEqual(
             self.supervisor.REPO_ROOT,
             supervisor.call_args.kwargs["trusted_tools_root"],

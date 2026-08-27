@@ -517,8 +517,8 @@
     },
     {
       "path": "packages/meshshot/src/meshshot/runtime_client.py",
-      "sha256": "33047328d4c61a6c81abc3318226440acfcf11c202c6734296e9e73903173f49",
-      "size": 19552
+      "sha256": "b1443b3ae0a3373876b91355d728b6e4826618cc3319009b2eb3a67ccc60edd5",
+      "size": 19917
     }
   ],
   "schema": "text-to-cad.trusted-tools/1"

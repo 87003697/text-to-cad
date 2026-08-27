@@ -35,6 +35,7 @@ Agent assessment. The runner privately binds the fixed shipped package roots.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 import hashlib
 import json
 import os
@@ -276,13 +277,15 @@ def real_repair_evidence_provider(
     request: RepairEvidenceRequest,
     *,
     renderer: Callable[..., Any] | None = None,
+    capability_path: Path | None = None,
     meshscope_src: Path | None = None,
     meshshot_src: Path | None = None,
 ) -> None:
     """Production Repair evidence provider.
 
     Composes the canonical shipped implementations without
-    reimplementing any geometry algorithm.
+    reimplementing any geometry algorithm.  ``capability_path`` is private
+    host-side runner wiring and never enters the Agent Surface request.
     """
 
     (
@@ -295,7 +298,10 @@ def real_repair_evidence_provider(
     MeshGeometry, load_profile, render_residual_preview = _import_meshshot(meshshot_src)
 
     if renderer is None:
-        renderer = render_residual_preview
+        renderer = partial(
+            render_residual_preview,
+            capability_path=capability_path,
+        )
 
     _hydrate_voxblame_stage(
         parent_voxblame=request.parent_voxblame,

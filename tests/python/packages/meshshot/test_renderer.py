@@ -76,6 +76,12 @@ class BrowserRuntimeClientTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(MeshshotError, "capability is required"):
                 render_residual_preview(_geometry(), _geometry())
+        with self.assertRaisesRegex(MeshshotError, "capability is required"):
+            render_residual_preview(
+                _geometry(),
+                _geometry(),
+                capability_path=Path("/definitely/absent/runtime.json"),
+            )
 
     def test_packed_geometry_rejects_float32_overflow(self) -> None:
         invalid = MeshGeometry(
@@ -97,6 +103,25 @@ class BrowserRuntimeClientTests(unittest.TestCase):
             rendered = render_residual_preview(_geometry(), _geometry())
         load_capability.assert_called_once_with()
         render_runtime.assert_called_once()
+        self.assertEqual(rendered.variant, "step")
+        self.assertEqual(len(rendered.views), 8)
+
+    def test_public_render_uses_explicit_runtime_capability_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            capability_path = Path(temp) / "runtime.json"
+            capability_path.write_text(json.dumps(_capability()), encoding="ascii")
+            capability_path.chmod(0o444)
+            with mock.patch.object(
+                runtime_client, "render_with_runtime", return_value=_result()
+            ) as render_runtime:
+                rendered = render_residual_preview(
+                    _geometry(),
+                    _geometry(),
+                    capability_path=capability_path,
+                )
+
+        render_runtime.assert_called_once()
+        self.assertEqual(_capability(), render_runtime.call_args.args[0])
         self.assertEqual(rendered.variant, "step")
         self.assertEqual(len(rendered.views), 8)
 

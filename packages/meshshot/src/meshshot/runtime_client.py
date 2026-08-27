@@ -488,12 +488,22 @@ def render_residual_preview(
     *,
     variant: str = "step",
     exterior_directions: Sequence[str] = (),
+    capability_path: Path | None = None,
 ) -> RenderedPreview:
-    """Render through the required job-owned Browser Runtime."""
+    """Render through the required job-owned Browser Runtime.
+
+    ``capability_path`` is a trusted host-side binding for callers that own
+    the per-job Browser Runtime.  Omitting it preserves the fixed default
+    path and its fail-closed behavior for unbound callers.
+    """
 
     loaded, payload = prepare_payload(
         reference, candidate, variant, exterior_directions
     )
-    capability = load_runtime_capability()
+    capability = (
+        load_runtime_capability(capability_path)
+        if capability_path is not None
+        else load_runtime_capability()
+    )
     result = render_with_runtime(capability, payload)
     return finalize_preview(result, loaded, variant)

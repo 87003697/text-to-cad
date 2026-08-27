@@ -2036,6 +2036,7 @@ def run_pilot(
                     trusted_tools_root=trusted_tools_root,
                     step_zero_evidence_provider=partial(
                         real_step_zero_evidence_provider,
+                        capability_path=sidecar.capability_dir / "runtime.json",
                         meshscope_src=(
                             trusted_tools_root / MESHSCOPE_RUNTIME_RELATIVE / "src"
                         ),
@@ -2045,6 +2046,7 @@ def run_pilot(
                     ),
                     repair_evidence_provider=partial(
                         real_repair_evidence_provider,
+                        capability_path=sidecar.capability_dir / "runtime.json",
                         meshscope_src=(
                             trusted_tools_root / MESHSCOPE_RUNTIME_RELATIVE / "src"
                         ),
