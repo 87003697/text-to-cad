@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -245,17 +246,38 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
 
         valid_source = "\n".join(
             (
-                "from build123d import Align, Box, BuildPart, Locations",
+                "from build123d import BuildPart, Location, Locations, Mode, Sphere, add, scale",
+                "",
                 "def gen_step():",
+                "    scaled = scale(Sphere(0.025, mode=Mode.PRIVATE), by=(1.0, 2.0, 3.0))",
                 "    with BuildPart() as part:",
                 "        with Locations((0.1, 0.2, 0.3)):",
-                "            Box(0.2, 0.1, 0.05, align=(Align.CENTER, Align.CENTER, Align.CENTER))",
-                "    return part.part",
+                "            add(scaled)",
+                "    return part.part.moved(Location((0.4, -0.1, 0.05)))",
             )
         )
         with temporary_directory(prefix="cad-location-transform-") as valid_root_text:
             valid_root = Path(valid_root_text)
             _write_canonical_source(valid_root, body=valid_source)
+
+            namespace: dict[str, object] = {}
+            exec(compile(valid_source, "model.py", "exec"), namespace)
+            shape = namespace["gen_step"]()  # type: ignore[operator]
+            self.assertTrue(shape.is_valid)  # type: ignore[union-attr]
+            self.assertEqual(1, len(shape.solids()))  # type: ignore[union-attr]
+            self.assertAlmostEqual(
+                4.0 / 3.0 * math.pi * 0.025**3 * 6.0,
+                shape.volume,  # type: ignore[union-attr]
+                delta=1e-6,
+            )
+            bounds = shape.bounding_box()  # type: ignore[union-attr]
+            for actual, expected in zip(bounds.min, (0.475, 0.05, 0.275)):
+                self.assertAlmostEqual(expected, actual, delta=0.002)
+            for actual, expected in zip(bounds.max, (0.525, 0.15, 0.425)):
+                self.assertAlmostEqual(expected, actual, delta=0.002)
+            for actual, expected in zip(shape.center(), (0.5, 0.1, 0.35)):  # type: ignore[union-attr]
+                self.assertAlmostEqual(expected, actual, delta=0.002)
+
             valid = _run_adapter(
                 valid_root,
                 "build",
@@ -265,15 +287,20 @@ class CanonicalBuildAdapterTests(unittest.TestCase):
                 "candidate",
             )
             self.assertEqual(0, valid.returncode, valid.stderr)
+            self.assertTrue((valid_root / "candidate/canonical.step").is_file())
+            self.assertTrue((valid_root / "candidate/measurement.glb").is_file())
             minimum, maximum = _position_bounds(valid_root / "candidate/measurement.glb")
-            minimum = [round(value, 6) for value in minimum]
-            maximum = [round(value, 6) for value in maximum]
-            self.assertEqual([0.0, 0.15, 0.275], minimum)
-            self.assertEqual([0.2, 0.25, 0.325], maximum)
-            self.assertEqual(
-                [0.1, 0.2, 0.3],
-                [round((low + high) / 2.0, 6) for low, high in zip(minimum, maximum)],
-            )
+            self.assertEqual(3, len(minimum))
+            self.assertEqual(3, len(maximum))
+            for actual, expected in zip(minimum, (0.475, 0.05, 0.275)):
+                self.assertAlmostEqual(expected, actual, delta=0.002)
+            for actual, expected in zip(maximum, (0.525, 0.15, 0.425)):
+                self.assertAlmostEqual(expected, actual, delta=0.002)
+            exported_centroid = [
+                (low + high) / 2.0 for low, high in zip(minimum, maximum)
+            ]
+            for actual, expected in zip(exported_centroid, (0.5, 0.1, 0.35)):
+                self.assertAlmostEqual(expected, actual, delta=0.002)
 
     def test_public_adapter_builds_canonical_step_measurement_and_provenance(self) -> None:
         with temporary_directory(prefix="cad-canonical-build-") as temp_dir:

@@ -139,22 +139,26 @@ class AgentSourceProjectionTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         normalized = " ".join(guidance.split())
         for required in (
-            "`Location` is a transform value, not a context manager.",
-            "Inside a `BuildPart` context",
+            "BuildPart 3D placement",
             "`with Locations((x, y, z)):`",
-            "`Location((x, y, z)) * shape`",
+            "A `Location` or `Plane` value is not a context manager",
+            "`BuildPart(Plane.XZ.offset(...))`",
+            "never write `with Location(...):` or `with Plane...`",
+            "Uniform scaling",
+            "`shape.scale(2.0)` returns a transformed value",
+            "Nonuniform scaling",
+            "`scale(shape, by=(sx, sy, sz))`",
+            "explicitly `add(...)` or return/use the transformed value",
+            "Direct translation",
             "`shape.moved(Location((x, y, z)))`",
-            "`with Location(...):`",
-            "do not discard the transformed value",
+            "`Location((x, y, z)) * shape`",
+            "All transforms return/use explicit values",
+            "do not discard them",
             "reuse the same active Attempt's opaque operation",
             "never repeat unchanged source",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, normalized)
-        location_section = normalized.split(
-            "`Location` is a transform value, not a context manager.", 1
-        )[1].split("## Repair edits", 1)[0]
-        self.assertNotIn("BuildSketch", location_section)
 
     def test_verify_rejects_missing_extra_and_digest_mismatch(self) -> None:
         mutations = (

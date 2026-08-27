@@ -67,12 +67,21 @@ manifest; you never call `export_step`, write files under `work/`
 outside `source/`, or touch `candidate.glb`. Doing so causes
 `run_candidate_tool` to fail closed.
 
-`Location` is a transform value, not a context manager. Inside a
-`BuildPart` context, place geometry with plural
-`with Locations((x, y, z)):`. In direct shape flow outside a builder, return or
-explicitly use `Location((x, y, z)) * shape` or
-`shape.moved(Location((x, y, z)))`; do not discard the transformed value.
-Never write singular `with Location(...):`. If a candidate operation fails,
+Use these build123d transform idioms:
+
+- **BuildPart 3D placement:** use plural `with Locations((x, y, z)):`. A
+  `Location` or `Plane` value is not a context manager. If a workplane is
+  needed, pass it to a supported builder constructor such as
+  `BuildPart(Plane.XZ.offset(...))`; never write `with Location(...):` or
+  `with Plane...`.
+- **Uniform scaling:** `shape.scale(2.0)` returns a transformed value.
+- **Nonuniform scaling:** use top-level `scale(shape, by=(sx, sy, sz))`, then
+  explicitly `add(...)` or return/use the transformed value.
+- **Direct translation:** use `shape.moved(Location((x, y, z)))` or
+  `Location((x, y, z)) * shape`.
+
+All transforms return/use explicit values; do not discard them or expect
+already-added builder geometry to mutate. If a candidate operation fails,
 change the candidate source first, then reuse the same active Attempt's opaque
 operation handle while its command budget permits; never repeat unchanged
 source.
