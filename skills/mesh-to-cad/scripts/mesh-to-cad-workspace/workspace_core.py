@@ -1318,6 +1318,7 @@ def _run_attempt_command(
     cwd: Path | None = None,
     environment: Mapping[str, str] | None = None,
     scope: ExecutionScope | None = None,
+    record_failure: bool = True,
 ) -> dict[str, Any]:
     """Run one bounded argv command without a shell and freeze its audit log."""
 
@@ -1365,6 +1366,8 @@ def _run_attempt_command(
         if timed_out:
             stderr += b"\ncommand timed out\n"
     except OSError as exc:
+        if not record_failure:
+            raise
         exit_code = 127
         stdout = b""
         stderr = f"command launch failed: {exc}\n".encode("utf-8", errors="replace")
@@ -1385,6 +1388,8 @@ def _run_attempt_command(
             "build_preflight_failed",
             detail or "canonical build preflight did not publish required artifacts",
         )
+    if exit_code != 0 and not record_failure:
+        return {"exit_code": exit_code, "command": None}
     stored_stdout, stdout_metadata = _bounded_log(stdout)
     stored_stderr, stderr_metadata = _bounded_log(stderr)
     stdout_metadata["path"] = f"commands/{command_id:06d}/stdout.log"
@@ -1420,6 +1425,7 @@ def run_attempt_command(
     cwd: Path | None = None,
     environment: Mapping[str, str] | None = None,
     scope: ExecutionScope | None = None,
+    record_failure: bool = True,
 ) -> dict[str, Any]:
     return _run_attempt_command(
         workspace,
@@ -1431,6 +1437,7 @@ def run_attempt_command(
         cwd=cwd,
         environment=environment,
         scope=scope,
+        record_failure=record_failure,
     )
 
 

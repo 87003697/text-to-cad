@@ -234,6 +234,9 @@ run returns the wrapped command's exit code.
   identities must agree.
 - record-attempt publishes failed or strategy-changed Attempts without
   creating a Measured Step.
+- A canonical candidate build that exits nonzero returns `run_candidate_tool`
+  with `state=failed`, leaves the Attempt active for a bounded retry, and does
+  not spend a published Attempt command until a build succeeds.
 - If trusted Repair evidence cannot satisfy its fixed comparison contract,
   the supervisor records the active Attempt as `strategy_changed`, returns
   `submit_repair` with `state=failed` and the closed

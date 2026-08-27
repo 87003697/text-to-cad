@@ -182,6 +182,7 @@ class WorkspaceAPI(Protocol):
         cwd: Path | None = None,
         environment: Mapping[str, str] | None = None,
         scope: Any | None = None,
+        record_failure: bool = True,
     ) -> Mapping[str, Any]: ...
 
     def cancel_active_commands(self, scope: Any) -> bool: ...
@@ -1501,16 +1502,35 @@ class WorkspaceSupervisor:
 
         try:
             exit_code, stdout, stderr, command_document = self._invoke_operation(
-                operation, context
+                operation, context, record_failure=False
             )
-        except SupervisorError:
+        except (SupervisorError, OSError):
             self._discard_trusted_output(output_dir)
             raise
         stdout_digest, _ = _bounded_process_detail(stdout)
         stderr_digest, _ = _bounded_process_detail(stderr)
+        result_handle = self.registry.issue(
+            "result",
+            {
+                "exit_code": exit_code,
+                "command": command_document.get("command"),
+                "stdout_sha256": stdout_digest,
+                "stderr_sha256": stderr_digest,
+                "adapter": _CANONICAL_ADAPTER_ID,
+            },
+            attempt_id=context.attempt_id,
+        )
+        if exit_code != 0:
+            self._discard_trusted_output(output_dir)
+            return {
+                "state": "failed",
+                "candidate_handle": context.candidate_handle,
+                "result_handle": result_handle,
+                "permitted_next_intents": self._attempt_next_intents(
+                    context.intended_step
+                ),
+            }
         try:
-            if exit_code != 0:
-                raise SupervisorError("candidate_tool_failed")
             self._reverify_source_digests(source_root, sidecars, source_digests)
             self._validate_canonical_output(output_dir, sidecars, source_digests)
             self._publish_candidate_glb(output_dir, candidate_glb)
@@ -1524,17 +1544,6 @@ class WorkspaceSupervisor:
             except OSError:
                 pass
             raise
-        result_handle = self.registry.issue(
-            "result",
-            {
-                "exit_code": exit_code,
-                "command": command_document.get("command"),
-                "stdout_sha256": stdout_digest,
-                "stderr_sha256": stderr_digest,
-                "adapter": _CANONICAL_ADAPTER_ID,
-            },
-            attempt_id=context.attempt_id,
-        )
         return {
             "state": "completed",
             "candidate_handle": context.candidate_handle,
@@ -1735,6 +1744,8 @@ class WorkspaceSupervisor:
         self,
         operation: _CandidateOperation,
         context: _AttemptContext,
+        *,
+        record_failure: bool = True,
     ) -> tuple[int, bytes, bytes, Mapping[str, Any]]:
         """Execute one prepared operation and return (exit, stdout, stderr, doc).
 
@@ -1784,6 +1795,7 @@ class WorkspaceSupervisor:
                     "timeout_seconds": operation.timeout_seconds,
                     "cwd": context.candidate_root,
                     "environment": env,
+                    "record_failure": record_failure,
                 }
                 if self._execution_scope is not None:
                     command_kwargs["scope"] = self._execution_scope

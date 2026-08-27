@@ -207,8 +207,8 @@
     },
     {
       "path": "packages/cadgen/src/cadgen/canonical_build.py",
-      "sha256": "264516f06de1bef5bfa86b1a8c67c4117e49cae216fe4296de4be99dfd1f2218",
-      "size": 31343
+      "sha256": "c197c500ba1944744b6104eea9d834c36886aaf2ab566a4be32db34567b69237",
+      "size": 31384
     },
     {
       "path": "packages/cadgen/src/cadgen/catalog.py",

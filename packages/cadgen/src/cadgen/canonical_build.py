@@ -625,6 +625,7 @@ def build(*, root: Path, source: str, output_dir: str, inputs: list[str] | None 
     # Initialize the registered CAD runtime before constraining user source
     # I/O. Some dependencies populate their own interpreter cache on import.
     import build123d  # noqa: F401
+    import encodings.ascii  # noqa: F401
 
     original_cwd = Path.cwd()
     os.chdir(bundle_root)
