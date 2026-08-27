@@ -265,9 +265,62 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
 
     def test_active_status_fails_closed_when_candidate_root_is_unavailable(self) -> None:
         self._start()
-        with mock.patch.object(os, "lstat", side_effect=OSError("denied")):
+        with mock.patch.object(os, "open", side_effect=OSError("denied")):
             with self.assertRaisesRegex(SupervisorError, "candidate_unavailable"):
                 self.sup.workspace_status(self.sup.workspace_handle)
+
+    def test_active_status_rejects_candidate_output_symlink(self) -> None:
+        self._start()
+        output = (
+            self.sup.candidate_root
+            / "work"
+            / CANDIDATE_PUBLISHED_MEASUREMENT_NAME
+        )
+        target = self.root / "outside.glb"
+        target.write_bytes(b"outside")
+        output.symlink_to(target)
+        with self.assertRaisesRegex(SupervisorError, "candidate_unavailable"):
+            self.sup.workspace_status(self.sup.workspace_handle)
+
+    def test_active_status_rejects_nonregular_candidate_output(self) -> None:
+        self._start()
+        output = (
+            self.sup.candidate_root
+            / "work"
+            / CANDIDATE_PUBLISHED_MEASUREMENT_NAME
+        )
+        output.mkdir()
+        with self.assertRaisesRegex(SupervisorError, "candidate_unavailable"):
+            self.sup.workspace_status(self.sup.workspace_handle)
+
+    def test_active_status_binds_candidate_root_before_swap(self) -> None:
+        candidate_root = self.root / "candidate-work"
+        candidate_root.mkdir()
+        (candidate_root / CANDIDATE_PUBLISHED_MEASUREMENT_NAME).write_bytes(
+            b"candidate"
+        )
+        replacement = self.root / "replacement-work"
+        replacement.mkdir()
+        original_stat = os.stat
+        swapped = False
+
+        def swap_root(path, *args, **kwargs):
+            nonlocal swapped
+            if (
+                path == CANDIDATE_PUBLISHED_MEASUREMENT_NAME
+                and kwargs.get("dir_fd") is not None
+                and not swapped
+            ):
+                candidate_root.rename(self.root / "original-work")
+                candidate_root.symlink_to(replacement, target_is_directory=True)
+                swapped = True
+            return original_stat(path, *args, **kwargs)
+
+        with mock.patch.object(os, "stat", side_effect=swap_root):
+            self.assertTrue(
+                WorkspaceSupervisor._candidate_output_present(candidate_root)
+            )
+        self.assertTrue(swapped)
 
     def test_preexisting_candidate_glb_rejected_and_partial_output_removed(self) -> None:
         attempt, candidate, bundle, work = self._start()

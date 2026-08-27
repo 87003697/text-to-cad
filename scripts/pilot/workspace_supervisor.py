@@ -1131,20 +1131,35 @@ class WorkspaceSupervisor:
         """Return whether the supervisor has already produced candidate.glb."""
 
         try:
-            root_metadata = os.lstat(candidate_root)
-        except OSError as exc:
+            directory_fd = _open_nofollow(candidate_root, directory=True)
+        except SupervisorError as exc:
             raise SupervisorError("candidate_unavailable") from exc
-        if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(
-            root_metadata.st_mode
-        ):
-            raise SupervisorError("candidate_unavailable")
         try:
-            os.lstat(candidate_root / CANDIDATE_PUBLISHED_MEASUREMENT_NAME)
-        except FileNotFoundError:
-            return False
-        except OSError as exc:
-            raise SupervisorError("candidate_unavailable") from exc
-        return True
+            try:
+                root_metadata = os.fstat(directory_fd)
+            except OSError as exc:
+                raise SupervisorError("candidate_unavailable") from exc
+            if not stat.S_ISDIR(root_metadata.st_mode):
+                raise SupervisorError("candidate_unavailable")
+            try:
+                output_metadata = os.stat(
+                    CANDIDATE_PUBLISHED_MEASUREMENT_NAME,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                return False
+            except OSError as exc:
+                raise SupervisorError("candidate_unavailable") from exc
+            if (
+                not stat.S_ISREG(output_metadata.st_mode)
+                or output_metadata.st_nlink != 1
+                or output_metadata.st_size > MAX_CANDIDATE_FILE_BYTES
+            ):
+                raise SupervisorError("candidate_unavailable")
+            return True
+        finally:
+            os.close(directory_fd)
 
     def workspace_status(self, workspace_handle: str) -> Mapping[str, Any]:
         workspace = self._workspace(workspace_handle)
