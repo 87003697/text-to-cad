@@ -8,8 +8,11 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -20,10 +23,9 @@ from typing import Sequence
 REPO_ROOT = Path(__file__).resolve().parents[2]
 S3_PREFIX = "s3://arcwm-code-us-west-2/ericzyma/text-to-cad/outputs"
 S3_REMOTE = "threed-code:arcwm-code-us-west-2/ericzyma/text-to-cad/outputs"
-RCLONE_RC_ADDR = "127.0.0.1:5572"
-MOUNT_PATH = (
-    Path.home() / "threed-code/ericzyma/text-to-cad/outputs"
-)
+MATERIALIZED_ROOT = REPO_ROOT / "tmp/cvm-pull/outputs"
+ARCHIVE_DIRNAME = ".cvm-pull-archives"
+ARCHIVE_SCHEMA = "text-to-cad.cvm-pull-archive/1"
 COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 DISPOSABLE_RUNTIME_EXCLUDES = (
     "run/playwright/*",
@@ -37,7 +39,6 @@ DISPOSABLE_RUNTIME_EXCLUDES = (
     ".git/lfs/*",
     "*/.git/lfs/*",
 )
-TERMINAL_LOCATOR_RELATIVE = "run/terminal-validation-locator.json"
 INTERNAL_TERMINAL_DIR = ".internal-terminal-validation"
 TERMINAL_HANDOFF_FILENAME = "terminal-validation.json"
 
@@ -83,12 +84,42 @@ class ExpInspection:
 class PullPlan:
     """The complete read-only plan produced before the first S3 write."""
 
-    cvm_exps: tuple[str, ...]
-    candidates: tuple[str, ...]
-    s3_exps: frozenset[str]
     publish: tuple[str, ...]
     preserve: tuple[ExpInspection, ...]
     handoffless_postmortems: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
+class ArchiveReceipt:
+    """Metadata for one experiment archive built on CVM."""
+
+    handle: str
+    size: int
+    file_count: int
+    key: str
+
+    @classmethod
+    def parse(cls, value: object) -> "ArchiveReceipt":
+        if not isinstance(value, dict) or set(value) != {
+            "schema", "handle", "size", "file_count", "key"
+        }:
+            raise PullError("Invalid archive receipt", 5)
+        handle = value["handle"]
+        size = value["size"]
+        count = value["file_count"]
+        key = value["key"]
+        if (
+            value["schema"] != ARCHIVE_SCHEMA
+            or not isinstance(handle, str)
+            or not is_safe_exp(handle)
+            or type(size) is not int
+            or size <= 0
+            or type(count) is not int
+            or count < 0
+            or key != f"{handle.split('/', 1)[0]}/{ARCHIVE_DIRNAME}/{handle.split('/', 1)[1]}.tar.gz"
+        ):
+            raise PullError("Invalid archive receipt", 5)
+        return cls(handle, size, count, key)
 
 
 @dataclass(frozen=True)
@@ -97,14 +128,8 @@ class PublishResult:
 
     uploaded: tuple[str, ...]
     preserved: tuple[ExpInspection, ...]
-    verified_existing: tuple[str, ...] = ()
     retained_source: tuple[str, ...] = ()
-
-    @property
-    def mount_targets(self) -> tuple[str, ...]:
-        """Return every verified S3 experiment that must be mount-visible."""
-
-        return self.uploaded + self.verified_existing
+    archives: tuple[ArchiveReceipt, ...] = ()
 
 
 def is_safe_component(value: str) -> bool:
@@ -217,30 +242,26 @@ class CommandRunner:
 
 
 class CvmPull:
-    """Orchestrate Plan -> Qualify -> Publish -> Verify -> Reclaim -> Expose."""
+    """Orchestrate Plan -> Qualify -> Publish -> Reclaim -> Expose."""
 
     def __init__(self, request: PullRequest, runner: CommandRunner) -> None:
         self.request = request
         self.runner = runner
-        self.mount_path = MOUNT_PATH
         self.log_path = Path(
             os.environ.get("TMPDIR", "/tmp")
         ) / f"cvm-pull-{time.strftime('%Y%m%d-%H%M%S')}.log"
-        self.refresh_warning = False
         self.excludes = self._load_excludes()
 
     def _require_rclone(self) -> None:
         result = self.runner.run(
             [
                 "rclone",
-                "rc",
-                f"--rc-addr={RCLONE_RC_ADDR}",
-                "core/version",
+                "version",
             ],
             check=False,
         )
         if result.returncode != 0:
-            raise PullError("rclone RC endpoint: NOT reachable. Aborting.", 4)
+            raise PullError("rclone is unavailable. Aborting.", 4)
 
     def _remote_directory_state(self, relative_path: str) -> bool:
         result = self.runner.remote(
@@ -295,44 +316,11 @@ class CvmPull:
             raise PullError(f"Cannot list CVM experiments{scope}", 4)
         return self._validated_lines(result.stdout)
 
-    def _discover_s3_exps(self) -> frozenset[str]:
-        result = self.runner.run(
-            [
-                "rclone",
-                "lsf",
-                S3_REMOTE,
-                "--dirs-only",
-                "--recursive",
-                "--max-depth",
-                "2",
-            ],
-            check=False,
-        )
-        if result.returncode != 0:
-            raise PullError(
-                "Cannot list S3 output prefixes through rclone remote",
-                4,
-            )
-        found: set[str] = set()
-        for line in result.stdout.splitlines():
-            parts = line.split("/")
-            if len(parts) >= 3 and parts[0] and parts[1]:
-                value = f"{parts[0]}/{parts[1]}"
-                if is_safe_exp(value):
-                    found.add(value)
-        return frozenset(found)
-
-    def discover_candidates(
-        self,
-    ) -> tuple[tuple[str, ...], frozenset[str]]:
-        """Module 2: discover scoped CVM experiments and existing S3 prefixes."""
+    def discover_candidates(self) -> tuple[str, ...]:
+        """Module 2: discover scoped CVM experiments."""
 
         self._require_rclone()
-        cvm_exps = self._discover_cvm_exps()
-        if not cvm_exps:
-            return (), frozenset()
-        s3_exps = self._discover_s3_exps()
-        return cvm_exps, s3_exps
+        return self._discover_cvm_exps()
 
     def _inspect_exp(self, exp: str) -> ExpInspection:
         script = """
@@ -417,9 +405,7 @@ print(json.dumps({
 
     def qualify(
         self,
-        cvm_exps: tuple[str, ...],
         candidates: tuple[str, ...],
-        s3_exps: frozenset[str] = frozenset(),
     ) -> PullPlan:
         """Module 3: enforce terminal manifests and classify postmortems."""
 
@@ -452,9 +438,6 @@ print(json.dumps({
                     handoffless_postmortems.add(item.exp)
                 publish.append(item.exp)
         return PullPlan(
-            cvm_exps=cvm_exps,
-            candidates=candidates,
-            s3_exps=s3_exps,
             publish=tuple(publish),
             preserve=tuple(preserve),
             handoffless_postmortems=frozenset(handoffless_postmortems),
@@ -476,543 +459,205 @@ print(json.dumps({
         )
         return tuple(dict.fromkeys((*DISPOSABLE_RUNTIME_EXCLUDES, *configured)))
 
-    def _upload_exp(self, exp: str) -> None:
-        exclude_args = " ".join(
-            f"--exclude {shlex.quote(pattern)}" for pattern in self.excludes
-        )
-        command = (
-            "aws s3 cp --recursive --no-follow-symlinks "
-            f"~/text-to-cad/outputs/{exp}/ {S3_PREFIX}/{exp}/"
-        )
-        if exclude_args:
-            command = f"{command} {exclude_args}"
-        # The locator is a minimal Workspace-local discovery marker; it never
-        # authenticates the terminal bundle but downstream review still
-        # consults it to confirm the fixed external handoff layout.
-        command = f"{command} --include {TERMINAL_LOCATOR_RELATIVE}"
-        status = self.runner.remote_tee(command, self.log_path)
-        if status not in {0, 2}:
-            raise PullError(f"aws s3 cp fatal (exit={status}) — aborting", status)
+    def _build_archive(self, exp: str, *, allow_missing_handoff: bool) -> ArchiveReceipt:
+        """Build one archive on CVM and return its transfer metadata."""
 
-    def _upload_exp_handoff(self, exp: str) -> None:
-        """Publish the runner-owned external Terminal Validation Handoff.
+        script = r'''
+import fnmatch, gzip, io, json, os, pathlib, stat, sys, tarfile
 
-        The handoff lives at the fixed sibling namespace
-        ``<group>/.internal-terminal-validation/<child>`` alongside the exp
-        tree.  It is the sole authentication lineage for the transferred
-        bundle, so we transfer it as an independent step and let verification
-        gate cleanup on the bytes and digest of the file it contains.
-        """
-
-        group, child = exp.split("/", 1)
-        source = (
-            f"~/text-to-cad/outputs/{group}/{INTERNAL_TERMINAL_DIR}/{child}/"
-        )
-        destination = f"{S3_PREFIX}/{group}/{INTERNAL_TERMINAL_DIR}/{child}/"
-        command = (
-            "aws s3 cp --recursive --no-follow-symlinks "
-            f"{source} {destination}"
-        )
-        status = self.runner.remote_tee(command, self.log_path)
-        if status not in {0, 2}:
-            raise PullError(
-                f"aws s3 cp fatal (exit={status}) — aborting", status
-            )
-
-    def _verify_exp_without_handoff(self, exp: str) -> int:
-        """Verify an early failed experiment without terminal evidence."""
-
-        expected, local, s3 = self._terminal_content_inventories(
-            exp, allow_missing_handoff=True
-        )
-        local_mismatch = self._content_mismatch(expected, local)
-        s3_mismatch = self._content_mismatch(expected, s3)
-        if any(local_mismatch) or any(s3_mismatch):
-            raise PullError(
-                "VERIFY FAILED transfer content "
-                f"(local={len(local)} s3={len(s3)} "
-                f"local_missing={local_mismatch[0]} "
-                f"local_extra={local_mismatch[1]} "
-                f"local_changed={local_mismatch[2]} "
-                f"s3_missing={s3_mismatch[0]} s3_extra={s3_mismatch[1]} "
-                f"s3_changed={s3_mismatch[2]}); "
-                "keeping CVM local. Investigate.",
-                5,
-            )
-        return len(local)
-
-    def _existing_s3_is_complete_without_handoff(
-        self, exp: str
-    ) -> tuple[bool, int, int]:
-        """Compare a handoffless prefix with its immutable CVM source."""
-
-        expected, local, s3 = self._terminal_content_inventories(
-            exp, allow_missing_handoff=True
-        )
-        return (
-            expected == local == s3,
-            len(local),
-            len(s3),
-        )
-
-    def _terminal_content_inventories(
-        self, exp: str, *, allow_missing_handoff: bool = False
-    ) -> tuple[
-        dict[str, tuple[int, str]],
-        dict[str, tuple[int, str]],
-        dict[str, tuple[int, str]],
-    ]:
-        """Return expected, CVM, and S3 content inventories."""
-
-        group, child = exp.split("/", 1)
-        script = """
-import fnmatch
-import hashlib
-import json
-import os
-import pathlib
-import stat
-import subprocess
-import sys
-import tempfile
-
-group, child, bucket, prefix, allow_missing, patterns_json = sys.argv[1:]
-allow_missing_handoff = allow_missing == "1"
-patterns = json.loads(patterns_json)
-handoff_path = pathlib.Path.home() / (
-    "text-to-cad/outputs/" + group + "/.internal-terminal-validation/"
-    + child + "/terminal-validation.json"
-)
-try:
-    info = handoff_path.lstat()
-except FileNotFoundError:
-    if not allow_missing_handoff:
-        raise SystemExit("terminal handoff is not a regular file")
-    handoff = None
-else:
-    if allow_missing_handoff:
-        raise SystemExit("terminal handoff appeared after planning")
-    if not stat.S_ISREG(info.st_mode):
-        raise SystemExit("terminal handoff is not a regular file")
-    handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
-    if (
-        not isinstance(handoff, dict)
-        or set(handoff) != {"schema", "terminal_identity_sha256", "bundle"}
-        or handoff.get("schema") != "mesh-to-cad.terminal-validation-handoff/1"
-        or not isinstance(handoff.get("bundle"), dict)
-    ):
-        raise SystemExit("terminal handoff schema is unsupported")
-
-def identity(schema, value):
-    body = (json.dumps(
-        value, indent=2, sort_keys=True, separators=(",", ": ")
-    ) + "\\n").encode("utf-8")
-    return hashlib.sha256(schema.encode("utf-8") + b"\\0" + body).hexdigest()
-
-expected = {}
-if handoff is not None:
-    bundle = handoff["bundle"]
-    if (
-        set(bundle) != {"schema", "result", "manifest"}
-        or bundle.get("schema") != "mesh-to-cad.terminal-validation-bundle/1"
-        or identity("mesh-to-cad.terminal-validation-handoff/1", bundle)
-           != handoff.get("terminal_identity_sha256")
-    ):
-        raise SystemExit("terminal handoff identity mismatch")
-    manifest = bundle["manifest"]
-    if (
-        not isinstance(manifest, dict)
-        or set(manifest) != {
-            "schema", "workspace_id", "workspace_identity_sha256", "files",
-            "identity_sha256",
-        }
-        or manifest.get("schema") != "mesh-to-cad.content-manifest/1"
-        or not isinstance(manifest.get("files"), list)
-    ):
-        raise SystemExit("terminal content manifest is unsupported")
-    manifest_body = dict(manifest)
-    manifest_identity = manifest_body.pop("identity_sha256")
-    if identity("mesh-to-cad.content-manifest/1", manifest_body) != manifest_identity:
-        raise SystemExit("terminal content manifest identity mismatch")
-
-    previous = ""
-    for item in manifest["files"]:
-        if not isinstance(item, dict) or set(item) != {"path", "size_bytes", "sha256"}:
-            raise SystemExit("terminal content manifest entry is unsupported")
-        name, size, digest = item["path"], item["size_bytes"], item["sha256"]
-        pure = pathlib.PurePosixPath(name) if isinstance(name, str) else None
-        if (
-            pure is None or pure.is_absolute() or not pure.parts
-            or any(part in {"", ".", ".."} for part in pure.parts)
-            or name != pure.as_posix() or name <= previous
-            or pure.parts[0] in {".git", "run", "work"}
-            or not isinstance(size, int) or isinstance(size, bool) or size < 0
-            or not isinstance(digest, str) or len(digest) != 64
-            or any(char not in "0123456789abcdef" for char in digest)
+exp, excludes_json, allow_missing_raw = sys.argv[1:]
+excludes = json.loads(excludes_json)
+allow_missing = allow_missing_raw == "1"
+group, child = exp.split("/", 1)
+root = pathlib.Path.home() / "text-to-cad/outputs"
+source = root / group / child
+manifest = json.loads((source / "artifact_manifest.json").read_text())
+if type(manifest.get("final_status")) is not int:
+    raise SystemExit(9)
+handoff = root / group / ".internal-terminal-validation" / child / "terminal-validation.json"
+if not handoff.is_file() and not allow_missing:
+    raise SystemExit("terminal handoff missing")
+if allow_missing and manifest["final_status"] == 0:
+    raise SystemExit("successful experiment requires terminal handoff")
+members = []
+for directory, dirnames, filenames in os.walk(source, followlinks=False):
+    directory_path = pathlib.Path(directory)
+    dirnames[:] = sorted(name for name in dirnames if not (directory_path / name).is_symlink())
+    for filename in sorted(filenames):
+        path = directory_path / filename
+        relative = path.relative_to(source).as_posix()
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode):
+            continue
+        if relative == ".cvm-pull" or relative.startswith(".cvm-pull/"):
+            raise SystemExit("reserved archive namespace")
+        if relative != "run/terminal-validation-locator.json" and any(
+            fnmatch.fnmatch(relative, pattern) for pattern in excludes
         ):
-            raise SystemExit("terminal content manifest entry is invalid")
-        expected[name] = [size, digest]
-        previous = name
-
-def file_digest(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return [path.stat().st_size, digest.hexdigest()]
-
-root = pathlib.Path.home() / "text-to-cad/outputs" / group / child
-local = {}
-for directory, dirnames, filenames in os.walk(root, followlinks=False):
-    parent = pathlib.Path(directory)
-    relative_parent = parent.relative_to(root)
-    if handoff is not None and not relative_parent.parts:
-        dirnames[:] = [name for name in dirnames if name not in {".git", "run", "work"}]
-    for name in filenames:
-        path = parent / name
-        if not stat.S_ISREG(path.lstat().st_mode):
             continue
-        relative = path.relative_to(root).as_posix()
-        if handoff is None:
-            if (
-                relative != "run/terminal-validation-locator.json"
-                and any(fnmatch.fnmatch(relative, pattern) for pattern in patterns)
-            ):
-                continue
-            local[relative] = file_digest(path)
-        elif relative.split("/", 1)[0] not in {".git", "run", "work"}:
-            local[relative] = file_digest(path)
-
-if handoff is None:
-    expected = dict(local)
-
-keys = []
-token = None
-while True:
-    command = [
-        "aws", "s3api", "list-objects-v2", "--bucket", bucket,
-        "--prefix", prefix, "--output", "json",
-    ]
-    if token is not None:
-        command.extend(["--continuation-token", token])
-    completed = subprocess.run(command, check=False, text=True,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if completed.returncode != 0:
-        sys.stderr.write(completed.stderr)
-        raise SystemExit(completed.returncode)
-    page = json.loads(completed.stdout)
-    for item in page.get("Contents", []):
-        key = item.get("Key")
-        if not isinstance(key, str) or not key.startswith(prefix):
-            continue
-        relative = key[len(prefix):]
-        if not relative:
-            continue
-        if handoff is None:
-            if (
-                relative != "run/terminal-validation-locator.json"
-                and any(fnmatch.fnmatch(relative, pattern) for pattern in patterns)
-            ):
-                continue
-            keys.append((relative, key))
-        elif relative.split("/", 1)[0] not in {".git", "run", "work"}:
-            keys.append((relative, key))
-    if not page.get("IsTruncated"):
-        break
-    token = page.get("NextContinuationToken")
-    if not isinstance(token, str) or not token:
-        raise SystemExit("S3 listing omitted its continuation token")
-
-s3 = {}
-for relative, key in keys:
-    with tempfile.NamedTemporaryFile() as target:
-        completed = subprocess.run(
-            ["aws", "s3api", "get-object", "--bucket", bucket,
-             "--key", key, target.name],
-            check=False, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-        )
-        if completed.returncode != 0:
-            sys.stderr.write(completed.stderr.decode("utf-8", errors="replace"))
-            raise SystemExit(completed.returncode)
-        s3[relative] = file_digest(pathlib.Path(target.name))
-print(json.dumps({"expected": expected, "local": local, "s3": s3}, sort_keys=True))
-""".strip()
-        prefix = f"ericzyma/text-to-cad/outputs/{exp}/"
-        command = " ".join(
-            (
-                "python3",
-                "-c",
-                shlex.quote(script),
-                shlex.quote(group),
-                shlex.quote(child),
-                shlex.quote("arcwm-code-us-west-2"),
-                shlex.quote(prefix),
-                shlex.quote("1" if allow_missing_handoff else "0"),
-                shlex.quote(json.dumps(self.excludes)),
-            )
-        )
+        members.append((relative, path, info.st_size))
+if handoff.is_file():
+    locator = json.loads((source / "run/terminal-validation-locator.json").read_text())
+    if locator != {
+        "schema": "mesh-to-cad.terminal-validation-locator/2",
+        "handoff_layout": "external-sibling-namespace/1",
+    }:
+        raise SystemExit("terminal locator invalid")
+    authority = json.loads(handoff.read_text())
+    if (
+        not isinstance(authority, dict)
+        or set(authority) != {"schema", "terminal_identity_sha256", "bundle"}
+        or authority.get("schema") != "mesh-to-cad.terminal-validation-handoff/1"
+        or not isinstance(authority.get("terminal_identity_sha256"), str)
+        or not isinstance(authority.get("bundle"), dict)
+        or set(authority["bundle"]) != {"schema", "result", "manifest"}
+        or authority["bundle"].get("schema")
+           != "mesh-to-cad.terminal-validation-bundle/1"
+        or not isinstance(authority["bundle"].get("result"), dict)
+        or not isinstance(authority["bundle"].get("manifest"), dict)
+    ):
+        raise SystemExit("terminal handoff invalid")
+    info = handoff.stat()
+    members.append((".cvm-pull/terminal-validation.json", handoff, info.st_size))
+members.sort(key=lambda item: item[0])
+archive_manifest = json.dumps({
+    "schema": "text-to-cad.cvm-pull-archive/1",
+    "handle": exp,
+    "members": [[name, size] for name, _path, size in members],
+}, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+spool = pathlib.Path.home() / "text-to-cad/tmp/cvm-pull-archives" / group / child
+spool.mkdir(parents=True, exist_ok=True)
+archive_path = spool / "archive.tar.gz"
+def info(name, size):
+    value = tarfile.TarInfo(name)
+    value.size = size; value.mode = 0o644; value.uid = value.gid = 0
+    value.uname = value.gname = ""; value.mtime = 0
+    return value
+with archive_path.open("wb") as raw:
+    with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as zipped:
+        with tarfile.open(fileobj=zipped, mode="w", format=tarfile.PAX_FORMAT) as archive:
+            for name, path, size in members:
+                with path.open("rb") as payload:
+                    archive.addfile(info(name, size), payload)
+            archive.addfile(info(".cvm-pull/archive-manifest.json", len(archive_manifest)),
+                            io.BytesIO(archive_manifest))
+key = f"{group}/.cvm-pull-archives/{child}.tar.gz"
+receipt = {
+    "schema": "text-to-cad.cvm-pull-archive/1", "handle": exp,
+    "size": archive_path.stat().st_size,
+    "file_count": len(members), "key": key,
+}
+print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
+'''.strip()
+        command = " ".join((
+            "python3", "-c", shlex.quote(script), shlex.quote(exp),
+            shlex.quote(json.dumps(self.excludes)),
+            "1" if allow_missing_handoff else "0",
+        ))
         result = self.runner.remote(command, check=False)
         if result.returncode != 0:
-            if (
-                allow_missing_handoff
-                and "terminal handoff appeared after planning"
-                in (result.stderr or "")
-            ):
-                raise PullError(
-                    f"terminal handoff appeared after planning: {exp}; replan required.",
-                    5,
-                )
-            raise PullError(f"Cannot verify terminal content: {exp}", 5)
+            status = 9 if result.returncode == 9 else 5
+            raise PullError(f"Cannot build CVM archive: {exp}", status)
         try:
-            payload = json.loads(result.stdout)
+            return ArchiveReceipt.parse(json.loads(result.stdout))
         except json.JSONDecodeError as error:
-            raise PullError(f"Invalid terminal content inventory: {exp}", 5) from error
-        if not isinstance(payload, dict) or set(payload) != {"expected", "local", "s3"}:
-            raise PullError(f"Invalid terminal content inventory: {exp}", 5)
-
-        decoded: list[dict[str, tuple[int, str]]] = []
-        for label in ("expected", "local", "s3"):
-            value = payload[label]
-            if not isinstance(value, dict):
-                raise PullError(f"Invalid {label} content inventory: {exp}", 5)
-            inventory: dict[str, tuple[int, str]] = {}
-            for path, entry in value.items():
-                if (
-                    not isinstance(path, str)
-                    or not isinstance(entry, list)
-                    or len(entry) != 2
-                    or not isinstance(entry[0], int)
-                    or isinstance(entry[0], bool)
-                    or entry[0] < 0
-                    or not isinstance(entry[1], str)
-                    or len(entry[1]) != 64
-                ):
-                    raise PullError(f"Invalid {label} content inventory: {exp}", 5)
-                inventory[path] = (entry[0], entry[1])
-            decoded.append(inventory)
-        return decoded[0], decoded[1], decoded[2]
+            raise PullError(f"Invalid CVM archive receipt: {exp}", 5) from error
 
     @staticmethod
-    def _content_mismatch(
-        expected: dict[str, tuple[int, str]],
-        actual: dict[str, tuple[int, str]],
-    ) -> tuple[list[str], list[str], list[str]]:
-        missing = sorted(set(expected) - set(actual))[:5]
-        extra = sorted(set(actual) - set(expected))[:5]
-        changed = sorted(
-            path for path in set(expected) & set(actual) if expected[path] != actual[path]
-        )[:5]
-        return missing, extra, changed
+    def _remote_archive_path(receipt: ArchiveReceipt) -> str:
+        group, child = receipt.handle.split("/", 1)
+        return f"~/text-to-cad/tmp/cvm-pull-archives/{group}/{child}/archive.tar.gz"
 
-    def _verify_exp(self, exp: str) -> int:
-        expected, local, s3 = self._terminal_content_inventories(exp)
-        local_mismatch = self._content_mismatch(expected, local)
-        s3_mismatch = self._content_mismatch(expected, s3)
-        if any(local_mismatch) or any(s3_mismatch):
-            raise PullError(
-                "VERIFY FAILED terminal content "
-                f"(expected={len(expected)} local={len(local)} s3={len(s3)} "
-                f"local_missing={local_mismatch[0]} local_extra={local_mismatch[1]} "
-                f"local_changed={local_mismatch[2]} s3_missing={s3_mismatch[0]} "
-                f"s3_extra={s3_mismatch[1]} s3_changed={s3_mismatch[2]}); "
-                "keeping CVM local. Investigate.",
-                5,
-            )
-        return len(expected)
-
-    def _existing_s3_is_complete(self, exp: str) -> tuple[bool, int, int]:
-        """Compare an existing S3 prefix with its immutable CVM source."""
-
-        expected, local, s3 = self._terminal_content_inventories(exp)
-        return (
-            expected == local == s3,
-            len(local),
-            len(s3),
+    def _upload_archive(self, receipt: ArchiveReceipt) -> None:
+        command = (
+            f"aws s3 cp {self._remote_archive_path(receipt)} "
+            f"{S3_PREFIX}/{receipt.key} --no-progress"
         )
+        status = self.runner.remote_tee(command, self.log_path)
+        if status != 0:
+            raise PullError(f"Archive upload failed: {receipt.handle}", 4)
 
-    def _digest_local_handoff(self, exp: str) -> tuple[str, str, int]:
-        """Return the local handoff SHA-256 identity + digest and file size."""
-
-        group, child = exp.split("/", 1)
-        script = """
-import hashlib
-import json
-import pathlib
-import stat
-import sys
-
-path = pathlib.Path.home() / (
-    "text-to-cad/outputs/" + sys.argv[1] + "/.internal-terminal-validation/"
-    + sys.argv[2] + "/terminal-validation.json"
-)
-info = path.lstat()
-if not stat.S_ISREG(info.st_mode):
-    raise SystemExit("terminal handoff is not a regular file")
-data = path.read_bytes()
-try:
-    parsed = json.loads(data.decode("utf-8"))
-except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-    raise SystemExit(f"terminal handoff is not valid JSON: {exc}")
-if (
-    not isinstance(parsed, dict)
-    or parsed.get("schema") != "mesh-to-cad.terminal-validation-handoff/1"
-    or not isinstance(parsed.get("terminal_identity_sha256"), str)
-    or len(parsed["terminal_identity_sha256"]) != 64
-    or not isinstance(parsed.get("bundle"), dict)
-):
-    raise SystemExit("terminal handoff schema is unsupported")
-print(json.dumps({
-    "identity": parsed["terminal_identity_sha256"],
-    "digest": hashlib.sha256(data).hexdigest(),
-    "size": len(data),
-}))
-""".strip()
-        command = " ".join(
-            (
-                "python3",
-                "-c",
-                shlex.quote(script),
-                shlex.quote(group),
-                shlex.quote(child),
-            )
-        )
-        result = self.runner.remote(command, check=False)
-        if result.returncode != 0:
-            raise PullError(
-                f"Cannot digest CVM terminal handoff: {exp}", 5
-            )
+    def _materialize_archive(self, receipt: ArchiveReceipt) -> Path:
+        cache = REPO_ROOT / "tmp/cvm-pull/archives" / receipt.key
         try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError as error:
+            cache.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
             raise PullError(
-                f"Cannot decode CVM terminal handoff digest: {exp}", 5
+                f"Cannot prepare archive cache: {receipt.handle}", 5
             ) from error
-        if not isinstance(payload, dict):
-            raise PullError(
-                f"Invalid CVM terminal handoff digest: {exp}", 5
-            )
-        identity = payload.get("identity")
-        digest = payload.get("digest")
-        size = payload.get("size")
-        if (
-            not isinstance(identity, str)
-            or len(identity) != 64
-            or not isinstance(digest, str)
-            or len(digest) != 64
-            or not isinstance(size, int)
-        ):
-            raise PullError(
-                f"Invalid CVM terminal handoff digest: {exp}", 5
-            )
-        return identity, digest, size
-
-    def _digest_s3_handoff(self, exp: str) -> tuple[str, str, int]:
-        """Return the transferred handoff SHA-256 identity + digest and size."""
-
-        group, child = exp.split("/", 1)
-        script = """
-import hashlib
-import json
-import subprocess
-import sys
-
-bucket = sys.argv[1]
-key = sys.argv[2]
-process = subprocess.run(
-    ["aws", "s3api", "get-object",
-     "--bucket", bucket,
-     "--key", key,
-     "/dev/stdout"],
-    check=False,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-)
-if process.returncode != 0:
-    sys.stderr.write(process.stderr.decode("utf-8", errors="replace"))
-    raise SystemExit(process.returncode)
-data = process.stdout
-try:
-    parsed = json.loads(data.decode("utf-8"))
-except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-    raise SystemExit(f"S3 terminal handoff is not valid JSON: {exc}")
-if (
-    not isinstance(parsed, dict)
-    or parsed.get("schema") != "mesh-to-cad.terminal-validation-handoff/1"
-    or not isinstance(parsed.get("terminal_identity_sha256"), str)
-    or len(parsed["terminal_identity_sha256"]) != 64
-    or not isinstance(parsed.get("bundle"), dict)
-):
-    raise SystemExit("S3 terminal handoff schema is unsupported")
-print(json.dumps({
-    "identity": parsed["terminal_identity_sha256"],
-    "digest": hashlib.sha256(data).hexdigest(),
-    "size": len(data),
-}))
-""".strip()
-        key = (
-            f"ericzyma/text-to-cad/outputs/{group}/"
-            f"{INTERNAL_TERMINAL_DIR}/{child}/{TERMINAL_HANDOFF_FILENAME}"
+        result = self.runner.run(
+            ["rclone", "copyto", f"{S3_REMOTE}/{receipt.key}", os.fspath(cache)],
+            check=False,
         )
-        command = " ".join(
-            (
-                "python3",
-                "-c",
-                shlex.quote(script),
-                shlex.quote("arcwm-code-us-west-2"),
-                shlex.quote(key),
-            )
-        )
-        result = self.runner.remote(command, check=False)
         if result.returncode != 0:
-            raise PullError(
-                f"Cannot digest S3 terminal handoff: {exp}", 5
-            )
+            raise PullError(f"Cannot download archive: {receipt.handle}", 4)
+        staging: Path | None = None
         try:
-            payload = json.loads(result.stdout)
-        except json.JSONDecodeError as error:
+            if cache.stat().st_size != receipt.size:
+                raise PullError(
+                    f"Downloaded archive size mismatch: {receipt.handle}", 5
+                )
+            group, child = receipt.handle.split("/", 1)
+            group_root = MATERIALIZED_ROOT / group
+            group_root.mkdir(parents=True, exist_ok=True)
+            staging = Path(
+                tempfile.mkdtemp(prefix=f".{child}.", dir=group_root)
+            )
+            with tarfile.open(cache, "r:gz") as archive:
+                manifest_member = archive.getmember(".cvm-pull/archive-manifest.json")
+                manifest_stream = archive.extractfile(manifest_member)
+                if manifest_stream is None:
+                    raise PullError(f"Archive manifest missing: {receipt.handle}", 5)
+                manifest = json.loads(manifest_stream.read())
+                expected = {name: size for name, size in manifest["members"]}
+                if manifest.get("schema") != ARCHIVE_SCHEMA or manifest.get("handle") != receipt.handle:
+                    raise PullError(f"Archive manifest mismatch: {receipt.handle}", 5)
+                if len(expected) != receipt.file_count:
+                    raise PullError(f"Archive member count mismatch: {receipt.handle}", 5)
+                actual: dict[str, int] = {}
+                for member in archive.getmembers():
+                    if member.name == ".cvm-pull/archive-manifest.json":
+                        continue
+                    path = Path(member.name)
+                    if not member.isfile() or path.is_absolute() or ".." in path.parts or member.name not in expected:
+                        raise PullError(f"Unsafe archive member: {member.name}", 7)
+                    payload = archive.extractfile(member)
+                    if payload is None:
+                        raise PullError(f"Unreadable archive member: {member.name}", 5)
+                    output = staging / path
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                    size = 0
+                    with output.open("xb") as stream:
+                        for block in iter(lambda: payload.read(1024 * 1024), b""):
+                            stream.write(block)
+                            size += len(block)
+                    actual[member.name] = size
+                if actual != expected:
+                    raise PullError(f"Archive member mismatch: {receipt.handle}", 5)
+            target = group_root / child
+            if target.exists():
+                shutil.rmtree(target)
+            staging.replace(target)
+            handoff = target / ".cvm-pull/terminal-validation.json"
+            if handoff.is_file():
+                external = group_root / INTERNAL_TERMINAL_DIR / child / TERMINAL_HANDOFF_FILENAME
+                external.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(handoff, external)
+                handoff.unlink()
+            controller = target / ".cvm-pull"
+            if controller.exists():
+                shutil.rmtree(controller)
+            return target
+        except PullError:
+            if staging is not None and staging.exists():
+                shutil.rmtree(staging)
+            raise
+        except (OSError, tarfile.TarError, KeyError, TypeError, ValueError) as error:
+            if staging is not None and staging.exists():
+                shutil.rmtree(staging)
             raise PullError(
-                f"Cannot decode S3 terminal handoff digest: {exp}", 5
+                f"Cannot materialize archive: {receipt.handle}", 5
             ) from error
-        if not isinstance(payload, dict):
-            raise PullError(
-                f"Invalid S3 terminal handoff digest: {exp}", 5
-            )
-        identity = payload.get("identity")
-        digest = payload.get("digest")
-        size = payload.get("size")
-        if (
-            not isinstance(identity, str)
-            or len(identity) != 64
-            or not isinstance(digest, str)
-            or len(digest) != 64
-            or not isinstance(size, int)
-        ):
-            raise PullError(
-                f"Invalid S3 terminal handoff digest: {exp}", 5
-            )
-        return identity, digest, size
-
-    def _verify_exp_handoff(self, exp: str) -> tuple[str, str, int]:
-        """Verify exact byte, digest, and identity parity of the handoff."""
-
-        local_identity, local_digest, local_size = self._digest_local_handoff(exp)
-        s3_identity, s3_digest, s3_size = self._digest_s3_handoff(exp)
-        if (
-            local_identity != s3_identity
-            or local_digest != s3_digest
-            or local_size != s3_size
-        ):
-            raise PullError(
-                "VERIFY FAILED terminal handoff "
-                f"(local_identity={local_identity[:12]} "
-                f"s3_identity={s3_identity[:12]} "
-                f"local_digest={local_digest[:12]} "
-                f"s3_digest={s3_digest[:12]} "
-                f"local_size={local_size} s3_size={s3_size}); "
-                "keeping CVM local. Investigate.",
-                5,
-            )
-        return local_identity, local_digest, local_size
 
     def _cleanup_exp(self, exp: str) -> None:
         if not is_safe_exp(exp):
@@ -1027,126 +672,73 @@ print(json.dumps({
             check=False,
         )
         if result.returncode != 0:
-            raise PullError(f"CVM cleanup failed: {exp}", result.returncode)
+            raise PullError(f"CVM cleanup failed: {exp}", 4)
+
+    def _cleanup_archive(self, receipt: ArchiveReceipt) -> None:
+        result = self.runner.remote(
+            f"rm -f -- {self._remote_archive_path(receipt)}",
+            check=False,
+        )
+        if result.returncode != 0:
+            raise PullError(
+                f"CVM archive cleanup failed: {receipt.handle}",
+                4,
+            )
 
     def publish(self, plan: PullPlan) -> PublishResult:
-        """Module 4: run upload -> verify -> precise cleanup per exp."""
+        """Module 4: archive -> upload -> materialize -> cleanup."""
 
         uploaded: list[str] = []
-        verified_existing: list[str] = []
         retained_source: list[str] = []
+        archives: list[ArchiveReceipt] = []
         retain_source = (
             self.request.postmortem_policy is PostmortemPolicy.INCLUDE_RETAIN
         )
         for index, exp in enumerate(plan.publish, start=1):
             self._log(f"=== [{index}/{len(plan.publish)}] {exp} ===")
             handoffless = exp in plan.handoffless_postmortems
-            count: int
-            if exp in plan.s3_exps:
-                if handoffless:
-                    complete, local_count, s3_count = (
-                        self._existing_s3_is_complete_without_handoff(exp)
-                    )
-                else:
-                    complete, local_count, s3_count = self._existing_s3_is_complete(
-                        exp
-                    )
-                if complete:
-                    count = local_count
-                    verified_existing.append(exp)
-                    self._log(
-                        f"  existing S3 prefix verified ({count} files)"
-                    )
-                    if not handoffless:
-                        identity, _digest, size = self._verify_exp_handoff(exp)
-                        self._log(
-                            f"  terminal handoff verified "
-                            f"(identity={identity[:12]} size={size} bytes)"
-                        )
-                else:
-                    raise PullError(
-                        "VERIFY FAILED existing S3 terminal content "
-                        f"(local={local_count} s3={s3_count}); "
-                        "keeping CVM local. Investigate.",
-                        5,
-                    )
-            else:
-                self._upload_exp(exp)
-                if handoffless:
-                    count = self._verify_exp_without_handoff(exp)
-                else:
-                    self._upload_exp_handoff(exp)
-                    count = self._verify_exp(exp)
-                    identity, _digest, size = self._verify_exp_handoff(exp)
-                    self._log(
-                        f"  terminal handoff verified "
-                        f"(identity={identity[:12]} size={size} bytes)"
-                    )
-                uploaded.append(exp)
+            receipt = self._build_archive(
+                exp, allow_missing_handoff=handoffless
+            )
+            self._upload_archive(receipt)
+            materialized = self._materialize_archive(receipt)
+            self._cleanup_archive(receipt)
+            archives.append(receipt)
+            uploaded.append(exp)
+            self._log(
+                f"  archive materialized files={receipt.file_count} "
+                f"bytes={receipt.size} path={materialized}"
+            )
             if retain_source:
-                self._log(f"  verify OK ({count} files); retaining CVM source")
+                self._log("  retaining CVM source")
                 retained_source.append(exp)
             else:
-                self._log(f"  verify OK ({count} files); cleaning CVM local...")
+                self._log("  cleaning CVM local...")
                 self._cleanup_exp(exp)
         return PublishResult(
             uploaded=tuple(uploaded),
             preserved=plan.preserve,
-            verified_existing=tuple(verified_existing),
             retained_source=tuple(retained_source),
+            archives=tuple(archives),
         )
-
-    def _refresh_dir(self, directory: str) -> None:
-        result = self.runner.run(
-            [
-                "rclone",
-                "rc",
-                f"--rc-addr={RCLONE_RC_ADDR}",
-                "vfs/refresh",
-                f"dir={directory}",
-                "recursive=false",
-            ],
-            check=False,
-        )
-        if result.returncode != 0:
-            self.refresh_warning = True
-            self._log(f"warning: rclone refresh failed: {directory}", error=True)
 
     def expose(self, result: PublishResult) -> None:
-        """Module 5: refresh parent -> group -> exp and prove visibility."""
+        """Module 5: prove every uploaded archive is materialized locally."""
 
-        targets = result.mount_targets
-        if not targets:
-            return
-        self._refresh_dir("ericzyma/text-to-cad/outputs")
-        for group in sorted({exp.split("/", 1)[0] for exp in targets}):
-            self._refresh_dir(f"ericzyma/text-to-cad/outputs/{group}")
-        for exp in targets:
-            self._refresh_dir(f"ericzyma/text-to-cad/outputs/{exp}")
-
-        invisible: list[str] = []
-        for exp in targets:
-            for _attempt in range(5):
-                if (self.mount_path / exp).is_dir():
-                    break
-                time.sleep(1)
-            else:
-                invisible.append(exp)
-        if invisible:
-            joined = "\n".join(f"  {exp}" for exp in invisible)
-            source_state = (
-                "CVM source retained"
-                if result.retained_source
-                else "CVM source cleaned"
-            )
+        missing = [
+            receipt.handle
+            for receipt in result.archives
+            if not (MATERIALIZED_ROOT / receipt.handle).is_dir()
+        ]
+        if missing:
             raise PullError(
-                f"S3 upload verified and {source_state}, "
-                f"but mount visibility is pending:\n{joined}",
+                "Archive uploaded but local materialization is missing:\n"
+                + "\n".join(f"  {handle}" for handle in missing),
                 6,
             )
 
-    def _log(self, message: str, *, error: bool = False) -> None:
-        print(message, file=sys.stderr if error else sys.stdout)
+    def _log(self, message: str) -> None:
+        print(message)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8") as stream:
             stream.write(f"{message}\n")
@@ -1154,18 +746,12 @@ print(json.dumps({
     def report(self, result: PublishResult) -> None:
         """Module 6: print the concise result and audit handoff."""
 
-        if not result.mount_targets:
+        if not result.uploaded:
             self._log("Done. No exp uploaded; preserved postmortem:")
         else:
             if result.uploaded:
-                self._log("Done. Uploaded + verified + mount-visible:")
+                self._log("Done. Archive uploaded + materialized:")
                 for exp in result.uploaded:
-                    self._log(f"  {exp}")
-            if result.verified_existing:
-                self._log(
-                    "Existing S3 prefix verified + mount-visible:"
-                )
-                for exp in result.verified_existing:
                     self._log(f"  {exp}")
             if result.retained_source:
                 self._log("Retained CVM source:")
@@ -1173,10 +759,10 @@ print(json.dumps({
                     self._log(f"  {exp}")
             else:
                 self._log("Cleaned CVM source:")
-                for exp in result.mount_targets:
+                for exp in result.uploaded:
                     self._log(f"  {exp}")
         if result.preserved:
-            if result.mount_targets:
+            if result.uploaded:
                 self._log("Preserved postmortem on CVM:")
             for item in result.preserved:
                 self._log(
@@ -1184,17 +770,11 @@ print(json.dumps({
                     f"(final_status={item.final_status}, "
                     f"upper={int(item.has_postmortem)})"
                 )
-        if self.refresh_warning:
-            self._log(
-                "warning: one or more refresh calls failed, "
-                "but mount visibility checks passed",
-                error=True,
-            )
 
     def run(self) -> None:
         """Compose the six modules into the complete pull workflow."""
 
-        cvm_exps, s3_exps = self.discover_candidates()
+        cvm_exps = self.discover_candidates()
         if not cvm_exps:
             print("No exp on CVM. Nothing to do.")
             return
@@ -1202,7 +782,7 @@ print(json.dumps({
         print("Planning scoped CVM experiments and checking terminal eligibility:")
         for exp in cvm_exps:
             print(f"  {exp}")
-        plan = self.qualify(cvm_exps, cvm_exps, s3_exps)
+        plan = self.qualify(cvm_exps)
         for item in plan.preserve:
             print(
                 "  preserving CVM postmortem "
