@@ -18,6 +18,7 @@ import tempfile
 import threading
 import time
 import unittest
+from typing import Any, Mapping
 from unittest import mock
 import socket
 
@@ -289,6 +290,9 @@ class _Workspace:
             parents=True, exist_ok=False
         )
         return {"attempt": attempt, "intended_step": kwargs["intended_step"]}
+
+    def seed_repair_source_from_parent_step(self, *_args, **_kwargs) -> None:
+        return None
 
     def publish_step_zero(self, _workspace: Path, **kwargs) -> dict:
         self.published.append(kwargs)
@@ -2648,6 +2652,67 @@ class WorkspaceSupervisorTests(unittest.TestCase):
         result = supervisor.start_attempt(supervisor.workspace_handle, plan_handle, None)
         return result["attempt_handle"], result["candidate_handle"]
 
+    def _start_repair_request(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        self.workspace.completed_cycles = 1
+        self.workspace.head_steps = [0]
+        parent_step = self.sup.registry.issue("step", 0)
+        plan = self.sup.candidate_root / "repair-plan.json"
+        plan.write_text("{}", encoding="utf-8")
+        self.sup._repair_evidence_provider = lambda _request: None
+        started = dict(
+            self.sup.start_attempt(
+                self.sup.workspace_handle,
+                self.sup.register_plan(plan),
+                parent_step,
+            )
+        )
+        return started, {
+            "schema": "mesh-to-cad.agent-intent/1",
+            "intent": "submit_repair",
+            "args": {
+                "workspace_handle": self.sup.workspace_handle,
+                "attempt_handle": started["attempt_handle"],
+                "candidate_handle": started["candidate_handle"],
+            },
+        }
+
+    @staticmethod
+    def _socket_round_trip(
+        socket_path: Path, request: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            connection.connect(os.fspath(socket_path))
+            stream = connection.makefile("rwb")
+            try:
+                stream.write(
+                    json.dumps(request, separators=(",", ":")).encode() + b"\n"
+                )
+                stream.flush()
+                return json.loads(stream.readline())
+            finally:
+                stream.close()
+        finally:
+            connection.close()
+
+    def _block_repair_publication(
+        self, *, timeout: float = 2
+    ) -> tuple[threading.Event, threading.Event, list[int]]:
+        entered = threading.Event()
+        release = threading.Event()
+        calls = [0]
+        original_publish = self.workspace.publish_cycle_from_candidate
+
+        def blocking_publish(*args, **kwargs):
+            calls[0] += 1
+            entered.set()
+            release.wait(timeout)
+            return original_publish(*args, **kwargs)
+
+        self.workspace.publish_cycle_from_candidate = blocking_publish  # type: ignore[assignment]
+        self.addCleanup(release.set)
+        return entered, release, calls
+
     def test_select_and_finalize_forwards_step_and_claim_paths_to_w1_only(
         self,
     ) -> None:
@@ -2812,21 +2877,281 @@ class WorkspaceSupervisorTests(unittest.TestCase):
             self.sup.submit_step_zero(
                 self.sup.workspace_handle, first_attempt, second_candidate
             )
-        # Publish Attempt 2 and verify its retired handles are also rejected.
-        self.assertEqual(
-            "published",
-            self.sup.submit_step_zero(
-                self.sup.workspace_handle, second_attempt, second_candidate
-            )["state"],
+        # Publish Attempt 2; a lost response must be replayable for the exact
+        # same request even after its handles are retired.
+        published = self.sup.submit_step_zero(
+            self.sup.workspace_handle, second_attempt, second_candidate
         )
-        with self.assertRaises(SupervisorError):
+        self.assertEqual("published", published["state"])
+        self.assertEqual(
+            published,
             self.sup.submit_step_zero(
                 self.sup.workspace_handle, second_attempt, second_candidate
-            )
+            ),
+        )
+        # A different intent is a different request and cannot reuse the
+        # retired Step 0 handles.
         with self.assertRaises(SupervisorError):
             self.sup.submit_repair(
                 self.sup.workspace_handle, second_attempt, second_candidate
             )
+
+    def test_submit_repair_single_flight_replays_after_client_disconnect(self) -> None:
+        """A lost submit response must not start a second W1 publication."""
+
+        from scripts.pilot.agent_surface_bridge import AgentSurfaceBridge
+
+        _started, request = self._start_repair_request()
+        entered, release, publication_calls = self._block_repair_publication()
+        socket_path = self.root / "single-flight-agent-surface.sock"
+        bridge = AgentSurfaceBridge(self.sup.agent_surface(), socket_path)
+
+        try:
+            bridge.start()
+            first = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            first.connect(os.fspath(socket_path))
+            first.sendall(json.dumps(request, separators=(",", ":")).encode() + b"\n")
+            self.assertTrue(entered.wait(2))
+            first.close()
+
+            status = self._socket_round_trip(
+                socket_path,
+                {
+                    "schema": "mesh-to-cad.agent-intent/1",
+                    "intent": "workspace_status",
+                    "args": {"workspace_handle": self.sup.workspace_handle},
+                },
+            )
+            self.assertTrue(status["ok"], status)
+            self.assertEqual(
+                ["workspace_status"],
+                status["response"]["result"]["permitted_next_intents"],
+            )
+
+            second_result: list[dict] = []
+
+            def second_submit() -> None:
+                second_result.append(self._socket_round_trip(socket_path, request))
+
+            second = threading.Thread(target=second_submit, daemon=True)
+            second.start()
+            self.assertEqual(1, publication_calls[0])
+            release.set()
+            second.join(timeout=3)
+            self.assertFalse(second.is_alive())
+            self.assertEqual(1, len(second_result))
+            self.assertTrue(second_result[0]["ok"], second_result[0])
+            self.assertEqual("published", second_result[0]["response"]["result"]["state"])
+            self.assertEqual(1, publication_calls[0])
+
+            replay = self._socket_round_trip(socket_path, request)
+            self.assertEqual(second_result[0], replay)
+            self.assertEqual(1, publication_calls[0])
+        finally:
+            release.set()
+            bridge.stop()
+
+    def test_submit_publication_is_counted_and_drained_during_bridge_stop(self) -> None:
+        """Bridge shutdown must observe and drain an active W1 submission."""
+
+        from scripts.pilot.agent_surface_bridge import AgentSurfaceBridge
+
+        started, _request = self._start_repair_request()
+        entered, release, _calls = self._block_repair_publication()
+        cancel_active_calls: list[int] = []
+
+        def cancel_active_commands(*_args):
+            cancel_active_calls.append(self.sup._active_calls)
+            release.set()
+            return True
+
+        self.workspace.cancel_active_commands = cancel_active_commands  # type: ignore[assignment]
+        socket_path = self.root / "drain-agent-surface.sock"
+        bridge = AgentSurfaceBridge(self.sup.agent_surface(), socket_path)
+        result: list[Mapping[str, Any]] = []
+        worker = threading.Thread(
+            target=lambda: result.append(
+                self.sup.submit_repair(
+                    self.sup.workspace_handle,
+                    started["attempt_handle"],
+                    started["candidate_handle"],
+                )
+            ),
+            daemon=True,
+        )
+        try:
+            bridge.start()
+            worker.start()
+            self.assertTrue(entered.wait(2))
+            deadline = time.monotonic() + 2
+            while self.sup._active_calls != 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(1, self.sup._active_calls)
+            bridge.stop()
+            worker.join(timeout=3)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual([1], cancel_active_calls)
+            self.assertEqual(1, len(result))
+            self.assertEqual("published", result[0]["state"])
+            self.assertTrue(self.sup.cancellation_confirmed)
+            self.assertEqual(0, self.sup._active_calls)
+        finally:
+            release.set()
+            if worker.is_alive():
+                worker.join(timeout=3)
+            bridge.stop()
+
+    def test_submit_publication_error_replays_classification_without_republishing(
+        self,
+    ) -> None:
+        """A failed publication remains a stable, at-most-once result."""
+
+        started, _request = self._start_repair_request()
+        publication_calls = 0
+
+        def failing_publish(*_args, **_kwargs):
+            nonlocal publication_calls
+            publication_calls += 1
+            raise RuntimeError("synthetic W1 failure")
+
+        self.workspace.publish_cycle_from_candidate = failing_publish  # type: ignore[assignment]
+
+        with self.assertRaises(SupervisorError) as first:
+            self.sup.submit_repair(
+                self.sup.workspace_handle,
+                started["attempt_handle"],
+                started["candidate_handle"],
+            )
+        self.assertEqual("cycle_publication_failed", first.exception.classification)
+
+        with self.assertRaises(SupervisorError) as replay:
+            self.sup.submit_repair(
+                self.sup.workspace_handle,
+                started["attempt_handle"],
+                started["candidate_handle"],
+            )
+        self.assertEqual(first.exception.classification, replay.exception.classification)
+        self.assertEqual(1, publication_calls)
+        status = self.sup.workspace_status(self.sup.workspace_handle)
+        self.assertEqual("blocked", status["state"])
+        self.assertEqual(
+            ["workspace_status"], status["permitted_next_intents"]
+        )
+
+    def test_submit_publication_waiter_exits_when_supervisor_cancels(self) -> None:
+        """A duplicate caller must not keep cleanup blocked after cancellation."""
+
+        started, _request = self._start_repair_request()
+        entered, release, publication_calls = self._block_repair_publication(timeout=5)
+        owner_result: list[Mapping[str, Any]] = []
+        follower_error: list[BaseException] = []
+
+        def capture_error(result: list[BaseException], call) -> None:
+            try:
+                call()
+            except BaseException as exc:  # noqa: BLE001
+                result.append(exc)
+
+        submit = lambda: self.sup.submit_repair(
+            self.sup.workspace_handle,
+            started["attempt_handle"],
+            started["candidate_handle"],
+        )
+        owner = threading.Thread(
+            target=lambda: owner_result.append(submit()), daemon=True
+        )
+        follower = threading.Thread(
+            target=capture_error, args=(follower_error, submit), daemon=True
+        )
+        canceller = threading.Thread(target=self.sup.cancel, daemon=True)
+        try:
+            owner.start()
+            self.assertTrue(entered.wait(2))
+            with self.assertRaises(SupervisorError) as wrong_kind:
+                self.sup.submit_step_zero(
+                    self.sup.workspace_handle,
+                    started["attempt_handle"],
+                    started["candidate_handle"],
+                )
+            self.assertEqual("invalid_request", wrong_kind.exception.classification)
+            follower.start()
+            deadline = time.monotonic() + 2
+            while self.sup._active_calls != 2 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(2, self.sup._active_calls)
+
+            canceller.start()
+            deadline = time.monotonic() + 2
+            while not follower_error and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(1, len(follower_error))
+            self.assertIsInstance(follower_error[0], SupervisorError)
+            self.assertEqual(
+                "supervisor_cancelled",
+                follower_error[0].classification,  # type: ignore[union-attr]
+            )
+            release.set()
+            owner.join(timeout=3)
+            canceller.join(timeout=3)
+            self.assertFalse(owner.is_alive())
+            self.assertFalse(canceller.is_alive())
+            self.assertEqual(1, len(owner_result))
+            self.assertEqual("published", owner_result[0]["state"])
+            self.assertEqual(1, publication_calls[0])
+        finally:
+            release.set()
+            owner.join(timeout=3)
+            follower.join(timeout=3)
+            canceller.join(timeout=6)
+
+    def test_publication_keeps_attempt_blocked_until_result_is_replayable(self) -> None:
+        """Retirement cannot race a new Attempt against result publication."""
+
+        started, _request = self._start_repair_request()
+        retired = threading.Event()
+        release = threading.Event()
+        original_retire = self.sup._retire_attempt
+
+        def delayed_retire(attempt_id: int) -> None:
+            original_retire(attempt_id)
+            retired.set()
+            release.wait(5)
+
+        self.sup._retire_attempt = delayed_retire  # type: ignore[assignment]
+        result: list[Mapping[str, Any]] = []
+        worker = threading.Thread(
+            target=lambda: result.append(
+                self.sup.submit_repair(
+                    self.sup.workspace_handle,
+                    started["attempt_handle"],
+                    started["candidate_handle"],
+                )
+            ),
+            daemon=True,
+        )
+        try:
+            worker.start()
+            self.assertTrue(retired.wait(2))
+            status = self.sup.workspace_status(self.sup.workspace_handle)
+            self.assertEqual("blocked", status["state"])
+            self.assertEqual(["workspace_status"], status["permitted_next_intents"])
+            next_plan = self.sup.candidate_root / "next-plan.json"
+            next_plan.write_text("{}", encoding="utf-8")
+            with self.assertRaises(SupervisorError) as raised:
+                self.sup.start_attempt(
+                    self.sup.workspace_handle,
+                    self.sup.register_plan(next_plan),
+                    None,
+                )
+            self.assertEqual("attempt_already_active", raised.exception.classification)
+            release.set()
+            worker.join(timeout=3)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual(1, len(result))
+            self.assertEqual("published", result[0]["state"])
+        finally:
+            release.set()
+            worker.join(timeout=3)
 
     def test_current_work_tree_is_fixed_and_agent_visible_without_attempt_id(self) -> None:
         # start_attempt binds the candidate handle to the fixed

@@ -374,6 +374,16 @@ class CandidateSubmission:
     candidate_root: Path
 
 
+@dataclass
+class _PublicationFlight:
+    """One at-most-once W1 publication and its recoverable response."""
+
+    attempt_id: int
+    done: bool = False
+    result: Mapping[str, Any] | None = None
+    error: str | None = None
+
+
 def _load_workspace_api() -> ModuleType:
     helper = (
         Path(__file__).resolve().parents[2]
@@ -772,6 +782,10 @@ class WorkspaceSupervisor:
                 self.canonical_build_root = canonical_build_root
                 self.cadgen_runtime_root = cadgen_runtime_root
             self._attempts: dict[int, _AttemptContext] = {}
+            self._publication_condition = threading.Condition()
+            self._publication_flights: dict[
+                tuple[str, str, str, str], _PublicationFlight
+            ] = {}
 
             self.workspace_handle = self.registry.issue("workspace", self.workspace)
             self.reference_handle: str | None = None
@@ -853,6 +867,8 @@ class WorkspaceSupervisor:
             return
         self.cancel()
         self._discard_private_storage()
+        with self._publication_condition:
+            self._publication_flights.clear()
         self._closed = True
 
     @property
@@ -864,7 +880,9 @@ class WorkspaceSupervisor:
     def cancel(self) -> None:
         """Cancel active Workspace commands and wait for handler calls to drain."""
 
-        self._cancel_event.set()
+        with self._publication_condition:
+            self._cancel_event.set()
+            self._publication_condition.notify_all()
         self._cancel_owned_processes()
         callback = getattr(self.workspace_api, "cancel_active_commands", None)
         if callback is not None:
@@ -1101,9 +1119,47 @@ class WorkspaceSupervisor:
         )
         if candidate != context.candidate_root:
             raise SupervisorError("stale_handle")
-        if self._attempts.get(context.attempt_id) != context:
+        with self._publication_condition:
+            current = self._attempts.get(context.attempt_id)
+        if current != context:
             raise SupervisorError("stale_handle")
         return context
+
+    @staticmethod
+    def _publication_key(
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+        kind: str,
+    ) -> tuple[str, str, str, str]:
+        """Identify one Agent request without exposing trusted state."""
+
+        return (workspace_handle, attempt_handle, candidate_handle, kind)
+
+    def _publication_in_flight_locked(self) -> bool:
+        return any(
+            not flight.done for flight in self._publication_flights.values()
+        )
+
+    def _publication_for_attempt_locked(
+        self, attempt_id: int
+    ) -> _PublicationFlight | None:
+        for flight in self._publication_flights.values():
+            if flight.attempt_id == attempt_id:
+                return flight
+        return None
+
+    def _wait_for_publication(self, flight: _PublicationFlight) -> Mapping[str, Any]:
+        """Wait for or replay the one result associated with a flight."""
+
+        with self._publication_condition:
+            while not flight.done:
+                if self._cancel_event.is_set():
+                    raise SupervisorError("supervisor_cancelled")
+                self._publication_condition.wait()
+            if flight.result is not None:
+                return flight.result
+            raise SupervisorError(flight.error or "supervisor_failure")
 
     @staticmethod
     def _status_state(status: Mapping[str, Any]) -> str:
@@ -1174,12 +1230,30 @@ class WorkspaceSupervisor:
         failures = int(status.get("tool_failures", 0))
         if completed < 0 or completed > MAX_CYCLES or total_attempts < 0 or failures < 0:
             raise SupervisorError("workspace_contract_violation")
-        active_attempt = next(iter(self._attempts.values()), None)
+        with self._publication_condition:
+            active_attempt = next(iter(self._attempts.values()), None)
+            active_publication = (
+                self._publication_for_attempt_locked(active_attempt.attempt_id)
+                if active_attempt is not None
+                else None
+            )
+            publication_in_flight = self._publication_in_flight_locked()
+            publication_failed = (
+                active_publication is not None
+                and active_publication.done
+                and active_publication.error is not None
+            )
         workspace_state = self._status_state(status)
         state = (
             workspace_state
             if workspace_state == "terminal"
-            else "blocked" if active_attempt is not None else workspace_state
+            else (
+                "blocked"
+                if active_attempt is not None
+                or publication_in_flight
+                or publication_failed
+                else workspace_state
+            )
         )
         remaining_attempts = status.get("remaining_attempts", MAX_ATTEMPTS_PER_STEP)
         remaining_tool_failures = status.get("remaining_tool_failures")
@@ -1194,6 +1268,8 @@ class WorkspaceSupervisor:
             raise SupervisorError("workspace_contract_violation")
         if workspace_state == "terminal":
             next_intents = ["workspace_status"]
+        elif publication_in_flight or publication_failed:
+            next_intents = ["workspace_status"]
         elif active_attempt is not None:
             next_intents = self._attempt_next_intents(
                 active_attempt.intended_step,
@@ -1203,7 +1279,11 @@ class WorkspaceSupervisor:
             )
         else:
             next_intents = ["workspace_status"]
-        if active_attempt is None and workspace_state != "terminal":
+        if (
+            active_attempt is None
+            and not publication_in_flight
+            and workspace_state != "terminal"
+        ):
             next_intents.append("observe_reference")
             next_intents.append("start_attempt")
             if workspace_state == "preterminal":
@@ -1237,7 +1317,10 @@ class WorkspaceSupervisor:
             if type(resolved) is not int or not 0 <= resolved < MAX_ATTEMPT_STEP:
                 raise SupervisorError("invalid_handle")
             from_step = resolved
-        if self._attempts:
+        with self._publication_condition:
+            attempt_is_active = bool(self._attempts)
+            publication_in_flight = self._publication_in_flight_locked()
+        if attempt_is_active or publication_in_flight:
             raise SupervisorError("attempt_already_active")
         staged_plan = self._staging_root / f"plan-{secrets.token_hex(12)}.json"
         try:
@@ -1300,7 +1383,8 @@ class WorkspaceSupervisor:
             candidate_handle,
         )
         self.registry.bind(attempt_handle, context)
-        self._attempts[attempt_id] = context
+        with self._publication_condition:
+            self._attempts[attempt_id] = context
         capability_bundle_handle = self._issue_attempt_capabilities(context)
         return {
             "state": "started",
@@ -1865,20 +1949,12 @@ class WorkspaceSupervisor:
         attempt_handle: str,
         candidate_handle: str,
     ) -> Mapping[str, Any]:
-        submission = self._prepare_submission(
-            workspace_handle, attempt_handle, candidate_handle, kind="step_zero"
+        return self._submit_publication_request(
+            workspace_handle,
+            attempt_handle,
+            candidate_handle,
+            kind="step_zero",
         )
-        published = self._publish_submission(submission)
-        decision_facts = published["decision_facts"]
-        self._retire_attempt(submission.attempt_id)
-        step_number = int(published["step"])
-        step_handle = self.registry.issue("step", step_number)
-        return {
-            "state": "published",
-            "step_handle": step_handle,
-            "decision_facts": decision_facts,
-            "permitted_next_intents": ["start_attempt", "select_and_finalize", "workspace_status"],
-        }
 
     def submit_repair(
         self,
@@ -1886,22 +1962,127 @@ class WorkspaceSupervisor:
         attempt_handle: str,
         candidate_handle: str,
     ) -> Mapping[str, Any]:
-        submission = self._prepare_submission(
-            workspace_handle, attempt_handle, candidate_handle, kind="repair"
+        return self._submit_publication_request(
+            workspace_handle,
+            attempt_handle,
+            candidate_handle,
+            kind="repair",
         )
-        published = self._publish_submission(submission)
-        decision_facts = published["decision_facts"]
-        self._retire_attempt(submission.attempt_id)
-        step_number = int(published["step"])
-        step_handle = self.registry.issue("step", step_number)
-        cycle_handle = self.registry.issue("cycle", int(published["cycle"]))
-        return {
-            "state": "published",
-            "step_handle": step_handle,
-            "cycle_handle": cycle_handle,
-            "decision_facts": decision_facts,
-            "permitted_next_intents": ["start_attempt", "select_and_finalize", "workspace_status"],
-        }
+
+    def _submit_publication_request(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+        *,
+        kind: str,
+    ) -> Mapping[str, Any]:
+        """Submit one W1 publication with cancellation and replay semantics."""
+
+        self._begin_active_call()
+        try:
+            return self._submit_publication_single_flight(
+                workspace_handle,
+                attempt_handle,
+                candidate_handle,
+                kind=kind,
+            )
+        finally:
+            self._end_active_call()
+
+    def _submit_publication_single_flight(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+        *,
+        kind: str,
+    ) -> Mapping[str, Any]:
+        key = self._publication_key(
+            workspace_handle, attempt_handle, candidate_handle, kind
+        )
+        with self._publication_condition:
+            flight = self._publication_flights.get(key)
+        if flight is not None:
+            return self._wait_for_publication(flight)
+
+        try:
+            submission = self._prepare_submission(
+                workspace_handle, attempt_handle, candidate_handle, kind=kind
+            )
+        except SupervisorError:
+            # A publication can retire the Attempt between the initial map
+            # lookup and handle validation.  If it did, recover the stored
+            # result instead of turning a lost response into a stale-handle
+            # retry.
+            with self._publication_condition:
+                flight = self._publication_flights.get(key)
+            if flight is not None:
+                return self._wait_for_publication(flight)
+            raise
+
+        with self._publication_condition:
+            flight = self._publication_flights.get(key)
+            if flight is None:
+                if self._cancel_event.is_set():
+                    raise SupervisorError("supervisor_cancelled")
+                if (
+                    self._publication_for_attempt_locked(submission.attempt_id)
+                    is not None
+                ):
+                    raise SupervisorError("attempt_already_active")
+                flight = _PublicationFlight(submission.attempt_id)
+                self._publication_flights[key] = flight
+                owner = True
+            else:
+                owner = False
+        if not owner:
+            return self._wait_for_publication(flight)
+
+        try:
+            published = self._publish_submission(submission)
+            decision_facts = published["decision_facts"]
+            step_number = int(published["step"])
+            result: dict[str, Any] = {
+                "state": "published",
+                "step_handle": self.registry.issue("step", step_number),
+                "decision_facts": decision_facts,
+                "permitted_next_intents": [
+                    "start_attempt",
+                    "select_and_finalize",
+                    "workspace_status",
+                ],
+            }
+            if kind == "repair":
+                result["cycle_handle"] = self.registry.issue(
+                    "cycle", int(published["cycle"])
+                )
+            # Keep the flight in progress while retiring the Attempt and
+            # clearing its fixed work tree.  A new Attempt must not reset
+            # that tree until the replayable result is ready.
+            self._retire_attempt(submission.attempt_id)
+            self._finish_publication(flight, result=result)
+            return result
+        except SupervisorError as exc:
+            self._finish_publication(flight, error=exc.classification)
+            raise
+        except Exception as exc:
+            self._finish_publication(flight, error="supervisor_failure")
+            raise SupervisorError("supervisor_failure") from exc
+
+    def _finish_publication(
+        self,
+        flight: _PublicationFlight,
+        *,
+        result: Mapping[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        with self._publication_condition:
+            flight.result = result
+            flight.error = error
+            flight.done = True
+            self._publication_condition.notify_all()
+
 
     def _prepare_submission(
         self,
@@ -1912,6 +2093,9 @@ class WorkspaceSupervisor:
         kind: str,
     ) -> CandidateSubmission:
         context = self._attempt(workspace_handle, attempt_handle, candidate_handle)
+        expected_kind = "step_zero" if context.intended_step == 0 else "repair"
+        if kind != expected_kind:
+            raise SupervisorError("invalid_request")
         return CandidateSubmission(
             attempt_id=context.attempt_id,
             intended_step=context.intended_step,
@@ -1979,8 +2163,12 @@ class WorkspaceSupervisor:
         return result
 
     def _retire_attempt(self, attempt_id: int) -> None:
+        # The publication flight remains unfinished until the work-tree
+        # cleanup below completes.  Callers therefore stay blocked without
+        # holding the lifecycle condition across filesystem I/O.
         self.registry.revoke_attempt(attempt_id)
-        self._attempts.pop(attempt_id, None)
+        with self._publication_condition:
+            self._attempts.pop(attempt_id, None)
         self._discard_current_work_tree()
 
     def _current_work_tree(self) -> Path:
@@ -2045,7 +2233,10 @@ class WorkspaceSupervisor:
         notes_handle: str,
     ) -> Mapping[str, Any]:
         self._workspace(workspace_handle)
-        if self._attempts:
+        with self._publication_condition:
+            attempt_is_active = bool(self._attempts)
+            publication_in_flight = self._publication_in_flight_locked()
+        if attempt_is_active or publication_in_flight:
             raise SupervisorError("attempt_already_active")
         selected_step = self.registry.resolve(step_handle, "step")
         selection = self.registry.resolve(selection_handle, "selection")
