@@ -9,8 +9,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
-
 # Production checkouts ship the trusted bridge and use the authority-hidden
 # Agent Surface by default. Small launcher fixtures that copy only this script
 # retain the legacy prompt; operators can force that compatibility path with
@@ -21,6 +19,13 @@ elif [[ -f "$SCRIPT_DIR/agent_surface_bridge.py" ]]; then
     AGENT_SURFACE_MODE=1
 else
     AGENT_SURFACE_MODE=0
+fi
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+    if [[ "$AGENT_SURFACE_MODE" == "1" ]]; then
+        PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
+    else
+        PYTHON_BIN=python3
+    fi
 fi
 
 # Defensive: source secrets so `nohup ./toys4k-pilot.sh ...` works without
