@@ -629,6 +629,25 @@ def _validate_step_zero_result(value: Any, path: str) -> dict[str, Any]:
 
 
 def _validate_repair_result(value: Any, path: str) -> dict[str, Any]:
+    if isinstance(value, dict) and value.get("state") == "failed":
+        value = _closed(
+            value,
+            ("state", "classification", "permitted_next_intents"),
+            path,
+        )
+        classification = _enum(
+            value["classification"],
+            ("repair_evidence_failed",),
+            f"{path}.classification",
+        )
+        return {
+            "state": _state(value["state"], "submit_repair", f"{path}.state"),
+            "classification": classification,
+            "permitted_next_intents": _next_result(
+                value["permitted_next_intents"],
+                f"{path}.permitted_next_intents",
+            ),
+        }
     return _result_fields(value, (("state", "state"), ("step_handle", "handle"), ("cycle_handle", "handle"), ("decision_facts", "decision_facts"), ("permitted_next_intents", "next")), path, "submit_repair")
 
 

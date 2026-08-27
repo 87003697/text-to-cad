@@ -208,6 +208,15 @@ class WorkspaceAPI(Protocol):
 
     def publish_cycle(self, workspace: Path, **kwargs: Any) -> Mapping[str, Any]: ...
 
+    def record_attempt(
+        self,
+        workspace: Path,
+        *,
+        attempt: int,
+        result: str,
+        classification: str,
+    ) -> Mapping[str, Any]: ...
+
     def finalize_workspace(self, workspace: Path, **kwargs: Any) -> Mapping[str, Any]: ...
 
 class ReferenceAPI(Protocol):
@@ -2041,6 +2050,19 @@ class WorkspaceSupervisor:
 
         try:
             published = self._publish_submission(submission)
+            if published.get("state") == "failed":
+                result = {
+                    "state": "failed",
+                    "classification": published["classification"],
+                    "permitted_next_intents": [
+                        "start_attempt",
+                        "select_and_finalize",
+                        "workspace_status",
+                    ],
+                }
+                self._retire_attempt(submission.attempt_id)
+                self._finish_publication(flight, result=result)
+                return result
             decision_facts = published["decision_facts"]
             step_number = int(published["step"])
             result: dict[str, Any] = {
@@ -2140,6 +2162,26 @@ class WorkspaceSupervisor:
         try:
             document = api_call()
         except Exception as exc:
+            if (
+                submission.kind == "repair"
+                and getattr(exc, "classification", None)
+                == "repair_evidence_failed"
+            ):
+                try:
+                    self.workspace_api.record_attempt(
+                        self.workspace,
+                        attempt=submission.attempt_id,
+                        result="strategy_changed",
+                        classification="repair_evidence_failed",
+                    )
+                except Exception as record_error:
+                    raise SupervisorError(
+                        "cycle_publication_failed"
+                    ) from record_error
+                return {
+                    "state": "failed",
+                    "classification": "repair_evidence_failed",
+                }
             classification = (
                 "step_publication_failed"
                 if submission.kind == "step_zero"

@@ -234,6 +234,11 @@ run returns the wrapped command's exit code.
   identities must agree.
 - record-attempt publishes failed or strategy-changed Attempts without
   creating a Measured Step.
+- If trusted Repair evidence cannot satisfy its fixed comparison contract,
+  the supervisor records the active Attempt as `strategy_changed`, returns
+  `submit_repair` with `state=failed` and the closed
+  `repair_evidence_failed` classification, and permits another Attempt from
+  an existing Measured Step. Unknown publication failures remain fatal.
 - finalize validates Agent-owned selection evidence, copies every selected
   recipe input into isolated staging, executes the explicitly supplied
   registered CAD rebuild adapter, proves the complete source to
