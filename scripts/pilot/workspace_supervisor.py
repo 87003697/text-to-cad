@@ -1112,12 +1112,19 @@ class WorkspaceSupervisor:
         return "ready"
 
     @staticmethod
-    def _attempt_next_intents(intended_step: int) -> list[str]:
-        return [
-            "run_candidate_tool",
-            "submit_step_zero" if intended_step == 0 else "submit_repair",
-            "workspace_status",
-        ]
+    def _attempt_next_intents(
+        intended_step: int, *, allow_candidate_tool: bool = True
+    ) -> list[str]:
+        next_intents = []
+        if allow_candidate_tool:
+            next_intents.append("run_candidate_tool")
+        next_intents.extend(
+            (
+                "submit_step_zero" if intended_step == 0 else "submit_repair",
+                "workspace_status",
+            )
+        )
+        return next_intents
 
     def workspace_status(self, workspace_handle: str) -> Mapping[str, Any]:
         workspace = self._workspace(workspace_handle)
@@ -1397,13 +1404,9 @@ class WorkspaceSupervisor:
             "state": "completed",
             "candidate_handle": context.candidate_handle,
             "result_handle": result_handle,
-            "permitted_next_intents": [
-                "run_candidate_tool",
-                "submit_step_zero"
-                if context.intended_step == 0
-                else "submit_repair",
-                "workspace_status",
-            ],
+            "permitted_next_intents": self._attempt_next_intents(
+                context.intended_step, allow_candidate_tool=False
+            ),
         }
 
     def _collect_declared_sidecars(self, source_root: Path) -> tuple[str, ...]:
@@ -1778,13 +1781,9 @@ class WorkspaceSupervisor:
             "state": "completed" if exit_code == 0 else "failed",
             "candidate_handle": context.candidate_handle,
             "result_handle": result_handle,
-            "permitted_next_intents": [
-                "run_candidate_tool",
-                "submit_step_zero"
-                if context.intended_step == 0
-                else "submit_repair",
-                "workspace_status",
-            ],
+            "permitted_next_intents": self._attempt_next_intents(
+                context.intended_step, allow_candidate_tool=exit_code != 0
+            ),
         }
 
     def _resolve_operation_capability(

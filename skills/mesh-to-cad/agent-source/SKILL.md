@@ -171,9 +171,10 @@ Rules:
   under `/candidate` (there are no Attempt-identified subdirectories
   to enumerate; any that appear must be ignored).
 - Do not write, name, or otherwise touch `work/candidate.glb` or any
-  export artifact — the supervisor owns them. Running
-  `run_candidate_tool` when a candidate-authored `candidate.glb`
-  already exists is rejected.
+  export artifact — the supervisor builds them from your source. Once
+  `candidate.glb` exists, submit the result instead of calling
+  `run_candidate_tool` again in that Attempt; a retry is only for a failed
+  operation that left no `candidate.glb`.
 - The recipe the trusted tool produces is work-relative. It rebuilds
   from `source/` alone; do not attempt to run exports yourself.
 - The supervisor resets `/candidate/work` between Attempts. If the

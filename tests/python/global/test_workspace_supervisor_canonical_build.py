@@ -75,6 +75,9 @@ class _Workspace:
         self.completed_cycles += 1
         return {"step": self.completed_cycles, "cycle": self.completed_cycles}
 
+    def seed_repair_source_from_parent_step(self, *_a, **_k) -> None:
+        return None
+
     def run_attempt_command(self, *_a, **_k):
         raise AssertionError("candidate execution must use the supervisor operation port")
 
@@ -130,11 +133,13 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
         finally:
             self.temp.cleanup()
 
-    def _start(self) -> tuple[str, str, str, Path]:
+    def _start(self, parent_step_handle: str | None = None) -> tuple[str, str, str, Path]:
         plan = self.sup.candidate_root / "plan.json"
         plan.write_text("{}", encoding="utf-8")
         plan_handle = self.sup.register_plan(plan)
-        result = self.sup.start_attempt(self.sup.workspace_handle, plan_handle, None)
+        result = self.sup.start_attempt(
+            self.sup.workspace_handle, plan_handle, parent_step_handle
+        )
         work = self.sup.candidate_root / "work"
         (work / "source").mkdir()
         (work / "source/model.py").write_text(
@@ -194,6 +199,10 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
             self.sup.workspace_handle, attempt, candidate, bundle
         )
         self.assertEqual("completed", result["state"])
+        self.assertEqual(
+            ["submit_step_zero", "workspace_status"],
+            result["permitted_next_intents"],
+        )
         # Fixed trusted argv: /runtime/bin/python + /builder entrypoint +
         # build subcommand + fixed source + fresh output-dir.
         argv = observed["argv"]
@@ -214,6 +223,25 @@ class CanonicalBuildExecutionTests(unittest.TestCase):
         self.assertEqual(
             (work / output_relative / "measurement.glb").read_bytes(),
             published.read_bytes(),
+        )
+        with self.assertRaises(SupervisorError) as raised:
+            self.sup.run_candidate_tool(
+                self.sup.workspace_handle, attempt, candidate, bundle
+            )
+        self.assertEqual("candidate_glb_preexisting", raised.exception.classification)
+
+    def test_successful_repair_build_only_advertises_submit_repair(self) -> None:
+        self.workspace.completed_cycles = 1
+        parent_step_handle = self.sup.registry.issue("step", 0)
+        attempt, candidate, bundle, _work = self._start(parent_step_handle)
+        self._install_runner()
+        result = self.sup.run_candidate_tool(
+            self.sup.workspace_handle, attempt, candidate, bundle
+        )
+        self.assertEqual("completed", result["state"])
+        self.assertEqual(
+            ["submit_repair", "workspace_status"],
+            result["permitted_next_intents"],
         )
 
     def test_preexisting_candidate_glb_rejected_and_partial_output_removed(self) -> None:
