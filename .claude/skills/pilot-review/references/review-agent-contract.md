@@ -16,6 +16,41 @@ inputs, code, and snapshot byte-for-byte. Complete the transaction only when
 `publish` exits zero and every experiment has both final reports. On failure,
 return the phase and error without fabricating a report.
 
+## Measured Step review method
+
+Before authoring the existing draft fields, reconstruct the complete ordered
+Measured Step chain in working notes. For every Step and parent, record the
+Agent-visible observation or explicit evidence gap, the public hypothesis or
+plan, the actual tool/source change, the parent-relative measured geometry
+result, Active Depth missing/excess/total, and the outcome or evidence gap that
+led to the next decision. Cite raw evidence; do not infer unrecorded Agent
+mental state.
+
+Keep source change, geometry result, and evaluator result separate. The
+parent-relative geometry result is `changed`, `no-op`, or an evidence gap. A
+restoration or rollback target is a separate optional note: call it a rollback
+only when evidence from an earlier Step establishes the restored target. Do
+not use it as a substitute for the parent-relative geometry result.
+
+A preview receipt proves only that the receipt exists. It does not establish
+that a preview artifact is readable, that pixels exist, or that the execution
+Agent inspected it. Attribute visual claims to the execution Agent only with
+execution evidence; reviewer visual observation must be explicitly attributed
+to the reviewer.
+
+For each Step, take Active Depth and its missing/excess/surface-error counts
+from that Step's decision or evaluation facts at
+`residual_summary.repair_frontier`. Use this frontier to explain repair choice.
+Use Depth-8 only for final acceptance and residual accounting. When the review
+can only derive a depth from `measurement.errors_by_depth`, label it a reviewer
+derivation and an evidence gap; never substitute Depth-8 for the frontier.
+
+Before a cross-pilot conclusion, verify every result-affecting condition that
+is relevant to the conclusion, including the shipped snapshot, build interface,
+and any differing inputs, runtime, evaluator, or policy conditions. If a
+condition is missing or differs, state the mismatch and limit the conclusion to
+an association; do not make a single-variable causal attribution.
+
 ## Experiment draft
 
 Write `<exp>/review-draft.json` under the destination selected by `prepare`.
@@ -152,9 +187,6 @@ source group path when using compatible in-place mode):
   ]
 }
 ```
-
-Compare experiments only when their shipped snapshot, build interface, or other relevant
-conditions are comparable. State the mismatch when they are not.
 
 ## Completion criterion
 

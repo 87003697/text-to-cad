@@ -124,6 +124,11 @@ Assess every compiler-issued `protocol_checks` entry as `observed`, `partial`,
 first failing node. Compare sibling Attempts before assigning a root cause.
 Missing evidence stays missing.
 
+Before drafting, reconstruct the Measured Step decision chain in review notes.
+Use the contract's evidence, attribution, Active Depth, and cross-pilot
+comparison rules; cite raw evidence rather than inferring private Agent
+reasoning.
+
 ### 3. Write Review Agent drafts
 
 Write:
@@ -134,10 +139,12 @@ Write:
 When preparation used `--review-root`, write drafts under the same review root.
 
 The draft supplies protocol assessments, semantic verdicts, findings,
-unresolved questions, evidence gaps, and the ordered fix playbook. Runner and
-Workspace verdicts come from the compiler and cannot be overridden. Every
-finding has one primary root cause, a concrete fix target, and at least one
-existing evidence file.
+unresolved questions, evidence gaps, and the ordered fix playbook. Use the
+reconstructed Step chain to make each finding explain a decision transition,
+rather than summarizing final verdicts or graph counts. Runner and Workspace
+verdicts come from the compiler and cannot be overridden. Every finding has one
+primary root cause, a concrete fix target, and at least one existing evidence
+file.
 
 Drafting is complete when every experiment listed by the compiler has a draft,
 its assessments exactly cover the issued protocol check IDs, all plausible
