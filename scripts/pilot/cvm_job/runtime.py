@@ -682,10 +682,11 @@ def supervise_provider_free_installed_plugin(
         try:
             provider_free.assert_current_authority(record, host_home or Path.home())
             transition(root, handle, "running", supervisor_pid=os.getpid())
+            module_name = provider_free.__name__.rsplit(".", 1)[-1]
             runner_command = list(command) if command is not None else [
                 sys.executable,
                 "-m",
-                f"scripts.pilot.{provider_free.__name__.rsplit(".", 1)[-1]}",
+                f"scripts.pilot.{module_name}",
                 "--job",
                 handle,
                 "--state-root",
