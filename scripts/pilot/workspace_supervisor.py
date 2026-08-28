@@ -2420,7 +2420,7 @@ class WorkspaceSupervisor:
         if type(observation) is not dict or set(observation) != {"method", "args"}:
             raise SupervisorError("invalid_reference_request")
         method = observation.get("method")
-        if method != "summary":
+        if method not in {"summary", "section_profile"}:
             raise SupervisorError("unsupported_reference_operation")
         args = observation.get("args")
         if type(args) is not dict or args:

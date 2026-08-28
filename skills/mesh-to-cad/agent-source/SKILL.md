@@ -113,7 +113,8 @@ The `args` object must have exactly the fields for its intent:
 - `select_and_finalize`: `workspace_handle`, `step_handle`,
   `selection_handle`, `notes_handle`.
 - `observe_reference`: `reference_handle` and an `observation` object that is
-  exactly `{"method":"summary","args":{}}`.
+  either `{"method":"summary","args":{}}` or
+  `{"method":"section_profile","args":{}}`.
 
 Send only one intent after reading the preceding client response. On an error,
 preserve its classification and do not retry blindly.
@@ -148,7 +149,7 @@ For the six workflow intents, `result` has the following closed shapes:
   `permitted_next_intents`.
 
 `observe_reference` is not a workflow-state response. Its `result` is exactly
-`{"observation":{"method":"summary","value":{...}}}`. Its summary value
+`{"observation":{"method":"<method>","value":{...}}}`. A `summary` value
 contains canonical-frame, bounds, count, quality, and aggregate geometry facts.
 
 A supervisor/handler error response is:
@@ -334,6 +335,14 @@ You never see raw reference bytes. Instead you request one bounded
 Reference Observation at a time. The available method is:
 
 - `summary` — one closed geometric summary of the Canonical Reference.
+- `section_profile` — a fixed 8-slab profile on each canonical X/Y/Z axis.
+  Each profile names its two occupied axes. Each slab has its canonical
+  coordinate interval, occupied extents in that named axis order,
+  centroid-partitioned surface-area fraction, and `mean_abs_normal` keyed by
+  X/Y/Z: the area-weighted mean absolute unit-normal components, not a
+  partitioning histogram. Its value schema is
+  `meshscope.reference-section-profile/1`; its response is bounded to 64 KiB.
+  It is a bounded whole-object cue, not components.
   Arguments must be empty.
 
 ```json
@@ -342,18 +351,19 @@ Reference Observation at a time. The available method is:
   "intent": "observe_reference",
   "args": {
     "reference_handle": "<opaque>",
-    "observation": { "method": "summary", "args": {} }
+    "observation": { "method": "section_profile", "args": {} }
   }
 }
 ```
 
-Every other observation method is `unsupported_operation`. Do not ask
-for raw mesh access, file paths, or free-form measurements; those are
-not available and asking for them is a closed error.
+Prohibited raw-access methods such as `components` are
+`unsupported_operation`; other unrecognized method names are `unknown_method`.
+Do not ask for raw mesh access, file paths, or free-form measurements; those
+are not available and asking for them is a closed error.
 
-For this fixed-client transport, use the returned summary structured
-observation for canonical-frame, bounds, count, quality, and aggregate geometry
-facts. It returns no image attachment. Use it, decision facts, repair-frontier
+For this fixed-client transport, use `summary` for canonical-frame, bounds,
+count, quality, and aggregate geometry facts; use `section_profile` for fixed
+whole-object shape cues. Neither returns an image attachment. Use them, decision facts, repair-frontier
 targets, and objective measurements for modeling and repair decisions; never
 claim to have inspected a formal preview image.
 

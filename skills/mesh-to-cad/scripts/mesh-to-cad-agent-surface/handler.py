@@ -214,6 +214,17 @@ def _vector(value: Any, path: str) -> list[int | float]:
     return [_number(item, f"{path}[{index}]") for index, item in enumerate(value)]
 
 
+def _pair(value: Any, path: str) -> list[int | float]:
+    if type(value) is not list or len(value) != 2:
+        _fail("supervisor_contract_violation", path)
+    return [_number(item, f"{path}[{index}]") for index, item in enumerate(value)]
+
+
+def _axis_values(value: Any, path: str) -> dict[str, int | float]:
+    value = _closed(value, ("x", "y", "z"), path)
+    return {axis: _number(value[axis], f"{path}.{axis}") for axis in ("x", "y", "z")}
+
+
 def _handle_result(value: Any, path: str) -> str:
     if type(value) is not str or _HANDLE.fullmatch(value) is None:
         _fail("supervisor_contract_violation", path)
@@ -571,6 +582,62 @@ def _summary_projection(value: Any, path: str) -> dict[str, Any]:
     }
 
 
+def _section_profile_projection(value: Any, path: str) -> dict[str, Any]:
+    value = _closed(value, ("schema", "coordinate_contract", "bin_count", "profiles"), path)
+    if value["schema"] != "meshscope.reference-section-profile/1":
+        _fail("supervisor_contract_violation", f"{path}.schema")
+    if value["coordinate_contract"] != "trellis2_canonical/1":
+        _fail("supervisor_contract_violation", f"{path}.coordinate_contract")
+    if value["bin_count"] != 8 or type(value["bin_count"]) is not int:
+        _fail("supervisor_contract_violation", f"{path}.bin_count")
+    if type(value["profiles"]) is not list or len(value["profiles"]) != 3:
+        _fail("supervisor_contract_violation", f"{path}.profiles")
+    profiles = []
+    for axis_index, axis in enumerate(("x", "y", "z")):
+        profile_path = f"{path}.profiles[{axis_index}]"
+        profile = _closed(value["profiles"][axis_index], ("axis", "occupied_axes", "slabs"), profile_path)
+        occupied_axes = [item for item in ("x", "y", "z") if item != axis]
+        if profile["axis"] != axis or profile["occupied_axes"] != occupied_axes or type(profile["slabs"]) is not list or len(profile["slabs"]) != 8:
+            _fail("supervisor_contract_violation", profile_path)
+        slabs = []
+        for index, slab_value in enumerate(profile["slabs"]):
+            slab_path = f"{profile_path}.slabs[{index}]"
+            slab = _closed(
+                slab_value,
+                ("canonical_interval", "occupied_extents", "surface_area_fraction", "mean_abs_normal"),
+                slab_path,
+            )
+            interval = _pair(slab["canonical_interval"], f"{slab_path}.canonical_interval")
+            expected = [-0.5 + index / 8, -0.5 + (index + 1) / 8]
+            if interval != expected:
+                _fail("supervisor_contract_violation", f"{slab_path}.canonical_interval")
+            occupied = slab["occupied_extents"]
+            if occupied is not None:
+                occupied = _closed(occupied, ("min", "max"), f"{slab_path}.occupied_extents")
+                minimum = _pair(occupied["min"], f"{slab_path}.occupied_extents.min")
+                maximum = _pair(occupied["max"], f"{slab_path}.occupied_extents.max")
+                if any(low > high for low, high in zip(minimum, maximum)):
+                    _fail("supervisor_contract_violation", f"{slab_path}.occupied_extents")
+                occupied = {"min": minimum, "max": maximum}
+            area_fraction = _number(slab["surface_area_fraction"], f"{slab_path}.surface_area_fraction")
+            mean_abs_normal = _axis_values(slab["mean_abs_normal"], f"{slab_path}.mean_abs_normal")
+            if area_fraction < 0 or area_fraction > 1 or any(item < 0 or item > 1 for item in mean_abs_normal.values()):
+                _fail("supervisor_contract_violation", slab_path)
+            slabs.append({
+                "canonical_interval": interval,
+                "occupied_extents": occupied,
+                "surface_area_fraction": area_fraction,
+                "mean_abs_normal": mean_abs_normal,
+            })
+        profiles.append({"axis": axis, "occupied_axes": occupied_axes, "slabs": slabs})
+    return {
+        "schema": value["schema"],
+        "coordinate_contract": value["coordinate_contract"],
+        "bin_count": value["bin_count"],
+        "profiles": profiles,
+    }
+
+
 def _bool(value: Any, path: str) -> bool:
     if type(value) is not bool:
         _fail("supervisor_contract_violation", path)
@@ -588,10 +655,14 @@ def _observation_result(value: Any, path: str) -> dict[str, Any]:
     if value["schema"] != "meshscope.reference-response/1":
         _fail("supervisor_contract_violation", f"{path}.schema")
     _handle_result(value["reference_id"], f"{path}.reference_id")
-    method = _enum(value["method"], ("summary",), f"{path}.method")
+    method = _enum(value["method"], ("summary", "section_profile"), f"{path}.method")
     return {
         "method": method,
-        "value": _summary_projection(value["observation"], f"{path}.observation"),
+        "value": (
+            _summary_projection(value["observation"], f"{path}.observation")
+            if method == "summary"
+            else _section_profile_projection(value["observation"], f"{path}.observation")
+        ),
     }
 
 
@@ -703,7 +774,7 @@ def _validate_observation_request(value: Any, path: str) -> dict[str, Any]:
         _fail("invalid_request", f"{path}.method")
     if method in _UNSUPPORTED_OBSERVATIONS:
         _fail("unsupported_operation", f"{path}.method")
-    if method != "summary":
+    if method not in {"summary", "section_profile"}:
         _fail("unknown_method", f"{path}.method")
     args = observation["args"]
     if type(args) is not dict or args:
@@ -749,7 +820,7 @@ def _field_schema(kind: str) -> dict[str, Any]:
         return {
             "type": "object",
             "additionalProperties": False,
-            "properties": {"method": {"const": "summary"}, "args": empty},
+            "properties": {"method": {"enum": ["summary", "section_profile"]}, "args": empty},
             "required": ["method", "args"],
         }
     raise AssertionError(kind)

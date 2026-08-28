@@ -26,6 +26,7 @@ from meshscope.voxblame.contracts import BOUNDARY_EPSILON, COORDINATE_CONTRACT
 REQUEST_SCHEMA = "meshscope.reference-request/1"
 RESPONSE_SCHEMA = "meshscope.reference-response/1"
 SUMMARY_SCHEMA = "meshscope.reference-summary/1"
+SECTION_PROFILE_SCHEMA = "meshscope.reference-section-profile/1"
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_REFERENCE_BYTES = 32 * 1024 * 1024
 # The header preflight derives record-count bounds from these shortest valid
@@ -41,6 +42,7 @@ PCA_GAP_ABSOLUTE_EPSILON = 1e-8
 PCA_GAP_RELATIVE_EPSILON = 1e-5
 CANONICAL_MIN = -0.5
 CANONICAL_MAX = 0.5
+SECTION_PROFILE_BINS = 8
 
 _REFERENCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _PROHIBITED_METHODS = frozenset(
@@ -102,6 +104,13 @@ def _number(value: Any) -> float:
 def _vector(values: Any) -> list[float]:
     array = np.asarray(values, dtype=np.float64).reshape(-1)
     if len(array) != 3:
+        _fail("invalid_reference_material")
+    return [_number(value) for value in array]
+
+
+def _pair(values: Any) -> list[float]:
+    array = np.asarray(values, dtype=np.float64).reshape(-1)
+    if len(array) != 2:
         _fail("invalid_reference_material")
     return [_number(value) for value in array]
 
@@ -660,7 +669,13 @@ def _canonical_response(value: dict[str, Any]) -> dict[str, Any]:
 class ReferenceCapability:
     """Expose fixed, bounded observations for one supervisor-owned PLY."""
 
-    __slots__ = ("_reference_id", "_mesh", "_vertices", "_summary")
+    __slots__ = (
+        "_reference_id",
+        "_mesh",
+        "_vertices",
+        "_summary",
+        "_section_profile",
+    )
 
     def __init__(self, reference_id: str, reference_path: str | Path):
         if (
@@ -676,6 +691,7 @@ class ReferenceCapability:
         self._mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
         self._vertices = vertices
         self._summary: dict[str, Any] | None = None
+        self._section_profile: dict[str, Any] | None = None
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
         """Handle one closed JSON-shaped request and return one observation."""
@@ -696,7 +712,7 @@ class ReferenceCapability:
             _fail("invalid_request")
         if method in _PROHIBITED_METHODS:
             _fail("unsupported_operation")
-        if method != "summary":
+        if method not in {"summary", "section_profile"}:
             _fail("unknown_method")
         args = request["args"]
         if not _is_dict(args):
@@ -705,7 +721,11 @@ class ReferenceCapability:
         try:
             if args:
                 _fail("invalid_request")
-            observation = self._summary_observation()
+            observation = (
+                self._summary_observation()
+                if method == "summary"
+                else self._section_profile_observation()
+            )
         except ReferenceCapabilityError:
             raise
         except (
@@ -767,5 +787,95 @@ class ReferenceCapability:
         # The cached value is an implementation detail; never let a caller's
         # mutation alter a later observation.
         return deepcopy(self._summary)
+
+    def _section_profile_observation(self) -> dict[str, Any]:
+        """Return a fixed, coordinate-only surface profile of canonical soup.
+
+        Every triangle contributes to exactly one bin on each canonical axis,
+        selected by its area centroid.  The profile therefore has a fixed
+        24-bin shape and each axis's ``surface_area_fraction`` sums to one.
+        It never depends on vertex sharing or component connectivity.
+        """
+
+        if self._section_profile is None:
+            triangles = self._vertices[self._mesh.faces]
+            edge_left = triangles[:, 1] - triangles[:, 0]
+            edge_right = triangles[:, 2] - triangles[:, 0]
+            cross = np.cross(edge_left, edge_right)
+            doubled_area = np.linalg.norm(cross, axis=1)
+            areas = doubled_area / 2.0
+            if (
+                not np.all(np.isfinite(areas))
+                or np.any(areas <= 0.0)
+                or not np.isfinite(float(np.sum(areas)))
+            ):
+                _fail("invalid_reference_material")
+            total_area = float(np.sum(areas))
+            normals = cross / doubled_area[:, None]
+            centroids = np.mean(triangles, axis=1, dtype=np.float64)
+            axis_names = ("x", "y", "z")
+            profiles: list[dict[str, Any]] = []
+            for axis, axis_name in enumerate(axis_names):
+                other_axes = tuple(index for index in range(3) if index != axis)
+                positions = (centroids[:, axis] - CANONICAL_MIN) / (
+                    CANONICAL_MAX - CANONICAL_MIN
+                )
+                bin_indices = np.minimum(
+                    (positions * SECTION_PROFILE_BINS).astype(np.int64),
+                    SECTION_PROFILE_BINS - 1,
+                )
+                bin_indices = np.maximum(bin_indices, 0)
+                slabs: list[dict[str, Any]] = []
+                for bin_index in range(SECTION_PROFILE_BINS):
+                    selected = bin_indices == bin_index
+                    interval = [
+                        _number(CANONICAL_MIN + bin_index / SECTION_PROFILE_BINS),
+                        _number(CANONICAL_MIN + (bin_index + 1) / SECTION_PROFILE_BINS),
+                    ]
+                    if not np.any(selected):
+                        slabs.append(
+                            {
+                                "canonical_interval": interval,
+                                "occupied_extents": None,
+                                "surface_area_fraction": 0.0,
+                                "mean_abs_normal": {"x": 0.0, "y": 0.0, "z": 0.0},
+                            }
+                        )
+                        continue
+                    selected_triangles = triangles[selected]
+                    selected_areas = areas[selected]
+                    selected_area = float(np.sum(selected_areas))
+                    extents = selected_triangles[..., list(other_axes)].reshape(-1, 2)
+                    orientation = (
+                        selected_areas[:, None] * np.abs(normals[selected])
+                    ).sum(axis=0) / selected_area
+                    slabs.append(
+                        {
+                            "canonical_interval": interval,
+                            "occupied_extents": {
+                                "min": _pair(extents.min(axis=0)),
+                                "max": _pair(extents.max(axis=0)),
+                            },
+                            "surface_area_fraction": _number(selected_area / total_area),
+                            "mean_abs_normal": {
+                                axis_name: _number(value)
+                                for axis_name, value in zip(axis_names, orientation)
+                            },
+                        }
+                    )
+                profiles.append(
+                    {
+                        "axis": axis_name,
+                        "occupied_axes": [axis_names[index] for index in other_axes],
+                        "slabs": slabs,
+                    }
+                )
+            self._section_profile = {
+                "schema": SECTION_PROFILE_SCHEMA,
+                "coordinate_contract": COORDINATE_CONTRACT,
+                "bin_count": SECTION_PROFILE_BINS,
+                "profiles": profiles,
+            }
+        return deepcopy(self._section_profile)
 
 __all__ = ["ReferenceCapability", "ReferenceCapabilityError"]

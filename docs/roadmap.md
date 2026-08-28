@@ -46,8 +46,9 @@ not another Workspace or Agent-interface implementation program.
   isolated candidate work tree.
 - Trusted providers own canonical build, preview, measurement, Region Diff,
   source-change evidence, and publication.
-- The bounded Reference Capability exposes one approved summary observation
-  without exposing raw reference meshes, `reference.vbsvo`, Workspace
+- The bounded Reference Capability exposes fixed `summary` and `section_profile`
+  observations; each profile names canonical slice and occupied axes, and reports
+  canonical-coordinate slabs without exposing raw reference meshes, `reference.vbsvo`, Workspace
   Authority, or arbitrary geometry queries.
 - Adversarial and vertical-slice coverage exercises the real seven-intent and
   nine-call paths.
