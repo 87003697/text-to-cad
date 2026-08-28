@@ -103,32 +103,7 @@ def _normalize_traceback_line(line: str) -> str | None:
     return None
 
 
-def _runner_diagnostics(handle: str) -> tuple[str, int, list[str]]:
-    parsed = parse_handle(handle)
-    outputs = REPO_ROOT / "outputs"
-    directory_flags = (
-        os.O_RDONLY
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
-    file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    directories: list[int] = []
-    descriptor: int | None = None
-    try:
-        directories.append(os.open(outputs, directory_flags))
-        for component in (parsed["group"], parsed["exp"], "run"):
-            directories.append(
-                os.open(component, directory_flags, dir_fd=directories[-1])
-            )
-        descriptor = os.open("stderr.log", file_flags, dir_fd=directories[-1])
-    except FileNotFoundError:
-        return "missing", 0, []
-    except OSError:
-        return "unavailable", 0, []
-    finally:
-        for directory in reversed(directories):
-            os.close(directory)
-    assert descriptor is not None
+def _diagnostics_from_descriptor(descriptor: int) -> tuple[str, int, list[str]]:
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
@@ -159,6 +134,47 @@ def _runner_diagnostics(handle: str) -> tuple[str, int, list[str]]:
     return status, metadata.st_size, diagnostics
 
 
+def _runner_diagnostics(handle: str) -> tuple[str, int, list[str]]:
+    parsed = parse_handle(handle)
+    outputs = REPO_ROOT / "outputs"
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    directories: list[int] = []
+    descriptor: int | None = None
+    try:
+        directories.append(os.open(outputs, directory_flags))
+        for component in (parsed["group"], parsed["exp"], "run"):
+            directories.append(
+                os.open(component, directory_flags, dir_fd=directories[-1])
+            )
+        descriptor = os.open("stderr.log", file_flags, dir_fd=directories[-1])
+    except FileNotFoundError:
+        return "missing", 0, []
+    except OSError:
+        return "unavailable", 0, []
+    finally:
+        for directory in reversed(directories):
+            os.close(directory)
+    assert descriptor is not None
+    return _diagnostics_from_descriptor(descriptor)
+
+
+def _supervisor_diagnostics(root: Path, handle: str) -> tuple[str, int, list[str]]:
+    try:
+        descriptor = os.open(
+            log_path(root, handle), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        )
+    except FileNotFoundError:
+        return "missing", 0, []
+    except OSError:
+        return "unavailable", 0, []
+    return _diagnostics_from_descriptor(descriptor)
+
+
 def diagnose_job(
     handle: str,
     *,
@@ -171,7 +187,12 @@ def diagnose_job(
         raise ProtocolError("diagnose requires a failed pilot")
     result = public_state(state, DEFAULT_STALE_AFTER)
     status, byte_count, diagnostics = _runner_diagnostics(handle)
+    source = "runner_stderr"
+    if status == "missing":
+        status, byte_count, diagnostics = _supervisor_diagnostics(_root(state_root), handle)
+        source = "supervisor_log"
     result["diagnostic_status"] = status
+    result["diagnostic_source"] = source
     result["diagnostic_bytes"] = byte_count
     result["diagnostics"] = diagnostics
     return result
