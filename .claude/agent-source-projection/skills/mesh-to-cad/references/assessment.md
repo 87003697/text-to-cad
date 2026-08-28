@@ -47,17 +47,23 @@ or non-string values fail closed.
 1. Read the intent response for the previous submission. The
    `decision_facts` object under it contains every measured fact you
    are allowed to cite.
-2. From `residual_summary.objective_facts` and `repair_targets`,
-   pick one residual you can plausibly move with a source edit.
+2. Read `residual_summary.repair_frontier.active_depth` first. When it is
+   non-null, use the active-depth interior targets and their
+   `bounds_canonical` values to pick one residual you can plausibly move with
+   a source edit. Also inspect any exterior targets on the same page: they
+   are independent actionable residuals, not part of the interior frontier.
+   Use depth-8 scalars only for exact acceptance and residual accounting, not
+   to select the repair layer or target.
 3. Make that edit under `/candidate/work/source/`. Do not touch any
    other file the supervisor named as its own.
 4. After `run_candidate_tool` produces the preview, write
    `/candidate/work/assessment.json` with:
    - `from_step` copied from the selected parent's `decision_facts.step_ordinal`;
      `to_step` bound to the current Repair Attempt's intended child step;
-   - a `summary` naming which of the three objective facts you expect
-     to flip, which repair-target `kind` you targeted, and what the
-     next decision-fact reading should show if the hypothesis holds;
+   - a `summary` naming the active repair depth, the repair-target `kind` and
+     bounds you targeted, and what the next frontier/target reading should
+     show if the hypothesis holds; depth-8 changes may be recorded only as
+     acceptance accounting;
    - a `preview_observation` grounded only in what the preview
      identity's rendered variant let you see.
 5. Submit through `submit_repair`. The supervisor uses your assessment as
@@ -86,8 +92,13 @@ or non-string values fail closed.
 Suppose the parent Measured Step response reported:
 
 - `acceptance_state`: `unaccepted`
-- `residual_summary.objective_facts.global_depth_8_zero`: `false`
-- `repair_targets.items[0].kind`: `excess`
+- `residual_summary.repair_frontier.active_depth`: `3`
+- `repair_targets.items[0].kind`: `interior`
+- `repair_targets.items[0].excess_surface_count`: `20`
+- `repair_targets.items[0].bounds_canonical`: `min=[0.12, -0.08, 0.04]`,
+  `max=[0.20, 0.08, 0.12]`
+- `residual_summary.depth_8_surface_error_count`: `42` (exact accounting,
+  not the edit selector)
 
 You edit `work/source/model.py` to trim a boss you believe is
 producing the top excess region, rebuild and preview, then write:
@@ -98,7 +109,7 @@ producing the top excess region, rebuild and preview, then write:
   "from_step": 0,
   "to_step": 1,
   "preview_observation": "Preview shows the trimmed boss no longer overhangs the plate.",
-  "summary": "Trimmed boss diameter by 2 mm to eliminate the rank-0 excess region; expect global_depth_8_zero to become true and depth_8_error_count to drop meaningfully. Refuted if the same excess kind reappears at rank 0."
+  "summary": "Trimmed the boss diameter by 2 mm inside the depth-3 rank-0 excess target bounds. Expect that target's excess count or the depth-3 frontier error count to fall. Depth-8 counts remain acceptance accounting. Refuted if the same excess reappears in the same target bounds."
 }
 ```
 

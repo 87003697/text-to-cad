@@ -327,7 +327,14 @@ carries one closed **decision facts** object under the
     "depth_8_missing_surface_count": 42,
     "depth_8_excess_surface_count": 0,
     "depth_8_surface_error_count": 42,
-    "depth_8_surface_error_rate": 0.017
+    "depth_8_surface_error_rate": 0.017,
+    "repair_frontier": {
+      "active_depth": 3,
+      "missing_surface_count": 20,
+      "excess_surface_count": 0,
+      "surface_error_count": 20,
+      "surface_error_rate": 0.125
+    }
   },
   "repair_targets": {
     "returned": 3,
@@ -339,6 +346,10 @@ carries one closed **decision facts** object under the
         "mask_sha256": "<sha256>",
         "rank": 0,
         "kind": "interior",
+        "bounds_canonical": {
+          "min": [-0.5, -0.2, -0.1],
+          "max": [0.4, 0.3, 0.2]
+        },
         "missing_surface_count": 20,
         "excess_surface_count": 0,
         "surface_error_count": 20
@@ -367,14 +378,26 @@ Fields and bounds:
 - `residual_summary.objective_facts` — the exact three booleans that
   gate acceptance.
 - `residual_summary.depth_8_*_surface_count` /
-  `depth_8_surface_error_rate` — bounded scalar summaries of the
-  deepest residual bucket
-  (rate is in `[0, 1]`; NaN or infinite values fail closed).
+  `depth_8_surface_error_rate` — exact acceptance and residual-accounting
+  scalars for depth 8. They do not select the repair layer (rate is in
+  `[0, 1]`; NaN or infinite values fail closed).
+- `residual_summary.repair_frontier` — the current action layer. Its
+  `active_depth` is the coarsest depth with interior error, or `null` when
+  the interior is clear. When it is `null`, all remaining frontier scalars
+  are zero; exterior errors remain only in their `repair_targets` entries.
+  Otherwise the remaining bounded scalars describe that interior layer.
+  Use it with `repair_targets`, whose interior targets are grouped at this
+  active depth while retaining exact depth-8 masks.
 - `repair_targets` — `null` when acceptance is satisfied, otherwise a
-  page of up to eight items ranked by residual weight. Each item
+  page of up to eight items that includes active-depth interior targets
+  and may also include independent actionable exterior targets. Exterior
+  targets are not part of the interior Repair Frontier. Each item
   carries the exact `target_key` and `mask_sha256` pair required by a
-  `voxblame.repair-batch/1`, plus its rank, semantic kind, and bounded
-  residual counts. Copy the pair unchanged into `selected_targets`;
+  `voxblame.repair-batch/1`, plus its rank, semantic kind,
+  `bounds_canonical`, and bounded residual counts. Bounds are closed
+  three-axis canonical `min`/`max` coordinates with finite values and
+  `min <= max` on each axis; they apply to interior and exterior targets.
+  Copy the pair unchanged into `selected_targets`;
   neither value is a path or raw mask content.
 - `preview.identity_sha256` — the formal identity digest of the
   Measured Step's preview render; you may cite it in your assessment
@@ -388,8 +411,9 @@ Rules for using decision facts:
 - Treat them as read-only. They are the only measured facts you may
   cite; you never override them, and you never derive acceptance from
   authored content.
-- Base your next repair hypothesis on them: `residual_summary` tells
-  you which objective fact fails and how large the depth-8 bucket is;
+- Base your next repair hypothesis on them: `repair_frontier` and
+  `repair_targets` identify the active action layer and target facts;
+  depth-8 scalars remain the exact acceptance accounting;
   `repair_targets` names the top-ranked residual regions by kind and
   supplies only the stable selection identities needed by the repair
   plan.

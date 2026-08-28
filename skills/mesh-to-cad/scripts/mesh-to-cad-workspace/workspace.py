@@ -1193,6 +1193,30 @@ def _fact_rate(value: Any, detail: str) -> float:
     return number
 
 
+def _fact_number(value: Any, detail: str) -> int | float:
+    if type(value) not in {int, float} or isinstance(value, bool):
+        _decision_facts_fail(detail)
+    if value != value or value in {float("inf"), float("-inf")}:
+        _decision_facts_fail(detail)
+    return value
+
+
+def _fact_bounds_canonical(value: Any, detail: str) -> dict[str, list[int | float]]:
+    if not isinstance(value, Mapping) or set(value) != {"min", "max"}:
+        _decision_facts_fail(detail)
+    bounds: dict[str, list[int | float]] = {}
+    for name in ("min", "max"):
+        vector = value[name]
+        if not isinstance(vector, list) or len(vector) != 3:
+            _decision_facts_fail(detail)
+        bounds[name] = [
+            _fact_number(component, detail) for component in vector
+        ]
+    if any(low > high for low, high in zip(bounds["min"], bounds["max"])):
+        _decision_facts_fail(detail)
+    return bounds
+
+
 def _fact_sha256(value: Any, detail: str) -> str:
     if type(value) is not str or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
         _decision_facts_fail(detail)
@@ -1243,6 +1267,10 @@ def _project_repair_targets(value: Any, *, step: int) -> Any:
                 ),
                 "rank": rank,
                 "kind": kind,
+                "bounds_canonical": _fact_bounds_canonical(
+                    item.get("bounds_canonical"),
+                    "decision-facts repair target bounds are malformed",
+                ),
                 "missing_surface_count": _fact_int(
                     profile.get("missing_surface_count"),
                     "decision-facts missing surface count is malformed",
@@ -1272,9 +1300,49 @@ def _project_residual_summary(measurement: Mapping[str, Any]) -> dict[str, Any]:
     errors = measurement.get("errors_by_depth")
     if not isinstance(errors, list) or len(errors) != _MAX_DEPTH:
         _decision_facts_fail("decision-facts errors_by_depth is malformed")
+    active_depth: int | None = None
+    active_error: Mapping[str, Any] | None = None
+    for depth, error in enumerate(errors, start=1):
+        if not isinstance(error, Mapping) or error.get("depth") != depth:
+            _decision_facts_fail("decision-facts depth evidence is malformed")
+        surface_error_count = _fact_int(
+            error.get("surface_error_count"),
+            "decision-facts surface error count is malformed",
+        )
+        if active_depth is None and surface_error_count:
+            active_depth = depth
+            active_error = error
     depth_eight = errors[_MAX_DEPTH - 1]
     if not isinstance(depth_eight, Mapping):
         _decision_facts_fail("decision-facts depth-8 entry is malformed")
+    if active_error is None:
+        repair_frontier = {
+            "active_depth": None,
+            "missing_surface_count": 0,
+            "excess_surface_count": 0,
+            "surface_error_count": 0,
+            "surface_error_rate": 0.0,
+        }
+    else:
+        repair_frontier = {
+            "active_depth": active_depth,
+            "missing_surface_count": _fact_int(
+                active_error.get("missing_surface_count"),
+                "decision-facts repair frontier missing count is malformed",
+            ),
+            "excess_surface_count": _fact_int(
+                active_error.get("excess_surface_count"),
+                "decision-facts repair frontier excess count is malformed",
+            ),
+            "surface_error_count": _fact_int(
+                active_error.get("surface_error_count"),
+                "decision-facts repair frontier error count is malformed",
+            ),
+            "surface_error_rate": _fact_rate(
+                active_error.get("surface_error_rate"),
+                "decision-facts repair frontier error rate is malformed",
+            ),
+        }
     return {
         "objective_facts": {
             key: _fact_bool(facts[key], f"decision-facts objective_facts.{key} is malformed")
@@ -1296,6 +1364,7 @@ def _project_residual_summary(measurement: Mapping[str, Any]) -> dict[str, Any]:
             depth_eight.get("surface_error_rate"),
             "decision-facts depth-8 error rate is malformed",
         ),
+        "repair_frontier": repair_frontier,
     }
 
 

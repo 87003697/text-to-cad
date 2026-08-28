@@ -274,12 +274,31 @@ def _residual_summary_result(value: Any, path: str) -> dict[str, Any]:
             "depth_8_excess_surface_count",
             "depth_8_surface_error_count",
             "depth_8_surface_error_rate",
+            "repair_frontier",
         ),
         path,
     )
     objective = _closed(
         value["objective_facts"], _OBJECTIVE_FACT_KEYS, f"{path}.objective_facts"
     )
+    frontier = _closed(
+        value["repair_frontier"],
+        (
+            "active_depth",
+            "missing_surface_count",
+            "excess_surface_count",
+            "surface_error_count",
+            "surface_error_rate",
+        ),
+        f"{path}.repair_frontier",
+    )
+    active_depth = frontier["active_depth"]
+    if active_depth is not None:
+        active_depth = _integer(
+            active_depth, f"{path}.repair_frontier.active_depth", maximum=8
+        )
+        if active_depth == 0:
+            _fail("supervisor_contract_violation", f"{path}.repair_frontier.active_depth")
     return {
         "objective_facts": {
             key: _bool(objective[key], f"{path}.objective_facts.{key}")
@@ -297,6 +316,25 @@ def _residual_summary_result(value: Any, path: str) -> dict[str, Any]:
         "depth_8_surface_error_rate": _rate(
             value["depth_8_surface_error_rate"], f"{path}.depth_8_surface_error_rate"
         ),
+        "repair_frontier": {
+            "active_depth": active_depth,
+            "missing_surface_count": _integer(
+                frontier["missing_surface_count"],
+                f"{path}.repair_frontier.missing_surface_count",
+            ),
+            "excess_surface_count": _integer(
+                frontier["excess_surface_count"],
+                f"{path}.repair_frontier.excess_surface_count",
+            ),
+            "surface_error_count": _integer(
+                frontier["surface_error_count"],
+                f"{path}.repair_frontier.surface_error_count",
+            ),
+            "surface_error_rate": _rate(
+                frontier["surface_error_rate"],
+                f"{path}.repair_frontier.surface_error_rate",
+            ),
+        },
     }
 
 
@@ -316,6 +354,7 @@ def _repair_target_items(
                 "mask_sha256",
                 "rank",
                 "kind",
+                "bounds_canonical",
                 "missing_surface_count",
                 "excess_surface_count",
                 "surface_error_count",
@@ -344,6 +383,9 @@ def _repair_target_items(
                 "kind": _enum(
                     item["kind"], ("interior", "exterior"), f"{path}[{index}].kind"
                 ),
+                "bounds_canonical": _bounds_canonical_result(
+                    item["bounds_canonical"], f"{path}[{index}].bounds_canonical"
+                ),
                 "missing_surface_count": _integer(
                     item["missing_surface_count"],
                     f"{path}[{index}].missing_surface_count",
@@ -358,6 +400,15 @@ def _repair_target_items(
             }
         )
     return items
+
+
+def _bounds_canonical_result(value: Any, path: str) -> dict[str, list[int | float]]:
+    bounds = _closed(value, ("min", "max"), path)
+    minimum = _vector(bounds["min"], f"{path}.min")
+    maximum = _vector(bounds["max"], f"{path}.max")
+    if any(low > high for low, high in zip(minimum, maximum)):
+        _fail("supervisor_contract_violation", path)
+    return {"min": minimum, "max": maximum}
 
 
 def _repair_targets_result(
