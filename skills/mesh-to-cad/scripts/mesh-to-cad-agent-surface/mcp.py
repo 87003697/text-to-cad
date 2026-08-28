@@ -144,7 +144,14 @@ def _initialize_result(request: dict, state: str) -> tuple[dict | None, str]:
 def _valid_tools_list_params(params) -> bool:
     if params is None or (type(params) is dict and not params):
         return True
-    return False
+    if type(params) is not dict or set(params) != {"_meta"}:
+        return False
+    meta = params["_meta"]
+    return (
+        type(meta) is dict
+        and set(meta) == {"progressToken"}
+        and _valid_request_id(meta["progressToken"])
+    )
 
 
 def _valid_initialized_notification(request: dict) -> bool:

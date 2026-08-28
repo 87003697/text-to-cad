@@ -733,7 +733,8 @@ def prepare_isolated_job_codex_home(exp_dir: Path) -> Path:
             "[mcp_servers.agent_surface]\n"
             'command = "python3"\n'
             'args = ["/agent-surface/client.py", "--mcp"]\n'
-            "startup_timeout_ms = 15000\n",
+            "startup_timeout_ms = 15000\n"
+            "required = true\n",
             encoding="utf-8",
         )
         config_path.chmod(0o600)
