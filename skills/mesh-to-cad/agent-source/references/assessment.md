@@ -31,9 +31,9 @@ Fields:
   as bound by the Attempt/plan lifecycle. The current Attempt has no decision
   facts yet; W1 checks this value against the intended child at submission.
 - `preview_observation` — a short human-language observation field retained
-  by the closed schema. In fixed-client transport, ground it in returned
-  Reference Observations, the parent decision facts, and the intended source
-  edit; no preview image is attached or inspectable.
+  by the closed schema. Ground it in returned Reference Observations, parent
+  decision facts, the inspected formal preview, and the intended source edit;
+  preview bytes and paths remain unavailable.
 - `summary` — a short human-language statement of the falsifiable
   hypothesis: what you edited in `work/source/`, why that edit should
   change a specific residual, and which decision-fact fields would
@@ -47,27 +47,28 @@ or non-string values fail closed.
 1. Read the intent response for the previous submission. The
    `decision_facts` object under it contains every measured fact you
    are allowed to cite.
-2. Read `residual_summary.repair_frontier.active_depth` first. When it is
+2. Call the Agent Surface MCP `inspect_formal_preview` tool with the returned
+   `preview_handle` and inspect its image block before creating or updating
+   `/candidate/reconstruction-spec.json`. Record semantic Components for the
+   fuselage/body, left and right main wings, horizontal tailplane, and vertical
+   fin with their canonical bounds; do not record paths, bytes, or handles.
+3. Read `residual_summary.repair_frontier.active_depth` first. When it is
    non-null, use the active-depth interior targets and their
    `bounds_canonical` values to pick one residual you can plausibly move with
    a source edit. Also inspect any exterior targets on the same page: they
    are independent actionable residuals, not part of the interior frontier.
-   Use depth-8 scalars only for exact acceptance and residual accounting, not
-   to select the repair layer or target.
-3. Make that edit under `/candidate/work/source/`. Do not touch any
+4. Make that edit under `/candidate/work/source/`. Do not touch any
    other file the supervisor named as its own.
-4. After `run_candidate_tool` produces the measured candidate evidence, write
+5. After `run_candidate_tool` produces the measured candidate evidence, write
    `/candidate/work/assessment.json` with:
    - `from_step` copied from the selected parent's `decision_facts.step_ordinal`;
      `to_step` bound to the current Repair Attempt's intended child step;
    - a `summary` naming the active repair depth, the repair-target `kind` and
      bounds you targeted, and what the next frontier/target reading should
-     show if the hypothesis holds; depth-8 changes may be recorded only as
-     acceptance accounting;
+     show if the hypothesis holds; acceptance remains host-only;
    - a `preview_observation` grounded in the returned Reference Observation,
-     parent decision facts, and intended source edit. Do not claim image
-     inspection.
-5. Submit through `submit_repair`. The supervisor uses your assessment as
+     parent decision facts, inspected formal preview, and intended source edit.
+6. Submit through `submit_repair`. The supervisor uses your assessment as
    authored notes only.
 
 ## What assessment is not
@@ -75,8 +76,8 @@ or non-string values fail closed.
 - **Assessment cannot override measured facts.** The next intent
   response's `decision_facts` remains the sole source of truth for
   acceptance, residuals, and observable change. If your assessment
-  claims a residual is fixed but `residual_summary.objective_facts`
-  says otherwise, the objective facts win.
+  claims a residual is fixed while the returned acceptance state remains
+  unaccepted, the measured state wins.
 - **Assessment cannot rename or renumber steps.** `from_step` is bound to the
   selected parent's `decision_facts.step_ordinal`, while `to_step` is bound
   to the current Repair Attempt's intended child step; inventing other
@@ -95,11 +96,8 @@ Suppose the parent Measured Step response reported:
 - `acceptance_state`: `unaccepted`
 - `residual_summary.repair_frontier.active_depth`: `3`
 - `repair_targets.items[0].kind`: `interior`
-- `repair_targets.items[0].excess_surface_count`: `20`
 - `repair_targets.items[0].bounds_canonical`: `min=[0.12, -0.08, 0.04]`,
   `max=[0.20, 0.08, 0.12]`
-- `residual_summary.depth_8_surface_error_count`: `42` (exact accounting,
-  not the edit selector)
 
 You edit `work/source/model.py` to trim a boss you believe is
 producing the top excess region, rebuild, then write:
@@ -110,7 +108,7 @@ producing the top excess region, rebuild, then write:
   "from_step": 0,
   "to_step": 1,
   "preview_observation": "The Reference Observation and depth-3 target bounds identify the boss region selected for trimming.",
-  "summary": "Trimmed the boss diameter by 2 mm inside the depth-3 rank-0 excess target bounds. Expect that target's excess count or the depth-3 frontier error count to fall. Depth-8 counts remain acceptance accounting. Refuted if the same excess reappears in the same target bounds."
+  "summary": "Trimmed the boss diameter by 2 mm inside the depth-3 rank-0 target bounds. Expect the frontier error count to fall. Refuted if the same target bounds remain ranked after measurement."
 }
 ```
 

@@ -78,6 +78,12 @@ class SupervisorPorts(Protocol):
         candidate_handle: str,
     ) -> tuple[Mapping[str, Any], bytes | None]: ...
 
+    def inspect_formal_preview(self, preview_handle: str) -> Mapping[str, Any]: ...
+
+    def inspect_formal_preview_with_preview(
+        self, preview_handle: str
+    ) -> tuple[Mapping[str, Any], bytes | None]: ...
+
     def select_and_finalize(
         self,
         workspace_handle: str,
@@ -176,6 +182,7 @@ _STATE_VALUES = {
     "run_candidate_tool": ("completed", "failed"),
     "submit_step_zero": ("published", "failed"),
     "submit_repair": ("published", "failed"),
+    "inspect_formal_preview": ("available",),
     "select_and_finalize": ("finalized", "blocked"),
 }
 
@@ -262,8 +269,6 @@ def _next_result(value: Any, path: str) -> list[str]:
 DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/1"
 _DECISION_FACT_MAX_TARGETS = 8
 _ACCEPTANCE_STATE_VALUES = ("acceptance_satisfied", "unaccepted")
-_OBJECTIVE_FACT_KEYS = ("global_depth_8_zero", "out_of_frame_clear", "no_evidence_conflict")
-_TARGET_KEY = re.compile(r"step-[0-9]{6}:target-[0-9a-f]{16}")
 
 
 def _rate(value: Any, path: str) -> float:
@@ -277,17 +282,9 @@ def _residual_summary_result(value: Any, path: str) -> dict[str, Any]:
     value = _closed(
         value,
         (
-            "objective_facts",
-            "depth_8_missing_surface_count",
-            "depth_8_excess_surface_count",
-            "depth_8_surface_error_count",
-            "depth_8_surface_error_rate",
             "repair_frontier",
         ),
         path,
-    )
-    objective = _closed(
-        value["objective_facts"], _OBJECTIVE_FACT_KEYS, f"{path}.objective_facts"
     )
     frontier = _closed(
         value["repair_frontier"],
@@ -308,22 +305,6 @@ def _residual_summary_result(value: Any, path: str) -> dict[str, Any]:
         if active_depth == 0:
             _fail("supervisor_contract_violation", f"{path}.repair_frontier.active_depth")
     return {
-        "objective_facts": {
-            key: _bool(objective[key], f"{path}.objective_facts.{key}")
-            for key in _OBJECTIVE_FACT_KEYS
-        },
-        "depth_8_missing_surface_count": _integer(
-            value["depth_8_missing_surface_count"], f"{path}.depth_8_missing_surface_count"
-        ),
-        "depth_8_excess_surface_count": _integer(
-            value["depth_8_excess_surface_count"], f"{path}.depth_8_excess_surface_count"
-        ),
-        "depth_8_surface_error_count": _integer(
-            value["depth_8_surface_error_count"], f"{path}.depth_8_surface_error_count"
-        ),
-        "depth_8_surface_error_rate": _rate(
-            value["depth_8_surface_error_rate"], f"{path}.depth_8_surface_error_rate"
-        ),
         "repair_frontier": {
             "active_depth": active_depth,
             "missing_surface_count": _integer(
@@ -358,52 +339,20 @@ def _repair_target_items(
         item = _closed(
             item,
             (
-                "target_key",
-                "mask_sha256",
                 "rank",
                 "kind",
                 "bounds_canonical",
-                "missing_surface_count",
-                "excess_surface_count",
-                "surface_error_count",
             ),
             f"{path}[{index}]",
         )
-        target_key = item["target_key"]
-        if (
-            type(target_key) is not str
-            or _TARGET_KEY.fullmatch(target_key) is None
-            or not target_key.startswith(f"step-{step:06d}:")
-        ):
-            _fail("supervisor_contract_violation", f"{path}[{index}].target_key")
-        mask_sha256 = item["mask_sha256"]
-        if (
-            type(mask_sha256) is not str
-            or len(mask_sha256) != 64
-            or any(character not in "0123456789abcdef" for character in mask_sha256)
-        ):
-            _fail("supervisor_contract_violation", f"{path}[{index}].mask_sha256")
         items.append(
             {
-                "target_key": target_key,
-                "mask_sha256": mask_sha256,
                 "rank": _integer(item["rank"], f"{path}[{index}].rank"),
                 "kind": _enum(
                     item["kind"], ("interior", "exterior"), f"{path}[{index}].kind"
                 ),
                 "bounds_canonical": _bounds_canonical_result(
                     item["bounds_canonical"], f"{path}[{index}].bounds_canonical"
-                ),
-                "missing_surface_count": _integer(
-                    item["missing_surface_count"],
-                    f"{path}[{index}].missing_surface_count",
-                ),
-                "excess_surface_count": _integer(
-                    item["excess_surface_count"],
-                    f"{path}[{index}].excess_surface_count",
-                ),
-                "surface_error_count": _integer(
-                    item["surface_error_count"], f"{path}[{index}].surface_error_count"
                 ),
             }
         )
@@ -438,19 +387,6 @@ def _repair_targets_result(
     }
 
 
-def _preview_identity_result(value: Any, path: str) -> dict[str, Any]:
-    value = _closed(value, ("identity_sha256", "render_variant"), path)
-    identity = value["identity_sha256"]
-    if type(identity) is not str or len(identity) != 64 or any(
-        c not in "0123456789abcdef" for c in identity
-    ):
-        _fail("supervisor_contract_violation", f"{path}.identity_sha256")
-    return {
-        "identity_sha256": identity,
-        "render_variant": _enum(value["render_variant"], ("step",), f"{path}.render_variant"),
-    }
-
-
 def _change_from_parent_result(value: Any, path: str) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -475,7 +411,6 @@ def _decision_facts_result(value: Any, path: str) -> dict[str, Any]:
             "acceptance_state",
             "residual_summary",
             "repair_targets",
-            "preview",
             "change_from_parent",
         ),
         path,
@@ -514,7 +449,6 @@ def _decision_facts_result(value: Any, path: str) -> dict[str, Any]:
         "repair_targets": _repair_targets_result(
             value["repair_targets"], f"{path}.repair_targets", step=step_ordinal
         ),
-        "preview": _preview_identity_result(value["preview"], f"{path}.preview"),
         "change_from_parent": change,
     }
 
@@ -713,7 +647,7 @@ def _validate_run_candidate_result(value: Any, path: str) -> dict[str, Any]:
 
 
 def _validate_step_zero_result(value: Any, path: str) -> dict[str, Any]:
-    return _result_fields(value, (("state", "state"), ("step_handle", "handle"), ("decision_facts", "decision_facts"), ("permitted_next_intents", "next")), path, "submit_step_zero")
+    return _result_fields(value, (("state", "state"), ("step_handle", "handle"), ("preview_handle", "handle"), ("decision_facts", "decision_facts"), ("permitted_next_intents", "next")), path, "submit_step_zero")
 
 
 def _validate_repair_result(value: Any, path: str) -> dict[str, Any]:
@@ -736,7 +670,11 @@ def _validate_repair_result(value: Any, path: str) -> dict[str, Any]:
                 f"{path}.permitted_next_intents",
             ),
         }
-    return _result_fields(value, (("state", "state"), ("step_handle", "handle"), ("cycle_handle", "handle"), ("decision_facts", "decision_facts"), ("permitted_next_intents", "next")), path, "submit_repair")
+    return _result_fields(value, (("state", "state"), ("step_handle", "handle"), ("preview_handle", "handle"), ("cycle_handle", "handle"), ("decision_facts", "decision_facts"), ("permitted_next_intents", "next")), path, "submit_repair")
+
+
+def _validate_preview_result(value: Any, path: str) -> dict[str, Any]:
+    return _result_fields(value, (("state", "state"), ("preview_handle", "handle"), ("permitted_next_intents", "next")), path, "inspect_formal_preview")
 
 
 def _validate_finalize_result(value: Any, path: str) -> dict[str, Any]:
@@ -758,6 +696,7 @@ _OPERATION_SPECS = (
     ),), _validate_run_candidate_result, "Run one supervisor-registered candidate operation."),
     _OperationSpec("submit_step_zero", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle")),), _validate_step_zero_result, "Submit one measured Step 0 through the supervisor."),
     _OperationSpec("submit_repair", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "attempt_handle", "candidate_handle")),), _validate_repair_result, "Submit one measured Repair Cycle through the supervisor."),
+    _OperationSpec("inspect_formal_preview", ((_FieldSpec("preview_handle", "handle"),),), _validate_preview_result, "Inspect one committed formal preview."),
     _OperationSpec("select_and_finalize", (tuple(_FieldSpec(name, "handle") for name in ("workspace_handle", "step_handle", "selection_handle", "notes_handle")),), _validate_finalize_result, "Select and request supervisor-owned Final Delivery."),
     _OperationSpec("observe_reference", ((
         _FieldSpec("reference_handle", "handle"), _FieldSpec("observation", "observation_request"),
@@ -913,15 +852,14 @@ class AgentSurface:
                     args["operation_handle"],
                 )
             elif intent == "submit_step_zero":
-                if include_preview:
-                    result, preview_png = self._ports.submit_step_zero_with_preview(**args)
-                else:
-                    result = self._ports.submit_step_zero(**args)
+                result = self._ports.submit_step_zero(**args)
             elif intent == "submit_repair":
+                result = self._ports.submit_repair(**args)
+            elif intent == "inspect_formal_preview":
                 if include_preview:
-                    result, preview_png = self._ports.submit_repair_with_preview(**args)
+                    result, preview_png = self._ports.inspect_formal_preview_with_preview(**args)
                 else:
-                    result = self._ports.submit_repair(**args)
+                    result = self._ports.inspect_formal_preview(**args)
             elif intent == "select_and_finalize":
                 result = self._ports.select_and_finalize(**args)
             else:

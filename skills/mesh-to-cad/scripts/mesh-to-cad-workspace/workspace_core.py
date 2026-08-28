@@ -4282,24 +4282,28 @@ def _validate_repair_plan_boundary(plan: Mapping[str, Any], from_step: int | Non
         _fail("invalid_attempt", "Repair Batch must select one or more targets")
     if not isinstance(plan["planned_edits"], list) or not plan["planned_edits"]:
         _fail("invalid_attempt", "Repair Batch must contain Planned Edits")
-    selected_keys: set[str] = set()
+    selected_ranks: set[int] = set()
     for index, item in enumerate(plan["selected_targets"]):
         target = _closed_object(
             item,
-            {"target_key", "mask_sha256"},
+            {"rank", "kind", "bounds_canonical"},
             f"$.plan.selected_targets[{index}]",
         )
-        _stable_key(target["target_key"], f"$.plan.selected_targets[{index}].target_key")
-        _sha256(target["mask_sha256"], f"$.plan.selected_targets[{index}].mask_sha256")
-        if target["target_key"] in selected_keys:
-            _fail("invalid_attempt", "Repair Batch target keys must be unique")
-        selected_keys.add(target["target_key"])
+        rank = target["rank"]
+        if not isinstance(rank, int) or isinstance(rank, bool) or rank < 0:
+            _fail("invalid_attempt", "Repair Batch target ranks must be non-negative integers")
+        if target["kind"] not in {"interior", "exterior"}:
+            _fail("invalid_attempt", "Repair Batch target kind is invalid")
+        _validate_bounds(target["bounds_canonical"], f"$.plan.selected_targets[{index}].bounds_canonical")
+        if rank in selected_ranks:
+            _fail("invalid_attempt", "Repair Batch target ranks must be unique")
+        selected_ranks.add(rank)
     edit_keys: set[str] = set()
     mapped_targets: set[str] = set()
     for index, item in enumerate(plan["planned_edits"]):
         edit = _closed_object(
             item,
-            {"edit_key", "target_keys", "description"},
+            {"edit_key", "target_ranks", "description"},
             f"$.plan.planned_edits[{index}]",
         )
         _stable_key(edit["edit_key"], f"$.plan.planned_edits[{index}].edit_key")
@@ -4307,17 +4311,18 @@ def _validate_repair_plan_boundary(plan: Mapping[str, Any], from_step: int | Non
             _fail("invalid_attempt", "Planned Edit keys must be unique")
         edit_keys.add(edit["edit_key"])
         if (
-            not isinstance(edit["target_keys"], list)
-            or not edit["target_keys"]
-            or len(set(edit["target_keys"])) != len(edit["target_keys"])
-            or not set(edit["target_keys"]).issubset(selected_keys)
+            not isinstance(edit["target_ranks"], list)
+            or not edit["target_ranks"]
+            or any(not isinstance(rank, int) or isinstance(rank, bool) for rank in edit["target_ranks"])
+            or len(set(edit["target_ranks"])) != len(edit["target_ranks"])
+            or not set(edit["target_ranks"]).issubset(selected_ranks)
         ):
             _fail("invalid_attempt", "Planned Edit target mapping is invalid")
-        mapped_targets.update(edit["target_keys"])
+        mapped_targets.update(edit["target_ranks"])
         _nonempty_string(
             edit["description"], f"$.plan.planned_edits[{index}].description"
         )
-    if mapped_targets != selected_keys:
+    if mapped_targets != selected_ranks:
         _fail("invalid_attempt", "every selected target must map to a Planned Edit")
     _nonempty_string(plan["rationale"], "$.plan.rationale")
     _nonempty_string(plan["preview_observation"], "$.plan.preview_observation")

@@ -2019,6 +2019,17 @@ class WorkspaceSupervisor:
             kind="repair",
         )
 
+    def inspect_formal_preview(self, preview_handle: str) -> Mapping[str, Any]:
+        self.registry.resolve(preview_handle, "preview")
+        status = self.workspace_status(self.workspace_handle)
+        return {"state": "available", "preview_handle": preview_handle, "permitted_next_intents": status["permitted_next_intents"]}
+
+    def inspect_formal_preview_with_preview(
+        self, preview_handle: str
+    ) -> tuple[Mapping[str, Any], bytes]:
+        step_number = self.registry.resolve(preview_handle, "preview")
+        return self.inspect_formal_preview(preview_handle), self._read_committed_step_preview_png(step_number)
+
     def _submit_publication_request(
         self,
         workspace_handle: str,
@@ -2141,8 +2152,10 @@ class WorkspaceSupervisor:
             result: dict[str, Any] = {
                 "state": "published",
                 "step_handle": self.registry.issue("step", step_number),
+                "preview_handle": self.registry.issue("preview", step_number),
                 "decision_facts": decision_facts,
                 "permitted_next_intents": [
+                    "inspect_formal_preview",
                     "start_attempt",
                     "select_and_finalize",
                     "workspace_status",

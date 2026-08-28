@@ -203,7 +203,7 @@ ${PROMPT_PREAMBLE}
 This is an authority-hidden Agent Surface execution. Read the opaque bootstrap
 contract from the fixed candidate mount /candidate/bootstrap.json. Use only
 ordinary exec_command calls to run the fixed client
-python3 /agent-surface/client.py for these seven intents:
+python3 /agent-surface/client.py for these seven JSON intents:
 workspace_status, start_attempt, run_candidate_tool,
 submit_step_zero, submit_repair, select_and_finalize, and observe_reference.
 For each call, provide exactly one closed JSON request envelope on stdin:
@@ -213,11 +213,11 @@ For observe_reference, args must be exactly
 {"reference_handle":"<opaque>","observation":{"method":"section_profile","args":{}}}.
 Read the one JSON client response
 before issuing another request; requests are strictly serial. On an error,
-preserve its classification and do not retry blindly. Do not call
-MCP tools or tool_search: the MCP registration is a compatibility surface for
-other providers, not an available transport here. Apart from authoring allowed
-candidate files, do not run shell authority operations, inspect paths, or
-invoke another client.
+preserve its classification and do not retry blindly. The only MCP tool you
+may call is the registered Agent Surface inspect_formal_preview, using a
+preview_handle returned by a published Step before creating or updating the
+Reconstruction Spec. Do not use tool_search, inspect paths, or invoke another
+client.
 Use only handles from the bootstrap contract and the returned
 capability_bundle_handle; reuse that attempt-scoped bundle for candidate tool
 and evidence submissions. Never invent paths, argv, shell
@@ -229,11 +229,10 @@ handoff. Raw and canonical reference bytes are unavailable to this process.
 The canonical Workspace and its atomically published Final Delivery define
 success. ${RECONSTRUCTION_SPEC_INSTRUCTION}
 
-This fixed-client transport does not return inspectable images. Base initial
-modeling and repair decisions on observe_reference summary and section_profile structured
-observations, returned decision facts, repair frontier and targets, and the
-objective measurements. Do not claim preview-image inspection. Do not use
-view_image, paths, URLs, or host/capability discovery.
+After every published Step response, use the registered Agent Surface MCP
+inspect_formal_preview tool with its opaque preview_handle and inspect the
+returned image block before creating or updating the Reconstruction Spec.
+Do not use view_image, paths, URLs, or host/capability discovery.
 EOF
     )
 else

@@ -14,7 +14,6 @@ import ctypes
 import errno
 import os
 import platform
-import re
 from pathlib import Path, PurePosixPath
 import shutil
 import secrets
@@ -810,7 +809,7 @@ def publish_step_zero_from_candidate(
                 candidate_mesh=_agent_relative(authority, CANDIDATE_MESH_RELATIVE),
                 measurement=measurement_target,
                 preview=internal_preview,
-                _decision_facts_factory=_build_decision_facts,
+                _decision_facts_factory=_decision_facts_factory(workspace),
             )
         except Exception:
             _rollback_step_zero_voxblame(workspace)
@@ -1017,7 +1016,7 @@ def publish_cycle_from_candidate(
                 assessment=authority
                 / _agent_relative(authority, CANDIDATE_ASSESSMENT_RELATIVE),
                 source_changes=internal_source_changes,
-                _decision_facts_factory=_build_decision_facts,
+                _decision_facts_factory=_decision_facts_factory(workspace),
             )
         except Exception:
             _rollback_repair_voxblame_step(workspace, intended_step)
@@ -1163,7 +1162,6 @@ _MAX_DEPTH = 8
 _MAX_FORMAL_PREVIEW_PNG_BYTES = 16 * 1024 * 1024
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _OBJECTIVE_FACT_KEYS = ("global_depth_8_zero", "out_of_frame_clear", "no_evidence_conflict")
-_TARGET_KEY = re.compile(r"step-[0-9]{6}:target-[0-9a-f]{16}")
 
 
 def _decision_facts_fail(detail: str) -> None:
@@ -1217,78 +1215,112 @@ def _fact_bounds_canonical(value: Any, detail: str) -> dict[str, list[int | floa
     return bounds
 
 
-def _fact_sha256(value: Any, detail: str) -> str:
-    if type(value) is not str or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
-        _decision_facts_fail(detail)
-    return value
+def _active_depth_cells(workspace: Path, item: Mapping[str, Any], depth: int) -> tuple[tuple[int, int, int], ...]:
+    """Project one host-only canonical region mask to its occupied coarse cells."""
+
+    mask = item.get("mask")
+    if not isinstance(mask, Mapping) or type(mask.get("path")) is not str:
+        _decision_facts_fail("decision-facts repair target mask is malformed")
+    relative = PurePosixPath(mask["path"])
+    if relative.is_absolute() or ".." in relative.parts:
+        _decision_facts_fail("decision-facts repair target mask path is malformed")
+    try:
+        snapshot = json.loads((workspace / Path(relative)).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        _decision_facts_fail("decision-facts repair target mask is unavailable")
+    if (
+        not isinstance(snapshot, Mapping)
+        or set(snapshot) != {"schema", "max_depth", "regions"}
+        or snapshot["schema"] != "octree_region_set/1"
+        or snapshot["max_depth"] != _MAX_DEPTH
+        or not isinstance(snapshot["regions"], list)
+    ):
+        _decision_facts_fail("decision-facts repair target mask is malformed")
+    prefixes: set[int] = set()
+    for region in snapshot["regions"]:
+        if not isinstance(region, Mapping) or set(region) != {"depth", "prefix"}:
+            _decision_facts_fail("decision-facts repair target mask region is malformed")
+        region_depth, prefix = region["depth"], region["prefix"]
+        if (
+            type(region_depth) is not int or isinstance(region_depth, bool)
+            or type(prefix) is not int or isinstance(prefix, bool)
+            or not 0 <= region_depth <= _MAX_DEPTH
+            or not 0 <= prefix < 1 << (3 * region_depth)
+        ):
+            _decision_facts_fail("decision-facts repair target mask region is malformed")
+        if region_depth >= depth:
+            prefixes.add(prefix >> (3 * (region_depth - depth)))
+        else:
+            shift = 3 * (depth - region_depth)
+            prefixes.update(range(prefix << shift, (prefix + 1) << shift))
+    cells = []
+    for prefix in sorted(prefixes):
+        coordinates = [0, 0, 0]
+        for shift in range(depth - 1, -1, -1):
+            child = (prefix >> (3 * shift)) & 7
+            coordinates[0] = (coordinates[0] << 1) | ((child >> 2) & 1)
+            coordinates[1] = (coordinates[1] << 1) | ((child >> 1) & 1)
+            coordinates[2] = (coordinates[2] << 1) | (child & 1)
+        cells.append(tuple(coordinates))
+    return tuple(cells)
 
 
-def _project_repair_targets(value: Any, *, step: int) -> Any:
+def _active_depth_bounds(cell: tuple[int, int, int], depth: int) -> dict[str, list[float]]:
+    width = 1.0 / (2 ** depth)
+    return {
+        "min": [round(-0.5 + index * width, 6) for index in cell],
+        "max": [round(-0.5 + (index + 1) * width, 6) for index in cell],
+    }
+
+
+def _project_repair_targets(workspace: Path, value: Any, *, active_depth: int | None) -> Any:
     if not isinstance(value, Mapping):
         _decision_facts_fail("decision-facts repair targets are malformed")
     total = _fact_int(value.get("total"), "decision-facts repair target total is malformed")
-    returned = _fact_int(value.get("returned"), "decision-facts repair target returned is malformed")
-    remaining = _fact_int(value.get("remaining"), "decision-facts repair target remaining is malformed")
-    if returned > _MAX_DECISION_FACT_TARGETS:
-        _decision_facts_fail("decision-facts repair target page exceeds bound")
-    items = value.get("items")
-    if not isinstance(items, list) or len(items) != returned:
-        _decision_facts_fail("decision-facts repair target items are malformed")
-    if total == 0 and returned == 0 and remaining == 0:
+    items = value.get("ordered_targets")
+    if not isinstance(items, list) or len(items) != total:
+        _decision_facts_fail("decision-facts repair target authority is malformed")
+    if total == 0:
         return None
-    projected_items: list[dict[str, Any]] = []
-    for index, item in enumerate(items):
+    grouped: dict[tuple[int, int, int], dict[str, Any]] = {}
+    exterior: list[dict[str, Any]] = []
+    for item in items:
         if not isinstance(item, Mapping):
             _decision_facts_fail("decision-facts repair target item is malformed")
-        target_key = item.get("target_key")
-        if (
-            type(target_key) is not str
-            or _TARGET_KEY.fullmatch(target_key) is None
-            or not target_key.startswith(f"step-{step:06d}:")
-        ):
-            _decision_facts_fail("decision-facts repair target identity is malformed")
-        mask = item.get("mask")
-        if not isinstance(mask, Mapping):
-            _decision_facts_fail("decision-facts repair target mask is malformed")
         display_rank = item.get("display_rank")
         rank = _fact_int(display_rank, "decision-facts repair target rank is malformed")
         kind = item.get("kind")
         if kind not in ("interior", "exterior"):
             _decision_facts_fail("decision-facts repair target kind is malformed")
-        profile = item.get("error_profile")
-        if not isinstance(profile, Mapping):
-            _decision_facts_fail("decision-facts repair target error profile is malformed")
-        projected_items.append(
-            {
-                "target_key": target_key,
-                "mask_sha256": _fact_sha256(
-                    mask.get("logical_sha256"),
-                    "decision-facts repair target mask identity is malformed",
-                ),
-                "rank": rank,
-                "kind": kind,
-                "bounds_canonical": _fact_bounds_canonical(
-                    item.get("bounds_canonical"),
-                    "decision-facts repair target bounds are malformed",
-                ),
-                "missing_surface_count": _fact_int(
-                    profile.get("missing_surface_count"),
-                    "decision-facts missing surface count is malformed",
-                ),
-                "excess_surface_count": _fact_int(
-                    profile.get("excess_surface_count"),
-                    "decision-facts excess surface count is malformed",
-                ),
-                "surface_error_count": _fact_int(
-                    profile.get("surface_error_count"),
-                    "decision-facts surface error count is malformed",
-                ),
-            }
-        )
+        bounds = _fact_bounds_canonical(item.get("bounds_canonical"), "decision-facts repair target bounds are malformed")
+        if kind == "exterior":
+            exterior.append({"rank": rank, "kind": kind, "bounds_canonical": bounds})
+            continue
+        if active_depth is None:
+            _decision_facts_fail("interior repair target has no active depth")
+        for cell in _active_depth_cells(workspace, item, active_depth):
+            current = grouped.get(cell)
+            if current is None or rank < current["rank"]:
+                grouped[cell] = {
+                    "rank": rank,
+                    "kind": "interior",
+                    "bounds_canonical": _active_depth_bounds(cell, active_depth),
+                }
+    ordered = sorted(
+        [*grouped.values(), *exterior],
+        key=lambda item: (
+            item.get("rank", total),
+            item["kind"],
+            item["bounds_canonical"]["min"],
+        ),
+    )
+    for rank, item in enumerate(ordered):
+        item["rank"] = rank
+    projected_items = ordered[:_MAX_DECISION_FACT_TARGETS]
     return {
-        "total": total,
-        "returned": returned,
-        "remaining": remaining,
+        "total": len(ordered),
+        "returned": len(projected_items),
+        "remaining": len(ordered) - len(projected_items),
         "items": projected_items,
     }
 
@@ -1312,9 +1344,6 @@ def _project_residual_summary(measurement: Mapping[str, Any]) -> dict[str, Any]:
         if active_depth is None and surface_error_count:
             active_depth = depth
             active_error = error
-    depth_eight = errors[_MAX_DEPTH - 1]
-    if not isinstance(depth_eight, Mapping):
-        _decision_facts_fail("decision-facts depth-8 entry is malformed")
     if active_error is None:
         repair_frontier = {
             "active_depth": None,
@@ -1343,45 +1372,22 @@ def _project_residual_summary(measurement: Mapping[str, Any]) -> dict[str, Any]:
                 "decision-facts repair frontier error rate is malformed",
             ),
         }
-    return {
-        "objective_facts": {
-            key: _fact_bool(facts[key], f"decision-facts objective_facts.{key} is malformed")
-            for key in _OBJECTIVE_FACT_KEYS
-        },
-        "depth_8_missing_surface_count": _fact_int(
-            depth_eight.get("missing_surface_count"),
-            "decision-facts depth-8 missing count is malformed",
-        ),
-        "depth_8_excess_surface_count": _fact_int(
-            depth_eight.get("excess_surface_count"),
-            "decision-facts depth-8 excess count is malformed",
-        ),
-        "depth_8_surface_error_count": _fact_int(
-            depth_eight.get("surface_error_count"),
-            "decision-facts depth-8 error count is malformed",
-        ),
-        "depth_8_surface_error_rate": _fact_rate(
-            depth_eight.get("surface_error_rate"),
-            "decision-facts depth-8 error rate is malformed",
-        ),
-        "repair_frontier": repair_frontier,
-    }
+    return {"repair_frontier": repair_frontier}
 
 
 def _build_decision_facts(
     step_document: Mapping[str, Any],
     measurement_document: Mapping[str, Any],
     parent_document: Mapping[str, Any] | None,
+    *,
+    workspace: Path,
+    repair_target_document: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project facts from the validated publication documents in memory."""
 
     step = _fact_int(step_document.get("step"), "step manifest ordinal is malformed")
     accepted = _fact_bool(
         step_document.get("accepted"), "step manifest accepted is malformed"
-    )
-    preview_identity = _fact_sha256(
-        step_document.get("preview_identity_sha256"),
-        "step manifest preview identity is malformed",
     )
     parent_value = step_document.get("parent_step")
     if parent_value is None:
@@ -1411,14 +1417,39 @@ def _build_decision_facts(
         "acceptance_state": "acceptance_satisfied" if accepted else "unaccepted",
         "residual_summary": _project_residual_summary(measurement_document),
         "repair_targets": _project_repair_targets(
-            measurement_document.get("repair_targets"), step=step
+            workspace,
+            (repair_target_document or measurement_document).get("repair_targets"),
+            active_depth=_project_residual_summary(measurement_document)["repair_frontier"]["active_depth"],
         ),
-        "preview": {
-            "identity_sha256": preview_identity,
-            "render_variant": "step",
-        },
         "change_from_parent": change_from_parent,
     }
+
+
+def _decision_facts_factory(workspace: Path) -> Callable[
+    [Mapping[str, Any], Mapping[str, Any], Mapping[str, Any] | None], Mapping[str, Any]
+]:
+    """Bind publication projection to the existing full target authority."""
+
+    def build(
+        step_document: Mapping[str, Any],
+        measurement_document: Mapping[str, Any],
+        parent_document: Mapping[str, Any] | None,
+    ) -> Mapping[str, Any]:
+        step = _fact_int(step_document.get("step"), "step manifest ordinal is malformed")
+        full_measurement = _read_authority_json(
+            workspace,
+            workspace / "voxblame" / "steps" / f"{step:06d}" / "measurement.json",
+            f"$.voxblame.steps[{step}].measurement",
+        )
+        return _build_decision_facts(
+            step_document,
+            measurement_document,
+            parent_document,
+            workspace=workspace,
+            repair_target_document=full_measurement,
+        )
+
+    return build
 
 
 def read_current_step_decision_facts(
@@ -1469,6 +1500,11 @@ def read_current_step_decision_facts(
         workspace / measurement_relative,
         f"$.steps[{step}].measurement",
     )
+    full_measurement_document = _read_authority_json(
+        workspace,
+        workspace / "voxblame" / "steps" / f"{step:06d}" / "measurement.json",
+        f"$.voxblame.steps[{step}].measurement",
+    )
     parent_document = (
         _read_authority_json(
             workspace,
@@ -1479,7 +1515,11 @@ def read_current_step_decision_facts(
         else None
     )
     return _build_decision_facts(
-        step_document, measurement_document, parent_document
+        step_document,
+        measurement_document,
+        parent_document,
+        workspace=workspace,
+        repair_target_document=full_measurement_document,
     )
 
 

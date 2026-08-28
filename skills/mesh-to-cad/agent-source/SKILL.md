@@ -34,7 +34,7 @@ choreography behind the intent seam.
 
 ## The intent seam
 
-The supervisor exposes exactly seven closed intents. Each intent takes
+The supervisor exposes exactly eight closed intents. Each intent takes
 opaque handles the supervisor gave you in an earlier response and returns
 a closed result plus the list of intents permitted next.
 
@@ -52,6 +52,9 @@ a closed result plus the list of intents permitted next.
 - `submit_repair` — submit one measured repair cycle through the
   supervisor using only the workspace, attempt, and candidate handles.
   The supervisor discovers evidence from the trusted candidate tree.
+- `inspect_formal_preview` — use the opaque `preview_handle` returned by a
+  published Step to inspect its formal image through the Agent Surface MCP
+  tool. It returns an image block, never a path or image bytes in JSON.
 - `select_and_finalize` — request the supervisor's final result from an
   opaque `step_handle` naming the Selected Step plus an authored
   selection handle (a bounded semantic claim) and notes handle. You do
@@ -82,8 +85,8 @@ handle opaque. There is no `tool`, `argv`, `command`, or
 
 ## Fixed-client transport
 
-Invoke every intent through ordinary `exec_command`, running only the fixed
-client `python3 /agent-surface/client.py`. Feed it exactly one closed JSON
+Invoke the seven JSON intents through ordinary `exec_command`, running only the
+fixed client `python3 /agent-surface/client.py`. Feed it exactly one closed JSON
 object on stdin and read its one JSON response before issuing another intent.
 For example, use shell input redirection only to feed this exact request:
 
@@ -95,11 +98,11 @@ For example, use shell input redirection only to feed this exact request:
 }
 ```
 
-Do not call MCP tools or `tool_search`. The MCP registration remains a
-compatibility surface for providers that support it, but this execution uses
-only the fixed client. Apart from authoring allowed candidate files, do not run
-shell authority operations, another client, Workspace helper, or
-path-discovery operation. Do not connect to sockets directly.
+Use the fixed client for every JSON intent. The only MCP tool you may call
+is the registered Agent Surface `inspect_formal_preview`, and only with a
+published Step's returned `preview_handle`; inspect its image block before
+creating or updating the Reconstruction Spec. Do not use `tool_search`, another
+client, Workspace helper, path-discovery operation, or direct socket.
 
 The `args` object must have exactly the fields for its intent:
 
@@ -140,13 +143,14 @@ For the six workflow intents, `result` has the following closed shapes:
   `capability_bundle_handle`, `permitted_next_intents`.
 - `run_candidate_tool`: `state`, `candidate_handle`, `result_handle`,
   `permitted_next_intents`.
-- `submit_step_zero`: `state`, `step_handle`, `decision_facts`,
+- `submit_step_zero`: `state`, `step_handle`, `preview_handle`, `decision_facts`,
   `permitted_next_intents`.
-- `submit_repair`: on publication, `state`, `step_handle`, `cycle_handle`,
+- `submit_repair`: on publication, `state`, `step_handle`, `preview_handle`, `cycle_handle`,
   `decision_facts`, `permitted_next_intents`; on its closed evidence failure,
   `state`, `classification`, `permitted_next_intents`.
 - `select_and_finalize`: `state`, `final_delivery_handle`,
   `permitted_next_intents`.
+- `inspect_formal_preview`: `state`, `preview_handle`, `permitted_next_intents`, plus an MCP image block.
 
 `observe_reference` is not a workflow-state response. Its `result` is exactly
 `{"observation":{"method":"<method>","value":{...}}}`. A `summary` value
@@ -265,12 +269,12 @@ evidence, previews, manifests, and export artifacts.
     "schema": "voxblame.repair-batch/1",
     "from_step": 0,
     "selected_targets": [
-      {"target_key": "step-000000:target-0123456789abcdef", "mask_sha256": "<sha256>"}
+      {"rank": 0, "kind": "interior", "bounds_canonical": {"min": [-0.5, -0.5, -0.5], "max": [0.0, 0.0, 0.0]}}
     ],
     "planned_edits": [
       {
         "edit_key": "edit-key",
-        "target_keys": ["step-000000:target-0123456789abcdef"],
+        "target_ranks": [0],
         "description": "Agent-authored modeling change"
       }
     ],
@@ -279,10 +283,10 @@ evidence, previews, manifests, and export artifacts.
   }
   ```
 
-  `from_step` must be the current parent step. Target keys and edit keys are
-  unique stable lowercase keys; each `mask_sha256` is a lowercase 64-character
-  SHA-256 digest. Every selected target must be covered by one or more planned
-  edits, and every target/edit list and prose field must be nonempty.
+  `from_step` must be the current parent step. Target ranks and edit keys are
+  unique; each selected target repeats only its returned rank, kind, and
+  canonical bounds. Every selected target must be covered by one or more
+  planned edits, and every target/edit list and prose field must be nonempty.
 - `/candidate/work/assessment.json` is Repair-only and must have exactly
   `{schema, from_step, to_step, preview_observation, summary}` with schema
   `mesh-to-cad.assessment/1`. Bind `from_step` to the parent and `to_step` to
@@ -303,21 +307,29 @@ evidence, previews, manifests, and export artifacts.
 
   ```json
   {
-    "components": [{"id": "component.body", "certainty": "observed"}],
+    "components": [
+      {"id": "component.fuselage", "bounds_canonical": {"min": [-0.12, -0.5, -0.1], "max": [0.12, 0.5, 0.16]}},
+      {"id": "component.main-wing-left", "bounds_canonical": {"min": [-0.5, -0.25, -0.05], "max": [0.0, 0.0, 0.08]}},
+      {"id": "component.main-wing-right", "bounds_canonical": {"min": [0.0, -0.25, -0.05], "max": [0.5, 0.0, 0.08]}},
+      {"id": "component.tailplane", "bounds_canonical": {"min": [-0.12, 0.25, -0.03], "max": [0.12, 0.375, 0.1]}},
+      {"id": "component.vertical-fin", "bounds_canonical": {"min": [-0.03, 0.375, 0.05], "max": [0.03, 0.5, 0.2]}}
+    ],
     "features": [{"id": "feature.opening", "certainty": "inferred"}],
     "relations": [
       {
         "id": "relation.opening-part-of-body",
         "kind": "part_of",
         "from": "feature.opening",
-        "to": "component.body"
+        "to": "component.fuselage"
       }
     ]
   }
   ```
 
-  Components and Features require an `id`; Relations require `id`, `kind`,
-  `from`, and `to`. IDs are globally unique, relation endpoints name an
+  Components require an `id` and `bounds_canonical`; Features require an `id`;
+  Relations require `id`, `kind`, `from`, and `to`. Component bounds are
+  finite three-axis canonical `{min,max}` arrays with `min <= max` per axis.
+  IDs are globally unique, relation endpoints name an
   existing Component or Feature, and `kind` is nonempty. `description`,
   `certainty`, and `evidence` are optional; `certainty` is one of `observed`,
   `inferred`, `hidden`, `uncertain`, or `mixed`. The Spec is non-authority
@@ -361,11 +373,11 @@ Prohibited raw-access methods such as `components` are
 Do not ask for raw mesh access, file paths, or free-form measurements; those
 are not available and asking for them is a closed error.
 
-For this fixed-client transport, use `summary` for canonical-frame, bounds,
-count, quality, and aggregate geometry facts; use `section_profile` for fixed
-whole-object shape cues. Neither returns an image attachment. Use them, decision facts, repair-frontier
-targets, and objective measurements for modeling and repair decisions; never
-claim to have inspected a formal preview image.
+For fixed-client transport, use `summary` for canonical-frame, bounds, count,
+quality, and aggregate geometry facts; use `section_profile` for fixed
+whole-object shape cues. Neither returns an image attachment. After a published
+Step, use the registered `inspect_formal_preview` MCP tool and record only
+visual facts actually visible in its returned image block.
 
 Use observation results plus residual evidence returned by the
 supervisor (measurements, region diffs, and decision facts) to form one
@@ -388,15 +400,6 @@ carries one closed **decision facts** object under the
   "accepted": false,
   "acceptance_state": "unaccepted",
   "residual_summary": {
-    "objective_facts": {
-      "global_depth_8_zero": false,
-      "out_of_frame_clear": true,
-      "no_evidence_conflict": true
-    },
-    "depth_8_missing_surface_count": 42,
-    "depth_8_excess_surface_count": 0,
-    "depth_8_surface_error_count": 42,
-    "depth_8_surface_error_rate": 0.017,
     "repair_frontier": {
       "active_depth": 3,
       "missing_surface_count": 20,
@@ -411,23 +414,14 @@ carries one closed **decision facts** object under the
     "remaining": 0,
     "items": [
       {
-        "target_key": "step-000001:target-0123456789abcdef",
-        "mask_sha256": "<sha256>",
         "rank": 0,
         "kind": "interior",
         "bounds_canonical": {
           "min": [-0.5, -0.2, -0.1],
           "max": [0.4, 0.3, 0.2]
-        },
-        "missing_surface_count": 20,
-        "excess_surface_count": 0,
-        "surface_error_count": 20
+        }
       }
     ]
-  },
-  "preview": {
-    "identity_sha256": "…",
-    "render_variant": "step"
   },
   "change_from_parent": {
     "no_observable_geometry_change": false,
@@ -442,35 +436,23 @@ Fields and bounds:
   step.
 - `parent_step_ordinal` — non-negative integer for repairs, `null`
   for Step 0.
-- `accepted` and `acceptance_state` — `acceptance_satisfied` iff all
-  three objective facts are true, else `unaccepted`.
-- `residual_summary.objective_facts` — the exact three booleans that
-  gate acceptance.
-- `residual_summary.depth_8_*_surface_count` /
-  `depth_8_surface_error_rate` — exact acceptance and residual-accounting
-  scalars for depth 8. They do not select the repair layer (rate is in
-  `[0, 1]`; NaN or infinite values fail closed).
+- `accepted` and `acceptance_state` — host-only exact acceptance. Do not infer
+  or reconstruct its depth-8 evidence.
 - `residual_summary.repair_frontier` — the current action layer. Its
   `active_depth` is the coarsest depth with interior error, or `null` when
   the interior is clear. When it is `null`, all remaining frontier scalars
   are zero; exterior errors remain only in their `repair_targets` entries.
   Otherwise the remaining bounded scalars describe that interior layer.
   Use it with `repair_targets`, whose interior targets are grouped at this
-  active depth while retaining exact depth-8 masks.
+  active depth.
 - `repair_targets` — `null` when acceptance is satisfied, otherwise a
   page of up to eight items that includes active-depth interior targets
   and may also include independent actionable exterior targets. Exterior
   targets are not part of the interior Repair Frontier. Each item
-  carries the exact `target_key` and `mask_sha256` pair required by a
-  `voxblame.repair-batch/1`, plus its rank, semantic kind,
-  `bounds_canonical`, and bounded residual counts. Bounds are closed
+  carries only rank, semantic kind, and active-depth-cell
+  `bounds_canonical`. Bounds are closed
   three-axis canonical `min`/`max` coordinates with finite values and
   `min <= max` on each axis; they apply to interior and exterior targets.
-  Copy the pair unchanged into `selected_targets`;
-  neither value is a path or raw mask content.
-- `preview.identity_sha256` — the formal identity digest of the
-  Measured Step's preview render. It is supervisor-owned; do not cite,
-  dereference, or copy it into an assessment.
 - `change_from_parent` — repair-only; reports whether the
   Measured Step observably changed vs. its parent and whether the
   parent was itself accepted.
@@ -481,8 +463,7 @@ Rules for using decision facts:
   cite; you never override them, and you never derive acceptance from
   authored content.
 - Base your next repair hypothesis on them: `repair_frontier` and
-  `repair_targets` identify the active action layer and target facts;
-  depth-8 scalars remain the exact acceptance accounting;
+  `repair_targets` identify the active action layer and coarse target facts;
   `repair_targets` names the top-ranked residual regions by kind and
   supplies only the stable selection identities needed by the repair
   plan.
@@ -508,9 +489,10 @@ The bounded loop the supervisor enforces is:
    candidate. Each call returns fresh handles.
 4. Use `submit_step_zero` to submit the measured initial step. The
    supervisor retires that Attempt and resets `/candidate/work`.
-5. Loop: form a repair hypothesis and replace `/candidate/plan.json`
-   with a `voxblame.repair-batch/1` that selects exact
-   `{target_key, mask_sha256}` pairs from the parent's decision facts.
+5. Inspect the returned formal preview, then create or update the
+   Reconstruction Spec before forming a repair hypothesis. Replace
+   `/candidate/plan.json` with a `voxblame.repair-batch/1` that repeats the
+   selected coarse target's `{rank, kind, bounds_canonical}` facts.
    Start the next Attempt with an explicit parent step handle; the supervisor reseeds
    `/candidate/work/source/` with the parent's source. Edit it,
    run the registered tools for the child, then `submit_repair`.
