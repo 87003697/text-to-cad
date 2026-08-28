@@ -1409,17 +1409,18 @@ def _build_decision_facts(
                 "parent step accepted is malformed",
             ),
         }
+    residual_summary = _project_residual_summary(measurement_document)
     return {
         "schema": DECISION_FACTS_SCHEMA,
         "step_ordinal": step,
         "parent_step_ordinal": parent_ordinal,
         "accepted": accepted,
         "acceptance_state": "acceptance_satisfied" if accepted else "unaccepted",
-        "residual_summary": _project_residual_summary(measurement_document),
+        "residual_summary": residual_summary,
         "repair_targets": _project_repair_targets(
             workspace,
             (repair_target_document or measurement_document).get("repair_targets"),
-            active_depth=_project_residual_summary(measurement_document)["repair_frontier"]["active_depth"],
+            active_depth=residual_summary["repair_frontier"]["active_depth"],
         ),
         "change_from_parent": change_from_parent,
     }

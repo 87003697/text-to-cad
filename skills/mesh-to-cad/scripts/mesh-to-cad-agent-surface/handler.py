@@ -57,26 +57,12 @@ class SupervisorPorts(Protocol):
         candidate_handle: str,
     ) -> Mapping[str, Any]: ...
 
-    def submit_step_zero_with_preview(
-        self,
-        workspace_handle: str,
-        attempt_handle: str,
-        candidate_handle: str,
-    ) -> tuple[Mapping[str, Any], bytes | None]: ...
-
     def submit_repair(
         self,
         workspace_handle: str,
         attempt_handle: str,
         candidate_handle: str,
     ) -> Mapping[str, Any]: ...
-
-    def submit_repair_with_preview(
-        self,
-        workspace_handle: str,
-        attempt_handle: str,
-        candidate_handle: str,
-    ) -> tuple[Mapping[str, Any], bytes | None]: ...
 
     def inspect_formal_preview(self, preview_handle: str) -> Mapping[str, Any]: ...
 
