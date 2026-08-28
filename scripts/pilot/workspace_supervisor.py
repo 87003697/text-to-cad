@@ -167,6 +167,8 @@ class WorkspaceAPI(Protocol):
         self, workspace: Path, *, step: int
     ) -> Mapping[str, Any]: ...
 
+    def read_current_step_preview_png(self, workspace: Path, *, step: int) -> bytes: ...
+
     def finalize_from_agent_selection_claim(
         self, workspace: Path, *, scope: Any | None = None, **kwargs: Any
     ) -> Mapping[str, Any]: ...
@@ -391,6 +393,7 @@ class _PublicationFlight:
     attempt_id: int
     done: bool = False
     result: Mapping[str, Any] | None = None
+    step_number: int | None = None
     error: str | None = None
 
 
@@ -1977,6 +1980,19 @@ class WorkspaceSupervisor:
             kind="step_zero",
         )
 
+    def submit_step_zero_with_preview(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+    ) -> tuple[Mapping[str, Any], bytes | None]:
+        return self._submit_publication_request_with_preview(
+            workspace_handle,
+            attempt_handle,
+            candidate_handle,
+            kind="step_zero",
+        )
+
     def submit_repair(
         self,
         workspace_handle: str,
@@ -1984,6 +2000,19 @@ class WorkspaceSupervisor:
         candidate_handle: str,
     ) -> Mapping[str, Any]:
         return self._submit_publication_request(
+            workspace_handle,
+            attempt_handle,
+            candidate_handle,
+            kind="repair",
+        )
+
+    def submit_repair_with_preview(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+    ) -> tuple[Mapping[str, Any], bytes | None]:
+        return self._submit_publication_request_with_preview(
             workspace_handle,
             attempt_handle,
             candidate_handle,
@@ -2008,6 +2037,38 @@ class WorkspaceSupervisor:
                 candidate_handle,
                 kind=kind,
             )
+        finally:
+            self._end_active_call()
+
+    def _submit_publication_request_with_preview(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+        *,
+        kind: str,
+    ) -> tuple[Mapping[str, Any], bytes | None]:
+        """Submit one W1 publication and attach its committed formal preview."""
+
+        self._begin_active_call()
+        try:
+            result = self._submit_publication_single_flight(
+                workspace_handle,
+                attempt_handle,
+                candidate_handle,
+                kind=kind,
+            )
+            if result.get("state") != "published":
+                return result, None
+            key = self._publication_key(
+                workspace_handle, attempt_handle, candidate_handle, kind
+            )
+            with self._publication_condition:
+                flight = self._publication_flights.get(key)
+                step_number = None if flight is None else flight.step_number
+            if type(step_number) is not int:
+                raise SupervisorError("formal_preview_unavailable")
+            return result, self._read_committed_step_preview_png(step_number)
         finally:
             self._end_active_call()
 
@@ -2095,7 +2156,9 @@ class WorkspaceSupervisor:
             # clearing its fixed work tree.  A new Attempt must not reset
             # that tree until the replayable result is ready.
             self._retire_attempt(submission.attempt_id)
-            self._finish_publication(flight, result=result)
+            self._finish_publication(
+                flight, result=result, step_number=step_number
+            )
             return result
         except SupervisorError as exc:
             self._finish_publication(flight, error=exc.classification)
@@ -2109,13 +2172,26 @@ class WorkspaceSupervisor:
         flight: _PublicationFlight,
         *,
         result: Mapping[str, Any] | None = None,
+        step_number: int | None = None,
         error: str | None = None,
     ) -> None:
         with self._publication_condition:
             flight.result = result
+            flight.step_number = step_number
             flight.error = error
             flight.done = True
             self._publication_condition.notify_all()
+
+    def _read_committed_step_preview_png(self, step_number: int) -> bytes:
+        try:
+            preview_png = self.workspace_api.read_current_step_preview_png(
+                self.workspace, step=step_number
+            )
+        except Exception as exc:
+            raise SupervisorError("formal_preview_unavailable") from exc
+        if type(preview_png) is not bytes:
+            raise SupervisorError("formal_preview_unavailable")
+        return preview_png
 
 
     def _prepare_submission(

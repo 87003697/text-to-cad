@@ -13,6 +13,7 @@ from typing import Any
 
 
 MAX_FRAME_BYTES = 64 * 1024
+MAX_RESPONSE_BYTES = 24 * 1024 * 1024
 SOCKET_TARGET = "/run/mesh-to-cad-agent-surface.sock"
 
 
@@ -134,7 +135,6 @@ class AgentSurfaceBridge:
 
     def _connection_worker(self, connection: socket.socket) -> None:
         with connection:
-            connection.settimeout(2.0)
             with self._connections_lock:
                 self._connections.add(connection)
             try:
@@ -205,7 +205,10 @@ class AgentSurfaceBridge:
 
     @staticmethod
     def _write(stream: Any, value: dict[str, Any]) -> None:
-        stream.write(json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode("utf-8"))
+        payload = json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        if len(payload) > MAX_RESPONSE_BYTES:
+            raise ValueError("response_too_large")
+        stream.write(payload)
         stream.write(b"\n")
         stream.flush()
 

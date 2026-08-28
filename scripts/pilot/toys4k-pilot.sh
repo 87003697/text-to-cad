@@ -202,8 +202,8 @@ ${PROMPT_PREAMBLE}
 
 This is an authority-hidden Agent Surface execution. Read the opaque bootstrap
 contract from the fixed candidate mount /candidate/bootstrap.json. Use only
-the fixed client /agent-surface/client.py (or its --mcp mode) to invoke these
-seven intents: workspace_status, start_attempt, run_candidate_tool,
+the registered agent_surface MCP tools to invoke these seven intents:
+workspace_status, start_attempt, run_candidate_tool,
 submit_step_zero, submit_repair, select_and_finalize, and observe_reference.
 Use only handles from the bootstrap contract and the returned
 capability_bundle_handle; reuse that attempt-scoped bundle for candidate tool
@@ -216,10 +216,10 @@ handoff. Raw and canonical reference bytes are unavailable to this process.
 The canonical Workspace and its atomically published Final Delivery define
 success. ${RECONSTRUCTION_SPEC_INSTRUCTION}
 
-Use \`view_image\` to inspect key generated setup/formal preview PNGs for
-initial modeling, Repair Hypothesis parent/child comparison, and final
-selection, alongside objective measurements returned through the fixed
-capabilities.
+Inspect the image handle returned by successful submit_step_zero and
+submit_repair calls for initial modeling and Repair Hypothesis parent/child
+comparison, alongside their objective measurements. Do not use view_image,
+paths, URLs, or shell JSON.
 EOF
     )
 else

@@ -13,6 +13,7 @@ import sys
 
 SOCKET_PATH = Path("/run/mesh-to-cad-agent-surface.sock")
 MAX_FRAME_BYTES = 64 * 1024
+MAX_RESPONSE_BYTES = 24 * 1024 * 1024
 
 
 def _socket() -> socket.socket:
@@ -30,8 +31,8 @@ def _send(stream, request: object) -> dict:
         raise ValueError("request_too_large")
     stream.write(payload + b"\n")
     stream.flush()
-    response = stream.readline(MAX_FRAME_BYTES + 1)
-    if not response or len(response) > MAX_FRAME_BYTES:
+    response = stream.readline(MAX_RESPONSE_BYTES + 1)
+    if not response or len(response) > MAX_RESPONSE_BYTES:
         raise ValueError("invalid_response")
     value = json.loads(response)
     if not isinstance(value, dict):

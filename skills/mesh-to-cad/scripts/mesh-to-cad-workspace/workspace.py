@@ -1160,6 +1160,8 @@ def seed_repair_source_from_parent_step(
 DECISION_FACTS_SCHEMA = "mesh-to-cad.decision-facts/1"
 _MAX_DECISION_FACT_TARGETS = 8
 _MAX_DEPTH = 8
+_MAX_FORMAL_PREVIEW_PNG_BYTES = 16 * 1024 * 1024
+_PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _OBJECTIVE_FACT_KEYS = ("global_depth_8_zero", "out_of_frame_clear", "no_evidence_conflict")
 _TARGET_KEY = re.compile(r"step-[0-9]{6}:target-[0-9a-f]{16}")
 
@@ -1410,6 +1412,30 @@ def read_current_step_decision_facts(
     return _build_decision_facts(
         step_document, measurement_document, parent_document
     )
+
+
+def read_current_step_preview_png(workspace: Path, *, step: int) -> bytes:
+    """Project a committed Measured Step formal preview as bounded bytes."""
+
+    workspace = Path(workspace).resolve()
+    if type(step) is not int or isinstance(step, bool) or step < 0 or step > MAX_REPAIR_CYCLES:
+        raise WorkspaceError(
+            "invalid_workspace_path",
+            "formal preview requested for an out-of-range step ordinal",
+        )
+    preview = workspace / "steps" / f"{step:06d}" / "preview" / "preview.png"
+    _safe_relative(workspace, preview)
+    if preview.is_symlink() or not preview.is_file():
+        raise WorkspaceError("corrupt_workspace", "formal preview is unavailable")
+    try:
+        if preview.stat().st_size > _MAX_FORMAL_PREVIEW_PNG_BYTES:
+            raise WorkspaceError("corrupt_workspace", "formal preview is invalid")
+        payload = preview.read_bytes()
+    except OSError as error:
+        raise WorkspaceError("corrupt_workspace", "formal preview is unavailable") from error
+    if len(payload) > _MAX_FORMAL_PREVIEW_PNG_BYTES or not payload.startswith(_PNG_SIGNATURE):
+        raise WorkspaceError("corrupt_workspace", "formal preview is invalid")
+    return payload
 
 
 def _finalization_staging_path(workspace: Path) -> Path:

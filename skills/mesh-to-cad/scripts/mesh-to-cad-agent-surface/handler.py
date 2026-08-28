@@ -60,12 +60,26 @@ class SupervisorPorts(Protocol):
         candidate_handle: str,
     ) -> Mapping[str, Any]: ...
 
+    def submit_step_zero_with_preview(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+    ) -> tuple[Mapping[str, Any], bytes | None]: ...
+
     def submit_repair(
         self,
         workspace_handle: str,
         attempt_handle: str,
         candidate_handle: str,
     ) -> Mapping[str, Any]: ...
+
+    def submit_repair_with_preview(
+        self,
+        workspace_handle: str,
+        attempt_handle: str,
+        candidate_handle: str,
+    ) -> tuple[Mapping[str, Any], bytes | None]: ...
 
     def select_and_finalize(
         self,
@@ -802,6 +816,17 @@ class AgentSurface:
             callback()
 
     def handle(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        response, _preview_png = self._handle(request, include_preview=False)
+        return response
+
+    def handle_mcp(self, request: Mapping[str, Any]) -> tuple[dict[str, Any], bytes | None]:
+        """Return one closed response and its private MCP-only PNG attachment."""
+
+        return self._handle(request, include_preview=True)
+
+    def _handle(
+        self, request: Mapping[str, Any], *, include_preview: bool
+    ) -> tuple[dict[str, Any], bytes | None]:
         encoded_request = _canonical_json(
             request,
             classification="invalid_request",
@@ -822,6 +847,7 @@ class AgentSurface:
         _validate_args(spec, args)
         if self._ports is None:
             _fail("supervisor_unavailable", "$.supervisor")
+        preview_png: bytes | None = None
         try:
             if intent == "workspace_status":
                 result = self._ports.workspace_status(args["workspace_handle"])
@@ -839,9 +865,15 @@ class AgentSurface:
                     args["operation_handle"],
                 )
             elif intent == "submit_step_zero":
-                result = self._ports.submit_step_zero(**args)
+                if include_preview:
+                    result, preview_png = self._ports.submit_step_zero_with_preview(**args)
+                else:
+                    result = self._ports.submit_step_zero(**args)
             elif intent == "submit_repair":
-                result = self._ports.submit_repair(**args)
+                if include_preview:
+                    result, preview_png = self._ports.submit_repair_with_preview(**args)
+                else:
+                    result = self._ports.submit_repair(**args)
             elif intent == "select_and_finalize":
                 result = self._ports.select_and_finalize(**args)
             else:
@@ -873,7 +905,9 @@ class AgentSurface:
             )
         ) > MAX_RESPONSE_BYTES:
             _fail("response_too_large", "$.response")
-        return response
+        if intent in {"submit_step_zero", "submit_repair"} and type(preview_png) is bytes:
+            return response, preview_png
+        return response, None
 
 
 __all__ = [

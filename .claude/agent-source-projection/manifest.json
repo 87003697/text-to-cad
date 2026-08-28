@@ -2,13 +2,13 @@
   "entries": [
     {
       "path": "agent-surface/client.py",
-      "sha256": "fce707ec8cdefb113814fc76f901e3a6375947aaaab5ea0af1d406ed89401939",
-      "size": 3957
+      "sha256": "bb2e1bbecc2359dad29f426c42957f59ca3a602c3507ecb9527ebfb797ac3362",
+      "size": 4001
     },
     {
       "path": "skills/mesh-to-cad/SKILL.md",
-      "sha256": "e255813f2f3c7f32d4322d15c15d6d7b6846ff456208797d397fcef338d633c9",
-      "size": 18436
+      "sha256": "dd861a8592f6c19e6d7f1d0fab71a7530e27255ca7f790faf208ee5200b286d0",
+      "size": 18676
     },
     {
       "path": "skills/mesh-to-cad/references/agent-selection-claim.md",

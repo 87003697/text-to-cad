@@ -729,7 +729,11 @@ def prepare_isolated_job_codex_home(exp_dir: Path) -> Path:
         config_path.write_text(
             "# Candidate-only Agent Execution CODEX_HOME.\n"
             "# The gateway supplies provider config via -c flags; no\n"
-            "# marketplaces or plugins are registered here.\n",
+            "# marketplaces or plugins are registered here.\n\n"
+            "[mcp_servers.agent_surface]\n"
+            'command = "python3"\n'
+            'args = ["/agent-surface/client.py", "--mcp"]\n'
+            "startup_timeout_ms = 15000\n",
             encoding="utf-8",
         )
         config_path.chmod(0o600)
@@ -982,7 +986,7 @@ def build_bwrap_argv(
         )
         projection_skills = None
 
-    if browser_capability_dir is not None:
+    if browser_capability_dir is not None and not isolated_agent:
         browser_capability_dir = browser_capability_dir.resolve()
         if not browser_capability_dir.is_dir():
             raise PilotError("browser runtime capability directory is unavailable")
@@ -1118,10 +1122,9 @@ def build_bwrap_argv(
                     str(SANDBOX_REPO_ROOT / "skills" / skill_dir.name),
                 ]
             )
-    if browser_capability_dir is not None:
+    if browser_capability_dir is not None and not isolated_agent:
         argv.extend(["--ro-bind", str(browser_capability_dir), str(sandbox_browser_capability_dir)])
-        if not isolated_agent:
-            argv.extend(["--ro-bind", str(browser_capability_dir), SANDBOX_MOUNT_ROOT])
+        argv.extend(["--ro-bind", str(browser_capability_dir), SANDBOX_MOUNT_ROOT])
     argv.extend(
         [
             "--remount-ro",

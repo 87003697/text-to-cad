@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import sys
@@ -37,19 +38,34 @@ def _rpc_error(request_id, code: int, message: str) -> dict:
     }
 
 
-def _tool_result(request_id, payload: dict, *, is_error: bool = False) -> dict:
+def _tool_result(
+    request_id,
+    payload: dict,
+    *,
+    preview_png: bytes | None = None,
+    is_error: bool = False,
+) -> dict:
+    content = [
+        {
+            "type": "text",
+            "text": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+        }
+    ]
+    if type(preview_png) is bytes:
+        content.append(
+            {
+                "type": "image",
+                "data": base64.b64encode(preview_png).decode("ascii"),
+                "mimeType": "image/png",
+            }
+        )
     return {
         "jsonrpc": JSON_RPC_VERSION,
         "id": request_id,
         "result": {
             "isError": is_error,
             "structuredContent": payload,
-            "content": [
-                {
-                    "type": "text",
-                    "text": json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
-                }
-            ],
+            "content": content,
         },
     }
 
@@ -187,12 +203,12 @@ def _handle_request(
     if type(name) is not str or name not in INTENTS or type(arguments) is not dict:
         return _rpc_error(request_id, INVALID_PARAMS, "tool parameters are invalid"), state
     try:
-        payload = handler.handle(
+        payload, preview_png = handler.handle_mcp(
             {"schema": REQUEST_SCHEMA, "intent": name, "args": arguments}
         )
     except AgentSurfaceError as error:
         return _tool_result(request_id, error_document(error), is_error=True), state
-    return _tool_result(request_id, payload), state
+    return _tool_result(request_id, payload, preview_png=preview_png), state
 
 
 def serve(

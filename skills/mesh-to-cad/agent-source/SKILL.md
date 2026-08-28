@@ -80,42 +80,46 @@ returned by that Attempt's `start_attempt` response, verbatim. Keep every
 handle opaque. There is no `tool`, `argv`, `command`, or
 `capability_bundle_handle` request field.
 
-Each intent request is one JSON document on stdin:
+The registered `agent_surface` MCP tools are the only way to invoke these
+intents. Use the tool result's structured content for handles and decision
+facts. Successful `submit_step_zero` and `submit_repair` calls also return an
+inspectable formal-preview image; inspect that returned image handle directly.
+Do not use shell JSON, `view_image`, paths, URLs, sockets, or another client.
+
+For reference, the fixed client script is the MCP server command already
+registered for this execution. You do not invoke it yourself.
+
+Pass only the intent-specific fields declared by that MCP tool. For example,
+`workspace_status` takes:
 
 ```json
 {
-  "schema": "mesh-to-cad.agent-intent/1",
-  "intent": "<one of the seven names>",
-  "args": { "<field>": "<handle-or-value>" }
+  "workspace_handle": "<opaque handle>"
 }
 ```
 
-Send it to the fixed client script that the sandbox exposes at
-`/agent-surface/client.py`. The client speaks a Unix socket the sandbox
-also exposes as `/run/mesh-to-cad-agent-surface.sock`. Do not construct
-your own client. Do not open the socket yourself.
+Do not add an intent envelope, `schema`, `intent`, or `args`; the registered
+MCP server constructs that envelope privately.
 
-Every response has the closed shape:
+Every successful tool result has this direct structured content:
 
 ```json
 {
-  "ok": true,
-  "response": { "schema": "mesh-to-cad.agent-response/1",
-                 "intent": "<same intent>",
-                 "result": { "state": "...", "...": "...",
-                             "permitted_next_intents": ["..."] } }
+  "schema": "mesh-to-cad.agent-response/1",
+  "intent": "<same intent>",
+  "result": { "state": "...", "...": "...",
+              "permitted_next_intents": ["..."] }
 }
 ```
 
-An error response has `ok: false` and a closed error body:
+An error tool result has this direct structured content:
 
 ```json
 {
-  "ok": false,
-  "error": { "schema": "mesh-to-cad.agent-error/1",
-              "error": { "classification": "<enum>",
-                          "path": "<jsonpath>",
-                          "detail": "<enum>" } }
+  "schema": "mesh-to-cad.agent-error/1",
+  "error": { "classification": "<enum>",
+              "path": "<jsonpath>",
+              "detail": "<enum>" }
 }
 ```
 
