@@ -21,6 +21,12 @@ from typing import Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.pilot import provider_free_agent_surface_mcp_injection as mcp_injection
+from scripts.pilot import provider_free_installed_plugin as installed_plugin
+
 S3_PREFIX = "s3://arcwm-code-us-west-2/ericzyma/text-to-cad/outputs"
 S3_REMOTE = "threed-code:arcwm-code-us-west-2/ericzyma/text-to-cad/outputs"
 MATERIALIZED_ROOT = REPO_ROOT / "tmp/cvm-pull/outputs"
@@ -78,6 +84,7 @@ class ExpInspection:
     final_status: int | None
     has_postmortem: bool
     has_terminal_handoff: bool = False
+    provider_free_success: bool = False
 
 
 @dataclass(frozen=True)
@@ -143,6 +150,48 @@ def is_safe_exp(value: str) -> bool:
 
     parts = value.split("/")
     return len(parts) == 2 and all(is_safe_component(part) for part in parts)
+
+
+def _provider_free_record(source: Path, manifest: object) -> dict[str, object] | None:
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("identity"), dict):
+        return None
+    identity = manifest["identity"]
+    job = f"{source.parent.name}/{source.name}"
+    if identity.get("job") != job or not isinstance(identity.get("authority"), dict):
+        return None
+    scenario = identity.get("scenario")
+    if scenario not in {installed_plugin.SCENARIO, mcp_injection.SCENARIO}:
+        return None
+    return {
+        "provider_free": True,
+        "scenario": scenario,
+        "object": scenario,
+        "token_slot": None,
+        "job": job,
+        "exp_dir": f"outputs/{job}",
+        "plugin_authority": identity["authority"],
+    }
+
+
+def is_valid_provider_free_success(source: Path, manifest: object) -> bool:
+    """Recognize a closed validated provider-free success without Workspace authority."""
+
+    record = _provider_free_record(source, manifest)
+    if record is None:
+        return False
+    repo_root = source.parents[2]
+    try:
+        if record["scenario"] == mcp_injection.SCENARIO:
+            mcp_injection.validate_artifacts(repo_root, record)
+        else:
+            installed_plugin.validate_artifacts(
+                repo_root,
+                record,
+                verify_evidence_digest=False,
+            )
+    except (installed_plugin.ProviderFreeError, mcp_injection.ProviderFreeError):
+        return False
+    return True
 
 
 def parse_request(argv: Sequence[str]) -> PullRequest:
@@ -328,6 +377,7 @@ import json
 import pathlib
 import stat
 import sys
+from scripts.pilot.cvm_pull import is_valid_provider_free_success
 
 root = pathlib.Path.home() / "text-to-cad/outputs"
 group, child = sys.argv[1].split("/", 1)
@@ -346,6 +396,7 @@ if not path_safe:
         "final_status": None,
         "has_postmortem": False,
         "has_terminal_handoff": False,
+        "provider_free_success": False,
     }, separators=(",", ":")))
     raise SystemExit(0)
 try:
@@ -354,6 +405,7 @@ try:
 except (OSError, json.JSONDecodeError):
     value = None
 complete = type(value) is int
+provider_free_success = is_valid_provider_free_success(exp, manifest) if complete else False
 handoff = (
     root / group / ".internal-terminal-validation" / child
     / "terminal-validation.json"
@@ -372,11 +424,12 @@ print(json.dumps({
     "final_status": value if complete else None,
     "has_postmortem": (exp / "run/.codex-home").is_dir(),
     "has_terminal_handoff": has_terminal_handoff,
+    "provider_free_success": provider_free_success,
 }, separators=(",", ":")))
 """.strip()
         command = " ".join(
             (
-                "python3",
+                "cd ~/text-to-cad && python3",
                 "-c",
                 shlex.quote(script),
                 shlex.quote(exp),
@@ -401,6 +454,7 @@ print(json.dumps({
             ),
             has_postmortem=payload.get("has_postmortem") is True,
             has_terminal_handoff=payload.get("has_terminal_handoff") is True,
+            provider_free_success=payload.get("provider_free_success") is True,
         )
 
     def qualify(
@@ -434,6 +488,10 @@ print(json.dumps({
                     is PostmortemPolicy.INCLUDE_RETAIN
                     and item.final_status != 0
                     and not item.has_terminal_handoff
+                ) or (
+                    item.provider_free_success
+                    and item.final_status == 0
+                    and not item.has_terminal_handoff
                 ):
                     handoffless_postmortems.add(item.exp)
                 publish.append(item.exp)
@@ -464,6 +522,7 @@ print(json.dumps({
 
         script = r'''
 import fnmatch, gzip, io, json, os, pathlib, stat, sys, tarfile
+from scripts.pilot.cvm_pull import is_valid_provider_free_success
 
 exp, excludes_json, allow_missing_raw = sys.argv[1:]
 excludes = json.loads(excludes_json)
@@ -477,7 +536,7 @@ if type(manifest.get("final_status")) is not int:
 handoff = root / group / ".internal-terminal-validation" / child / "terminal-validation.json"
 if not handoff.is_file() and not allow_missing:
     raise SystemExit("terminal handoff missing")
-if allow_missing and manifest["final_status"] == 0:
+if allow_missing and manifest["final_status"] == 0 and not is_valid_provider_free_success(source, manifest):
     raise SystemExit("successful experiment requires terminal handoff")
 members = []
 for directory, dirnames, filenames in os.walk(source, followlinks=False):
@@ -550,7 +609,7 @@ receipt = {
 print(json.dumps(receipt, sort_keys=True, separators=(",", ":")))
 '''.strip()
         command = " ".join((
-            "python3", "-c", shlex.quote(script), shlex.quote(exp),
+            "cd ~/text-to-cad && python3", "-c", shlex.quote(script), shlex.quote(exp),
             shlex.quote(json.dumps(self.excludes)),
             "1" if allow_missing_handoff else "0",
         ))

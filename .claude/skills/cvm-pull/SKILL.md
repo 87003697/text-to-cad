@@ -19,14 +19,15 @@ scripts/pilot/cvm-pull.sh \
 
 The command performs one transaction per experiment:
 
-1. Read the completed CVM experiment and its terminal evidence.
+1. Read the completed CVM experiment and its Workspace terminal evidence or
+   closed provider-free evidence.
 2. Build one compressed archive on CVM. Normal and discard publication apply
    `.cvmignore.pull` plus the fixed disposable runtime exclusions; explicit
    `--include-byproducts` publication applies only the fixed exclusions.
 3. Upload that archive to the fixed S3 outputs prefix.
 4. Download and materialize the archive under `tmp/cvm-pull/outputs/`.
-5. Validate the archive handle, member names and sizes, and restore the
-   external Terminal Validation Handoff beside the materialized experiment.
+5. Validate the archive handle, member names and sizes. Restore the external
+   Terminal Validation Handoff only for a materialized Workspace experiment.
 6. Clean the exact CVM experiment only after materialization succeeds, unless
    `--retain-cvm-source` was requested.
 
@@ -35,9 +36,13 @@ add a second transfer path or checksum pass.
 
 ## Publication rules
 
-- A successful experiment requires a valid
+- A successful Workspace experiment requires a valid
   `run/terminal-validation-locator.json` and its external
   `.internal-terminal-validation/<child>/terminal-validation.json` handoff.
+  A closed provider-free artifact manifest with supported provider-free
+  evidence may be materialized without Workspace terminal evidence; audit its
+  materialized `provider-free-evidence.json` and artifact manifest directly,
+  rather than sending it to pilot review.
 - A failed experiment is preserved by default. Include it only with
   `--include-byproducts`; use `--retain-cvm-source` when the CVM copy must
   remain for postmortem review.
@@ -63,4 +68,5 @@ add a second transfer path or checksum pass.
 
 On failure, preserve the CVM source and report the exact handle and exit class.
 On success, report the materialized path and whether the CVM source was cleaned
-or retained. For review, point `cad:pilot-review` at the materialized group.
+or retained. Send materialized Workspace outputs to `cad:pilot-review`; audit
+provider-free outputs from their materialized evidence and artifact manifest.

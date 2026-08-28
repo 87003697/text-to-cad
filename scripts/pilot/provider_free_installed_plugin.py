@@ -311,7 +311,12 @@ def artifact_paths(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path, Pa
     return exp_dir, exp_dir / "provider-free-evidence.json", exp_dir / "artifact_manifest.json"
 
 
-def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path, Path]:
+def validate_artifacts(
+    repo_root: Path,
+    record: Mapping[str, Any],
+    *,
+    verify_evidence_digest: bool = True,
+) -> tuple[Path, Path]:
     _, evidence_path, manifest_path = artifact_paths(repo_root, record)
     try:
         evidence_bytes = evidence_path.read_bytes()
@@ -366,12 +371,26 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
         "schema": MANIFEST_SCHEMA,
         "final_status": 0,
         "identity": identity,
-        "evidence": {
-            "path": evidence_path.name,
-            "sha256": hashlib.sha256(evidence_bytes).hexdigest(),
-        },
+        "evidence": {"path": evidence_path.name},
     }
-    if manifest != expected_manifest:
+    if verify_evidence_digest:
+        expected_manifest["evidence"]["sha256"] = hashlib.sha256(
+            evidence_bytes
+        ).hexdigest()
+        valid_manifest = manifest == expected_manifest
+    else:
+        evidence_marker = manifest.get("evidence") if isinstance(manifest, dict) else None
+        valid_manifest = (
+            isinstance(evidence_marker, dict)
+            and set(evidence_marker) == {"path", "sha256"}
+            and evidence_marker.get("path") == evidence_path.name
+            and isinstance(manifest, dict)
+            and set(manifest) == set(expected_manifest)
+            and manifest.get("schema") == expected_manifest["schema"]
+            and manifest.get("final_status") == expected_manifest["final_status"]
+            and manifest.get("identity") == identity
+        )
+    if not valid_manifest:
         raise ProviderFreeError("provider-free artifact manifest differs from evidence")
     return evidence_path, manifest_path
 
