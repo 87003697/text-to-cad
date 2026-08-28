@@ -54,7 +54,10 @@ a closed result plus the list of intents permitted next.
   The supervisor discovers evidence from the trusted candidate tree.
 - `inspect_formal_preview` — use the opaque `preview_handle` returned by a
   published Step to inspect its formal image through the Agent Surface MCP
-  tool. It returns an image block, never a path or image bytes in JSON.
+  tool. In code mode call `mcp__agent_surface__inspect_formal_preview`; native
+  Responses uses namespace `mcp__agent_surface` with child
+  `inspect_formal_preview`. It returns an image block, never a path or image
+  bytes in JSON.
 - `select_and_finalize` — request the supervisor's final result from an
   opaque `step_handle` naming the Selected Step plus an authored
   selection handle (a bounded semantic claim) and notes handle. You do
@@ -98,11 +101,14 @@ For example, use shell input redirection only to feed this exact request:
 }
 ```
 
-Use the fixed client for every JSON intent. The only MCP tool you may call
-is the registered Agent Surface `inspect_formal_preview`, and only with a
-published Step's returned `preview_handle`; inspect its image block before
-creating or updating the Reconstruction Spec. Do not use `tool_search`, another
-client, Workspace helper, path-discovery operation, or direct socket.
+Use the fixed client for every JSON intent. After a published Step returns a
+`preview_handle`, emit no text before calling the only MCP tool you may use:
+code mode calls `mcp__agent_surface__inspect_formal_preview`; native Responses
+uses namespace `mcp__agent_surface` with child `inspect_formal_preview`. Never
+use a dotted server/tool spelling. Inspect its image block before creating or
+updating the Reconstruction Spec, and record only visual facts actually visible
+there. Do not use `tool_search`, another client, Workspace helper,
+path-discovery operation, or direct socket.
 
 The `args` object must have exactly the fields for its intent:
 

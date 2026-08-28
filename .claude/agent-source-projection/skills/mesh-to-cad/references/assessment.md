@@ -47,11 +47,15 @@ or non-string values fail closed.
 1. Read the intent response for the previous submission. The
    `decision_facts` object under it contains every measured fact you
    are allowed to cite.
-2. Call the Agent Surface MCP `inspect_formal_preview` tool with the returned
-   `preview_handle` and inspect its image block before creating or updating
-   `/candidate/reconstruction-spec.json`. Record semantic Components for the
-   fuselage/body, left and right main wings, horizontal tailplane, and vertical
-   fin with their canonical bounds; do not record paths, bytes, or handles.
+2. With the returned `preview_handle`, emit no text before calling the Agent
+   Surface MCP inspection tool: code mode calls
+   `mcp__agent_surface__inspect_formal_preview`; native Responses uses namespace
+   `mcp__agent_surface` with child `inspect_formal_preview`. Never use a dotted
+   server/tool spelling. Inspect its image block before creating or updating
+   `/candidate/reconstruction-spec.json`, and record only visual facts actually
+   visible there. Record semantic Components for the fuselage/body, left and
+   right main wings, horizontal tailplane, and vertical fin with their canonical
+   bounds; do not record paths, bytes, or handles.
 3. Read `residual_summary.repair_frontier.active_depth` first. When it is
    non-null, use the active-depth interior targets and their
    `bounds_canonical` values to pick one residual you can plausibly move with

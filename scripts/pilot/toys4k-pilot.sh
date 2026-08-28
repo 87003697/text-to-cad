@@ -213,9 +213,12 @@ For observe_reference, args must be exactly
 {"reference_handle":"<opaque>","observation":{"method":"section_profile","args":{}}}.
 Read the one JSON client response
 before issuing another request; requests are strictly serial. On an error,
-preserve its classification and do not retry blindly. The only MCP tool you
-may call is the registered Agent Surface inspect_formal_preview, using a
-preview_handle returned by a published Step before creating or updating the
+preserve its classification and do not retry blindly. After each published
+Step response with a preview_handle, emit no text before calling the only MCP
+tool you may use: in code mode its callable ID is
+mcp__agent_surface__inspect_formal_preview; native Responses uses namespace
+mcp__agent_surface with child inspect_formal_preview. Never use a dotted
+server/tool spelling. Inspect its image block before creating or updating the
 Reconstruction Spec. Do not use tool_search, inspect paths, or invoke another
 client.
 Use only handles from the bootstrap contract and the returned
@@ -229,10 +232,13 @@ handoff. Raw and canonical reference bytes are unavailable to this process.
 The canonical Workspace and its atomically published Final Delivery define
 success. ${RECONSTRUCTION_SPEC_INSTRUCTION}
 
-After every published Step response, use the registered Agent Surface MCP
-inspect_formal_preview tool with its opaque preview_handle and inspect the
-returned image block before creating or updating the Reconstruction Spec.
-Do not use view_image, paths, URLs, or host/capability discovery.
+After every published Step response with an opaque preview_handle, emit no
+text before calling the Agent Surface MCP inspection tool: code mode uses
+mcp__agent_surface__inspect_formal_preview; native Responses uses namespace
+mcp__agent_surface with child inspect_formal_preview. Never use a dotted
+server/tool spelling. Inspect the returned image block before creating or
+updating the Reconstruction Spec. Do not use view_image, paths, URLs, or
+host/capability discovery.
 EOF
     )
 else
