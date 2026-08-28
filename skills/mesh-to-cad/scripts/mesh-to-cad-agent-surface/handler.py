@@ -905,9 +905,7 @@ class AgentSurface:
             )
         ) > MAX_RESPONSE_BYTES:
             _fail("response_too_large", "$.response")
-        if intent in {"submit_step_zero", "submit_repair"} and type(preview_png) is bytes:
-            return response, preview_png
-        return response, None
+        return response, preview_png
 
 
 __all__ = [
