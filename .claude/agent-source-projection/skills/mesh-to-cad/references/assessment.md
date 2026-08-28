@@ -30,10 +30,10 @@ Fields:
 - `to_step` — the intended child step ordinal for the current Repair Attempt,
   as bound by the Attempt/plan lifecycle. The current Attempt has no decision
   facts yet; W1 checks this value against the intended child at submission.
-- `preview_observation` — a short human-language note about the
-  candidate preview you inspected before submitting. Free text, but
-  scoped to what you observed in the returned preview identity, not
-  raw geometry.
+- `preview_observation` — a short human-language observation field retained
+  by the closed schema. In fixed-client transport, ground it in returned
+  Reference Observations, the parent decision facts, and the intended source
+  edit; no preview image is attached or inspectable.
 - `summary` — a short human-language statement of the falsifiable
   hypothesis: what you edited in `work/source/`, why that edit should
   change a specific residual, and which decision-fact fields would
@@ -56,7 +56,7 @@ or non-string values fail closed.
    to select the repair layer or target.
 3. Make that edit under `/candidate/work/source/`. Do not touch any
    other file the supervisor named as its own.
-4. After `run_candidate_tool` produces the preview, write
+4. After `run_candidate_tool` produces the measured candidate evidence, write
    `/candidate/work/assessment.json` with:
    - `from_step` copied from the selected parent's `decision_facts.step_ordinal`;
      `to_step` bound to the current Repair Attempt's intended child step;
@@ -64,8 +64,9 @@ or non-string values fail closed.
      bounds you targeted, and what the next frontier/target reading should
      show if the hypothesis holds; depth-8 changes may be recorded only as
      acceptance accounting;
-   - a `preview_observation` grounded only in what the preview
-     identity's rendered variant let you see.
+   - a `preview_observation` grounded in the returned Reference Observation,
+     parent decision facts, and intended source edit. Do not claim image
+     inspection.
 5. Submit through `submit_repair`. The supervisor uses your assessment as
    authored notes only.
 
@@ -81,7 +82,7 @@ or non-string values fail closed.
   to the current Repair Attempt's intended child step; inventing other
   numbers is rejected.
 - **Assessment cannot reference internal identifiers.** Do not paste
-  handles, digests other than the preview identity, or paths outside
+  handles, digests, or paths outside
   `/candidate/work/`. Cite semantic facts, not identifiers.
 - **Assessment cannot substitute for a submission.** Writing the
   file has no effect until you invoke `submit_repair` with the current
@@ -101,14 +102,14 @@ Suppose the parent Measured Step response reported:
   not the edit selector)
 
 You edit `work/source/model.py` to trim a boss you believe is
-producing the top excess region, rebuild and preview, then write:
+producing the top excess region, rebuild, then write:
 
 ```json
 {
   "schema": "mesh-to-cad.assessment/1",
   "from_step": 0,
   "to_step": 1,
-  "preview_observation": "Preview shows the trimmed boss no longer overhangs the plate.",
+  "preview_observation": "The Reference Observation and depth-3 target bounds identify the boss region selected for trimming.",
   "summary": "Trimmed the boss diameter by 2 mm inside the depth-3 rank-0 excess target bounds. Expect that target's excess count or the depth-3 frontier error count to fall. Depth-8 counts remain acceptance accounting. Refuted if the same excess reappears in the same target bounds."
 }
 ```

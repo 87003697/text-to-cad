@@ -80,46 +80,99 @@ returned by that Attempt's `start_attempt` response, verbatim. Keep every
 handle opaque. There is no `tool`, `argv`, `command`, or
 `capability_bundle_handle` request field.
 
-The registered `agent_surface` MCP tools are the only way to invoke these
-intents. Use the tool result's structured content for handles and decision
-facts. Successful `submit_step_zero` and `submit_repair` calls also return an
-inspectable formal-preview image; inspect that returned image handle directly.
-Do not use shell JSON, `view_image`, paths, URLs, sockets, or another client.
+## Fixed-client transport
 
-For reference, the fixed client script is the MCP server command already
-registered for this execution. You do not invoke it yourself.
-
-Pass only the intent-specific fields declared by that MCP tool. For example,
-`workspace_status` takes:
+Invoke every intent through ordinary `exec_command`, running only the fixed
+client `python3 /agent-surface/client.py`. Feed it exactly one closed JSON
+object on stdin and read its one JSON response before issuing another intent.
+For example, use shell input redirection only to feed this exact request:
 
 ```json
 {
-  "workspace_handle": "<opaque handle>"
+  "schema": "mesh-to-cad.agent-intent/1",
+  "intent": "workspace_status",
+  "args": {"workspace_handle": "<opaque handle>"}
 }
 ```
 
-Do not add an intent envelope, `schema`, `intent`, or `args`; the registered
-MCP server constructs that envelope privately.
+Do not call MCP tools or `tool_search`. The MCP registration remains a
+compatibility surface for providers that support it, but this execution uses
+only the fixed client. Apart from authoring allowed candidate files, do not run
+shell authority operations, another client, Workspace helper, or
+path-discovery operation. Do not connect to sockets directly.
 
-Every successful tool result has this direct structured content:
+The `args` object must have exactly the fields for its intent:
+
+- `workspace_status`: `workspace_handle`.
+- `start_attempt`: `workspace_handle`, `plan_handle`, and, only for a repair,
+  `parent_step_handle`.
+- `run_candidate_tool`: `workspace_handle`, `attempt_handle`,
+  `candidate_handle`, `operation_handle`.
+- `submit_step_zero` and `submit_repair`: `workspace_handle`,
+  `attempt_handle`, `candidate_handle`.
+- `select_and_finalize`: `workspace_handle`, `step_handle`,
+  `selection_handle`, `notes_handle`.
+- `observe_reference`: `reference_handle`, `observation`.
+
+Every successful client response is one JSON object with the response envelope:
 
 ```json
 {
-  "schema": "mesh-to-cad.agent-response/1",
-  "intent": "<same intent>",
-  "result": { "state": "...", "...": "...",
-              "permitted_next_intents": ["..."] }
+  "ok": true,
+  "response": {
+    "schema": "mesh-to-cad.agent-response/1",
+    "intent": "<same intent>",
+    "result": { "...": "..." }
+  }
 }
 ```
 
-An error tool result has this direct structured content:
+For the six workflow intents, `result` has the following closed shapes:
+
+- `workspace_status`: `state`, `workspace_identity`, `budgets`,
+  `permitted_next_intents`.
+- `start_attempt`: `state`, `attempt_handle`, `candidate_handle`,
+  `capability_bundle_handle`, `permitted_next_intents`.
+- `run_candidate_tool`: `state`, `candidate_handle`, `result_handle`,
+  `permitted_next_intents`.
+- `submit_step_zero`: `state`, `step_handle`, `decision_facts`,
+  `permitted_next_intents`.
+- `submit_repair`: on publication, `state`, `step_handle`, `cycle_handle`,
+  `decision_facts`, `permitted_next_intents`; on its closed evidence failure,
+  `state`, `classification`, `permitted_next_intents`.
+- `select_and_finalize`: `state`, `final_delivery_handle`,
+  `permitted_next_intents`.
+
+`observe_reference` is not a workflow-state response. Its `result` is exactly
+`{"observation":{"method":"summary|components","value":{...}}}`. A
+summary value contains canonical-frame, bounds, count, quality, and aggregate
+geometry facts; a components value contains bounded component ranks, counts,
+bounds, and centroids.
+
+A supervisor/handler error response is:
 
 ```json
 {
+  "ok": false,
   "schema": "mesh-to-cad.agent-error/1",
   "error": { "classification": "<enum>",
               "path": "<jsonpath>",
               "detail": "<enum>" }
+}
+```
+
+If the fixed client cannot parse its stdin JSON before contacting the
+supervisor, it instead returns this local parse-failure shape:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "schema": "mesh-to-cad.agent-error/1",
+    "error": { "classification": "invalid_request",
+               "path": "$.request",
+               "detail": "invalid_request" }
+  }
 }
 ```
 
@@ -219,7 +272,7 @@ evidence, previews, manifests, and export artifacts.
       }
     ],
     "rationale": "Why these targets form one coherent modeling problem.",
-    "preview_observation": "What the formal preview shows before editing."
+    "preview_observation": "What the Reference Observation and parent decision facts establish before editing."
   }
   ```
 
@@ -298,8 +351,15 @@ Every other observation method is `unsupported_operation`. Do not ask
 for raw mesh access, file paths, or free-form measurements; those are
 not available and asking for them is a closed error.
 
+For this fixed-client transport, use the returned summary/components structured
+observations: summary provides canonical-frame, bounds, count, quality, and
+aggregate geometry facts; components provides bounded component ranks, counts,
+bounds, and centroids. It returns no image attachment. Use those observations,
+decision facts, repair-frontier targets, and objective measurements for modeling
+and repair decisions; never claim to have inspected a formal preview image.
+
 Use observation results plus residual evidence returned by the
-supervisor (measurements, region diffs, previews) to form one
+supervisor (measurements, region diffs, and decision facts) to form one
 falsifiable repair hypothesis at a time. Cite what you observed, what
 you would change in the candidate source, and what geometric fact
 would refute the hypothesis. The residual facts the supervisor returns
@@ -400,8 +460,8 @@ Fields and bounds:
   Copy the pair unchanged into `selected_targets`;
   neither value is a path or raw mask content.
 - `preview.identity_sha256` — the formal identity digest of the
-  Measured Step's preview render; you may cite it in your assessment
-  but cannot dereference it.
+  Measured Step's preview render. It is supervisor-owned; do not cite,
+  dereference, or copy it into an assessment.
 - `change_from_parent` — repair-only; reports whether the
   Measured Step observably changed vs. its parent and whether the
   parent was itself accepted.

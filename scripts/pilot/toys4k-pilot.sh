@@ -28,7 +28,7 @@ if [[ -z "${PYTHON_BIN:-}" ]]; then
     fi
 fi
 
-# Defensive: source secrets so `nohup ./toys4k-pilot.sh ...` works without
+# Defensive: source secrets so nohup toys4k-pilot.sh works without
 # a caller wrapper. The direct Venus provider still needs VENUS_TOKEN; nohup
 # does not source shell startup files. A missing file is fine for local tests.
 SECRETS_FILE="${HOME}/.secrets/text-to-cad.env"
@@ -161,17 +161,17 @@ fi
 VIEW_IMAGE_INSTRUCTION=""
 if [[ "$VIEW_IMAGE" == 1 ]]; then
     VIEW_IMAGE_INSTRUCTION=$(cat <<EOF
-View-image treatment is enabled for this pilot. Use \`view_image\` to inspect
+View-image treatment is enabled for this pilot. Use view_image to inspect
 the generated setup/formal preview PNGs during setup/initial modeling, for
 each Repair Hypothesis parent-child comparison (parent/child comparison), and
 for final selection,
-alongside objective measurements. Do not disable or avoid the \`view_image\`
+alongside objective measurements. Do not disable or avoid the view_image
 tool.
 EOF
     )
 else
     VIEW_IMAGE_INSTRUCTION=$(cat <<EOF
-View-image control mode is active: \`view_image\` is disabled; do not call \`view_image\`.
+View-image control mode is active: view_image is disabled; do not call view_image.
 Use the formal preview JSON and objective measurements for
 decisions while keeping all other pilot behavior unchanged.
 EOF
@@ -202,9 +202,17 @@ ${PROMPT_PREAMBLE}
 
 This is an authority-hidden Agent Surface execution. Read the opaque bootstrap
 contract from the fixed candidate mount /candidate/bootstrap.json. Use only
-the registered agent_surface MCP tools to invoke these seven intents:
+ordinary exec_command calls to run the fixed client
+python3 /agent-surface/client.py for these seven intents:
 workspace_status, start_attempt, run_candidate_tool,
 submit_step_zero, submit_repair, select_and_finalize, and observe_reference.
+For each call, provide exactly one closed JSON request envelope on stdin:
+{"schema":"mesh-to-cad.agent-intent/1","intent":"<intent>","args":{...}}.
+Read the one JSON client response before issuing another request. Do not call
+MCP tools or tool_search: the MCP registration is a compatibility surface for
+other providers, not an available transport here. Apart from authoring allowed
+candidate files, do not run shell authority operations, inspect paths, or
+invoke another client.
 Use only handles from the bootstrap contract and the returned
 capability_bundle_handle; reuse that attempt-scoped bundle for candidate tool
 and evidence submissions. Never invent paths, argv, shell
@@ -216,10 +224,11 @@ handoff. Raw and canonical reference bytes are unavailable to this process.
 The canonical Workspace and its atomically published Final Delivery define
 success. ${RECONSTRUCTION_SPEC_INSTRUCTION}
 
-Inspect the image handle returned by successful submit_step_zero and
-submit_repair calls for initial modeling and Repair Hypothesis parent/child
-comparison, alongside their objective measurements. Do not use view_image,
-paths, URLs, or shell JSON.
+This fixed-client transport does not return inspectable images. Base initial
+modeling and repair decisions on observe_reference summary/components structured
+observations, returned decision facts, repair frontier and targets, and the
+objective measurements. Do not claim preview-image inspection. Do not use
+view_image, paths, URLs, or host/capability discovery.
 EOF
     )
 else
@@ -254,7 +263,7 @@ WORKLOAD=(
     exec
     --skip-git-repo-check
 )
-if [[ "$PLUGIN_MODE" == "direct" ]]; then
+if [[ "$PLUGIN_MODE" == "direct" || "$AGENT_SURFACE_MODE" == 1 ]]; then
     WORKLOAD+=(--disable plugins)
 fi
 WORKLOAD+=(

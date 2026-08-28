@@ -26,11 +26,11 @@ publishing anything.
 
 ### `preview_observation` (string, 1..4096 chars)
 
-One or two sentences describing what you observed in the Selected Step's
-preview — for example "Preview matches the requested profile from the
-front and top." Do not restate acceptance, do not cite hashes, do not
-name step ordinals or evidence paths. The supervisor already knows those
-and rebuilds them from the Selected Step.
+One or two sentences describing the Selected Step from returned Reference
+Observations and decision facts. The field name is fixed by the schema, but
+fixed-client transport has no preview image attachment. Do not restate
+acceptance, cite hashes, or name step ordinals or evidence paths. The
+supervisor already knows those and rebuilds them from the Selected Step.
 
 ### `stop_reason` (enum)
 
@@ -45,7 +45,7 @@ you:
   remained under the evidence you had.
 - `representation_limit` — the target cannot be represented honestly as
   the STEP-first parametric form the skill supports.
-- `modeling_intent_conflict` — the preview and the modeling intent
+- `modeling_intent_conflict` — the returned observations and the modeling intent
   disagree in a way you cannot reconcile from the current source.
 - `repeated_ineffective_strategy` — repair attempts did not change
   observable geometry across cycles.
@@ -60,15 +60,15 @@ closest label.
 
 Set `conflict: true` **only** when you observed a material semantic
 mismatch between the Selected Step and the requested modeling intent
-that finalization should not paper over — for example the preview
-shows a feature that contradicts the intent. When you do, provide a
+that finalization should not paper over — for example returned observations
+and decision facts identify a feature that contradicts the intent. When you do, provide a
 concise 1..4096-char `conflict_details` string. The supervisor fails
 `select_and_finalize` closed with `agent_semantic_conflict`; nothing
 is published.
 
 When there is no conflict, `conflict` must be `false` and
 `conflict_details` must be `null`. A non-null `conflict_details` on a
-clear preview is a closed error.
+clear claim is a closed error.
 
 ### `rationale` (string, 1..4096 chars)
 
