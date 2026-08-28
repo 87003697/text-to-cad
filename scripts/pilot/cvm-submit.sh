@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] (default: gpt-5.5) [--plugin-mode direct|e2e] [--view-image|--no-view-image] (default: --view-image) [--reconstruction-spec|--no-reconstruction-spec] (default: --reconstruction-spec) | provider-free installed-plugin <group>" >&2
+    echo "Usage: $0 pilot <object> <group> [--token-slot N] [--model sol|terra|luna|gpt-5.5] (default: gpt-5.5) [--plugin-mode direct|e2e] [--view-image|--no-view-image] (default: --view-image) [--reconstruction-spec|--no-reconstruction-spec] (default: --reconstruction-spec) | provider-free installed-plugin|agent-surface-mcp-injection <group>" >&2
     exit 2
 }
 
@@ -109,7 +109,7 @@ case "$mode" in
         fi
         ;;
     provider-free)
-        [[ $# -eq 3 && "$2" == "installed-plugin" ]] || usage
+        [[ $# -eq 3 && ( "$2" == "installed-plugin" || "$2" == "agent-surface-mcp-injection" ) ]] || usage
         scenario="$2"
         group="$3"
         safe_group "$group" || usage

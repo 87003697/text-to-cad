@@ -411,6 +411,18 @@ def submit_pilot(
     }
 
 
+def _provider_free_module(scenario: str):
+    from scripts.pilot import provider_free_installed_plugin as installed
+
+    if scenario == installed.SCENARIO:
+        return installed
+    if scenario == "agent-surface-mcp-injection":
+        from scripts.pilot import provider_free_agent_surface_mcp_injection as injection
+
+        return injection
+    raise ProtocolError(f"unsupported provider-free scenario: {scenario!r}")
+
+
 def submit_provider_free_installed_plugin(
     scenario: str,
     group: str,
@@ -421,10 +433,7 @@ def submit_provider_free_installed_plugin(
 ) -> dict[str, Any]:
     """Bind the current plugin authority and launch one offline discovery job."""
 
-    from scripts.pilot import provider_free_installed_plugin as provider_free
-
-    if scenario != provider_free.SCENARIO:
-        raise ProtocolError(f"unsupported provider-free scenario: {scenario!r}")
+    provider_free = _provider_free_module(scenario)
     root = _root(state_root)
     group = _validate_pilot_group(group)
     try:
@@ -662,12 +671,11 @@ def supervise_provider_free_installed_plugin(
 ) -> dict[str, Any]:
     """Supervise one provider-free runner and validate its bound evidence."""
 
-    from scripts.pilot import provider_free_installed_plugin as provider_free
-
     root = _root(state_root)
     parse_handle(handle)
     with _supervisor_lock(root, handle):
         record = load_state(root, handle)
+        provider_free = _provider_free_module(record.get("scenario"))
         if record["state"] != "submitted":
             raise ProtocolError(f"pilot cannot start from {record['state']}")
         process_status: int | None = None
@@ -677,7 +685,7 @@ def supervise_provider_free_installed_plugin(
             runner_command = list(command) if command is not None else [
                 sys.executable,
                 "-m",
-                "scripts.pilot.provider_free_installed_plugin",
+                f"scripts.pilot.{provider_free.__name__.rsplit(".", 1)[-1]}",
                 "--job",
                 handle,
                 "--state-root",
