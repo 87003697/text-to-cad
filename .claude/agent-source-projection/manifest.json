@@ -22,8 +22,8 @@
     },
     {
       "path": "skills/mesh-to-cad/references/candidate-authoring.md",
-      "sha256": "f345f3e2b96e5e994262ac2159942176117662884af46e1c6b6089e7f6704aa6",
-      "size": 4979
+      "sha256": "69415c932280a2c884a787243edc114690fed4fa14fd84bf4750c414c7c9a977",
+      "size": 5495
     }
   ],
   "schema": "text-to-cad.agent-source-projection/2",

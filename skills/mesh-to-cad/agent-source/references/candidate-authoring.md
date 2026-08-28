@@ -75,8 +75,24 @@ Use these build123d transform idioms:
   `BuildPart(Plane.XZ.offset(...))`; never write `with Location(...):` or
   `with Plane...`.
 - **Uniform scaling:** `shape.scale(2.0)` returns a transformed value.
-- **Nonuniform scaling:** use top-level `scale(shape, by=(sx, sy, sz))`, then
-  explicitly `add(...)` or return/use the transformed value.
+- **Nonuniform scaling in an active builder:** top-level `scale(...)` defaults
+  to `Mode.REPLACE` there. Keep both the primitive and `scale` private, then
+  explicitly add the transformed result so existing builder geometry remains:
+
+  ```python
+  from build123d import BuildPart, Location, Mode, Sphere, add, scale
+
+  def gen_step():
+      sx, sy, sz = 0.30, 0.18, 0.12
+      x, y, z = 0.0, 0.16, 0.02
+      with BuildPart() as part:
+          sphere = Sphere(1.0, mode=Mode.PRIVATE)
+          body = scale(sphere, by=(sx, sy, sz), mode=Mode.PRIVATE).moved(
+              Location((x, y, z))
+          )
+          add(body)
+      return part.part
+  ```
 - **Direct translation:** use `shape.moved(Location((x, y, z)))` or
   `Location((x, y, z)) * shape`.
 
