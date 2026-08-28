@@ -103,7 +103,9 @@ def _normalize_traceback_line(line: str) -> str | None:
     return None
 
 
-def _diagnostics_from_descriptor(descriptor: int) -> tuple[str, int, list[str]]:
+def _diagnostics_from_descriptor(
+    descriptor: int, *, include_nonempty_lines: bool = False
+) -> tuple[str, int, list[str]]:
     try:
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
@@ -116,14 +118,22 @@ def _diagnostics_from_descriptor(descriptor: int) -> tuple[str, int, list[str]]:
     text = payload.decode("utf-8", "replace")
     if offset:
         _, _, text = text.partition("\n")
-    selected = []
-    for line in text.splitlines():
-        if line.startswith(_DIAGNOSTIC_PREFIXES):
-            selected.append(_sanitize_public_line(line))
-            continue
-        normalized = _normalize_traceback_line(line)
-        if normalized is not None:
-            selected.append(_sanitize_public_line(normalized))
+    if include_nonempty_lines:
+        selected = []
+        for line in text.splitlines():
+            if not line:
+                continue
+            normalized = _normalize_traceback_line(line)
+            selected.append(_sanitize_public_line(normalized or line))
+    else:
+        selected = []
+        for line in text.splitlines():
+            if line.startswith(_DIAGNOSTIC_PREFIXES):
+                selected.append(_sanitize_public_line(line))
+                continue
+            normalized = _normalize_traceback_line(line)
+            if normalized is not None:
+                selected.append(_sanitize_public_line(normalized))
     diagnostics = selected[-_DIAGNOSTIC_MAX_LINES:]
     if diagnostics:
         status = "ready"
@@ -172,7 +182,7 @@ def _supervisor_diagnostics(root: Path, handle: str) -> tuple[str, int, list[str
         return "missing", 0, []
     except OSError:
         return "unavailable", 0, []
-    return _diagnostics_from_descriptor(descriptor)
+    return _diagnostics_from_descriptor(descriptor, include_nonempty_lines=True)
 
 
 def diagnose_job(
