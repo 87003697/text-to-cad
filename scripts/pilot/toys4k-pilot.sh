@@ -267,7 +267,7 @@ WORKLOAD=(
     exec
     --skip-git-repo-check
 )
-if [[ "$PLUGIN_MODE" == "direct" || "$AGENT_SURFACE_MODE" == 1 ]]; then
+if [[ "$PLUGIN_MODE" == "direct" && "$AGENT_SURFACE_MODE" != 1 ]]; then
     WORKLOAD+=(--disable plugins)
 fi
 WORKLOAD+=(

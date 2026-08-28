@@ -12,7 +12,6 @@ from handler import (
     MAX_REQUEST_BYTES,
     AgentSurface,
     AgentSurfaceError,
-    INTENTS,
     REQUEST_SCHEMA,
     error_document,
     tool_descriptors,
@@ -28,6 +27,7 @@ NOT_INITIALIZED = -32002
 PRE_INIT = "pre-init"
 NEGOTIATED = "negotiated"
 ACTIVE = "active"
+MCP_INTENT = "inspect_formal_preview"
 
 
 def _rpc_error(request_id, code: int, message: str) -> dict:
@@ -195,10 +195,15 @@ def _handle_request(
     if method == "tools/list":
         if not _valid_tools_list_params(request.get("params")):
             return _rpc_error(request_id, INVALID_PARAMS, "tools/list parameters are invalid"), state
+        descriptors = [
+            descriptor
+            for descriptor in tool_descriptors()
+            if descriptor["name"] == MCP_INTENT
+        ]
         return {
             "jsonrpc": JSON_RPC_VERSION,
             "id": request_id,
-            "result": {"tools": tool_descriptors()},
+            "result": {"tools": descriptors},
         }, state
     if method != "tools/call":
         return _rpc_error(request_id, METHOD_NOT_FOUND, "method is not supported"), state
@@ -207,7 +212,7 @@ def _handle_request(
         return _rpc_error(request_id, INVALID_PARAMS, "tool parameters are invalid"), state
     name = params["name"]
     arguments = params["arguments"]
-    if type(name) is not str or name not in INTENTS or type(arguments) is not dict:
+    if type(name) is not str or name != MCP_INTENT or type(arguments) is not dict:
         return _rpc_error(request_id, INVALID_PARAMS, "tool parameters are invalid"), state
     try:
         payload, preview_png = handler.handle_mcp(
