@@ -113,8 +113,7 @@ The `args` object must have exactly the fields for its intent:
 - `select_and_finalize`: `workspace_handle`, `step_handle`,
   `selection_handle`, `notes_handle`.
 - `observe_reference`: `reference_handle` and an `observation` object that is
-  exactly one of `{"method":"summary","args":{}}` or
-  `{"method":"components","args":{"limit":<integer 1..32>}}`.
+  exactly `{"method":"summary","args":{}}`.
 
 Send only one intent after reading the preceding client response. On an error,
 preserve its classification and do not retry blindly.
@@ -149,10 +148,8 @@ For the six workflow intents, `result` has the following closed shapes:
   `permitted_next_intents`.
 
 `observe_reference` is not a workflow-state response. Its `result` is exactly
-`{"observation":{"method":"summary|components","value":{...}}}`. A
-summary value contains canonical-frame, bounds, count, quality, and aggregate
-geometry facts; a components value contains bounded component ranks, counts,
-bounds, and centroids.
+`{"observation":{"method":"summary","value":{...}}}`. Its summary value
+contains canonical-frame, bounds, count, quality, and aggregate geometry facts.
 
 A supervisor/handler error response is:
 
@@ -334,12 +331,10 @@ evidence, previews, manifests, and export artifacts.
 ## Reconstruction reasoning
 
 You never see raw reference bytes. Instead you request one bounded
-Reference Observation at a time. Two methods are available:
+Reference Observation at a time. The available method is:
 
 - `summary` — one closed geometric summary of the Canonical Reference.
   Arguments must be empty.
-- `components` — up to a small bounded number of extracted geometric
-  components. Arguments accept only `limit` (a positive integer).
 
 ```json
 {
@@ -356,12 +351,11 @@ Every other observation method is `unsupported_operation`. Do not ask
 for raw mesh access, file paths, or free-form measurements; those are
 not available and asking for them is a closed error.
 
-For this fixed-client transport, use the returned summary/components structured
-observations: summary provides canonical-frame, bounds, count, quality, and
-aggregate geometry facts; components provides bounded component ranks, counts,
-bounds, and centroids. It returns no image attachment. Use those observations,
-decision facts, repair-frontier targets, and objective measurements for modeling
-and repair decisions; never claim to have inspected a formal preview image.
+For this fixed-client transport, use the returned summary structured
+observation for canonical-frame, bounds, count, quality, and aggregate geometry
+facts. It returns no image attachment. Use it, decision facts, repair-frontier
+targets, and objective measurements for modeling and repair decisions; never
+claim to have inspected a formal preview image.
 
 Use observation results plus residual evidence returned by the
 supervisor (measurements, region diffs, and decision facts) to form one

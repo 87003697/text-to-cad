@@ -20,16 +20,14 @@ ERROR_SCHEMA = "mesh-to-cad.agent-error/1"
 
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024
-MAX_COMPONENT_LIMIT = 32
 MAX_REPAIR_STEP = 5
 MAX_PARENT_STEP = MAX_REPAIR_STEP - 1
 
 _HANDLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
 _HANDLE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
 _W2_SUMMARY_SCHEMA = "meshscope.reference-summary/1"
-_W2_COMPONENTS_SCHEMA = "meshscope.reference-components/1"
 _UNSUPPORTED_OBSERVATIONS = frozenset(
-    {"vertices", "faces", "triangles", "raw_bytes", "export", "raycast", "nearest_point"}
+    {"components", "vertices", "faces", "triangles", "raw_bytes", "export", "raycast", "nearest_point"}
 )
 
 
@@ -586,61 +584,16 @@ def _enum(value: Any, values: tuple[str, ...], path: str) -> str:
     return value
 
 
-def _component_projection(value: Any, path: str) -> dict[str, Any]:
-    value = _closed(
-        value,
-        ("schema", "limit", "total", "returned", "omitted", "components"),
-        path,
-    )
-    if value["schema"] != "meshscope.reference-components/1":
-        _fail("supervisor_contract_violation", f"{path}.schema")
-    limit = _integer(value["limit"], f"{path}.limit", maximum=MAX_COMPONENT_LIMIT)
-    total = _integer(value["total"], f"{path}.total")
-    returned = _integer(value["returned"], f"{path}.returned")
-    omitted = _integer(value["omitted"], f"{path}.omitted")
-    components = value["components"]
-    if type(components) is not list or len(components) > MAX_COMPONENT_LIMIT:
-        _fail("supervisor_contract_violation", f"{path}.components")
-    rows = []
-    for index, item in enumerate(components):
-        item = _closed(
-            item,
-            ("rank", "vertices", "faces", "bounds", "centroid"),
-            f"{path}.components[{index}]",
-        )
-        rows.append(
-            {
-                "rank": _integer(item["rank"], f"{path}.components[{index}].rank"),
-                "vertices": _integer(item["vertices"], f"{path}.components[{index}].vertices"),
-                "faces": _integer(item["faces"], f"{path}.components[{index}].faces"),
-                "bounds": _bounds_result(item["bounds"], f"{path}.components[{index}].bounds"),
-                "centroid": _vector(item["centroid"], f"{path}.components[{index}].centroid"),
-            }
-        )
-    if returned != len(rows) or omitted != total - returned or returned > limit:
-        _fail("supervisor_contract_violation", path)
-    return {
-        "schema": value["schema"],
-        "limit": limit,
-        "total": total,
-        "returned": returned,
-        "omitted": omitted,
-        "components": rows,
-    }
-
-
 def _observation_result(value: Any, path: str) -> dict[str, Any]:
     value = _closed(value, ("schema", "reference_id", "method", "observation"), path)
     if value["schema"] != "meshscope.reference-response/1":
         _fail("supervisor_contract_violation", f"{path}.schema")
     _handle_result(value["reference_id"], f"{path}.reference_id")
-    method = _enum(value["method"], ("summary", "components"), f"{path}.method")
-    projection = (
-        _summary_projection(value["observation"], f"{path}.observation")
-        if method == "summary"
-        else _component_projection(value["observation"], f"{path}.observation")
-    )
-    return {"method": method, "value": projection}
+    method = _enum(value["method"], ("summary",), f"{path}.method")
+    return {
+        "method": method,
+        "value": _summary_projection(value["observation"], f"{path}.observation"),
+    }
 
 
 def _result_fields(
@@ -751,20 +704,10 @@ def _validate_observation_request(value: Any, path: str) -> dict[str, Any]:
         _fail("invalid_request", f"{path}.method")
     if method in _UNSUPPORTED_OBSERVATIONS:
         _fail("unsupported_operation", f"{path}.method")
-    if method not in {"summary", "components"}:
+    if method != "summary":
         _fail("unknown_method", f"{path}.method")
     args = observation["args"]
-    if type(args) is not dict or set(args) - {"limit"}:
-        _fail("invalid_request", f"{path}.args")
-    if method == "summary" and args:
-        _fail("invalid_request", f"{path}.args")
-    if "limit" in args and (
-        type(args["limit"]) is not int
-        or isinstance(args["limit"], bool)
-        or not 1 <= args["limit"] <= MAX_COMPONENT_LIMIT
-    ):
-        _fail("invalid_request", f"{path}.args.limit")
-    if method == "summary" and "limit" in args:
+    if type(args) is not dict or args:
         _fail("invalid_request", f"{path}.args")
     return observation
 
@@ -782,11 +725,6 @@ def _bind_observation_response(
         _fail("supervisor_contract_violation", "$.result.reference_id")
     if response["method"] != request_observation["method"]:
         _fail("supervisor_contract_violation", "$.result.method")
-    if request_observation["method"] == "components":
-        requested_limit = request_observation["args"].get("limit", MAX_COMPONENT_LIMIT)
-        returned = response["observation"]
-        if type(returned) is not dict or returned.get("limit") != requested_limit:
-            _fail("supervisor_contract_violation", "$.result.observation.limit")
 
 
 def _validate_args(spec: _OperationSpec, args: dict[str, Any]) -> None:
@@ -809,19 +747,12 @@ def _field_schema(kind: str) -> dict[str, Any]:
         return {"type": "string", "pattern": _HANDLE_PATTERN}
     if kind == "observation_request":
         empty = {"type": "object", "additionalProperties": False, "properties": {}}
-        components = {"type": "object", "additionalProperties": False, "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": MAX_COMPONENT_LIMIT}}, "required": []}
         return {
             "oneOf": [
                 {
                     "type": "object",
                     "additionalProperties": False,
                     "properties": {"method": {"const": "summary"}, "args": empty},
-                    "required": ["method", "args"],
-                },
-                {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {"method": {"const": "components"}, "args": {"anyOf": [empty, components]}},
                     "required": ["method", "args"],
                 },
             ]

@@ -209,9 +209,8 @@ submit_step_zero, submit_repair, select_and_finalize, and observe_reference.
 For each call, provide exactly one closed JSON request envelope on stdin:
 {"schema":"mesh-to-cad.agent-intent/1","intent":"<intent>","args":{...}}.
 For observe_reference, args must be exactly
-{"reference_handle":"<opaque>","observation":{"method":"summary","args":{}}}
-or {"reference_handle":"<opaque>","observation":{"method":"components","args":{"limit":32}}},
-where limit is an integer from 1 through 32. Read the one JSON client response
+{"reference_handle":"<opaque>","observation":{"method":"summary","args":{}}}.
+Read the one JSON client response
 before issuing another request; requests are strictly serial. On an error,
 preserve its classification and do not retry blindly. Do not call
 MCP tools or tool_search: the MCP registration is a compatibility surface for
@@ -230,7 +229,7 @@ The canonical Workspace and its atomically published Final Delivery define
 success. ${RECONSTRUCTION_SPEC_INSTRUCTION}
 
 This fixed-client transport does not return inspectable images. Base initial
-modeling and repair decisions on observe_reference summary/components structured
+modeling and repair decisions on observe_reference summary structured
 observations, returned decision facts, repair frontier and targets, and the
 objective measurements. Do not claim preview-image inspection. Do not use
 view_image, paths, URLs, or host/capability discovery.

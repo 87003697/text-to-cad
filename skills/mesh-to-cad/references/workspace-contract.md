@@ -26,11 +26,11 @@ the following intents: `workspace_status`, `start_attempt`,
 plan, evidence, selection, notes, and reference values cross this seam only as
 opaque handles. `run_candidate_tool` accepts a supervisor-registered operation
 handle, never an argv or command string. Reference observations are limited to
-the fixed W2 summary/components operations. Paths, raw geometry, authority
+the fixed W2 summary operation. Paths, raw geometry, authority
 documents, exceptions, and secrets are rejected or removed from the response
 contract. Each intent has its own closed argument and result projection; there
 is no generic successful-result bag.
-The `observe_reference` port projects W2's summary/components result into that
+The `observe_reference` port projects W2's summary result into that
 closed projection before it reaches the Agent; the W3 handler does not pass a
 generic W2 dictionary through.
 `start_attempt` has two exact argument variants: an initial plan with no parent
@@ -141,7 +141,7 @@ for the selected identity until the Agent bridge and candidate tools stop;
 retention never removes a live-leased or building entry.
 
 W2 is constructed behind the supervisor's opaque reference handle. Only its
-summary/components response projection crosses the Agent Surface. Raw or
+summary response projection crosses the Agent Surface. Raw or
 canonical PLY bytes, path names, and arbitrary geometry operations do not.
 
 After trusted Final Delivery succeeds, the outer runner asks the W1 facade to

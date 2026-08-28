@@ -2,9 +2,8 @@
 
 The capability is deliberately constructed by the supervisor with the opaque
 reference id and the material it owns.  The request handler accepts only that
-id and one of the fixed observation methods; paths and mesh objects never
-cross the handler interface.  The first capability intentionally exposes only
-summary and bounded component observations.
+id and the fixed summary observation; paths and mesh objects never cross the
+handler interface.
 """
 
 from __future__ import annotations
@@ -27,10 +26,6 @@ from meshscope.voxblame.contracts import BOUNDARY_EPSILON, COORDINATE_CONTRACT
 REQUEST_SCHEMA = "meshscope.reference-request/1"
 RESPONSE_SCHEMA = "meshscope.reference-response/1"
 SUMMARY_SCHEMA = "meshscope.reference-summary/1"
-COMPONENTS_SCHEMA = "meshscope.reference-components/1"
-
-DEFAULT_COMPONENT_LIMIT = 32
-MAX_COMPONENT_LIMIT = 32
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_REFERENCE_BYTES = 32 * 1024 * 1024
 # The header preflight derives record-count bounds from these shortest valid
@@ -50,6 +45,7 @@ CANONICAL_MAX = 0.5
 _REFERENCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _PROHIBITED_METHODS = frozenset(
     {
+        "components",
         "vertices",
         "faces",
         "triangles",
@@ -661,102 +657,10 @@ def _canonical_response(value: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
-def _component_rows(
-    vertices: np.ndarray,
-    faces: np.ndarray,
-    limit: int,
-) -> tuple[int, list[dict[str, Any]]]:
-    parent = np.arange(len(vertices), dtype=np.int64)
-    rank = np.zeros(len(vertices), dtype=np.uint8)
-
-    def find(index: int) -> int:
-        root = index
-        while parent[root] != root:
-            root = int(parent[root])
-        while parent[index] != index:
-            next_index = int(parent[index])
-            parent[index] = root
-            index = next_index
-        return root
-
-    def union(first: int, second: int) -> None:
-        first_root = find(first)
-        second_root = find(second)
-        if first_root == second_root:
-            return
-        if rank[first_root] < rank[second_root]:
-            first_root, second_root = second_root, first_root
-        parent[second_root] = first_root
-        if rank[first_root] == rank[second_root]:
-            rank[first_root] += 1
-
-    for first, second, third in faces:
-        first_index = int(first)
-        second_index = int(second)
-        third_index = int(third)
-        union(first_index, second_index)
-        union(second_index, third_index)
-
-    vertex_roots = np.asarray(
-        [find(index) for index in range(len(vertices))], dtype=np.int64
-    )
-    face_roots = np.asarray(
-        [find(int(face[0])) for face in faces], dtype=np.int64
-    )
-    used = np.zeros(len(vertices), dtype=bool)
-    used[faces.reshape(-1)] = True
-    vertex_counts = np.bincount(
-        vertex_roots[used], minlength=len(vertices)
-    )
-    face_counts = np.bincount(face_roots, minlength=len(vertices))
-    minimum = np.full((len(vertices), 3), np.inf, dtype=np.float64)
-    maximum = np.full((len(vertices), 3), -np.inf, dtype=np.float64)
-    sums = np.zeros((len(vertices), 3), dtype=np.float64)
-    np.minimum.at(minimum, vertex_roots[used], vertices[used])
-    np.maximum.at(maximum, vertex_roots[used], vertices[used])
-    np.add.at(sums, vertex_roots[used], vertices[used])
-
-    roots = np.flatnonzero(face_counts)
-
-    def sort_key(root: int) -> tuple[Any, ...]:
-        centroid = sums[root] / vertex_counts[root]
-        return (
-            -int(face_counts[root]),
-            -int(vertex_counts[root]),
-            tuple(_number(value) for value in minimum[root]),
-            tuple(_number(value) for value in maximum[root]),
-            tuple(_number(value) for value in centroid),
-        )
-
-    top: list[tuple[tuple[Any, ...], int]] = []
-    for root_value in roots:
-        root = int(root_value)
-        candidate = (sort_key(root), root)
-        if len(top) < limit:
-            top.append(candidate)
-            continue
-        worst = max(range(len(top)), key=lambda index: top[index][0])
-        if candidate[0] < top[worst][0]:
-            top[worst] = candidate
-    ordered_roots = [root for _key, root in sorted(top, key=lambda item: item[0])]
-    rows: list[dict[str, Any]] = []
-    for rank, root in enumerate(ordered_roots[:limit], start=1):
-        rows.append(
-            {
-                "rank": rank,
-                "vertices": int(vertex_counts[root]),
-                "faces": int(face_counts[root]),
-                "bounds": _bounds(minimum[root], maximum[root]),
-                "centroid": _vector(sums[root] / vertex_counts[root]),
-            }
-        )
-    return int(len(roots)), rows
-
-
 class ReferenceCapability:
     """Expose fixed, bounded observations for one supervisor-owned PLY."""
 
-    __slots__ = ("_reference_id", "_mesh", "_vertices", "_faces", "_summary")
+    __slots__ = ("_reference_id", "_mesh", "_vertices", "_summary")
 
     def __init__(self, reference_id: str, reference_path: str | Path):
         if (
@@ -771,7 +675,6 @@ class ReferenceCapability:
         self._reference_id = reference_id
         self._mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
         self._vertices = vertices
-        self._faces = faces
         self._summary: dict[str, Any] | None = None
 
     def handle(self, request: dict[str, Any]) -> dict[str, Any]:
@@ -793,7 +696,7 @@ class ReferenceCapability:
             _fail("invalid_request")
         if method in _PROHIBITED_METHODS:
             _fail("unsupported_operation")
-        if method not in {"summary", "components"}:
+        if method != "summary":
             _fail("unknown_method")
         args = request["args"]
         if not _is_dict(args):
@@ -804,13 +707,6 @@ class ReferenceCapability:
                 if args:
                     _fail("invalid_request")
                 observation = self._summary_observation()
-            elif method == "components":
-                if set(args) - {"limit"}:
-                    _fail("invalid_request")
-                limit = args.get("limit", DEFAULT_COMPONENT_LIMIT)
-                if type(limit) is not int or not 1 <= limit <= MAX_COMPONENT_LIMIT:
-                    _fail("invalid_request")
-                observation = self._components_observation(limit)
         except ReferenceCapabilityError:
             raise
         except (
@@ -872,17 +768,5 @@ class ReferenceCapability:
         # The cached value is an implementation detail; never let a caller's
         # mutation alter a later observation.
         return deepcopy(self._summary)
-
-    def _components_observation(self, limit: int) -> dict[str, Any]:
-        total, components = _component_rows(self._vertices, self._faces, limit)
-        return {
-            "schema": COMPONENTS_SCHEMA,
-            "limit": limit,
-            "total": total,
-            "returned": len(components),
-            "omitted": total - len(components),
-            "components": components,
-        }
-
 
 __all__ = ["ReferenceCapability", "ReferenceCapabilityError"]

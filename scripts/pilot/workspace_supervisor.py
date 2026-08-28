@@ -2420,17 +2420,10 @@ class WorkspaceSupervisor:
         if type(observation) is not dict or set(observation) != {"method", "args"}:
             raise SupervisorError("invalid_reference_request")
         method = observation.get("method")
-        if method not in {"summary", "components"}:
+        if method != "summary":
             raise SupervisorError("unsupported_reference_operation")
         args = observation.get("args")
-        if type(args) is not dict or set(args) - {"limit"}:
-            raise SupervisorError("invalid_reference_request")
-        if method == "summary" and args:
-            raise SupervisorError("invalid_reference_request")
-        if method == "components" and (
-            "limit" in args
-            and (type(args["limit"]) is not int or not 1 <= args["limit"] <= 32)
-        ):
+        if type(args) is not dict or args:
             raise SupervisorError("invalid_reference_request")
         request = {
             "schema": "meshscope.reference-request/1",
