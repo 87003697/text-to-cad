@@ -208,7 +208,12 @@ workspace_status, start_attempt, run_candidate_tool,
 submit_step_zero, submit_repair, select_and_finalize, and observe_reference.
 For each call, provide exactly one closed JSON request envelope on stdin:
 {"schema":"mesh-to-cad.agent-intent/1","intent":"<intent>","args":{...}}.
-Read the one JSON client response before issuing another request. Do not call
+For observe_reference, args must be exactly
+{"reference_handle":"<opaque>","observation":{"method":"summary","args":{}}}
+or {"reference_handle":"<opaque>","observation":{"method":"components","args":{"limit":32}}},
+where limit is an integer from 1 through 32. Read the one JSON client response
+before issuing another request; requests are strictly serial. On an error,
+preserve its classification and do not retry blindly. Do not call
 MCP tools or tool_search: the MCP registration is a compatibility surface for
 other providers, not an available transport here. Apart from authoring allowed
 candidate files, do not run shell authority operations, inspect paths, or

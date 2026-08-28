@@ -112,7 +112,12 @@ The `args` object must have exactly the fields for its intent:
   `attempt_handle`, `candidate_handle`.
 - `select_and_finalize`: `workspace_handle`, `step_handle`,
   `selection_handle`, `notes_handle`.
-- `observe_reference`: `reference_handle`, `observation`.
+- `observe_reference`: `reference_handle` and an `observation` object that is
+  exactly one of `{"method":"summary","args":{}}` or
+  `{"method":"components","args":{"limit":<integer 1..32>}}`.
+
+Send only one intent after reading the preceding client response. On an error,
+preserve its classification and do not retry blindly.
 
 Every successful client response is one JSON object with the response envelope:
 
