@@ -25,7 +25,6 @@ MAX_PARENT_STEP = MAX_REPAIR_STEP - 1
 
 _HANDLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}")
 _HANDLE_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
-_W2_SUMMARY_SCHEMA = "meshscope.reference-summary/1"
 _UNSUPPORTED_OBSERVATIONS = frozenset(
     {"components", "vertices", "faces", "triangles", "raw_bytes", "export", "raycast", "nearest_point"}
 )
@@ -748,14 +747,10 @@ def _field_schema(kind: str) -> dict[str, Any]:
     if kind == "observation_request":
         empty = {"type": "object", "additionalProperties": False, "properties": {}}
         return {
-            "oneOf": [
-                {
-                    "type": "object",
-                    "additionalProperties": False,
-                    "properties": {"method": {"const": "summary"}, "args": empty},
-                    "required": ["method", "args"],
-                },
-            ]
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"method": {"const": "summary"}, "args": empty},
+            "required": ["method", "args"],
         }
     raise AssertionError(kind)
 

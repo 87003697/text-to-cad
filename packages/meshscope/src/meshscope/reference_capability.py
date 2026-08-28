@@ -703,10 +703,9 @@ class ReferenceCapability:
             _fail("invalid_request")
 
         try:
-            if method == "summary":
-                if args:
-                    _fail("invalid_request")
-                observation = self._summary_observation()
+            if args:
+                _fail("invalid_request")
+            observation = self._summary_observation()
         except ReferenceCapabilityError:
             raise
         except (
