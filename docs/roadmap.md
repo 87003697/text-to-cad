@@ -1,8 +1,8 @@
 # Text-to-CAD Roadmap
 
 Status: **Current authority for implementation progress**  
-Updated: 2026-08-26  
-Integration baseline: `develop@7712be8d`
+Updated: 2026-08-28
+Integration baseline: `develop@4e52c868`
 
 This file records current product progress. Historical plans and handoffs retain
 design and execution evidence, but their old `Planning`, `not started`, or
@@ -79,15 +79,16 @@ These items do not require a new product architecture.
 
 | Item | Status | Completion evidence |
 |---|---|---|
-| Exact-head integration gate | **Pending rerun** | On the exact release head: Linux `bwrap` vertical slice, focused/full regression, bundle freshness, symlink check, installed-plugin smoke, and independent review all pass. |
-| Publish integrated `develop` | **Complete — 2026-08-26** | `origin/develop` advanced through merge head `7712be8d` without a force push. |
-| Current-stack paid acceptance | **Pending** | Authorized airplane and bicycle runs use the current Agent Surface and shipped authority, publish valid terminal Workspaces and Final Deliveries, transfer successfully, and pass `pilot-review`. |
+| Exact-head integration gate | **Complete — 2026-08-28** | `4e52c868`: bundle freshness, symlink layout, installed-plugin smoke, independent code review, CVM authority publication, provider-free installed-plugin discovery, and the real Linux `bwrap` Agent Surface pilot all passed. Current repository policy prohibited unit-test execution; the gate used real entry-path integration evidence. |
+| Publish integrated `develop` | **Complete — 2026-08-28** | `origin/develop` advanced through exact integration head `4e52c868` without a force push. |
+| Current-stack paid acceptance | **Partial — airplane operational path complete with residual 2026-08-28** | Exact-head airplane handle `20260828-071800-workspace-agent-surface-paid-4e52c868/20260827-231618-airplane_airplane_016` completed with runner status 0, published Final Delivery and Terminal Validation Handoff, transferred successfully, and passed `pilot-review` with all 10 protocol checks observed. Reconstruction was `delivered_with_residual`: selected Step 4 remained `accepted=false` with `stop_reason=no_feasible_strategy`. The broader bicycle sample remains unrun. |
 | Reconstruction Spec matched comparison | **Pending evidence** | A Spec-enabled and Spec-disabled matched run supports or rejects a causal quality claim. The feature itself is implemented. |
 
-The canonical installed-plugin receipt currently present under
-`tmp/installed-plugin-smoke/receipt.json` is successful but identifies
-`a675a4e0`, not the exact roadmap baseline. It is prior evidence, not the final
-exact-head release receipt.
+The exact-head installed-plugin smoke, CVM deployment authority, and
+provider-free discovery gate separately bind `4e52c868`. The paid airplane
+pilot observed a registered rebuild exit code of 0 and an atomic Final Delivery;
+its archive does not independently audit shipped-runtime parity because it
+contains no shipped snapshot or parity receipt.
 
 ## Deferred, non-blocking roadmap
 
@@ -119,11 +120,8 @@ workflow or the release-closure items above.
 
 ## Next execution order
 
-1. Run the exact-head integration gate and retain the new receipts.
-2. Resolve any gate findings without expanding the architecture.
-3. Obtain authorization and budget for current-stack airplane and bicycle
-   acceptance runs.
-4. Pull, review, and inspect both actual Final Deliveries.
-5. Run the Reconstruction Spec matched comparison if a quality-benefit claim is
+1. Run the remaining bicycle acceptance sample if the broader two-object
+   acceptance claim is still required.
+2. Run the Reconstruction Spec matched comparison if a quality-benefit claim is
    still desired.
-6. Choose deferred scale work only from measured operational need.
+3. Choose deferred scale work only from measured operational need.

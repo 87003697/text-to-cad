@@ -51,3 +51,11 @@ The following architecture decisions are recorded as part of this ADR without ch
    production-only compatibility framework is required for them.
 
 8. Correctness Phase D binds the production Reference Capability to exactly the Workspace [[Canonical Reference]] via a Workspace-derived [[Reference Binding]] proven before the Agent Surface starts. Ambient `AGENT_REFERENCE_PATH` overrides are removed from production; test-only injection uses the pre-existing internal dependency seam.
+
+9. [[Candidate Runtime]] is the common execution identity for Agent-authored
+   canonical builds and the registered rebuild that publishes Final Delivery.
+   By default, the Agent Surface runner starts from the repository `.venv`
+   used to materialize Candidate Runtime. An explicit `PYTHON_BIN` remains an
+   operator override; if it diverges from the recipe runtime, replay fails
+   closed. Finalization does not weaken the recipe contract or silently fall
+   back to an ambient system interpreter.

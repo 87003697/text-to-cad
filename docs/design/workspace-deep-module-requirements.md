@@ -1,6 +1,6 @@
 # Workspace deep module requirements
 
-Status: **Implemented; exact-head integration gate pending**
+Status: **Implemented; exact-head integration gate passed 2026-08-28**
 
 Date: 2026-08-25
 
@@ -104,7 +104,10 @@ Windows publication is not required.
 4. Pilot terminal handling invokes the complete Workspace validator exactly once and produces a valid Terminal Validation Result plus exact content manifest.
 5. Pilot review consumes that retained result and neither invokes the complete validator nor reconstructs the Workspace graph from authority directories.
 6. The Terminal Validation Result exposes current objective evaluation facts without defining a new score or evaluation policy.
-7. Focused Workspace, Agent Surface, runner, and review tests pass, followed by the symlink check, bundle freshness check, and installed-plugin smoke.
+7. Permitted focused Workspace, Agent Surface, runner, and review integration
+   checks pass, followed by the symlink check, bundle freshness check, and
+   installed-plugin smoke. Under the current repository policy, unit tests are
+   not added, modified, or run.
 8. Independent code review reports no unresolved findings against this document and ADR 0006.
 
 ## Explicit non-goals
@@ -122,8 +125,8 @@ Windows publication is not required.
 
 The original W1–W5 behavior and the R1–R5 reduction work are represented by
 the current `develop` branch. This table is now an implementation record. R6
-is the only remaining gate, and it must not add a second framework around the
-implemented module.
+was the final gate and did not add a second framework around the implemented
+module.
 
 | Ticket | Status | Implementation | Exit evidence |
 |---|---|---|---|
@@ -132,8 +135,8 @@ implemented module.
 | R3 — Reduce Agent projection | **Implemented** | `e1365bba` plus type/nonregular-file hardening | Five-file inventory, digest, policy, and no-symlink coverage. |
 | R4 — Verify transferred bytes | **Implemented** | `ed2850d7` | Missing, changed, extra, corrupt, and stale destinations fail before CVM cleanup. |
 | R5 — Authority-boundary review | **Implemented** | `66bd1851` and the subsequent deep-module integration range | Review consumes Terminal Validation; the vertical slice uses the public Workspace/Agent seams. |
-| R6 — Integration gate | **Pending exact-head rerun** | No architecture change authorized | On the exact release head: Linux `bwrap` vertical slice, full regression, bundle, symlink, installed-plugin smoke, and independent review pass. |
+| R6 — Integration gate | **Complete — 2026-08-28** | `4e52c868`; final rebuild runtime alignment in `scripts/pilot/toys4k-pilot.sh` | Exact-head bundle, symlink, installed-plugin smoke, independent review, CVM authority, provider-free discovery, real Linux `bwrap` Agent Surface execution, Final Delivery, Terminal Validation Handoff, transfer, and `pilot-review` passed. |
 
-R1–R5 are complete implementation work. R6 remains a verification and release
-gate and makes no architecture changes. Current cross-project progress is
-tracked in [`docs/roadmap.md`](../roadmap.md).
+R1–R6 are complete. R6 remained a verification and release gate and introduced
+no second framework. Current cross-project progress is tracked in
+[`docs/roadmap.md`](../roadmap.md).
