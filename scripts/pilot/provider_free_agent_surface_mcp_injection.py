@@ -300,43 +300,56 @@ def _schema_projection(value: object) -> dict[str, object]:
     }
 
 
+def _tool_projection(item: Mapping[str, object], children: list[str]) -> dict[str, object]:
+    schema = item.get("parameters", item.get("input_schema"))
+    return {
+        "type": item.get("type") if type(item.get("type")) is str and len(item["type"]) <= 64 else None,
+        "name": item.get("name") if type(item.get("name")) is str and len(item["name"]) <= MAX_TOOL_NAME_BYTES else None,
+        "children": children,
+        **_schema_projection(schema),
+        "defer": item.get("defer_loading") if type(item.get("defer_loading")) is bool else None,
+    }
+
+
 def _protocol_projection(body: object) -> dict[str, object]:
     request = body if isinstance(body, dict) else {}
-    tools = request.get("tools")
     input_value = request.get("input")
     input_items = input_value if isinstance(input_value, list) else []
     input_types = sorted({item.get("type") for item in input_items if isinstance(item, dict) and type(item.get("type")) is str and len(item["type"]) <= 64})[:16]
+    additional = [item for item in input_items if isinstance(item, dict) and item.get("type") == "additional_tools"]
+    roots = additional[0].get("tools") if len(additional) == 1 else None
     projected: list[dict[str, object]] = []
-    if isinstance(tools, list):
-        for item in tools[:MAX_TOOL_NAMES]:
-            if not isinstance(item, dict):
+    raw_tools: list[Mapping[str, object]] = []
+
+    def collect(items: object) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict) or len(projected) >= MAX_TOOL_NAMES:
                 continue
             children = item.get("tools")
             child_names = sorted(child.get("name") for child in children if isinstance(child, dict) and type(child.get("name")) is str and len(child["name"]) <= MAX_TOOL_NAME_BYTES)[:MAX_TOOL_NAMES] if isinstance(children, list) else []
-            schema = item.get("parameters", item.get("input_schema"))
-            projected.append({
-                "type": item.get("type") if type(item.get("type")) is str and len(item["type"]) <= 64 else None,
-                "name": item.get("name") if type(item.get("name")) is str and len(item["name"]) <= MAX_TOOL_NAME_BYTES else None,
-                "children": child_names,
-                **_schema_projection(schema),
-                "defer": item.get("defer_loading") if type(item.get("defer_loading")) is bool else None,
-            })
+            projected.append(_tool_projection(item, child_names))
+            raw_tools.append(item)
+            collect(children)
+
+    collect(roots)
     exec_items = [item for item in projected if item["name"] == "exec"]
     return {
-        "top_level_tools_present": isinstance(tools, list),
+        "top_level_tools_present": isinstance(request.get("tools"), list),
         "input_types": input_types,
         "additional_tools": projected,
         "tool_search_count": sum(1 for item in projected if item["name"] == "tool_search"),
         "exec": {
             "custom": any(item["type"] == "custom" for item in exec_items),
             "lark": any(
-                isinstance(raw, dict)
-                and raw.get("name") == "exec"
+                raw.get("name") == "exec"
                 and raw.get("type") == "custom"
-                and isinstance(raw.get("input_format"), dict)
-                and raw["input_format"].get("type") == "lark_grammar"
-                for raw in tools
-            ) if isinstance(tools, list) else False,
+                and isinstance(raw.get("format"), dict)
+                and raw["format"].get("type") == "grammar"
+                and raw["format"].get("syntax") == "lark"
+                for raw in raw_tools
+            ),
         },
     }
 
@@ -398,7 +411,7 @@ class _AuditedBridge(AgentSurfaceBridge):
 def _valid_protocol(value: object) -> bool:
     if not isinstance(value, dict) or set(value) != {"top_level_tools_present", "input_types", "additional_tools", "tool_search_count", "exec"}:
         return False
-    if value["top_level_tools_present"] is not True or not isinstance(value["input_types"], list) or not value["input_types"]:
+    if value["top_level_tools_present"] is not False or not isinstance(value["input_types"], list) or "additional_tools" not in value["input_types"]:
         return False
     if len(value["input_types"]) > 16 or any(type(item) is not str or len(item) > 64 for item in value["input_types"]):
         return False
@@ -418,7 +431,7 @@ def _valid_protocol(value: object) -> bool:
                 return False
         if any(tool[key] is not None and type(tool[key]) is not bool for key in ("strict", "additionalProperties", "defer")):
             return False
-    if type(value["tool_search_count"]) is not int or value["tool_search_count"] != 1:
+    if type(value["tool_search_count"]) is not int or not 0 <= value["tool_search_count"] <= MAX_TOOL_NAMES:
         return False
     return value["exec"] == {"custom": True, "lark": True}
 
@@ -481,6 +494,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
     version_exit = workload_exit = None
     version = None
     preflight = {"initialize_succeeded": False, "tools_list_succeeded": False, "tool_descriptor_names": []}
+    config_enabled = False
     requests: list[tuple[str, Any, str]] = []
     try:
         bridge = _AuditedBridge(None, socket_path)
@@ -488,6 +502,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         bridge.start()
         preflight = _mcp_preflight(socket_path)
         config_path = runner.prepare_isolated_job_codex_home(exp_dir) / plugin_deployment.CONFIG_TOML_NAME
+        config_enabled = _config_enabled(config_path)
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Receiver)
         _Receiver.requests = []
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -520,7 +535,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         "schema": EVIDENCE_SCHEMA,
         "identity": identity,
         "sandbox": {"runner_bwrap": True, "gateway": "codex-tap-gpt56", "network": "loopback-only"},
-        "private_config": {"agent_surface_server_enabled": _config_enabled(config_path)},
+        "private_config": {"agent_surface_server_enabled": config_enabled},
         "mcp_preflight": preflight,
         "first_request": {"received": bool(requests), "protocol": _protocol_projection(first_body)},
         "mcp_dispatch": audit[0] if len(audit) == 1 else {"tools_call": False, "method": None, "tool_name": None, "argument_keys": []},
