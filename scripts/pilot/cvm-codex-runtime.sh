@@ -2,18 +2,17 @@
 # Controlled CVM Codex CLI runtime selector.
 set -euo pipefail
 
-VERSION="0.147.0"
 SCHEMA="text-to-cad.cvm-codex-runtime/1"
 
 usage() {
-    echo "Usage: $0 install 0.147.0 | status | probe" >&2
+    echo "Usage: $0 install 0.147.0|0.148.0 | status | probe" >&2
     exit 2
 }
 
 action="${1:-}"
 case "$action" in
     install)
-        [[ $# -eq 2 && "$2" == "$VERSION" ]] || usage
+        [[ $# -eq 2 && ( "$2" == "0.147.0" || "$2" == "0.148.0" ) ]] || usage
         ;;
     status|probe)
         [[ $# -eq 1 ]] || usage
@@ -21,16 +20,20 @@ case "$action" in
     *) usage ;;
 esac
 
-exec ssh cvm "bash -s -- '$action'" <<'REMOTE'
+exec ssh cvm "bash -s -- '$action' '${2:-}'" <<'REMOTE'
 set -euo pipefail
 
-VERSION="0.147.0"
+VERSION="${2:-}"
 SCHEMA="text-to-cad.cvm-codex-runtime/1"
 RUNTIME_ROOT="/usr/local/lib/text-to-cad/codex"
 CANDIDATE="$RUNTIME_ROOT/$VERSION"
 CANDIDATE_CODEX="$CANDIDATE/node_modules/.bin/codex"
 SELECTOR="/usr/local/bin/codex"
 EXPECTED_VERSION="codex-cli $VERSION"
+
+allowed_version() {
+    [[ "$1" == "0.147.0" || "$1" == "0.148.0" ]]
+}
 
 installed_versions() {
     local directory name count=0 separator=""
@@ -77,7 +80,7 @@ probe_runtime() {
             ;;
     esac
     version="$("$SELECTOR" --version 2>&1 || true)"
-    if [ "$version" != "$EXPECTED_VERSION" ]; then
+    if ! safe_version "$version" >/dev/null || ! allowed_version "${version#codex-cli }"; then
         emit "$action" "version_mismatch" "$resolved" "$(safe_version "$version")" 127
         return 1
     fi
@@ -115,6 +118,7 @@ switch_selector() {
 
 case "$1" in
     install)
+        allowed_version "$VERSION" || exit 2
         mkdir -p "$RUNTIME_ROOT"
         exec 9>"$RUNTIME_ROOT/.install.lock"
         flock 9

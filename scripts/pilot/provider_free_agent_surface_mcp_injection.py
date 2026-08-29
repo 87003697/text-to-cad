@@ -34,6 +34,7 @@ MAX_RECEIVER_REQUESTS = 2
 _FIXTURE = Path("models/toys4k/cup_cup_033.ply")
 _TOOL = "inspect_formal_preview"
 _VERSION = re.compile(r"(?:codex-cli|OpenAI Codex v)\s*([0-9]+\.[0-9]+\.[0-9]+)")
+EXPECTED_CODEX_VERSION = "0.148.0"
 
 
 class ProviderFreeError(RuntimeError):
@@ -626,7 +627,7 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
     if evidence.get("receiver") != {"loopback_only": True, "provider_escape": False, "request_count": 2}:
         raise ProviderFreeError("provider-free evidence has an invalid receiver result")
     process = evidence.get("process")
-    if not isinstance(process, dict) or set(process) != {"codex_version", "version_exit_code", "workload_exit_code"} or process["codex_version"] != "0.147.0" or type(process["version_exit_code"]) is not int or process["version_exit_code"] != 0 or type(process["workload_exit_code"]) is not int or process["workload_exit_code"] != 0 or evidence.get("gate_passed") is not True:
+    if not isinstance(process, dict) or set(process) != {"codex_version", "version_exit_code", "workload_exit_code"} or process["codex_version"] != EXPECTED_CODEX_VERSION or type(process["version_exit_code"]) is not int or process["version_exit_code"] != 0 or type(process["workload_exit_code"]) is not int or process["workload_exit_code"] != 0 or evidence.get("gate_passed") is not True:
         raise ProviderFreeError("provider-free evidence has an invalid process result")
     expected_manifest = {"schema": MANIFEST_SCHEMA, "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}
     if manifest != expected_manifest:
