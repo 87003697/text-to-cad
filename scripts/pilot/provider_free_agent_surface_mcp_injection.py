@@ -24,7 +24,7 @@ from scripts.pilot.cvm_job import protocol
 
 
 SCENARIO = "agent-surface-mcp-injection"
-EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/3"
+EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/4"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024
@@ -188,14 +188,27 @@ if (alias_found && static_callable) {
 }
 const content = Array.isArray(result?.content) ? result.content : [];
 const structured = result?.structuredContent;
+const first_text = content.find((item) => item?.type === "text" && typeof item?.text === "string")?.text;
+let first_text_classification = "none";
+if (result?.isError === true && typeof first_text === "string") {
+  const lowered = first_text.toLowerCase();
+  if (lowered.includes("not available to model")) first_text_classification = "not_available_to_model";
+  else if (lowered.includes("mcp client is not initialized")) first_text_classification = "mcp_client_not_initialized";
+  else if (lowered.includes("mcp client is shut down")) first_text_classification = "mcp_client_shutdown";
+  else if (lowered.includes("tool not found")) first_text_classification = "tool_not_found";
+  else if (lowered.includes("transport")) first_text_classification = "transport";
+  else first_text_classification = "other";
+}
 text(JSON.stringify({
   alias_found,
   static_callable,
   call_attempted,
   call_threw,
   isError: result ? result.isError === true : null,
-  content_types: content.map((item) => typeof item?.type === \"string\" ? item.type : \"invalid\").slice(0,4),
-  supervisor_unavailable: result ? structured?.error?.classification === \"supervisor_unavailable\" : null
+  content_types: content.map((item) => typeof item?.type === "string" ? item.type : "invalid").slice(0,4),
+  structured_content_present: structured !== null && typeof structured === "object",
+  supervisor_unavailable: result ? structured?.error?.classification === "supervisor_unavailable" : null,
+  first_text_classification
 }));
 """
 
@@ -388,14 +401,18 @@ def _output_signal(body: object) -> dict[str, object]:
         signal = json.loads(texts[1])
     except json.JSONDecodeError:
         return result
-    fields = {"alias_found", "static_callable", "call_attempted", "call_threw", "isError", "content_types", "supervisor_unavailable"}
+    fields = {"alias_found", "static_callable", "call_attempted", "call_threw", "isError", "content_types", "structured_content_present", "supervisor_unavailable", "first_text_classification"}
     if not isinstance(signal, dict) or set(signal) != fields:
         return result
     if any(type(signal[key]) is not bool for key in ("alias_found", "static_callable", "call_attempted", "call_threw")):
         return result
     if signal["isError"] is not None and type(signal["isError"]) is not bool:
         return result
+    if type(signal["structured_content_present"]) is not bool:
+        return result
     if signal["supervisor_unavailable"] is not None and type(signal["supervisor_unavailable"]) is not bool:
+        return result
+    if signal["first_text_classification"] not in {"not_available_to_model", "mcp_client_not_initialized", "mcp_client_shutdown", "transport", "tool_not_found", "other", "none"}:
         return result
     if not isinstance(signal["content_types"], list) or len(signal["content_types"]) > 4 or any(type(value) is not str or len(value) > 64 for value in signal["content_types"]):
         return result
@@ -450,14 +467,18 @@ def _valid_second_request(value: object) -> bool:
         return False
     if value["output_shape"] == "invalid":
         return set(value) == base and value["script_status"] == "unknown"
-    fields = base | {"alias_found", "static_callable", "call_attempted", "call_threw", "isError", "content_types", "supervisor_unavailable"}
+    fields = base | {"alias_found", "static_callable", "call_attempted", "call_threw", "isError", "content_types", "structured_content_present", "supervisor_unavailable", "first_text_classification"}
     if set(value) != fields:
         return False
     if any(type(value[key]) is not bool for key in ("alias_found", "static_callable", "call_attempted", "call_threw")):
         return False
     if value["isError"] is not None and type(value["isError"]) is not bool:
         return False
+    if type(value["structured_content_present"]) is not bool:
+        return False
     if value["supervisor_unavailable"] is not None and type(value["supervisor_unavailable"]) is not bool:
+        return False
+    if value["first_text_classification"] not in {"not_available_to_model", "mcp_client_not_initialized", "mcp_client_shutdown", "transport", "tool_not_found", "other", "none"}:
         return False
     contents = value["content_types"]
     return isinstance(contents, list) and len(contents) <= 4 and all(type(item) is str and len(item) <= 64 for item in contents)
@@ -527,7 +548,7 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
     second = evidence.get("second_request")
     if not _valid_second_request(second):
         raise ProviderFreeError("provider-free evidence has an invalid second request")
-    expected_signal = {"call_id_matches": True, "output_shape": "content_array", "script_status": "completed", "alias_found": True, "static_callable": True, "call_attempted": True, "call_threw": False, "isError": True, "content_types": ["text"], "supervisor_unavailable": True}
+    expected_signal = {"call_id_matches": True, "output_shape": "content_array", "script_status": "completed", "alias_found": True, "static_callable": True, "call_attempted": True, "call_threw": False, "isError": True, "content_types": ["text"], "structured_content_present": True, "supervisor_unavailable": True, "first_text_classification": "other"}
     if second != expected_signal:
         raise ProviderFreeError("provider-free evidence has an unsuccessful second request")
     if evidence.get("receiver") != {"loopback_only": True, "provider_escape": False, "request_count": 2}:
