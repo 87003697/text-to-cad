@@ -21,7 +21,7 @@ case "$action" in
     *) usage ;;
 esac
 
-exec ssh -n cvm "bash -s -- '$action'" <<'REMOTE'
+exec ssh cvm "bash -s -- '$action'" <<'REMOTE'
 set -euo pipefail
 
 VERSION="0.147.0"
