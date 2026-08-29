@@ -30,6 +30,8 @@ import time
 from types import ModuleType
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
+from scripts.pilot.agent_surface_bridge import _handler_module_name
+
 try:
     from scripts.pilot.trusted_tools import (  # type: ignore[import-not-found]
         CADGEN_RUNTIME_RELATIVE,
@@ -396,23 +398,38 @@ class _PublicationFlight:
     error: str | None = None
 
 
-def _load_workspace_api() -> ModuleType:
-    helper = (
-        Path(__file__).resolve().parents[2]
-        / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
-    )
+def _load_workspace_api(product_root: Path | None = None) -> ModuleType:
+    helper = (Path(product_root) if product_root is not None else Path(__file__).resolve().parents[2]) / "skills/mesh-to-cad/scripts/mesh-to-cad-workspace"
     if str(helper) not in sys.path:
         sys.path.insert(0, str(helper))
-    module_name = "_mesh_to_cad_workspace_for_pilot"
+    module_name = "_mesh_to_cad_workspace_for_pilot" if product_root is None else f"_mesh_to_cad_workspace_for_pilot_{abs(hash(str(helper.resolve())))}"
     loaded = sys.modules.get(module_name)
     if loaded is not None:
         return loaded
+    previous_core = sys.modules.get("workspace_core")
+    if product_root is not None:
+        core_spec = importlib.util.spec_from_file_location("workspace_core", helper / "workspace_core.py")
+        if core_spec is None or core_spec.loader is None:
+            raise RuntimeError("Workspace core is unavailable")
+        core = importlib.util.module_from_spec(core_spec)
+        sys.modules["workspace_core"] = core
     spec = importlib.util.spec_from_file_location(module_name, helper / "workspace.py")
     if spec is None or spec.loader is None:
         raise RuntimeError("Workspace facade is unavailable")
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
-    spec.loader.exec_module(module)
+    try:
+        if product_root is not None:
+            core_spec.loader.exec_module(core)
+        spec.loader.exec_module(module)
+        if product_root is not None:
+            module._loaded_workspace_core = core
+    finally:
+        if product_root is not None:
+            if previous_core is None:
+                sys.modules.pop("workspace_core", None)
+            else:
+                sys.modules["workspace_core"] = previous_core
     return module
 
 
@@ -423,12 +440,9 @@ def _load_reference_type(meshscope_src: Path | None = None) -> type[Any]:
     return ReferenceCapability
 
 
-def _load_agent_surface_type() -> type[Any]:
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "skills/mesh-to-cad/scripts/mesh-to-cad-agent-surface/handler.py"
-    )
-    module_name = "mesh_to_cad_agent_surface_handler"
+def _load_agent_surface_type(product_root: Path | None = None) -> type[Any]:
+    source = (Path(product_root) if product_root is not None else Path(__file__).resolve().parents[2]) / "skills/mesh-to-cad/scripts/mesh-to-cad-agent-surface/handler.py"
+    module_name = _handler_module_name(source, legacy=product_root is None)
     loaded = sys.modules.get(module_name)
     if loaded is None:
         spec = importlib.util.spec_from_file_location(module_name, source)
@@ -436,10 +450,17 @@ def _load_agent_surface_type() -> type[Any]:
             raise RuntimeError("Agent Surface handler is unavailable")
         loaded = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = loaded
-        sys.modules["handler"] = loaded
-        spec.loader.exec_module(loaded)
+        previous_handler = sys.modules.get("handler")
+        try:
+            sys.modules["handler"] = loaded
+            spec.loader.exec_module(loaded)
+        finally:
+            if previous_handler is None:
+                sys.modules.pop("handler", None)
+            else:
+                sys.modules["handler"] = previous_handler
     else:
-        sys.modules["handler"] = loaded
+        loaded = loaded
     return loaded.AgentSurface
 
 
@@ -696,6 +717,7 @@ class WorkspaceSupervisor:
         trusted_tools_root: Path | None = None,
         step_zero_evidence_provider: Callable[..., Any] | None = None,
         repair_evidence_provider: Callable[..., Any] | None = None,
+        trusted_product_root: Path | None = None,
     ) -> None:
         raw_workspace = Path(workspace)
         if raw_workspace.is_symlink():
@@ -735,7 +757,7 @@ class WorkspaceSupervisor:
 
         try:
             if workspace_api is None:
-                workspace_api = _load_workspace_api()  # type: ignore[assignment]
+                workspace_api = _load_workspace_api(trusted_product_root)  # type: ignore[assignment]
             self.workspace_api = workspace_api
             scope_factory = getattr(workspace_api, "ExecutionScope", None)
             self._execution_scope = scope_factory() if scope_factory is not None else None
@@ -746,6 +768,7 @@ class WorkspaceSupervisor:
             self._browser_runtime_capability = browser_runtime_capability
             self._step_zero_evidence_provider = step_zero_evidence_provider
             self._repair_evidence_provider = repair_evidence_provider
+            self._trusted_product_root = Path(trusted_product_root).resolve() if trusted_product_root is not None else None
             self.candidate_runtime: Path | None = None
             if candidate_runtime is not None:
                 raw_runtime = Path(candidate_runtime)
@@ -1011,7 +1034,19 @@ class WorkspaceSupervisor:
     def agent_surface(self) -> Any:
         """Build the W3 shared handler over this supervisor's seven ports."""
 
-        return _load_agent_surface_type()(self)
+        return _load_agent_surface_type(self._trusted_product_root)(self)
+
+    def module_provenance(self, bridge: Any) -> dict[str, Path]:
+        workspace = self.workspace_api
+        core = getattr(workspace, "_loaded_workspace_core", getattr(workspace, "_core", None))
+        bridge_modules = bridge.module_provenance()
+        handler = bridge_modules.get("handler")
+        mcp = bridge_modules.get("mcp")
+        modules = {"workspace": workspace, "core": core, "handler": handler, "mcp": mcp}
+        paths = {key: Path(getattr(module, "__file__")) for key, module in modules.items() if module is not None and getattr(module, "__file__", None)}
+        if set(paths) != set(modules):
+            raise SupervisorError("module provenance unavailable")
+        return paths
 
     def register_candidate_path(
         self,

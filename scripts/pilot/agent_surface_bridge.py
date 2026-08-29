@@ -17,12 +17,19 @@ MAX_RESPONSE_BYTES = 24 * 1024 * 1024
 SOCKET_TARGET = "/run/mesh-to-cad-agent-surface.sock"
 
 
-def _load_mcp_module() -> Any:
-    root = Path(__file__).resolve().parents[2]
+def _handler_module_name(source: Path, *, legacy: bool = False) -> str:
+    if legacy:
+        return "mesh_to_cad_agent_surface_handler"
+    return f"mesh_to_cad_agent_surface_handler_{abs(hash(str(source.resolve())))}"
+
+
+def _load_mcp_module(product_root: Path | None = None) -> Any:
+    root = Path(product_root) if product_root is not None else Path(__file__).resolve().parents[2]
     surface = root / "skills/mesh-to-cad/scripts/mesh-to-cad-agent-surface"
     if str(surface) not in sys.path:
         sys.path.insert(0, str(surface))
-    handler_name = "mesh_to_cad_agent_surface_handler"
+    previous_handler = sys.modules.get("handler")
+    handler_name = _handler_module_name(surface / "handler.py", legacy=product_root is None)
     handler = sys.modules.get(handler_name)
     if handler is None:
         handler_spec = importlib.util.spec_from_file_location(
@@ -32,27 +39,45 @@ def _load_mcp_module() -> Any:
             raise RuntimeError("Agent Surface handler is unavailable")
         handler = importlib.util.module_from_spec(handler_spec)
         sys.modules[handler_name] = handler
-        sys.modules["handler"] = handler
-        handler_spec.loader.exec_module(handler)
+        try:
+            sys.modules["handler"] = handler
+            handler_spec.loader.exec_module(handler)
+        finally:
+            if previous_handler is None:
+                sys.modules.pop("handler", None)
+            else:
+                sys.modules["handler"] = previous_handler
     else:
         sys.modules["handler"] = handler
-    name = "mesh_to_cad_agent_surface_mcp"
+    name = "mesh_to_cad_agent_surface_mcp" if product_root is None else f"mesh_to_cad_agent_surface_mcp_{abs(hash(str(root.resolve())))}"
     loaded = sys.modules.get(name)
     if loaded is not None:
+        loaded._agent_surface_handler = handler
+        if previous_handler is None:
+            sys.modules.pop("handler", None)
+        else:
+            sys.modules["handler"] = previous_handler
         return loaded
     spec = importlib.util.spec_from_file_location(name, surface / "mcp.py")
     if spec is None or spec.loader is None:
         raise RuntimeError("Agent Surface MCP adapter is unavailable")
     loaded = importlib.util.module_from_spec(spec)
     sys.modules[name] = loaded
-    spec.loader.exec_module(loaded)
+    try:
+        spec.loader.exec_module(loaded)
+    finally:
+        if previous_handler is None:
+            sys.modules.pop("handler", None)
+        else:
+            sys.modules["handler"] = previous_handler
+    loaded._agent_surface_handler = handler
     return loaded
 
 
 class AgentSurfaceBridge:
     """Serve CLI envelopes and MCP frames without exposing supervisor state."""
 
-    def __init__(self, surface: Any, socket_path: Path) -> None:
+    def __init__(self, surface: Any, socket_path: Path, *, trusted_product_root: Path | None = None) -> None:
         self.surface = surface
         self.socket_path = Path(socket_path).resolve()
         self._server: socket.socket | None = None
@@ -61,7 +86,8 @@ class AgentSurfaceBridge:
         self._connections: set[socket.socket] = set()
         self._connections_lock = threading.Lock()
         self._workers: set[threading.Thread] = set()
-        self._mcp = _load_mcp_module()
+        self._mcp = _load_mcp_module(trusted_product_root)
+        self._handler_module = getattr(self._mcp, "_agent_surface_handler", None)
 
     def start(self) -> None:
         if self.socket_path.exists() or self.socket_path.is_symlink():
@@ -82,6 +108,9 @@ class AgentSurfaceBridge:
         self._server = server
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
+
+    def module_provenance(self) -> dict[str, Any]:
+        return {"handler": self._handler_module, "mcp": self._mcp}
 
     def stop(self) -> None:
         self._stop.set()
@@ -189,8 +218,9 @@ class AgentSurfaceBridge:
                     frame = {"ok": True, "response": response}
                 except Exception as error:
                     try:
-                        from handler import AgentSurfaceError, error_document
-                    except ImportError:
+                        AgentSurfaceError = self._handler_module.AgentSurfaceError
+                        error_document = self._handler_module.error_document
+                    except (AttributeError, ImportError):
                         frame = {"ok": False, "error": "supervisor_failure"}
                     else:
                         if isinstance(error, AgentSurfaceError):

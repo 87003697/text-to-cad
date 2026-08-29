@@ -28,6 +28,7 @@ from scripts.pilot import provider_free_agent_surface_mcp_injection as mcp_injec
 from scripts.pilot import provider_free_agent_surface_mcp_direct_injection as mcp_direct
 from scripts.pilot import provider_free_agent_surface_mcp_ephemeral_differential as mcp_differential
 from scripts.pilot import provider_free_installed_plugin as installed_plugin
+from scripts.pilot import provider_free_workspace_repair_chain as repair_chain
 
 S3_PREFIX = "s3://arcwm-code-us-west-2/ericzyma/text-to-cad/outputs"
 S3_REMOTE = "threed-code:arcwm-code-us-west-2/ericzyma/text-to-cad/outputs"
@@ -162,7 +163,7 @@ def _provider_free_record(source: Path, manifest: object) -> dict[str, object] |
     if identity.get("job") != job or not isinstance(identity.get("authority"), dict):
         return None
     scenario = identity.get("scenario")
-    if scenario not in {installed_plugin.SCENARIO, mcp_injection.SCENARIO, mcp_direct.SCENARIO, mcp_differential.SCENARIO}:
+    if scenario not in {installed_plugin.SCENARIO, mcp_injection.SCENARIO, mcp_direct.SCENARIO, mcp_differential.SCENARIO, repair_chain.SCENARIO}:
         return None
     return {
         "provider_free": True,
@@ -189,13 +190,15 @@ def is_valid_provider_free_success(source: Path, manifest: object) -> bool:
             mcp_direct.validate_artifacts(repo_root, record)
         elif record["scenario"] == mcp_differential.SCENARIO:
             mcp_differential.validate_artifacts(repo_root, record)
+        elif record["scenario"] == repair_chain.SCENARIO:
+            repair_chain.validate_artifacts(repo_root, record)
         else:
             installed_plugin.validate_artifacts(
                 repo_root,
                 record,
                 verify_evidence_digest=False,
             )
-    except (installed_plugin.ProviderFreeError, mcp_injection.ProviderFreeError, mcp_direct.ProviderFreeError, mcp_differential.ProviderFreeError):
+    except (installed_plugin.ProviderFreeError, mcp_injection.ProviderFreeError, mcp_direct.ProviderFreeError, mcp_differential.ProviderFreeError, repair_chain.ProviderFreeError):
         return False
     return True
 

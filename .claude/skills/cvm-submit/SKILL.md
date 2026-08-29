@@ -63,6 +63,13 @@ For the narrow provider-free installed-plugin discovery check, run:
 scripts/pilot/cvm-submit.sh provider-free installed-plugin <group>
 ```
 
+The deterministic Workspace repair-chain gate is also available without a
+provider:
+
+```bash
+scripts/pilot/cvm-submit.sh provider-free workspace-repair-chain <group>
+```
+
 That mode performs no model inference and accepts no token, model, arbitrary
 command, or scenario argument. It binds the current plugin-authority receipt
 at submit time, revalidates it in the detached supervisor, and runs only

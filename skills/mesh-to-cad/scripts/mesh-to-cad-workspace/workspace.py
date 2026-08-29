@@ -281,6 +281,7 @@ class RepairEvidenceRequest:
     region_diff_output: Path
     source_changes_output: Path
     plan: Mapping[str, Any]
+    plan_digest: str
     preview_profile: Mapping[str, Any]
     from_step: int
     to_step: int
@@ -997,7 +998,8 @@ def publish_cycle_from_candidate(
             preview_output=external_preview_output,
             region_diff_output=external_region_diff_output,
             source_changes_output=external_source_changes_output,
-            plan=dict(plan),
+            plan=_resolve_repair_provider_plan(workspace, plan, from_step=from_step),
+            plan_digest=active["plan_digest"],
             preview_profile={
                 "name": preview_profile.get("name"),
                 "sha256": preview_profile.get("sha256"),
@@ -1322,6 +1324,106 @@ def _active_depth_bounds(cell: tuple[int, int, int], depth: int) -> dict[str, li
         "min": [round(-0.5 + index * width, 6) for index in cell],
         "max": [round(-0.5 + (index + 1) * width, 6) for index in cell],
     }
+
+
+def _resolve_repair_provider_plan(
+    workspace: Path, plan: Mapping[str, Any], *, from_step: int
+) -> dict[str, Any]:
+    """Expand Agent active-depth targets into the canonical Region Diff plan."""
+
+    measurement = _read_authority_json(
+        workspace,
+        workspace / "voxblame" / "steps" / f"{from_step:06d}" / "measurement.json",
+        "$.voxblame.parent.measurement",
+    )
+    active_depth = _project_residual_summary(measurement)["repair_frontier"][
+        "active_depth"
+    ]
+    ordered_targets = measurement["repair_targets"]["ordered_targets"]
+    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for target in ordered_targets:
+        if target["kind"] == "exterior":
+            key = ("exterior", target["target_key"])
+            groups[key] = {
+                "rank": target["display_rank"],
+                "kind": "exterior",
+                "bounds_canonical": target["bounds_canonical"],
+                "targets": [target],
+            }
+            continue
+        if active_depth is None:
+            _decision_facts_fail("interior repair target has no active depth")
+        for cell in _active_depth_cells(workspace, target, active_depth):
+            key = ("interior", *cell)
+            group = groups.get(key)
+            if group is None:
+                groups[key] = group = {
+                    "rank": target["display_rank"],
+                    "kind": "interior",
+                    "bounds_canonical": _active_depth_bounds(cell, active_depth),
+                    "targets": [],
+                }
+            group["rank"] = min(group["rank"], target["display_rank"])
+            group["targets"].append(target)
+
+    ordered_groups = sorted(
+        groups.values(),
+        key=lambda item: (
+            item["rank"],
+            item["kind"],
+            item["bounds_canonical"]["min"],
+        ),
+    )
+    for rank, group in enumerate(ordered_groups):
+        group["rank"] = rank
+
+    selected_groups: dict[int, dict[str, Any]] = {}
+    for item in plan["selected_targets"]:
+        matches = [
+            group
+            for group in ordered_groups
+            if group["rank"] == item["rank"]
+            and group["kind"] == item["kind"]
+            and group["bounds_canonical"] == item["bounds_canonical"]
+        ]
+        if len(matches) != 1:
+            _decision_facts_fail("repair target does not match active-depth authority")
+        selected_groups[item["rank"]] = matches[0]
+
+    resolved = dict(plan)
+    selected_targets: list[dict[str, str]] = []
+    selected_keys: set[str] = set()
+    for item in plan["selected_targets"]:
+        for target in selected_groups[item["rank"]]["targets"]:
+            key = target["target_key"]
+            if key not in selected_keys:
+                selected_keys.add(key)
+                selected_targets.append(
+                    {
+                        "target_key": key,
+                        "mask_sha256": target["mask"]["logical_sha256"],
+                    }
+                )
+    resolved["selected_targets"] = selected_targets
+    resolved_edits: list[dict[str, Any]] = []
+    for edit in plan["planned_edits"]:
+        edit_targets: list[str] = []
+        edit_keys: set[str] = set()
+        for rank in edit["target_ranks"]:
+            for target in selected_groups[rank]["targets"]:
+                key = target["target_key"]
+                if key not in edit_keys:
+                    edit_keys.add(key)
+                    edit_targets.append(key)
+        resolved_edits.append(
+            {
+                "edit_key": edit["edit_key"],
+                "target_keys": edit_targets,
+                "description": edit["description"],
+            }
+        )
+    resolved["planned_edits"] = resolved_edits
+    return resolved
 
 
 def _project_repair_targets(workspace: Path, value: Any, *, active_depth: int | None) -> Any:

@@ -52,6 +52,7 @@ def publish_region_diff(
     to_step: int,
     repair_plan: str | Path | Mapping[str, Any],
     output: str | Path,
+    plan_digest: str | None = None,
 ) -> RegionDiffResult:
     """Compare one explicit Repair Cycle and atomically publish its evidence."""
 
@@ -68,7 +69,13 @@ def publish_region_diff(
     plan = _load_repair_plan(repair_plan)
     targets = _validate_repair_batch(plan, from_step=from_step, measurement=before)
     plan_bytes = _json_bytes(plan)
-    plan_sha256 = hashlib.sha256(_PLAN_DIGEST_DOMAIN + plan_bytes).hexdigest()
+    resolved_plan_sha256 = hashlib.sha256(_PLAN_DIGEST_DOMAIN + plan_bytes).hexdigest()
+    if plan_digest is None:
+        plan_sha256 = resolved_plan_sha256
+    elif isinstance(plan_digest, str) and len(plan_digest) == 64:
+        plan_sha256 = plan_digest
+    else:
+        raise OctreeError("Region Diff plan digest is invalid")
 
     reference_sets = _occupancy_by_depth(read_surface_tree(root / "reference.vbsvo"))
     before_sets = _step_sets(root, from_step)

@@ -90,7 +90,8 @@ class RepairEvidenceRequest:
     ``preview_profile`` is the closed ``{name, sha256}`` identity value
     the Workspace committed to for the experiment.  ``plan`` is a copy
     of the active Attempt's plan document — never re-authored by the
-    provider.  ``from_step``, ``to_step``, ``parent_observable_sha256``
+    provider.  ``plan_digest`` remains the digest of that original Agent
+    plan and is used for Region Diff identity.  ``from_step``, ``to_step``, ``parent_observable_sha256``
     and ``parent_selected_summary_sha256`` are the parent-binding facts
     W1 already committed to the Workspace.
     """
@@ -110,6 +111,7 @@ class RepairEvidenceRequest:
     to_step: int
     parent_observable_sha256: str
     parent_selected_summary_sha256: str
+    plan_digest: str | None = None
 
 
 class RepairEvidenceProvider(Protocol):
@@ -331,6 +333,7 @@ def real_repair_evidence_provider(
             to_step=request.to_step,
             repair_plan=dict(request.plan),
             output=request.region_diff_output,
+            plan_digest=request.plan_digest,
         )
     except Exception as exc:
         raise RepairEvidenceError("region_diff_failed", str(exc)) from exc

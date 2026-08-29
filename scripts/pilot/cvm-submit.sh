@@ -109,7 +109,7 @@ case "$mode" in
         fi
         ;;
     provider-free)
-        [[ $# -eq 3 && ( "$2" == "installed-plugin" || "$2" == "agent-surface-mcp-injection" || "$2" == "agent-surface-mcp-direct-injection" || "$2" == "agent-surface-mcp-ephemeral-differential" ) ]] || usage
+        [[ $# -eq 3 && ( "$2" == "installed-plugin" || "$2" == "agent-surface-mcp-injection" || "$2" == "agent-surface-mcp-direct-injection" || "$2" == "agent-surface-mcp-ephemeral-differential" || "$2" == "workspace-repair-chain" ) ]] || usage
         scenario="$2"
         group="$3"
         safe_group "$group" || usage
