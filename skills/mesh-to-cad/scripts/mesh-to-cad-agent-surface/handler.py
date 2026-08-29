@@ -765,11 +765,18 @@ def tool_descriptors() -> list[dict[str, Any]]:
     descriptors = []
     for spec in _OPERATION_SPECS:
         variants = [variant_schema(variant) for variant in spec.variants]
-        descriptors.append({
+        descriptor = {
             "name": spec.name,
             "description": spec.description,
             "inputSchema": variants[0] if len(variants) == 1 else {"type": "object", "oneOf": variants},
-        })
+        }
+        if spec.name == "inspect_formal_preview":
+            descriptor["annotations"] = {
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "openWorldHint": False,
+            }
+        descriptors.append(descriptor)
     return descriptors
 
 

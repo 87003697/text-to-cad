@@ -24,7 +24,7 @@ from scripts.pilot.cvm_job import protocol
 
 
 SCENARIO = "agent-surface-mcp-injection"
-EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/7"
+EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/8"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024
@@ -362,6 +362,7 @@ def _same_sandbox_mcp_preflight(argv: list[str], env: Mapping[str, str]) -> dict
         "initialize_ok": False,
         "tools_list_ok": False,
         "exact_descriptor_seen": False,
+        "descriptor_annotations": {},
         "tools_call_ok": False,
         "is_error": None,
         "text_present": False,
@@ -407,6 +408,22 @@ def _same_sandbox_mcp_preflight(argv: list[str], env: Mapping[str, str]) -> dict
     names = sorted(item.get("name") for item in tools if isinstance(item, dict) and isinstance(item.get("name"), str)) if isinstance(tools, list) else []
     result["tools_list_ok"] = frames[1].get("id") == 2 and isinstance(tools, list)
     result["exact_descriptor_seen"] = names == [_TOOL]
+    descriptor = (
+        tools[0]
+        if names == [_TOOL]
+        and isinstance(tools, list)
+        and len(tools) == 1
+        and isinstance(tools[0], dict)
+        else None
+    )
+    annotations = descriptor.get("annotations") if isinstance(descriptor, dict) else None
+    if (
+        isinstance(annotations, dict)
+        and set(annotations)
+        == {"readOnlyHint", "destructiveHint", "openWorldHint"}
+        and all(type(annotations[key]) is bool for key in annotations)
+    ):
+        result["descriptor_annotations"] = dict(annotations)
     call = frames[2].get("result") if frames[2].get("id") == 3 else None
     if not isinstance(call, dict) or set(call) != {"isError", "structuredContent", "content"} or type(call.get("isError")) is not bool or not isinstance(call.get("content"), list):
         return result
@@ -883,7 +900,22 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
         raise ProviderFreeError("provider-free evidence has an invalid sandbox contract")
     if evidence.get("private_config") != {"agent_surface_server_enabled": True}:
         raise ProviderFreeError("provider-free evidence has an invalid config result")
-    expected_preflight = {"spawned": True, "initialize_ok": True, "tools_list_ok": True, "exact_descriptor_seen": True, "tools_call_ok": True, "is_error": True, "text_present": True, "supervisor_unavailable": True, "exit_class": "zero"}
+    expected_preflight = {
+        "spawned": True,
+        "initialize_ok": True,
+        "tools_list_ok": True,
+        "exact_descriptor_seen": True,
+        "descriptor_annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "openWorldHint": False,
+        },
+        "tools_call_ok": True,
+        "is_error": True,
+        "text_present": True,
+        "supervisor_unavailable": True,
+        "exit_class": "zero",
+    }
     if evidence.get("mcp_preflight") != expected_preflight:
         raise ProviderFreeError("provider-free evidence has an invalid MCP preflight")
     preflight_dispatch = evidence.get("preflight_dispatch")
@@ -938,7 +970,18 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
     thread: threading.Thread | None = None
     version_exit = workload_exit = None
     version = None
-    preflight = {"spawned": False, "initialize_ok": False, "tools_list_ok": False, "exact_descriptor_seen": False, "tools_call_ok": False, "is_error": None, "text_present": False, "supervisor_unavailable": None, "exit_class": "spawn_failed"}
+    preflight = {
+        "spawned": False,
+        "initialize_ok": False,
+        "tools_list_ok": False,
+        "exact_descriptor_seen": False,
+        "descriptor_annotations": {},
+        "tools_call_ok": False,
+        "is_error": None,
+        "text_present": False,
+        "supervisor_unavailable": None,
+        "exit_class": "spawn_failed",
+    }
     preflight_dispatch: dict[str, object] = {"audit_count": "0"}
     preflight_protocol: dict[str, object] = {"session_count": "0", "sessions": [], "truncated": False, "classification": "no_bridge_connection"}
     workload_protocol: dict[str, object] = {"session_count": "0", "sessions": [], "truncated": False, "classification": "no_bridge_connection"}
