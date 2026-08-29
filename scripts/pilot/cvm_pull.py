@@ -25,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from scripts.pilot import provider_free_agent_surface_mcp_injection as mcp_injection
+from scripts.pilot import provider_free_agent_surface_mcp_ephemeral_differential as mcp_differential
 from scripts.pilot import provider_free_installed_plugin as installed_plugin
 
 S3_PREFIX = "s3://arcwm-code-us-west-2/ericzyma/text-to-cad/outputs"
@@ -160,7 +161,7 @@ def _provider_free_record(source: Path, manifest: object) -> dict[str, object] |
     if identity.get("job") != job or not isinstance(identity.get("authority"), dict):
         return None
     scenario = identity.get("scenario")
-    if scenario not in {installed_plugin.SCENARIO, mcp_injection.SCENARIO}:
+    if scenario not in {installed_plugin.SCENARIO, mcp_injection.SCENARIO, mcp_differential.SCENARIO}:
         return None
     return {
         "provider_free": True,
@@ -183,13 +184,15 @@ def is_valid_provider_free_success(source: Path, manifest: object) -> bool:
     try:
         if record["scenario"] == mcp_injection.SCENARIO:
             mcp_injection.validate_artifacts(repo_root, record)
+        elif record["scenario"] == mcp_differential.SCENARIO:
+            mcp_differential.validate_artifacts(repo_root, record)
         else:
             installed_plugin.validate_artifacts(
                 repo_root,
                 record,
                 verify_evidence_digest=False,
             )
-    except (installed_plugin.ProviderFreeError, mcp_injection.ProviderFreeError):
+    except (installed_plugin.ProviderFreeError, mcp_injection.ProviderFreeError, mcp_differential.ProviderFreeError):
         return False
     return True
 

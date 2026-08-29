@@ -111,7 +111,7 @@ def _parser() -> argparse.ArgumentParser:
     )
 
     provider_free = subparsers.add_parser("submit-provider-free")
-    provider_free.add_argument("scenario", choices=("installed-plugin", "agent-surface-mcp-injection"))
+    provider_free.add_argument("scenario", choices=("installed-plugin", "agent-surface-mcp-injection", "agent-surface-mcp-ephemeral-differential"))
     provider_free.add_argument("group")
 
     supervise_one = subparsers.add_parser("supervise-pilot")

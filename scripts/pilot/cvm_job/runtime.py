@@ -420,6 +420,10 @@ def _provider_free_module(scenario: str):
         from scripts.pilot import provider_free_agent_surface_mcp_injection as injection
 
         return injection
+    if scenario == "agent-surface-mcp-ephemeral-differential":
+        from scripts.pilot import provider_free_agent_surface_mcp_ephemeral_differential as differential
+
+        return differential
     raise ProtocolError(f"unsupported provider-free scenario: {scenario!r}")
 
 
