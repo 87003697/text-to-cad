@@ -30,7 +30,12 @@ import time
 from types import ModuleType
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
-from scripts.pilot.agent_surface_bridge import _handler_module_name
+try:
+    from scripts.pilot.agent_surface_bridge import _handler_module_name
+except ModuleNotFoundError as _exc:  # pragma: no cover - shipped-layout fallback
+    if _exc.name not in {"scripts", "scripts.pilot"}:
+        raise
+    from agent_surface_bridge import _handler_module_name  # type: ignore[no-redef]
 
 try:
     from scripts.pilot.trusted_tools import (  # type: ignore[import-not-found]
