@@ -256,7 +256,7 @@ if [ -z "$PREPARED_TREE" ]; then
   publish_tree_oid="$(git -C "$WORKTREE" write-tree)"
   PUBLISH_TREE="$(mktemp -d /private/tmp/installed-plugin-smoke-publish-XXXXXX)"
   require_owned_temp_path "$PUBLISH_TREE" installed-plugin-smoke-publish
-  PUBLISH_ARCHIVE="$(mktemp /private/tmp/installed-plugin-smoke-publish-XXXXXX.tar)"
+  PUBLISH_ARCHIVE="$(mktemp /private/tmp/installed-plugin-smoke-publish-archive-XXXXXX)"
   require_owned_temp_path "$PUBLISH_ARCHIVE" installed-plugin-smoke-publish
   git -C "$WORKTREE" archive --format=tar --output="$PUBLISH_ARCHIVE" "$publish_tree_oid"
   tar -xf "$PUBLISH_ARCHIVE" -C "$PUBLISH_TREE"
