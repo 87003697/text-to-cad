@@ -91,6 +91,10 @@ handle opaque. There is no `tool`, `argv`, `command`, or
 Invoke the seven JSON intents through ordinary `exec_command`, running only the
 fixed client `python3 /agent-surface/client.py`. Feed it exactly one closed JSON
 object on stdin and read its one JSON response before issuing another intent.
+If a long-running call returns an `exec_command` session ID before its JSON
+response, immediately and repeatedly poll that exact session through `write_stdin`
+with empty input until the client exits and returns the response. Do not issue another
+intent, commentary, or unrelated command while that session is live.
 For example, use shell input redirection only to feed this exact request:
 
 ```json
