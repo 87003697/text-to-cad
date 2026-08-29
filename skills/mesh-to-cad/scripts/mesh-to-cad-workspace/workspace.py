@@ -1850,12 +1850,6 @@ def finalize_from_agent_selection_claim(
             "Selected Step is not present in the canonical graph",
             "$.selected_step",
         )
-    if selected_step not in graph["heads"]:
-        raise WorkspaceError(
-            "invalid_workspace_path",
-            "Selected Step is not a selectable current head",
-            "$.selected_step",
-        )
     step_document = _read_authority_json(
         workspace,
         workspace / "steps" / f"{selected_step:06d}" / "step.json",

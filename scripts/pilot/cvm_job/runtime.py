@@ -695,8 +695,13 @@ def supervise_provider_free_installed_plugin(
             provider_free.assert_current_authority(record, host_home or Path.home())
             transition(root, handle, "running", supervisor_pid=os.getpid())
             module_name = provider_free.__name__.rsplit(".", 1)[-1]
+            runner_executable = sys.executable
+            if command is None and record.get("scenario") == "workspace-repair-chain":
+                runner_executable = os.fspath(REPO_ROOT / ".venv/bin/python")
+                if not Path(runner_executable).is_file():
+                    raise ProtocolError("workspace-repair-chain runner runtime unavailable")
             runner_command = list(command) if command is not None else [
-                sys.executable,
+                runner_executable,
                 "-m",
                 f"scripts.pilot.{module_name}",
                 "--job",

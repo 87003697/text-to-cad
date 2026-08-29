@@ -238,10 +238,17 @@ def _workspace_json_bytes(value: Mapping[str, object]) -> bytes:
     ).encode("utf-8")
 
 
-def publish_tool_registry(authority_dir: Path) -> Path:
+def publish_tool_registry(
+    authority_dir: Path,
+    *,
+    rebuild_entrypoint: Path | None = None,
+    geometry_entrypoint: Path | None = None,
+) -> Path:
     """Publish the runner-owned finalization registry beside runtime authority."""
 
-    for path in (CAD_REBUILD_ENTRYPOINT, GEOMETRY_ENTRYPOINT):
+    rebuild_source = rebuild_entrypoint or CAD_REBUILD_ENTRYPOINT
+    geometry_source = geometry_entrypoint or GEOMETRY_ENTRYPOINT
+    for path in (rebuild_source, geometry_source):
         if not path.is_file() or path.is_symlink():
             raise PilotError("trusted tool entrypoint is unavailable")
     value: dict[str, object] = {
@@ -250,14 +257,14 @@ def publish_tool_registry(authority_dir: Path) -> Path:
             "id": "cad.canonical-build/1",
             "entrypoint": str(SANDBOX_CAD_REBUILD_ENTRYPOINT),
             "entrypoint_sha256": hashlib.sha256(
-                CAD_REBUILD_ENTRYPOINT.read_bytes()
+                rebuild_source.read_bytes()
             ).hexdigest(),
         },
         "geometry": {
             "id": "mesh-compare.voxblame/1",
             "entrypoint": str(SANDBOX_GEOMETRY_ENTRYPOINT),
             "entrypoint_sha256": hashlib.sha256(
-                GEOMETRY_ENTRYPOINT.read_bytes()
+                geometry_source.read_bytes()
             ).hexdigest(),
         },
     }

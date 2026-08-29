@@ -482,9 +482,13 @@ Rules for using decision facts:
   authored content.
 - Base your next repair hypothesis on them: `repair_frontier` and
   `repair_targets` identify the active action layer and coarse target facts;
-  `repair_targets` names the top-ranked residual regions by kind and
-  supplies only the stable selection identities needed by the repair
-  plan.
+   `repair_targets` names the top-ranked residual regions by kind and
+   supplies only the stable selection identities needed by the repair
+   plan.
+- Compare candidate frontiers lexicographically: a greater `active_depth`
+  is better; at the same depth, a smaller `surface_error_count` is better.
+  Equal depth and error count is a tie. Use missing and excess counts for
+  diagnosis, not for additional ranking.
 - If `change_from_parent.no_observable_geometry_change` is true after
   a repair, your source edit did not move observable geometry — stop
   and reconsider before spending another attempt.
@@ -514,13 +518,19 @@ The bounded loop the supervisor enforces is:
    Start the next Attempt with an explicit parent step handle; the supervisor reseeds
    `/candidate/work/source/` with the parent's source. Edit it,
    run the registered tools for the child, then `submit_repair`.
-   Stop when residuals establish acceptance, when no further coherent
-   repair is plausible, or when the supervisor reports
-   `budget_exhausted`. If `submit_repair` returns
+   Maintain the best-so-far result by Active Depth using lexicographic
+   comparison. If a child is not better than that result, start the next
+   Attempt from the best result's opaque parent handle. Stop when residuals
+   establish acceptance, when no further coherent repair is plausible, or
+   when the supervisor reports `budget_exhausted`. If `submit_repair` returns
    `repair_evidence_failed`, use its closed subtype only to choose the next
    permitted action; do not infer or request host-side diagnostics.
-6. `select_and_finalize` with the strongest plausible step handle and
-   authored notes.
+   For every Repair Attempt, rebind the plan to the chosen parent's current
+   target facts, set `from_step` to that parent's ordinal, and set assessment
+   `to_step` to one greater than the maximum published returned step ordinal;
+   this remains true across historical branches.
+6. `select_and_finalize` with the strongest returned opaque step handle
+   and authored notes.
 
 You always read `permitted_next_intents` in the previous response and
 issue only an intent it lists. Any other intent returns

@@ -96,11 +96,13 @@ claim is refused before any tool runs.
 
 `step_handle` is opaque. It must be one of the step handles the
 supervisor returned to you from `submit_step_zero` or `submit_repair`
-in this Attempt sequence, and it must still name a **current head**
-of the step graph — a step that no later repair descends from. A step
-you already superseded with a repair is no longer selectable and the
-intent will refuse it.
+in this Attempt sequence. Any published and validated Measured Step
+returned by the supervisor is selectable, including a historical step
+that is no longer a graph head when it remains the strongest result.
+Pass the opaque handle itself; an ordinal or path is not a selection
+identity.
 
-Choose the honest head that best matches your stop reason: an accepted
-head if you paired it with `acceptance_satisfied`; otherwise the
-strongest unaccepted head you would defend on its own merits.
+Choose the honest strongest returned step that best matches your stop
+reason: an accepted step if you paired it with `acceptance_satisfied`;
+otherwise the strongest unaccepted step you would defend on its own
+merits.
