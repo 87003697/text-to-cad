@@ -1389,11 +1389,6 @@ class WorkspaceSupervisor:
                 raise SupervisorError("invalid_handle")
             from_step = resolved
         with self._publication_condition:
-            attempt_is_active = bool(self._attempts) or self._starting_attempt
-            publication_in_flight = self._publication_in_flight_locked()
-        if attempt_is_active or publication_in_flight:
-            raise SupervisorError("attempt_already_active")
-        with self._publication_condition:
             if self._attempts or self._starting_attempt or self._publication_in_flight_locked():
                 raise SupervisorError("attempt_already_active")
             self._starting_attempt = True

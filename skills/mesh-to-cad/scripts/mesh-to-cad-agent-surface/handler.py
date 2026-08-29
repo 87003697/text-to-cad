@@ -637,28 +637,15 @@ def _validate_workspace_status_result(value: Any, path: str) -> dict[str, Any]:
         "workspace_status",
     )
     if recovery is not None:
-        recovery_fields = (
-            ("state", "state"),
-            ("step_handle", "handle"),
-            ("preview_handle", "handle"),
-            ("decision_facts", "decision_facts"),
-            ("permitted_next_intents", "next"),
-        )
+        recovery_path = f"{path}.publication_recovery"
         if type(recovery) is not dict or recovery.get("state") != "published":
-            _fail("supervisor_contract_violation", f"{path}.publication_recovery")
-        if "cycle_handle" in recovery:
-            recovery_fields = (
-                recovery_fields[:3]
-                + (("cycle_handle", "handle"),)
-                + recovery_fields[3:]
-            )
-        recovery_result = _result_fields(
-            recovery,
-            recovery_fields,
-            f"{path}.publication_recovery",
-            "submit_step_zero",
+            _fail("supervisor_contract_violation", recovery_path)
+        validator = (
+            _validate_repair_result
+            if "cycle_handle" in recovery
+            else _validate_step_zero_result
         )
-        result["publication_recovery"] = recovery_result
+        result["publication_recovery"] = validator(recovery, recovery_path)
     return result
 
 
