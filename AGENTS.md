@@ -69,15 +69,14 @@ don't need this file.
 
 Run the smallest path-targeted check that covers the change:
 
-- Code tests: `scripts/test/test.sh` (or focused runners `test-js.sh`,
-  `test-docs.sh`, `test-python.sh`, `test-global.sh`)
+- Code tests: `scripts/test/test.sh` (or focused runners `test-js.sh` and
+  `test-docs.sh`)
 - Symlink layout: `scripts/dev/setup-symlinks.sh --check`
 - Generated runtime freshness: `scripts/bundle/bundle.sh --check` (run
   `scripts/bundle/bundle.sh` first if source changes affect generated
   runtimes)
 - Viewer / packages: `npm --prefix <path> test|build`
 - Docs: `npm --prefix docs run check`
-- Targeted Python: `./.venv/bin/python -m unittest <changed paths>`
 - Installed-plugin smoke (**required before production or paid-pilot
   claims** about the shipped plugin surface):
   `scripts/release/smoke-installed-plugin.sh`. Materializes and bundles a

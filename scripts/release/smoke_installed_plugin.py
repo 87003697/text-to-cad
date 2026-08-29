@@ -10,7 +10,7 @@ host-side build probe uses a fixed adapter for the two canonical sandbox
 entrypoint names; production does not translate registry paths.
 
 Pure validation logic (manifest / digest / fail-closed assertions / receipt
-construction) is exposed as functions and covered by tests/python/global/
+construction) is exposed as functions for direct validation by release tooling.
 test_smoke_installed_plugin.py. The `main` entrypoint is the thin driver used
 by scripts/release/smoke-installed-plugin.sh.
 

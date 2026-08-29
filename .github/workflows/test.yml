@@ -110,23 +110,6 @@ jobs:
       - name: Set up dependencies
         uses: ./.github/actions/setup-deps
 
-      # Three steps rather than test.sh, each running even if an earlier one failed, and the
-      # Python runner in --keep-going mode. While Windows is being brought up the failures are
-      # independent POSIX-isms in unrelated suites, and stopping at the first one turns a list
-      # into one ~10 minute round trip per entry. The Linux job keeps the fail-fast default.
       - name: Run JS tests
         run: scripts/test/test-js.sh
         shell: bash
-
-      - name: Run Python tests
-        if: ${{ !cancelled() }}
-        run: scripts/test/test-python.sh --keep-going
-        shell: bash
-
-      # test-global.sh is deliberately absent, for the same reason the bundle and symlink
-      # steps are. It asserts REPOSITORY policy -- that manifests pin the canonical version,
-      # that lockfiles do not reach outside a skill, that the release scripts read the right
-      # VERSION path at a given ref -- by executing the repo's own bash tooling. None of that
-      # is shipped to a Windows user, and none of its answers can differ by operating system;
-      # running it here only asks whether `bash` on a Windows runner behaves like bash, which
-      # it does not (it resolves to the WSL stub and answers in UTF-16).

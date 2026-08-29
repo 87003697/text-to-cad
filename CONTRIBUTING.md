@@ -443,16 +443,6 @@ Use `AGENTS.md` or `scripts/README.md` for path-specific validation when you are
 working in a particular package, skill, docs site, or production-output
 path.
 
-For targeted Python skill-script tests, run the relevant unittest files with the
-repo-local Python runtime, for example:
-
-```bash
-./.venv/bin/python -m unittest tests/python/skills/urdf/test_cli.py
-```
-
-Python tests live under `tests/python/`, grouped by tested surface:
-`skills/<skill>`, `packages/<package>`, `viewer/<service>`, and `global`.
-
 For fast CAD Viewer source iteration, run the root viewer app in dev mode. Do
 not run the generated viewer from the cad-viewer skill while modifying Viewer
 behavior:

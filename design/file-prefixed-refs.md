@@ -232,8 +232,6 @@ At the two places raw user ref strings first become tokens/selectors:
 ## Verification commands
 
 ```
-./.venv/bin/python -m unittest tests/python/packages/cadgen/test_cad_ref_syntax_parity.py
-scripts/test/test-python.sh
 npm --prefix packages/cadjs test
 npm --prefix viewer run test
 scripts/bundle/bundle.sh --check

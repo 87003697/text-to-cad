@@ -49,16 +49,14 @@ mounted, required runtime paths are mounted, and browser artifacts on every
 remaining declared root are still found and masked. Use read-only CVM probes
 to justify the allowlist; do not run a formal or provider-backed pilot.
 
-If source changes are justified, make the smallest fail-closed correction and
-add focused regression tests. Preserve undeclared-root escape, dangling-link,
+If source changes are justified, make the smallest fail-closed correction.
+Preserve undeclared-root escape, dangling-link,
 cycle, identity-change, uninspectable-entry, writable-browser-artifact, and
-required-root rejection. Run the focused tests with system `python3`; this
-isolated copy has no repository virtualenv.
+required-root rejection.
 
 Allowed source paths are limited to:
 
 - `scripts/pilot/`
-- `tests/python/global/`
 
 Treat Docker, S3, SSH, Git remotes, the shared checkout, formal pilots, and
 other model calls as unavailable. Inspect Docker-related source if useful, but

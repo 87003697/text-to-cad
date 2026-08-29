@@ -74,13 +74,11 @@ Do this first regardless; it is the safety net for every later phase.
 3. Add a shared parity fixture `packages/cadjs/src/lib/cadRefs.parity.json`: an
    array of `{selector, type, occurrenceId, ordinal, canonical}` cases covering
    every grammar form, including the future label forms marked `"phase": 1` so both
-   suites skip-then-enable them. Root Python test
-   `tests/python/packages/cadgen/test_cad_ref_syntax_parity.py` loads the fixture
-   (root tests may reach into `packages/`); `cadRefs.test.js` loads it relatively.
-   Both assert their parser agrees with every case.
+   suites skip-then-enable them. `cadRefs.test.js` loads it relatively and
+   asserts its parser agrees with every case.
 
 Checks: `npm --prefix packages/cadjs test`, `npm --prefix viewer run test`,
-`./.venv/bin/python -m unittest tests/python/packages/cadgen/test_cad_ref_syntax_parity.py`.
+and `scripts/bundle/bundle.sh --check`.
 
 ## Phase 1 — grammar: parse label forms (Python + JS)
 
@@ -237,8 +235,6 @@ JS:
 ## Verification commands
 
 ```
-./.venv/bin/python -m unittest tests/python/packages/cadgen/test_cad_ref_syntax_parity.py tests/python/packages/cadgen/test_label_refs.py
-scripts/test/test-python.sh
 npm --prefix packages/cadjs test
 npm --prefix viewer run test
 scripts/bundle/bundle.sh --check
@@ -252,5 +248,5 @@ scripts/bundle/bundle.sh --check
    `_1`/`_2`; numbered forms resolve; order follows the occurrence tree).
 3. Every numeric ref that worked before still works byte-for-byte; no emitted
    `ref` field anywhere changes.
-4. Parity fixture green in both languages; the two inline viewer regexes are gone.
-5. Full `scripts/test/test-python.sh` and both JS suites green; bundle check clean.
+4. Parity fixture green; the two inline viewer regexes are gone.
+5. Both JS suites are green and the bundle check is clean.

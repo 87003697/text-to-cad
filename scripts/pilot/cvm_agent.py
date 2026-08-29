@@ -38,12 +38,10 @@ NOBODY_UID = 65534
 NOBODY_GID = 65534
 ALLOWED_CHANGED_PREFIXES = (
     "scripts/pilot/",
-    "tests/python/global/",
 )
 SOURCE_INPUT_PREFIXES = (
     "packages/meshshot",
     "scripts/pilot",
-    "tests/python/global",
 )
 SOURCE_INPUT_FILES = ("AGENTS.md", "CONTRIBUTING.md")
 SOURCE_EXCLUDED_NAMES = frozenset({"__pycache__", "node_modules", ".pytest_cache"})

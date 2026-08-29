@@ -112,12 +112,6 @@ node scripts/run-tests.mjs src/client/workbench/sidebar.test.js
 node scripts/run-tests.mjs src/shared/viewerConfig.test.mjs
 ```
 
-Python backend tests run separately:
-
-```bash
-python -m unittest discover -s server_py/tests -t .
-```
-
 ## Runtime Configuration
 
 Important environment variables:

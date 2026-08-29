@@ -63,9 +63,3 @@ not retry, install, start a runtime, or mutate CVM state.
 
 `install` and `probe` are separate CVM writes and require explicit
 authorization. Neither authorizes a paid pilot or output upload.
-
-## Validation
-
-```bash
-python3 -m unittest tests.python.global.test_cvm_browser_runtime
-```
