@@ -29,6 +29,14 @@ STEP_SCHEMA = "mesh-to-cad.measured-step/1"
 CYCLE_SCHEMA = "mesh-to-cad.repair-cycle/1"
 INDEX_SCHEMA = "mesh-to-cad.step-index/1"
 ATTEMPT_SCHEMA = "mesh-to-cad.attempt/1"
+REPAIR_EVIDENCE_FAILURE_SCHEMA = "mesh-to-cad.repair-evidence-failure/1"
+REPAIR_EVIDENCE_FAILURE_SUBTYPES = (
+    "provider_execution_failed",
+    "voxblame_output_invalid",
+    "preview_output_invalid",
+    "region_diff_invalid",
+    "source_changes_invalid",
+)
 COMMAND_SCHEMA = "mesh-to-cad.command/1"
 INITIAL_PLAN_SCHEMA = "mesh-to-cad.initial-plan/1"
 COORDINATE_CONTRACT = "trellis2_canonical/1"
@@ -52,6 +60,12 @@ FAILED_ATTEMPT_RESULTS = (
     "strategy_changed",
     "no_feasible_strategy",
 )
+
+
+class RepairEvidenceFailure(Exception):
+    def __init__(self, subtype: str) -> None:
+        self.subtype = subtype
+
 
 class ExecutionScope:
     """Per-run process cancellation scope with spawn/registration handshake."""
@@ -1543,6 +1557,8 @@ def record_attempt(
     shutil.copy2(active_root / "plan.json", stage / "plan.json")
     if (active_root / "commands").exists():
         shutil.copytree(active_root / "commands", stage / "commands")
+    if classification == "repair_evidence_failed":
+        _copy_repair_evidence_failure(active_root, stage)
     files = _inventory(stage)
     document: dict[str, Any] = {
         **{key: active[key] for key in _ACTIVE_ATTEMPT_FIELDS - {"result"}},
@@ -1599,6 +1615,7 @@ def publish_cycle(
         [Mapping[str, Any], Mapping[str, Any], Mapping[str, Any] | None],
         Mapping[str, Any],
     ] | None = None,
+    _repair_evidence_failures: bool = False,
 ) -> dict[str, Any]:
     """Publish one successful Repair Cycle edge and its Measured Step node."""
 
@@ -1636,28 +1653,39 @@ def publish_cycle(
         candidate_mesh=candidate_mesh,
         measurement=measurement,
         preview=preview,
+        repair_evidence=_repair_evidence_failures,
     )
     voxblame_path = _voxblame_step_path(
         workspace, evidence.measurement, intended_step
     )
-    diff_document = _read_json(region_diff, "$.region_diff")
-    _validate_region_diff_boundary(
-        diff_document,
-        plan=plan,
-        plan_digest=active["plan_digest"],
-        from_step=from_step,
-        to_step=intended_step,
-        before_observable=parent_manifest["observable_sha256"],
-        after_observable=evidence.identities["observable_sha256"],
-    )
+    try:
+        diff_document = _read_json(region_diff, "$.region_diff")
+        _validate_region_diff_boundary(
+            diff_document,
+            plan=plan,
+            plan_digest=active["plan_digest"],
+            from_step=from_step,
+            to_step=intended_step,
+            before_observable=parent_manifest["observable_sha256"],
+            after_observable=evidence.identities["observable_sha256"],
+        )
+    except WorkspaceError as error:
+        if _repair_evidence_failures:
+            raise RepairEvidenceFailure("region_diff_invalid") from error
+        raise
     assessment_document = _read_json(assessment, "$.assessment")
     _validate_assessment(
         assessment_document, from_step=from_step, to_step=intended_step
     )
-    source_changes_document = _read_json(source_changes, "$.source_changes")
-    _validate_source_changes(
-        source_changes_document, from_step=from_step, to_step=intended_step
-    )
+    try:
+        source_changes_document = _read_json(source_changes, "$.source_changes")
+        _validate_source_changes(
+            source_changes_document, from_step=from_step, to_step=intended_step
+        )
+    except WorkspaceError as error:
+        if _repair_evidence_failures:
+            raise RepairEvidenceFailure("source_changes_invalid") from error
+        raise
     attempt_ids = _cycle_attempt_ids(
         workspace,
         intended_step,
@@ -2985,16 +3013,32 @@ def _prepare_step_evidence(
     candidate_mesh: str,
     measurement: Path,
     preview: Path,
+    repair_evidence: bool = False,
 ) -> _PreparedStepEvidence:
     candidate = candidate.resolve()
     preview = preview.resolve()
     measurement = measurement.resolve()
     _validate_tree_source(candidate, "$.candidate")
     _validate_candidate_rebuild_recipe_if_present(candidate)
-    _validate_tree_source(preview, "$.preview")
+    try:
+        _validate_tree_source(preview, "$.preview")
+    except WorkspaceError as error:
+        if repair_evidence:
+            raise RepairEvidenceFailure("preview_output_invalid") from error
+        raise
     mesh_path = _relative_member(candidate, candidate_mesh, "$.candidate_mesh")
-    measurement_document = _read_json(measurement, "$.measurement")
-    preview_document = _read_json(preview / "preview.json", "$.preview")
+    if repair_evidence:
+        try:
+            measurement_document = _read_json(measurement, "$.measurement")
+        except WorkspaceError as error:
+            raise RepairEvidenceFailure("voxblame_output_invalid") from error
+        try:
+            preview_document = _read_json(preview / "preview.json", "$.preview")
+        except WorkspaceError as error:
+            raise RepairEvidenceFailure("preview_output_invalid") from error
+    else:
+        measurement_document = _read_json(measurement, "$.measurement")
+        preview_document = _read_json(preview / "preview.json", "$.preview")
     identities = _validate_step_evidence(
         workspace,
         _load_workspace_document(workspace),
@@ -3006,6 +3050,7 @@ def _prepare_step_evidence(
         measurement=measurement_document,
         preview_root=preview,
         preview=preview_document,
+        repair_evidence=repair_evidence,
     )
     return _PreparedStepEvidence(
         candidate=candidate,
@@ -3034,15 +3079,28 @@ def _validate_step_evidence(
     measurement: Mapping[str, Any],
     preview_root: Path,
     preview: Mapping[str, Any],
+    repair_evidence: bool = False,
 ) -> dict[str, str]:
-    _validate_measurement_boundary(measurement, step=step, compare_to=parent_step)
-    _validate_preview_boundary(preview, preview_root)
+    try:
+        _validate_measurement_boundary(measurement, step=step, compare_to=parent_step)
+    except WorkspaceError as error:
+        if repair_evidence:
+            raise RepairEvidenceFailure("voxblame_output_invalid") from error
+        raise
+    try:
+        _validate_preview_boundary(preview, preview_root)
+    except WorkspaceError as error:
+        if repair_evidence:
+            raise RepairEvidenceFailure("preview_output_invalid") from error
+        raise
     expected_no_op = (
         parent_observable_sha256 is not None
         and measurement["measurement"]["observable_sha256"]
         == parent_observable_sha256
     )
     if measurement["no_observable_geometry_change"] is not expected_no_op:
+        if repair_evidence:
+            raise RepairEvidenceFailure("voxblame_output_invalid")
         _fail(
             "identity_conflict",
             "Observable Geometry no-op fact contradicts parent identity",
@@ -3051,17 +3109,24 @@ def _validate_step_evidence(
     reference_sha = experiment["canonical_reference_sha256"]
     profile = experiment["preview_profile"]
     checks = (
-        (measurement["canonical_reference"]["canonical_reference_sha256"], reference_sha, "measurement reference"),
-        (preview["reference"]["canonical_reference_sha256"], reference_sha, "preview reference"),
-        (measurement["measurement"]["candidate_mesh_sha256"], candidate_sha, "measurement candidate"),
-        (preview["candidate"]["mesh_sha256"], candidate_sha, "preview candidate"),
-        (preview["profile"]["experiment_identity"], profile, "preview profile"),
-        (preview["canonical_frame"]["coordinate_contract"], experiment["coordinate_contract"], "preview frame"),
+        (measurement["canonical_reference"]["canonical_reference_sha256"], reference_sha, "voxblame_output_invalid", "measurement reference"),
+        (preview["reference"]["canonical_reference_sha256"], reference_sha, "preview_output_invalid", "preview reference"),
+        (measurement["measurement"]["candidate_mesh_sha256"], candidate_sha, "voxblame_output_invalid", "measurement candidate"),
+        (preview["candidate"]["mesh_sha256"], candidate_sha, "preview_output_invalid", "preview candidate"),
+        (preview["profile"]["experiment_identity"], profile, "preview_output_invalid", "preview profile"),
+        (preview["canonical_frame"]["coordinate_contract"], experiment["coordinate_contract"], "preview_output_invalid", "preview frame"),
     )
-    for actual, expected, label in checks:
+    for actual, expected, subtype, label in checks:
         if actual != expected:
+            if repair_evidence:
+                raise RepairEvidenceFailure(subtype)
             _fail("identity_conflict", f"{label} identity conflicts with the Workspace")
-    _workspace_relative(workspace, measurement_path)
+    try:
+        _workspace_relative(workspace, measurement_path)
+    except WorkspaceError as error:
+        if repair_evidence:
+            raise RepairEvidenceFailure("voxblame_output_invalid") from error
+        raise
     return {
         "canonical_reference_sha256": reference_sha,
         "candidate_mesh_sha256": candidate_sha,
@@ -3892,6 +3957,26 @@ def _require_current_commit_trailers(
 
 def _accepted(measurement: Mapping[str, Any]) -> bool:
     return all(measurement["objective_facts"].values())
+
+
+def _copy_repair_evidence_failure(active_root: Path, stage: Path) -> None:
+    source = active_root / "repair-evidence-failure.json"
+    document = _closed_object(
+        _read_json(source, "$.repair_evidence_failure"),
+        {"schema", "subtype"},
+        "$.repair_evidence_failure",
+    )
+    _const(
+        document["schema"],
+        REPAIR_EVIDENCE_FAILURE_SCHEMA,
+        "$.repair_evidence_failure.schema",
+    )
+    if (
+        not isinstance(document["subtype"], str)
+        or document["subtype"] not in REPAIR_EVIDENCE_FAILURE_SUBTYPES
+    ):
+        _fail("invalid_contract", "unsupported repair evidence failure subtype", "$.repair_evidence_failure.subtype")
+    shutil.copy2(source, stage / source.name)
 
 
 def _inventory(root: Path) -> list[dict[str, Any]]:

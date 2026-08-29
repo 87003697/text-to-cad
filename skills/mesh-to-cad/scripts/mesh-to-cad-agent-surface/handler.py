@@ -665,7 +665,7 @@ def _validate_repair_result(value: Any, path: str) -> dict[str, Any]:
     if isinstance(value, dict) and value.get("state") == "failed":
         value = _closed(
             value,
-            ("state", "classification", "permitted_next_intents"),
+            ("state", "classification", "subtype", "permitted_next_intents"),
             path,
         )
         classification = _enum(
@@ -676,6 +676,7 @@ def _validate_repair_result(value: Any, path: str) -> dict[str, Any]:
         return {
             "state": _state(value["state"], "submit_repair", f"{path}.state"),
             "classification": classification,
+            "subtype": _enum(value["subtype"], ("provider_execution_failed", "voxblame_output_invalid", "preview_output_invalid", "region_diff_invalid", "source_changes_invalid"), f"{path}.subtype"),
             "permitted_next_intents": _next_result(
                 value["permitted_next_intents"],
                 f"{path}.permitted_next_intents",

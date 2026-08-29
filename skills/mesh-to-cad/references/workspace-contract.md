@@ -240,8 +240,11 @@ run returns the wrapped command's exit code.
 - If trusted Repair evidence cannot satisfy its fixed comparison contract,
   the supervisor records the active Attempt as `strategy_changed`, returns
   `submit_repair` with `state=failed` and the closed
-  `repair_evidence_failed` classification, and permits another Attempt from
-  an existing Measured Step. Unknown publication failures remain fatal.
+  `repair_evidence_failed` classification with one closed subtype, and permits
+  another Attempt from an existing Measured Step. The subtype is the only
+  repair-evidence diagnostic returned to the Agent and is retained as the
+  closed `repair-evidence-failure.json` Attempt artifact for host-side pilot
+  review; unknown publication failures remain fatal.
 - finalize validates Agent-owned selection evidence, copies every selected
   recipe input into isolated staging, executes the explicitly supplied
   registered CAD rebuild adapter, proves the complete source to

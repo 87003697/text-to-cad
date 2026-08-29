@@ -162,7 +162,10 @@ For the six workflow intents, `result` has the following closed shapes:
   `permitted_next_intents`.
 - `submit_repair`: on publication, `state`, `step_handle`, `preview_handle`, `cycle_handle`,
   `decision_facts`, `permitted_next_intents`; on its closed evidence failure,
-  `state`, `classification`, `permitted_next_intents`.
+  `state`, `classification`, `subtype`, `permitted_next_intents`. Its subtype
+  is one of `provider_execution_failed`, `voxblame_output_invalid`,
+  `preview_output_invalid`, `region_diff_invalid`, or `source_changes_invalid`.
+  Use it only to choose a permitted next action; it carries no host detail.
 - `select_and_finalize`: `state`, `final_delivery_handle`,
   `permitted_next_intents`.
 - `inspect_formal_preview`: `state`, `preview_handle`, `permitted_next_intents`, plus an MCP image block.
@@ -513,7 +516,9 @@ The bounded loop the supervisor enforces is:
    run the registered tools for the child, then `submit_repair`.
    Stop when residuals establish acceptance, when no further coherent
    repair is plausible, or when the supervisor reports
-   `budget_exhausted`.
+   `budget_exhausted`. If `submit_repair` returns
+   `repair_evidence_failed`, use its closed subtype only to choose the next
+   permitted action; do not infer or request host-side diagnostics.
 6. `select_and_finalize` with the strongest plausible step handle and
    authored notes.
 

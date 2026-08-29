@@ -218,8 +218,9 @@ completed publication response is unavailable, call workspace_status; its
 publication_recovery, when present, is the exact published response and must
 be used without resubmitting W1. Do not issue another intent while a client
 session is live.
-On an error, preserve its classification and do not retry blindly. After each published
-Step response with a preview_handle, emit no text before calling the only MCP
+On an error, preserve its classification and do not retry blindly. For a closed
+repair_evidence_failed response, use only its subtype to choose a permitted next
+intent; never request host diagnostics. After each published Step response with a preview_handle, emit no text before calling the only MCP
 tool you may use: in code mode its callable ID is
 mcp__agent_surface__inspect_formal_preview; native Responses uses namespace
 mcp__agent_surface with child inspect_formal_preview. Never use a dotted

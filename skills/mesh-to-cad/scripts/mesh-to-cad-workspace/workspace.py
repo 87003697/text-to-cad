@@ -49,6 +49,39 @@ workspace_status = _core.workspace_status
 cancel_active_commands = _core.cancel_active_commands
 ExecutionScope = _core.ExecutionScope
 
+REPAIR_EVIDENCE_FAILURE_SCHEMA = _core.REPAIR_EVIDENCE_FAILURE_SCHEMA
+_REPAIR_PROVIDER_SUBTYPES = {
+    "measurement_failed": "voxblame_output_invalid",
+    "region_diff_failed": "region_diff_invalid",
+    "preview_failed": "preview_output_invalid",
+    "preview_profile_mismatch": "preview_output_invalid",
+    "source_changes_failed": "source_changes_invalid",
+}
+
+
+def _repair_evidence_subtype(error: Exception) -> str:
+    return _REPAIR_PROVIDER_SUBTYPES.get(
+        getattr(error, "classification", None), "provider_execution_failed"
+    )
+
+
+def _write_repair_evidence_failure(active_root: Path, subtype: str) -> None:
+    (active_root / "repair-evidence-failure.json").write_text(
+        json.dumps(
+            {"schema": REPAIR_EVIDENCE_FAILURE_SCHEMA, "subtype": subtype},
+            separators=(",", ":"), sort_keys=True
+        ) + "\n", encoding="utf-8"
+    )
+
+
+def _repair_evidence_failure(active_root: Path, subtype: str) -> dict[str, str]:
+    _write_repair_evidence_failure(active_root, subtype)
+    return {
+        "state": "failed",
+        "classification": "repair_evidence_failed",
+        "subtype": subtype,
+    }
+
 
 def workspace_initialized(workspace: Path) -> bool:
     """Return whether the Workspace authority document is readable."""
@@ -644,12 +677,24 @@ def _validate_repair_stage(
         step_root / "summary.json",
         step_root / "measurement.json",
     )
-    for path in required_voxblame:
-        _assert_repair_stage_regular_file(path, f"voxblame stage {path.name}")
-    for name in ("preview.json", "preview.png"):
-        _assert_repair_stage_regular_file(preview_output / name, f"preview stage {name}")
-    _assert_repair_stage_regular_file(region_diff_output, "region-diff stage")
-    _assert_repair_stage_regular_file(source_changes_output, "source-changes stage")
+    try:
+        for path in required_voxblame:
+            _assert_repair_stage_regular_file(path, f"voxblame stage {path.name}")
+    except WorkspaceError as error:
+        raise _core.RepairEvidenceFailure("voxblame_output_invalid") from error
+    try:
+        for name in ("preview.json", "preview.png"):
+            _assert_repair_stage_regular_file(preview_output / name, f"preview stage {name}")
+    except WorkspaceError as error:
+        raise _core.RepairEvidenceFailure("preview_output_invalid") from error
+    try:
+        _assert_repair_stage_regular_file(region_diff_output, "region-diff stage")
+    except WorkspaceError as error:
+        raise _core.RepairEvidenceFailure("region_diff_invalid") from error
+    try:
+        _assert_repair_stage_regular_file(source_changes_output, "source-changes stage")
+    except WorkspaceError as error:
+        raise _core.RepairEvidenceFailure("source_changes_invalid") from error
 
 
 def _promote_repair_voxblame_step(
@@ -965,20 +1010,21 @@ def publish_cycle_from_candidate(
         _assert_repair_request_paths_outside(request, workspace)
         try:
             evidence_provider(request)
+            _validate_repair_stage(
+                external_voxblame_output,
+                external_preview_output,
+                external_region_diff_output,
+                external_source_changes_output,
+                intended_step=intended_step,
+            )
+        except _core.RepairEvidenceFailure as error:
+            return _repair_evidence_failure(active_root, error.subtype)
         except WorkspaceError:
             raise
         except Exception as error:
-            raise WorkspaceError(
-                "repair_evidence_failed",
-                f"trusted Repair evidence provider failed: {error.__class__.__name__}",
-            ) from error
-        _validate_repair_stage(
-            external_voxblame_output,
-            external_preview_output,
-            external_region_diff_output,
-            external_source_changes_output,
-            intended_step=intended_step,
-        )
+            return _repair_evidence_failure(
+                active_root, _repair_evidence_subtype(error)
+            )
 
         # Descriptor-copy the validated external outputs into a private
         # same-filesystem W1 stage.  The provider never learns this
@@ -1017,7 +1063,12 @@ def publish_cycle_from_candidate(
                 / _agent_relative(authority, CANDIDATE_ASSESSMENT_RELATIVE),
                 source_changes=internal_source_changes,
                 _decision_facts_factory=_decision_facts_factory(workspace),
+                _repair_evidence_failures=True,
             )
+        except _core.RepairEvidenceFailure as error:
+            _rollback_repair_voxblame_step(workspace, intended_step)
+            promoted = False
+            return _repair_evidence_failure(active_root, error.subtype)
         except Exception:
             _rollback_repair_voxblame_step(workspace, intended_step)
             promoted = False

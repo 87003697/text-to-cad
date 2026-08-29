@@ -2155,6 +2155,7 @@ class WorkspaceSupervisor:
                 result = {
                     "state": "failed",
                     "classification": published["classification"],
+                    "subtype": published["subtype"],
                     "permitted_next_intents": [
                         "start_attempt",
                         "select_and_finalize",
@@ -2276,32 +2277,27 @@ class WorkspaceSupervisor:
         try:
             document = api_call()
         except Exception as exc:
-            if (
-                submission.kind == "repair"
-                and getattr(exc, "classification", None)
-                == "repair_evidence_failed"
-            ):
-                try:
-                    self.workspace_api.record_attempt(
-                        self.workspace,
-                        attempt=submission.attempt_id,
-                        result="strategy_changed",
-                        classification="repair_evidence_failed",
-                    )
-                except Exception as record_error:
-                    raise SupervisorError(
-                        "cycle_publication_failed"
-                    ) from record_error
-                return {
-                    "state": "failed",
-                    "classification": "repair_evidence_failed",
-                }
             classification = (
                 "step_publication_failed"
                 if submission.kind == "step_zero"
                 else "cycle_publication_failed"
             )
             raise SupervisorError(classification) from exc
+        if (
+            submission.kind == "repair"
+            and isinstance(document, Mapping)
+            and document.get("state") == "failed"
+        ):
+            try:
+                self.workspace_api.record_attempt(
+                    self.workspace,
+                    attempt=submission.attempt_id,
+                    result="strategy_changed",
+                    classification="repair_evidence_failed",
+                )
+            except Exception as error:
+                raise SupervisorError("cycle_publication_failed") from error
+            return document
         if not isinstance(document, Mapping):
             raise SupervisorError("decision_facts_unavailable")
         decision_facts = document.get("decision_facts")
