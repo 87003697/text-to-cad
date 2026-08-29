@@ -24,13 +24,13 @@ from scripts.pilot.cvm_job import protocol
 
 
 SCENARIO = "agent-surface-mcp-injection"
-EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/1"
+EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/2"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024
 MAX_TOOL_NAMES = 64
 MAX_TOOL_NAME_BYTES = 256
-MAX_RECEIVER_REQUESTS = 64
+MAX_RECEIVER_REQUESTS = 2
 _FIXTURE = Path("models/toys4k/cup_cup_033.ply")
 _TOOL = "inspect_formal_preview"
 _VERSION = re.compile(r"(?:codex-cli|OpenAI Codex v)\s*([0-9]+\.[0-9]+\.[0-9]+)")
@@ -125,8 +125,99 @@ def _inspect_name(names: list[str]) -> tuple[bool, bool]:
     return exact, qualified
 
 
+def _sse_event(event: str, value: Mapping[str, Any]) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(value, separators=(',', ':'))}\n\n".encode()
+
+
+def _response_events(*, call: Mapping[str, str] | None = None) -> bytes:
+    response_id = "resp_provider_free"
+    events = [
+        _sse_event("response.created", {
+            "type": "response.created",
+            "response": {"id": response_id, "object": "response", "status": "in_progress", "output": []},
+        }),
+    ]
+    output: list[dict[str, Any]] = []
+    if call is not None:
+        item = {
+            "id": "ctc_provider_free",
+            "type": "custom_tool_call",
+            "status": "completed",
+            "call_id": "call_provider_free",
+            "name": call["name"],
+            "input": call["input"],
+        }
+        events.extend((
+            _sse_event("response.output_item.added", {"type": "response.output_item.added", "output_index": 0, "item": {**item, "status": "in_progress", "input": ""}}),
+            _sse_event("response.custom_tool_call_input.done", {"type": "response.custom_tool_call_input.done", "input": call["input"], "item_id": item["id"], "output_index": 0}),
+            _sse_event("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": item}),
+        ))
+        output.append(item)
+    else:
+        item = {
+            "id": "msg_provider_free",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "provider-free canary complete"}],
+        }
+        events.extend((
+            _sse_event("response.output_item.added", {"type": "response.output_item.added", "output_index": 0, "item": {**item, "status": "in_progress", "content": []}}),
+            _sse_event("response.content_part.added", {"type": "response.content_part.added", "item_id": item["id"], "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": ""}}),
+            _sse_event("response.output_text.done", {"type": "response.output_text.done", "text": "provider-free canary complete", "item_id": item["id"], "output_index": 0, "content_index": 0}),
+            _sse_event("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": item}),
+        ))
+        output.append(item)
+    events.append(_sse_event("response.completed", {"type": "response.completed", "response": {"id": response_id, "object": "response", "status": "completed", "output": output}}))
+    return b"".join(events)
+
+
+_EXEC_INPUT = """const wanted = \"mcp__agent_surface__inspect_formal_preview\";
+const tool = ALL_TOOLS.find(({ name }) => name === wanted);
+if (!tool) {
+  text(JSON.stringify({alias_found:false,isError:null,content_types:[],supervisor_unavailable:false}));
+  exit();
+}
+const result = await tools[wanted]({preview_handle:\"preview-probe\"});
+const content = Array.isArray(result?.content) ? result.content : [];
+const structured = result?.structuredContent;
+text(JSON.stringify({
+  alias_found:true,
+  isError:result?.isError === true,
+  content_types:content.map((item) => typeof item?.type === \"string\" ? item.type : \"invalid\").slice(0,4),
+  supervisor_unavailable:structured?.error?.classification === \"supervisor_unavailable\"
+}));
+"""
+
+
 class _Receiver(http.server.BaseHTTPRequestHandler):
     requests: list[tuple[str, Any, str]] = []
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            body = json.loads(self.rfile.read(length))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            body = None
+        self.__class__.requests.append((self.path, body, self.client_address[0]))
+        if len(self.__class__.requests) == 1:
+            response = _response_events(call={"name": "exec", "input": _EXEC_INPUT})
+        elif len(self.__class__.requests) == 2:
+            response = _response_events()
+        else:
+            response = b'{"error":{"message":"too many provider-free requests","type":"invalid_request_error"}}'
+        self.send_response(200 if len(self.__class__.requests) <= 2 else 400)
+        self.send_header("Content-Type", "text/event-stream" if len(self.__class__.requests) <= 2 else "application/json")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
+
+    def log_message(self, *_: object) -> None:
+        pass
+
+
+class _CaptureReceiver(_Receiver):
+    """The one-request receiver retained for the isolated differential gate."""
 
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
@@ -141,9 +232,6 @@ class _Receiver(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(response)))
         self.end_headers()
         self.wfile.write(response)
-
-    def log_message(self, *_: object) -> None:
-        pass
 
 
 def _mcp_preflight(socket_path: Path) -> dict[str, Any]:
@@ -201,6 +289,140 @@ def _safe_returncode(value: int | None) -> int | None:
     return value if isinstance(value, int) and -255 <= value <= 255 else None
 
 
+def _schema_projection(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {"strict": None, "required": [], "additionalProperties": None}
+    required = value.get("required")
+    return {
+        "strict": value.get("strict") if type(value.get("strict")) is bool else None,
+        "required": sorted(item for item in required if type(item) is str and len(item) <= 64)[:16] if isinstance(required, list) else [],
+        "additionalProperties": value.get("additionalProperties") if type(value.get("additionalProperties")) is bool else None,
+    }
+
+
+def _protocol_projection(body: object) -> dict[str, object]:
+    request = body if isinstance(body, dict) else {}
+    tools = request.get("tools")
+    input_value = request.get("input")
+    input_items = input_value if isinstance(input_value, list) else []
+    input_types = sorted({item.get("type") for item in input_items if isinstance(item, dict) and type(item.get("type")) is str and len(item["type"]) <= 64})[:16]
+    projected: list[dict[str, object]] = []
+    if isinstance(tools, list):
+        for item in tools[:MAX_TOOL_NAMES]:
+            if not isinstance(item, dict):
+                continue
+            children = item.get("tools")
+            child_names = sorted(child.get("name") for child in children if isinstance(child, dict) and type(child.get("name")) is str and len(child["name"]) <= MAX_TOOL_NAME_BYTES)[:MAX_TOOL_NAMES] if isinstance(children, list) else []
+            schema = item.get("parameters", item.get("input_schema"))
+            projected.append({
+                "type": item.get("type") if type(item.get("type")) is str and len(item["type"]) <= 64 else None,
+                "name": item.get("name") if type(item.get("name")) is str and len(item["name"]) <= MAX_TOOL_NAME_BYTES else None,
+                "children": child_names,
+                **_schema_projection(schema),
+                "defer": item.get("defer_loading") if type(item.get("defer_loading")) is bool else None,
+            })
+    exec_items = [item for item in projected if item["name"] == "exec"]
+    return {
+        "top_level_tools_present": isinstance(tools, list),
+        "input_types": input_types,
+        "additional_tools": projected,
+        "tool_search_count": sum(1 for item in projected if item["name"] == "tool_search"),
+        "exec": {
+            "custom": any(item["type"] == "custom" for item in exec_items),
+            "lark": any(
+                isinstance(raw, dict)
+                and raw.get("name") == "exec"
+                and raw.get("type") == "custom"
+                and isinstance(raw.get("input_format"), dict)
+                and raw["input_format"].get("type") == "lark_grammar"
+                for raw in tools
+            ) if isinstance(tools, list) else False,
+        },
+    }
+
+
+def _output_signal(body: object) -> dict[str, object]:
+    items = body.get("input") if isinstance(body, dict) and isinstance(body.get("input"), list) else []
+    outputs = [item for item in items if isinstance(item, dict) and item.get("type") == "custom_tool_call_output"]
+    signal: dict[str, object] = {
+        "received": isinstance(body, dict),
+        "custom_tool_call_output": len(outputs) == 1,
+        "alias_found": None,
+        "isError": None,
+        "content_types": [],
+        "supervisor_unavailable": None,
+    }
+    if len(outputs) != 1 or outputs[0].get("call_id") != "call_provider_free":
+        return signal
+    output = outputs[0].get("output")
+    try:
+        value = json.loads(output) if isinstance(output, str) else None
+    except json.JSONDecodeError:
+        value = None
+    if not isinstance(value, dict) or set(value) != {"alias_found", "isError", "content_types", "supervisor_unavailable"}:
+        return signal
+    content_types = value["content_types"]
+    if not isinstance(content_types, list) or len(content_types) > 4 or any(type(item) is not str or len(item) > 64 for item in content_types):
+        return signal
+    if any(type(value[key]) is not bool for key in ("alias_found", "isError", "supervisor_unavailable")):
+        return signal
+    signal.update({
+        "alias_found": value["alias_found"],
+        "isError": value["isError"],
+        "content_types": content_types,
+        "supervisor_unavailable": value["supervisor_unavailable"],
+    })
+    return signal
+
+
+class _AuditedBridge(AgentSurfaceBridge):
+    """Real bridge dispatch with a bounded record of the one MCP call."""
+
+    def __init__(self, surface: object, socket_path: Path) -> None:
+        super().__init__(surface, socket_path)
+        self.audit: list[dict[str, object]] = []
+
+    def _mcp_frame(self, request: dict[str, object], state: str):
+        if request.get("method") == "tools/call" and len(self.audit) < 2:
+            params = request.get("params")
+            arguments = params.get("arguments") if isinstance(params, dict) else None
+            self.audit.append({
+                "tools_call": True,
+                "method": "tools/call",
+                "tool_name": params.get("name") if isinstance(params, dict) else None,
+                "argument_keys": sorted(arguments) if isinstance(arguments, dict) and all(type(key) is str and len(key) <= 64 for key in arguments) else [],
+            })
+        return super()._mcp_frame(request, state)
+
+
+def _valid_protocol(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {"top_level_tools_present", "input_types", "additional_tools", "tool_search_count", "exec"}:
+        return False
+    if value["top_level_tools_present"] is not True or not isinstance(value["input_types"], list) or not value["input_types"]:
+        return False
+    if len(value["input_types"]) > 16 or any(type(item) is not str or len(item) > 64 for item in value["input_types"]):
+        return False
+    tools = value["additional_tools"]
+    if not isinstance(tools, list) or not 1 <= len(tools) <= MAX_TOOL_NAMES:
+        return False
+    required_tool_fields = {"type", "name", "children", "strict", "required", "additionalProperties", "defer"}
+    for tool in tools:
+        if not isinstance(tool, dict) or set(tool) != required_tool_fields:
+            return False
+        if tool["type"] is not None and (type(tool["type"]) is not str or len(tool["type"]) > 64):
+            return False
+        if tool["name"] is not None and (type(tool["name"]) is not str or len(tool["name"]) > MAX_TOOL_NAME_BYTES):
+            return False
+        for key, maximum in (("children", MAX_TOOL_NAMES), ("required", 16)):
+            if not isinstance(tool[key], list) or len(tool[key]) > maximum or any(type(item) is not str or len(item) > MAX_TOOL_NAME_BYTES for item in tool[key]):
+                return False
+        if any(tool[key] is not None and type(tool[key]) is not bool for key in ("strict", "additionalProperties", "defer")):
+            return False
+    if type(value["tool_search_count"]) is not int or value["tool_search_count"] != 1:
+        return False
+    return value["exec"] == {"custom": True, "lark": True}
+
+
 def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path, Path]:
     _, evidence_path, manifest_path = artifact_paths(repo_root, record)
     def read_bounded(path: Path, maximum: int) -> bytes:
@@ -212,55 +434,34 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
             raise ProviderFreeError("provider-free evidence or artifact manifest is missing/invalid") from exc
 
     try:
-        evidence_bytes = read_bounded(evidence_path, MAX_EVIDENCE_BYTES)
+        evidence = json.loads(read_bounded(evidence_path, MAX_EVIDENCE_BYTES))
         manifest = json.loads(read_bounded(manifest_path, MAX_MANIFEST_BYTES))
-        evidence = json.loads(evidence_bytes)
     except json.JSONDecodeError as exc:
         raise ProviderFreeError("provider-free evidence or artifact manifest is missing/invalid") from exc
     identity = expected_identity(record)
-    expected_fields = {
-        "schema", "identity", "sandbox", "private_config", "mcp_preflight",
-        "first_request", "receiver", "process", "gate_passed",
-    }
-    if not isinstance(evidence, dict) or set(evidence) != expected_fields:
+    fields = {"schema", "identity", "sandbox", "private_config", "mcp_preflight", "first_request", "mcp_dispatch", "second_request", "receiver", "process", "gate_passed"}
+    if not isinstance(evidence, dict) or set(evidence) != fields or evidence.get("schema") != EVIDENCE_SCHEMA or evidence.get("identity") != identity:
         raise ProviderFreeError("provider-free evidence has an invalid shape")
-    if evidence.get("schema") != EVIDENCE_SCHEMA or evidence.get("identity") != identity:
-        raise ProviderFreeError("provider-free evidence identity differs from job")
-    sandbox = evidence.get("sandbox")
-    if sandbox != {"runner_bwrap": True, "gateway": "codex-tap-gpt56", "network": "loopback-only"}:
+    if evidence.get("sandbox") != {"runner_bwrap": True, "gateway": "codex-tap-gpt56", "network": "loopback-only"}:
         raise ProviderFreeError("provider-free evidence has an invalid sandbox contract")
-    config = evidence.get("private_config")
-    if not isinstance(config, dict) or set(config) != {"agent_surface_server_enabled"} or type(config["agent_surface_server_enabled"]) is not bool:
+    if evidence.get("private_config") != {"agent_surface_server_enabled": True}:
         raise ProviderFreeError("provider-free evidence has an invalid config result")
-    preflight = evidence.get("mcp_preflight")
-    if not isinstance(preflight, dict) or set(preflight) != {"initialize_succeeded", "tools_list_succeeded", "tool_descriptor_names"}:
-        raise ProviderFreeError("provider-free evidence has an invalid MCP preflight")
-    if not all(type(preflight[name]) is bool for name in ("initialize_succeeded", "tools_list_succeeded")) or preflight["tool_descriptor_names"] not in ([], [_TOOL]):
+    if evidence.get("mcp_preflight") != {"initialize_succeeded": True, "tools_list_succeeded": True, "tool_descriptor_names": [_TOOL]}:
         raise ProviderFreeError("provider-free evidence has an invalid MCP preflight")
     first = evidence.get("first_request")
-    if not isinstance(first, dict) or set(first) != {"received", "tool_descriptor_names", "exact_inspect_name", "qualified_inspect_name"}:
-        raise ProviderFreeError("provider-free evidence has an invalid captured request")
-    if type(first["received"]) is not bool or type(first["exact_inspect_name"]) is not bool or type(first["qualified_inspect_name"]) is not bool or not isinstance(first["tool_descriptor_names"], list):
-        raise ProviderFreeError("provider-free evidence has an invalid captured request")
-    for names in (preflight["tool_descriptor_names"], first["tool_descriptor_names"]):
-        if len(names) > MAX_TOOL_NAMES or any(type(name) is not str or len(name) > MAX_TOOL_NAME_BYTES for name in names):
-            raise ProviderFreeError("provider-free evidence has an invalid tool descriptor list")
-    receiver = evidence.get("receiver")
-    if not isinstance(receiver, dict) or set(receiver) != {"loopback_only", "provider_escape", "request_count"} or type(receiver["loopback_only"]) is not bool or receiver["provider_escape"] is not False or type(receiver["request_count"]) is not int or not 0 <= receiver["request_count"] <= MAX_RECEIVER_REQUESTS:
+    if not isinstance(first, dict) or set(first) != {"received", "protocol"} or first["received"] is not True or not _valid_protocol(first["protocol"]):
+        raise ProviderFreeError("provider-free evidence has an invalid first request")
+    if evidence.get("mcp_dispatch") != {"tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"]}:
+        raise ProviderFreeError("provider-free evidence has an invalid MCP dispatch")
+    expected_signal = {"received": True, "custom_tool_call_output": True, "alias_found": True, "isError": True, "content_types": ["text"], "supervisor_unavailable": True}
+    if evidence.get("second_request") != expected_signal:
+        raise ProviderFreeError("provider-free evidence has an invalid second request")
+    if evidence.get("receiver") != {"loopback_only": True, "provider_escape": False, "request_count": 2}:
         raise ProviderFreeError("provider-free evidence has an invalid receiver result")
     process = evidence.get("process")
-    if not isinstance(process, dict) or set(process) != {"codex_version", "version_exit_code", "workload_exit_code"}:
+    if not isinstance(process, dict) or set(process) != {"codex_version", "version_exit_code", "workload_exit_code"} or process["codex_version"] != "0.147.0" or type(process["version_exit_code"]) is not int or process["version_exit_code"] != 0 or type(process["workload_exit_code"]) is not int or process["workload_exit_code"] != 0 or evidence.get("gate_passed") is not True:
         raise ProviderFreeError("provider-free evidence has an invalid process result")
-    if process["codex_version"] is not None and (not isinstance(process["codex_version"], str) or len(process["codex_version"]) > 32):
-        raise ProviderFreeError("provider-free evidence has an invalid Codex version")
-    if any(process[name] is not None and not isinstance(process[name], int) for name in ("version_exit_code", "workload_exit_code")) or type(evidence["gate_passed"]) is not bool:
-        raise ProviderFreeError("provider-free evidence has an invalid gate result")
-    expected_manifest = {
-        "schema": MANIFEST_SCHEMA,
-        "final_status": 0 if evidence["gate_passed"] else 1,
-        "identity": identity,
-        "evidence": {"path": evidence_path.name},
-    }
+    expected_manifest = {"schema": MANIFEST_SCHEMA, "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}}
     if manifest != expected_manifest:
         raise ProviderFreeError("provider-free artifact manifest differs from evidence")
     return evidence_path, manifest_path
@@ -274,25 +475,19 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
     candidate_dir = Path(tempfile.mkdtemp(prefix="ttc-agent-surface-gate-"))
     socket_dir = Path(tempfile.mkdtemp(prefix="ttc-agent-surface-socket-"))
     socket_path = socket_dir / "surface.sock"
-    bridge: AgentSurfaceBridge | None = None
+    bridge: _AuditedBridge | None = None
     server: http.server.ThreadingHTTPServer | None = None
     thread: threading.Thread | None = None
     version_exit = workload_exit = None
     version = None
-    config_enabled = False
     preflight = {"initialize_succeeded": False, "tools_list_succeeded": False, "tool_descriptor_names": []}
-    first = None
-    names: list[str] = []
-    exact = qualified = loopback_only = False
+    requests: list[tuple[str, Any, str]] = []
     try:
-        surface_dir = repo_root / "skills/mesh-to-cad/scripts/mesh-to-cad-agent-surface"
-        sys.path.insert(0, os.fspath(surface_dir))
-        from handler import AgentSurface
-        bridge = AgentSurfaceBridge(AgentSurface(None), socket_path)
+        bridge = _AuditedBridge(None, socket_path)
+        bridge.surface = bridge._mcp.AgentSurface(None)
         bridge.start()
         preflight = _mcp_preflight(socket_path)
         config_path = runner.prepare_isolated_job_codex_home(exp_dir) / plugin_deployment.CONFIG_TOML_NAME
-        config_enabled = _config_enabled(config_path)
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Receiver)
         _Receiver.requests = []
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -300,23 +495,17 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         gate_env = dict(environ)
         gate_env["VENUS_TOKEN"] = "provider-free-loopback-only"
         fixture = repo_root / _FIXTURE
-        workload = ["gateway/codex-tap-gpt56", "sol", "exec", "--skip-git-repo-check", "--ephemeral", "capture MCP tools only"]
         child_env = runner.build_sandbox_environment(gate_env, f"http://127.0.0.1:{server.server_port}/v1", isolated_agent=True, tap_client_token="provider-free-loopback-token")
-        version_argv = runner.build_bwrap_argv(repo_root, exp_dir, [fixture], ["codex", "--version"], gate_env, agent_candidate_dir=candidate_dir, agent_surface_socket=socket_path)
-        version_result = subprocess.run(version_argv, env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=30)
+        version_result = subprocess.run(runner.build_bwrap_argv(repo_root, exp_dir, [fixture], ["codex", "--version"], gate_env, agent_candidate_dir=candidate_dir, agent_surface_socket=socket_path), env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=30)
         version_exit = _safe_returncode(version_result.returncode)
         version = _version_from_output(version_result.stdout + "\n" + version_result.stderr)
-        workload_argv = runner.build_bwrap_argv(repo_root, exp_dir, [fixture], workload, gate_env, agent_candidate_dir=candidate_dir, agent_surface_socket=socket_path)
-        workload_result = subprocess.run(workload_argv, env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=45)
+        workload = ["gateway/codex-tap-gpt56", "sol", "exec", "--skip-git-repo-check", "--ephemeral", "run the fixed provider-free MCP canary"]
+        workload_result = subprocess.run(runner.build_bwrap_argv(repo_root, exp_dir, [fixture], workload, gate_env, agent_candidate_dir=candidate_dir, agent_surface_socket=socket_path), env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=60)
         workload_exit = _safe_returncode(workload_result.returncode)
-        first = _Receiver.requests[0] if _Receiver.requests else None
-        names = _bounded_names(first[1]) if first is not None else []
-        exact, qualified = _inspect_name(names)
-        loopback_only = bool(_Receiver.requests) and all(path == "/v1/responses" and host == "127.0.0.1" for path, _body, host in _Receiver.requests)
+        requests = list(_Receiver.requests)
     finally:
         if server is not None:
-            server.shutdown()
-            server.server_close()
+            server.shutdown(); server.server_close()
         if thread is not None:
             thread.join(timeout=2)
         if bridge is not None:
@@ -324,20 +513,32 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         shutil.rmtree(candidate_dir, ignore_errors=True)
         shutil.rmtree(socket_dir, ignore_errors=True)
         shutil.rmtree(exp_dir / "run" / ".codex-home", ignore_errors=True)
+    first_body = requests[0][1] if requests else None
+    second_body = requests[1][1] if len(requests) > 1 else None
+    audit = bridge.audit if bridge is not None else []
     evidence = {
         "schema": EVIDENCE_SCHEMA,
         "identity": identity,
         "sandbox": {"runner_bwrap": True, "gateway": "codex-tap-gpt56", "network": "loopback-only"},
-        "private_config": {"agent_surface_server_enabled": config_enabled},
+        "private_config": {"agent_surface_server_enabled": _config_enabled(config_path)},
         "mcp_preflight": preflight,
-        "first_request": {"received": first is not None, "tool_descriptor_names": names, "exact_inspect_name": exact, "qualified_inspect_name": qualified},
-        "receiver": {"loopback_only": loopback_only, "provider_escape": False, "request_count": len(_Receiver.requests)},
+        "first_request": {"received": bool(requests), "protocol": _protocol_projection(first_body)},
+        "mcp_dispatch": audit[0] if len(audit) == 1 else {"tools_call": False, "method": None, "tool_name": None, "argument_keys": []},
+        "second_request": _output_signal(second_body),
+        "receiver": {"loopback_only": len(requests) == 2 and all(path == "/v1/responses" and host == "127.0.0.1" for path, _body, host in requests), "provider_escape": False, "request_count": len(requests)},
         "process": {"codex_version": version, "version_exit_code": version_exit, "workload_exit_code": workload_exit},
-        "gate_passed": config_enabled and preflight == {"initialize_succeeded": True, "tools_list_succeeded": True, "tool_descriptor_names": [_TOOL]} and first is not None and (exact or qualified) and loopback_only,
+        "gate_passed": False,
     }
-    _atomic_write(evidence_path, evidence)
-    _atomic_write(manifest_path, {"schema": MANIFEST_SCHEMA, "final_status": 0 if evidence["gate_passed"] else 1, "identity": identity, "evidence": {"path": evidence_path.name}})
-    validate_artifacts(repo_root, record)
+    try:
+        provisional = dict(evidence)
+        provisional["gate_passed"] = True
+        _atomic_write(evidence_path, provisional)
+        _atomic_write(manifest_path, {"schema": MANIFEST_SCHEMA, "final_status": 0, "identity": identity, "evidence": {"path": evidence_path.name}})
+        validate_artifacts(repo_root, record)
+        evidence = provisional
+    except ProviderFreeError:
+        _atomic_write(evidence_path, evidence)
+        _atomic_write(manifest_path, {"schema": MANIFEST_SCHEMA, "final_status": 1, "identity": identity, "evidence": {"path": evidence_path.name}})
     return 0 if evidence["gate_passed"] else 1
 
 

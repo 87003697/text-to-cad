@@ -84,7 +84,7 @@ def _run_arm(name: str, ephemeral: bool, *, repo_root: Path, exp_dir: Path, gate
     bridge: AgentSurfaceBridge | None = None
     server: http.server.ThreadingHTTPServer | None = None
     thread: threading.Thread | None = None
-    class Receiver(injection._Receiver):
+    class Receiver(injection._CaptureReceiver):
         requests: list[tuple[str, Any, str]] = []
     try:
         surface_dir = repo_root / "skills/mesh-to-cad/scripts/mesh-to-cad-agent-surface"
