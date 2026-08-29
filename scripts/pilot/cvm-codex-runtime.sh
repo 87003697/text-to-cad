@@ -5,14 +5,14 @@ set -euo pipefail
 SCHEMA="text-to-cad.cvm-codex-runtime/1"
 
 usage() {
-    echo "Usage: $0 install 0.147.0|0.148.0 | status | probe" >&2
+    echo "Usage: $0 install 0.147.0|0.148.0|0.149.1 | status | probe" >&2
     exit 2
 }
 
 action="${1:-}"
 case "$action" in
     install)
-        [[ $# -eq 2 && ( "$2" == "0.147.0" || "$2" == "0.148.0" ) ]] || usage
+        [[ $# -eq 2 && ( "$2" == "0.147.0" || "$2" == "0.148.0" || "$2" == "0.149.1" ) ]] || usage
         ;;
     status|probe)
         [[ $# -eq 1 ]] || usage
@@ -32,7 +32,7 @@ SELECTOR="/usr/local/bin/codex"
 EXPECTED_VERSION="codex-cli $VERSION"
 
 allowed_version() {
-    [[ "$1" == "0.147.0" || "$1" == "0.148.0" ]]
+    [[ "$1" == "0.147.0" || "$1" == "0.148.0" || "$1" == "0.149.1" ]]
 }
 
 installed_versions() {

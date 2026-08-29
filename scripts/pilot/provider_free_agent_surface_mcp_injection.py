@@ -36,7 +36,7 @@ MAX_PROTOCOL_METHODS = 12
 _FIXTURE = Path("models/toys4k/cup_cup_033.ply")
 _TOOL = "inspect_formal_preview"
 _VERSION = re.compile(r"(?:codex-cli|OpenAI Codex v)\s*([0-9]+\.[0-9]+\.[0-9]+)")
-EXPECTED_CODEX_VERSION = "0.148.0"
+EXPECTED_CODEX_VERSION = "0.149.1"
 
 
 class ProviderFreeError(RuntimeError):
