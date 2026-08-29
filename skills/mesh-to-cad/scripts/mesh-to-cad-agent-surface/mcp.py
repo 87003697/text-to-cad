@@ -210,9 +210,8 @@ def _handle_request(
     params = request.get("params")
     if (
         type(params) is not dict
-        or not {"name", "arguments"}.issubset(params)
-        or set(params) - {"name", "arguments", "_meta"}
-        or ("_meta" in params and type(params["_meta"]) is not dict)
+        or set(params) not in ({"name", "arguments"}, {"name", "arguments", "_meta"})
+        or type(params.get("_meta", {})) is not dict
     ):
         return _rpc_error(request_id, INVALID_PARAMS, "tool parameters are invalid"), state
     name = params["name"]

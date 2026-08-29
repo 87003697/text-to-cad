@@ -586,24 +586,6 @@ class _AuditedBridge(AgentSurfaceBridge):
         return super()._mcp_frame(request, state)
 
 
-class _NestedAuditedBridge(_AuditedBridge):
-    """Add the nested-only envelope shape without changing shared audit records."""
-
-    def _mcp_frame(self, request: dict[str, object], state: str):
-        if request.get("method") == "tools/call" and len(self.audit) < 2:
-            params = request.get("params")
-            arguments = params.get("arguments") if isinstance(params, dict) else None
-            param_keys = set(params) if isinstance(params, dict) else set()
-            self.audit.append({
-                "tools_call": True,
-                "method": "tools/call",
-                "tool_name": params.get("name") if isinstance(params, dict) else None,
-                "argument_keys": sorted(arguments) if isinstance(arguments, dict) and all(type(key) is str and len(key) <= 64 for key in arguments) else [],
-                "params_shape": "name_arguments" if param_keys == {"name", "arguments"} else "name_arguments_meta" if param_keys == {"name", "arguments", "_meta"} else "other",
-            })
-        return AgentSurfaceBridge._mcp_frame(self, request, state)
-
-
 def _protocol_method(request: Mapping[str, object]) -> str:
     method = request.get("method")
     if method == "initialize":
@@ -623,7 +605,7 @@ def _saturated_count(value: int) -> str:
     return "0" if value == 0 else "1" if value == 1 else "2_plus"
 
 
-class _ProtocolAuditedBridge(_NestedAuditedBridge):
+class _ProtocolAuditedBridge(_AuditedBridge):
     """A closed, per-connection MCP protocol projection for the nested gate."""
 
     def __init__(self, surface: object, socket_path: Path, *, chronology: _Chronology | None = None) -> None:
@@ -671,7 +653,18 @@ class _ProtocolAuditedBridge(_NestedAuditedBridge):
                     methods.append(method)
                 else:
                     session["truncated"] = True
-        frame, next_state = super()._mcp_frame(request, state)
+        if request.get("method") == "tools/call" and len(self.audit) < 2:
+            params = request.get("params")
+            arguments = params.get("arguments") if isinstance(params, dict) else None
+            param_keys = set(params) if isinstance(params, dict) else set()
+            self.audit.append({
+                "tools_call": True,
+                "method": "tools/call",
+                "tool_name": params.get("name") if isinstance(params, dict) else None,
+                "argument_keys": sorted(arguments) if isinstance(arguments, dict) and all(type(key) is str and len(key) <= 64 for key in arguments) else [],
+                "params_shape": "name_arguments" if param_keys == {"name", "arguments"} else "name_arguments_meta" if param_keys == {"name", "arguments", "_meta"} else "other",
+            })
+        frame, next_state = AgentSurfaceBridge._mcp_frame(self, request, state)
         if isinstance(session, dict):
             if method == "initialize":
                 session["initialize_ok"] = isinstance(frame, dict) and isinstance(frame.get("result"), dict)
@@ -939,7 +932,7 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
     if evidence.get("mcp_preflight") != expected_preflight:
         raise ProviderFreeError("provider-free evidence has an invalid MCP preflight")
     preflight_dispatch = evidence.get("preflight_dispatch")
-    if not _valid_dispatch(preflight_dispatch) or preflight_dispatch != {"audit_count": "1", "tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"], "params_shape": "name_arguments"}:
+    if preflight_dispatch != {"audit_count": "1", "tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"], "params_shape": "name_arguments"}:
         raise ProviderFreeError("provider-free evidence has an invalid preflight dispatch")
     if not _exact_preflight_protocol(evidence.get("preflight_protocol")):
         raise ProviderFreeError("provider-free evidence has an invalid preflight protocol")
