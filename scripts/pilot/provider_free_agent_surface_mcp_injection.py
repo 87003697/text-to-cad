@@ -24,13 +24,15 @@ from scripts.pilot.cvm_job import protocol
 
 
 SCENARIO = "agent-surface-mcp-injection"
-EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/5"
+EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/6"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024
 MAX_TOOL_NAMES = 64
 MAX_TOOL_NAME_BYTES = 256
 MAX_RECEIVER_REQUESTS = 2
+MAX_PROTOCOL_SESSIONS = 2
+MAX_PROTOCOL_METHODS = 12
 _FIXTURE = Path("models/toys4k/cup_cup_033.ply")
 _TOOL = "inspect_formal_preview"
 _VERSION = re.compile(r"(?:codex-cli|OpenAI Codex v)\s*([0-9]+\.[0-9]+\.[0-9]+)")
@@ -481,7 +483,7 @@ def _output_signal(body: object) -> dict[str, object]:
         return result
     if signal["supervisor_unavailable"] is not None and type(signal["supervisor_unavailable"]) is not bool:
         return result
-    if signal["first_text_classification"] not in {"not_available_to_model", "mcp_client_not_initialized", "mcp_client_shutdown", "transport", "tool_not_found", "other", "none"}:
+    if type(signal["first_text_classification"]) is not str or signal["first_text_classification"] not in {"not_available_to_model", "mcp_client_not_initialized", "mcp_client_shutdown", "transport", "tool_not_found", "other", "none"}:
         return result
     if not isinstance(signal["content_types"], list) or len(signal["content_types"]) > 4 or any(type(value) is not str or len(value) > 64 for value in signal["content_types"]):
         return result
@@ -490,7 +492,7 @@ def _output_signal(body: object) -> dict[str, object]:
 
 
 class _AuditedBridge(AgentSurfaceBridge):
-    """Real bridge dispatch with a bounded record of the one MCP call."""
+    """Real bridge dispatch with a bounded record of MCP tool calls."""
 
     def __init__(self, surface: object, socket_path: Path) -> None:
         super().__init__(surface, socket_path)
@@ -509,6 +511,190 @@ class _AuditedBridge(AgentSurfaceBridge):
         return super()._mcp_frame(request, state)
 
 
+def _protocol_method(request: Mapping[str, object]) -> str:
+    method = request.get("method")
+    if method == "initialize":
+        return "initialize"
+    if method == "notifications/initialized":
+        return "notifications_initialized"
+    if method == "tools/list":
+        return "tools_list"
+    if method == "tools/call":
+        return "tools_call"
+    if method == "ping":
+        return "ping"
+    return "other_notification" if "id" not in request else "other_request"
+
+
+def _saturated_count(value: int) -> str:
+    return "0" if value == 0 else "1" if value == 1 else "2_plus"
+
+
+class _ProtocolAuditedBridge(_AuditedBridge):
+    """A closed, per-connection MCP protocol projection for the nested gate."""
+
+    def __init__(self, surface: object, socket_path: Path) -> None:
+        super().__init__(surface, socket_path)
+        self._sessions: list[dict[str, object]] = []
+        self._sessions_lock = threading.Lock()
+        self._local = threading.local()
+        self._sessions_truncated = False
+
+    def _serve_connection(self, connection: socket.socket) -> None:
+        session: dict[str, object] | None
+        with self._sessions_lock:
+            if len(self._sessions) >= MAX_PROTOCOL_SESSIONS:
+                self._sessions_truncated = True
+                session = None
+            else:
+                session = {"methods": [], "truncated": False, "initialize_ok": False,
+                           "initialized": False, "list_ok": False, "call_seen": False,
+                           "state": "pre_init", "closed": False}
+                self._sessions.append(session)
+        self._local.session = session
+        try:
+            super()._serve_connection(connection)
+        finally:
+            if session is not None:
+                session["closed"] = True
+            self._local.session = None
+
+    def _mcp_frame(self, request: dict[str, object], state: str):
+        session = getattr(self._local, "session", None)
+        method = _protocol_method(request)
+        if isinstance(session, dict):
+            methods = session["methods"]
+            if isinstance(methods, list):
+                if len(methods) < MAX_PROTOCOL_METHODS:
+                    methods.append(method)
+                else:
+                    session["truncated"] = True
+        frame, next_state = super()._mcp_frame(request, state)
+        if isinstance(session, dict):
+            if method == "initialize":
+                session["initialize_ok"] = isinstance(frame, dict) and isinstance(frame.get("result"), dict)
+            elif method == "notifications_initialized" and state == self._mcp.NEGOTIATED and next_state == self._mcp.ACTIVE:
+                session["initialized"] = True
+            elif method == "tools_list":
+                tools = frame.get("result", {}).get("tools") if isinstance(frame, dict) and isinstance(frame.get("result"), dict) else None
+                session["list_ok"] = isinstance(tools, list)
+            elif method == "tools_call":
+                session["call_seen"] = True
+            session["state"] = "active" if next_state == self._mcp.ACTIVE else "negotiated" if next_state == self._mcp.NEGOTIATED else "pre_init"
+        return frame, next_state
+
+    def protocol_projection(self) -> dict[str, object]:
+        with self._sessions_lock:
+            sessions = [dict(session) for session in self._sessions]
+            truncated = self._sessions_truncated
+        projected: list[dict[str, object]] = []
+        for session in sessions:
+            methods = session["methods"]
+            assert isinstance(methods, list)
+            projected.append({
+                "method_count": _saturated_count(len(methods)),
+                "methods": list(methods),
+                "state": session["state"],
+                "closed": session["closed"],
+                "list_succeeded": session["list_ok"],
+                "call_seen": session["call_seen"],
+                "truncated": session["truncated"],
+                "initialize_succeeded": session["initialize_ok"],
+                "initialized": session["initialized"],
+            })
+        count = _saturated_count(len(sessions))
+        if truncated or count == "2_plus" or any(session["truncated"] for session in projected):
+            classification = "multiple_sessions"
+        elif count == "0":
+            classification = "no_bridge_connection"
+        else:
+            session = projected[0]
+            if not session["initialize_succeeded"]:
+                classification = "connected_without_initialize" if "initialize" not in session["methods"] else "initialize_rejected_or_incomplete"
+            elif not session["initialized"]:
+                classification = "negotiated_without_initialized"
+            elif not session["list_succeeded"]:
+                classification = "active_without_list"
+            elif session["call_seen"]:
+                classification = "live_call_reached_bridge"
+            else:
+                classification = "live_listed_no_call"
+        return {"session_count": count, "sessions": projected, "truncated": truncated, "classification": classification}
+
+
+
+def _valid_protocol_audit(value: object) -> bool:
+    fields = {"session_count", "sessions", "truncated", "classification"}
+    classes = {"live_call_reached_bridge", "live_listed_no_call", "active_without_list", "negotiated_without_initialized", "initialize_rejected_or_incomplete", "connected_without_initialize", "no_bridge_connection", "multiple_sessions"}
+    if not isinstance(value, dict) or set(value) != fields:
+        return False
+    if type(value.get("session_count")) is not str or value["session_count"] not in {"0", "1", "2_plus"} or type(value.get("truncated")) is not bool or type(value.get("classification")) is not str or value["classification"] not in classes:
+        return False
+    sessions = value["sessions"]
+    if not isinstance(sessions, list) or len(sessions) > MAX_PROTOCOL_SESSIONS or _saturated_count(len(sessions)) != value["session_count"]:
+        return False
+    session_fields = {"method_count", "methods", "state", "closed", "list_succeeded", "call_seen", "truncated", "initialize_succeeded", "initialized"}
+    allowed_methods = {"initialize", "notifications_initialized", "tools_list", "tools_call", "ping", "other_request", "other_notification"}
+    classifications: list[str] = []
+    for session in sessions:
+        if not isinstance(session, dict) or set(session) != session_fields:
+            return False
+        methods = session["methods"]
+        if not isinstance(methods, list) or len(methods) > MAX_PROTOCOL_METHODS or any(type(method) is not str or method not in allowed_methods for method in methods):
+            return False
+        if type(session["method_count"]) is not str or session["method_count"] != _saturated_count(len(methods)) or type(session["state"]) is not str or session["state"] not in {"pre_init", "negotiated", "active"}:
+            return False
+        if any(type(session[key]) is not bool for key in ("closed", "list_succeeded", "call_seen", "truncated", "initialize_succeeded", "initialized")):
+            return False
+        if session["truncated"] or not session["closed"]:
+            return False
+        # The successful path is intentionally exact.  A ping or unknown frame
+        # may be diagnostic evidence but cannot establish a successful gate.
+        if methods == []:
+            expected = ("connected_without_initialize", "pre_init", False, False, False, False)
+        elif methods == ["initialize"] and session["state"] == "pre_init":
+            expected = ("initialize_rejected_or_incomplete", "pre_init", False, False, False, False)
+        elif methods == ["initialize"]:
+            expected = ("negotiated_without_initialized", "negotiated", True, False, False, False)
+        elif methods == ["initialize", "notifications_initialized"]:
+            expected = ("active_without_list", "active", True, True, False, False)
+        elif methods == ["initialize", "notifications_initialized", "tools_list"]:
+            expected = ("live_listed_no_call", "active", True, True, True, False)
+        elif methods == ["initialize", "notifications_initialized", "tools_list", "tools_call"]:
+            expected = ("live_call_reached_bridge", "active", True, True, True, True)
+        else:
+            return False
+        classification, state, initialize_ok, initialized, list_ok, call_seen = expected
+        if session["state"] != state or session["initialize_succeeded"] is not initialize_ok or session["initialized"] is not initialized or session["list_succeeded"] is not list_ok or session["call_seen"] is not call_seen:
+            return False
+        classifications.append(classification)
+    if value["truncated"] or value["session_count"] == "2_plus":
+        expected_classification = "multiple_sessions"
+    elif value["session_count"] == "0":
+        expected_classification = "no_bridge_connection"
+    else:
+        expected_classification = classifications[0]
+    return value["classification"] == expected_classification
+
+
+def _exact_preflight_protocol(value: object) -> bool:
+    return _valid_protocol_audit(value) and value == {
+        "session_count": "1",
+        "sessions": [{
+            "method_count": "2_plus",
+            "methods": ["initialize", "notifications_initialized", "tools_list", "tools_call"],
+            "state": "active",
+            "closed": True,
+            "list_succeeded": True,
+            "call_seen": True,
+            "truncated": False,
+            "initialize_succeeded": True,
+            "initialized": True,
+        }],
+        "truncated": False,
+        "classification": "live_call_reached_bridge",
+    }
+
 def _valid_dispatch(value: object) -> bool:
     if not isinstance(value, dict) or not isinstance(value.get("audit_count"), str):
         return False
@@ -516,7 +702,7 @@ def _valid_dispatch(value: object) -> bool:
     if count == "0":
         return set(value) == {"audit_count"}
     fields = {"audit_count", "tools_call", "method", "tool_name", "argument_keys"}
-    if count not in {"1", "2_plus"} or set(value) != fields:
+    if type(count) is not str or count not in {"1", "2_plus"} or set(value) != fields:
         return False
     if value["tools_call"] is not True:
         return False
@@ -532,7 +718,7 @@ def _valid_second_request(value: object) -> bool:
     base = {"call_id_matches", "output_shape", "script_status"}
     if not isinstance(value, dict) or not base <= set(value):
         return False
-    if type(value["call_id_matches"]) is not bool or value["output_shape"] not in {"invalid", "content_array"} or value["script_status"] not in {"unknown", "completed", "failed"}:
+    if type(value["call_id_matches"]) is not bool or type(value["output_shape"]) is not str or value["output_shape"] not in {"invalid", "content_array"} or type(value["script_status"]) is not str or value["script_status"] not in {"unknown", "completed", "failed"}:
         return False
     if value["output_shape"] == "invalid":
         return set(value) == base and value["script_status"] == "unknown"
@@ -547,7 +733,7 @@ def _valid_second_request(value: object) -> bool:
         return False
     if value["supervisor_unavailable"] is not None and type(value["supervisor_unavailable"]) is not bool:
         return False
-    if value["first_text_classification"] not in {"not_available_to_model", "mcp_client_not_initialized", "mcp_client_shutdown", "transport", "tool_not_found", "other", "none"}:
+    if type(value["first_text_classification"]) is not str or value["first_text_classification"] not in {"not_available_to_model", "mcp_client_not_initialized", "mcp_client_shutdown", "transport", "tool_not_found", "other", "none"}:
         return False
     contents = value["content_types"]
     return isinstance(contents, list) and len(contents) <= 4 and all(type(item) is str and len(item) <= 64 for item in contents)
@@ -597,7 +783,7 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
     except json.JSONDecodeError as exc:
         raise ProviderFreeError("provider-free evidence or artifact manifest is missing/invalid") from exc
     identity = expected_identity(record)
-    fields = {"schema", "identity", "sandbox", "private_config", "mcp_preflight", "preflight_dispatch", "first_request", "mcp_dispatch", "second_request", "receiver", "process", "gate_passed"}
+    fields = {"schema", "identity", "sandbox", "private_config", "mcp_preflight", "preflight_dispatch", "preflight_protocol", "first_request", "workload_protocol", "mcp_dispatch", "second_request", "receiver", "process", "gate_passed"}
     if not isinstance(evidence, dict) or set(evidence) != fields or evidence.get("schema") != EVIDENCE_SCHEMA or evidence.get("identity") != identity:
         raise ProviderFreeError("provider-free evidence has an invalid shape")
     if evidence.get("sandbox") != {"runner_bwrap": True, "gateway": "codex-tap-gpt56", "network": "loopback-only"}:
@@ -610,6 +796,8 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
     preflight_dispatch = evidence.get("preflight_dispatch")
     if not _valid_dispatch(preflight_dispatch) or preflight_dispatch != {"audit_count": "1", "tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"]}:
         raise ProviderFreeError("provider-free evidence has an invalid preflight dispatch")
+    if not _exact_preflight_protocol(evidence.get("preflight_protocol")):
+        raise ProviderFreeError("provider-free evidence has an invalid preflight protocol")
     first = evidence.get("first_request")
     if not isinstance(first, dict) or set(first) != {"received", "protocol"} or first["received"] is not True or not _valid_protocol(first["protocol"]):
         raise ProviderFreeError("provider-free evidence has an invalid first request")
@@ -618,6 +806,12 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
         raise ProviderFreeError("provider-free evidence has an invalid MCP dispatch")
     if dispatch != {"audit_count": "1", "tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"]}:
         raise ProviderFreeError("provider-free evidence has an unsuccessful MCP dispatch")
+    workload_protocol = evidence.get("workload_protocol")
+    if not _valid_protocol_audit(workload_protocol) or workload_protocol.get("classification") != "live_call_reached_bridge" or workload_protocol.get("truncated") is not False or workload_protocol.get("session_count") != "1":
+        raise ProviderFreeError("provider-free evidence has an invalid workload bridge protocol")
+    session = workload_protocol["sessions"][0]
+    if session["call_seen"] is not True or session["list_succeeded"] is not True:
+        raise ProviderFreeError("provider-free evidence has an inconsistent workload protocol")
     second = evidence.get("second_request")
     if not _valid_second_request(second):
         raise ProviderFreeError("provider-free evidence has an invalid second request")
@@ -641,55 +835,76 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
     exp_dir, evidence_path, manifest_path = artifact_paths(repo_root, record)
     exp_dir.mkdir(parents=True, exist_ok=False)
     candidate_dir = Path(tempfile.mkdtemp(prefix="ttc-agent-surface-gate-"))
-    socket_dir = Path(tempfile.mkdtemp(prefix="ttc-agent-surface-socket-"))
-    socket_path = socket_dir / "surface.sock"
-    bridge: _AuditedBridge | None = None
+    preflight_socket_dir = Path(tempfile.mkdtemp(prefix="ttc-agent-surface-preflight-socket-"))
+    workload_socket_dir = Path(tempfile.mkdtemp(prefix="ttc-agent-surface-workload-socket-"))
+    preflight_bridge: _ProtocolAuditedBridge | None = None
+    workload_bridge: _ProtocolAuditedBridge | None = None
     server: http.server.ThreadingHTTPServer | None = None
     thread: threading.Thread | None = None
     version_exit = workload_exit = None
     version = None
     preflight = {"spawned": False, "initialize_ok": False, "tools_list_ok": False, "exact_descriptor_seen": False, "tools_call_ok": False, "is_error": None, "text_present": False, "supervisor_unavailable": None, "exit_class": "spawn_failed"}
-    preflight_dispatch = {"audit_count": "0"}
+    preflight_dispatch: dict[str, object] = {"audit_count": "0"}
+    preflight_protocol: dict[str, object] = {"session_count": "0", "sessions": [], "truncated": False, "classification": "no_bridge_connection"}
+    workload_protocol: dict[str, object] = {"session_count": "0", "sessions": [], "truncated": False, "classification": "no_bridge_connection"}
+    workload_audit: list[dict[str, object]] = []
     config_enabled = False
     requests: list[tuple[str, Any, str]] = []
     try:
-        bridge = _AuditedBridge(None, socket_path)
-        bridge.surface = bridge._mcp.AgentSurface(None)
-        bridge.start()
         config_path = runner.prepare_isolated_job_codex_home(exp_dir) / plugin_deployment.CONFIG_TOML_NAME
         config_enabled = _config_enabled(config_path)
+        gate_env = dict(environ)
+        gate_env["VENUS_TOKEN"] = "provider-free-loopback-only"
+        fixture = repo_root / _FIXTURE
+        child_env = runner.build_sandbox_environment(gate_env, "http://127.0.0.1:9/v1", isolated_agent=True, tap_client_token="provider-free-loopback-token")
+
+        preflight_bridge = _ProtocolAuditedBridge(None, preflight_socket_dir / "surface.sock")
+        preflight_bridge.surface = preflight_bridge._mcp.AgentSurface(None)
+        preflight_bridge.start()
+        try:
+            preflight_argv = runner.build_bwrap_argv(repo_root, exp_dir, [fixture], ["python3", "/agent-surface/client.py", "--mcp"], gate_env, agent_candidate_dir=candidate_dir, agent_surface_socket=preflight_bridge.socket_path)
+            preflight = _same_sandbox_mcp_preflight(preflight_argv, child_env)
+        finally:
+            preflight_bridge.stop()
+        preflight_dispatch = _audit_projection(preflight_bridge.audit)
+        preflight_protocol = preflight_bridge.protocol_projection()
+
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Receiver)
         _Receiver.requests = []
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        gate_env = dict(environ)
-        gate_env["VENUS_TOKEN"] = "provider-free-loopback-only"
-        fixture = repo_root / _FIXTURE
         child_env = runner.build_sandbox_environment(gate_env, f"http://127.0.0.1:{server.server_port}/v1", isolated_agent=True, tap_client_token="provider-free-loopback-token")
-        preflight_argv = runner.build_bwrap_argv(repo_root, exp_dir, [fixture], ["python3", "/agent-surface/client.py", "--mcp"], gate_env, agent_candidate_dir=candidate_dir, agent_surface_socket=socket_path)
-        preflight = _same_sandbox_mcp_preflight(preflight_argv, child_env)
-        preflight_dispatch = _audit_projection(bridge.audit)
-        bridge.audit.clear()
-        version_result = subprocess.run(runner.build_bwrap_argv(repo_root, exp_dir, [fixture], ["codex", "--version"], gate_env, agent_candidate_dir=candidate_dir, agent_surface_socket=socket_path), env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=30)
-        version_exit = _safe_returncode(version_result.returncode)
-        version = _version_from_output(version_result.stdout + "\n" + version_result.stderr)
-        workload = ["gateway/codex-tap-gpt56", "sol", "exec", "--skip-git-repo-check", "--ephemeral", "run the fixed provider-free MCP canary"]
-        workload_result = subprocess.run(runner.build_bwrap_argv(repo_root, exp_dir, [fixture], workload, gate_env, agent_candidate_dir=candidate_dir, agent_surface_socket=socket_path), env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=60)
-        workload_exit = _safe_returncode(workload_result.returncode)
-        requests = list(_Receiver.requests)
+        workload_bridge = _ProtocolAuditedBridge(None, workload_socket_dir / "surface.sock")
+        workload_bridge.surface = workload_bridge._mcp.AgentSurface(None)
+        workload_bridge.start()
+        try:
+            version_result = subprocess.run(runner.build_bwrap_argv(repo_root, exp_dir, [fixture], ["codex", "--version"], gate_env, agent_candidate_dir=candidate_dir, agent_surface_socket=workload_bridge.socket_path), env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=30)
+            version_exit = _safe_returncode(version_result.returncode)
+            version = _version_from_output(version_result.stdout + "\n" + version_result.stderr)
+            workload = ["gateway/codex-tap-gpt56", "sol", "exec", "--skip-git-repo-check", "--ephemeral", "run the fixed provider-free MCP canary"]
+            workload_result = subprocess.run(runner.build_bwrap_argv(repo_root, exp_dir, [fixture], workload, gate_env, agent_candidate_dir=candidate_dir, agent_surface_socket=workload_bridge.socket_path), env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=60)
+            workload_exit = _safe_returncode(workload_result.returncode)
+            requests = list(_Receiver.requests)
+        finally:
+            workload_bridge.stop()
+        workload_audit = list(workload_bridge.audit)
+        workload_protocol = workload_bridge.protocol_projection()
     finally:
         if server is not None:
-            server.shutdown(); server.server_close()
+            server.shutdown()
+            server.server_close()
         if thread is not None:
             thread.join(timeout=2)
-        if bridge is not None:
-            bridge.stop()
+        if preflight_bridge is not None and preflight_bridge._server is not None:
+            preflight_bridge.stop()
+        if workload_bridge is not None and workload_bridge._server is not None:
+            workload_bridge.stop()
         shutil.rmtree(candidate_dir, ignore_errors=True)
-        shutil.rmtree(socket_dir, ignore_errors=True)
+        shutil.rmtree(preflight_socket_dir, ignore_errors=True)
+        shutil.rmtree(workload_socket_dir, ignore_errors=True)
         shutil.rmtree(exp_dir / "run" / ".codex-home", ignore_errors=True)
     first_body = requests[0][1] if requests else None
     second_body = requests[1][1] if len(requests) > 1 else None
-    audit = bridge.audit if bridge is not None else []
     evidence = {
         "schema": EVIDENCE_SCHEMA,
         "identity": identity,
@@ -697,8 +912,10 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         "private_config": {"agent_surface_server_enabled": config_enabled},
         "mcp_preflight": preflight,
         "preflight_dispatch": preflight_dispatch,
+        "preflight_protocol": preflight_protocol,
         "first_request": {"received": bool(requests), "protocol": _protocol_projection(first_body)},
-        "mcp_dispatch": _audit_projection(audit),
+        "workload_protocol": workload_protocol,
+        "mcp_dispatch": _audit_projection(workload_audit),
         "second_request": _output_signal(second_body),
         "receiver": {"loopback_only": len(requests) == 2 and all(path == "/v1/responses" and host == "127.0.0.1" for path, _body, host in requests), "provider_escape": False, "request_count": len(requests)},
         "process": {"codex_version": version, "version_exit_code": version_exit, "workload_exit_code": workload_exit},
