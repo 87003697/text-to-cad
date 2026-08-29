@@ -464,8 +464,6 @@ def _load_agent_surface_type(product_root: Path | None = None) -> type[Any]:
                 sys.modules.pop("handler", None)
             else:
                 sys.modules["handler"] = previous_handler
-    else:
-        loaded = loaded
     return loaded.AgentSurface
 
 
