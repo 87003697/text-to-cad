@@ -24,7 +24,7 @@ from scripts.pilot.cvm_job import protocol
 
 
 SCENARIO = "agent-surface-mcp-injection"
-EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/2"
+EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/3"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024
@@ -173,19 +173,29 @@ def _response_events(*, call: Mapping[str, str] | None = None) -> bytes:
 
 
 _EXEC_INPUT = """const wanted = \"mcp__agent_surface__inspect_formal_preview\";
-const tool = ALL_TOOLS.find(({ name }) => name === wanted);
-if (!tool) {
-  text(JSON.stringify({alias_found:false,isError:null,content_types:[],supervisor_unavailable:false}));
-  exit();
+const alias_found = ALL_TOOLS.some(({ name }) => name === wanted);
+const static_callable = typeof tools.mcp__agent_surface__inspect_formal_preview === \"function\";
+let call_attempted = false;
+let call_threw = false;
+let result = null;
+if (alias_found && static_callable) {
+  call_attempted = true;
+  try {
+    result = await tools.mcp__agent_surface__inspect_formal_preview({preview_handle:\"preview-probe\"});
+  } catch (_) {
+    call_threw = true;
+  }
 }
-const result = await tools[wanted]({preview_handle:\"preview-probe\"});
 const content = Array.isArray(result?.content) ? result.content : [];
 const structured = result?.structuredContent;
 text(JSON.stringify({
-  alias_found:true,
-  isError:result?.isError === true,
-  content_types:content.map((item) => typeof item?.type === \"string\" ? item.type : \"invalid\").slice(0,4),
-  supervisor_unavailable:structured?.error?.classification === \"supervisor_unavailable\"
+  alias_found,
+  static_callable,
+  call_attempted,
+  call_threw,
+  isError: result ? result.isError === true : null,
+  content_types: content.map((item) => typeof item?.type === \"string\" ? item.type : \"invalid\").slice(0,4),
+  supervisor_unavailable: result ? structured?.error?.classification === \"supervisor_unavailable\" : null
 }));
 """
 
@@ -357,35 +367,40 @@ def _protocol_projection(body: object) -> dict[str, object]:
 def _output_signal(body: object) -> dict[str, object]:
     items = body.get("input") if isinstance(body, dict) and isinstance(body.get("input"), list) else []
     outputs = [item for item in items if isinstance(item, dict) and item.get("type") == "custom_tool_call_output"]
-    signal: dict[str, object] = {
-        "received": isinstance(body, dict),
-        "custom_tool_call_output": len(outputs) == 1,
-        "alias_found": None,
-        "isError": None,
-        "content_types": [],
-        "supervisor_unavailable": None,
-    }
-    if len(outputs) != 1 or outputs[0].get("call_id") != "call_provider_free":
-        return signal
-    output = outputs[0].get("output")
+    result: dict[str, object] = {"call_id_matches": False, "output_shape": "invalid", "script_status": "unknown"}
+    if len(outputs) != 1:
+        return result
+    result["call_id_matches"] = outputs[0].get("call_id") == "call_provider_free"
+    content = outputs[0].get("output")
+    if not isinstance(content, list) or not 1 <= len(content) <= 4:
+        return result
+    if len(content) != 2:
+        return result
+    texts: list[str] = []
+    for item in content:
+        if not isinstance(item, dict) or item.get("type") != "input_text" or set(item) != {"type", "text"} or not isinstance(item["text"], str) or len(item["text"]) > 1024:
+            return result
+        texts.append(item["text"])
+    status_match = re.fullmatch(r"Script (completed|failed)\nWall time [0-9]+(?:\.[0-9])? seconds\nOutput:\n", texts[0])
+    if status_match is None:
+        return result
     try:
-        value = json.loads(output) if isinstance(output, str) else None
+        signal = json.loads(texts[1])
     except json.JSONDecodeError:
-        value = None
-    if not isinstance(value, dict) or set(value) != {"alias_found", "isError", "content_types", "supervisor_unavailable"}:
-        return signal
-    content_types = value["content_types"]
-    if not isinstance(content_types, list) or len(content_types) > 4 or any(type(item) is not str or len(item) > 64 for item in content_types):
-        return signal
-    if any(type(value[key]) is not bool for key in ("alias_found", "isError", "supervisor_unavailable")):
-        return signal
-    signal.update({
-        "alias_found": value["alias_found"],
-        "isError": value["isError"],
-        "content_types": content_types,
-        "supervisor_unavailable": value["supervisor_unavailable"],
-    })
-    return signal
+        return result
+    fields = {"alias_found", "static_callable", "call_attempted", "call_threw", "isError", "content_types", "supervisor_unavailable"}
+    if not isinstance(signal, dict) or set(signal) != fields:
+        return result
+    if any(type(signal[key]) is not bool for key in ("alias_found", "static_callable", "call_attempted", "call_threw")):
+        return result
+    if signal["isError"] is not None and type(signal["isError"]) is not bool:
+        return result
+    if signal["supervisor_unavailable"] is not None and type(signal["supervisor_unavailable"]) is not bool:
+        return result
+    if not isinstance(signal["content_types"], list) or len(signal["content_types"]) > 4 or any(type(value) is not str or len(value) > 64 for value in signal["content_types"]):
+        return result
+    result.update({"output_shape": "content_array", "script_status": status_match.group(1), **signal})
+    return result
 
 
 class _AuditedBridge(AgentSurfaceBridge):
@@ -406,6 +421,46 @@ class _AuditedBridge(AgentSurfaceBridge):
                 "argument_keys": sorted(arguments) if isinstance(arguments, dict) and all(type(key) is str and len(key) <= 64 for key in arguments) else [],
             })
         return super()._mcp_frame(request, state)
+
+
+def _valid_dispatch(value: object) -> bool:
+    if not isinstance(value, dict) or not isinstance(value.get("audit_count"), str):
+        return False
+    count = value["audit_count"]
+    if count == "0":
+        return set(value) == {"audit_count"}
+    fields = {"audit_count", "tools_call", "method", "tool_name", "argument_keys"}
+    if count not in {"1", "2_plus"} or set(value) != fields:
+        return False
+    if value["tools_call"] is not True:
+        return False
+    if type(value["method"]) is not str or len(value["method"]) > 64:
+        return False
+    if value["tool_name"] is not None and (type(value["tool_name"]) is not str or len(value["tool_name"]) > MAX_TOOL_NAME_BYTES):
+        return False
+    keys = value["argument_keys"]
+    return isinstance(keys, list) and len(keys) <= 16 and all(type(key) is str and len(key) <= 64 for key in keys)
+
+
+def _valid_second_request(value: object) -> bool:
+    base = {"call_id_matches", "output_shape", "script_status"}
+    if not isinstance(value, dict) or not base <= set(value):
+        return False
+    if type(value["call_id_matches"]) is not bool or value["output_shape"] not in {"invalid", "content_array"} or value["script_status"] not in {"unknown", "completed", "failed"}:
+        return False
+    if value["output_shape"] == "invalid":
+        return set(value) == base and value["script_status"] == "unknown"
+    fields = base | {"alias_found", "static_callable", "call_attempted", "call_threw", "isError", "content_types", "supervisor_unavailable"}
+    if set(value) != fields:
+        return False
+    if any(type(value[key]) is not bool for key in ("alias_found", "static_callable", "call_attempted", "call_threw")):
+        return False
+    if value["isError"] is not None and type(value["isError"]) is not bool:
+        return False
+    if value["supervisor_unavailable"] is not None and type(value["supervisor_unavailable"]) is not bool:
+        return False
+    contents = value["content_types"]
+    return isinstance(contents, list) and len(contents) <= 4 and all(type(item) is str and len(item) <= 64 for item in contents)
 
 
 def _valid_protocol(value: object) -> bool:
@@ -464,11 +519,17 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
     first = evidence.get("first_request")
     if not isinstance(first, dict) or set(first) != {"received", "protocol"} or first["received"] is not True or not _valid_protocol(first["protocol"]):
         raise ProviderFreeError("provider-free evidence has an invalid first request")
-    if evidence.get("mcp_dispatch") != {"tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"]}:
+    dispatch = evidence.get("mcp_dispatch")
+    if not _valid_dispatch(dispatch):
         raise ProviderFreeError("provider-free evidence has an invalid MCP dispatch")
-    expected_signal = {"received": True, "custom_tool_call_output": True, "alias_found": True, "isError": True, "content_types": ["text"], "supervisor_unavailable": True}
-    if evidence.get("second_request") != expected_signal:
+    if dispatch != {"audit_count": "1", "tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"]}:
+        raise ProviderFreeError("provider-free evidence has an unsuccessful MCP dispatch")
+    second = evidence.get("second_request")
+    if not _valid_second_request(second):
         raise ProviderFreeError("provider-free evidence has an invalid second request")
+    expected_signal = {"call_id_matches": True, "output_shape": "content_array", "script_status": "completed", "alias_found": True, "static_callable": True, "call_attempted": True, "call_threw": False, "isError": True, "content_types": ["text"], "supervisor_unavailable": True}
+    if second != expected_signal:
+        raise ProviderFreeError("provider-free evidence has an unsuccessful second request")
     if evidence.get("receiver") != {"loopback_only": True, "provider_escape": False, "request_count": 2}:
         raise ProviderFreeError("provider-free evidence has an invalid receiver result")
     process = evidence.get("process")
@@ -538,7 +599,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         "private_config": {"agent_surface_server_enabled": config_enabled},
         "mcp_preflight": preflight,
         "first_request": {"received": bool(requests), "protocol": _protocol_projection(first_body)},
-        "mcp_dispatch": audit[0] if len(audit) == 1 else {"tools_call": False, "method": None, "tool_name": None, "argument_keys": []},
+        "mcp_dispatch": ({"audit_count": "0"} if not audit else {"audit_count": "1" if len(audit) == 1 else "2_plus", **audit[0]}),
         "second_request": _output_signal(second_body),
         "receiver": {"loopback_only": len(requests) == 2 and all(path == "/v1/responses" and host == "127.0.0.1" for path, _body, host in requests), "provider_escape": False, "request_count": len(requests)},
         "process": {"codex_version": version, "version_exit_code": version_exit, "workload_exit_code": workload_exit},
