@@ -192,11 +192,11 @@ const first_text = content.find((item) => item?.type === "text" && typeof item?.
 let first_text_classification = "none";
 if (result?.isError === true && typeof first_text === "string") {
   const lowered = first_text.toLowerCase();
-  if (lowered.includes("not available to model")) first_text_classification = "not_available_to_model";
+  if (lowered.includes("is not available to the model")) first_text_classification = "not_available_to_model";
   else if (lowered.includes("mcp client is not initialized")) first_text_classification = "mcp_client_not_initialized";
-  else if (lowered.includes("mcp client is shut down")) first_text_classification = "mcp_client_shutdown";
+  else if (lowered.includes("mcp client shutdown")) first_text_classification = "mcp_client_shutdown";
   else if (lowered.includes("tool not found")) first_text_classification = "tool_not_found";
-  else if (lowered.includes("transport")) first_text_classification = "transport";
+  else if (lowered.includes("transport error:") || lowered.includes("transport failed:") || lowered.includes("transport disconnected:")) first_text_classification = "transport";
   else first_text_classification = "other";
 }
 text(JSON.stringify({
