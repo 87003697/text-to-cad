@@ -892,6 +892,7 @@ def build_bwrap_argv(
     browser_mcp_url: str | None = None,
     agent_candidate_dir: Path | None = None,
     agent_surface_socket: Path | None = None,
+    isolated_code_mode_direct_namespace: str | None = None,
 ) -> list[str]:
     """Build a least-visibility bwrap argv without placing secrets in it.
 
@@ -920,6 +921,11 @@ def build_bwrap_argv(
     exp_dir = validate_exp_dir(repo_root, exp_dir)
     inputs = validate_input_paths(repo_root, input_paths)
     isolated_agent = agent_candidate_dir is not None
+    if isolated_code_mode_direct_namespace is not None and (
+        not isolated_agent
+        or isolated_code_mode_direct_namespace != "mcp__agent_surface"
+    ):
+        raise PilotError("unsupported isolated code-mode namespace")
     if isolated_agent:
         raw_candidate_dir = Path(agent_candidate_dir)
         if raw_candidate_dir.is_symlink():
@@ -969,6 +975,16 @@ def build_bwrap_argv(
         if not projected_client.is_file() or projected_client.is_symlink():
             raise PilotError("Agent Surface client is unavailable")
         job_codex_home = prepare_isolated_job_codex_home(exp_dir)
+        if isolated_code_mode_direct_namespace is not None:
+            config_path = job_codex_home / plugin_deployment.CONFIG_TOML_NAME
+            try:
+                with config_path.open("a", encoding="utf-8") as stream:
+                    stream.write(
+                        "\n[features.code_mode]\n"
+                        'direct_only_tool_namespaces=["mcp__agent_surface"]\n'
+                    )
+            except OSError as exc:
+                raise PilotError("cannot configure isolated code-mode namespace") from exc
         job_publish_tree = None
         skill_dirs: tuple[Path, ...] = ()
     else:

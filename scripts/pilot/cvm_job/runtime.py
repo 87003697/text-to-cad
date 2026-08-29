@@ -420,6 +420,10 @@ def _provider_free_module(scenario: str):
         from scripts.pilot import provider_free_agent_surface_mcp_injection as injection
 
         return injection
+    if scenario == "agent-surface-mcp-direct-injection":
+        from scripts.pilot import provider_free_agent_surface_mcp_direct_injection as direct
+
+        return direct
     if scenario == "agent-surface-mcp-ephemeral-differential":
         from scripts.pilot import provider_free_agent_surface_mcp_ephemeral_differential as differential
 
