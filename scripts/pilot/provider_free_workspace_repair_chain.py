@@ -28,7 +28,6 @@ from scripts.pilot.workspace_supervisor import SupervisorError, WorkspaceSupervi
 SCENARIO = "workspace-repair-chain"
 EVIDENCE_SCHEMA_V1 = "text-to-cad.provider-free-workspace-repair-chain-evidence/1"
 EVIDENCE_SCHEMA_V2 = "text-to-cad.provider-free-workspace-repair-chain-evidence/2"
-EVIDENCE_SCHEMA = EVIDENCE_SCHEMA_V2
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 96 * 1024
 MAX_MANIFEST_BYTES = 8 * 1024
