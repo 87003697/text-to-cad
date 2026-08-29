@@ -208,7 +208,12 @@ def _handle_request(
     if method != "tools/call":
         return _rpc_error(request_id, METHOD_NOT_FOUND, "method is not supported"), state
     params = request.get("params")
-    if type(params) is not dict or set(params) != {"name", "arguments"}:
+    if (
+        type(params) is not dict
+        or not {"name", "arguments"}.issubset(params)
+        or set(params) - {"name", "arguments", "_meta"}
+        or ("_meta" in params and type(params["_meta"]) is not dict)
+    ):
         return _rpc_error(request_id, INVALID_PARAMS, "tool parameters are invalid"), state
     name = params["name"]
     arguments = params["arguments"]

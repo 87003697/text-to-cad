@@ -24,7 +24,7 @@ from scripts.pilot.cvm_job import protocol
 
 
 SCENARIO = "agent-surface-mcp-injection"
-EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/8"
+EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/9"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024
@@ -586,6 +586,24 @@ class _AuditedBridge(AgentSurfaceBridge):
         return super()._mcp_frame(request, state)
 
 
+class _NestedAuditedBridge(_AuditedBridge):
+    """Add the nested-only envelope shape without changing shared audit records."""
+
+    def _mcp_frame(self, request: dict[str, object], state: str):
+        if request.get("method") == "tools/call" and len(self.audit) < 2:
+            params = request.get("params")
+            arguments = params.get("arguments") if isinstance(params, dict) else None
+            param_keys = set(params) if isinstance(params, dict) else set()
+            self.audit.append({
+                "tools_call": True,
+                "method": "tools/call",
+                "tool_name": params.get("name") if isinstance(params, dict) else None,
+                "argument_keys": sorted(arguments) if isinstance(arguments, dict) and all(type(key) is str and len(key) <= 64 for key in arguments) else [],
+                "params_shape": "name_arguments" if param_keys == {"name", "arguments"} else "name_arguments_meta" if param_keys == {"name", "arguments", "_meta"} else "other",
+            })
+        return AgentSurfaceBridge._mcp_frame(self, request, state)
+
+
 def _protocol_method(request: Mapping[str, object]) -> str:
     method = request.get("method")
     if method == "initialize":
@@ -605,7 +623,7 @@ def _saturated_count(value: int) -> str:
     return "0" if value == 0 else "1" if value == 1 else "2_plus"
 
 
-class _ProtocolAuditedBridge(_AuditedBridge):
+class _ProtocolAuditedBridge(_NestedAuditedBridge):
     """A closed, per-connection MCP protocol projection for the nested gate."""
 
     def __init__(self, surface: object, socket_path: Path, *, chronology: _Chronology | None = None) -> None:
@@ -805,7 +823,7 @@ def _valid_dispatch(value: object) -> bool:
     count = value["audit_count"]
     if count == "0":
         return set(value) == {"audit_count"}
-    fields = {"audit_count", "tools_call", "method", "tool_name", "argument_keys"}
+    fields = {"audit_count", "tools_call", "method", "tool_name", "argument_keys", "params_shape"}
     if type(count) is not str or count not in {"1", "2_plus"} or set(value) != fields:
         return False
     if value["tools_call"] is not True:
@@ -813,6 +831,8 @@ def _valid_dispatch(value: object) -> bool:
     if type(value["method"]) is not str or len(value["method"]) > 64:
         return False
     if value["tool_name"] is not None and (type(value["tool_name"]) is not str or len(value["tool_name"]) > MAX_TOOL_NAME_BYTES):
+        return False
+    if type(value["params_shape"]) is not str or value["params_shape"] not in {"name_arguments", "name_arguments_meta", "other"}:
         return False
     keys = value["argument_keys"]
     return isinstance(keys, list) and len(keys) <= 16 and all(type(key) is str and len(key) <= 64 for key in keys)
@@ -919,7 +939,7 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
     if evidence.get("mcp_preflight") != expected_preflight:
         raise ProviderFreeError("provider-free evidence has an invalid MCP preflight")
     preflight_dispatch = evidence.get("preflight_dispatch")
-    if not _valid_dispatch(preflight_dispatch) or preflight_dispatch != {"audit_count": "1", "tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"]}:
+    if not _valid_dispatch(preflight_dispatch) or preflight_dispatch != {"audit_count": "1", "tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"], "params_shape": "name_arguments"}:
         raise ProviderFreeError("provider-free evidence has an invalid preflight dispatch")
     if not _exact_preflight_protocol(evidence.get("preflight_protocol")):
         raise ProviderFreeError("provider-free evidence has an invalid preflight protocol")
@@ -929,7 +949,7 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
     dispatch = evidence.get("mcp_dispatch")
     if not _valid_dispatch(dispatch):
         raise ProviderFreeError("provider-free evidence has an invalid MCP dispatch")
-    if dispatch != {"audit_count": "1", "tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"]}:
+    if dispatch != {"audit_count": "1", "tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"], "params_shape": "name_arguments_meta"}:
         raise ProviderFreeError("provider-free evidence has an unsuccessful MCP dispatch")
     workload_protocol = evidence.get("workload_protocol")
     if not _valid_chronology(evidence.get("workload_chronology")):
