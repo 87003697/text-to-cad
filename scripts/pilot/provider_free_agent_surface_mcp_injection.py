@@ -24,7 +24,7 @@ from scripts.pilot.cvm_job import protocol
 
 
 SCENARIO = "agent-surface-mcp-injection"
-EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/6"
+EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/7"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024
@@ -33,6 +33,7 @@ MAX_TOOL_NAME_BYTES = 256
 MAX_RECEIVER_REQUESTS = 2
 MAX_PROTOCOL_SESSIONS = 2
 MAX_PROTOCOL_METHODS = 12
+MAX_CHRONOLOGY_EVENTS = 32
 _FIXTURE = Path("models/toys4k/cup_cup_033.ply")
 _TOOL = "inspect_formal_preview"
 _VERSION = re.compile(r"(?:codex-cli|OpenAI Codex v)\s*([0-9]+\.[0-9]+\.[0-9]+)")
@@ -175,16 +176,16 @@ def _response_events(*, call: Mapping[str, str] | None = None) -> bytes:
     return b"".join(events)
 
 
-_EXEC_INPUT = """const wanted = \"mcp__agent_surface__inspect_formal_preview\";
+_EXEC_INPUT = r"""const wanted = "mcp__agent_surface__inspect_formal_preview";
 const alias_found = ALL_TOOLS.some(({ name }) => name === wanted);
-const static_callable = typeof tools.mcp__agent_surface__inspect_formal_preview === \"function\";
+const static_callable = typeof tools.mcp__agent_surface__inspect_formal_preview === "function";
 let call_attempted = false;
 let call_threw = false;
 let result = null;
 if (alias_found && static_callable) {
   call_attempted = true;
   try {
-    result = await tools.mcp__agent_surface__inspect_formal_preview({preview_handle:\"preview-probe\"});
+    result = await tools.mcp__agent_surface__inspect_formal_preview({preview_handle:"preview-probe"});
   } catch (_) {
     call_threw = true;
   }
@@ -211,13 +212,52 @@ text(JSON.stringify({
   content_types: content.map((item) => typeof item?.type === "string" ? item.type : "invalid").slice(0,4),
   structured_content_present: structured !== null && typeof structured === "object",
   supervisor_unavailable: result ? structured?.error?.classification === "supervisor_unavailable" : null,
-  first_text_classification
+  first_text_classification,
+  ...(() => {
+    if (result?.isError !== true || typeof first_text !== "string") return {sanitized_error: null, sanitized_error_truncated: false};
+    let value = first_text.replace(/[\x00-\x1f\x7f]/g, " ");
+    value = value.replace(/https?:\/\/[^\s]+/gi, "<url>");
+    value = value.replace(/(?<![A-Za-z0-9_.-])\/(?:[^\s\/"',}\]]+(?:\/[^\s\/"',}\]]*)*)/g, "<path>");
+    value = value.replace(/\b(bearer)\s+["']?[^\s"']+["']?/gi, "$1 <redacted>");
+    value = value.replace(/(["']?(?:token|secret|api[_-]?key|password|authorization)["']?\s*[:=]\s*)["']?[^\s,"'}\]]+["']?/gi, "$1<redacted>");
+    value = value.replace(/\s+/g, " ").trim();
+    const truncated = value.length > 256;
+    return {sanitized_error: value.slice(0, 256), sanitized_error_truncated: truncated};
+  })()
 }));
 """
 
 
+class _Chronology:
+    """Thread-safe, bounded workload-only callback chronology."""
+
+    _ALLOWED = {
+        "bridge_open", "initialize", "initialized", "list", "call", "bridge_close",
+        "request1_received", "exec_response_sent", "request2_received", "final_response_sent",
+    }
+
+    def __init__(self) -> None:
+        self._events: list[str] = []
+        self._truncated = False
+        self._lock = threading.Lock()
+
+    def record(self, event: str) -> None:
+        if event not in self._ALLOWED:
+            raise ValueError("invalid chronology event")
+        with self._lock:
+            if len(self._events) < MAX_CHRONOLOGY_EVENTS:
+                self._events.append(event)
+            else:
+                self._truncated = True
+
+    def projection(self) -> dict[str, object]:
+        with self._lock:
+            return {"events": list(self._events), "truncated": self._truncated}
+
+
 class _Receiver(http.server.BaseHTTPRequestHandler):
     requests: list[tuple[str, Any, str]] = []
+    chronology: _Chronology | None = None
 
     def do_POST(self) -> None:
         length = int(self.headers.get("Content-Length", "0"))
@@ -226,17 +266,29 @@ class _Receiver(http.server.BaseHTTPRequestHandler):
         except (UnicodeDecodeError, json.JSONDecodeError):
             body = None
         self.__class__.requests.append((self.path, body, self.client_address[0]))
-        if len(self.__class__.requests) == 1:
+        request_count = len(self.__class__.requests)
+        if self.__class__.chronology is not None:
+            if request_count == 1:
+                self.__class__.chronology.record("request1_received")
+            elif request_count == 2:
+                self.__class__.chronology.record("request2_received")
+        sent_event: str | None = None
+        if request_count == 1:
             response = _response_events(call={"name": "exec", "input": _EXEC_INPUT})
-        elif len(self.__class__.requests) == 2:
+            sent_event = "exec_response_sent"
+        elif request_count == 2:
             response = _response_events()
+            sent_event = "final_response_sent"
         else:
             response = b'{"error":{"message":"too many provider-free requests","type":"invalid_request_error"}}'
-        self.send_response(200 if len(self.__class__.requests) <= 2 else 400)
-        self.send_header("Content-Type", "text/event-stream" if len(self.__class__.requests) <= 2 else "application/json")
+        self.send_response(200 if request_count <= 2 else 400)
+        self.send_header("Content-Type", "text/event-stream" if request_count <= 2 else "application/json")
         self.send_header("Content-Length", str(len(response)))
         self.end_headers()
         self.wfile.write(response)
+        self.wfile.flush()
+        if sent_event is not None and self.__class__.chronology is not None:
+            self.__class__.chronology.record(sent_event)
 
     def log_message(self, *_: object) -> None:
         pass
@@ -472,7 +524,7 @@ def _output_signal(body: object) -> dict[str, object]:
         signal = json.loads(texts[1])
     except json.JSONDecodeError:
         return result
-    fields = {"alias_found", "static_callable", "call_attempted", "call_threw", "isError", "content_types", "structured_content_present", "supervisor_unavailable", "first_text_classification"}
+    fields = {"alias_found", "static_callable", "call_attempted", "call_threw", "isError", "content_types", "structured_content_present", "supervisor_unavailable", "first_text_classification", "sanitized_error", "sanitized_error_truncated"}
     if not isinstance(signal, dict) or set(signal) != fields:
         return result
     if any(type(signal[key]) is not bool for key in ("alias_found", "static_callable", "call_attempted", "call_threw")):
@@ -484,6 +536,12 @@ def _output_signal(body: object) -> dict[str, object]:
     if signal["supervisor_unavailable"] is not None and type(signal["supervisor_unavailable"]) is not bool:
         return result
     if type(signal["first_text_classification"]) is not str or signal["first_text_classification"] not in {"not_available_to_model", "mcp_client_not_initialized", "mcp_client_shutdown", "transport", "tool_not_found", "other", "none"}:
+        return result
+    if signal["sanitized_error"] is not None and (type(signal["sanitized_error"]) is not str or len(signal["sanitized_error"]) > 256):
+        return result
+    if type(signal["sanitized_error_truncated"]) is not bool:
+        return result
+    if signal["isError"] is not True and (signal["sanitized_error"] is not None or signal["sanitized_error_truncated"] is not False):
         return result
     if not isinstance(signal["content_types"], list) or len(signal["content_types"]) > 4 or any(type(value) is not str or len(value) > 64 for value in signal["content_types"]):
         return result
@@ -533,8 +591,9 @@ def _saturated_count(value: int) -> str:
 class _ProtocolAuditedBridge(_AuditedBridge):
     """A closed, per-connection MCP protocol projection for the nested gate."""
 
-    def __init__(self, surface: object, socket_path: Path) -> None:
+    def __init__(self, surface: object, socket_path: Path, *, chronology: _Chronology | None = None) -> None:
         super().__init__(surface, socket_path)
+        self._chronology = chronology
         self._sessions: list[dict[str, object]] = []
         self._sessions_lock = threading.Lock()
         self._local = threading.local()
@@ -552,16 +611,24 @@ class _ProtocolAuditedBridge(_AuditedBridge):
                            "state": "pre_init", "closed": False}
                 self._sessions.append(session)
         self._local.session = session
+        if self._chronology is not None:
+            self._chronology.record("bridge_open")
         try:
             super()._serve_connection(connection)
         finally:
             if session is not None:
                 session["closed"] = True
+            if self._chronology is not None:
+                self._chronology.record("bridge_close")
             self._local.session = None
 
     def _mcp_frame(self, request: dict[str, object], state: str):
         session = getattr(self._local, "session", None)
         method = _protocol_method(request)
+        if self._chronology is not None:
+            event = {"initialize": "initialize", "notifications_initialized": "initialized", "tools_list": "list", "tools_call": "call"}.get(method)
+            if event is not None:
+                self._chronology.record(event)
         if isinstance(session, dict):
             methods = session["methods"]
             if isinstance(methods, list):
@@ -677,6 +744,26 @@ def _valid_protocol_audit(value: object) -> bool:
     return value["classification"] == expected_classification
 
 
+def _valid_chronology(value: object) -> bool:
+    expected = {
+        "request1_received", "exec_response_sent", "bridge_open", "initialize",
+        "initialized", "list", "call", "bridge_close", "request2_received",
+        "final_response_sent",
+    }
+    if not isinstance(value, dict) or set(value) != {"events", "truncated"} or type(value.get("truncated")) is not bool or value["truncated"] is not False:
+        return False
+    events = value["events"]
+    if not isinstance(events, list) or len(events) != len(expected) or any(type(event) is not str for event in events) or set(events) != expected or len(events) != len(set(events)):
+        return False
+    positions = {event: index for index, event in enumerate(events)}
+    return (
+        positions["request1_received"] < positions["exec_response_sent"]
+        and positions["bridge_open"] < positions["initialize"] < positions["initialized"] < positions["list"] < positions["call"]
+        and positions["call"] < positions["request2_received"] < positions["final_response_sent"]
+        and positions["call"] < positions["bridge_close"]
+    )
+
+
 def _exact_preflight_protocol(value: object) -> bool:
     return _valid_protocol_audit(value) and value == {
         "session_count": "1",
@@ -722,7 +809,7 @@ def _valid_second_request(value: object) -> bool:
         return False
     if value["output_shape"] == "invalid":
         return set(value) == base and value["script_status"] == "unknown"
-    fields = base | {"alias_found", "static_callable", "call_attempted", "call_threw", "isError", "content_types", "structured_content_present", "supervisor_unavailable", "first_text_classification"}
+    fields = base | {"alias_found", "static_callable", "call_attempted", "call_threw", "isError", "content_types", "structured_content_present", "supervisor_unavailable", "first_text_classification", "sanitized_error", "sanitized_error_truncated"}
     if set(value) != fields:
         return False
     if any(type(value[key]) is not bool for key in ("alias_found", "static_callable", "call_attempted", "call_threw")):
@@ -734,6 +821,12 @@ def _valid_second_request(value: object) -> bool:
     if value["supervisor_unavailable"] is not None and type(value["supervisor_unavailable"]) is not bool:
         return False
     if type(value["first_text_classification"]) is not str or value["first_text_classification"] not in {"not_available_to_model", "mcp_client_not_initialized", "mcp_client_shutdown", "transport", "tool_not_found", "other", "none"}:
+        return False
+    if value["sanitized_error"] is not None and (type(value["sanitized_error"]) is not str or len(value["sanitized_error"]) > 256):
+        return False
+    if type(value["sanitized_error_truncated"]) is not bool:
+        return False
+    if value["isError"] is not True and (value["sanitized_error"] is not None or value["sanitized_error_truncated"] is not False):
         return False
     contents = value["content_types"]
     return isinstance(contents, list) and len(contents) <= 4 and all(type(item) is str and len(item) <= 64 for item in contents)
@@ -783,7 +876,7 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
     except json.JSONDecodeError as exc:
         raise ProviderFreeError("provider-free evidence or artifact manifest is missing/invalid") from exc
     identity = expected_identity(record)
-    fields = {"schema", "identity", "sandbox", "private_config", "mcp_preflight", "preflight_dispatch", "preflight_protocol", "first_request", "workload_protocol", "mcp_dispatch", "second_request", "receiver", "process", "gate_passed"}
+    fields = {"schema", "identity", "sandbox", "private_config", "mcp_preflight", "preflight_dispatch", "preflight_protocol", "first_request", "workload_protocol", "workload_chronology", "mcp_dispatch", "second_request", "receiver", "process", "gate_passed"}
     if not isinstance(evidence, dict) or set(evidence) != fields or evidence.get("schema") != EVIDENCE_SCHEMA or evidence.get("identity") != identity:
         raise ProviderFreeError("provider-free evidence has an invalid shape")
     if evidence.get("sandbox") != {"runner_bwrap": True, "gateway": "codex-tap-gpt56", "network": "loopback-only"}:
@@ -807,6 +900,8 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
     if dispatch != {"audit_count": "1", "tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"]}:
         raise ProviderFreeError("provider-free evidence has an unsuccessful MCP dispatch")
     workload_protocol = evidence.get("workload_protocol")
+    if not _valid_chronology(evidence.get("workload_chronology")):
+        raise ProviderFreeError("provider-free evidence has an invalid workload chronology")
     if not _valid_protocol_audit(workload_protocol) or workload_protocol.get("classification") != "live_call_reached_bridge" or workload_protocol.get("truncated") is not False or workload_protocol.get("session_count") != "1":
         raise ProviderFreeError("provider-free evidence has an invalid workload bridge protocol")
     session = workload_protocol["sessions"][0]
@@ -816,7 +911,7 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
     if not _valid_second_request(second):
         raise ProviderFreeError("provider-free evidence has an invalid second request")
     expected_signal = {"call_id_matches": True, "output_shape": "content_array", "script_status": "completed", "alias_found": True, "static_callable": True, "call_attempted": True, "call_threw": False, "isError": True, "content_types": ["text"], "structured_content_present": True, "supervisor_unavailable": True, "first_text_classification": "other"}
-    if second != expected_signal:
+    if not all(second.get(key) == expected for key, expected in expected_signal.items()):
         raise ProviderFreeError("provider-free evidence has an unsuccessful second request")
     if evidence.get("receiver") != {"loopback_only": True, "provider_escape": False, "request_count": 2}:
         raise ProviderFreeError("provider-free evidence has an invalid receiver result")
@@ -848,6 +943,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
     preflight_protocol: dict[str, object] = {"session_count": "0", "sessions": [], "truncated": False, "classification": "no_bridge_connection"}
     workload_protocol: dict[str, object] = {"session_count": "0", "sessions": [], "truncated": False, "classification": "no_bridge_connection"}
     workload_audit: list[dict[str, object]] = []
+    workload_chronology = _Chronology()
     config_enabled = False
     requests: list[tuple[str, Any, str]] = []
     try:
@@ -871,10 +967,11 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
 
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Receiver)
         _Receiver.requests = []
+        _Receiver.chronology = workload_chronology
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         child_env = runner.build_sandbox_environment(gate_env, f"http://127.0.0.1:{server.server_port}/v1", isolated_agent=True, tap_client_token="provider-free-loopback-token")
-        workload_bridge = _ProtocolAuditedBridge(None, workload_socket_dir / "surface.sock")
+        workload_bridge = _ProtocolAuditedBridge(None, workload_socket_dir / "surface.sock", chronology=workload_chronology)
         workload_bridge.surface = workload_bridge._mcp.AgentSurface(None)
         workload_bridge.start()
         try:
@@ -895,6 +992,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
             server.server_close()
         if thread is not None:
             thread.join(timeout=2)
+        _Receiver.chronology = None
         if preflight_bridge is not None and preflight_bridge._server is not None:
             preflight_bridge.stop()
         if workload_bridge is not None and workload_bridge._server is not None:
@@ -915,6 +1013,7 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         "preflight_protocol": preflight_protocol,
         "first_request": {"received": bool(requests), "protocol": _protocol_projection(first_body)},
         "workload_protocol": workload_protocol,
+        "workload_chronology": workload_chronology.projection(),
         "mcp_dispatch": _audit_projection(workload_audit),
         "second_request": _output_signal(second_body),
         "receiver": {"loopback_only": len(requests) == 2 and all(path == "/v1/responses" and host == "127.0.0.1" for path, _body, host in requests), "provider_escape": False, "request_count": len(requests)},
