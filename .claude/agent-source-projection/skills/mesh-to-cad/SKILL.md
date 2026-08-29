@@ -39,7 +39,9 @@ opaque handles the supervisor gave you in an earlier response and returns
 a closed result plus the list of intents permitted next.
 
 - `workspace_status` — read the current bounded workflow state, the
-  active budgets, the workspace identity, and the intents permitted next.
+  active budgets, the workspace identity, and the intents permitted next. A
+  current preterminal publication whose original response was not received may
+  additionally return `publication_recovery`, the exact published response.
 - `start_attempt` — begin one bounded Attempt from an authored plan
   handle. Optionally branch from a parent step handle.
 - `run_candidate_tool` — ask the supervisor to run one registered
@@ -92,9 +94,11 @@ Invoke the seven JSON intents through ordinary `exec_command`, running only the
 fixed client `python3 /agent-surface/client.py`. Feed it exactly one closed JSON
 object on stdin and read its one JSON response before issuing another intent.
 If a long-running call returns an `exec_command` session ID before its JSON
-response, immediately and repeatedly poll that exact session through `write_stdin`
-with empty input until the client exits and returns the response. Do not issue another
-intent, commentary, or unrelated command while that session is live.
+response, normally poll that exact session through `write_stdin` with empty
+input until the client exits and returns the response. If a completed
+publication response is unavailable, call `workspace_status`; its optional
+`publication_recovery` is the exact published response. Use it without
+resubmitting W1. Do not issue another intent while that session is live.
 For example, use shell input redirection only to feed this exact request:
 
 ```json
@@ -148,7 +152,8 @@ Every successful client response is one JSON object with the response envelope:
 For the six workflow intents, `result` has the following closed shapes:
 
 - `workspace_status`: `state`, `workspace_identity`, `budgets`,
-  `permitted_next_intents`.
+  `permitted_next_intents`, and, only for an unreceived current published
+  response, `publication_recovery` with that published response's closed shape.
 - `start_attempt`: `state`, `attempt_handle`, `candidate_handle`,
   `capability_bundle_handle`, `permitted_next_intents`.
 - `run_candidate_tool`: `state`, `candidate_handle`, `result_handle`,

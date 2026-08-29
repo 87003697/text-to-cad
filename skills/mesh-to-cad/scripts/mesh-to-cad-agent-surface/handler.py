@@ -616,12 +616,50 @@ def _result_fields(
 
 
 def _validate_workspace_status_result(value: Any, path: str) -> dict[str, Any]:
-    return _result_fields(
-        value,
-        (("state", "state"), ("workspace_identity", "identity"), ("budgets", "budgets"), ("permitted_next_intents", "next")),
+    fields = (
+        ("state", "state"),
+        ("workspace_identity", "identity"),
+        ("budgets", "budgets"),
+        ("permitted_next_intents", "next"),
+    )
+    if type(value) is not dict:
+        _fail("supervisor_contract_violation", path)
+    expected = {name for name, _kind in fields}
+    recovery = value.get("publication_recovery")
+    if recovery is not None:
+        expected.add("publication_recovery")
+    if set(value) != expected:
+        _fail("supervisor_contract_violation", path)
+    result = _result_fields(
+        {name: value[name] for name, _kind in fields},
+        fields,
         path,
         "workspace_status",
     )
+    if recovery is not None:
+        recovery_fields = (
+            ("state", "state"),
+            ("step_handle", "handle"),
+            ("preview_handle", "handle"),
+            ("decision_facts", "decision_facts"),
+            ("permitted_next_intents", "next"),
+        )
+        if type(recovery) is not dict or recovery.get("state") != "published":
+            _fail("supervisor_contract_violation", f"{path}.publication_recovery")
+        if "cycle_handle" in recovery:
+            recovery_fields = (
+                recovery_fields[:3]
+                + (("cycle_handle", "handle"),)
+                + recovery_fields[3:]
+            )
+        recovery_result = _result_fields(
+            recovery,
+            recovery_fields,
+            f"{path}.publication_recovery",
+            "submit_step_zero",
+        )
+        result["publication_recovery"] = recovery_result
+    return result
 
 
 def _validate_start_attempt_result(value: Any, path: str) -> dict[str, Any]:

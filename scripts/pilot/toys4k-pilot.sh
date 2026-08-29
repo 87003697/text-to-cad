@@ -211,12 +211,13 @@ For each call, provide exactly one closed JSON request envelope on stdin:
 For observe_reference, args must be exactly
 {"reference_handle":"<opaque>","observation":{"method":"summary","args":{}}} or
 {"reference_handle":"<opaque>","observation":{"method":"section_profile","args":{}}}.
-Read the one JSON client response
-before issuing another request; requests are strictly serial. A publication
-can outlive an exec_command yield: if it returns a session_id without that
-JSON response, immediately and repeatedly use write_stdin with that same
-session_id and empty input until the client exits and returns its response. Do not issue
-another intent, commentary, or unrelated command while that session is live.
+Read the one JSON client response before issuing another request; requests are
+strictly serial. A publication can outlive an exec_command yield: normally poll
+that same session_id through write_stdin until its response arrives. If a
+completed publication response is unavailable, call workspace_status; its
+publication_recovery, when present, is the exact published response and must
+be used without resubmitting W1. Do not issue another intent while a client
+session is live.
 On an error, preserve its classification and do not retry blindly. After each published
 Step response with a preview_handle, emit no text before calling the only MCP
 tool you may use: in code mode its callable ID is

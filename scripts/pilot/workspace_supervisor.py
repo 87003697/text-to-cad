@@ -798,6 +798,7 @@ class WorkspaceSupervisor:
             self._publication_flights: dict[
                 tuple[str, str, str, str], _PublicationFlight
             ] = {}
+            self._starting_attempt = False
 
             self.workspace_handle = self.registry.issue("workspace", self.workspace)
             self.reference_handle: str | None = None
@@ -1244,6 +1245,7 @@ class WorkspaceSupervisor:
             raise SupervisorError("workspace_contract_violation")
         with self._publication_condition:
             active_attempt = next(iter(self._attempts.values()), None)
+            starting_attempt = self._starting_attempt
             active_publication = (
                 self._publication_for_attempt_locked(active_attempt.attempt_id)
                 if active_attempt is not None
@@ -1262,6 +1264,7 @@ class WorkspaceSupervisor:
             else (
                 "blocked"
                 if active_attempt is not None
+                or starting_attempt
                 or publication_in_flight
                 or publication_failed
                 else workspace_state
@@ -1280,7 +1283,7 @@ class WorkspaceSupervisor:
             raise SupervisorError("workspace_contract_violation")
         if workspace_state == "terminal":
             next_intents = ["workspace_status"]
-        elif publication_in_flight or publication_failed:
+        elif starting_attempt or publication_in_flight or publication_failed:
             next_intents = ["workspace_status"]
         elif active_attempt is not None:
             next_intents = self._attempt_next_intents(
@@ -1293,6 +1296,7 @@ class WorkspaceSupervisor:
             next_intents = ["workspace_status"]
         if (
             active_attempt is None
+            and not starting_attempt
             and not publication_in_flight
             and workspace_state != "terminal"
         ):
@@ -1300,7 +1304,7 @@ class WorkspaceSupervisor:
             next_intents.append("start_attempt")
             if workspace_state == "preterminal":
                 next_intents.append("select_and_finalize")
-        return {
+        result: dict[str, Any] = {
             "state": state,
             "workspace_identity": workspace_handle,
             "budgets": {
@@ -1310,6 +1314,61 @@ class WorkspaceSupervisor:
             },
             "permitted_next_intents": next_intents,
         }
+        recovery = self._completed_publication_recovery(status, workspace_state)
+        if recovery is not None:
+            result["publication_recovery"] = recovery
+        return result
+
+    def _completed_publication_recovery(
+        self, status: Mapping[str, Any], workspace_state: str
+    ) -> Mapping[str, Any] | None:
+        """Return the current preterminal publication result without replaying W1."""
+
+        if workspace_state != "preterminal":
+            return None
+        heads = status.get("head_steps")
+        if (
+            type(heads) is not list
+            or len(heads) != 1
+            or type(heads[0]) is not int
+            or heads[0] < 0
+        ):
+            return None
+        current_step = heads[0]
+        with self._publication_condition:
+            if self._attempts or self._starting_attempt or self._publication_in_flight_locked():
+                return None
+            flight_item = next(
+                (
+                    item
+                    for item in reversed(self._publication_flights.items())
+                    if item[0][0] == self.workspace_handle
+                ),
+                None,
+            )
+        if flight_item is None:
+            return None
+        _key, flight = flight_item
+        result = flight.result
+        if (
+            not flight.done
+            or flight.error is not None
+            or not isinstance(result, Mapping)
+            or result.get("state") != "published"
+        ):
+            return None
+        try:
+            step = self.registry.resolve(result.get("step_handle"), "step")
+        except SupervisorError:
+            return None
+        facts = result.get("decision_facts")
+        if (
+            step != current_step
+            or not isinstance(facts, Mapping)
+            or facts.get("step_ordinal") != current_step
+        ):
+            return None
+        return result
 
     def start_attempt(
         self,
@@ -1330,11 +1389,16 @@ class WorkspaceSupervisor:
                 raise SupervisorError("invalid_handle")
             from_step = resolved
         with self._publication_condition:
-            attempt_is_active = bool(self._attempts)
+            attempt_is_active = bool(self._attempts) or self._starting_attempt
             publication_in_flight = self._publication_in_flight_locked()
         if attempt_is_active or publication_in_flight:
             raise SupervisorError("attempt_already_active")
+        with self._publication_condition:
+            if self._attempts or self._starting_attempt or self._publication_in_flight_locked():
+                raise SupervisorError("attempt_already_active")
+            self._starting_attempt = True
         staged_plan = self._staging_root / f"plan-{secrets.token_hex(12)}.json"
+        context: _AttemptContext | None = None
         try:
             _copy_candidate_file(plan, staged_plan)
             status = self.workspace_api.workspace_status(workspace)
@@ -1359,12 +1423,41 @@ class WorkspaceSupervisor:
                 from_step=from_step,
             )
             attempt_id = int(document["attempt"])
+            candidate = self._current_work_tree()
+            attempt_handle = self.registry.issue("attempt", None, attempt_id=attempt_id)
+            candidate_handle = self.registry.issue(
+                "candidate", candidate, attempt_id=attempt_id
+            )
+            context = _AttemptContext(
+                attempt_id,
+                intended_step,
+                candidate,
+                attempt_handle,
+                candidate_handle,
+            )
+            self.registry.bind(attempt_handle, context)
+            with self._publication_condition:
+                self._attempts[attempt_id] = context
         except SupervisorError:
+            if context is None:
+                with self._publication_condition:
+                    self._starting_attempt = False
             raise
         except Exception as exc:
-            raise SupervisorError("attempt_rejected") from exc
+            if context is None:
+                with self._publication_condition:
+                    self._starting_attempt = False
+                raise SupervisorError("attempt_rejected") from exc
+            raise
         finally:
-            staged_plan.unlink(missing_ok=True)
+            try:
+                staged_plan.unlink(missing_ok=True)
+            except OSError:
+                if context is None:
+                    with self._publication_condition:
+                        self._starting_attempt = False
+                raise
+        assert context is not None
         candidate = self._reset_current_work_tree()
         if from_step is not None:
             seeder = getattr(
@@ -1376,32 +1469,20 @@ class WorkspaceSupervisor:
             try:
                 seeder(
                     workspace,
-                    attempt=attempt_id,
+                    attempt=context.attempt_id,
                     from_step=from_step,
                     destination=candidate,
                 )
             except Exception as exc:
                 self._discard_current_work_tree()
                 raise SupervisorError("repair_source_seed_failed") from exc
-        attempt_handle = self.registry.issue("attempt", None, attempt_id=attempt_id)
-        candidate_handle = self.registry.issue(
-            "candidate", candidate, attempt_id=attempt_id
-        )
-        context = _AttemptContext(
-            attempt_id,
-            intended_step,
-            candidate,
-            attempt_handle,
-            candidate_handle,
-        )
-        self.registry.bind(attempt_handle, context)
         with self._publication_condition:
-            self._attempts[attempt_id] = context
+            self._starting_attempt = False
         capability_bundle_handle = self._issue_attempt_capabilities(context)
         return {
             "state": "started",
-            "attempt_handle": attempt_handle,
-            "candidate_handle": candidate_handle,
+            "attempt_handle": context.attempt_handle,
+            "candidate_handle": context.candidate_handle,
             "capability_bundle_handle": capability_bundle_handle,
             "permitted_next_intents": self._attempt_next_intents(intended_step),
         }
