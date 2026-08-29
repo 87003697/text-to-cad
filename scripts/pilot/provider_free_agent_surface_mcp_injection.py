@@ -24,7 +24,7 @@ from scripts.pilot.cvm_job import protocol
 
 
 SCENARIO = "agent-surface-mcp-injection"
-EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/4"
+EVIDENCE_SCHEMA = "text-to-cad.provider-free-agent-surface-mcp-injection-evidence/5"
 MANIFEST_SCHEMA = "text-to-cad.provider-free-artifact-manifest/1"
 MAX_EVIDENCE_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 4 * 1024
@@ -295,6 +295,74 @@ def _mcp_preflight(socket_path: Path) -> dict[str, Any]:
     }
 
 
+def _audit_projection(audit: list[dict[str, object]]) -> dict[str, object]:
+    if not audit:
+        return {"audit_count": "0"}
+    return {"audit_count": "1" if len(audit) == 1 else "2_plus", **audit[0]}
+
+
+def _same_sandbox_mcp_preflight(argv: list[str], env: Mapping[str, str]) -> dict[str, object]:
+    result: dict[str, object] = {
+        "spawned": False,
+        "initialize_ok": False,
+        "tools_list_ok": False,
+        "exact_descriptor_seen": False,
+        "tools_call_ok": False,
+        "is_error": None,
+        "text_present": False,
+        "supervisor_unavailable": None,
+        "exit_class": "spawn_failed",
+    }
+    sequence = b"\n".join((
+        b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"provider-free-gate","version":"1"}}}',
+        b'{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}',
+        b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}',
+        b'{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"inspect_formal_preview","arguments":{"preview_handle":"preview-probe"}}}',
+    )) + b"\n"
+    try:
+        completed = subprocess.run(
+            argv,
+            env=dict(env),
+            input=sequence,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        result["exit_class"] = "timeout"
+        return result
+    except OSError:
+        return result
+    result["spawned"] = True
+    if completed.returncode != 0:
+        result["exit_class"] = "nonzero"
+        return result
+    result["exit_class"] = "zero"
+    if len(completed.stdout) > MAX_EVIDENCE_BYTES:
+        return result
+    try:
+        frames = [json.loads(line) for line in completed.stdout.splitlines()]
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return result
+    if len(frames) != 3 or not all(isinstance(frame, dict) for frame in frames):
+        return result
+    result["initialize_ok"] = frames[0].get("id") == 1 and isinstance(frames[0].get("result"), dict)
+    tools = frames[1].get("result", {}).get("tools") if isinstance(frames[1].get("result"), dict) else None
+    names = sorted(item.get("name") for item in tools if isinstance(item, dict) and isinstance(item.get("name"), str)) if isinstance(tools, list) else []
+    result["tools_list_ok"] = frames[1].get("id") == 2 and isinstance(tools, list)
+    result["exact_descriptor_seen"] = names == [_TOOL]
+    call = frames[2].get("result") if frames[2].get("id") == 3 else None
+    if not isinstance(call, dict) or set(call) != {"isError", "structuredContent", "content"} or type(call.get("isError")) is not bool or not isinstance(call.get("content"), list):
+        return result
+    result["tools_call_ok"] = True
+    result["is_error"] = call["isError"]
+    result["text_present"] = any(isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str) for item in call["content"])
+    structured = call["structuredContent"]
+    result["supervisor_unavailable"] = isinstance(structured, dict) and isinstance(structured.get("error"), dict) and structured["error"].get("classification") == "supervisor_unavailable"
+    return result
+
+
 def _version_from_output(value: str) -> str | None:
     match = _VERSION.search(value)
     return match.group(1) if match else None
@@ -528,15 +596,19 @@ def validate_artifacts(repo_root: Path, record: Mapping[str, Any]) -> tuple[Path
     except json.JSONDecodeError as exc:
         raise ProviderFreeError("provider-free evidence or artifact manifest is missing/invalid") from exc
     identity = expected_identity(record)
-    fields = {"schema", "identity", "sandbox", "private_config", "mcp_preflight", "first_request", "mcp_dispatch", "second_request", "receiver", "process", "gate_passed"}
+    fields = {"schema", "identity", "sandbox", "private_config", "mcp_preflight", "preflight_dispatch", "first_request", "mcp_dispatch", "second_request", "receiver", "process", "gate_passed"}
     if not isinstance(evidence, dict) or set(evidence) != fields or evidence.get("schema") != EVIDENCE_SCHEMA or evidence.get("identity") != identity:
         raise ProviderFreeError("provider-free evidence has an invalid shape")
     if evidence.get("sandbox") != {"runner_bwrap": True, "gateway": "codex-tap-gpt56", "network": "loopback-only"}:
         raise ProviderFreeError("provider-free evidence has an invalid sandbox contract")
     if evidence.get("private_config") != {"agent_surface_server_enabled": True}:
         raise ProviderFreeError("provider-free evidence has an invalid config result")
-    if evidence.get("mcp_preflight") != {"initialize_succeeded": True, "tools_list_succeeded": True, "tool_descriptor_names": [_TOOL]}:
+    expected_preflight = {"spawned": True, "initialize_ok": True, "tools_list_ok": True, "exact_descriptor_seen": True, "tools_call_ok": True, "is_error": True, "text_present": True, "supervisor_unavailable": True, "exit_class": "zero"}
+    if evidence.get("mcp_preflight") != expected_preflight:
         raise ProviderFreeError("provider-free evidence has an invalid MCP preflight")
+    preflight_dispatch = evidence.get("preflight_dispatch")
+    if not _valid_dispatch(preflight_dispatch) or preflight_dispatch != {"audit_count": "1", "tools_call": True, "method": "tools/call", "tool_name": _TOOL, "argument_keys": ["preview_handle"]}:
+        raise ProviderFreeError("provider-free evidence has an invalid preflight dispatch")
     first = evidence.get("first_request")
     if not isinstance(first, dict) or set(first) != {"received", "protocol"} or first["received"] is not True or not _valid_protocol(first["protocol"]):
         raise ProviderFreeError("provider-free evidence has an invalid first request")
@@ -575,14 +647,14 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
     thread: threading.Thread | None = None
     version_exit = workload_exit = None
     version = None
-    preflight = {"initialize_succeeded": False, "tools_list_succeeded": False, "tool_descriptor_names": []}
+    preflight = {"spawned": False, "initialize_ok": False, "tools_list_ok": False, "exact_descriptor_seen": False, "tools_call_ok": False, "is_error": None, "text_present": False, "supervisor_unavailable": None, "exit_class": "spawn_failed"}
+    preflight_dispatch = {"audit_count": "0"}
     config_enabled = False
     requests: list[tuple[str, Any, str]] = []
     try:
         bridge = _AuditedBridge(None, socket_path)
         bridge.surface = bridge._mcp.AgentSurface(None)
         bridge.start()
-        preflight = _mcp_preflight(socket_path)
         config_path = runner.prepare_isolated_job_codex_home(exp_dir) / plugin_deployment.CONFIG_TOML_NAME
         config_enabled = _config_enabled(config_path)
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Receiver)
@@ -593,6 +665,10 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         gate_env["VENUS_TOKEN"] = "provider-free-loopback-only"
         fixture = repo_root / _FIXTURE
         child_env = runner.build_sandbox_environment(gate_env, f"http://127.0.0.1:{server.server_port}/v1", isolated_agent=True, tap_client_token="provider-free-loopback-token")
+        preflight_argv = runner.build_bwrap_argv(repo_root, exp_dir, [fixture], ["python3", "/agent-surface/client.py", "--mcp"], gate_env, agent_candidate_dir=candidate_dir, agent_surface_socket=socket_path)
+        preflight = _same_sandbox_mcp_preflight(preflight_argv, child_env)
+        preflight_dispatch = _audit_projection(bridge.audit)
+        bridge.audit.clear()
         version_result = subprocess.run(runner.build_bwrap_argv(repo_root, exp_dir, [fixture], ["codex", "--version"], gate_env, agent_candidate_dir=candidate_dir, agent_surface_socket=socket_path), env=child_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, timeout=30)
         version_exit = _safe_returncode(version_result.returncode)
         version = _version_from_output(version_result.stdout + "\n" + version_result.stderr)
@@ -619,8 +695,9 @@ def run_job(record: Mapping[str, Any], *, repo_root: Path, host_home: Path, envi
         "sandbox": {"runner_bwrap": True, "gateway": "codex-tap-gpt56", "network": "loopback-only"},
         "private_config": {"agent_surface_server_enabled": config_enabled},
         "mcp_preflight": preflight,
+        "preflight_dispatch": preflight_dispatch,
         "first_request": {"received": bool(requests), "protocol": _protocol_projection(first_body)},
-        "mcp_dispatch": ({"audit_count": "0"} if not audit else {"audit_count": "1" if len(audit) == 1 else "2_plus", **audit[0]}),
+        "mcp_dispatch": _audit_projection(audit),
         "second_request": _output_signal(second_body),
         "receiver": {"loopback_only": len(requests) == 2 and all(path == "/v1/responses" and host == "127.0.0.1" for path, _body, host in requests), "provider_escape": False, "request_count": len(requests)},
         "process": {"codex_version": version, "version_exit_code": version_exit, "workload_exit_code": workload_exit},
