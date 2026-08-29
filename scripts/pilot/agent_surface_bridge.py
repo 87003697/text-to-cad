@@ -112,10 +112,20 @@ class AgentSurfaceBridge:
         self.socket_path.unlink(missing_ok=True)
         self._server = None
         self._thread = None
-        if cancellation_error is not None:
-            raise RuntimeError("Agent Surface cancellation did not complete") from cancellation_error
+        if cancellation_error is not None and not alive and callback is not None:
+            # Closing the client transport can let an already-cancelled
+            # handler unwind.  Confirm that drain before treating the first
+            # bounded cancellation attempt as a lifetime failure.
+            try:
+                callback()
+            except Exception as error:
+                cancellation_error = error
+            else:
+                cancellation_error = None
         if alive:
             raise RuntimeError("Agent Surface handler threads did not terminate")
+        if cancellation_error is not None:
+            raise RuntimeError("Agent Surface cancellation did not complete") from cancellation_error
 
     def _serve(self) -> None:
         assert self._server is not None
