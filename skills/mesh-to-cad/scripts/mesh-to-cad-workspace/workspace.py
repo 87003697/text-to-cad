@@ -1728,7 +1728,6 @@ def bind_step_target_section(
             "invalid_workspace_path", "committed Step candidate mesh is unavailable"
         )
     return {
-        "rank": rank,
         "core_bounds_canonical": core_bounds,
         "neighborhood_bounds_canonical": neighborhood_bounds,
         "reference_path": reference,
